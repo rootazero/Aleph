@@ -26,6 +26,11 @@
 | 横切 | copy 说成功但少了文件 / 拷贝目录静默漏掉保护文件 | Copy Discloses Its Skips | `file_ops/ops.rs::copy_dir_recursive` | ✅ (§3.15⑥, 2026-08-10) |
 | 横切 | 审批等了半天 / 批准的目录被换成软链 | Two-Phase cwd Containment | `sandbox/workspace/mod.rs::revalidate_cwd_containment` | ✅ (§3.15④, 2026-08-10) |
 | 横切 | 工具描述字节账不对 / 棘轮数字突然涨了 11 KB | Registry-Only Description Accounting | `definitions.rs::REGISTRY_ONLY_DESCRIPTIONS`（棘轮与 `no_sentence_is_stated_twice` 共用） | ✅ (§3.15⑦, 2026-08-10) |
+| 横切 | 关掉终端重开对话就没了 / 重开之后档位模式都变回默认 / token 计数归零 | Thread Persistence (Attach Snapshot) | `gateway/session_snapshot.rs` + `handlers/chat.rs::handle_history`（`session`）+ `aleph_protocol::session_thread` | ✅ (§5.23, 2026-08-11) |
+| 横切 | `aleph-tui` 发消息没反应 / TUI 每次启动都是新会话 / `/usage` 说 Invalid session_key | TUI↔Gateway Wire Contract | `aleph_protocol::session_thread::AgentRunRequest` + `tui/commands.rs::send_to_agent` | ✅ (§5.23, 2026-08-11) |
+| 横切 | `select_model` 选的模型重启就丢 | Durable Model Pin (4th Twin) | `gateway/session_model_pin.rs` + `execution_engine/turn_model.rs` + `session_model_handle::MODEL_PIN_SESSION_KEY` | ✅ (§5.23, 2026-08-11) |
+| Context | 想让这个对话不注入记忆 / 干净房间对话 / `/memory-mode off` | Per-Session Memory Mode (5th Twin) | `memory/session_memory_mode.rs` + `execution_engine/turn_memory.rs` + `harness_bridge/prompt_build.rs`（唯一闸点） | ✅ (§5.23, 2026-08-11) |
+| CLI | 续上次对话 / `--continue` / 重开终端接着聊 | Continue Last Thread | `shared/client/src/session_resolve.rs`（`ask --last` 与 `chat --continue` 共用） | ✅ (§5.23, 2026-08-11) |
 | Panel | 另一个标签页的回答跑到我这来了 / 定时任务的输出流进我正在看的对话 / 我下一句发错会话了 / 房间里看不见队友说话 | Frame-to-Conversation Routing | `platform/wide/views/chat/events.rs::resolve_target`（三步）+ `state/sessions.rs::set_session_key` | ✅ (§6.9, 2026-08-10) |
 | Panel | 打开一个正在跑的会话什么也不动 / 队友在跑我这边一片死寂 / 只能等它跑完 | Join A Live Turn | `handlers/chat.rs::handle_history`（`active_run`）+ `chat_sidebar.rs::hydrate_and_follow` | ✅ (§6.9, 2026-08-10) |
 | Panel | core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 刷新页面才好 | Reconnect Baseline Rebase | `context.rs::connection_epoch` + `sessions.rs::{reset_running_baseline,settle_runs_absent_from}` | ✅ (§6.9, 2026-08-10) |
@@ -1709,11 +1714,13 @@
   **consent 现在绑脚本内容**：批准的是 approve 那一刻的文件哈希，不是命令字符串——脚本被改＝按未批准处理。所以『我明明批过了怎么又不跑了』的第一问是『脚本动过吗』。**工具永远不能批准**（能报告状态、不能授予），否则被注入的模型可以一回合内自写自批。」
 
 ### 5.11 CLI (Command Line Interface)
-- **口语关键词**：CLI、命令行、start/stop/status、子命令
+- **口语关键词**：CLI、命令行、start/stop/status、子命令、续上次对话 / `--continue` / `--last`
 - **代码锚点**：`src/bin/aleph-server/cli.rs`（Clap 定义）、`src/bin/aleph-server/commands/`（mod.rs 分发 + doctor/plugins/hooks/secret/node/sandbox_debug/prompt_size/update/start）、`shared/client/src/gateway_client.rs`（`gateway call` 的 WS JSON-RPC 客户端）、`src/bin/aleph-server/daemon.rs`（start/stop/**status** 生命周期 + 单例锁交互）、`src/cli/ipc_client.rs`、`src/cli/endpoint.rs`（`.ipc-endpoint.json` 发现文件）。**注**：`audit` 子命令已删（2026-07-14 熵减，见 §5.3——它查的三张表零生产写入者），勿再找。
 - **职责**：Clap 驱动入口，覆盖 daemon 生命周期 + 插件/hook 同意/沙箱调试/集群节点，支持 JSON 输出与 IPC 客户端。
 - **状态**：✅ 已实现。**`gateway call` 全方法失效修复（2026-07-12）**：`GatewayClient::call_raw`（`shared/client/src/gateway_client.rs`）开一条 WS 后**把 RPC 方法当作首帧发出**，而中心强制「一条连接的首帧必须是 `connect`」（`gateway/server/handler.rs`，否则 `AUTH_REQUIRED` + 关 socket）⇒ **`aleph-server gateway call <任何方法>` 一律失败**，报 `First request must be 'connect'`。这与「集群节点冷启动登记从来没成功过」（§5.5）是**同一个根因的两个受害者**——「首帧规则」是协议级不变量，任何直连 WS 的客户端都必须先握手。现 `call_raw` 先发 `connect`（id=0，与方法的 id=1 区分，既有的按 id 匹配响应循环天然跳过握手回包），再发方法；`connect` 也是确立 operator 角色的帧，本来就必须前置。**握手 params 刻意只带 `device_name`/`channel_kind`、绝不带 `commands`/`tags`**——后者正是中心识别「集群节点」的形状，CLI 不能把自己注册成执行臂。**SIGTERM 优雅停机统一（2026-07-03）**：此前 `setup_graceful_shutdown`（`commands/start/helpers.rs`）双任务不对称——Ctrl-C 走 oneshot 优雅路径（axum drain + monitor 停机 + endpoint 清理 + GatewayStop hooks + 插件停止），而 **SIGTERM 直接 `std::process::exit(0)` 全部绕过**，偏偏 SIGTERM 才是 launchd/systemd/`aleph stop` 的生产停机信号。现合并为单任务 `tokio::select!` 双信号同走 oneshot（各自保留 forensics 语义：Ctrl-C 无 parent、SIGTERM 带 parent command），发送后挂 5s 失效保护 watchdog（`SHUTDOWN_FAILSAFE`，对齐 `daemon.rs::stop_running_process` 的 SIGTERM≤5s→SIGKILL 升级预算）——长连 WS 让 `axum::serve` 不返回时强制退出而非挂到 supervisor SIGKILL。顺带删除零调用者/零事件消费者的死方法 `GatewayServer::graceful_shutdown()`（R10 YAGNI 撤回，其 `system.shutdown` 事件无任何订阅方）。**status 连线强化（2026-06-17）**：① **修缺陷**——PID 文件**只在 `daemonize()`（Unix daemon 路径）写入**，前台 `aleph start`（无 `-d`）与 **Windows** 均不写 → 旧 `status` 对正在运行的前台/Windows server **误报"未运行"**；现 `handle_status` 连线 `.ipc-endpoint.json`（所有启动路径都写，持 live PID+URL+started_at），对 endpoint PID 做存活探测后合并 PID 文件信号，前台/Windows 可见。② **增强表面化**——`status` 现输出 **URL / Uptime / Version**（Uptime 复用 `looping::types::fmt_duration_ms` 渲染，与 loop status 同词汇）；`--json` 增 `url/started_at/uptime_seconds/version` 字段（向后兼容超集，`running/pid` 键保留）。③ **纯函数 `resolve_status`**（注入存活探测 + `now`，可单测）：**live endpoint 胜过陈旧 PID 文件**；陈旧 endpoint（server 崩溃未清理）经存活探测**不**广告死 URL。④ **`stop` 清理 endpoint 文件**——`cleanup_endpoint_file()` 在停止确认/陈旧分支 best-effort `remove_endpoint`，消除前台/Windows 残留。
 - **打磨话术**：「加 CLI 子命令在 `src/bin/aleph-server/commands/`；**任何新的直连 WS 客户端都必须先发 `connect` 再发方法**（首帧规则，见上；`gateway call` 与集群节点都曾栽在这条上）。注意 `gateway call` 有自己的 `--url`（默认 `ws://127.0.0.1:18790/ws`），**全局 `--port` 对它无效**；‘CLI 写操作如何不与 daemon 抢锁’走 with_policy（见 CLAUDE.md 进程管理）。‘status 为何对前台/Windows server 失明’= 旧版只读 `gateway.pid`（仅 daemon 写）；现 `daemon.rs::resolve_status` 已连线 endpoint 发现文件。要调‘status 显示什么’改 `StatusReport` + `print_status_human`；uptime 渲染走 `fmt_duration_ms`。」
+
+- **续上次线程（2026-08-11，§5.23）**：`aleph chat --continue` / `-c` 与 `aleph-tui --continue`，与 `aleph ask --last` **共用**解析器 `aleph_client::resolve_last_session`（此前是 `ask.rs` 里的私有拷贝）——两个都表示「我上次那个线程」的命令不能挑出不同的线程，而"取 `last_active_at` 最大者、并列取先出现者"这条并列破平规则只在共用时才是同一条。**opt-in 不是默认**（对齐 codex `resume` / pi `--continue`）：裸 `aleph chat` 开新对话，因为"静默续昨天的线程"属于用户察觉时已经无法撤销的默认。行解析用类型（`SessionRow`）而非 `get("key")` 字符串——字段名是 wire 契约，字面量打错会降级成"没有会话可续"，读起来像一台空装机。
 
 ### 5.12 执行权限档位 (Exec Tier)
 - **口语关键词**：执行档位、三档、ask/auto/full、每次都问 / 只在危险时问 / 全放开、composer 档位 pill、本会话档位、全局档位（Settings→Policies）、"它删文件前该问我一声"
@@ -1762,6 +1769,13 @@
     - **① 正文追加两遍（HIGH）**——一个流式回合在线上产出两份同样的正文：`StreamEvent::ResponseChunk` 逐 delta，以及 `AgentTrace{TextEmitted{Final}}` 的整段全文（`harness/agent/think.rs` **无条件**发它；紧邻的 `response_was_streamed` 守卫只抑制进程内第二次 `on_delta`）。TUI **不调 `events.subscribe`**，于是 `should_receive` 的 `None => true` 把两条都给它，`events.rs::ResponseChunk` 与 `trace.rs::TextEmitted{Final}` 各 `append_assistant_content` 一次，且 `ensure_assistant_message` 复用尾部同一条 Assistant 消息 ⇒ 模型答「Hello!」显示「Hello!Hello!」，多轮累积。现记 `AppState.turn_streamed_len`（`TurnStarted`/`RunAccepted` 归零），Final 只追加 `text.get(streamed_len..)`（`.get()` 非切片，UTF-8 安全）——流式轮为空、非流式轮（mock provider / output guardrail）仍拿全文。**刻意不给 `ResponseChunk` 加 `current_run_uses_agent_trace` 门**：那会关掉实时打字机（`TextEmitted` 每迭代才一次）。**旧测试全绿的原因**：`app/tests.rs` 的两条投影**从不在同一个测试里交错**，而 `think.rs` 每轮都发 `TurnStarted` ⇒ 它们跑的那条 `current_run_uses_agent_trace == false` 分支**生产中恒不可达**。
     - **② 工具行永久转圈（MEDIUM · 断线）**——`RunComplete` 只读 `terminate_reason` 与 token，**一个字不碰 `summary.tool_summaries`**，而 `shared/protocol/src/events.rs` 那两个字段的 doc 逐字写着它们存在就是因为 live 帧跑在 deliberately-lossy 的 `agent_trace` 上、消费者应在 `run_complete` 对账（Panel §6.1 早已实现）。`agent_trace_emit_sink` 是 `mpsc(256)` + `try_send`，满即丢 ⇒ 一次丢帧让 `ToolExecution.status` 永停 `Running`、`tool_block.rs` 永画 ⟳。现 `RunComplete` 先按 `tool_id` 用 `tool_summaries` 覆盖/**补建**行（起始帧也可能被丢）并从 `summary.errors` 取错误文本，再把仍 `Running` 的落到新增的 `ToolStatus::Unknown`（渲染 `–`，**绝不猜 Success**）；`RunError` 无 summary，只做第二步。同批**取消 `ToolEnd` 的 trace 门**（它是权威流，`finish_tool_execution` 只推向终态、对未知 id 是 no-op）——但 **`ToolStart` 的门保留**：`start_tool_execution` 会把行**重置回 Running** 并清 duration/error，乱序到达会让已完成的工具复活。
     - 测试 +5（按生产顺序交错喂两条投影）；`cargo test -p aleph-tui --lib` 105 绿。
+  - **线程持久化轮（2026-08-11，详见 §5.23）**：本轮在 TUI 上抓到两条从写下之日起就存在的 P0，两条的共同成因是这个 crate **按设计不许依赖 alephcore**，于是 wire 形状是手写字面量、没有对手可以分歧：
+    - **① 每一条消息都必然 `INVALID_PARAMS`（P0）**——`send_to_agent`（doc 自称"the request shape can never drift across the four paths"的那个唯一发送点）发 `"message"`，而 `agent.run` 要 `input`（`message` 是 `chat.send` 的键）。形状在那一个点上错，四条路径就一起错。现从 `aleph_protocol::AgentRunRequest` **构造**，对账测试住在同时依赖两侧的 crate 里（变异证过 RED）。
+    - **② 会话身份是虚构的（P0）**——默认键 `chat-<uuid8>` 过不了 `SessionKey::parse`，而 `AgentRouter::route` 对解析失败**不报错、另起 epoch**；于是每次启动新建对话，且 `/tier` `/usage` `/compress` `/undo` `chat.abort` `chat.history` 全部寻址一个服务端没听说过的键。现**不发键**（让网关路由）并采纳回执里的规范键。
+    - **③ 启动不加载 transcript**——`chat.history` 此前**只**从 `/sessions` 选择器到达，所以 `--session <key>` 开的是白屏。现 `attach_session` 在启动与切换两处共用，一次调用取回 transcript **与**设置。
+    - **④ token 计数跨会话串味**——`switch_session` 清了七样东西，唯独没清 `total_tokens`（且它从 0 起，不从会话行读）。现清空并由快照填回。
+    - **⑤ `/mode` `/think` `/memory-mode` 补齐 `/tier`**（一个 handler 管一族），状态栏显示四个 knob；**`/memory-mode` 不叫 `/memory`**——网关已拥有 `/memory <verb>` 命名空间，而本地命令**先解析且从不 fall through**，同名＝整族不可达。新增启动期 `shadowed_gateway_commands` 按网关真实清单报告遮蔽。
+    - **⑥ 熵减**：删 `execute_tier`、删 uuid 键生成与 `uuid` 依赖。
   - **cache 命中段（2026-07-17，§2.15 连线）**：状态栏新增 `cache N%` 段——`ProviderUsage` trace 事件此前被 `app/trace.rs` 显式丢弃（`=> {}`），现喂 `AppState.cache_stat`（last-call 口径 `read/(input+creation+read)`；只有报告过缓存活动的调用才更新，无缓存 provider 不显示），`widgets/status_bar.rs` 渲染（≥50% 常色/以下 warning）。命中率骤降＝前缀刚被打穿的实时症状。
 - **打磨话术**：「TUI 是 CLI（§5.11）的孪生瘦客户端（`interfaces/tui/`，**禁 alephcore**，只经 aleph-client/protocol 走 WS）。改事件循环 / 焦点分派 / RPC 调用点在 `mod.rs`；改'终端事件→内部事件'（含 `KeyEventKind::Press` 去重门、粘贴映射）在 `event.rs::map_event`（**单一收口，别在各 `handle_*_key` 里补过滤**）；改状态 / 滚动 / overlay 在 `app/mod.rs`；改'StreamEvent→状态'在 `app/events.rs`；改布局在 `render.rs`，改 markdown/换行在 `markdown.rs`（`wrap_line_spans` 已保样式，别退回 flatten）；改斜杠命令'本地 vs Gateway'分流在 `slash.rs::parse_input`。**症状定位**：Windows 每键两次＝`event.rs` 漏 `Press` 门；Home/PageUp 空屏＝`chat_area.rs` 漏钳 `scroll_offset`；宽行/代码块裁掉最新内容＝system/code 路径未预排（逻辑行≠物理行）；换行在 Windows 失效＝只认 Shift+Enter，要用 `\`+Enter / Ctrl+J；Esc 关掉 AskUser 后卡住＝Esc 不该关 dialog（孤立 park run）。**加本地斜杠命令**：`slash.rs` 加 `LocalCommand` 变体 + `parse_input` 分流 + `LOCAL_COMMAND_CATALOG` + `execute_local_command` 分支（`/sessions` 即范例：`sessions.list`/`chat.history` 都是既有 RPC，**别造新服务端方法**）。」
 
@@ -2020,6 +2034,70 @@
   - **刻意不做**：不给 `action="archive"` 加参数级审批闸。它可逆（`unarchive`、id 不释放、记忆与笔记留在盘上），而 `DESTRUCTIVE_FILE_OPS` 自陈是 tier 系统**唯一**的参数级规则；也不进 `READ_ONLY_TOOLS`（读写混在一个名字下，`Ask` 档连 `list` 也举卡，与 `file_ops` 同形）。也**不**进 `CHAT_DEFER_FAMILIES`：defer 省不下目录字节（描述照发），只省 schema，换一次 `tool_search` 往返——理由记进了 `session_mode.rs` 的「审计保留」段，免得下次审计以为没考虑过。
   - **字节账**：目录棘轮 82,462 → 82,981 B（+519 B / 六个动词）。初稿 778 B，砍掉的全是**参数 schema 已经承载**的话（`update` 是 patch、`include_archived` 放宽 `list`、各字段含义）；留下的只有 schema 说不出口的运行时事实——workspace id **就是** agent id 且指向它的记忆分区、这条记录**改不了** model/tools/prompt、`create` 不是 `agent_create`、`archive` 是软删且 id 仍被占。
   - **未做**：无真机 QA（本轮全部为编译 + 单测验证，15,664 lib 测试全绿）。
+
+### 5.23 线程持久化 (Thread Persistence · 2026-08-11)
+
+- **口语关键词**：关掉终端重开对话就没了 / `aleph-tui` 发消息没反应 / 每次启动都是新会话 / `/usage` 说 Invalid session_key / 重开之后档位模式都变回默认 / token 计数归零 / `select_model` 选的模型重启就丢 / 想让某个对话不注入记忆 / `--continue` / 续上次对话
+- **代码锚点**：`shared/protocol/src/session_thread.rs`（跨 crate 契约：`AgentRunRequest` / `AgentRunAccepted` / `SessionSnapshot`）· `src/gateway/session_snapshot.rs`（**唯一**的 knob 解码器，`chat.history` 与 `sessions.list` 共用）· `src/gateway/session_model_pin.rs` + `src/providers/session_model_handle.rs`（模型 pin 的耐久化：sink + 回灌）· `src/gateway/execution_engine/turn_model.rs` · `src/gateway/execution_engine/turn_memory.rs` · `src/memory/session_memory_mode.rs` · `shared/client/src/session_resolve.rs`（`--last` / `--continue` 共用 resolver）· `interfaces/tui/src/tui/commands.rs::attach_session`
+- **职责**：一个对话的**耐久设置**（使用模式 / 执行档位 / 推理档 / 记忆模式 / 模型 pin / 累计 token / 工作目录）在客户端重新 attach 时原样回来。服务端一直在持久化这些事实，缺的是**读者**。
+- **状态**：✅ 已实现（2026-08-11）。
+
+#### 两条 P0 断线（先修，否则"持久化"无意义）
+
+- **① `aleph-tui` 发的每一条消息都必然 `INVALID_PARAMS`。** `agent.run` 的 `AgentRunParams.input` 是必填、无 `default`、无 `alias`，而 TUI 的**唯一**发送点发的是 `"message"`（那是 `chat.send` 的键）。该调用点的 doc 逐字写着 "the request shape can never drift across the four paths"——形状在**那一个点**上就是错的，于是四条路径一起错。**这是 CLAUDE.md §0「契约的两半住在两个 crate 里时，'有测试'这件事本身会骗人」的第二次复发**（第一次是 `aleph workspace create|archive`），成因逐字相同：`aleph-tui` 按设计不许依赖 `alephcore`，字面量没有对手可以分歧。
+- **② TUI 的会话身份是虚构的。** 默认键 `chat-<uuid8>` 过不了 `SessionKey::parse`（要 `agent:` 前缀 + ≥3 段），而 `AgentRouter::route` 对解析失败**静默 fall-through**——不是报错，是另起一个 epoch。于是每次启动都新建对话，且 `/tier`、`/usage`、`/compress`、`/undo`、`chat.abort`、`chat.history` 全部拿这个键去调 RPC。
+- **修法**：形状收进 `aleph_protocol::session_thread`（两边都依赖的 crate），客户端**构造**、服务端**解析**；对账测试住在**同时依赖两侧**的 crate 里，两个方向各一条——请求侧 `the_shared_run_request_deserializes_into_the_handler_params`（已用 `serde(rename)` 变异证过 RED），响应侧 `the_run_result_carries_exactly_what_the_shared_type_declares` 用**键集相等**且期望值从契约类型自身序列化派生（解析只能证超集，见 §0 那条）。会话键改为**不发**（让网关路由）并采纳回执里的规范键——单一真源在服务端。
+
+#### attach 快照（连线，零新存储）
+
+- **`chat.history` 新增 `session` 对象**：`{mode, exec_tier, think_level, memory_mode, model_pin(+provider), model(+provider), input/output/total_tokens, estimated_cost_usd, message_count, compaction_count, project_root, label}`。理由就是这个响应自己的 doc 已经为 `active_run` / `plan` 写下的那句：**它们是一个快照**，分两次调用就会开出一个"客户端拿着 transcript 却拿着另一份设置"的窗口。
+- **单一解码器 `session_snapshot::snapshot_from_metadata`**，`sessions.list` 一并改走它。此前 `sessions.list` 内联解码三个 knob、`chat.history` 解码零个——**`think_level` 因此一个客户端面都到不了**（`turn_thinking` 自写下之日起就持久化并每轮强制它）。形状太简单，所以被逐 knob 复制而不是共用，而没人写的那份拷贝是看不见的。
+- **`sessions.patch` 的配对校验补齐**：三个 `if let` 收成一张表 `knob_validators()`，`think_level` / `memory_mode` 入表；census `every_session_knob_is_validated_on_patch` 从 `session_snapshot.rs` 的**源码**派生名单（不是本文件里记住的清单），新 knob 未接线即红。
+- **`model_pin` / `model_pin_provider` 由 `sessions.patch` 明确拒绝**（`NOT_PATCHABLE`）：pin 有**两个**必须一致的存储（会话行 + 进程内表），只有 `select_model` 两个都写；只写行的 patch 会在重启后生效、重启前不生效——"有时候能用"比"从来不能用"更难诊断。
+
+#### 模型 pin 耐久化（第四孪生）
+
+- 旧世界：`session_model_handle` 的进程内 `HashMap` 是全部，模块 doc 明写 "In-memory by design … resets on restart, which is the intended 'fresh session' behaviour"。但这张表被问的是「这个对话 pin 了什么」——**进程内表在重启后不是"空了"，是答了另一个问题**（§0），症状只出现在账单上。
+- 新世界：`identity_meta.custom["model_pin"]`（第四孪生，与 exec_tier / session_mode / think_level 同载体）+ boot 装的 `SessionPinSink`（`gateway::session_model_pin::StoreBackedPinSink`）+ run 开始时 `turn_model::rehydrate_turn_model_pin` 回灌。
+- **sink 是进程全局而不是构造参数**：`set_session_model` 是每个写者都已经过的**唯一**写缝，而 `SelectModelTool` 有三个构造点——把耐久性接到其中一个＝另外两个继续只写内存，各自单测全绿（§0「七个构造点就别再想构造点了」的同一条）。
+- **回灌不覆盖活的 pin**：进程内表至少和行一样新（每次写都先表后行），覆盖会在一次 store 往返的宽度里把用户刚换掉的模型复活。规则和理由都住在 `hydrate_session_model` 里。
+- **读侧三个消费者一行未动**——回灌跑在它们之前。
+
+#### 记忆模式（第五孪生 · codex `memory_mode` 对标）
+
+- `MemoryMode::{On,Off}`，载体 `identity_meta.custom["memory_mode"]`，precedence 请求 > 会话 > `[memory] enabled`（live 读），解析在 `turn_memory.rs`（`turn_mode.rs` 的逐行孪生）。
+- **闸只有一个点**：`harness_bridge::prompt_build` 里 curated memory / wiki orientation / hybrid recall 三个信封汇合的那个 `if let Some(mcp)`。走已有的 `TurnEnvelope` 轨（`build_system_prompt` 本来就收这个参数，零新管道）。
+- **`None` 读作 ON**，由 `TurnEnvelope::injects_memory()` 单点派生——每一条不设该字段的 dispatch 路径（子流程、token 估算、测试）必须与本 knob 出现前逐字节相同；极性在第二个消费者手里搞反就会静默剥掉所有路径的记忆，而症状（"模型忘事了"）读起来像模型问题。
+- **闸的是注入，不是能力，也不是写**：`memory_search` / `remember` / `note_*` 照常可调，学到的东西照常记录。悄悄拿掉一个模型看得见的工具，正是模型坚称自己存过某件事的成因；而静音读侧顺手静音写侧，会让一个只想要干净 prompt 的用户几个月后发现历史里有个洞。
+- **静音必须说给模型听**（§0「一句关于什么被闸住的话有三份拷贝，最贵的那份发给模型」）：`OperatingEnvelopeLayer` 的 `MEMORY_MUTED_LINE` 只在 Off 时渲染，且明说两件事——你没有忘记（是被扣下了）、工具仍然可用。被扣下的记忆从内部看和从来没有过一模一样，模型会为自己的失忆**发明一个理由**。
+- **刻意不移植 codex 的第三态 `polluted`**：它标记的是「这条线程的 context 来自外部 MCP，因此**学它**不安全」，属写侧关切，Aleph 由 `memory_trace` / ingest 治理闸回答。本 knob 只管读侧，doc 里说了。
+
+#### 客户端（TUI / CLI）
+
+- **启动即 attach**：`attach_session` 一次调用同时取 transcript 与设置。此前 `chat.history` **只**从会话选择器到达 ⇒ `aleph-tui --session <key>` 打开的是一块白屏，而服务端一直有那份 transcript。
+- **`switch_session` 现在清 token 计数与设置**（此前不清 ⇒ 跨会话串味，§0/§4.7 的「按会话的状态住进单例组件」在 TUI 上的实例），随后由 attach 快照填回新对话自己的。
+- **状态栏显示四个 knob**，按 `SessionKnob::ALL` 枚举渲染（parser 加一个而渲染面漏掉＝编译错）。未设置的 knob **不显示**——TUI 不读服务端配置，印一个"auto"就是客户端在发明事实。
+- **`/mode`、`/think`、`/memory-mode` 补齐 `/tier`**，一个 handler 管一族（它们只差写哪个键）。**命名注意**：叫 `/memory-mode` 不叫 `/memory`——网关已经拥有 `/memory <verb>` 命名空间（`memory_search` / `memory_browse` / …），而 TUI **先解析本地命令且从不 fall through**，所以同名不是"优先级"，是让整族网关命令**不可达**。新增 `shadowed_gateway_commands` 在启动时按网关**真实发布**的清单报告遮蔽（不是编译期硬编码名单——网关的命名空间随装的 skill / MCP / plugin 生长）。
+- **未加 `/model`（刻意）**：pin 的权威写者是 `select_model` 工具（它同时更新运行时读的那张表），一个只 patch 行的斜杠命令会在重启后生效、重启前不生效。换模型保持对话式（R8），状态栏显示结果。
+- **`aleph chat --continue` / `aleph-tui --continue`**：与 `aleph ask --last` 共用 `aleph_client::resolve_last_session`（此前是 `ask.rs` 的私有拷贝）——两个都表示"我上次那个线程"的命令不能挑出不同的线程。**opt-in 不是默认**，对齐 codex `resume` / pi `--continue`：裸 `aleph chat` 静默续昨天的线程，是那种用户察觉时已经无法撤销的默认。
+
+#### 对照结论（codex / pi / hermes）
+
+| 维度 | codex | pi | hermes | Aleph 结论 |
+|---|---|---|---|---|
+| 线程真源 | rollout JSONL + SQLite `threads` 投影（`apply_rollout_item` 折叠） | JSONL，load 时折叠出 `{messages, thinkingLevel, model}` | `sessions` 表 | **架构已等价或更强**（`session_events` 权威 + `messages` 投影 + `sessions` 行），存储层不移植 |
+| 续上次 | `codex resume` / picker | `continueRecent(cwd)` | `/resume` | 本轮补 `--continue`；**不做 pi 的 cwd 分目录**——Aleph 的会话键已带 agent/scope 轴，再加一层目录轴会与 §5.22 的分区语义打架 |
+| 设置随线程 | `TurnContextItem` 每轮进 rollout，resume 时重放 | 折叠 model-change / thinking 条目 | `sessions.model` 列 | Aleph 用 `identity_meta.custom` 五孪生 + 快照读回，**不引入 per-turn context item**（Aleph 的 knob 是稀疏事件而非每轮事实，逐轮写入是纯开销） |
+| 记忆开关 | `memory_mode` 三态 | — | — | 采纳两态，第三态 `polluted` 属写侧、不移植 |
+
+#### 刻意不做（勿重提）
+
+- **不给会话行加 `TurnContext` 式的逐轮快照**：knob 变更是稀疏的，`identity_meta` 已是它们的家；逐轮写入换不到任何回答不了的问题。
+- **不做 `sessions.get`**：`chat.history` 就是那个按键 attach 的面，它已经过了可见性闸、已经解析了 metadata；第二个方法＝第二个存在性 oracle（该响应的 doc 为 `active_run` 写过同一段论证）。
+- **不给 Panel 加 think/memory pill**（本轮只到 wire 与 TUI）：Panel 的 pill 一族在 §6，独立一轮；`SessionInfo` 的三个新字段已就位，接线是纯客户端工作。
+- **不做 TUI 的 `/model`**：见上。
+- **未做真机 QA**：本轮全部为编译 + 单测验证。
+
 
 ---
 

@@ -247,6 +247,9 @@
 - **一个值有存储形态和展示形态时，转换只能发生在出线边界、且只发生一次** —— `canonicalize` 在 Windows 返回 `\\?\C:\…`，对 API 层是对的、对人是错的。修法是出线转换（`utils::paths::display_string`），**不是**把存储也换掉：那个转换**是部分的**（超过 `MAX_PATH` 与 UNC 保留前缀），所以两边各转一次会让 `starts_with` 从**放行翻成拒绝**——`allowed_roots` 作用域检查正是这个形状 → §5.22
 - **真源必须在被依赖的一侧** —— 依赖方向 `linux → shared` ⇒ 真源在 `shared/`；反着放就是把同一个问题回答 N 次
 - **契约的两半住在两个 crate 里时，"有测试"这件事本身会骗人** —— `aleph workspace create|archive` 自写下之日起每次调用都 `INVALID_PARAMS`（CLI 发 `{"name"}`，handler 要 `id`），而 CLI 那侧的测试断言的是 `json!({"name":…})["name"] == "test-ws"`：**一个只读自己刚写下的字面量的断言，测的是 serde_json 不是你的代码**，它永远绿。判据：跨 crate 的 wire 契约要么**共用一个类型**（重命名 ⇒ 编译错；单一源 `aleph_protocol::workspace`，`aleph-cli` 按设计不许依赖 `alephcore`），要么在**依赖两边的那一侧**留一条真正对账的测试（`workspace.rs::every_column_the_cli_renders_is_present_in_the_list_response`，用改 wire key 的变异证过 RED）。**同族：展示列也要对账**——那张表读的 `status`/`created` 服务端从来没发过（真名 `is_archived`/`created_at`），于是每行印一列破折号，看起来只是"还没有值"
+- **⚠️ 第二次复发（2026-08-11，`aleph-tui`），而且这次它躲在一句自称保证的话后面** —— `send_to_agent` 是 TUI 唯一的 `agent.run` 发送点，doc 逐字写着 "the request shape can never drift across the four paths"，而它发的是 `"message"`（`chat.send` 的键），`agent.run` 要 `input`。**一个"唯一发送点"保证的是四条路径彼此一致，不是它们对**——形状在那一个点上错，四条就一起错，而收敛本身让人以为这一族已经被看过了。同一轮的第二个：TUI 自造的会话键 `chat-<uuid8>` 过不了 `SessionKey::parse`，而 `AgentRouter::route` 对解析失败**不报错、另起 epoch**，于是客户端握着一个服务端从没听说过的键去调六个 RPC。判据补两句：① **"我们已经把它收敛到一个点了"不是正确性证据**，去问那一个点的形状是从哪来的——手写字面量就是没有对手；② **一个"宽容"的解析入口（fall-through 而非报错）会把客户端的错误变成服务端的静默分叉**，凡按 id/键寻址的入口，解析失败该是拒绝还是另起一个新对象，必须是被写下来的决定。单一源 `aleph_protocol::session_thread`，两个方向各一条对账（请求侧 deserialize、响应侧**键集相等且期望从契约类型派生**）→ FEATURE_LOCATOR §5.23
+- **形状太简单的东西会被复制而不是共用，而没人写的那份拷贝是看不见的** —— `exec_tier` / `session_mode` / `think_level` 是同一套三孪生：前两个各自被加进 `sessions.list` 的解码、`sessions.patch` 的校验、Panel 的 pill，第三个**一处都没有**——它自写下之日起就被 `turn_thinking` 持久化并每轮强制，只是没有任何客户端面读得到，所以junk 值存得进去、每轮被 warn 掉、而"一个没人读的 knob"和"一个没人设的 knob"长得一模一样。成因不是偷懒：`im.custom.get(k)?.as_str()` 太短了，短到共用它显得小题大做，于是它被逐 knob 抄写，而第三次抄写没有发生。判据：**一族同构的解码/校验/渲染，超过两个就收敛成一张表 + 一条从源码派生名单的 census**（`session_snapshot.rs` ↔ `modify.rs::every_session_knob_is_validated_on_patch`），别数"我加了几个"——数"这一族总共有几个" → §5.23
+- **"服务端已经持久化了"回答不了"客户端拿得到吗"，而 attach 面是最容易漏的那一个** —— 一个对话的模式 / 档位 / 推理档 / 累计 token 全都有耐久的家，且每轮都在被强制；缺的是**没有任何响应把它们交给按键重新连上来的客户端**。于是重开的终端在一个服务端仍按自己的值治理的对话上，画出了**装机默认值**。判据一句话：**这个事实有持久行吗？有的话，客户端 attach 时读的是哪一个响应？** 答不上就是它还没有读者。修法是挂到客户端 attach 时本就要发的那个响应上（`chat.history` 的 `active_run` / `plan` 是同一个论证的先例——它们是**一个**快照，分两次调用就开出一个"拿着 transcript 却拿着另一份设置"的窗口），不是新造一个 `sessions.get`（第二个存在性 oracle）→ §5.23
 - **解析只能证明"超集"，永远证不出"相等"——而超发就住在这个缝里** —— 上一条的第二半，同一个 wire 上第二次犯。那条对账测试（`every_column_the_cli_renders_is_present_in_the_..._response`）把真实响应 parse 成契约类型再断言字段都在，**方向只有一个**：serde 默认忽略未知键，所以它对"响应里还有什么"结构性失明。`workspace.get` 因此把整个 `AgentEnv` 发上线，多出 `env_vars`/`allowed_tools`/`system_prompt_override`/`default_model` 四个字段——**全仓既无写入者也无读取者**（`ActiveAgentEnv` 自称流经整条执行流水线，却在解析边界把它们全丢了），即一个"看起来可设置、设了永远没反应"的配置面。判据两句：① **契约类型要用来"构造"响应，不只是用来"解析"响应**——从契约类型 build，超发就成了编译期不可能，而不是一条要记得写的断言；② 断言要写成**键集相等**且**期望值从契约类型自身派生**（序列化一份取 keys），写字面量清单就是同一个列举法错误挪高一层。反向的"未知字段容忍"是另一条独立性质，归协议 crate，别塞进对账夹具里——夹具一旦混进服务端已经不发的键，它就从"真实响应"变成了最后一处谎言的藏身地
 - **一个子系统的负半边有出口，正半边没有，这个不对称本身就是缺陷** —— 拒绝侧建了熔断器 / 冷却 / 半开探测（因为"永久拒绝"显然坏），而**授权侧的"永久允许"连列表都没有**：用户点完「本会话允许」既看不到也收不回。判据一句话：**这个决定有没有反悔的路**？两个方向要分别问一遍——通常只有让人不舒服的那个方向被想到了。⚠️ 配套：可枚举性是可撤销性的前提，而**列表里只有指纹就等于没有列表**（人分不出哪条是要删的那条），所以授权记录必须存下**当时给人看的那句话** → §5.12
 - **fail-soft 的跳过不是「不存在」的证据** —— `Ok(None)` 给读者防卡死用，拿它当 DELETE / 放行判据就是不可逆损坏；**按状态做的闸，`Err` 必须是拒绝不能是放行**
@@ -502,6 +505,7 @@
 | `src/config/` `src/diagnostics/` | §5.8 §5.9 §5.10 |
 | `desktop/` | [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) · [LINUX_DESKTOP.md](docs/reference/LINUX_DESKTOP.md) · [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) · §7.1–§7.4 |
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 §6.9 |
+| `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | 判据清单 §0（跨 crate wire 契约）· FEATURE_LOCATOR §5.11 §5.13 §5.23 |
 | `src/agents/` `src/teams/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) · §4.4 §4.5 §4.13a–c |
 | `src/tasks/cron/` `src/tasks/heartbeat/` | §4.13b（写面对账守卫 · 共用告警判据 · 停摆 job）· §4.13c（**不阻塞 tick · 投递失败即失败 · 孪生子系统对账**）· `src/tasks/shared/{alert,delivery}.rs` |
 | `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 · §3.15（后台执行生命周期 · 实时尾巴 · 两阶段 cwd 闸） |
@@ -536,17 +540,24 @@
 - **MSRV = 1.95**（由 `sysinfo 0.39` 决定），在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明。
 - 仓库根的 `rust-toolchain.toml` 钉住具体 stable（当前 `1.96.0`），本地与 CI 自动使用同一工具链——无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新这两处。
 
-### 三根会话旋钮 (Session Knobs)
+### 会话旋钮 (Session Knobs)
 
-三者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
+**别在这里维护一个数目**——上一版标题写着「三根」而表里已经不止三行。全部**正交**，且**不是每一根都有 pill**：见「谁在拨」列。
+
+前五根共用一套机制：值住在 `SessionMetadata.identity_meta.custom[<key>]`，precedence 一律 **请求 > 会话 > 全局**，请求携带的值会被**盖回会话**（所以选择活过它所在的那一轮），解析各在 `src/gateway/execution_engine/turn_*.rs` 的孪生模块里。加第六根之前先读那五个文件里任意一个——它们逐行同形是有意的。
 
 | 旋钮 | 值 | 管什么 | 谁在拨 | 单一源 |
 |---|---|---|---|---|
-| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | Panel pill + `chat.send{exec_tier}` | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
-| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
+| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | Panel pill + `chat.send{exec_tier}` + TUI `/tier` | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
+| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` + `session_set_mode` 工具 + TUI `/mode` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
+| **推理档 Think Level** | `off`…`xhigh`，**未设=不发指令** | 模型被要求想多深（reasoning token 按 output 计费） | `chat.send{thinking}` + `self_config` + TUI `/think` | `src/agents/thinking.rs` + `execution_engine/turn_thinking.rs` |
+| **记忆模式 Memory Mode** | `on` / `off`（默认跟 `[memory] enabled`） | 这一轮 prompt **注入**不注入 curated memory / 笔记索引 / 召回。**不闸工具、不闸写** | `chat.send{memory}` + TUI `/memory-mode` | `src/memory/session_memory_mode.rs` + `harness_bridge/prompt_build.rs`（唯一闸点）→ FEATURE_LOCATOR §5.23 |
+| **模型 pin Model Pin** | 任意 model id（+可选 provider） | 这个对话此后用哪个模型（下一 run 起生效） | **只有 `select_model` 工具**（R8 对话式）——`sessions.patch` 明确拒绝该键 | `src/providers/session_model_handle.rs` + `gateway/session_model_pin.rs` + `execution_engine/turn_model.rs` |
 | **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
 
-> **别急着给它加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
+> **别急着给 Busy Input 加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
+
+> **加第六根旋钮的清单**（前五根里有一根每一步都漏过，代价见 §5.23）：① `turn_*.rs` 孪生解析器；② `sessions.patch` 的 `knob_validators()`（census 会红）；③ `session_snapshot.rs` 的解码（census 会红）；④ 至少一个客户端面读得到它——**没有读者的 knob 和没人设的 knob 长得一模一样**；⑤ 如果它闸住了什么，那句话要同时出现在代码、doc 和**发给模型的 prompt** 里。
 
 `[sandbox.command_policy]` 的硬底线**任何档位都压不下去**。
 

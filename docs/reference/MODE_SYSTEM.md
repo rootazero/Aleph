@@ -7,7 +7,7 @@
 ## 1. 是什么 (What)
 
 一根**用户显式选择**的会话级旋钮 `SessionMode { Chat, Work, Code }`（默认 `Work`），
-与 `ExecTier`（自治/审批）、`ThinkLevel`（推理深度）**完全正交**的第三孪生。
+与 `ExecTier`（自治/审批）、`ThinkLevel`（推理深度）**完全正交**的第三孪生（这一族现共五根，见下）。
 模式**不授予、不拒绝任何权限**——安全永远归 exec tier × `tool_permissions` × sandbox；
 模式改变的是工具**呈现面的资源分配**与 prompt 语域，让 agent 在不同工作形态下更高效：
 
@@ -56,7 +56,11 @@
 带**空核守卫**：configured 非空/非通配时减空回退 configured 原样——空集是下游"披露关闭"哨兵，
 减空会让 chat 反而比 work 更肥（escape hatch 必须 operator 显式）。
 
-**三孪生管道**（与 exec_tier / think_level 逐点同构）：
+**孪生管道**（与 exec_tier / think_level 逐点同构）。⚠️ **别在这里维护一个数目**：这一族
+2026-08-11 起有**五根**——`exec_tier` / `session_mode` / `think_level` / `memory_mode`
+（`turn_memory.rs`）/ `model_pin`（`turn_model.rs`，写者只有 `select_model` 工具）。加第六根的
+清单与它们各自漏过的那一步见 CLAUDE.md「会话旋钮」与 [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md)：
+`think_level` 走完 1–4 步却**一个客户端面都没有**，于是它被强制了很久而没人看得见。
 
 1. 载体入口：`chat.send`/`agent.run` 顶层 `mode` 参数（`SendParams.mode` → `AgentRunParams.mode`，
    `handlers/chat.rs` + `handlers/agent.rs`，双入口 `server_init.rs` 同步）；
