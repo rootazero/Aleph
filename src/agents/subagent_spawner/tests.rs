@@ -439,6 +439,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -481,6 +483,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -520,6 +524,8 @@ mod tests {
                     model: None,
                     timeout_secs: 5,
                     cancel: CancellationToken::new(),
+                    spawn_context: None,
+                    fork_source: None,
                     isolation: None,
                     strategy: None,
                     session_mode: None,
@@ -546,6 +552,8 @@ mod tests {
                     model: None,
                     timeout_secs: 5,
                     cancel: CancellationToken::new(),
+                    spawn_context: None,
+                    fork_source: None,
                     isolation: None,
                     strategy: None,
                     session_mode: None,
@@ -595,6 +603,8 @@ mod tests {
                     model: None,
                     timeout_secs: 60,
                     cancel,
+                    spawn_context: None,
+                    fork_source: None,
                     isolation: None,
                     strategy: None,
                     session_mode: None,
@@ -644,6 +654,8 @@ mod tests {
                     model: None,
                     timeout_secs: 60,
                     cancel,
+                    spawn_context: None,
+                    fork_source: None,
                     isolation: None,
                     strategy: None,
                     session_mode: None,
@@ -688,6 +700,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -718,6 +732,8 @@ mod tests {
             model: None,
             timeout_secs: 10,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -744,6 +760,8 @@ mod tests {
             model: None,
             timeout_secs: 1,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -780,6 +798,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -831,6 +851,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -902,6 +924,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -931,6 +955,8 @@ mod tests {
             model: None,
             timeout_secs: 1,
             cancel,
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -947,7 +973,7 @@ mod tests {
         session: &Arc<dyn SessionService>,
         child_id: &SessionId,
         texts: &[Option<&str>],
-    ) {
+    ) -> uuid::Uuid {
         session.attach(child_id.clone()).await.unwrap();
         let turn = uuid::Uuid::new_v4();
         session
@@ -980,6 +1006,166 @@ mod tests {
                 .await
                 .unwrap();
         }
+        turn
+    }
+
+    /// A forked child's tallies must cover only what the child itself did.
+    ///
+    /// `context=fork` seeds the child's log with a verbatim copy of the
+    /// parent's transcript, and `extract_run_result` reads that same log. Two
+    /// failures follow from counting the whole thing, and the second is the
+    /// dangerous one:
+    ///
+    /// * `iterations` / `tool_calls_made` charge the parent's turns to the
+    ///   child — a one-turn child forked off a busy parent reporting double
+    ///   digits;
+    /// * a child that produced **no** assistant message of its own (immediate
+    ///   error, cancelled before its first Think) hands back *the parent's last
+    ///   answer* as its finding, in a success shape. A sub-agent that quotes the
+    ///   question back as its result is worse than one that fails.
+    #[tokio::test]
+    async fn a_forked_child_reports_only_its_own_work() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
+        let child_id = ephemeral_for("forked", None);
+
+        // Stand in for `fork::seed`: the parent's turn, copied in verbatim,
+        // under the PARENT's turn id.
+        let parent_turn = uuid::Uuid::new_v4();
+        session.attach(child_id.clone()).await.unwrap();
+        for (call, text) in [("p1", "parent's own conclusion")] {
+            session
+                .emit_event(
+                    &child_id,
+                    SessionEvent::ToolCallRequested {
+                        turn_id: parent_turn,
+                        call_id: call.to_string(),
+                        name: "bash".into(),
+                        input: json!({}),
+                        at: now_ms(),
+                    },
+                )
+                .await
+                .unwrap();
+            session
+                .emit_event(
+                    &child_id,
+                    SessionEvent::AssistantMessage {
+                        turn_id: parent_turn,
+                        content: MessageContent {
+                            text: text.to_string(),
+                            blocks: Vec::new(),
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        usage: None,
+                        at: now_ms(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        // Now the child's own turn — which does exactly one thing.
+        let own_turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                &child_id,
+                SessionEvent::TurnStarted {
+                    turn_id: own_turn,
+                    trigger: TurnTrigger::SubagentRequest,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        session
+            .emit_event(
+                &child_id,
+                SessionEvent::AssistantMessage {
+                    turn_id: own_turn,
+                    content: MessageContent {
+                        text: "the child's finding".to_string(),
+                        blocks: Vec::new(),
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    usage: None,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let result = extract_run_result(session.as_ref(), &child_id, false, 0, own_turn)
+            .await
+            .expect("extract ok");
+
+        assert_eq!(
+            result.iterations, 1,
+            "the parent's assistant turns must not be charged to the child"
+        );
+        assert_eq!(
+            result.tool_calls_made, 0,
+            "the parent's tool calls must not be charged to the child"
+        );
+        assert_eq!(result.final_text.as_deref(), Some("the child's finding"));
+    }
+
+    /// The other half of the same boundary: a forked child that never produced
+    /// an assistant message must report *nothing*, not the parent's answer.
+    #[tokio::test]
+    async fn a_forked_child_that_said_nothing_does_not_borrow_the_parents_answer() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
+        let child_id = ephemeral_for("forked-silent", None);
+
+        session.attach(child_id.clone()).await.unwrap();
+        let parent_turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                &child_id,
+                SessionEvent::AssistantMessage {
+                    turn_id: parent_turn,
+                    content: MessageContent {
+                        text: "PARENT-ANSWER".to_string(),
+                        blocks: Vec::new(),
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    usage: None,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let own_turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                &child_id,
+                SessionEvent::TurnStarted {
+                    turn_id: own_turn,
+                    trigger: TurnTrigger::SubagentRequest,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let result = extract_run_result(session.as_ref(), &child_id, false, 0, own_turn)
+            .await
+            .expect("extract ok");
+
+        assert_eq!(result.iterations, 0);
+        assert_eq!(
+            result.final_text, None,
+            "a silent child must return nothing, never the parent's own words"
+        );
     }
 
     /// When the final AssistantMessage has empty text but earlier turns had
@@ -995,9 +1181,11 @@ mod tests {
         let child_id = ephemeral_for("edge", None);
 
         // Turn 1: "thinking..." (real text). Turn 2: pure tool_use (empty).
-        seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None]).await;
+        let turn =
+            seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None])
+                .await;
 
-        let result = extract_run_result(session.as_ref(), &child_id, true, 777)
+        let result = extract_run_result(session.as_ref(), &child_id, true, 777, turn)
             .await
             .expect("extract ok");
 
@@ -1026,9 +1214,11 @@ mod tests {
         let child_id = ephemeral_for("happy", None);
 
         // Turn 1: pure tool_use (empty). Turn 2: terminal text.
-        seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")]).await;
+        let turn =
+            seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")])
+                .await;
 
-        let result = extract_run_result(session.as_ref(), &child_id, false, 0)
+        let result = extract_run_result(session.as_ref(), &child_id, false, 0, turn)
             .await
             .expect("extract ok");
         assert_eq!(result.final_text.as_deref(), Some("final answer"));
@@ -1072,6 +1262,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel,
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -1148,6 +1340,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -1268,6 +1462,8 @@ mod tests {
             model: None,
             timeout_secs: 5,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -1316,6 +1512,8 @@ mod tests {
                 .with_provider_hint("anthropic"),
             task: "plan it".to_string(),
             context_summary: None,
+            spawn_context: None,
+            fork_source: None,
             model: None,
             timeout_secs: 5,
             request_id: None,
@@ -1333,32 +1531,79 @@ mod tests {
         assert_eq!(got[0].provider_id, "anthropic");
     }
 
-    // -- B5: context_mode authoritative --------------------------------------
+    // -- B5: the starting-context mode is authoritative -----------------------
 
+    /// An isolated child must not receive the caller's summary — that is the
+    /// mode's entire content — but the caller must still be told, or a
+    /// 2 KB briefing vanishes with an off-target answer and nothing to
+    /// correlate it to.
     #[test]
-    fn build_effective_task_fresh_mode_ignores_summary() {
-        use crate::agents::types::ContextMode;
-        let t = build_effective_task(Some("SECRET-CONTEXT"), ContextMode::Fresh, "do work");
-        assert_eq!(t, "do work");
-        assert!(!t.contains("SECRET-CONTEXT"));
+    fn build_effective_task_isolated_drops_the_summary_but_announces_it() {
+        use crate::agents::SpawnContext;
+        let t = build_effective_task(Some("SECRET-CONTEXT"), SpawnContext::Isolated, "do work");
+        assert!(t.starts_with("do work"));
+        assert!(!t.contains("SECRET-CONTEXT"), "the summary leaked: {t}");
         assert!(!t.contains("Context from parent agent"));
+        assert!(
+            t.contains("context=isolated") && t.contains("context=\\\"summary\\\"")
+                || t.contains("context=\"summary\""),
+            "a dropped summary must name the mode that dropped it and the way \
+             back: {t}"
+        );
     }
 
     #[test]
     fn build_effective_task_summary_mode_prepends_summary() {
-        use crate::agents::types::ContextMode;
-        let t = build_effective_task(Some("PARENT-CTX"), ContextMode::Summary, "do work");
+        use crate::agents::SpawnContext;
+        let t = build_effective_task(Some("PARENT-CTX"), SpawnContext::Summary, "do work");
         assert!(t.contains("Context from parent agent"));
         assert!(t.contains("PARENT-CTX"));
         assert!(t.ends_with("do work"));
     }
 
+    /// A fork already hands the child the parent's real transcript; a précis of
+    /// the same events layered on top would be a second, lossier account that
+    /// contradicts the first wherever they disagree.
+    #[test]
+    fn build_effective_task_fork_drops_the_summary_as_redundant() {
+        use crate::agents::SpawnContext;
+        let t = build_effective_task(
+            Some("SECRET-CONTEXT"),
+            SpawnContext::Fork { turns: None },
+            "do work",
+        );
+        assert!(!t.contains("SECRET-CONTEXT"), "the summary leaked: {t}");
+        assert!(t.contains("context=fork"), "the reason must be named: {t}");
+    }
+
     #[test]
     fn build_effective_task_no_summary_is_bare_task() {
-        use crate::agents::types::ContextMode;
+        use crate::agents::SpawnContext;
+        for mode in [
+            crate::agents::SpawnContext::Isolated,
+            SpawnContext::Summary,
+            SpawnContext::Fork { turns: None },
+        ] {
+            assert_eq!(
+                build_effective_task(None, mode, "just this"),
+                "just this",
+                "no summary means no annotation, in every mode"
+            );
+        }
+    }
+
+    /// The per-call knob defaults to the agent definition's declared mode, so
+    /// every caller that predates it behaves exactly as before.
+    #[test]
+    fn an_omitted_context_argument_falls_back_to_the_agent_default() {
+        use crate::agents::{ContextMode, SpawnContext};
         assert_eq!(
-            build_effective_task(None, ContextMode::Summary, "just this"),
-            "just this"
+            SpawnContext::from_context_mode(&ContextMode::Fresh),
+            SpawnContext::Isolated
+        );
+        assert_eq!(
+            SpawnContext::from_context_mode(&ContextMode::Summary),
+            SpawnContext::Summary
         );
     }
 
@@ -1429,6 +1674,8 @@ mod tests {
             model: None,
             timeout_secs: 30,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: Some("Objective: weld it.\nGuardrails:\n- no shortcuts"),
             session_mode: None,
@@ -1459,6 +1706,8 @@ mod tests {
             model: None,
             timeout_secs: 30,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: Some(crate::config::types::policies::SessionMode::Chat),
@@ -1487,6 +1736,8 @@ mod tests {
             model: None,
             timeout_secs: 30,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -1523,6 +1774,8 @@ mod tests {
             model: None,
             timeout_secs: 10,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -1575,6 +1828,8 @@ mod tests {
             model: None,
             timeout_secs: 10,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,
@@ -1619,6 +1874,8 @@ mod tests {
             model: None,
             timeout_secs: 10,
             cancel: CancellationToken::new(),
+            spawn_context: None,
+            fork_source: None,
             isolation: None,
             strategy: None,
             session_mode: None,

@@ -99,6 +99,108 @@ impl std::fmt::Display for ContextMode {
     }
 }
 
+/// Where **this** sub-agent call's starting context comes from.
+///
+/// [`ContextMode`] answers the same question one level up — it is the *agent
+/// definition's* default, chosen by whoever wrote the agent file. That was the
+/// only answer available for a long time, and it puts the choice in the wrong
+/// hands: whether a given delegation wants an untainted reviewer or a child
+/// that already knows what happened is a property of the delegation, not of the
+/// role. `explore` is the right agent for both "go find out, ignore what I
+/// think" and "carry on from where we are".
+///
+/// So this is the per-call override; `None` at the call site falls back to
+/// [`ContextMode`], which keeps every existing caller byte-identical.
+///
+/// There is deliberately **no** `Fork` variant on `ContextMode`. An agent file
+/// cannot sensibly declare "always fork" — a fork is meaningful only relative to
+/// a live parent transcript, and the same role is spawned from cron, from a
+/// channel, and from a nested child, where there is nothing worth forking. A
+/// variant with no producer is the abstraction R10's YAGNI clause says to leave
+/// unbuilt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnContext {
+    /// Clean room. The child sees its task and nothing else — not the parent's
+    /// transcript, not the parent's `context_summary`.
+    ///
+    /// This is the setting an independent review needs: the single input most
+    /// likely to bias a verifier is the author's own account of what it did and
+    /// why, and that account is exactly what `context_summary` contains.
+    Isolated,
+    /// The caller's hand-written `context_summary`, prefixed to the task.
+    /// Lossy and parent-authored, but cheap and under the caller's control.
+    Summary,
+    /// A verbatim copy of the parent's own recent transcript.
+    ///
+    /// Highest fidelity — the child reads what actually happened rather than
+    /// the parent's précis of it — and the only mode with prefix warmth across
+    /// a fan-out (see [`crate::agents::subagent_spawner::fork`] for what that
+    /// does and does not mean). It also inherits the parent's framing wholesale,
+    /// which is the opposite of what [`Self::Isolated`] is for.
+    ///
+    /// `turns` bounds how many complete parent turns are carried, newest-first;
+    /// `None` means "as many as fit the child's context budget".
+    Fork { turns: Option<usize> },
+}
+
+impl SpawnContext {
+    /// The per-call mode an agent's declared default corresponds to.
+    #[must_use]
+    pub const fn from_context_mode(mode: &ContextMode) -> Self {
+        match mode {
+            ContextMode::Fresh => Self::Isolated,
+            ContextMode::Summary => Self::Summary,
+        }
+    }
+
+    /// Parse the model-facing `context` argument.
+    ///
+    /// Returns the accepted spelling on success and `None` on anything else, so
+    /// the caller can reject with a message naming the valid values rather than
+    /// silently falling back — a mistyped `context` that degraded to the agent
+    /// default would be a review the caller believes is isolated and is not.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "isolated" => Some(Self::Isolated),
+            "summary" => Some(Self::Summary),
+            "fork" => Some(Self::Fork { turns: None }),
+            _ => None,
+        }
+    }
+
+    /// Every value [`Self::parse`] accepts, for schema and error text.
+    ///
+    /// One source: the tool schema's `enum`, the parse error message and the
+    /// parser itself all read this, so a fourth mode cannot be added to one and
+    /// missed by the others.
+    pub const ACCEPTED: &'static [&'static str] = &["isolated", "summary", "fork"];
+
+    /// Is this a fork? (Pattern-matching helper for call sites that only care
+    /// about the branch, not the bound.)
+    #[must_use]
+    pub const fn is_fork(&self) -> bool {
+        matches!(self, Self::Fork { .. })
+    }
+
+    /// The wire spelling — the exact string a caller would pass as `context`.
+    ///
+    /// Exists so the *other* face of this axis can speak the same vocabulary.
+    /// `agent_info` reports an agent's declared default, and it used to render
+    /// `ContextMode`'s own `Display` (`Fresh` / `Summary`) — which meant the
+    /// model was shown one word and had to type a different one for the same
+    /// thing, with nothing anywhere saying they were the same thing. One axis,
+    /// one set of names.
+    #[must_use]
+    pub const fn as_arg(&self) -> &'static str {
+        match self {
+            Self::Isolated => "isolated",
+            Self::Summary => "summary",
+            Self::Fork { .. } => "fork",
+        }
+    }
+}
+
 /// Definition of an agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDef {
