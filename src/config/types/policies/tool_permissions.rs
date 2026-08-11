@@ -58,6 +58,25 @@ impl Default for ToolPermissionsConfig {
     }
 }
 
+/// Which override entry decided a tool's permission, and what it decided.
+///
+/// Returned by [`ToolPermissionsConfig::explain`]. `pattern` borrows the key as
+/// written in the config — an exact tool name or a glob — so a surface can quote
+/// it back verbatim ("`*` = deny") instead of paraphrasing a config the operator
+/// wrote themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PermissionMatch<'a> {
+    /// The permission the entry states.
+    pub action: PermissionAction,
+    /// The override key that matched, exactly as written in the config.
+    pub pattern: &'a str,
+    /// `true` when `pattern` is the tool's exact name rather than a glob. The
+    /// exec tier's argument-level filter stands down only for an exact entry
+    /// (see `ScopedToolService::explicitly_named`), so the distinction is
+    /// load-bearing, not cosmetic.
+    pub exact: bool,
+}
+
 impl ToolPermissionsConfig {
     /// Resolve the effective permission for a tool.
     ///
@@ -83,20 +102,65 @@ impl ToolPermissionsConfig {
     /// [`crate::tools::scoped::ScopedToolService::permission_for`] — need to
     /// tell "the operator decided Allow" apart from "nobody said anything and
     /// the default is Allow".
+    ///
+    /// Delegates to [`Self::explain`] so "what did the operator decide" and
+    /// "which entry decided it" can never answer differently.
     pub fn resolve_explicit(&self, tool_name: &str) -> Option<PermissionAction> {
+        self.explain(tool_name).map(|m| m.action)
+    }
+
+    /// [`Self::resolve_explicit`] plus the override key that produced the
+    /// answer — the fact an approval card needs so the human can tell what to
+    /// edit.
+    ///
+    /// A gate that says "this tool needs your confirmation" and stops there
+    /// teaches the reader to guess, and the two guesses this repo actually sees
+    /// are both wrong somewhere: "set it to allow and it will stop asking"
+    /// (false whenever the tool declares its own gate) and "I never configured
+    /// this" (false whenever a glob caught it). Naming the entry answers both.
+    ///
+    /// # Determinism
+    ///
+    /// `overrides` is a `HashMap`, so the glob scan visits patterns in an
+    /// arbitrary order. The *action* was always deterministic
+    /// ([`restrictive_min`] is commutative and associative) but the winning
+    /// *pattern* is not, and a reason string that changes between runs is a
+    /// reason string nobody trusts. Equally restrictive matches therefore break
+    /// the tie on the lexicographically smallest key.
+    pub fn explain(&self, tool_name: &str) -> Option<PermissionMatch<'_>> {
         // 1. Exact override — fast path and most specific.
-        if let Some(action) = self.overrides.get(tool_name).copied() {
-            return Some(action);
+        if let Some((pattern, action)) = self.overrides.get_key_value(tool_name) {
+            return Some(PermissionMatch {
+                action: *action,
+                pattern,
+                exact: true,
+            });
         }
-        // 2. Glob-pattern overrides; most restrictive match wins.
-        let mut matched: Option<PermissionAction> = None;
+        // 2. Glob-pattern overrides; most restrictive match wins, ties on key.
+        let mut matched: Option<PermissionMatch<'_>> = None;
         for (pattern, action) in &self.overrides {
-            if is_glob_pattern(pattern) && crate::approval::matches_glob(tool_name, pattern) {
-                matched = Some(match matched {
-                    Some(prev) => restrictive_min(prev, *action),
-                    None => *action,
-                });
+            if !is_glob_pattern(pattern) || !crate::approval::matches_glob(tool_name, pattern) {
+                continue;
             }
+            let candidate = PermissionMatch {
+                action: *action,
+                pattern,
+                exact: false,
+            };
+            matched = Some(match matched {
+                // Strictly more restrictive wins outright; equally restrictive
+                // breaks on the smallest key so the answer does not depend on
+                // `HashMap` iteration order.
+                Some(prev)
+                    if restrictive_min(prev.action, candidate.action) != prev.action
+                        || (prev.action == candidate.action
+                            && candidate.pattern < prev.pattern) =>
+                {
+                    candidate
+                }
+                Some(prev) => prev,
+                None => candidate,
+            });
         }
         matched
     }
@@ -236,6 +300,84 @@ mod tests {
             PermissionAction::Allow
         );
         assert_eq!(config.resolve("read_file"), PermissionAction::Allow);
+    }
+
+    /// `explain` says WHICH entry decided, and marks whether it was the tool's
+    /// own name. The `exact` bit is load-bearing: the exec tier's
+    /// argument-level filter stands down only for an exact entry.
+    #[test]
+    fn explain_names_the_entry_and_whether_it_was_exact() {
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [
+                ("github__*".to_string(), PermissionAction::Ask),
+                ("file_ops".to_string(), PermissionAction::Ask),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        let exact = config.explain("file_ops").expect("named exactly");
+        assert_eq!(exact.pattern, "file_ops");
+        assert!(exact.exact);
+
+        let glob = config.explain("github__delete_repo").expect("glob match");
+        assert_eq!(glob.pattern, "github__*");
+        assert!(!glob.exact);
+
+        assert_eq!(config.explain("read_file"), None, "silence stays silence");
+    }
+
+    /// The winning PATTERN must be stable across runs. `overrides` is a
+    /// `HashMap`, so the scan order is arbitrary; the action was always
+    /// deterministic (`restrictive_min` is commutative) but the pattern quoted
+    /// back to the user was not, and a card that names a different entry each
+    /// time it renders is worse than one that names none.
+    #[test]
+    fn explain_breaks_ties_deterministically_across_iteration_orders() {
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [
+                ("zzz_*".to_string(), PermissionAction::Ask),
+                ("aaa*".to_string(), PermissionAction::Ask),
+                ("a*".to_string(), PermissionAction::Ask),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        // Rebuild the map repeatedly: each `HashMap` gets its own random seed
+        // for the SipHash keys, so this really does resample the scan order.
+        for _ in 0..32 {
+            let shuffled = ToolPermissionsConfig {
+                default: config.default,
+                overrides: config.overrides.clone().into_iter().collect(),
+            };
+            assert_eq!(
+                shuffled.explain("aaa_tool").map(|m| m.pattern),
+                Some("a*"),
+                "equally restrictive matches must resolve to the same pattern"
+            );
+        }
+    }
+
+    /// A more restrictive pattern still wins outright — the tie-break only
+    /// arbitrates between equals, it does not reorder the lattice.
+    #[test]
+    fn explain_prefers_restrictiveness_over_the_tie_break_key() {
+        let config = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [
+                ("a*".to_string(), PermissionAction::Ask),
+                ("az*".to_string(), PermissionAction::Deny),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        // Both patterns match `az_tool`, and the denying one sorts LATER, so a
+        // key-first rule would have picked the wrong (weaker) answer.
+        let m = config.explain("az_tool").expect("both match");
+        assert_eq!(m.action, PermissionAction::Deny);
+        assert_eq!(m.pattern, "az*");
     }
 
     #[test]

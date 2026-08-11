@@ -119,14 +119,19 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_team_status ON coord_tasks(team_id, status);
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_owner ON coord_tasks(owner);
-        // B6-03: index on coord_task_dependencies(depends_on). The edge
-        // table's only prior index is the implicit PK (task_id, depends_on),
-        // which by the leftmost-prefix rule cannot serve any lookup keyed on
-        // depends_on. Three production paths are keyed exactly that way:
-        //   * deps::get_dependents  WHERE depends_on = ?1
-        //   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
-        //     (runs on every task completion)
-        //   * FK child scan for delete_team_tasks (O(deleted_tasks × total_edges))
+        -- B6-03: index on coord_task_dependencies(depends_on). The edge
+        -- table's only prior index is the implicit PK (task_id, depends_on),
+        -- which by the leftmost-prefix rule cannot serve any lookup keyed on
+        -- depends_on. Three production paths are keyed exactly that way:
+        --   * deps::get_dependents  WHERE depends_on = ?1
+        --   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
+        --     (runs on every task completion)
+        --   * FK child scan for delete_team_tasks (O(deleted_tasks x total_edges))
+        -- NOTE: `--`, not `//`. This block shipped with Rust-style comments
+        -- inside a SQL string literal, so `execute_batch` failed at the first
+        -- `/` and the WHOLE migration aborted: every coord-task table went
+        -- missing, teams / workflows / swarm tasks were dead at runtime, and
+        -- 133 lib tests failed. A comment syntax error is a migration outage.
         CREATE INDEX IF NOT EXISTS idx_coord_task_deps_depends_on
             ON coord_task_dependencies(depends_on);
         "#,
