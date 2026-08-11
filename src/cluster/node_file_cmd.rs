@@ -192,7 +192,7 @@ impl NodeCommand for FileReadCommand {
         // the kernel only delivers `MAX_FILE_BYTES + 1` bytes regardless of
         // the file's actual size, and reject if the buffer is over the cap.
         use tokio::io::AsyncReadExt;
-        let mut file = tokio::fs::File::open(&src)
+        let file = tokio::fs::File::open(&src)
             .await
             .map_err(|e| format!("file.read: {e}"))?;
         let mut buf = Vec::with_capacity(std::cmp::min(size, MAX_FILE_BYTES as u64) as usize);

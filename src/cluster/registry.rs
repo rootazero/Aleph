@@ -201,7 +201,7 @@ impl NodeRegistry {
                 inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             }
         }
-        inner.nodes_by_conn.insert(conn_id, node_id.clone());
+        inner.nodes_by_conn.insert(conn_id.clone(), node_id.clone());
         inner.nodes_by_id.insert(node_id.clone(), session);
         tracing::debug!(node_id = %node_id, conn_id = %conn_id, "cluster node registered");
     }
@@ -215,7 +215,7 @@ impl NodeRegistry {
         let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
             return false;
         };
-        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id)
+        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id.clone())
         {
             if entry.get().conn_id == conn_id {
                 let removed_name = entry.get().device_name.clone();

@@ -21,7 +21,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 ///
 /// Thread-safe; lock poisoning handled per P7
 /// (`unwrap_or_else(|e| e.into_inner())`).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct PendingInvokes {
     counter: AtomicU64,
     waiters: Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>,
@@ -106,6 +106,11 @@ impl PendingInvokes {
     /// is a known-handled response, the second is a routing bug worth a
     /// warning. Cheap O(1) lookup; the table also retains an internal
     /// `seen_ids` set so the answer survives `cancel()` / `cancel_all()`.
+    ///
+    /// Allowed-dead-code: the inbound-loop caller lives in
+    /// `src/gateway/server/handler.rs` (out of scope for the cluster static
+    /// review batch); once that wiring lands the `#[allow]` can be removed.
+    #[allow(dead_code)]
     pub(crate) fn remembered(&self, id: &str) -> bool {
         self.seen_ids.lock().unwrap_or_else(|e| e.into_inner()).contains(id)
     }
@@ -173,7 +178,7 @@ const OUTBOUND_PUSH_BUDGET_MS: u64 = 500;
 /// A reverse RPC channel bound to a **single connection**: writes request
 /// frames into that connection's outbound mpsc and awaits the associated
 /// response through a shared [`PendingInvokes`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReverseRpcChannel {
     outbound: mpsc::Sender<String>,
     pending: Arc<PendingInvokes>,
