@@ -357,6 +357,9 @@
 - **加了通道 adapter ≠ 用户能配** —— 必须手工进 `gateway/interfaces/plugin.rs` 的工厂表（`register_plain_channel!`）→ [GATEWAY.md](docs/reference/GATEWAY.md)
 - **`ChannelCapabilities` 的每个位都是承诺** —— 声明了就必须覆写对应的 `Channel` 方法（默认体一律 `Err` 并指名道姓）；频道寻址是**两步**（先 `channel_directory` 换 id）→ §5.18
 - **车道是候车室，不是运行登记簿** —— 取槽成功时必须 `busy_queue::mark_admitted`，否则 `Steer`/`Interrupt` **静默退化成 `Queue`**（三件事一起修或一起坏）→ §4.8
+- **修好一条堵塞之后，被它挡住的每一个动词都第一次真正开火——包括那些「开火」意味着破坏的** —— 上一条的第二半，同一个车道。`mark_admitted` 让后来者能在前驱运行期间够到引擎，这正是 `Steer` 需要的；而 `Interrupt` 拿到同一条通路的意思是**每条排队消息都会在毫秒内杀掉前驱刚变成的那个 run**，一个 burst 里 N 条只剩最后一条活着、N-1 轮工作被销毁，而没有任何人按过停止。判据是**时间性的**：只能取消一个「在本消息**开始等待之前**就已被接纳」的 run（车道半边 `busy_queue::waiting_since`、引擎半边 `ActiveRun.admitted_at`，两边都必须是**单调钟**——墙钟跳变会静默反转判决，而 `started_at` 是给人看的那一份）。⚠️ **两条更便宜的判据都是错的**：「目标是不是本车道最近接纳的那个」会连同「sibling 健康时新到达的真 Interrupt」一起压掉（那正是这个模式存在的理由）；而忘了给「没有 ticket 的生产者」留 `None ⇒ 不设限` 那条臂，修的就不是 burst 而是把 Interrupt 整个关掉 → §4.8 Round-8 ①
+- **一个 id 在客户端手里的时刻，和它在投递过滤器眼里可解析的时刻，是两回事** —— `chat.send` 一返回，客户端就握着 `run_id`；而 `EventVisibilityIndex` 的 run→session 种子只来自 `stream.run_accepted`，那是**准入之后**才发的。于是每一个「这个 run 从没进过引擎」的终局帧（车道满 / 等待超时 / 被停止清掉）都分类 `ByRunId`、解析落空、**fail-closed 拒给每一条连接，operator 也不例外**——三条写在文档里的用户回执因此全是静默丢弃，其中一条正是专门写来关掉「停不掉的 pending 气泡」的那条。修法是**让帧自报归属**（`RunError.session_key`，只有 `spawn_queued_run` 设它），并把播种判据从「topic 是不是那一个」改成「**这一帧有没有同时说出 run_id 和 session_key**」——`note_frame` 跑在过滤器之前，所以帧给自己播种。判据一句话：**加一个只在准入前发得出来的帧之前，先问它凭什么被解析**（同族＝ `src/gateway/CLAUDE.md` 地雷 H：解析句柄的安装条件不得比帧的生产条件更窄）→ §4.8 Round-8 ②
+- **「停止」这个动词有两种寻址方式，只有一种接了完整的那条线** —— 按 session key 停（channel `/stop`）走 `cancel_session`，它会 walk 委派子运行；按 run id 停（Panel `chat.abort` / TUI `/stop` / `aleph chat abort`）落在 `AgentRunManager::cancel_run`，而它调的是 `execution_adapter.cancel(run_id)` —— **只点一个令牌**。leader 停了，它 `task_manage`/delegate/后台子代理派出去的成员运行继续跑、继续烧 token，且此后没有任何 surface 够得到它们——正是那趟 walk 被写出来堵的 detach 泄漏。**而 `cancel_session` 自己的 doc、FEATURE_LOCATOR §4.8、CLAUDE.md 打磨话术三处都写着 `chat.abort` 已经走它**（「同一事实的两份表述」再来一次，这回是三份，代码那份才是真的）。修法是加一个**查询**而不是第三个动词（`ExecutionAdapter::session_of_run`，默认 `None`），让 run-id 那张脸解析出会话后走**同一个** `cancel_session`；引擎不握着这个 run（已结束 / 仍在车道里）时回退原语，那条路同时是 `cancel_queued_run` 需要的 → §4.8 Round-8 ③
 - **「提前返回的快路径」会静默吞掉请求上除它自己之外的一切** —— 判据不是「这条路径会不会崩」而是「它跳过了哪些本该发生的解析」；新增 per-request 指令字段必须在 `steering.rs::carries_more_than_text` 登记。**一个方向被想到、反方向没有**是这类缺陷最常见的形状 → §4.8
 - **`devices` 是 panel 与 cluster 共用的一张表，`device_id` 两边都是对端自报的** —— 任何「按 id 认领一行」的新路径必须先拒掉另一半命名空间（判据单一源 `PANEL_DEVICE_TYPE`）→ [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux) · `src/gateway/CLAUDE.md`
 - **团队群聊投影前必须先按当前 `chat.team_id` 作用域** —— 订阅是 `team.*` 通配，否则后台团队的气泡挤进任意会话 → §4.5
@@ -524,13 +527,15 @@
 
 ### 三根会话旋钮 (Session Knobs)
 
-三者**正交**，都由 Panel composer pill 或对话式工具切换：
+三者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
 
-| 旋钮 | 值 | 管什么 | 单一源 |
-|---|---|---|---|
-| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
-| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
-| **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
+| 旋钮 | 值 | 管什么 | 谁在拨 | 单一源 |
+|---|---|---|---|---|
+| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | Panel pill + `chat.send{exec_tier}` | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
+| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
+| **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
+
+> **别急着给它加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
 
 `[sandbox.command_policy]` 的硬底线**任何档位都压不下去**。
 
