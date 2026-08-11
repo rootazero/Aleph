@@ -332,6 +332,21 @@ pub(crate) async fn project_event(
 
 impl SessionEventObserver for MessageProjector {
     fn on_appended(&self, id: &SessionId, record: &SessionEventRecord) {
+        // Busy-lane wake edge, taken here rather than inside the drain task
+        // below: `try_send` DROPS on a full queue (the projection is
+        // eventually consistent by design, the SSOT log is not), and a dropped
+        // wake would put a backpressure-deferred steer back on the 30 s
+        // fallback tick — the exact staleness this edge exists to remove.
+        //
+        // This observer is the gateway's one "an event was appended" seam, so
+        // it sees every producer of an assistant turn (harness run, fast path,
+        // simple engine). The predicate for which events matter belongs to
+        // steering, next to the count it resets; everything below the
+        // `matches!` costs nothing for the events that are not assistant turns.
+        crate::gateway::execution_engine::wake_lane_if_burst_drained(
+            &id.to_key_string(),
+            &record.event,
+        );
         match self.tx.try_send((id.clone(), record.clone())) {
             Ok(()) => {}
             // Expected back-pressure. The event stays in the SSOT log (agent
@@ -589,6 +604,51 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         store.get_history(id, None).await.unwrap_or_default()
+    }
+
+    /// The busy lane's burst-drain wake edge has to survive the seam it is
+    /// fired from. Asserting the call would prove nothing — throw the notify
+    /// away and a call-count guard stays green — so this asserts the effect:
+    /// a waiter parked on the lane is released by an assistant turn arriving at
+    /// the observer, and is NOT released by a user turn (which does not drain
+    /// anything). Fired before the `try_send` below on purpose: that send drops
+    /// on a full queue, and a dropped wake puts the message back on the 30 s
+    /// fallback tick.
+    #[tokio::test]
+    async fn an_appended_assistant_turn_wakes_a_backpressure_deferred_waiter() {
+        let temp = tempdir().unwrap();
+        let config = SessionManagerConfig {
+            db_path: temp.path().join("proj_wake.db"),
+            ..Default::default()
+        };
+        let manager = SessionManager::new(config).unwrap();
+        let id = SessionId::ephemeral("proj_wake");
+        manager.get_or_create(&id).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+        let projector = MessageProjector::new(store, None);
+
+        // The lane is keyed exactly as the observer will render this session.
+        let key = id.to_key_string();
+        let ticket = crate::gateway::busy_queue::register(&key, 8, "proj-wake-run")
+            .expect("lane accepts the deferred steer");
+        crate::gateway::busy_queue::mark_awaiting_burst_drain(&key, "proj-wake-run");
+        let wake = ticket.wake_handle();
+        let parked = wake.notified();
+        tokio::pin!(parked);
+
+        let tid = uuid::Uuid::new_v4();
+        projector.on_appended(&id, &rec(1, user_msg(tid)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "a user turn adds to the burst; it cannot drain it"
+        );
+
+        projector.on_appended(&id, &rec(2, assistant_msg(tid)));
+        tokio::time::timeout(Duration::from_millis(500), &mut parked)
+            .await
+            .expect("an assistant turn at the observer must reach the lane");
     }
 
     #[tokio::test]
