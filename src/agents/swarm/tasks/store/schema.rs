@@ -331,4 +331,44 @@ mod tests {
         migrate(&conn).expect("first apply");
         migrate(&conn).expect("second apply must be a no-op");
     }
+
+    /// No SQL literal in this file may carry a Rust line comment.
+    ///
+    /// The direct tests above prove the schema parses *today*; this one names
+    /// the specific mistake, so the next person who explains an index in a
+    /// `r#"…"#` block finds out at `cargo test` rather than at boot. Reads the
+    /// source with `\r` stripped first — CLAUDE.md §10: a source-level guard
+    /// that anchors on `\n` matches nothing in this CRLF checkout while passing
+    /// on CI's LF, which looks like a platform quirk and is really a blind spot.
+    #[test]
+    fn no_sql_literal_carries_a_rust_line_comment() {
+        let src = std::fs::read_to_string(file!())
+            .or_else(|_| {
+                std::fs::read_to_string(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/src/agents/swarm/tasks/store/schema.rs"
+                ))
+            })
+            .expect("this file is readable")
+            .replace('\r', "");
+
+        // Every `r#"…"#` literal in the file; the SQL lives in exactly these.
+        let mut checked = 0usize;
+        for (i, chunk) in src.split("r#\"").enumerate().skip(1) {
+            let body = chunk.split("\"#").next().unwrap_or("");
+            checked += 1;
+            for line in body.lines() {
+                assert!(
+                    !line.trim_start().starts_with("//"),
+                    "raw string literal #{i} contains a Rust line comment: {line:?}. \
+                     SQLite's line comment is `--`; `//` is a syntax error that fails \
+                     the entire batch."
+                );
+            }
+        }
+        assert!(
+            checked > 0,
+            "found no r#\"…\"# literals — the migrations moved and this guard is blind"
+        );
+    }
 }

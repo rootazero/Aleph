@@ -43,6 +43,7 @@ pub use run_context::{current_agent_id, with_agent_id};
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome};
 pub use types::{
     AgentDef, AgentMode, AgentSource, ContextMode, IsolationMode, McpInlineConfig, McpServerSpec,
+    SpawnContext,
 };
 
 // Re-export sub_agents module types for convenience

@@ -10,6 +10,8 @@
 //! timeout + panic isolation, then walks the child session event log to
 //! synthesize a `LoopRunResult`.
 //!
+pub(crate) mod fork;
+
 use std::panic::AssertUnwindSafe;
 
 use crate::sync_primitives::Arc;
@@ -140,6 +142,17 @@ pub struct SpawnRequest<'a> {
     pub timeout_secs: u64,
     /// Cancellation token observed between turns by the harness.
     pub cancel: CancellationToken,
+    /// Per-call override of where the child's starting context comes from.
+    ///
+    /// `None` — every caller that predates the knob — falls back to
+    /// `agent_def.context_mode`, so those paths are byte-identical to before.
+    pub spawn_context: Option<crate::agents::SpawnContext>,
+    /// The parent transcript a `context=fork` spawn copies from, captured once
+    /// per tool call by the caller. Required when `spawn_context` is
+    /// [`crate::agents::SpawnContext::Fork`]; ignored otherwise. See
+    /// [`fork::ForkSource`] for why the caller captures it rather than the
+    /// spawner.
+    pub fork_source: Option<fork::ForkSource>,
     /// Strict isolation mode (P3 Stage H). `None` = inherit parent's
     /// `HarnessDeps` (legacy / default). `Some(IsolationMode::Worktree)`
     /// will provision a detached-HEAD git worktree in Task 9.
@@ -362,6 +375,100 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .await
             .map_err(|e| format!("sub-agent failed: attach session: {e}"))?;
 
+        // 3a. Resolve where this child's starting context comes from. The
+        //     call's explicit choice wins; otherwise the agent definition's
+        //     declared default — which is what every pre-knob caller gets, so
+        //     their behaviour is unchanged.
+        let spawn_context = req.spawn_context.unwrap_or_else(|| {
+            crate::agents::SpawnContext::from_context_mode(&req.agent_def.context_mode)
+        });
+
+        // 3b. Build the agent-scoped system prompt.
+        //
+        //     Moved AHEAD of session seeding (it used to sit at step 4) because
+        //     a fork's size ceiling is "the child's compaction warning line
+        //     minus whatever the system block already occupies", and that
+        //     second term is knowable exactly here. Sizing the fork against the
+        //     whole window instead would seed a child that compacts on its
+        //     first Think — paying an LLM to summarise history we just paid to
+        //     copy. Pure function of `req` / `base`, so the move is safe.
+        //
+        //     `PromptBuilder::with_agent` pulls in the AgentRoleLayer;
+        //     `build_system_prompt(&[])` is fine — tool schemas are delivered
+        //     via native tool_use, not the prompt. The descended `child_chain`
+        //     is passed in so `ChainContextLayer` can tell the spawned agent it
+        //     is nested and how much delegation budget remains.
+        let resolved_model: Option<String> = req
+            .model
+            .map(str::to_string)
+            .or_else(|| req.agent_def.model_hint.clone());
+        let token_budget = base
+            .context_budget_config
+            .as_ref()
+            .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
+                crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
+            });
+        let mut builder = PromptBuilder::new(PromptConfig {
+            token_budget,
+            ..PromptConfig::default()
+        })
+        .with_agent(req.agent_def.clone())
+        .with_chain_context(child_chain.clone());
+        if let Some(strategy) = req.strategy {
+            builder = builder.with_strategy(strategy.to_string());
+        }
+        if let Some(mode) = req.session_mode {
+            builder = builder.with_session_mode(mode);
+        }
+        let system_prompt = builder.build_system_prompt(&[]);
+
+        // 3c. Fork: copy the parent's own recent transcript into the child
+        //     BEFORE its task turn opens, so `build_prompt` — which walks the
+        //     child log from index 0 exactly as it walks the parent's —
+        //     reconstructs it through the same code path that produced it. That
+        //     shared path is what makes the replay byte-identical, which is
+        //     what makes the prefix cacheable.
+        let fork_applied = match spawn_context {
+            crate::agents::SpawnContext::Fork { turns } => {
+                let parent_id = base
+                    .parent_session_id
+                    .as_deref()
+                    .and_then(parent_session_id_of)
+                    .ok_or_else(|| {
+                        "sub-agent failed: context=fork has no parent session to fork from \
+                         (this spawn site runs outside a conversation — use context=isolated \
+                         or context=summary)"
+                            .to_string()
+                    })?;
+                let source = req.fork_source.as_ref().ok_or_else(|| {
+                    "sub-agent failed: context=fork reached the spawner with no captured \
+                     parent transcript — the caller must snapshot it once per tool call \
+                     (fork::snapshot) so every child of one fan-out forks the same instant"
+                        .to_string()
+                })?;
+                let budget = fork::ForkBudget::for_child(
+                    base.context_budget_config.as_ref(),
+                    system_prompt.len(),
+                    turns,
+                )
+                .ok_or_else(|| {
+                    "sub-agent failed: context=fork cannot be sized — this run has no \
+                     [context_budget], or the child's system prompt already fills its \
+                     window. Use context=isolated or context=summary."
+                        .to_string()
+                })?;
+                fork::seed(
+                    base.session.as_ref(),
+                    &parent_id,
+                    &child_id,
+                    source,
+                    &budget,
+                )
+                .await?
+            }
+            _ => None,
+        };
+
         let turn = uuid::Uuid::new_v4();
         base.session
             .emit_event(
@@ -375,11 +482,14 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .await
             .map_err(|e| format!("sub-agent failed: emit TurnStarted: {e}"))?;
 
-        let effective_task = build_effective_task(
-            req.context_summary,
-            req.agent_def.context_mode.clone(),
-            req.task,
-        );
+        let mut effective_task = build_effective_task(req.context_summary, spawn_context, req.task);
+        // The fork receipt rides on the same message as the task, so the child
+        // reads what it is looking at and what it is being asked together —
+        // rather than inferring an objective from a window that may start in
+        // the middle of one.
+        if let Some(note) = fork_applied.as_ref().and_then(fork::ForkPlan::receipt) {
+            effective_task = format!("{note}\n\n{effective_task}");
+        }
         // VESR v1.1 (b) — capture this subagent's run under its own agent_id by
         // wrapping the child trace sink with a dedicated OutcomeObserver.
         // Subagents bypass the top-level wrap (runner_impl.rs), so we mirror it
@@ -467,36 +577,6 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                     .await;
             }
         }
-
-        // 4. Build the agent-scoped system prompt. `PromptBuilder::with_agent`
-        //    pulls in the AgentRoleLayer; `build_system_prompt(&[])` is fine —
-        //    tool schemas are delivered via native tool_use, not the prompt.
-        //    The descended `child_chain` is passed in so `ChainContextLayer`
-        //    can tell the spawned agent it is nested and how much delegation
-        //    budget remains.
-        let resolved_model: Option<String> = req
-            .model
-            .map(str::to_string)
-            .or_else(|| req.agent_def.model_hint.clone());
-        let token_budget = base
-            .context_budget_config
-            .as_ref()
-            .map_or_else(crate::thinker::prompt_budget::TokenBudget::default, |cfg| {
-                crate::thinker::prompt_budget::TokenBudget::from_context_window(cfg.token_budget)
-            });
-        let mut builder = PromptBuilder::new(PromptConfig {
-            token_budget,
-            ..PromptConfig::default()
-        })
-        .with_agent(req.agent_def.clone())
-        .with_chain_context(child_chain.clone());
-        if let Some(strategy) = req.strategy {
-            builder = builder.with_strategy(strategy.to_string());
-        }
-        if let Some(mode) = req.session_mode {
-            builder = builder.with_session_mode(mode);
-        }
-        let system_prompt = builder.build_system_prompt(&[]);
 
         // 5. Resolve the model override: explicit > model_hint > native.
         let llm: Arc<dyn AiProvider> = match resolved_model {
@@ -722,9 +802,14 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 let hit_limit = harness.hit_limit();
 
                 let total_tokens = harness.total_tokens();
-                let result =
-                    extract_run_result(base.session.as_ref(), &child_id, hit_limit, total_tokens)
-                        .await?;
+                let result = extract_run_result(
+                    base.session.as_ref(),
+                    &child_id,
+                    hit_limit,
+                    total_tokens,
+                    turn,
+                )
+                .await?;
 
                 // Emit SubagentReturned to the parent session.
                 let summary = result.final_text.clone().unwrap_or_default();
@@ -805,33 +890,43 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     result
 }
 
-/// B5 — assemble the child's seed task. A `context_summary` is prepended only
-/// when the agent's declared `context_mode` is `Summary`; `Fresh`-mode agents
-/// always start from the bare task, making `AgentDef.context_mode`
-/// authoritative instead of decorative.
+/// B5 — assemble the child's seed task.
+///
+/// A `context_summary` is prepended only under [`SpawnContext::Summary`]. Under
+/// [`SpawnContext::Isolated`] it is dropped — that is the whole point of the
+/// mode — and under [`SpawnContext::Fork`] it is redundant: the child is about
+/// to be handed the parent's actual transcript, and a précis of it sitting on
+/// top would be a second, lossier account of the same events, contradicting the
+/// first wherever they disagree.
+///
+/// A dropped summary is always *announced*, never erased. The tool schema
+/// advertises `context_summary` unconditionally, so a caller can and does
+/// supply one for a target that will not use it; the model composed 2 KB of
+/// context, the child received the bare task, and the answer came back
+/// off-target with nothing to correlate it to. The note names the mode that
+/// dropped it and the argument that would have kept it, so the fix is one
+/// re-issue away instead of a mystery.
 fn build_effective_task(
     context_summary: Option<&str>,
-    context_mode: crate::agents::types::ContextMode,
+    spawn_context: crate::agents::SpawnContext,
     task: &str,
 ) -> String {
-    match context_summary {
-        Some(summary) if context_mode == crate::agents::types::ContextMode::Summary => {
+    use crate::agents::SpawnContext;
+    match (context_summary, spawn_context) {
+        (Some(summary), SpawnContext::Summary) => {
             format!("## Context from parent agent\n\n{summary}\n\n---\n\n{task}")
         }
-        // B4-04: surface dropped summaries to the model so it can see what
-        // happened. The tool schema advertises `context_summary`
-        // unconditionally; the previous fallback silently discarded it for
-        // every Fresh-mode agent (which is the default and includes the
-        // shipped builtins `explore`, `coder`, `researcher`). The model
-        // composed a 2 KB summary, passed it in, and the child received only
-        // the bare task — off-target answers with no signal. Annotate the
-        // task with a brief dropped-summary note (so the model can correlate
-        // to its own call) instead of erasing the fact.
-        Some(_) => format!(
-            "{task}\n\n[context_summary supplied by caller but ignored: target agent declares \
-             context_mode=Fresh; set context_mode=Summary on the agent to receive it]"
+        (Some(_), SpawnContext::Isolated) => format!(
+            "{task}\n\n[context_summary supplied by caller but ignored: this spawn ran with \
+             context=isolated (the target agent's default is context_mode=Fresh unless the \
+             call said otherwise). Pass context=\"summary\" to have it delivered.]"
         ),
-        None => task.to_string(),
+        (Some(_), SpawnContext::Fork { .. }) => format!(
+            "{task}\n\n[context_summary supplied by caller but ignored: this spawn ran with \
+             context=fork, so the parent's actual transcript is above and a summary of it \
+             would only compete with it.]"
+        ),
+        (None, _) => task.to_string(),
     }
 }
 
@@ -850,23 +945,47 @@ async fn extract_run_result(
     child_id: &SessionId,
     hit_limit: bool,
     total_tokens: u64,
+    own_turn: crate::session::events::TurnId,
 ) -> Result<LoopRunResult, String> {
-    let events = session
+    let all = session
         .get_events(child_id, None, None)
         .await
         .map_err(|e| format!("sub-agent failed: read events: {e}"))?;
 
+    // Count only what THIS child did.
+    //
+    // The log is no longer guaranteed to start with the child's own work: a
+    // `context=fork` spawn seeds it with a verbatim copy of the parent's
+    // transcript first (`fork::seed`). Walking from index 0 would charge the
+    // parent's assistant turns and tool calls to the child — a one-turn child
+    // forked off twelve parent turns reporting `iterations: 13` — and, on the
+    // path that matters, a child that produced **no** assistant message of its
+    // own (immediate error, cancelled before its first Think) would hand back
+    // *the parent's last answer* as its finding. A sub-agent quoting the
+    // question back as its result, with a success shape, is worse than an
+    // error.
+    //
+    // `own_turn` is the turn id the spawner minted for the seeded task, so the
+    // first event carrying it is the exact boundary. Nothing forked can share
+    // it (parent turns carry their own uuids), and with no fork the boundary is
+    // index 0 — byte-identical to the previous behaviour.
+    let start = all
+        .iter()
+        .position(|r| turn_id_of(&r.event) == Some(own_turn))
+        .unwrap_or(0);
+    let events = &all[start..];
+
     let mut iterations: usize = 0;
     let mut tool_calls_made: usize = 0;
     let mut final_text: Option<String> = None;
-    for rec in &events {
+    for rec in events {
         match &rec.event {
             SessionEvent::AssistantMessage { content, .. } => {
                 iterations = iterations.saturating_add(1);
                 // Keep the most recent assistant text as the "final" answer.
                 if !content.text.is_empty() {
                     final_text = Some(content.text.clone());
-                } else if is_last_assistant(&events, rec) {
+                } else if is_last_assistant(events, rec) {
                     // Edge case: the *last* AssistantMessage is pure tool_use
                     // (no text) — the run ended mid-work (typically a capped
                     // run, `hit_limit=true`). Clear any earlier textual answer
@@ -1057,6 +1176,37 @@ fn build_context_triple(
 }
 
 /// Whether `target` is the last `AssistantMessage` in `events` (by seq).
+/// The turn an event belongs to, for the events that carry one.
+///
+/// Broader than `fork::turn_of`, which answers the same question only for
+/// prompt-bearing events: the boundary [`extract_run_result`] needs is the
+/// seeded `TurnStarted`, which never reaches the model and so is not in that
+/// set. Two questions, two predicates — merging them would make one of the two
+/// call sites quietly wrong.
+fn turn_id_of(event: &SessionEvent) -> Option<crate::session::events::TurnId> {
+    match event {
+        SessionEvent::TurnStarted { turn_id, .. }
+        | SessionEvent::TurnEnded { turn_id, .. }
+        | SessionEvent::UserMessage { turn_id, .. }
+        | SessionEvent::AssistantMessage { turn_id, .. }
+        | SessionEvent::AssistantRunMeta { turn_id, .. }
+        | SessionEvent::SystemMessage { turn_id, .. }
+        | SessionEvent::ToolCallRequested { turn_id, .. }
+        | SessionEvent::ToolCallApproved { turn_id, .. }
+        | SessionEvent::ToolCallDenied { turn_id, .. }
+        | SessionEvent::ToolResult { turn_id, .. }
+        | SessionEvent::ToolError { turn_id, .. }
+        | SessionEvent::SubagentSpawned { turn_id, .. }
+        | SessionEvent::SubagentReturned { turn_id, .. } => Some(*turn_id),
+        SessionEvent::Error { turn_id, .. } => *turn_id,
+        SessionEvent::SessionWoken { .. }
+        | SessionEvent::RunStarted { .. }
+        | SessionEvent::RunFinished { .. }
+        | SessionEvent::CompactionPerformed { .. }
+        | SessionEvent::SessionForked { .. } => None,
+    }
+}
+
 fn is_last_assistant(events: &[SessionEventRecord], target: &SessionEventRecord) -> bool {
     events
         .iter()

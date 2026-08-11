@@ -198,6 +198,8 @@ async fn subagent_base_carries_4_p1_fields() {
         model: None,
         timeout_secs: 5,
         cancel: CancellationToken::new(),
+        spawn_context: None,
+        fork_source: None,
         isolation: None,
         strategy: None,
         session_mode: None,

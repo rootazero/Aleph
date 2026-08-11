@@ -29,6 +29,23 @@ pub use types::{
     DEFAULT_MAX_CONCURRENT_SUBAGENTS, MAX_CONCURRENT_SUBAGENTS_CEILING, MIN_CONCURRENT_SUBAGENTS,
 };
 
+/// The wire name of this tool — the string the model actually types.
+///
+/// A single source because the name is also *spoken about* in prose that ships
+/// on every Full-mode prompt: `AgentCatalogLayer` tells the model which tool to
+/// delegate with. That sentence said `` `delegate` `` for as long as the layer
+/// has existed and no such tool has ever been registered (`delegate` is a
+/// `groups.rs` *category* id holding `session_send` / `gateway_route` / …), so
+/// a model that followed the instruction spent a turn on tool-not-found. A
+/// prose reference to a tool is a second copy of its name, and the copy that
+/// went stale was the one being sent to the model — CLAUDE.md §0's "同一事实的
+/// 两份表述，只改一份就是静默说谎", with the lying half in the prompt.
+///
+/// `agent_catalog::tests::every_tool_the_catalog_names_is_a_real_tool` resolves
+/// every backticked name in that sentence against the real tool universe, so
+/// this cannot rot again by rename *or* by invention.
+pub const SUBAGENT_TOOL_NAME: &str = "subagent";
+
 #[cfg(test)]
 mod tests;
 
