@@ -237,6 +237,8 @@
 - **一张列举法名单的上游，常常是一个装了两种东西的字段** —— 白名单存在，往往不是因为作者偷懒，而是因为**形状答不了那一问**，消费者只能靠字段之外的信息重建区别。`ScratchpadOutput.content` 同时装原始 markdown 与进度回显 ⇒ 频道推送只能靠 `PROGRESS_ACTIONS` 四个动作名判断"这算不算进度"，而名单只描述立法当天的动作。删名单之前先问**这两种东西凭什么共用一个字段**；拆成两个字段之后判据回到形状上，名单整体消失（不是缩短）→ §3.13
 - **收敛写者时要数一遍写者，不然最后那个是靠没人扫过活下来的** —— 「所有写 X 的路径都必须走单一源」这类收敛**分三轮**才做完过：`upsert_section` 收了 `set_objective`/`set_plan`（§3.13 ⑤），一轮后发现 `set_item_status` 没加入（round-2 ②），再一轮后发现 `append_note` **也**没加入（2026-08-10 ②）——每一轮都以为自己扫完了，每一轮的漏网者都在报 `success: true` 地做 no-op。判据：写下"现在所有写者都过单一源了"之前，**grep 出这个 section / 这张表 / 这个键的全部写入点并逐个点名**，别按记忆列举 → §3.13
 - **列举法只覆盖立法当天的世界** —— 白名单式判据（"这算不算合成消息"/"保真字段集"/"受支持的维度"）必然漂移；改问**这段字是谁写的**、**不在我这张表上的那部分呢**。⚠️ **当"默认＝全都要"时，重放一份清单不是恢复而是收窄**：判据要倒过来问「我这次重放，把哪些原本会到达的东西挡在外面了」（Panel 重连只重放 3 个字面量 topic，把"无 filter ⇒ 收全部"的新连接压成只收那三类，`stream.*` 自此静默死亡而连接灯是绿的）→ §6.1
+- **扇出的每个成员各自去读同一个"来源"，就有 N 份来源** —— 读取发生在扇出**之后**时，"同一个来源"只是措辞：detached 的成员读到的"现在"是**它开始跑的那个现在**，不是委派的那个现在（后台子代理会 fork 到委派之后的未来），而 K 个成员各读各的就得到 K 份不同前缀 ⇒ **K 次全价 cache write 而不是 1 写 K−1 读**。判据：**这份来源在我读它的时候还会变吗**；会变就在扇出前快照一次并把快照传下去（`fork::ForkSource = Arc<Vec<…>>`）。⚠️ 这一类的**症状只出现在账单上**——每个成员都返回了正确结果，测试全绿 → §4.11 round-12
+- **一个角色的 prompt 承诺，要和它的默认输入并排读一遍** —— 两句话分别看都对，合起来才是 bug：`verify` 的 prompt 逐字写着「try to break the implementation, don't confirm it」「report what you actually observed, **not what you expected**」，而它的默认 `context_mode` 是 `Summary` ＝ 先读**被对抗方对自己刚做的工作的自述**、再去看现实。判据：凡角色声明了立场（对抗 / 独立 / 第二意见），去看它**默认**吃进什么；这类默认值是**正确性**属性，不是便利性，选错的方向必须是"要出声地要求"而不是"默认就给" → §4.11 round-12
 - **两条投影同时喂同一个 append-only 状态，就会翻倍** —— 一份事实在线上有两种投影（权威流 vs 有意有损的镜像）时，消费者往往被写成"每条投影都是唯一来源"。加一个消费分支前先问**这条事实还会不会从另一条路再来一次**，以及**我这个容器是覆盖式还是追加式**（覆盖幂等、追加翻倍）。**测试不会告诉你**：单投影测试各自全绿，而两条投影从不在同一个测试里交错——那正是生产中唯一存在的调用序 → §5.13
 - **一句关于"什么被闸住"的话，往往有三份拷贝，其中一份是发给模型的** —— 代码里的地板、doc comment、以及每回合进 prompt 的那句描述。改地板时三份一起改；**发给模型的那份说了假话最贵**（`Full` 档告诉模型"nothing pauses for confirmation"，而工具自声明的确认门根本不看档位）→ §5.12
 - **同一事实的两份表述，只改一份就是静默说谎** —— 代码 vs 工具 `DESCRIPTION`、代码 vs 文档数字、代码 vs 注释；**注释正是说谎的那一方**。⚠️ **一条"已知缺口"记录也是一份表述，而且它会被后来的修复悄悄作废**：gap 0（档位目录 member 不可读）在被裁决时**早已在 wire 上关掉了**——carve-out 与收窄响应都在，只有三处文档还在描述旧世界。开工修一条记录在案的 gap，第一步是**去代码里确认它还成立**，第二步才是修；确认成立不了时欠的是一条守卫（把"现在是对的"钉住），不是一次改动。⚠️ **反向同样成立，而且更难看见：一个缺陷会被别处引用成安全论证，修掉它就悄悄抽走了那条论证的一条腿**。`agent.resume` 豁免 agent 准入闸的两条理由之一，逐字是「撤销本来就要重启才生效」——那句话把 `agent_update` 运行时半边的 no-op 当成了自己的地基；把 no-op 修成真的之后，那条窄缝从「重启之后才可达」变成「紧跟撤销就可达」，而 resume 那侧**一个字符都没动、一条测试都不会红**。判据：**修一个缺陷之前，grep 谁把这个缺陷写进了自己的理由**（找「因为它本来就……所以这里不用管」这种句式），不只 grep 谁调用了它——调用点编译器帮你找，论证只有你自己找得到。⚠️ **第二半（2026-08-10 补闸时才看清）：剩下的那条腿往往也不是它自称的那么宽**。resume 的 ② 是「续跑不可操纵」，字面为真——但 `allowed_users` 守的是 `tool_permissions` 的 agent 轴，而续跑**重新进 harness、继续按那个 agent 的权限调工具**。「那份工作已经过闸」只对**已经做完的**那部分成立，对下一轮模型自己想出来的动作一个字都没说。判据：**一条腿倒下之后，别默认另一条撑得住——去问它覆盖的是不是同一件事**（现闸在 `resume_named_session`，排在 `session_visible` 之后）
@@ -306,6 +308,7 @@
 - **一层只有一个 `stability()`；两半分歧时答案是拆层，不是取更差的评级** → §2.18
 - **任何按 HashMap 迭代序进 prompt 的集合都是缓存炸弹**；**任何"重建整个配置结构体"的 RPC 都会静默吃掉 DTO 表达不了的字段** → §2.18
 - **`CacheMonitor` 的判据必须是读主导（`reads >= writes`）** —— "任何非零 read 就清零 streak"在实际布局下永远攒不到告警 → §2.18
+- **提示词散文里点名的工具，是那个工具名的第二份拷贝，而且是模型真正照做的那一份** —— 它没有编译器也没有调用点，所以工具改名 / 从来就没有过这个名字，两种都不会红：`agent_catalog` 的引导句让**每一个** Full 模式提示词去调 `delegate`（那是 `groups.rs` 的一个工具**分类 id**，真名 `subagent`），住在 Stable 块里，代价是模型每次照做都换来一次 tool-not-found。守卫要**解析句中每一个反引号名字逐个对真工具表求解**，不是断言"句子里含 subagent"——后者是列举法，加第二个工具引用当天就失明 → §4.11 round-12
 - **环境信封只有一个事实源 `RuntimeContext`** —— prompt layer 不许自己读 `std::env`；per-run 字节进可缓存前缀 = 整段会话缓存作废 → §2.3
 - **往 `<tag>` 里插用户/模型正文前先 `xml_util::escape_xml`**；**外层转义 ≠ 内层格式安全**（行式块里 `\n` 原样穿过，能伪造权威行）→ §2.3 §4.12
 - **「这条尾部消息是不是脚手架」在仓里被三层各自回答过**（provider 缓存断点 / harness 条数 / context 摘要锚）—— 单一源必须落在**产地**：`thinker/nudges.rs::is_synthetic_reminder` / `providers/moa/prompts.rs::carries_advisory_guidance`；防漂移守卫必须断言在**源码**上。⚠️ 一刀切按 fence 是错的——`user_interjection_note` 用同一道 fence 包**真实**用户 steering 消息 → §2.19
@@ -360,6 +363,9 @@
 - **加了通道 adapter ≠ 用户能配** —— 必须手工进 `gateway/interfaces/plugin.rs` 的工厂表（`register_plain_channel!`）→ [GATEWAY.md](docs/reference/GATEWAY.md)
 - **`ChannelCapabilities` 的每个位都是承诺** —— 声明了就必须覆写对应的 `Channel` 方法（默认体一律 `Err` 并指名道姓）；频道寻址是**两步**（先 `channel_directory` 换 id）→ §5.18
 - **车道是候车室，不是运行登记簿** —— 取槽成功时必须 `busy_queue::mark_admitted`，否则 `Steer`/`Interrupt` **静默退化成 `Queue`**（三件事一起修或一起坏）→ §4.8
+- **修好一条堵塞之后，被它挡住的每一个动词都第一次真正开火——包括那些「开火」意味着破坏的** —— 上一条的第二半，同一个车道。`mark_admitted` 让后来者能在前驱运行期间够到引擎，这正是 `Steer` 需要的；而 `Interrupt` 拿到同一条通路的意思是**每条排队消息都会在毫秒内杀掉前驱刚变成的那个 run**，一个 burst 里 N 条只剩最后一条活着、N-1 轮工作被销毁，而没有任何人按过停止。判据是**时间性的**：只能取消一个「在本消息**开始等待之前**就已被接纳」的 run（车道半边 `busy_queue::waiting_since`、引擎半边 `ActiveRun.admitted_at`，两边都必须是**单调钟**——墙钟跳变会静默反转判决，而 `started_at` 是给人看的那一份）。⚠️ **两条更便宜的判据都是错的**：「目标是不是本车道最近接纳的那个」会连同「sibling 健康时新到达的真 Interrupt」一起压掉（那正是这个模式存在的理由）；而忘了给「没有 ticket 的生产者」留 `None ⇒ 不设限` 那条臂，修的就不是 burst 而是把 Interrupt 整个关掉 → §4.8 Round-8 ①
+- **一个 id 在客户端手里的时刻，和它在投递过滤器眼里可解析的时刻，是两回事** —— `chat.send` 一返回，客户端就握着 `run_id`；而 `EventVisibilityIndex` 的 run→session 种子只来自 `stream.run_accepted`，那是**准入之后**才发的。于是每一个「这个 run 从没进过引擎」的终局帧（车道满 / 等待超时 / 被停止清掉）都分类 `ByRunId`、解析落空、**fail-closed 拒给每一条连接，operator 也不例外**——三条写在文档里的用户回执因此全是静默丢弃，其中一条正是专门写来关掉「停不掉的 pending 气泡」的那条。修法是**让帧自报归属**（`RunError.session_key`，只有 `spawn_queued_run` 设它），并把播种判据从「topic 是不是那一个」改成「**这一帧有没有同时说出 run_id 和 session_key**」——`note_frame` 跑在过滤器之前，所以帧给自己播种。判据一句话：**加一个只在准入前发得出来的帧之前，先问它凭什么被解析**（同族＝ `src/gateway/CLAUDE.md` 地雷 H：解析句柄的安装条件不得比帧的生产条件更窄）→ §4.8 Round-8 ②
+- **「停止」这个动词有两种寻址方式，只有一种接了完整的那条线** —— 按 session key 停（channel `/stop`）走 `cancel_session`，它会 walk 委派子运行；按 run id 停（Panel `chat.abort` / TUI `/stop` / `aleph chat abort`）落在 `AgentRunManager::cancel_run`，而它调的是 `execution_adapter.cancel(run_id)` —— **只点一个令牌**。leader 停了，它 `task_manage`/delegate/后台子代理派出去的成员运行继续跑、继续烧 token，且此后没有任何 surface 够得到它们——正是那趟 walk 被写出来堵的 detach 泄漏。**而 `cancel_session` 自己的 doc、FEATURE_LOCATOR §4.8、CLAUDE.md 打磨话术三处都写着 `chat.abort` 已经走它**（「同一事实的两份表述」再来一次，这回是三份，代码那份才是真的）。修法是加一个**查询**而不是第三个动词（`ExecutionAdapter::session_of_run`，默认 `None`），让 run-id 那张脸解析出会话后走**同一个** `cancel_session`；引擎不握着这个 run（已结束 / 仍在车道里）时回退原语，那条路同时是 `cancel_queued_run` 需要的 → §4.8 Round-8 ③
 - **「提前返回的快路径」会静默吞掉请求上除它自己之外的一切** —— 判据不是「这条路径会不会崩」而是「它跳过了哪些本该发生的解析」；新增 per-request 指令字段必须在 `steering.rs::carries_more_than_text` 登记。**一个方向被想到、反方向没有**是这类缺陷最常见的形状 → §4.8
 - **`devices` 是 panel 与 cluster 共用的一张表，`device_id` 两边都是对端自报的** —— 任何「按 id 认领一行」的新路径必须先拒掉另一半命名空间（判据单一源 `PANEL_DEVICE_TYPE`）→ [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux) · `src/gateway/CLAUDE.md`
 - **团队群聊投影前必须先按当前 `chat.team_id` 作用域** —— 订阅是 `team.*` 通配，否则后台团队的气泡挤进任意会话 → §4.5
@@ -528,13 +534,15 @@
 
 ### 三根会话旋钮 (Session Knobs)
 
-三者**正交**，都由 Panel composer pill 或对话式工具切换：
+三者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
 
-| 旋钮 | 值 | 管什么 | 单一源 |
-|---|---|---|---|
-| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
-| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
-| **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
+| 旋钮 | 值 | 管什么 | 谁在拨 | 单一源 |
+|---|---|---|---|---|
+| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | Panel pill + `chat.send{exec_tier}` | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
+| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
+| **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
+
+> **别急着给它加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
 
 `[sandbox.command_policy]` 的硬底线**任何档位都压不下去**。
 

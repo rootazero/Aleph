@@ -101,6 +101,15 @@ pub fn spawn_queued_run<P, R, E>(
                 seq,
                 error: error_message,
                 error_code: Some(error_code.to_string()),
+                // This is the one `RunError` producer whose run never reached
+                // the engine, so no `RunAccepted` ever seeded the delivery
+                // filter's run→session index and `ByRunId` resolution fails
+                // closed. Naming the session makes the frame seed itself
+                // (`EventVisibilityIndex::note_frame`). Without it every
+                // receipt below this line is built, emitted, and then dropped
+                // by the gateway before any client sees it — which is what was
+                // happening to all three never-ran outcomes.
+                session_key: Some(session_key.clone()),
             })
             .await
         {

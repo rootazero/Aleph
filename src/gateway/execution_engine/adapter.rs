@@ -43,6 +43,13 @@ where
         Self::cancel_session(self, session_key).await
     }
 
+    async fn session_of_run(
+        &self,
+        run_id: &str,
+    ) -> Option<crate::routing::session_key::SessionKey> {
+        Self::session_of_run(self, run_id).await
+    }
+
     async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         Self::get_status(self, run_id).await
     }

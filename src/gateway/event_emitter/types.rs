@@ -145,6 +145,30 @@ pub enum StreamEvent {
         seq: u64,
         error: String,
         error_code: Option<String>,
+        /// The session this failure belongs to, when the producer knows it
+        /// **and the run may not be resolvable by id yet**.
+        ///
+        /// `stream.run_error` is classified `SessionIdentity::ByRunId`, and the
+        /// run→session index behind that is seeded by exactly one frame:
+        /// `RunAccepted`, which `execute()` emits *after* the admission gate.
+        /// A queued message that never reaches the engine — the lane was full,
+        /// it waited out `busy_queue_max_wait_secs`, or a stop purged it —
+        /// therefore carries a `run_id` the index has never heard of, and the
+        /// delivery filter fails closed on it. The three receipts the busy
+        /// queue exists to send (`Rejected` / `TimedOut` / `Purged`) were
+        /// dropped for every connection, operator included: the lane-full
+        /// rejection documented as "reported, never silently dropped" was
+        /// silent, and the Panel bubble that `cancel_queued_run` was written to
+        /// close stayed spinning.
+        ///
+        /// Naming the session makes the frame self-resolving —
+        /// `EventVisibilityIndex::note_frame` runs before the filter and seeds
+        /// from any frame that names both — so the fix does not depend on a
+        /// resolver being warm. Post-admission producers leave it `None`; their
+        /// `RunAccepted` already seeded the index. See
+        /// `busy_queue::spawn_queued_run`, the only producer that sets it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_key: Option<String>,
     },
 
     /// Agent is asking the user a question

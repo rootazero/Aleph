@@ -204,7 +204,10 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     let batch_tasks: Option<Vec<BatchTask>> = match input.get("batch_tasks") {
         Some(v) if !v.is_null() => {
             let arr = v.as_array().ok_or_else(|| {
-                format!("batch_tasks must be an array of objects (got {})", value_kind(v))
+                format!(
+                    "batch_tasks must be an array of objects (got {})",
+                    value_kind(v)
+                )
             })?;
             let mut rows = Vec::with_capacity(arr.len());
             for (idx, item) in arr.iter().enumerate() {
@@ -222,9 +225,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                     })?
                     .to_string();
                 if task.trim().is_empty() {
-                    return Err(format!(
-                        "batch_tasks[{idx}]: 'task' must not be empty"
-                    ));
+                    return Err(format!("batch_tasks[{idx}]: 'task' must not be empty"));
                 }
                 rows.push(BatchTask {
                     task,
@@ -293,6 +294,62 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         .get("context_summary")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+
+    // `context` — where this child starts from. Omitted defers to the target
+    // agent's declared `context_mode`, which is what every call made before the
+    // knob existed does, so their behaviour is unchanged.
+    //
+    // A misspelling is REJECTED, never quietly defaulted. Falling back would
+    // hand the caller a child running under a context policy it did not choose
+    // and cannot observe — and the case that matters is precisely the one where
+    // it matters most: a reviewer the caller believes is isolated, silently
+    // reading the parent's framing.
+    let spawn_context = match input.get("context") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => {
+            let raw = v.as_str().ok_or_else(|| {
+                format!(
+                    "'context' must be a string, one of {:?}",
+                    crate::agents::SpawnContext::ACCEPTED
+                )
+            })?;
+            Some(crate::agents::SpawnContext::parse(raw).ok_or_else(|| {
+                format!(
+                    "unknown context '{raw}' — expected one of {:?}",
+                    crate::agents::SpawnContext::ACCEPTED
+                )
+            })?)
+        }
+    };
+
+    // `fork_turns` bounds a fork. It is meaningless anywhere else, and a
+    // silently-ignored argument is how a caller ends up believing it bounded
+    // something it did not — so mismatched pairs are rejected rather than
+    // dropped.
+    let spawn_context = match (spawn_context, input.get("fork_turns")) {
+        (ctx, None | Some(serde_json::Value::Null)) => ctx,
+        (Some(crate::agents::SpawnContext::Fork { .. }), Some(v)) => {
+            let turns = v.as_u64().ok_or_else(|| {
+                "'fork_turns' must be a positive integer number of parent turns".to_string()
+            })?;
+            let turns = usize::try_from(turns)
+                .ok()
+                .filter(|t| *t > 0)
+                .ok_or_else(|| {
+                    "'fork_turns' must be at least 1 — to carry nothing, use \
+                     context=\"isolated\""
+                        .to_string()
+                })?;
+            Some(crate::agents::SpawnContext::Fork { turns: Some(turns) })
+        }
+        (_, Some(_)) => {
+            return Err(
+                "'fork_turns' only applies to context=\"fork\"; set context=\"fork\" or drop \
+                 fork_turns"
+                    .to_string(),
+            )
+        }
+    };
 
     // Honest-trim: spawned sub-agents are NOT addressable teammates. The old
     // `name`/`team_name` run options registered a roster row the child could
@@ -377,6 +434,7 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         timeout_secs,
         run_in_background,
         context_summary,
+        spawn_context,
         batch_tasks,
         proposer_models,
         synthesize,

@@ -48,6 +48,13 @@ pub struct AgentRuntimeConfig {
     pub task: String,
     /// Optional context summary from the parent agent.
     pub context_summary: Option<String>,
+    /// Per-call override of where the child's starting context comes from.
+    /// `None` defers to `agent_def.context_mode`.
+    pub spawn_context: Option<crate::agents::SpawnContext>,
+    /// Parent transcript for a `context=fork` spawn, captured once per tool
+    /// call so every child of one fan-out forks the same instant. See
+    /// [`crate::agents::subagent_spawner::fork::ForkSource`].
+    pub fork_source: Option<crate::agents::subagent_spawner::fork::ForkSource>,
     /// Explicit model override (highest priority).
     pub model: Option<String>,
     /// Timeout in seconds for the entire run.
@@ -573,6 +580,8 @@ impl AgentRuntime {
             model: routed_model.as_deref().or(config.model.as_deref()),
             timeout_secs: config.timeout_secs,
             cancel: self.cancel_token.clone(),
+            spawn_context: config.spawn_context,
+            fork_source: config.fork_source.clone(),
             isolation: config.agent_def.isolation.clone(),
             strategy: self.strategy.as_deref(),
             session_mode: self.session_mode,
@@ -870,6 +879,8 @@ mod tests {
             agent_def: make_agent_def(),
             task: "Do something".to_string(),
             context_summary: Some("Parent context".to_string()),
+            spawn_context: None,
+            fork_source: None,
             model: Some("claude-sonnet".to_string()),
             timeout_secs: 60,
         };

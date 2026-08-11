@@ -469,7 +469,25 @@ pub fn builtin_agents() -> Vec<AgentDef> {
                 "hub_install_verify".into(),
             ])
             .with_max_iterations(25)
-            .with_context_mode(ContextMode::Summary),
+            // Fresh, not Summary — the one default on this list that is a
+            // correctness property rather than a convenience.
+            //
+            // `verify_protocol` tells this agent, in as many words, to "try to
+            // break the implementation, don't confirm it" and to "report what
+            // you actually observed (not what you expected)". A
+            // `context_summary` is the *parent's own account of the work it
+            // just did*: what it set out to do, what it believes it achieved,
+            // why the tricky part is fine. Handing that to the verifier before
+            // it looks at reality installs the expectation the role exists to
+            // defeat — the agent was declared adversarial and then seeded with
+            // the case for the defence.
+            //
+            // Not a loss of context: what to check belongs in `task`, which the
+            // caller writes anyway, and a caller who genuinely wants the
+            // narrative delivered can say `context="summary"` on the call. The
+            // default is now the safe direction, and the unsafe one has to be
+            // asked for out loud.
+            .with_context_mode(ContextMode::Fresh),
     ]
 }
 

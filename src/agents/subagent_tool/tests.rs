@@ -2714,3 +2714,125 @@ fn a_new_tool_fans_out_at_the_configured_concurrency() {
         "the run's concurrency semaphore must be sized by [execution] max_concurrent_subagents"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `context` / `fork_turns` — the per-call starting-context axis
+// ---------------------------------------------------------------------------
+
+fn run_args_of(v: serde_json::Value) -> super::types::RunArgs {
+    match parse_args(&v).expect("parses") {
+        SubagentAction::Run(args) => args,
+        other => unreachable!("expected Run, got {other:?}"),
+    }
+}
+
+/// Omitted `context` must stay `None` — that is what defers to the target
+/// agent's `context_mode`, and it is what every call written before the
+/// argument existed sends.
+#[test]
+fn an_omitted_context_defers_to_the_agent_default() {
+    assert!(run_args_of(json!({ "task": "t" })).spawn_context.is_none());
+    // An explicit JSON null is "absent", matching the rest of this parser:
+    // schema-completing providers emit it for properties they are not using.
+    assert!(run_args_of(json!({ "task": "t", "context": null }))
+        .spawn_context
+        .is_none());
+}
+
+#[test]
+fn each_accepted_context_value_parses_to_its_mode() {
+    use crate::agents::SpawnContext;
+    assert_eq!(
+        run_args_of(json!({ "task": "t", "context": "isolated" })).spawn_context,
+        Some(SpawnContext::Isolated)
+    );
+    assert_eq!(
+        run_args_of(json!({ "task": "t", "context": "summary" })).spawn_context,
+        Some(SpawnContext::Summary)
+    );
+    assert_eq!(
+        run_args_of(json!({ "task": "t", "context": "fork" })).spawn_context,
+        Some(SpawnContext::Fork { turns: None })
+    );
+    // Case-insensitive: a model that types `Isolated` meant `isolated`, and
+    // rejecting that would be pedantry with a real cost (a wasted turn).
+    assert_eq!(
+        run_args_of(json!({ "task": "t", "context": "ISOLATED" })).spawn_context,
+        Some(SpawnContext::Isolated)
+    );
+}
+
+/// A misspelled `context` is REJECTED, never quietly defaulted.
+///
+/// This is the whole reason the parse returns an error instead of an
+/// `unwrap_or_default`: falling back would give the caller a child running
+/// under a context policy it did not choose and cannot observe — and the case
+/// that matters most is a reviewer the caller believes is isolated, silently
+/// reading the parent's framing. The error names the accepted set so the next
+/// turn gets it right.
+#[test]
+fn a_misspelled_context_is_rejected_with_the_accepted_set() {
+    let err = parse_args(&json!({ "task": "t", "context": "isolate" }))
+        .expect_err("a typo must not fall back to the default");
+    assert!(err.contains("isolate"), "{err}");
+    for accepted in crate::agents::SpawnContext::ACCEPTED {
+        assert!(
+            err.contains(accepted),
+            "error must list '{accepted}': {err}"
+        );
+    }
+
+    // Wrong JSON type is the same class of mistake.
+    assert!(parse_args(&json!({ "task": "t", "context": 3 })).is_err());
+}
+
+/// `fork_turns` only means anything under `context="fork"`. A silently ignored
+/// argument is how a caller ends up believing it bounded something it did not.
+#[test]
+fn fork_turns_is_rejected_where_it_would_do_nothing() {
+    for ctx in [json!("isolated"), json!("summary")] {
+        let err = parse_args(&json!({ "task": "t", "context": ctx, "fork_turns": 3 }))
+            .expect_err("fork_turns outside a fork must be rejected, not dropped");
+        assert!(err.contains("fork_turns"), "{err}");
+    }
+    // ...including when `context` was omitted entirely: the agent default is
+    // never `fork` (there is deliberately no such `ContextMode`), so this can
+    // only be a mistake.
+    assert!(parse_args(&json!({ "task": "t", "fork_turns": 3 })).is_err());
+}
+
+#[test]
+fn fork_turns_bounds_the_fork_and_rejects_zero() {
+    use crate::agents::SpawnContext;
+    assert_eq!(
+        run_args_of(json!({ "task": "t", "context": "fork", "fork_turns": 4 })).spawn_context,
+        Some(SpawnContext::Fork { turns: Some(4) })
+    );
+    // Zero turns is "carry nothing", which already has a spelling.
+    let err = parse_args(&json!({ "task": "t", "context": "fork", "fork_turns": 0 }))
+        .expect_err("zero turns must be rejected");
+    assert!(
+        err.contains("isolated"),
+        "the error must name the way to say \"carry nothing\": {err}"
+    );
+}
+
+/// The schema's `enum` and the parser's accepted set are two halves of one
+/// contract, and `SpawnContext::ACCEPTED` is meant to be the single source of
+/// both. Pin that they actually agree — otherwise the model is offered a value
+/// the parser rejects, or a working value is never advertised.
+#[test]
+fn the_schema_enum_matches_the_accepted_context_values() {
+    let schema = make_tool().schema();
+    let advertised: Vec<String> = schema["properties"]["context"]["enum"]
+        .as_array()
+        .expect("context advertises an enum")
+        .iter()
+        .map(|v| v.as_str().expect("enum members are strings").to_string())
+        .collect();
+    let accepted: Vec<String> = crate::agents::SpawnContext::ACCEPTED
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(advertised, accepted);
+}

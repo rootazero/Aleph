@@ -27,6 +27,23 @@ use crate::thinker::xml_util::escape_xml;
 
 pub struct AgentCatalogLayer;
 
+/// The one prose line in this layer, and the only place it names a tool.
+///
+/// It said "with the `delegate` tool" from the day the layer was written, and
+/// **no tool named `delegate` has ever been registered** — `delegate` is a
+/// `builtin_registry/groups.rs` *category* id whose members are `session_send`
+/// / `gateway_route` / `channel_message`, none of which spawn anything. The
+/// real tool is `subagent`. So every Full-mode prompt carried, in the *stable*
+/// (always-cached, always-sent) block, an instruction whose only possible
+/// outcome was a tool-not-found round trip.
+///
+/// Hoisted to a const so the guard below has something to read: a sentence that
+/// names a tool is a second copy of that tool's name, and this one is the copy
+/// the model acts on.
+const CATALOG_LEAD_SENTENCE: &str = "Delegate tasks to specialized sub-agents with the \
+     `subagent` tool; call `agent_info(agent_id)` first to see a candidate's full \
+     capabilities.\n\n";
+
 impl PromptLayer for AgentCatalogLayer {
     fn name(&self) -> &'static str {
         "agent_catalog"
@@ -63,10 +80,7 @@ impl PromptLayer for AgentCatalogLayer {
         }
 
         output.push_str("## Available Agents\n\n");
-        output.push_str(
-            "Delegate tasks to specialized sub-agents with the `delegate` tool; call \
-             `agent_info(agent_id)` first to see a candidate's full capabilities.\n\n",
-        );
+        output.push_str(CATALOG_LEAD_SENTENCE);
         output.push_str(&build_agent_catalog_xml(&visible));
         output.push_str("\n\n");
     }
@@ -103,6 +117,54 @@ mod tests {
             id: id.to_string(),
             description: desc.to_string(),
             when_to_use: when.map(|s| s.to_string()),
+        }
+    }
+
+    /// Every tool the lead sentence names must be a tool that exists.
+    ///
+    /// This is the guard for the defect that shipped: the sentence advertised
+    /// `delegate`, which is a tool *category* id, not a tool. Nothing caught it
+    /// because a prompt string has no compiler and no call site — the only
+    /// consumer is a model, and a model's reaction to a bad name is an error it
+    /// then has to recover from, not a red test.
+    ///
+    /// Written as "resolve every backticked name" rather than "assert the
+    /// sentence contains `subagent`" on purpose. The containment form is a
+    /// point check that goes on passing the moment someone adds a *second*
+    /// tool reference — CLAUDE.md §0's 列举法 trap, where the assertion only
+    /// covers the world as it stood on the day it was written.
+    #[test]
+    fn every_tool_the_catalog_names_is_a_real_tool() {
+        use crate::executor::BUILTIN_TOOL_DEFINITIONS;
+
+        let named: Vec<&str> = CATALOG_LEAD_SENTENCE
+            .split('`')
+            // Odd indices are the spans *between* backticks.
+            .skip(1)
+            .step_by(2)
+            // `agent_info(agent_id)` — the call form names the tool before `(`.
+            .map(|span| span.split('(').next().unwrap_or(span).trim())
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(
+            !named.is_empty(),
+            "the lead sentence stopped naming any tool — either it was rewritten \
+             (update this guard) or the backtick convention changed, in which case \
+             this guard is now blind and would pass on a bad name"
+        );
+
+        for name in named {
+            assert!(
+                BUILTIN_TOOL_DEFINITIONS.iter().any(|def| def.name == name)
+                    // `subagent` is attached on top of the registry
+                    // (`SubagentTool`), so it is deliberately absent from the
+                    // catalog table — see `tools/scoped/tests.rs`.
+                    || name == crate::agents::subagent_tool::SUBAGENT_TOOL_NAME,
+                "the agent catalog tells every Full-mode prompt to call `{name}`, but no \
+                 such tool is registered. A tool named in prose is a second copy of its \
+                 name and this is the copy the model acts on."
+            );
         }
     }
 
