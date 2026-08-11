@@ -63,9 +63,10 @@ impl DeliveryOutcome {
 ///
 /// `attempt` is retried only while it reports [`ExecutionError::AgentBusy`] —
 /// every other outcome is terminal. Between attempts the waiter parks on the
-/// lane's wake signal (fired by the engine's slot release and by ticket
-/// departures), with `wake_fallback_secs` as a safety net; it never polls on a
-/// short timer.
+/// lane's wake signal (fired by the engine's slot release, by ticket
+/// departures, and — for a steer refused because the running loop's burst is at
+/// `max_pending_steering` — by that burst draining), with `wake_fallback_secs`
+/// as a safety net; it never polls on a short timer.
 ///
 /// Takes an already-issued [`TicketGuard`] rather than registering internally,
 /// because the ticket must be taken **synchronously on the arrival path**

@@ -92,6 +92,18 @@ pub struct ExecApprovalRecord {
     /// every other requester — both mean "owner-scoped", the prior behaviour.
     #[serde(default)]
     pub operator_only: bool,
+    /// The decision tiers this card was raised with
+    /// ([`crate::exec::allowed_decisions::for_confirm_gate`]). Renderers draw
+    /// from it; [`ExecApprovalManager::resolve_with_reason`] **enforces** it, so
+    /// an `allow-always` posted straight at `exec.approval.resolve` for a card
+    /// that never offered the tier is narrowed to a session grant.
+    ///
+    /// The serde default is deliberately the SESSION ceiling, not
+    /// [`crate::exec::allowed_decisions::full_set`]: a record persisted before
+    /// this field existed must not be readable as permission to create a
+    /// permanent grant. A missing field may narrow; it may never widen.
+    #[serde(default = "crate::exec::allowed_decisions::session_max")]
+    pub allowed_decisions: Vec<ApprovalDecisionType>,
 }
 
 impl ExecApprovalRecord {
@@ -145,6 +157,7 @@ impl ExecApprovalRecord {
             // the operator's behalf stamps this to `true` on the record it gets
             // back, before `register_pending` publishes it.
             operator_only: false,
+            allowed_decisions: request.allowed_decisions.clone(),
         }
     }
 
@@ -437,7 +450,11 @@ impl ExecApprovalManager {
             return false;
         }
 
-        let decision = Self::clamp_decision(decision);
+        // Enforced against the set THIS card was raised with, not a global
+        // rule: that is what makes "the Panel does not draw the button" stop
+        // being the control (an `allow-always` posted straight at
+        // `exec.approval.resolve` was always accepted on the wire).
+        let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
         Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason);
         debug!(id = %id, ?decision, "Resolved approval");
 
@@ -488,17 +505,24 @@ impl ExecApprovalManager {
         }
     }
 
-    /// Cascade a session-level grant to every OTHER live pending record in the
+    /// Cascade a **standing** grant to every OTHER live pending record in the
     /// same session carrying the same `grant_key`.
     ///
-    /// Session memory only suppresses FUTURE prompts; without this, identical
+    /// The grant store only suppresses FUTURE prompts; without this, identical
     /// calls that were already parked (concurrent subagents, a teams
     /// broadcast) would each still wait for their own click even though the
-    /// user just granted that exact action for the session. Cascading resolves
-    /// them through the same [`Self::resolve_entry`] path a manual resolve
-    /// takes. Only `AllowSession` (post-clamp) cascades — an `AllowOnce` covers
-    /// one invocation by definition, and a `Deny` is about THIS call's timing
-    /// or wording, not a blanket refusal of the action (mirrors kimi-cli
+    /// user just granted that exact action. Cascading resolves them through the
+    /// same [`Self::resolve_entry`] path a manual resolve takes.
+    ///
+    /// Both standing tiers cascade (post-clamp): `AllowSession`, and
+    /// `AllowAlways` **a fortiori** — a grant that outlives the process
+    /// certainly covers the identical call parked next to the one that was
+    /// answered. This condition was written as `!= AllowSession` when the
+    /// persistent tier could not exist; leaving it that way would have made the
+    /// widest possible answer the ONE that fails to release its siblings, which
+    /// is the enumeration-goes-stale shape (判据 §0). `AllowOnce` covers one
+    /// invocation by definition, and a `Deny` is about THIS call's timing or
+    /// wording, not a blanket refusal of the action (mirrors kimi-cli
     /// `approval.py`'s session-approval fan-out). A `None` key (no action
     /// identity) never cascades.
     fn cascade_session_grant(
@@ -512,7 +536,10 @@ impl ExecApprovalManager {
         let Some(key) = grant_key else {
             return;
         };
-        if decision != ApprovalDecisionType::AllowSession {
+        if !matches!(
+            decision,
+            ApprovalDecisionType::AllowSession | ApprovalDecisionType::AllowAlways
+        ) {
             return;
         }
         let ids: Vec<String> = pending
@@ -684,7 +711,7 @@ impl ExecApprovalManager {
         }
 
         if let Some(entry) = pending.get_mut(&id) {
-            let decision = Self::clamp_decision(decision);
+            let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
             let summary = Self::display_line(&entry.record);
             Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason);
             debug!(id = %id, ?decision, "Resolved approval by session");
@@ -714,14 +741,18 @@ impl ExecApprovalManager {
         line
     }
 
-    /// Clamp `requested` to a grant scope the system can actually honor.
+    /// Clamp `requested` to a grant scope THIS card may honor.
     ///
-    /// Delegates to [`ApprovalDecisionType::clamped`] — the single source of
-    /// the "AllowAlways narrows to session" rule — so the decision layer and
-    /// the outcome layer ([`ApprovalDecisionType::to_outcome`]) can never
-    /// disagree on the downgrade.
-    const fn clamp_decision(requested: ApprovalDecisionType) -> ApprovalDecisionType {
-        requested.clamped()
+    /// Delegates to [`ApprovalDecisionType::clamped_for`] — the single source
+    /// of the narrowing rule — so the decision layer and the outcome layer
+    /// ([`ApprovalDecisionType::to_outcome_within`]) can never disagree on the
+    /// downgrade. `allowed` is the record's own
+    /// [`ExecApprovalRecord::allowed_decisions`], derived once at the gate.
+    fn clamp_decision(
+        requested: ApprovalDecisionType,
+        allowed: &[ApprovalDecisionType],
+    ) -> ApprovalDecisionType {
+        requested.clamped_for(allowed)
     }
 
     /// Get snapshot of a pending approval
@@ -850,6 +881,19 @@ mod tests {
             reason: None,
             originator_user_id: None,
             grant_key: None,
+            // The default ceiling every gate but the operator-tier confirm gate
+            // raises its cards with.
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
+        }
+    }
+
+    /// A request raised by a card that DID offer the persistent tier — what
+    /// `for_confirm_gate` produces for an operator-tier turn outside the
+    /// declared floor.
+    fn persistent_capable_request() -> ApprovalRequest {
+        ApprovalRequest {
+            allowed_decisions: crate::exec::allowed_decisions::with_persistent(),
+            ..mock_request()
         }
     }
 
@@ -1115,10 +1159,11 @@ mod tests {
 
     #[test]
     fn clamp_downgrades_allow_always_to_session() {
-        // No persistent allowlist exists, so `AllowAlways` can never mean more
-        // than a session grant — at any risk level.
+        // A card raised at the session ceiling can never produce more than a
+        // session grant, whoever posts the decision.
+        let ceiling = crate::exec::allowed_decisions::session_max();
         assert_eq!(
-            ExecApprovalManager::clamp_decision(ApprovalDecisionType::AllowAlways),
+            ExecApprovalManager::clamp_decision(ApprovalDecisionType::AllowAlways, &ceiling),
             ApprovalDecisionType::AllowSession
         );
         // Other decisions pass through untouched; approvals are never escalated
@@ -1128,8 +1173,41 @@ mod tests {
             ApprovalDecisionType::AllowSession,
             ApprovalDecisionType::Deny,
         ] {
-            assert_eq!(ExecApprovalManager::clamp_decision(decision), decision);
+            assert_eq!(
+                ExecApprovalManager::clamp_decision(decision, &ceiling),
+                decision
+            );
         }
+    }
+
+    /// The other half of the same rule: when the card DID offer the persistent
+    /// tier, the human's answer survives to the waiter unchanged. Without this
+    /// the feature is unreachable; without the test above it is unbounded.
+    #[tokio::test]
+    async fn a_card_that_offered_the_persistent_tier_keeps_it() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&persistent_capable_request(), 60_000);
+        let (id, rx, timeout) = manager.register_pending(record);
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowAlways, None));
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowAlways));
+    }
+
+    /// The wire is the attack surface, not the button: a client that posts
+    /// `allow-always` at a card raised WITHOUT the tier is narrowed, not obeyed.
+    /// This is the whole reason `allowed_decisions` is enforced server-side.
+    #[tokio::test]
+    async fn an_unoffered_allow_always_is_narrowed_on_the_wire() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        let (id, rx, timeout) = manager.register_pending(record);
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowAlways, None));
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(
+            resolved.decision,
+            Some(ApprovalDecisionType::AllowSession),
+            "a decision the card never offered must not reach the waiter"
+        );
     }
 
     #[test]
@@ -1153,6 +1231,39 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The widest answer must not be the one that fails to release its
+    /// siblings. The cascade condition was `== AllowSession`, written when the
+    /// persistent tier could not exist; a user answering "always" on one of two
+    /// identical parked cards would have left the other waiting for a click.
+    #[tokio::test]
+    async fn a_persistent_grant_cascades_to_identical_pending_cards() {
+        let manager = ExecApprovalManager::new();
+        let mut first = persistent_capable_request();
+        first.id = "card-1".to_string();
+        first.grant_key = Some("fp-shared".to_string());
+        let rec1 = manager.create(&first, 60_000);
+        let (id1, rx1, t1) = manager.register_pending(rec1);
+
+        let mut second = persistent_capable_request();
+        second.id = "card-2".to_string();
+        second.grant_key = Some("fp-shared".to_string());
+        let rec2 = manager.create(&second, 60_000);
+        let (id2, rx2, t2) = manager.register_pending(rec2);
+
+        // The human answers ONE card with the persistent tier.
+        assert!(manager.resolve(&id1, ApprovalDecisionType::AllowAlways, None));
+
+        assert_eq!(
+            manager.await_registered(id1, rx1, t1).await.decision,
+            Some(ApprovalDecisionType::AllowAlways)
+        );
+        assert_eq!(
+            manager.await_registered(id2, rx2, t2).await.decision,
+            Some(ApprovalDecisionType::AllowAlways),
+            "the identical card parked beside it must not still be waiting"
+        );
     }
 
     /// The multi-pending guard: with two live cards on one session a bare

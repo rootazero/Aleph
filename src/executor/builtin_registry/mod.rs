@@ -19,13 +19,15 @@ mod groups;
 mod registry;
 
 pub use config::BuiltinToolConfig;
+pub use definitions::{create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS};
 /// Re-exported for `thinker::prompt_contract`, whose duplicate-sentence scan
 /// ships-text surface is the same one the byte ratchet measures. Test-only:
 /// it names no runtime behaviour, only what the guards are allowed to be
 /// blind to.
 #[cfg(test)]
-pub(crate) use definitions::REGISTRY_ONLY_DESCRIPTIONS;
-pub use definitions::{create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS};
+pub(crate) use definitions::{
+    BRIDGE_TOOL_DESCRIPTIONS, INJECTED_TOOL_DESCRIPTIONS, REGISTRY_ONLY_DESCRIPTIONS,
+};
 pub use groups::TOOL_CATEGORIES;
 pub use registry::BuiltinToolRegistry;
 

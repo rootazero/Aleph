@@ -29,6 +29,7 @@
 //! | chat | Chat control |
 //! | cron | Cron job management |
 //! | exec_approvals | Exec approval management |
+//! | exec_grants | Standing approval grants (list / revoke) |
 //! | clarification | `ask_user` clarification pending/resolve (HITL P4) |
 //! | pty | Embedded interactive terminal sessions (spawn/input/resize/close/list) |
 //! | identity | Identity/soul management |
@@ -61,6 +62,7 @@ pub mod echo;
 pub mod embedding_providers;
 pub mod events;
 pub mod exec_approvals;
+pub mod exec_grants;
 pub mod execution_config;
 pub mod fetch_config;
 pub mod flow_admin;

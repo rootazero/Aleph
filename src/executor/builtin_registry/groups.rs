@@ -368,6 +368,16 @@ mod tests {
     ///
     /// Named per-tool, not per-missing-line, so a future orphan is
     /// easy to triage.
+    ///
+    /// `INJECTED_TOOL_DESCRIPTIONS`, the third measured surface, is
+    /// deliberately NOT joined here — and this omission is not the same kind
+    /// of oversight the paragraph above describes. Groups answer "what may a
+    /// user assign to an agent"; `subagent` is exempt from the allow-filter by
+    /// construction (`ScopedToolService::is_allowed`) precisely because it is
+    /// not registry-backed and not user-selectable, so demanding a group for it
+    /// would put a row in the Panel's picker for a tool that picker cannot
+    /// govern. Measurement and discoverability are two questions; they do not
+    /// share a predicate just because they can share a table.
     #[test]
     fn every_accounted_tool_appears_in_some_group() {
         let grouped: std::collections::HashSet<&str> = TOOL_CATEGORIES

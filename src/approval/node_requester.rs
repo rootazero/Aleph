@@ -14,21 +14,25 @@
 use crate::exec::analysis::CommandAnalysis;
 use crate::exec::decision::ApprovalRequest;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
-use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 use crate::sandbox::exec_approval::gate::ApprovalOutcome;
 
 /// Render an outcome as the wire string consumed by the node's
 /// `outcome_from_str`. The decision → outcome step is the shared
-/// [`ApprovalDecisionType::to_outcome`] mapping (`AllowAlways` collapses to a
-/// session grant — permanent device elevation is out of scope, same as
-/// Phase 2b); this fn only fixes the cluster wire vocabulary, which must not
-/// change.
+/// [`ApprovalDecisionType::to_outcome_within`] mapping, and the set this path
+/// names is [`session_max`](crate::exec::allowed_decisions::session_max):
+/// permanent device elevation is out of scope (same as Phase 2b), and a remote
+/// center answering "always" must not mint an install-wide grant on this side.
+/// This fn only fixes the cluster wire vocabulary, which must not change.
+///
+/// `ApprovedAlways` is unreachable here for that reason, and is rendered as the
+/// session grant rather than silently as "denied" — an approval must never be
+/// turned into a refusal by a rendering table.
 const fn outcome_to_wire(outcome: ApprovalOutcome) -> &'static str {
     match outcome {
         ApprovalOutcome::Approved => "approved",
-        ApprovalOutcome::ApprovedForSession => "approved_session",
+        ApprovalOutcome::ApprovedForSession | ApprovalOutcome::ApprovedAlways => "approved_session",
         ApprovalOutcome::Denied => "denied",
         ApprovalOutcome::Timeout => "timeout",
     }
@@ -75,6 +79,9 @@ pub async fn run_node_approval(
         // The node's redacted summary is not a canonical action identity — no
         // session-grant cascade for node approvals.
         grant_key: None,
+        // A node approval can be answered once; it carries no local action
+        // identity for either grant tier to key on.
+        allowed_decisions: crate::exec::allowed_decisions::session_max(),
     };
     let record = manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
     // Register BEFORE publishing so an instantly-resolving operator cannot race
@@ -114,13 +121,16 @@ pub async fn run_node_approval(
         tracing::warn!(error = %e, "failed to publish final approval event for node approval");
     }
 
-    let outcome = decision.map_or(ApprovalOutcome::Timeout, ApprovalDecisionType::to_outcome);
+    let outcome = decision.map_or(ApprovalOutcome::Timeout, |d| {
+        d.to_outcome_within(&crate::exec::allowed_decisions::session_max())
+    });
     (outcome_to_wire(outcome), resolved.deny_reason)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::socket::ApprovalDecisionType;
     use crate::sync_primitives::Arc;
     use std::time::Duration;
 
@@ -129,7 +139,9 @@ mod tests {
         // The wire strings are the cluster protocol and must not change; the
         // decision → outcome step is the shared `to_outcome` mapping.
         let wire = |d: Option<ApprovalDecisionType>| {
-            outcome_to_wire(d.map_or(ApprovalOutcome::Timeout, ApprovalDecisionType::to_outcome))
+            outcome_to_wire(d.map_or(ApprovalOutcome::Timeout, |d| {
+                d.to_outcome_within(&crate::exec::allowed_decisions::session_max())
+            }))
         };
         assert_eq!(wire(Some(ApprovalDecisionType::AllowOnce)), "approved");
         assert_eq!(

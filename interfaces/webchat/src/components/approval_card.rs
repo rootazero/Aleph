@@ -53,7 +53,20 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
 
     let id_once = approval.id.clone();
     let id_session = approval.id.clone();
+    let id_always = approval.id.clone();
     let id_deny = approval.id.clone();
+    // Which tiers this card may offer is the SERVER's decision (it depends on
+    // why the gate fired and who is being asked), carried on the record and
+    // enforced when the answer comes back. Rendering a fixed three was the
+    // asymmetry this closes: Telegram already read the list, the Panel did not.
+    let offers_session = approval
+        .allowed_decisions
+        .iter()
+        .any(|d| d == "allow-session");
+    let offers_always = approval
+        .allowed_decisions
+        .iter()
+        .any(|d| d == "allow-always");
     // Stored (not captured by value) so the deny-with-reason submit closure
     // stays `Copy` — the input's Enter handler and the confirm button both
     // need it (same pattern as `AskUserCard`).
@@ -116,13 +129,39 @@ pub fn ApprovalCard(approval: PendingApprovalView) -> impl IntoView {
                 >
                     {t!(i18n, notifications.approval_allow_once)}
                 </button>
-                <button
-                    type="button"
-                    class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors"
-                    on:click=move |_| resolve(dashboard, id_session.clone(), "allow-session", None)
-                >
-                    {t!(i18n, notifications.approval_allow_session)}
-                </button>
+                <Show when=move || offers_session>
+                    {
+                        let id_session = id_session.clone();
+                        view! {
+                            <button
+                                type="button"
+                                class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors"
+                                on:click=move |_| resolve(dashboard, id_session.clone(), "allow-session", None)
+                            >
+                                {t!(i18n, notifications.approval_allow_session)}
+                            </button>
+                        }
+                    }
+                </Show>
+                // Only rendered when the server offered it: an operator-tier
+                // turn, on a gate that is not the tool's own declared floor.
+                // The hint says where to take it back — a permanent grant
+                // nobody can find is the part that makes permanence scary.
+                <Show when=move || offers_always>
+                    {
+                        let id_always = id_always.clone();
+                        view! {
+                            <button
+                                type="button"
+                                title=move || t_string!(i18n, notifications.approval_allow_always_hint).to_string()
+                                class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors"
+                                on:click=move |_| resolve(dashboard, id_always.clone(), "allow-always", None)
+                            >
+                                {t!(i18n, notifications.approval_allow_always)}
+                            </button>
+                        }
+                    }
+                </Show>
                 <button
                     type="button"
                     class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors"

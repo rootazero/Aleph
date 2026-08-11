@@ -181,12 +181,35 @@ struct SessionDenials {
 }
 
 impl SessionDenials {
+    /// Whether escalation is paused right now, WITHOUT advancing the breaker.
+    ///
+    /// The read-only half of [`Self::paused_now`], for callers that already
+    /// know they will not prompt anybody — see [`DenialLedger::is_blocked`],
+    /// where spending the probe on a call that was never going to reach a human
+    /// is the bug this split exists to prevent.
+    fn paused_without_probing(&self) -> bool {
+        match self.state {
+            PauseState::Closed | PauseState::HalfOpen => false,
+            // An `Open` whose cooldown has already elapsed is not "in force" —
+            // it is one probe away from recovering. Reading the clock without
+            // writing the transition is the whole point of this method.
+            PauseState::Open { since } => since.elapsed() < SESSION_PAUSE_COOLDOWN,
+        }
+    }
+
     /// Whether escalation is paused *right now*, transitioning `Open` →
     /// `HalfOpen` when the cooldown has elapsed.
     ///
     /// Mutating inside a query mirrors `GuardianBreaker::allows`, and for the
     /// same reason: the cooldown can only be observed to have elapsed by
     /// something that looks, and the alternative is a timer task per session.
+    ///
+    /// **Only call this when the caller will actually put a card in front of a
+    /// human if it returns `false`.** The transition it performs is the probe:
+    /// spending it on a call that a per-intent refusal will short-circuit
+    /// anyway means the breaker leaves `Open` without anybody being asked, and
+    /// the one question the probe exists to ask — "is this session still
+    /// pushing?" — goes unasked until the next denial resets the clock.
     fn paused_now(&mut self) -> bool {
         match self.state {
             PauseState::Closed | PauseState::HalfOpen => false,
@@ -255,14 +278,37 @@ impl DenialLedger {
     /// A half-open session still honours per-intent stickiness — the probe is
     /// about whether the *session* may ask again, not about re-litigating an
     /// answer the user already gave.
+    ///
+    /// # A blind retry does not spend the probe
+    ///
+    /// Per-intent stickiness is checked FIRST, against a **non-advancing** read
+    /// of the breaker. It used to be checked second, after `paused_now` had
+    /// already flipped `Open` → `HalfOpen`: a repeat of an
+    /// already-refused action, arriving any time after the cooldown, consumed
+    /// the one probe the cooldown had just bought — without a card ever being
+    /// rendered, because the very next line refused the call for being a blind
+    /// retry. An agent looping on the action it was refused could therefore
+    /// keep the breaker's recovery permanently spent on itself.
+    ///
+    /// The reported reason keeps the original precedence: while the pause is
+    /// genuinely in force, a sticky intent is still reported as
+    /// [`DenialReason::ThresholdExceeded`], because that is the stronger and
+    /// more actionable statement. Only once the cooldown has elapsed — where
+    /// the session-wide pause is no longer the operative fact — does it report
+    /// the per-intent refusal, and it leaves the probe unspent for whichever
+    /// call actually reaches a human.
     pub fn is_blocked(&self, session: &str, fingerprint: &str) -> Option<DenialReason> {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let denials = guard.by_session.get_mut(session)?;
+        if denials.counts.contains_key(fingerprint) {
+            return Some(if denials.paused_without_probing() {
+                DenialReason::ThresholdExceeded
+            } else {
+                DenialReason::RepeatedSameIntent
+            });
+        }
         if denials.paused_now() {
             return Some(DenialReason::ThresholdExceeded);
-        }
-        if denials.counts.contains_key(fingerprint) {
-            return Some(DenialReason::RepeatedSameIntent);
         }
         None
     }
@@ -606,6 +652,72 @@ mod tests {
             led.is_blocked("s1", &other),
             Some(DenialReason::ThresholdExceeded),
             "one refused probe re-pauses the session"
+        );
+    }
+
+    /// A blind retry must not spend the probe.
+    ///
+    /// The recovery a cooldown buys is "one card may reach a human". A repeat
+    /// of an already-refused intent reaches nobody — the very next branch
+    /// refuses it — so consuming the `Open` → `HalfOpen` transition on it left
+    /// the breaker recovered on paper and unasked in fact. An agent looping on
+    /// the action it was just refused could keep every cooldown to itself
+    /// while the user saw nothing.
+    #[test]
+    fn a_blind_retry_does_not_spend_the_probe() {
+        let led = DenialLedger::new();
+        let sticky = action_fingerprint("code_exec", "intent-0");
+        led.record_denial("s1", &sticky, DenialReason::UserRejected);
+        for i in 1..SESSION_PAUSE_THRESHOLD {
+            let fp = action_fingerprint("code_exec", &format!("intent-{i}"));
+            led.record_denial("s1", &fp, DenialReason::UserRejected);
+        }
+        led.expire_cooldown("s1");
+
+        // The agent re-requests the refused action, twice. Neither call can
+        // reach a human, so neither may consume the recovery.
+        for _ in 0..2 {
+            assert_eq!(
+                led.is_blocked("s1", &sticky),
+                Some(DenialReason::RepeatedSameIntent),
+                "a refused intent stays refused"
+            );
+        }
+
+        // The probe is still there for the call that would actually be shown.
+        let fresh = action_fingerprint("code_exec", "fresh");
+        assert_eq!(
+            led.is_blocked("s1", &fresh),
+            None,
+            "the cooldown's one probe survived the blind retries"
+        );
+    }
+
+    /// While the pause is genuinely in force, the reported reason is still the
+    /// session-wide one — the stronger and more actionable statement. Only
+    /// after the cooldown elapses does a sticky intent report itself.
+    #[test]
+    fn a_sticky_intent_reports_the_pause_while_the_pause_is_in_force() {
+        let led = DenialLedger::new();
+        let sticky = action_fingerprint("code_exec", "intent-0");
+        for i in 0..SESSION_PAUSE_THRESHOLD {
+            let fp = if i == 0 {
+                sticky.clone()
+            } else {
+                action_fingerprint("code_exec", &format!("intent-{i}"))
+            };
+            led.record_denial("s1", &fp, DenialReason::UserRejected);
+        }
+        assert_eq!(
+            led.is_blocked("s1", &sticky),
+            Some(DenialReason::ThresholdExceeded),
+            "the breaker outranks per-intent stickiness while it is Open"
+        );
+        led.expire_cooldown("s1");
+        assert_eq!(
+            led.is_blocked("s1", &sticky),
+            Some(DenialReason::RepeatedSameIntent),
+            "once the pause has cooled down, the per-intent refusal is the live fact"
         );
     }
 

@@ -27,13 +27,18 @@ use super::types::{
 };
 use super::SubagentTool;
 
-#[async_trait]
-impl LoopTool for SubagentTool {
-    fn name(&self) -> &str {
-        super::SUBAGENT_TOOL_NAME
-    }
-
-    fn description(&self) -> &str {
+impl SubagentTool {
+    /// The description the model reads, hoisted out of the `LoopTool` method
+    /// body so a byte ratchet can reference it as a const.
+    ///
+    /// This tool reaches the model through neither of the two shapes the
+    /// catalog guards knew about — it is attached to the per-request
+    /// `ScopedToolService`, not registered — so these bytes shipped on every
+    /// request for as long as the tool has existed while every ceiling read as
+    /// though it bounded the whole surface. Measured now via
+    /// `executor::INJECTED_TOOL_DESCRIPTIONS`; a literal in that table would
+    /// only move the drift one layer up, hence the const.
+    pub(crate) const DESCRIPTION: &'static str =
         "Delegate tasks to autonomous sub-agents. For simple single tasks, use 'task'. \
          For complex goals that can be broken into independent sub-tasks, use 'batch_tasks' \
          to launch multiple sub-agents in parallel — the system automatically runs them \
@@ -47,10 +52,17 @@ impl LoopTool for SubagentTool {
          'proposer_models' to a list of models and 'synthesize'=true: the same 'task' runs \
          on every model in parallel, then one aggregator sub-agent folds the proposals into \
          a single synthesized answer. 'synthesize' also works on an explicit 'batch_tasks' \
-         fan-out to add a reduce/aggregation step over the parallel results."
-    }
+         fan-out to add a reduce/aggregation step over the parallel results.";
 
-    fn schema(&self) -> Value {
+    /// The argument schema, hoisted for the same reason as [`Self::DESCRIPTION`]
+    /// and additionally because it cannot be a const: `json!` builds a `Value`
+    /// at runtime, so the ratchet needs something it can call without
+    /// constructing a whole `SubagentTool` (which wants a provider, a session
+    /// service, a tracker and a registry).
+    ///
+    /// `subagent` is in `default_core_tools()`, so progressive disclosure never
+    /// collapses this schema — it ships in full beside the description.
+    pub(crate) fn schema_value() -> Value {
         json!({
             "type": "object",
             "properties": {
@@ -163,6 +175,21 @@ impl LoopTool for SubagentTool {
             },
             "required": []
         })
+    }
+}
+
+#[async_trait]
+impl LoopTool for SubagentTool {
+    fn name(&self) -> &str {
+        super::SUBAGENT_TOOL_NAME
+    }
+
+    fn description(&self) -> &str {
+        Self::DESCRIPTION
+    }
+
+    fn schema(&self) -> Value {
+        Self::schema_value()
     }
 
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {

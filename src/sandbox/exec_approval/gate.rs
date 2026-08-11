@@ -21,10 +21,20 @@ pub enum ApprovalOutcome {
     /// Approved for this single invocation only.
     Approved,
     /// Approved for the remainder of the session ("allow session").
-    /// Treated as approved everywhere; additionally recorded in the session
-    /// approval memory so the SAME ACTION — same tool, same arguments — is not
-    /// re-prompted this session. A different action of the same tool still asks.
+    /// Treated as approved everywhere; additionally recorded in the grant store
+    /// so the SAME ACTION — same tool, same arguments — is not re-prompted this
+    /// session. A different action of the same tool still asks.
     ApprovedForSession,
+    /// Approved until revoked, across restarts ("always allow"). Recorded in
+    /// the persistent tier of the grant store.
+    ///
+    /// Only reachable when the approval record's `allowed_decisions` offered
+    /// the tier — [`ApprovalDecisionType::to_outcome_within`] cannot produce it
+    /// otherwise, which is why every decision→outcome call site has to name the
+    /// set it offered.
+    ///
+    /// [`ApprovalDecisionType::to_outcome_within`]: crate::exec::socket::ApprovalDecisionType::to_outcome_within
+    ApprovedAlways,
     Denied,
     Timeout,
 }
@@ -32,14 +42,25 @@ pub enum ApprovalOutcome {
 impl ApprovalOutcome {
     #[must_use]
     pub const fn is_approved(&self) -> bool {
-        matches!(self, Self::Approved | Self::ApprovedForSession)
+        matches!(
+            self,
+            Self::Approved | Self::ApprovedForSession | Self::ApprovedAlways
+        )
     }
 
-    /// True only for a session-scoped grant — the caller should remember it so
-    /// subsequent calls of the same action skip the prompt.
+    /// The scope of the standing grant this outcome creates, if any — the one
+    /// derivation of "how long does this yes last", so a surface cannot record
+    /// a grant at a scope the outcome never carried.
+    ///
+    /// `None` for a one-shot approval and for every refusal.
     #[must_use]
-    pub const fn is_session_grant(&self) -> bool {
-        matches!(self, Self::ApprovedForSession)
+    pub const fn grant_scope(&self) -> Option<crate::sandbox::exec_approval::GrantScope> {
+        use crate::sandbox::exec_approval::GrantScope;
+        match self {
+            Self::ApprovedForSession => Some(GrantScope::Session),
+            Self::ApprovedAlways => Some(GrantScope::Always),
+            _ => None,
+        }
     }
 }
 

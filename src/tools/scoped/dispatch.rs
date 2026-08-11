@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::extension::hooks::{budget_hook_contexts, HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
-use crate::sandbox::exec_approval::{denial_ledger, session_memory, ApprovalAction};
+use crate::sandbox::exec_approval::{denial_ledger, grants, ApprovalAction, Grant, GrantScope};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
@@ -385,6 +385,10 @@ impl ScopedToolService {
         }
         match &self.config_approval_requester {
             Some(req) => {
+                // Deliberately NOT `.offering(...)`: this card exists BECAUSE
+                // the requester is not operator-tier, so the default session
+                // ceiling is exactly right — answering it must not permanently
+                // retire the escalation for everyone who follows.
                 let action = ApprovalAction::for_tool_call(
                     name,
                     input,
@@ -479,7 +483,19 @@ impl ScopedToolService {
         };
         match &self.approval_requester {
             Some(requester) => {
-                let action = ApprovalAction::for_tool_call(name, input, rule.reason(name));
+                // Which decision tiers this card may offer is derived HERE,
+                // once, from the two facts only this site has: which rule
+                // stopped the call, and whether the requesting turn is
+                // operator-tier. It rides the action to every renderer and is
+                // enforced by the resolver — see `exec::allowed_decisions`.
+                let offered = crate::exec::allowed_decisions::for_confirm_gate(
+                    rule.id(),
+                    self.turn_context
+                        .as_ref()
+                        .is_none_or(crate::tools::turn_context::TurnContext::caller_is_operator),
+                );
+                let action =
+                    ApprovalAction::for_tool_call(name, input, rule.reason(name)).offering(offered);
                 if let Err(denial) = self.confirm_with_memory(requester, &action, input).await {
                     if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                         return Err(ToolError::ApprovalExpired {
@@ -730,9 +746,15 @@ impl ScopedToolService {
             });
         }
 
-        // Session memory short-circuit: a prior session grant of THIS ACTION
-        // satisfies the confirmation without re-prompting (and without
-        // re-firing observers). A different call of the same tool still asks.
+        // Standing-grant short-circuit: a prior grant of THIS ACTION — taken
+        // earlier in this session, or persisted until revoked — satisfies the
+        // confirmation without re-prompting (and without re-firing observers).
+        // A different call of the same tool still asks.
+        //
+        // Both tiers are consulted through ONE store call, so a listing or a
+        // revocation cannot cover one tier and miss the other. `mem_key` may be
+        // `None` (no derivable session identity); the persistent tier still
+        // answers, the session tier structurally cannot.
         //
         // The decision IS still recorded. It used to return with no record at
         // all, so every repeat of a granted action executed with nothing in the
@@ -740,21 +762,32 @@ impl ScopedToolService {
         // accountability record cannot tolerate, because a chain proves nothing
         // about entries that were never written. It is filed as
         // `ApprovalSource::Trusted` (a standing grant), not `User` (a human
-        // answering now); conflating them would misreport who decided.
-        if let Some(ref key) = mem_key {
-            if session_memory::global().is_approved(key, &fingerprint) {
-                tracing::debug!(
-                    tool = %name,
-                    "confirmation satisfied by session approval memory"
-                );
-                self.record_approval_decision(
-                    name,
-                    &fingerprint,
-                    ApprovalRecord::GrantedBySessionMemory,
-                )
-                .await;
-                return Ok(());
-            }
+        // answering now); conflating them would misreport who decided, and the
+        // scope rides along so the trail distinguishes "clicked ten minutes ago
+        // in this conversation" from "permanently allowed last month".
+        //
+        // A card that may not CREATE a persistent grant may not be SATISFIED by
+        // one: the same derivation answers both questions, so an operator's
+        // "always" cannot silently retire the operator-escalation card a member
+        // trips on the identical call. See `GrantStore::granted_within`.
+        let honors_persistent = action
+            .allowed_decisions
+            .contains(&crate::exec::socket::ApprovalDecisionType::AllowAlways);
+        if let Some(scope) =
+            grants::global().granted_within(mem_key.as_deref(), &fingerprint, honors_persistent)
+        {
+            tracing::debug!(
+                tool = %name,
+                scope = %scope.as_str(),
+                "confirmation satisfied by a standing grant"
+            );
+            self.record_approval_decision(
+                name,
+                &fingerprint,
+                ApprovalRecord::GrantedByStandingGrant(scope),
+            )
+            .await;
+            return Ok(());
         }
 
         // Denial-ledger short-circuit (negative twin of the grant above): a
@@ -875,13 +908,63 @@ impl ScopedToolService {
             });
         }
 
-        // Record a session-scoped grant so subsequent calls of THIS ACTION skip
-        // the prompt. Keyed on the action, so the grant covers exactly the call
-        // the user read and approved.
-        if let Some(ref key) = mem_key {
-            if outcome.is_session_grant() {
-                session_memory::global().remember(key, &fingerprint);
+        // Record the standing grant the human's answer created, so subsequent
+        // calls of THIS ACTION skip the prompt. Keyed on the action, so the
+        // grant covers exactly the call the user read and approved, and stamped
+        // with that same redacted summary — a revocation list of bare
+        // fingerprints is not revocable by a person.
+        //
+        // The scope comes from the outcome (`ApprovalOutcome::grant_scope`),
+        // which can only be `Always` if the card was raised offering that tier
+        // and the resolver honoured it — this site does not re-derive the rule.
+        // The SAME predicate that decided whether this card could be satisfied
+        // by a persistent grant decides whether it may create one. The resolver
+        // already clamps the decision, but that only covers requesters that go
+        // through `ExecApprovalManager`; an `ApprovalRequester` returns an
+        // `ApprovalOutcome` directly, and that trait has several
+        // implementations (channel bridge, operator, cluster centre, guardian,
+        // fallback, a debug auto-approver). A gate that trusted the outcome it
+        // was handed would let any of them —
+        // present or future — mint an install-wide grant on a card that never
+        // offered one. Narrowing here costs nothing when the tier was offered
+        // and is the difference between a rule and a convention when it was not.
+        if let Some(scope) = outcome.grant_scope() {
+            let scope = if scope == GrantScope::Always && !honors_persistent {
+                tracing::warn!(
+                    tool = %name,
+                    "an approval requester returned a persistent grant for a card that did \
+                     not offer the tier — recording it as a session grant instead"
+                );
+                GrantScope::Session
+            } else {
+                scope
+            };
+            let grant = Grant::new(&fingerprint, name, &action.summary, scope)
+                .by(crate::gateway::visibility::ambient_actor())
+                .in_session(mem_key.clone());
+            match scope {
+                GrantScope::Session => {
+                    if let Some(ref key) = mem_key {
+                        grants::global().remember_session(key, grant);
+                    }
+                }
+                GrantScope::Always => {
+                    if let Err(e) = grants::global().remember_always(grant) {
+                        // Not fatal to THIS call — the human approved it and it
+                        // runs — but the permanence they asked for did not
+                        // happen, and silently re-prompting forever with no
+                        // explanation is the worst of both.
+                        tracing::error!(
+                            tool = %name,
+                            error = %e,
+                            "failed to persist an 'always allow' grant — this call proceeds, \
+                             but the same action will ask again"
+                        );
+                    }
+                }
             }
+        }
+        if let Some(ref key) = mem_key {
             // A yes ends the run of refusals the brute-force breaker counts.
             // Without this the breaker measured "denials ever in this session"
             // while calling itself consecutive, so three deliberate `no`s
@@ -1052,6 +1135,12 @@ impl ScopedToolService {
             }
             match &self.approval_requester {
                 Some(requester) => {
+                    // Deliberately NOT `.offering(...)`: a plugin hook asking
+                    // for confirmation keeps the default session ceiling, so it
+                    // can neither hand out an install-wide grant nor be
+                    // satisfied by one. The tier gate above is the only site
+                    // that knows which RULE fired, which is half of what
+                    // `for_confirm_gate` needs.
                     let action = ApprovalAction::for_tool_call(name, &input, reason);
                     if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
                     {

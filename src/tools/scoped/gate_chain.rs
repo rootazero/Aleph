@@ -113,7 +113,11 @@ impl GateRule<'_> {
     pub(super) const fn id(self) -> &'static str {
         match self {
             Self::PolicyDeny { .. } => "policy_deny",
-            Self::ToolDeclared => "tool_declared",
+            // One spelling, shared with the decision-set derivation that must
+            // refuse to offer a persistent grant on this rule's card
+            // (`exec::allowed_decisions::for_confirm_gate`). A rename here is a
+            // compile error there, not a silently widened button set.
+            Self::ToolDeclared => crate::exec::allowed_decisions::DECLARED_FLOOR_RULE,
             Self::DestructiveArguments => "destructive_arguments",
             Self::PolicyAsk { .. } => "policy_ask",
             Self::TierRaised => "tier_raised",

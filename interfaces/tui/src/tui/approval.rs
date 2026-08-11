@@ -5,10 +5,16 @@
 // `exec.approvals.pending` from the main-loop tick (only while a run is active)
 // and resolves the user's choice.
 //
-// SAFETY: `exec.approvals.pending` is GLOBAL across every session and
-// `exec.approval.resolve` has no server-side ownership check, so the session
-// filter in `select_session_approval` is load-bearing — the TUI must never
-// surface, let alone resolve, an approval that is not its own session's.
+// The session filter in `select_session_approval` is load-bearing for a UX
+// reason, not a security one: the TUI must never surface, let alone resolve, an
+// approval raised for a different session than the one on screen.
+//
+// It used to be the ONLY thing standing there — this comment read
+// "`exec.approvals.pending` is GLOBAL across every session and
+// `exec.approval.resolve` has no server-side ownership check". Both halves have
+// been false since 2026-08-08: both methods are owner-scoped server-side
+// (`gateway::handlers::exec_approvals`). Left in place because a client-side
+// filter is still the right shape for "which card belongs on THIS screen".
 
 use serde_json::{json, Value};
 
@@ -23,6 +29,10 @@ pub(super) struct PendingApprovalView {
     pub id: String,
     pub command: String,
     pub reason: Option<String>,
+    /// The decision tiers the server raised this card with. Absent from an
+    /// older core, where the historical three are the right reading —
+    /// `offered_decisions` supplies them.
+    pub decisions: Vec<(&'static str, &'static str)>,
 }
 
 /// Pick the oldest pending approval that belongs to `session_key` from an
@@ -56,10 +66,21 @@ pub(super) fn select_session_approval(
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(ToOwned::to_owned);
+        let allowed: Vec<String> = record
+            .get("allowed_decisions")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
         return Some(PendingApprovalView {
             id: id.to_string(),
             command,
             reason,
+            decisions: app::offered_decisions(&allowed),
         });
     }
     None
@@ -109,7 +130,7 @@ pub(super) async fn poll_approvals(state: &mut AppState, client: &AlephClient) {
     }
 
     if let Some(view) = select_session_approval(&resp, &state.session_key) {
-        state.open_approval(view.id, view.command, view.reason);
+        state.open_approval(view.id, view.command, view.reason, view.decisions);
     }
 }
 
@@ -122,7 +143,10 @@ pub(super) async fn resolve_approval(state: &mut AppState, client: &AlephClient,
     };
     state.focus = Focus::Input;
 
-    let Some((label, decision)) = app::APPROVAL_DECISIONS.get(index) else {
+    // Index into the decisions THIS card offered, not a global list: the two
+    // differ whenever the server narrowed the set, and indexing the wrong one
+    // sends a decision the user did not pick.
+    let Some((label, decision)) = approval.decisions.get(index).copied() else {
         return;
     };
     let params = json!({
@@ -155,6 +179,45 @@ mod tests {
             },
             "remaining_ms": 90_000,
         })
+    }
+
+    /// The overlay renders what the SERVER said this card may offer. A record
+    /// carrying the persistent tier gets four options; one without the field
+    /// (an older core) falls back to the historical three and — crucially —
+    /// never invents `allow-always`.
+    #[test]
+    fn the_overlay_offers_exactly_what_the_record_allows() {
+        let mut with_always = record("s1", "a1");
+        with_always["record"]["allowed_decisions"] =
+            json!(["allow-once", "allow-session", "allow-always", "deny"]);
+        let resp = json!({ "pending": [with_always] });
+        let view = select_session_approval(&resp, "s1").expect("view");
+        let wires: Vec<&str> = view.decisions.iter().map(|(_, w)| *w).collect();
+        assert_eq!(
+            wires,
+            vec!["allow-once", "allow-session", "allow-always", "deny"]
+        );
+
+        let resp = json!({ "pending": [record("s1", "a1")] });
+        let view = select_session_approval(&resp, "s1").expect("view");
+        let wires: Vec<&str> = view.decisions.iter().map(|(_, w)| *w).collect();
+        assert_eq!(
+            wires,
+            vec!["allow-once", "allow-session", "deny"],
+            "a missing field may narrow what a client offers, never widen it"
+        );
+    }
+
+    /// A narrowed card is the case the index bug lives in: option 2 of a
+    /// two-option card is `deny`, not the third entry of a global list.
+    #[test]
+    fn a_narrowed_card_indexes_against_its_own_options() {
+        let mut narrow = record("s1", "a1");
+        narrow["record"]["allowed_decisions"] = json!(["allow-once", "deny"]);
+        let resp = json!({ "pending": [narrow] });
+        let view = select_session_approval(&resp, "s1").expect("view");
+        assert_eq!(view.decisions.len(), 2);
+        assert_eq!(view.decisions[1].1, "deny");
     }
 
     #[test]
