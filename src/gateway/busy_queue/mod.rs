@@ -75,6 +75,7 @@ pub use spawn::spawn_queued_run;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use tokio::sync::Notify;
 
@@ -89,6 +90,14 @@ struct Ticket {
     /// `active_runs` yet, so `ExecutionEngine::cancel` cannot see it and the
     /// user would face an unstoppable pending bubble.
     run_id: String,
+    /// When this message joined the lane, on the monotonic clock.
+    ///
+    /// Read back by [`waiting_since`] so the admission gate can answer
+    /// "was the run I am about to cancel already running when I got here?".
+    /// Wall time would do for a log line but not for a decision: the
+    /// comparison is against another in-process instant, and a clock step
+    /// would silently flip the answer.
+    enqueued_at: Instant,
     /// Set by [`purge`] / [`cancel_queued_run`]: this waiter should abandon
     /// its message.
     cancelled: bool,
@@ -140,6 +149,7 @@ pub fn register(session_key: &str, max_per_session: usize, run_id: &str) -> Opti
     lane.tickets.push_back(Ticket {
         id: ticket,
         run_id: run_id.to_string(),
+        enqueued_at: Instant::now(),
         cancelled: false,
     });
     Some(TicketGuard {
@@ -208,6 +218,42 @@ pub fn mark_admitted(session_key: &str, run_id: &str) {
     // Promote whoever was behind the admitted run so it can attempt right away
     // instead of waiting out the fallback tick.
     wake.notify_waiters();
+}
+
+/// When the still-waiting message that would become `run_id` joined
+/// `session_key`'s lane, or `None` if it holds no ticket.
+///
+/// `None` covers three genuinely different callers and all three want the same
+/// treatment — "no constraint from the lane": a run that never queued (loop
+/// tick, goal continuation, delegated child, the OpenAI-compat surface), a run
+/// whose ticket [`mark_admitted`] already withdrew, and a lane that has since
+/// been garbage-collected.
+///
+/// # Why the admission gate needs this
+///
+/// `BusyInputMode::Interrupt` means "supersede the task that was running when I
+/// sent this". Once [`mark_admitted`] let followers reach the engine mid-run
+/// (Round-6), a *burst* of interrupt-mode messages read that as "supersede
+/// whatever is running when my turn to ask comes round" — and what is running by
+/// then is the run the message immediately ahead of me just became. Each queued
+/// message killed its own predecessor milliseconds after the lane admitted it,
+/// so an N-message burst left only the last one alive and N-1 turns of work
+/// destroyed with nothing to show for them.
+///
+/// The correct predicate is temporal, and this is the half of it the lane owns:
+/// a message may only cancel a run that was **already admitted when the message
+/// began waiting**. Cheaper predicates are wrong in the same direction — "is the
+/// target the run my own lane admitted most recently?" would also suppress a
+/// genuine interrupt that arrives while a healthy sibling runs, which is the
+/// entire reason the mode exists.
+#[must_use]
+pub fn waiting_since(session_key: &str, run_id: &str) -> Option<Instant> {
+    let map = lock();
+    map.get(session_key)?
+        .tickets
+        .iter()
+        .find(|t| t.run_id == run_id)
+        .map(|t| t.enqueued_at)
 }
 
 /// Abandon every message waiting on `session_key` and return how many were
@@ -280,13 +326,25 @@ pub fn cancel_queued_run(run_id: &str) -> bool {
 /// Total messages waiting across all sessions, plus the per-session breakdown
 /// (deepest first). Feeds `gateway.metrics.run_concurrency` so an operator can
 /// see backlog the same way they see run-slot saturation.
+/// A cancelled ticket is not counted. [`purge`] / [`cancel_queued_run`] mark
+/// rather than remove — the waiter owns its guard and drops it when it next
+/// wakes — so between the stop and that wake the lane still holds tickets whose
+/// messages have already been abandoned. Counting them reports a backlog the
+/// user just cancelled, which is the same class of lie `mark_admitted` fixed on
+/// the other side (a message that had already become a run counted as
+/// waiting). `total_waiting` means what it says: messages that may still run.
 #[must_use]
 pub fn snapshot() -> BusyQueueSnapshot {
     let map = lock();
     let mut per_session: Vec<(String, usize)> = map
         .iter()
-        .filter(|(_, lane)| !lane.tickets.is_empty())
-        .map(|(key, lane)| (key.clone(), lane.tickets.len()))
+        .map(|(key, lane)| {
+            (
+                key.clone(),
+                lane.tickets.iter().filter(|t| !t.cancelled).count(),
+            )
+        })
+        .filter(|(_, depth)| *depth > 0)
         .collect();
     per_session.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     BusyQueueSnapshot {
@@ -420,6 +478,47 @@ mod tests {
 
     // Tests share one process-global lane map, so each test uses a unique
     // session key to stay isolated under the parallel test runner.
+
+    /// The lane's half of the interrupt-burst rule. What the gate needs is not
+    /// "is this message queued" but "since when" — and the answer has to
+    /// survive the predecessor being admitted out from under it.
+    #[test]
+    fn waiting_since_reports_arrival_and_stops_reporting_once_admitted() {
+        let key = "agent:since";
+        assert_eq!(
+            waiting_since(key, "run-1"),
+            None,
+            "no lane, no ticket, no constraint"
+        );
+
+        let first = register(key, CAP, "run-1").expect("lane accepts");
+        let t1 = waiting_since(key, "run-1").expect("a queued message names when it arrived");
+
+        let second = register(key, CAP, "run-2").expect("lane accepts");
+        let t2 = waiting_since(key, "run-2").expect("so does the follower");
+        assert!(t2 >= t1, "arrival order is monotonic on the lane");
+
+        assert_eq!(
+            waiting_since(key, "run-absent"),
+            None,
+            "a run that never queued is unconstrained, not blocked"
+        );
+
+        // Admission withdraws the ticket, so the run that is now EXECUTING no
+        // longer reports a wait — which is what makes it a legitimate
+        // interrupt target for anything that arrives from here on.
+        mark_admitted(key, "run-1");
+        assert_eq!(waiting_since(key, "run-1"), None);
+        assert_eq!(
+            waiting_since(key, "run-2"),
+            Some(t2),
+            "the follower's own arrival instant is unchanged by its \
+             predecessor's admission — that is the whole point"
+        );
+
+        drop(first);
+        drop(second);
+    }
 
     #[test]
     fn tickets_deliver_in_fifo_order() {
@@ -605,6 +704,28 @@ mod tests {
             .find(|(k, _)| k == s)
             .map(|(_, d)| *d);
         assert_eq!(depth, Some(1), "only the waiting message counts as backlog");
+    }
+
+    /// The other half of that gauge's honesty. A stop marks tickets rather than
+    /// removing them — the waiter owns its guard — so between the purge and the
+    /// waiter's next wake the lane still holds them. Reporting a backlog the
+    /// user just cancelled is the same lie in the other direction.
+    #[test]
+    fn snapshot_excludes_messages_an_explicit_stop_already_abandoned() {
+        let s = "bq-test-snap-purged";
+        let _a = register(s, CAP, "run-a").unwrap();
+        let _b = register(s, CAP, "run-b").unwrap();
+        assert_eq!(purge(s), 2);
+
+        let depth = snapshot()
+            .per_session
+            .iter()
+            .find(|(k, _)| k == s)
+            .map(|(_, d)| *d);
+        assert_eq!(
+            depth, None,
+            "a fully purged lane is empty backlog, even before its waiters wake"
+        );
     }
 
     #[test]

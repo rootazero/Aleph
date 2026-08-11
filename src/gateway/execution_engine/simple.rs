@@ -100,6 +100,7 @@ impl SimpleExecutionEngine {
                     request: request.clone(),
                     state: RunState::Running,
                     started_at: chrono::Utc::now(),
+                    admitted_at: std::time::Instant::now(),
                     completed_at: None,
                     steps_completed: 0,
                     current_tool: None,
@@ -258,6 +259,8 @@ impl SimpleExecutionEngine {
                         seq: final_seq,
                         error: e.to_string(),
                         error_code: Some(error_code),
+                        // Post-admission: `RunAccepted` already seeded the index.
+                        session_key: None,
                     })
                     .await;
                 // Preserve the typed variant — see execute.rs for rationale.
