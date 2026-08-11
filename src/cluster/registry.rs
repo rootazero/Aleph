@@ -146,19 +146,64 @@ impl NodeRegistry {
     }
 
     /// Register a node session. Reconnect with the same `node_id` → overwrites
-    /// the old session and clears the old conn mapping.
+    /// the old session, clears the old conn mapping, **and asks the old session's
+    /// connection to close** (B1-01). Reusing the same `conn_id` under a
+    /// different `node_id` also evicts the colliding session for the same reason
+    /// (B1-03).
     pub fn register(&self, session: NodeSession) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let node_id = session.node_id.clone();
         let conn_id = session.conn_id.clone();
-        // Drop any stale conn→node mapping the previous session for this node_id held,
-        // so an old connection's later cleanup can't evict the new session.
+        // (B1-03) If this `conn_id` is already mapped to a *different* node_id,
+        // that older session is orphaned by the new mapping; drop it the same
+        // way `forget` does — close its connection and remove both tables'
+        // entries. Same-eviction costs a no-op (we'd be removing the slot we
+        // are about to overwrite).
+        if let Some(prev_node_id) = inner.nodes_by_conn.get(&conn_id).cloned() {
+            if prev_node_id != node_id {
+                if let Some(prev) = inner.nodes_by_id.remove(&prev_node_id) {
+                    let prev_conn = prev.conn_id.clone();
+                    let prev_channel = prev.channel.clone();
+                    drop(prev);
+                    inner.nodes_by_conn.remove(&prev_conn);
+                    // Drop the write lock before signalling: the notified
+                    // connection task re-enters the registry via `deregister`.
+                    drop(inner);
+                    prev_channel.close_connection();
+                    tracing::info!(
+                        old_node_id = %prev_node_id,
+                        new_node_id = %node_id,
+                        conn_id = %conn_id,
+                        "cluster node connection reused under a different node_id; evicting old session"
+                    );
+                    inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+                }
+            }
+        }
+        // (B1-01) Reconnect with the same node_id: drop the old session's
+        // conn→node mapping AND signal its connection to close. Without the
+        // close signal, the dropped session's connection task keeps running,
+        // and any `channel.clone()` still alive in another part of the program
+        // can still `call()` a session the registry no longer knows about.
         if let Some(prev) = inner.nodes_by_id.get(&node_id) {
-            let prev_conn = prev.conn_id.clone();
-            inner.nodes_by_conn.remove(&prev_conn);
+            if prev.conn_id != conn_id {
+                let prev_conn = prev.conn_id.clone();
+                let prev_channel = prev.channel.clone();
+                inner.nodes_by_conn.remove(&prev_conn);
+                drop(inner);
+                tracing::info!(
+                    node_id = %node_id,
+                    old_conn_id = %prev_conn,
+                    new_conn_id = %conn_id,
+                    "cluster node reconnected under a fresh connection; closing old"
+                );
+                prev_channel.close_connection();
+                inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            }
         }
         inner.nodes_by_conn.insert(conn_id, node_id.clone());
-        inner.nodes_by_id.insert(node_id, session);
+        inner.nodes_by_id.insert(node_id.clone(), session);
+        tracing::debug!(node_id = %node_id, conn_id = %conn_id, "cluster node registered");
     }
 
     /// Deregister a connected node session. Only removes if the current session
@@ -173,7 +218,9 @@ impl NodeRegistry {
         if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id)
         {
             if entry.get().conn_id == conn_id {
+                let removed_name = entry.get().device_name.clone();
                 entry.remove();
+                tracing::debug!(node_id = %node_id, conn_id = %conn_id, name = %removed_name, "cluster node session deregistered");
                 return true;
             }
         }
@@ -345,6 +392,7 @@ impl NodeRegistry {
         };
         match removed {
             Some(s) => {
+                tracing::info!(node_id = %node_id, name = %s.device_name, "cluster node session evicted (operator forgot/forget)");
                 s.channel.close_connection();
                 true
             }
