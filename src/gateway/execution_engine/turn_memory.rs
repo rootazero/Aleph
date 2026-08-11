@@ -17,6 +17,23 @@
 //! 3. the global `[memory] enabled`, read LIVE so a config change reaches the
 //!    very next turn.
 //!
+//! # `[memory] enabled` gets a consumer here, for the first time
+//!
+//! That flag is documented in `MEMORY_SYSTEM.md` as the "master switch", is
+//! surfaced by `config/ui_hints`, and is logged at startup by both
+//! `config::load` and `config::validate` — and before this module **nothing
+//! read it to decide anything**. The gate at `assembler/hybrid.rs` reads
+//! `[memory.assembler] enabled`, a different flag with a narrower meaning
+//! (whether hybrid retrieval runs), so an install that set the master switch to
+//! `false` still had its curated memory and note index folded into every
+//! prompt.
+//!
+//! Honoring it is a **behaviour change** for exactly those installs, and the
+//! honest direction: a switch that a user set, that documents itself as a
+//! master switch, and that changes nothing, is worse than one that does not
+//! exist. It is stated in FEATURE_LOCATOR §5.23 rather than left for someone
+//! to discover as a regression.
+//!
 //! R7: nothing here reads the user's message. Whether a conversation wants
 //! memory is DECLARED by a human (or by the model's own R8 tool call); no code
 //! infers it from what is being discussed.

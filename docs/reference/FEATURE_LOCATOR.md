@@ -2070,6 +2070,7 @@
 - **`None` 读作 ON**，由 `TurnEnvelope::injects_memory()` 单点派生——每一条不设该字段的 dispatch 路径（子流程、token 估算、测试）必须与本 knob 出现前逐字节相同；极性在第二个消费者手里搞反就会静默剥掉所有路径的记忆，而症状（"模型忘事了"）读起来像模型问题。
 - **闸的是注入，不是能力，也不是写**：`memory_search` / `remember` / `note_*` 照常可调，学到的东西照常记录。悄悄拿掉一个模型看得见的工具，正是模型坚称自己存过某件事的成因；而静音读侧顺手静音写侧，会让一个只想要干净 prompt 的用户几个月后发现历史里有个洞。
 - **静音必须说给模型听**（§0「一句关于什么被闸住的话有三份拷贝，最贵的那份发给模型」）：`OperatingEnvelopeLayer` 的 `MEMORY_MUTED_LINE` 只在 Off 时渲染，且明说两件事——你没有忘记（是被扣下了）、工具仍然可用。被扣下的记忆从内部看和从来没有过一模一样，模型会为自己的失忆**发明一个理由**。
+- **⚠️ `[memory] enabled` 在这里第一次有了消费者——对设了 `false` 的装机是行为变更。** 那个开关在 `MEMORY_SYSTEM.md` 里自称 master switch、进 `config/ui_hints`、被 `config::load` 与 `config::validate` 各打一条启动日志，而在此之前**没有任何代码读它来做决定**：`assembler/hybrid.rs` 那道闸读的是 `[memory.assembler] enabled`（另一个更窄的开关，管 hybrid 检索跑不跑），所以关掉总开关的装机照样把 curated memory 与笔记索引灌进每一次 prompt。现在它们得到自己配置的东西。**另一条路是让总开关继续空转、把 per-session knob 做成纯加法**——那能保住逐字节相同的行为，代价是留着一个什么也不做的、自称总开关的开关，两个谎里更糟的那个。
 - **刻意不移植 codex 的第三态 `polluted`**：它标记的是「这条线程的 context 来自外部 MCP，因此**学它**不安全」，属写侧关切，Aleph 由 `memory_trace` / ingest 治理闸回答。本 knob 只管读侧，doc 里说了。
 
 #### 客户端（TUI / CLI）

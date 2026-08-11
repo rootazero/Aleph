@@ -367,6 +367,19 @@ from an external MCP source and is therefore unsafe to *learn from* — a
 write-side concern Aleph answers elsewhere (`memory_trace`, the ingest
 governance gate). This knob is read-side only.
 
+⚠️ **`[memory] enabled` gets its first consumer here — a behaviour change for
+installs that set it to `false`.** The flag is documented above as the master
+switch, is surfaced by `config/ui_hints`, and is logged at startup by both
+`config::load` and `config::validate`; before 2026-08-11 **nothing read it to
+decide anything**. The gate in `assembler/hybrid.rs` reads
+`[memory.assembler] enabled`, a different flag with a narrower meaning (whether
+hybrid retrieval runs), so an install that turned the master switch off still
+had its curated memory and note index folded into every prompt. Those installs
+now get what they configured. The alternative — leaving the switch inert and
+making the per-session knob purely additive — would have preserved byte-identical
+behaviour at the price of keeping a documented switch that does nothing, which is
+the worse of the two lies.
+
 Surfaces: `chat.send{memory}` / `agent.run{memory}`, `sessions.patch`
 (`memory_mode`), TUI `/memory-mode on|off|default`, and the attach snapshot on
 `chat.history`. See [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md).
