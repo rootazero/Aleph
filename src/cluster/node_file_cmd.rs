@@ -37,6 +37,18 @@ async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, St
     tokio::fs::create_dir_all(workspace_dir)
         .await
         .map_err(|e| format!("workspace dir unavailable: {e}"))?;
+    // (B4-01) Reject symlinks at the workspace root itself: an attacker who
+    // can race the service to delete and re-create `workspace_dir` as a
+    // symlink to `/etc` would otherwise have `canonicalize` resolve `root`
+    // to `/etc`, and every subsequent `starts_with(&root)` check would
+    // happily admit `/etc/passwd`. `symlink_metadata` does NOT follow
+    // symlinks, so we can refuse the symlink root before canonicalizing.
+    let root_meta = tokio::fs::symlink_metadata(workspace_dir)
+        .await
+        .map_err(|e| format!("workspace root unresolved: {e}"))?;
+    if !root_meta.file_type().is_dir() {
+        return Err("workspace root is not a directory".to_string());
+    }
     let root = tokio::fs::canonicalize(workspace_dir)
         .await
         .map_err(|e| format!("workspace root unresolved: {e}"))?;
@@ -174,19 +186,31 @@ impl NodeCommand for FileReadCommand {
                 "file.read: {size} bytes exceeds {MAX_FILE_BYTES} cap"
             ));
         }
-        let bytes = tokio::fs::read(&src)
+        // (B4-04) `tokio::fs::read` allocates the full file into memory before
+        // the size cap can reject it — an adversarial 10GB file at a known
+        // path would drive the node's allocator. Use `File::take(MAX + 1)` so
+        // the kernel only delivers `MAX_FILE_BYTES + 1` bytes regardless of
+        // the file's actual size, and reject if the buffer is over the cap.
+        use tokio::io::AsyncReadExt;
+        let mut file = tokio::fs::File::open(&src)
             .await
             .map_err(|e| format!("file.read: {e}"))?;
-        if bytes.len() > MAX_FILE_BYTES {
+        let mut buf = Vec::with_capacity(std::cmp::min(size, MAX_FILE_BYTES as u64) as usize);
+        let capped = file
+            .take((MAX_FILE_BYTES as u64) + 1)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| format!("file.read: {e}"))?;
+        let _ = capped; // capped is the byte count actually read into `buf`
+        if buf.len() > MAX_FILE_BYTES {
             return Err(format!(
-                "file.read: {} bytes exceeds {MAX_FILE_BYTES} cap",
-                bytes.len()
+                "file.read: >{MAX_FILE_BYTES} bytes (cap enforced at read)"
             ));
         }
         Ok(json!({
-            "content_b64": B64.encode(&bytes),
-            "sha256": sha256_hex(&bytes),
-            "size": bytes.len(),
+            "content_b64": B64.encode(&buf),
+            "sha256": sha256_hex(&buf),
+            "size": buf.len(),
         }))
     }
 
