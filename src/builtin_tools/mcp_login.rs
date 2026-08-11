@@ -58,22 +58,45 @@ impl McpLoginTool {
     }
 }
 
+impl McpLoginTool {
+    /// The description this tool ships to the model, hoisted out of
+    /// `definition()` so a byte ratchet can reference it as a const.
+    ///
+    /// This is the FOURTH registration shape: `mcp/tool_bridge.rs` installs
+    /// the tool straight into the process-wide MCP `ToolHandlerRegistry`
+    /// that `run_loop` snapshots per request, so it appears in no catalog,
+    /// reaches no `reg(` site, and is pushed by no tool service. Measured via
+    /// `executor::BRIDGE_TOOL_DESCRIPTIONS`; a literal in that table would
+    /// only move the drift one layer up, hence the const.
+    pub(crate) const DESCRIPTION: &'static str =
+        "Authorize a remote MCP server via OAuth. Returns an authorization URL — relay it \
+         to the user to open in a browser. After they approve, the token exchange completes \
+         automatically in the background (5 minute window) and the server reconnects with \
+         credentials. Use when a remote MCP server rejects credentials (auth_expired) or \
+         requires login.";
+
+    /// The argument schema, measured beside the description because these
+    /// tools sit in `default_core_tools()` — progressive disclosure never
+    /// collapses them, so the schema ships in full on every request whose
+    /// capability gate is open. (`mcp_login` is the one that is not core,
+    /// and is measured anyway: being uncollapsed is the reason to measure,
+    /// not the condition for it.)
+    pub(crate) fn schema_value() -> Value {
+        let schema = schemars::schema_for!(McpLoginArgs);
+        serde_json::to_value(&schema).unwrap_or_default()
+    }
+}
+
 impl AlephToolDyn for McpLoginTool {
     fn name(&self) -> &str {
         "mcp_login"
     }
 
     fn definition(&self) -> ToolDefinition {
-        let schema = schemars::schema_for!(McpLoginArgs);
-        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_login",
-            "Authorize a remote MCP server via OAuth. Returns an authorization URL — relay it \
-             to the user to open in a browser. After they approve, the token exchange completes \
-             automatically in the background (5 minute window) and the server reconnects with \
-             credentials. Use when a remote MCP server rejects credentials (auth_expired) or \
-             requires login.",
-            parameters,
+            Self::DESCRIPTION,
+            Self::schema_value(),
             ToolCategory::Mcp,
         )
     }

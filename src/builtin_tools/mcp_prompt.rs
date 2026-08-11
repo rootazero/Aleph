@@ -58,21 +58,44 @@ impl McpGetPromptTool {
     }
 }
 
+impl McpGetPromptTool {
+    /// The description this tool ships to the model, hoisted out of
+    /// `definition()` so a byte ratchet can reference it as a const.
+    ///
+    /// This is the FOURTH registration shape: `mcp/tool_bridge.rs` installs
+    /// the tool straight into the process-wide MCP `ToolHandlerRegistry`
+    /// that `run_loop` snapshots per request, so it appears in no catalog,
+    /// reaches no `reg(` site, and is pushed by no tool service. Measured via
+    /// `executor::BRIDGE_TOOL_DESCRIPTIONS`; a literal in that table would
+    /// only move the drift one layer up, hence the const.
+    pub(crate) const DESCRIPTION: &'static str =
+        "Get a prompt template from a connected MCP server by its server-qualified \
+         `name`. Call `mcp_list_prompts` first to discover available prompts and pass \
+         the returned `name` exactly as given (it is an opaque identifier — do not \
+         edit or shorten it).";
+
+    /// The argument schema, measured beside the description because these
+    /// tools sit in `default_core_tools()` — progressive disclosure never
+    /// collapses them, so the schema ships in full on every request whose
+    /// capability gate is open. (`mcp_login` is the one that is not core,
+    /// and is measured anyway: being uncollapsed is the reason to measure,
+    /// not the condition for it.)
+    pub(crate) fn schema_value() -> Value {
+        let schema = schemars::schema_for!(McpGetPromptArgs);
+        serde_json::to_value(&schema).unwrap_or_default()
+    }
+}
+
 impl AlephToolDyn for McpGetPromptTool {
     fn name(&self) -> &str {
         "mcp_get_prompt"
     }
 
     fn definition(&self) -> ToolDefinition {
-        let schema = schemars::schema_for!(McpGetPromptArgs);
-        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_get_prompt",
-            "Get a prompt template from a connected MCP server by its server-qualified \
-             `name`. Call `mcp_list_prompts` first to discover available prompts and pass \
-             the returned `name` exactly as given (it is an opaque identifier — do not \
-             edit or shorten it).",
-            parameters,
+            Self::DESCRIPTION,
+            Self::schema_value(),
             ToolCategory::Mcp,
         )
     }
@@ -190,20 +213,43 @@ impl McpListPromptsTool {
     }
 }
 
+impl McpListPromptsTool {
+    /// The description this tool ships to the model, hoisted out of
+    /// `definition()` so a byte ratchet can reference it as a const.
+    ///
+    /// This is the FOURTH registration shape: `mcp/tool_bridge.rs` installs
+    /// the tool straight into the process-wide MCP `ToolHandlerRegistry`
+    /// that `run_loop` snapshots per request, so it appears in no catalog,
+    /// reaches no `reg(` site, and is pushed by no tool service. Measured via
+    /// `executor::BRIDGE_TOOL_DESCRIPTIONS`; a literal in that table would
+    /// only move the drift one layer up, hence the const.
+    pub(crate) const DESCRIPTION: &'static str =
+        "Discover the prompt templates exposed by connected MCP servers. Call \
+         this FIRST, then fetch one with `mcp_get_prompt`, copying the exact \
+         server-qualified `name` returned here.";
+
+    /// The argument schema, measured beside the description because these
+    /// tools sit in `default_core_tools()` — progressive disclosure never
+    /// collapses them, so the schema ships in full on every request whose
+    /// capability gate is open. (`mcp_login` is the one that is not core,
+    /// and is measured anyway: being uncollapsed is the reason to measure,
+    /// not the condition for it.)
+    pub(crate) fn schema_value() -> Value {
+        let schema = schemars::schema_for!(McpListPromptsArgs);
+        serde_json::to_value(&schema).unwrap_or_default()
+    }
+}
+
 impl AlephToolDyn for McpListPromptsTool {
     fn name(&self) -> &str {
         "mcp_list_prompts"
     }
 
     fn definition(&self) -> ToolDefinition {
-        let schema = schemars::schema_for!(McpListPromptsArgs);
-        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_list_prompts",
-            "Discover the prompt templates exposed by connected MCP servers. Call \
-             this FIRST, then fetch one with `mcp_get_prompt`, copying the exact \
-             server-qualified `name` returned here.",
-            parameters,
+            Self::DESCRIPTION,
+            Self::schema_value(),
             ToolCategory::Mcp,
         )
     }

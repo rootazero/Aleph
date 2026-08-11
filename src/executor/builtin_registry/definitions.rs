@@ -1318,9 +1318,214 @@ pub(crate) const REGISTRY_ONLY_DESCRIPTIONS: &[(&str, &str)] = &[
     ("strategy", crate::builtin_tools::StrategyTool::DESCRIPTION),
 ];
 
+/// Tools the **per-request tool service** appends to the model's list beside
+/// the registry snapshot — a third registration shape, measured by neither
+/// table above until now.
+///
+/// `ScopedToolService::list()` builds its definitions from the
+/// `LoopToolRegistry` snapshot and then *pushes* extra ones that were attached
+/// to the service itself (`with_subagent_tool`). Such a tool is in neither
+/// `BUILTIN_TOOL_DEFINITIONS` nor `builder/core_tools.rs`: it never reaches a
+/// `reg(` site, so `every_registered_core_tool_is_accounted` cannot see it,
+/// and adding it to `REGISTRY_ONLY_DESCRIPTIONS` would be a lie in the other
+/// direction — that table's staleness half asserts every entry IS registered
+/// in `core_tools.rs`, so the entry would fail as stale on the way in.
+///
+/// This is the same lesson the 2026-08-10 repointing recorded, arriving for
+/// the third time in the same place: *the question is never whether the rule
+/// is right, it is how many registration shapes the guard recognises.* The
+/// catalog was shape one, `reg(` shape two, and this is shape three.
+///
+/// Entries are `(wire name, description const, schema constructor)`. By direct
+/// const/fn reference, never a literal — for the reason spelled out on
+/// `REGISTRY_ONLY_DESCRIPTIONS`: a literal here measures bytes that have
+/// stopped being the bytes actually sent, and the ratchet goes on passing.
+///
+/// Unlike the other two surfaces this one carries its **schema** too, and that
+/// is not symmetry for its own sake: `subagent` is in `default_core_tools()`,
+/// so progressive disclosure never collapses it and the full schema ships on
+/// every request the tool is attached to. See `NON_CATALOG_SCHEMA_CEILING_BYTES`
+/// for what that bound does and does not cover.
+///
+/// Kept honest by `every_injected_tool_is_accounted`, which reads the
+/// injection site in `tools/scoped/mod.rs` — at runtime an injected definition
+/// and a registry one are the same struct, so the push site is the only
+/// witness.
+#[cfg(test)]
+pub(crate) const INJECTED_TOOL_DESCRIPTIONS: &[(&str, &str, fn() -> serde_json::Value)] = &[(
+    crate::agents::subagent_tool::SUBAGENT_TOOL_NAME,
+    crate::agents::subagent_tool::SubagentTool::DESCRIPTION,
+    crate::agents::subagent_tool::SubagentTool::schema_value,
+)];
+
+/// Tools the **MCP bridge** installs straight into the process-wide
+/// `ToolHandlerRegistry` — the fourth registration shape.
+///
+/// `mcp/tool_bridge.rs::sync_builtins` registers these against a capability
+/// gate (a connected server actually offering resources / prompts / a
+/// non-stdio transport), and `run_loop` snapshots that registry into every
+/// request's `LoopToolRegistry`. So they are in no catalog, reach no `reg(`
+/// site, and are pushed by no tool service: all three censuses above are
+/// structurally blind to them, which is exactly how six tools shipped their
+/// descriptions unmeasured.
+///
+/// Entries are `(wire name, description const, schema constructor)`, by direct
+/// const/fn reference for the reason `REGISTRY_ONLY_DESCRIPTIONS` states. The
+/// name comes from `tool_bridge`'s own const rather than a literal here, so the
+/// census below compares this table against the registration site by VALUE and
+/// a rename cannot leave the two agreeing on a name nobody uses.
+///
+/// These are gated, not unconditional — an install with no MCP server pays none
+/// of it. That ranks them below the other three surfaces; it does not make them
+/// free, and a ceiling that omitted them would still be reporting a smaller
+/// surface than the one being paid for.
+#[cfg(test)]
+pub(crate) const BRIDGE_TOOL_DESCRIPTIONS: &[(&str, &str, fn() -> serde_json::Value)] = &[
+    (
+        crate::mcp::tool_bridge::RESOURCE_TOOL,
+        crate::builtin_tools::mcp_resource::McpReadResourceTool::DESCRIPTION,
+        crate::builtin_tools::mcp_resource::McpReadResourceTool::schema_value,
+    ),
+    (
+        crate::mcp::tool_bridge::RESOURCE_LIST_TOOL,
+        crate::builtin_tools::mcp_resource::McpListResourcesTool::DESCRIPTION,
+        crate::builtin_tools::mcp_resource::McpListResourcesTool::schema_value,
+    ),
+    (
+        crate::mcp::tool_bridge::RESOURCE_TEMPLATE_LIST_TOOL,
+        crate::builtin_tools::mcp_resource::McpListResourceTemplatesTool::DESCRIPTION,
+        crate::builtin_tools::mcp_resource::McpListResourceTemplatesTool::schema_value,
+    ),
+    (
+        crate::mcp::tool_bridge::PROMPT_TOOL,
+        crate::builtin_tools::mcp_prompt::McpGetPromptTool::DESCRIPTION,
+        crate::builtin_tools::mcp_prompt::McpGetPromptTool::schema_value,
+    ),
+    (
+        crate::mcp::tool_bridge::PROMPT_LIST_TOOL,
+        crate::builtin_tools::mcp_prompt::McpListPromptsTool::DESCRIPTION,
+        crate::builtin_tools::mcp_prompt::McpListPromptsTool::schema_value,
+    ),
+    (
+        crate::mcp::tool_bridge::LOGIN_TOOL,
+        crate::builtin_tools::mcp_login::McpLoginTool::DESCRIPTION,
+        crate::builtin_tools::mcp_login::McpLoginTool::schema_value,
+    ),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every tool the per-request tool service injects is measured.
+    ///
+    /// Like `every_registered_core_tool_is_accounted`, this has to read the
+    /// source: at runtime an injected `ToolDefinition` and a registry-derived
+    /// one are the same struct in the same vector, so nothing observable says
+    /// "these bytes are outside the ceiling". The push site is the only
+    /// witness.
+    ///
+    /// **The shape it recognises** — and therefore the shape it does not — is
+    /// `defs.push(Self::<tool>_definition(…))` in `ScopedToolService`. That is
+    /// the mechanism by which a definition joins the model's list without
+    /// coming from the registry snapshot. A future injected tool that arrives
+    /// by some other form (`defs.extend`, a differently-named constructor) is
+    /// outside this scan's field of view; a constructor that merely breaks the
+    /// `<tool>_definition` naming convention fails LOUDLY here as unaccounted,
+    /// which is the safe direction.
+    ///
+    /// `describe()` uses the same constructor and is deliberately not an
+    /// anchor: a tool reachable only through `describe()` is not in the list
+    /// the model is sent, so it costs nothing per request.
+    #[test]
+    fn every_injected_tool_is_accounted() {
+        // CRLF-safe: strip carriage returns before any matching, so a Windows
+        // checkout scans the same bytes a Unix one does. (The separator here
+        // is not newline-anchored either — see the same note on
+        // `every_registered_core_tool_is_accounted`.)
+        let src = include_str!("../../tools/scoped/mod.rs").replace('\r', "");
+
+        const OPENER: &str = "defs.push(Self::";
+        let openers = src.lines().filter(|l| l.trim().starts_with(OPENER)).count();
+
+        let mut injected: Vec<String> = Vec::new();
+        let mut matched = 0usize;
+        for line in src.lines().map(str::trim) {
+            let Some(rest) = line.strip_prefix(OPENER) else {
+                continue;
+            };
+            let Some(stem) = rest
+                .split('(')
+                .next()
+                .and_then(|ctor| ctor.strip_suffix("_definition"))
+            else {
+                continue;
+            };
+            matched += 1;
+            if !injected.iter().any(|n| n == stem) {
+                injected.push(stem.to_string());
+            }
+        }
+
+        // Non-vacuity, both halves. A scan that stopped seeing the injection
+        // sites certifies nothing, and it would fail SILENTLY — the
+        // unaccounted list below would simply come back empty.
+        assert_eq!(
+            matched, openers,
+            "the source scan matched {matched} constructors for {openers} `{OPENER}` sites in \
+             tools/scoped/mod.rs — it is no longer reading every injection, so the checks below \
+             prove nothing"
+        );
+        assert!(
+            !injected.is_empty(),
+            "no injected tool found in tools/scoped/mod.rs — the scan is looking at the wrong \
+             shape, and an empty census cannot fail"
+        );
+
+        let unaccounted: Vec<&str> = injected
+            .iter()
+            .map(String::as_str)
+            .filter(|stem| !INJECTED_TOOL_DESCRIPTIONS.iter().any(|(n, ..)| n == stem))
+            .collect();
+        assert!(
+            unaccounted.is_empty(),
+            "these tools are pushed onto the model's tool list by ScopedToolService but appear \
+             in no measured table. Their description ships on every request that attaches them, \
+             and their schema too when they are in `default_core_tools()`, so they spend \
+             per-request bytes that nothing bounds. Add each to INJECTED_TOOL_DESCRIPTIONS by \
+             direct const/fn reference (never a literal), then re-measure both ceilings: \
+             {unaccounted:?}"
+        );
+
+        let stale: Vec<&str> = INJECTED_TOOL_DESCRIPTIONS
+            .iter()
+            .map(|(name, ..)| *name)
+            .filter(|name| !injected.iter().any(|i| i == name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these entries in INJECTED_TOOL_DESCRIPTIONS are no longer pushed in \
+             tools/scoped/mod.rs — they charge the ceilings for bytes that no longer ship, which \
+             leaves room for real growth to slip under: {stale:?}"
+        );
+
+        // A name in two tables is counted twice, and a ceiling that double-counts
+        // is that much looser than it reads — the same failure
+        // `every_registered_core_tool_is_accounted` checks for on its own pair.
+        let doubled: Vec<&str> = INJECTED_TOOL_DESCRIPTIONS
+            .iter()
+            .map(|(name, ..)| *name)
+            .filter(|name| {
+                BUILTIN_TOOL_DEFINITIONS.iter().any(|d| d.name == *name)
+                    || REGISTRY_ONLY_DESCRIPTIONS.iter().any(|(n, _)| n == name)
+            })
+            .collect();
+        assert!(
+            doubled.is_empty(),
+            "these tools are in INJECTED_TOOL_DESCRIPTIONS and also in one of the other two \
+             measured tables, so the ratchet counts their description twice: {doubled:?}"
+        );
+    }
 
     /// No entry may spell its description out here — see the module invariant.
     ///
@@ -1527,7 +1732,49 @@ mod tests {
     /// runtime `summary` string states it in the response itself, which is
     /// strictly better than paying for it on every request that merely lists
     /// the tool.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 94_306;
+    /// 2026-08-11, the third registration shape: 94,306 -> 95,333 B. As with
+    /// the first half of 2026-08-10, **the increase is not new spending** — it
+    /// is bytes that were already going out and were never counted. `subagent`
+    /// (1,039 B) reaches the model through neither surface this ceiling summed:
+    /// it has no catalog entry and no `reg(` site, because the per-request
+    /// `ScopedToolService` *pushes* it onto the list it hands the model
+    /// (`with_subagent_tool`). `every_registered_core_tool_is_accounted` reads
+    /// `reg(` sites, so it was structurally incapable of naming this tool, and
+    /// `REGISTRY_ONLY_DESCRIPTIONS` could not host it either — that table's
+    /// staleness half asserts every entry IS registered in `core_tools.rs`, so
+    /// the entry would have failed on the way in. Hence a third table
+    /// (`INJECTED_TOOL_DESCRIPTIONS`) and a third census
+    /// (`every_injected_tool_is_accounted`).
+    ///
+    /// The lesson is the one the 2026-08-10 entry recorded, arriving one shape
+    /// later in the same place: the question a census answers is never "is the
+    /// rule right" but "how many registration shapes does it recognise". Asking
+    /// it once more, in the same sitting, turned up a FOURTH — the six tools
+    /// `mcp/tool_bridge.rs` installs directly into the `ToolHandlerRegistry`
+    /// `run_loop` snapshots. They are measured in the same pass
+    /// (`BRIDGE_TOOL_DESCRIPTIONS`, +1,944 B) rather than recorded as a known
+    /// gap, because a guard that certifies three of four shapes is the failure
+    /// this ledger keeps re-recording: it hands a clean bill of health to the
+    /// half still unmeasured. Unlike the other three these are capability-gated
+    /// — an install with no MCP server pays none of it — which ranks them
+    /// lower, not free.
+    ///
+    /// Two book-keeping notes, so neither number is absorbed in silence:
+    /// * the catalog half measured 80,905 B here, 12 B under the 80,917 B the
+    ///   `tool_usage` entry above recorded. Unrelated trims landed in between;
+    ///   the slack is stated rather than left as headroom that reads like it
+    ///   was always there.
+    /// * catalog and registry-only descriptions ship on EVERY request, while
+    ///   this one ships only where the agent has `subagent` attached — so the
+    ///   ceiling bounds a slight over-estimate for an agent without it. That is
+    ///   the conservative direction, and the only one under which a single
+    ///   number stays meaningful.
+    ///
+    /// Same day, the fourth shape measured: 95,333 -> 97,277 B (+1,944 B, the
+    /// six MCP bridge tools). Not new spending either — see the paragraph
+    /// above for why they were invisible and why they were closed in the same
+    /// pass rather than logged as a gap.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 97_277;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -1539,7 +1786,15 @@ mod tests {
             .iter()
             .map(|(_, desc)| desc.len())
             .sum();
-        let total = catalog + registry_only;
+        let injected: usize = INJECTED_TOOL_DESCRIPTIONS
+            .iter()
+            .map(|(_, desc, _)| desc.len())
+            .sum();
+        let bridge: usize = BRIDGE_TOOL_DESCRIPTIONS
+            .iter()
+            .map(|(_, desc, _)| desc.len())
+            .sum();
+        let total = catalog + registry_only + injected + bridge;
 
         let mut largest: Vec<(&str, usize)> = BUILTIN_TOOL_DEFINITIONS
             .iter()
@@ -1549,6 +1804,16 @@ mod tests {
                     .iter()
                     .map(|(name, desc)| (*name, desc.len())),
             )
+            .chain(
+                INJECTED_TOOL_DESCRIPTIONS
+                    .iter()
+                    .map(|(name, desc, _)| (*name, desc.len())),
+            )
+            .chain(
+                BRIDGE_TOOL_DESCRIPTIONS
+                    .iter()
+                    .map(|(name, desc, _)| (*name, desc.len())),
+            )
             .collect();
         largest.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
         largest.truncate(5);
@@ -1556,7 +1821,8 @@ mod tests {
         assert!(
             total <= CATALOG_DESCRIPTION_CEILING_BYTES,
             "builtin tool descriptions total {total} B ({catalog} B catalog + {registry_only} B \
-             registry-only), over the ceiling of {CATALOG_DESCRIPTION_CEILING_BYTES} B. These \
+             registry-only + {injected} B injected + {bridge} B bridge), over the ceiling of \
+             {CATALOG_DESCRIPTION_CEILING_BYTES} B. These \
              bytes ship in every request that lists these tools. Largest: {largest:?}. Answer \
              the three questions documented on CATALOG_DESCRIPTION_CEILING_BYTES before \
              raising it."
@@ -1575,6 +1841,336 @@ mod tests {
             registry_only > 10_000,
             "registry-only descriptions measured only {registry_only} B — the guard has lost \
              sight of the tools that reach the model without a catalog entry"
+        );
+        // The floor here is only `> 0`, and deliberately so: this half is one
+        // tool, so any number that reads like a size would be a magic constant
+        // guessing at `subagent`'s length. What it has to catch is what the
+        // other two floors catch — the half going silent, which is how a
+        // census stops bounding a surface while still passing.
+        assert!(
+            injected > 0,
+            "injected descriptions measured 0 B — the guard has lost sight of the tools the \
+             per-request tool service pushes onto the model's list"
+        );
+        assert!(
+            bridge > 0,
+            "bridge descriptions measured 0 B — the guard has lost sight of the tools the MCP \
+             bridge installs directly into the registry run_loop snapshots"
+        );
+    }
+
+    /// Schema bytes of the per-request injected surface.
+    ///
+    /// **Scope, stated plainly so this is not read as more than it is:** this
+    /// bounds the schemas of the two NON-CATALOG shapes —
+    /// `INJECTED_TOOL_DESCRIPTIONS` and `BRIDGE_TOOL_DESCRIPTIONS` — and
+    /// nothing else. Catalog and registry-only tool schemas are NOT measured
+    /// here or anywhere: `BuiltinToolDefinition` carries no schema field, so
+    /// reaching them means constructing every tool. That is a real remaining
+    /// gap, not a claim this constant quietly covers, and it is why the name
+    /// says `NON_CATALOG_` instead of `SCHEMA_`.
+    ///
+    /// Why these two surfaces earn a schema bound when the catalog has none:
+    /// they are reachable without an instance (a `fn() -> Value` per entry),
+    /// and their tools are core — `subagent` and five of the six bridge tools
+    /// are in `default_core_tools()`, so progressive disclosure never collapses
+    /// them, and `truncate_tool_descriptions` does not apply to schemas at all.
+    /// These bytes go out in full. Both are also surfaces with no catalog entry
+    /// to review, so schema growth here is exactly the growth nobody sees.
+    ///
+    /// Measured, not computed: the failure prints the live number.
+    ///
+    /// History: 2026-08-11, first measurement — 8,834 B: `subagent` 6,584 B
+    /// plus 2,250 B across the six MCP bridge tools (301–418 B each). The round
+    /// that added `subagent`'s per-call `context` / `fork_turns` arguments grew
+    /// that schema by ~0.6 KB and no guard in the repository could observe it;
+    /// that is what put the third registration shape on the map at all, and
+    /// asking the same question once more turned up the fourth.
+    ///
+    /// For scale, `subagent`'s schema alone outweighs every tool DESCRIPTION in
+    /// the repository except `desktop`'s. Nothing is trimmed here — this round
+    /// bought the ability to see these bytes; cutting argument prose is a
+    /// separate judgement against the three questions, not a measurement
+    /// change.
+    const NON_CATALOG_SCHEMA_CEILING_BYTES: usize = 8_834;
+
+    #[test]
+    fn non_catalog_tool_schema_bytes_ratchet() {
+        let mut sizes: Vec<(&str, usize)> = INJECTED_TOOL_DESCRIPTIONS
+            .iter()
+            .chain(BRIDGE_TOOL_DESCRIPTIONS.iter())
+            .map(|(name, _, schema)| (*name, schema().to_string().len()))
+            .collect();
+        let total: usize = sizes.iter().map(|(_, len)| len).sum();
+        sizes.sort_by_key(|(_, len)| std::cmp::Reverse(*len));
+
+        assert!(
+            total <= NON_CATALOG_SCHEMA_CEILING_BYTES,
+            "non-catalog tool schemas total {total} B, over the ceiling of \
+             {NON_CATALOG_SCHEMA_CEILING_BYTES} B. Per tool: {sizes:?}. These ship uncollapsed on \
+             every request that attaches the tool — an argument's `description` here costs the \
+             same as one in the tool's own DESCRIPTION. Answer the three questions documented \
+             on CATALOG_DESCRIPTION_CEILING_BYTES before raising it."
+        );
+
+        // A ceiling over an empty measurement is not a ceiling — the same
+        // non-vacuity the description ratchet learned to assert. `to_string()`
+        // on a `Value::Null` is 4 bytes, so a schema constructor that lost its
+        // body would still register; the floor is what catches it.
+        assert!(
+            total > 100,
+            "non-catalog tool schemas measured only {total} B — the guard is no longer reading \
+             the \
+             schemas it exists to bound"
+        );
+    }
+
+    /// Schema bytes carried by the registry map — the catalog half and the
+    /// registry-only half at once.
+    ///
+    /// One number covers both because the catalog has no schema of its own.
+    /// `agent_init` builds the model's tool list from `BUILTIN_TOOL_DEFINITIONS`
+    /// for name and description, then attaches parameters from
+    /// `tool_registry.get_tool_schema(def.name)` — a lookup of
+    /// `UnifiedTool.parameters_schema` — and completes the tail from that same
+    /// map. So "the catalog entry's schema" IS a registry-map entry, and a
+    /// catalog tool absent from the map ships with no parameters at all.
+    ///
+    /// **What this bounds, precisely.** The map as built with NOTHING wired:
+    /// `register_core_tools` plus `register_optional_tools` with every
+    /// dependency `None` and a default config. That is the unconditional
+    /// subset — the schemas that go out in every deployment regardless of what
+    /// is configured — and it is deterministic, which a ceiling has to be.
+    ///
+    /// **What it does not bound**, stated here rather than left to be
+    /// discovered: tools the constructor registers only when their dependency
+    /// is live (memory, generation, cron/heartbeat, teams, desktop) carry
+    /// schemas this number does not contain. They are enumerated by
+    /// `tools_without_an_unconditional_schema_are_pinned` rather than waved at,
+    /// so the residue is a list someone can shorten, not a vague caveat.
+    ///
+    /// Note the asymmetry with descriptions: `truncate_tool_descriptions`
+    /// defaults to false so every description ships in full, while a non-core
+    /// tool's schema IS collapsed by progressive disclosure. This ceiling is
+    /// therefore an upper bound — what a `[tools] core = ["*"]` install pays,
+    /// and what any install pays for its core set.
+    ///
+    /// History: 2026-08-11, first measurement — 90,215 B across 50 tools.
+    /// Until this round no schema in the repository was measured at all; the
+    /// `subagent` round exposed the gap, and the catalog and registry halves
+    /// turned out to be reachable after all — not through the catalog table,
+    /// but through the same registration functions production calls.
+    ///
+    /// The number is the finding. 90,215 B of schema sits beside 97,277 B of
+    /// description: the argument schemas are very nearly a SECOND copy of the
+    /// tool surface, and they were the unmeasured half the whole time. Largest
+    /// on first measurement: `desktop` 17,014 B — one tool, more than a sixth
+    /// of the total, and about 1.5x its own (already largest) description —
+    /// then `loop_graph` 6,368, `goal` 4,985, `scratchpad` 3,891, `self_config`
+    /// 3,553. Nothing is trimmed in this round; measuring and cutting are
+    /// separate acts, and cutting an argument description is a judgement about
+    /// what the model can still call correctly without it.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 90_215;
+
+    /// The tool map with nothing wired — the deterministic half of what the
+    /// constructor builds.
+    ///
+    /// Calls the same two registration functions the constructor does, in the
+    /// same order, so the schemas measured are byte-for-byte the ones
+    /// `get_tool_schema` would hand `agent_init`. Re-deriving them from
+    /// `schemars` here instead would measure a second opinion about what ships.
+    fn unconditional_registry_map(
+    ) -> std::collections::HashMap<String, crate::tool_metadata::UnifiedTool> {
+        let mut tools = std::collections::HashMap::new();
+        crate::executor::builtin_registry::BuiltinToolRegistry::register_core_tools(&mut tools);
+        crate::executor::builtin_registry::BuiltinToolRegistry::register_optional_tools(
+            &mut tools,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &crate::executor::builtin_registry::BuiltinToolConfig::default(),
+            crate::config::types::memory::MemoryInjectionMode::default(),
+            &None,
+            &None,
+            &None,
+        );
+        tools
+    }
+
+    #[test]
+    fn registry_schema_bytes_ratchet() {
+        let map = unconditional_registry_map();
+        let mut sizes: Vec<(&str, usize)> = map
+            .iter()
+            .filter_map(|(name, tool)| {
+                tool.parameters_schema
+                    .as_ref()
+                    .map(|schema| (name.as_str(), schema.to_string().len()))
+            })
+            .collect();
+        let total: usize = sizes.iter().map(|(_, len)| len).sum();
+        sizes.sort_by_key(|(name, len)| (std::cmp::Reverse(*len), *name));
+        let largest: Vec<(&str, usize)> = sizes.iter().take(5).copied().collect();
+
+        assert!(
+            total <= REGISTRY_SCHEMA_CEILING_BYTES,
+            "registry tool schemas total {total} B across {} tools, over the ceiling of \
+             {REGISTRY_SCHEMA_CEILING_BYTES} B. Largest: {largest:?}. A `#[schemars(description \
+             = ...)]` on an argument costs exactly what a sentence in the tool's DESCRIPTION \
+             costs, and unlike a description it is easy to add without noticing. Answer the \
+             three questions documented on CATALOG_DESCRIPTION_CEILING_BYTES before raising it.",
+            sizes.len()
+        );
+
+        // A ceiling over an empty measurement is not a ceiling — the same
+        // non-vacuity every other ratchet in this module asserts. If the two
+        // registration calls above ever stop populating the map, this must fail
+        // loudly rather than certify zero bytes as a clean bill of health.
+        assert!(
+            total > 10_000,
+            "registry schemas measured only {total} B across {} tools — the guard is no longer \
+             reading the map it exists to bound",
+            sizes.len()
+        );
+    }
+
+    /// The tools whose schema this module cannot reach without wiring a
+    /// dependency, pinned so the residue cannot grow in silence.
+    ///
+    /// A guard that measured the reachable schemas and said nothing about the
+    /// rest would be handing out the same clean bill of health that let three
+    /// registration shapes ship unmeasured. This one names them.
+    ///
+    /// A ratchet, not an equality: shrinking the list is good and needs no
+    /// ceremony, growing it means a new tool ships a schema nothing bounds and
+    /// should cost a deliberate edit here. Lower the number when you improve
+    /// it, or the slack left behind is room for the next one to slip back in.
+    ///
+    /// 2026-08-11: 125. Most are conditionally registered (memory, browser,
+    /// desktop AX, teams/tasks, hub, cron/heartbeat, generation), so in a wired
+    /// deployment they DO carry schemas — the residue is a statement about what
+    /// a deterministic test can reach, not about what production sends. That is
+    /// exactly why it is written down instead of implied.
+    #[test]
+    fn tools_without_an_unconditional_schema_are_pinned() {
+        let map = unconditional_registry_map();
+        let mut missing: Vec<&str> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|def| def.name)
+            .chain(REGISTRY_ONLY_DESCRIPTIONS.iter().map(|(name, _)| *name))
+            .filter(|name| {
+                !map.get(*name)
+                    .is_some_and(|tool| tool.parameters_schema.is_some())
+            })
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+
+        assert!(
+            missing.len() <= 125,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 125 \
+             recorded here, so `registry_schema_bytes_ratchet` does not bound them. Either a \
+             tool ships with no parameters at all (free, and fine), or it registers only once a \
+             dependency is live and its schema is unmeasured (not fine, just not cheap to fix). \
+             Raise this pin deliberately: {missing:?}",
+            missing.len()
+        );
+    }
+
+    /// Every tool the MCP bridge installs is measured.
+    ///
+    /// The fourth shape's witness is `mcp/tool_bridge.rs`'s own name consts:
+    /// registering a bridge tool means declaring one, and `sync_builtins` keys
+    /// every install off it. Compared by VALUE, not by identifier — the table
+    /// references those same consts, so a rename that touched only one side
+    /// would otherwise leave both agreeing on a name the wire never sees.
+    ///
+    /// Fails BY NAME in both directions, like its three siblings: a seventh
+    /// bridge tool is named as unaccounted, and an entry whose const has gone
+    /// away is named as stale (it would keep charging the ceilings for bytes
+    /// nobody sends).
+    #[test]
+    fn every_bridge_tool_is_accounted() {
+        // CRLF-safe, and the separator is not line-anchored — see the same note
+        // on `every_registered_core_tool_is_accounted`.
+        let src = include_str!("../../mcp/tool_bridge.rs").replace('\r', "");
+
+        const MARKER: &str = "_TOOL: &str = ";
+        let declarations = src
+            .lines()
+            .filter(|l| l.trim_start().starts_with("pub(crate) const") && l.contains(MARKER))
+            .count();
+
+        let registered: Vec<&str> = src
+            .lines()
+            .filter(|l| l.trim_start().starts_with("pub(crate) const"))
+            .filter_map(|l| l.split_once(MARKER))
+            .filter_map(|(_, rest)| rest.trim().strip_prefix('"'))
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+
+        // Non-vacuity in both directions. A const whose value the scan cannot
+        // read (say it is spelled `= SomeTool::NAME` one day) must fail here
+        // rather than drop quietly out of the census — an unreadable
+        // registration is not an absent one.
+        assert_eq!(
+            registered.len(),
+            declarations,
+            "read {} names from {declarations} `{MARKER}` declarations in mcp/tool_bridge.rs — \
+             a declaration this scan cannot parse is a tool it cannot hold to account, so the \
+             checks below prove nothing. Found: {registered:?}",
+            registered.len()
+        );
+        assert!(
+            !registered.is_empty(),
+            "no bridge tool names found in mcp/tool_bridge.rs — the scan is looking at the \
+             wrong shape, and an empty census cannot fail"
+        );
+
+        let unaccounted: Vec<&str> = registered
+            .iter()
+            .copied()
+            .filter(|name| !BRIDGE_TOOL_DESCRIPTIONS.iter().any(|(n, ..)| n == name))
+            .collect();
+        assert!(
+            unaccounted.is_empty(),
+            "these tools are installed into the MCP tool registry by tool_bridge.rs but appear \
+             in no measured table. `run_loop` snapshots that registry into every request, so \
+             their description — and their schema, since five of the six are in \
+             `default_core_tools()` and never collapse — ship unbounded whenever their \
+             capability gate is open. Add each to BRIDGE_TOOL_DESCRIPTIONS by direct const/fn \
+             reference (never a literal), then re-measure both ceilings: {unaccounted:?}"
+        );
+
+        let stale: Vec<&str> = BRIDGE_TOOL_DESCRIPTIONS
+            .iter()
+            .map(|(name, ..)| *name)
+            .filter(|name| !registered.contains(name))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these entries in BRIDGE_TOOL_DESCRIPTIONS no longer correspond to a name const in \
+             tool_bridge.rs — they charge the ceilings for bytes that no longer ship, which \
+             leaves room for real growth to slip under: {stale:?}"
+        );
+
+        let doubled: Vec<&str> = BRIDGE_TOOL_DESCRIPTIONS
+            .iter()
+            .map(|(name, ..)| *name)
+            .filter(|name| {
+                BUILTIN_TOOL_DEFINITIONS.iter().any(|d| d.name == *name)
+                    || REGISTRY_ONLY_DESCRIPTIONS.iter().any(|(n, _)| n == name)
+                    || INJECTED_TOOL_DESCRIPTIONS.iter().any(|(n, ..)| n == name)
+            })
+            .collect();
+        assert!(
+            doubled.is_empty(),
+            "these tools are in BRIDGE_TOOL_DESCRIPTIONS and also in another measured table, \
+             so the ratchet counts them twice and both ceilings are that much looser than they \
+             read: {doubled:?}"
         );
     }
 

@@ -47,23 +47,46 @@ impl McpReadResourceTool {
     }
 }
 
+impl McpReadResourceTool {
+    /// The description this tool ships to the model, hoisted out of
+    /// `definition()` so a byte ratchet can reference it as a const.
+    ///
+    /// This is the FOURTH registration shape: `mcp/tool_bridge.rs` installs
+    /// the tool straight into the process-wide MCP `ToolHandlerRegistry`
+    /// that `run_loop` snapshots per request, so it appears in no catalog,
+    /// reaches no `reg(` site, and is pushed by no tool service. Measured via
+    /// `executor::BRIDGE_TOOL_DESCRIPTIONS`; a literal in that table would
+    /// only move the drift one layer up, hence the const.
+    pub(crate) const DESCRIPTION: &'static str =
+        "Read a resource from a connected MCP server by its server-qualified `uri`. \
+         Call `mcp_list_resources` first to discover available resources and pass the \
+         returned `uri` exactly as given (it is an opaque identifier — do not edit or \
+         shorten it). Do not guess a URI or read files off disk. Prefer reading an \
+         MCP resource over a web search or a shell `cat` when a connected server \
+         already exposes the content.";
+
+    /// The argument schema, measured beside the description because these
+    /// tools sit in `default_core_tools()` — progressive disclosure never
+    /// collapses them, so the schema ships in full on every request whose
+    /// capability gate is open. (`mcp_login` is the one that is not core,
+    /// and is measured anyway: being uncollapsed is the reason to measure,
+    /// not the condition for it.)
+    pub(crate) fn schema_value() -> Value {
+        let schema = schemars::schema_for!(McpReadResourceArgs);
+        serde_json::to_value(&schema).unwrap_or_default()
+    }
+}
+
 impl AlephToolDyn for McpReadResourceTool {
     fn name(&self) -> &str {
         "mcp_read_resource"
     }
 
     fn definition(&self) -> ToolDefinition {
-        let schema = schemars::schema_for!(McpReadResourceArgs);
-        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_read_resource",
-            "Read a resource from a connected MCP server by its server-qualified `uri`. \
-             Call `mcp_list_resources` first to discover available resources and pass the \
-             returned `uri` exactly as given (it is an opaque identifier — do not edit or \
-             shorten it). Do not guess a URI or read files off disk. Prefer reading an \
-             MCP resource over a web search or a shell `cat` when a connected server \
-             already exposes the content.",
-            parameters,
+            Self::DESCRIPTION,
+            Self::schema_value(),
             ToolCategory::Mcp,
         )
     }
@@ -224,22 +247,45 @@ impl McpListResourcesTool {
     }
 }
 
+impl McpListResourcesTool {
+    /// The description this tool ships to the model, hoisted out of
+    /// `definition()` so a byte ratchet can reference it as a const.
+    ///
+    /// This is the FOURTH registration shape: `mcp/tool_bridge.rs` installs
+    /// the tool straight into the process-wide MCP `ToolHandlerRegistry`
+    /// that `run_loop` snapshots per request, so it appears in no catalog,
+    /// reaches no `reg(` site, and is pushed by no tool service. Measured via
+    /// `executor::BRIDGE_TOOL_DESCRIPTIONS`; a literal in that table would
+    /// only move the drift one layer up, hence the const.
+    pub(crate) const DESCRIPTION: &'static str =
+        "Discover the readable resources (docs, files, data) exposed by \
+         connected MCP servers. Call this FIRST, then read one with \
+         `mcp_read_resource`, copying the exact server-qualified `uri` \
+         returned here. Prefer MCP resources over a web search or shell `cat` \
+         when a connected server already exposes the content.";
+
+    /// The argument schema, measured beside the description because these
+    /// tools sit in `default_core_tools()` — progressive disclosure never
+    /// collapses them, so the schema ships in full on every request whose
+    /// capability gate is open. (`mcp_login` is the one that is not core,
+    /// and is measured anyway: being uncollapsed is the reason to measure,
+    /// not the condition for it.)
+    pub(crate) fn schema_value() -> Value {
+        let schema = schemars::schema_for!(McpListResourcesArgs);
+        serde_json::to_value(&schema).unwrap_or_default()
+    }
+}
+
 impl AlephToolDyn for McpListResourcesTool {
     fn name(&self) -> &str {
         "mcp_list_resources"
     }
 
     fn definition(&self) -> ToolDefinition {
-        let schema = schemars::schema_for!(McpListResourcesArgs);
-        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_list_resources",
-            "Discover the readable resources (docs, files, data) exposed by \
-             connected MCP servers. Call this FIRST, then read one with \
-             `mcp_read_resource`, copying the exact server-qualified `uri` \
-             returned here. Prefer MCP resources over a web search or shell `cat` \
-             when a connected server already exposes the content.",
-            parameters,
+            Self::DESCRIPTION,
+            Self::schema_value(),
             ToolCategory::Mcp,
         )
     }
@@ -361,25 +407,48 @@ impl McpListResourceTemplatesTool {
     }
 }
 
+impl McpListResourceTemplatesTool {
+    /// The description this tool ships to the model, hoisted out of
+    /// `definition()` so a byte ratchet can reference it as a const.
+    ///
+    /// This is the FOURTH registration shape: `mcp/tool_bridge.rs` installs
+    /// the tool straight into the process-wide MCP `ToolHandlerRegistry`
+    /// that `run_loop` snapshots per request, so it appears in no catalog,
+    /// reaches no `reg(` site, and is pushed by no tool service. Measured via
+    /// `executor::BRIDGE_TOOL_DESCRIPTIONS`; a literal in that table would
+    /// only move the drift one layer up, hence the const.
+    pub(crate) const DESCRIPTION: &'static str =
+        "Discover parameterized resource templates (RFC-6570 URIs like \
+         `file:///{path}`) exposed by connected MCP servers — useful when a \
+         server exposes resources only by template, so `mcp_list_resources` \
+         comes back empty. Substitute the `{...}` parameters, then read the \
+         result with `mcp_read_resource(uri=\"<server>:<filled uri>\")` \
+         (prefix the filled URI with the entry's `server`). Prefer this over \
+         a web search or shell `cat` when a connected server can produce the \
+         content.";
+
+    /// The argument schema, measured beside the description because these
+    /// tools sit in `default_core_tools()` — progressive disclosure never
+    /// collapses them, so the schema ships in full on every request whose
+    /// capability gate is open. (`mcp_login` is the one that is not core,
+    /// and is measured anyway: being uncollapsed is the reason to measure,
+    /// not the condition for it.)
+    pub(crate) fn schema_value() -> Value {
+        let schema = schemars::schema_for!(McpListResourceTemplatesArgs);
+        serde_json::to_value(&schema).unwrap_or_default()
+    }
+}
+
 impl AlephToolDyn for McpListResourceTemplatesTool {
     fn name(&self) -> &str {
         "mcp_list_resource_templates"
     }
 
     fn definition(&self) -> ToolDefinition {
-        let schema = schemars::schema_for!(McpListResourceTemplatesArgs);
-        let parameters: Value = serde_json::to_value(&schema).unwrap_or_default();
         ToolDefinition::new(
             "mcp_list_resource_templates",
-            "Discover parameterized resource templates (RFC-6570 URIs like \
-             `file:///{path}`) exposed by connected MCP servers — useful when a \
-             server exposes resources only by template, so `mcp_list_resources` \
-             comes back empty. Substitute the `{...}` parameters, then read the \
-             result with `mcp_read_resource(uri=\"<server>:<filled uri>\")` \
-             (prefix the filled URI with the entry's `server`). Prefer this over \
-             a web search or shell `cat` when a connected server can produce the \
-             content.",
-            parameters,
+            Self::DESCRIPTION,
+            Self::schema_value(),
             ToolCategory::Mcp,
         )
     }

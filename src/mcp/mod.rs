@@ -53,7 +53,7 @@ mod redact;
 mod resources;
 pub mod sampling;
 pub mod sampling_bridge;
-mod tool_bridge;
+pub(crate) mod tool_bridge;
 mod tool_sanitize;
 pub mod transport;
 pub mod types;

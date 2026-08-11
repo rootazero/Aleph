@@ -33,25 +33,25 @@ use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::AlephToolDyn;
 
 /// Registry name of the capability-gated resource-reading builtin.
-const RESOURCE_TOOL: &str = "mcp_read_resource";
+pub(crate) const RESOURCE_TOOL: &str = "mcp_read_resource";
 /// Registry name of the capability-gated resource-discovery builtin. Gated by
 /// the same condition as [`RESOURCE_TOOL`]: without it the model can read a
 /// resource but has no way to learn which resources exist (the gap that pushed
 /// it to a raw `cat`).
-const RESOURCE_LIST_TOOL: &str = "mcp_list_resources";
+pub(crate) const RESOURCE_LIST_TOOL: &str = "mcp_list_resources";
 /// Registry name of the capability-gated resource-*template* discovery builtin.
 /// Gated with the resource cluster: a server may expose resources ONLY by
 /// template (concrete `resource_count == 0`), so the gate also fires on
 /// `resource_template_count > 0` — otherwise a template-only server would strand
 /// the model with no discoverable, readable handle (another `cat` fallback).
-const RESOURCE_TEMPLATE_LIST_TOOL: &str = "mcp_list_resource_templates";
+pub(crate) const RESOURCE_TEMPLATE_LIST_TOOL: &str = "mcp_list_resource_templates";
 /// Registry name of the capability-gated prompt-fetching builtin.
-const PROMPT_TOOL: &str = "mcp_get_prompt";
+pub(crate) const PROMPT_TOOL: &str = "mcp_get_prompt";
 /// Registry name of the capability-gated prompt-discovery builtin. Gated by the
 /// same condition as [`PROMPT_TOOL`].
-const PROMPT_LIST_TOOL: &str = "mcp_list_prompts";
+pub(crate) const PROMPT_LIST_TOOL: &str = "mcp_list_prompts";
 /// Registry name of the OAuth login builtin (present only with remote servers).
-const LOGIN_TOOL: &str = "mcp_login";
+pub(crate) const LOGIN_TOOL: &str = "mcp_login";
 
 /// The capability-gated bridge builtins that are pure reads, in the exact
 /// spelling they register under.
