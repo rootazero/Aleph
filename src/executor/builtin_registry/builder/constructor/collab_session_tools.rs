@@ -111,7 +111,20 @@ impl BuiltinToolRegistry {
                         Arc::clone(es),
                     )))
                 }
-                _ => None,
+                _ => {
+                    // Log the missing-dep so a misconfigured boot surfaces
+                    // here rather than as a silent "plan_submit unavailable"
+                    // tool result. The three deps are all required; missing
+                    // any one disables both tools.
+                    tracing::warn!(
+                        message_router = config.message_router.is_some(),
+                        artifact_store = config.artifact_store.is_some(),
+                        event_store = config.event_store.is_some(),
+                        "plan_submit / plan_resolve: disabled (need MessageRouter + ArtifactStore + \
+                         EventLogStore); verify [teams] configuration"
+                    );
+                    None
+                }
             };
             let submit = match (plan_manager.as_ref(), config.team_store.as_ref()) {
                 (Some(pm), Some(ts)) => {

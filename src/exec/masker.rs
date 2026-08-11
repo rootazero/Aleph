@@ -9,6 +9,12 @@ static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::
         .collect()
 });
 
+/// Upper bound on operator-installed redaction patterns. See
+/// [`install_operator_patterns`] for the rationale; the cap is the only thing
+/// standing between a misconfigured `[[security.mask_patterns]]` and a regex
+/// DoS on every outbound JSON payload.
+pub const MAX_OPERATOR_PATTERNS: usize = 64;
+
 /// Operator-configured patterns from `[[security.mask_patterns]]`, compiled
 /// once at boot by [`install_operator_patterns`].
 ///
@@ -35,20 +41,43 @@ fn operator_patterns() -> Arc<Vec<(Regex, String)>> {
 ///
 /// Invalid regexes are **reported, not swallowed**: a redaction pattern that
 /// silently failed to compile is a secret printed in the clear with no symptom
-/// anywhere. The caller logs the rejects; the valid ones still install, because
-/// dropping the whole list over one typo is the worse failure.
+/// anywhere. The valid ones still install, because dropping the whole list
+/// over one typo is the worse failure.
+///
+/// **Capped at [`MAX_OPERATOR_PATTERNS`] entries.** A config typo or a future
+/// "user-supplied redaction" tool that points at a multi-thousand-entry file
+/// would otherwise make every `mask()` call run thousands of regex passes,
+/// turning the redacting emitter's hot path into a regex DoS. Truncated
+/// installs are logged at `warn!` so the operator can see "installed 64 of
+/// 1000 patterns; remainder refused — see the docs".
 pub fn install_operator_patterns<'a>(
     patterns: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> (usize, Vec<(String, regex::Error)>) {
     let mut compiled = Vec::new();
     let mut rejected = Vec::new();
+    let mut truncated = 0usize;
     for (pattern, replacement) in patterns {
+        if compiled.len() >= MAX_OPERATOR_PATTERNS {
+            truncated += 1;
+            continue;
+        }
         match crate::security::safe_regex::bounded_builder(pattern).build() {
             Ok(re) => compiled.push((re, replacement.to_string())),
             Err(e) => rejected.push((pattern.to_string(), e)),
         }
     }
     let installed = compiled.len();
+    if truncated > 0 {
+        tracing::warn!(
+            truncated,
+            installed,
+            cap = MAX_OPERATOR_PATTERNS,
+            "install_operator_patterns: cap reached; remainder of [[security.mask_patterns]] refused"
+        );
+    }
+    for (pattern, err) in &rejected {
+        tracing::warn!(pattern = %pattern, error = %err, "install_operator_patterns: invalid regex");
+    }
     *OPERATOR_PATTERNS.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(compiled);
     (installed, rejected)
 }

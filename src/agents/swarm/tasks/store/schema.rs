@@ -129,10 +129,12 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
         --   * FK child scan for delete_team_tasks (O(deleted_tasks x total_edges))
         -- NOTE: `--`, not `//`. This is a SQL string, not Rust: `//` made
         -- `execute_batch` fail with `near "/": syntax error` at the FIRST
-        -- statement, so the whole coord schema never ran and every
-        -- `CoordTaskStore::new` returned Err. Boot treats that as the
-        -- supported warn-and-continue degradation, so the coordination-task
-        -- subsystem went dark with no error a user could see.
+        -- statement, so the WHOLE migration aborted: every coord-task table
+        -- went missing, teams / workflows / swarm tasks were dead at runtime,
+        -- every `CoordTaskStore::new` returned Err, boot took its supported
+        -- warn-and-continue degradation path so the coordination-task subsystem
+        -- went dark with no error a user could see — and 133 lib tests
+        -- failed. A comment syntax error is a migration outage.
         CREATE INDEX IF NOT EXISTS idx_coord_task_deps_depends_on
             ON coord_task_dependencies(depends_on);
         "#,

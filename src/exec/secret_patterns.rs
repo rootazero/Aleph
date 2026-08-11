@@ -40,7 +40,16 @@ pub(crate) fn secret_masker_patterns() -> Vec<SecretPattern> {
                     replacement: "sk-ant-***REDACTED***",
                 },
                 SecretPattern {
-                    regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+                    // `\b` anchors the start so an in-string occurrence of
+                    // `AIza` (e.g. embedded in a longer base64) is not
+                    // matched. The body (`[a-zA-Z0-9_-]{35}`) already
+                    // requires 35 chars after the prefix, so the false-
+                    // positive surface is the asymmetric edge cases (a
+                    // password manager URL with `AIza` mid-string), and
+                    // the cost of an over-match in redaction is just
+                    // "this word is gone" — a sentence the model can
+                    // always ask the user about.
+                    regex: Regex::new(r"\bAIza[a-zA-Z0-9_\-]{35}").unwrap(),
                     replacement: "AIza***REDACTED***",
                 },
                 SecretPattern {
@@ -134,7 +143,13 @@ pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
                 },
                 LeakPatternDef {
                     name: "google_api_key",
-                    regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+                    // `\b` anchor — see the masker entry for the same body.
+                    // Without it, the pattern matches `AIza…` mid-string and
+                    // gives every leak detector a "google_api_key" finding
+                    // for an in-string coincidence. False positives in the
+                    // leak path are worse than in the masker path: a
+                    // `Block` finding is refused from the LLM.
+                    regex: Regex::new(r"\bAIza[a-zA-Z0-9_\-]{35}").unwrap(),
                     action: super::leak_detector::LeakAction::Block,
                 },
                 LeakPatternDef {

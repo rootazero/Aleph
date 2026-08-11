@@ -1477,7 +1477,16 @@ async fn declared_confirmation_tool_fails_closed_without_requester() {
     match svc.execute("danger", json!({})).await {
         Err(ToolError::Execution { name, cause }) => {
             assert_eq!(name, "danger");
-            assert!(cause.contains("no approval"), "unexpected cause: {cause}");
+            assert!(
+                cause.contains("approval channel is available"),
+                "unexpected cause: {cause}"
+            );
+            // The fail-closed message names the rule too, so a run that dies
+            // here says which gate it died on rather than just "no channel".
+            assert!(
+                cause.contains("declares its own confirmation gate"),
+                "unexpected cause: {cause}"
+            );
         }
         other => panic!("expected fail-closed Execution error, got: {other:?}"), // rust-doctor-disable-line panic-in-library
     }
@@ -2821,4 +2830,180 @@ async fn a_permission_denied_call_is_not_counted_as_usage() {
         usage_snapshot().is_empty(),
         "a call the gate refused never reached the server; it is not usage"
     );
+}
+
+// -------------------------------------------------------------------------
+// The ordered approval chain: named rules, and decisions the human already made
+// -------------------------------------------------------------------------
+
+/// PINS AN ADJUDICATED DECISION — a session grant does **not** carry into an
+/// unattended continuation of the same session.
+///
+/// The `if self.unattended` auto-deny sits ABOVE the session-grant
+/// short-circuit in `confirm_with_memory`, so an action the human cleared with
+/// "allow for this session" is refused again once the same `SessionKey`
+/// continues autonomously. Swapping those two blocks makes "approve once, the
+/// loop stops asking" work and is the obvious-looking repair when a user
+/// reports that their grant stopped applying; it was evaluated on 2026-08-07
+/// and **ruled against by the user** (SECURITY.md *Unattended = fail closed*,
+/// FEATURE_LOCATOR §5.3). The order IS the trust boundary: running something
+/// with nobody watching must rest on a present decision, never on a remembered
+/// click from earlier in the session.
+///
+/// Until now nothing enforced that. The ruling lived only in prose, one
+/// two-block move away from being silently undone — which is exactly what
+/// happened while this round was being written. This is the guard.
+#[tokio::test]
+async fn a_session_grant_does_not_survive_into_an_unattended_run() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::ApprovedForSession));
+    let ctx = turn_ctx("agent-grant-vs-unattended");
+
+    // Attended turn: the human grants this exact call for the session…
+    let attended = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(ctx.clone())
+        .with_confirmation(StdArc::clone(&requester) as _);
+    attended
+        .execute("danger", json!({}))
+        .await
+        .expect("granted");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+    // …and it does suppress the re-prompt while a human is still attached, so
+    // the assertion below is about the unattended flag and nothing else.
+    attended
+        .execute("danger", json!({}))
+        .await
+        .expect("the grant holds within the attended session");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+
+    // The same session continues with nobody watching: refused anyway.
+    let unattended = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(ctx)
+        .with_confirmation(StdArc::clone(&requester) as _)
+        .with_unattended(true);
+    let err = unattended.execute("danger", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::Execution { .. }),
+        "a remembered grant must not authorize an unattended run, got {err:?}"
+    );
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "and no card was raised into the void"
+    );
+}
+
+/// The card must name the rule that gated the call.
+///
+/// `danger` declares its own confirmation gate, which no tier and no explicit
+/// `allow` can switch off. The old text ("Tool `danger` requires your
+/// confirmation to run") was the same sentence a stray `"*" = "ask"` glob
+/// produced, and it invited the one repair that cannot work here.
+#[tokio::test]
+async fn the_approval_card_names_the_rule_that_gated_the_call() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-card-reason"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    svc.execute("danger", json!({})).await.expect("approved");
+
+    let reasons: Vec<String> = requester
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|a| a.reason.clone())
+        .collect();
+    assert_eq!(reasons.len(), 1);
+    assert!(
+        reasons[0].contains("declares its own confirmation gate"),
+        "the card must say which rule stopped the call: {}",
+        reasons[0]
+    );
+    assert!(
+        reasons[0].contains("full"),
+        "…and that this one survives every tier: {}",
+        reasons[0]
+    );
+}
+
+/// A policy `deny` tells the model which entry denied it, so the sentence it
+/// relays to the user names something they can actually edit.
+#[tokio::test]
+async fn a_policy_deny_names_the_entry_that_denied_it() {
+    use crate::config::types::policies::ToolPermissionsConfig;
+    use crate::extension::PermissionAction;
+
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new()).with_tool_permissions(
+        ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("*_delete".to_string(), PermissionAction::Deny)]
+                .into_iter()
+                .collect(),
+        },
+    );
+    match svc.execute("agent_delete", json!({})).await {
+        Err(ToolError::PermissionDenied { reason, .. }) => {
+            assert!(reason.contains("*_delete"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected PermissionDenied, got {other:?}"), // rust-doctor-disable-line panic-in-library
+    }
+}
+
+/// REGRESSION — one dispatch, two cards.
+///
+/// `confirm_with_memory` documents that "a grant taken at one satisfies the
+/// others for the same call and the user is never double-prompted". That held
+/// only for session-scoped grants: after an "allow once" at the confirm gate, a
+/// `BeforeToolCall` hook's `ask` raised a SECOND card for the identical
+/// fingerprint in the same dispatch.
+#[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh
+async fn a_hook_ask_does_not_re_prompt_a_call_a_gate_already_approved() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        r#"echo '{"hookSpecificOutput": {"permissionDecision": "ask", "permissionDecisionReason": "hook wants a look"}}'"#,
+    )]));
+    // AllowOnce on purpose: a session grant would have masked the bug.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-hook-double-prompt"))
+        .with_confirmation(StdArc::clone(&requester) as _)
+        .with_hook_executor(executor, "agent-hook-double-prompt");
+
+    svc.execute("danger", json!({})).await.expect("approved");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "one call, one card"
+    );
+}
+
+/// …and a hook `ask` on an UNGATED call still asks. Otherwise the dedupe above
+/// could be a hook seam that silently stopped working.
+#[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh
+async fn a_hook_ask_still_prompts_when_no_gate_ran_first() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let executor = Arc::new(HookExecutor::new(vec![make_command_hook(
+        HookEvent::BeforeToolCall,
+        HookKind::Interceptor,
+        r#"echo '{"hookSpecificOutput": {"permissionDecision": "ask", "permissionDecisionReason": "hook wants a look"}}'"#,
+    )]));
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-hook-single-prompt"))
+        .with_confirmation(StdArc::clone(&requester) as _)
+        .with_hook_executor(executor, "agent-hook-single-prompt");
+
+    // `plain` declares no gate of its own, so the hook is the only thing asking.
+    svc.execute("plain", json!({})).await.expect("approved");
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
 }

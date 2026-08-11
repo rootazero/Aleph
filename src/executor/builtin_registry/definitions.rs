@@ -1333,13 +1333,27 @@ mod tests {
     fn no_catalog_entry_inlines_its_description() {
         let src = include_str!("definitions.rs");
 
+        // Scope the scan to the catalog body so a future `description:`
+        // field added OUTSIDE the catalog (e.g. a private helper struct)
+        // does not make the count drift. The catalog constant's body is
+        // bounded by the first `];` after the constant's start; every
+        // scan site inside that body is an entry, no more.
+        let start = src
+            .find("pub const BUILTIN_TOOL_DEFINITIONS")
+            .expect("catalog constant present");
+        let end = src[start..]
+            .find("];")
+            .map(|i| start + i)
+            .expect("catalog terminator present");
+        let catalog_src = &src[start..=end];
+
         // Scan statements, not lines: rustfmt wraps a long path onto the line
         // after `description:`, and a line-only scan reads that as a value with
         // no const in it. Accumulate from the field name to the terminating
         // comma so both shapes are one site.
         let mut sites: Vec<String> = Vec::new();
         let mut pending: Option<String> = None;
-        for line in src.lines().map(str::trim) {
+        for line in catalog_src.lines().map(str::trim) {
             match pending.as_mut() {
                 Some(acc) => {
                     acc.push(' ');
