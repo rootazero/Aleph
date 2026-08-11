@@ -357,6 +357,17 @@ reports and hands back rather than stalling silently. Do not "fix" this by
 reordering; if the ask returns, the answer is to make the continuation
 attended (give it a routable approval channel), not to widen the gate.
 
+**The ruling is now pinned by a test (2026-08-11).** Until then it lived only in
+prose here and in FEATURE_LOCATOR §5.3 — one two-block move away from being
+undone by someone repairing "my session grant stopped applying", which is
+precisely how the reorder gets proposed. `tools::scoped::tests::`
+`a_session_grant_does_not_survive_into_an_unattended_run` grants the action on an
+attended service, proves the grant *does* suppress the re-prompt while a human
+is attached (so the test is about the flag and nothing else), then asserts the
+same action on an `unattended` service is refused. A reorder turns that
+`unwrap_err()` into a panic. The comment above the block in
+`confirm_with_memory` names the ruling and the test.
+
 ---
 
 ## Architecture
@@ -527,12 +538,70 @@ pub enum ApprovalDecisionType {
   a cancelled run's zombie can no longer win the `/approve` FIFO or render.
 - **Denial is terminal** for that call, and is returned to the model as an
   in-context instruction not to retry it, rewrite it, or achieve the same result
-  by other means. Three denials trip the sticky pause in `denial_ledger.rs`.
+  by other means. Three **consecutive** denials trip the session pause in
+  `denial_ledger.rs` — see *The denial breaker recovers* below.
 - **A denial can carry the human's reason.** `/deny wrong directory, use /tmp`
   (channels) or `exec.approval.resolve {reason}` (RPC) stamps
   `ExecApprovalRecord.deny_reason`; the gate renders it verbatim in the
   model-facing error (`The user said: "…"`) so the model re-plans on the actual
   objection. Display-layer only — the ledger still keys on the fingerprint.
+
+### The card names the rule that gated the call (2026-08-11)
+
+`src/tools/scoped/gate_chain.rs` is the one enumeration of *why* a call stops.
+`ScopedToolService::confirmation_rule` returns the first matching `GateRule`, and
+its `reason()` renders the sentence that goes to the human card, the model's
+refusal, and the ledger detail — from one source, so the two audiences cannot be
+told different stories about the same gate.
+
+| rule (`id`) | what fired | what the reader can change |
+|---|---|---|
+| `tool_declared` | `LoopTool::requires_confirmation` (`CONFIRMATION_REQUIRED_TOOLS` / MCP `destructiveHint`) | **nothing** — this survives every tier, `full` included, and an explicit `allow` |
+| `destructive_arguments` | `ExecTier::asks_for_arguments` on *this call*'s args | name the tool exactly in `overrides` |
+| `policy_ask` | an explicit `[policies.tool_permissions]` entry, quoted verbatim (exact name or the glob that matched) | edit that entry |
+| `tier_raised` | nobody named the tool; the tier read its declared metadata | change the tier |
+| `policy_deny` | the merged policy denies (refuses rather than asks); quotes the entry, or `default` | edit that entry |
+
+Order is chosen by one criterion: **a reason must never mislead the reader about
+what would change the outcome.** `tool_declared` therefore outranks a
+same-tool `policy_ask`, because reporting the softer rule sends the operator to a
+setting that cannot help them — the same class of claim as the three now-corrected
+copies of "`Full` gates nothing". Two of the pairs are mutually exclusive by
+construction (an exact entry stands the argument filter down), so the ordering
+only actually arbitrates around the declared floor;
+`gate_chain::tests::the_chain_and_the_chokepoint_never_disagree` pins that the
+chain classifies exactly the calls `permission_for` gates — no gate without a
+reason, no reason without a gate.
+
+Before this, all three ask-arms produced the identical sentence "Tool `x`
+requires your confirmation to run."
+
+### The denial breaker recovers (2026-08-11)
+
+`DenialLedger`'s session pause has the same three states as its in-repo twin,
+the guardian judge's `GuardianBreaker`: `Closed` / `Open` / `HalfOpen`, with
+`SESSION_PAUSE_COOLDOWN` = 300 s.
+
+- The counter is **consecutive**, reset by `DenialLedger::record_approval`,
+  called from both gates that can obtain a live yes (the tool confirm gate and
+  the sandbox elevation gate — they share one session bucket).
+- After the cooldown, one probe is let through. A refusal there re-opens
+  immediately (no fresh countdown, and no re-firing of the one-shot
+  tool-result-cache purge); an approval closes it.
+- Per-intent stickiness is untouched: an approval of action A says nothing about
+  the refusal of action B.
+
+It used to be neither. `total` only ever went up and nothing cleared it, so the
+word "consecutive" — in the constant's doc, the module doc, and the product spec
+all three quote — described something the code never did; and `paused` was set
+once and never cleared by anything. A user who declined three *different*
+suggestions across an hour of productive review permanently paused every confirm
+gate in that conversation, including the operator gate a chat-tier device needs
+to get anything authorized at all. The countermeasure built for a brute-force
+loop fired hardest on the most attentive user, and the documented escape was to
+widen `exec_tier` — a gate that pushes people onto the least safe setting has
+inverted its own purpose. The bound on an actual attacker is unchanged: one
+prompt per cooldown, and their refusal re-opens it.
 
 ---
 

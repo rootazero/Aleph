@@ -175,17 +175,19 @@ impl ScopedToolService {
         // already hidden from list()/describe(), so reaching here means the
         // model guessed the name or the policy tightened mid-session — reject
         // with an explicit reason rather than a confusing NotFound.
-        if self.is_permission_denied(name) {
+        //
+        // The reason names the entry that denied it (`deny_rule`), so the model
+        // relays something the user can act on instead of "the policy says no".
+        if let Some(rule) = self.deny_rule(name) {
+            let explanation = rule.reason(name);
             if let Some(ref l) = ledger {
-                l.commit_refusal(&input, "denied by the configured tool permission policy")
-                    .await;
+                l.commit_refusal(&input, &explanation).await;
             }
             return Err(ToolError::PermissionDenied {
                 name: name.to_string(),
                 reason: format!(
-                    "`{name}` is denied by the configured tool permission policy. \
-                     Do not retry; ask the user to adjust `[policies.tool_permissions]` \
-                     if this tool is needed."
+                    "{explanation} Do not retry; ask the user to adjust \
+                     `[policies.tool_permissions]` if this tool is needed."
                 ),
             });
         }
@@ -196,8 +198,17 @@ impl ScopedToolService {
         // Confirmation gate — user-approval for destructive / gated tools.
         // Skipped entirely when the operator gate above already approved this
         // exact call.
-        self.check_confirmation_gate(name, &input, approved_by_operator_gate)
-            .await?;
+        //
+        // `authorized` = a human (or a standing grant they made) said yes to
+        // THIS call. Threaded into the hook seam below so a `BeforeToolCall`
+        // interceptor's `Ask` does not raise a second card for the identical
+        // fingerprint — the promise `confirm_with_memory` documents, which used
+        // to hold only for session-scoped grants and quietly double-prompted
+        // after an "allow once".
+        let authorized = approved_by_operator_gate
+            || self
+                .check_confirmation_gate(name, &input, approved_by_operator_gate)
+                .await?;
 
         // Fire pre-hook (legacy observational decorator).
         if let Some(ref hook) = self.hook_decorator {
@@ -210,7 +221,7 @@ impl ScopedToolService {
         // blocked call never reaches the retry pipeline.
         let started = std::time::Instant::now();
         let (effective_input, mut pre_hook_contexts) = match self
-            .run_before_tool_hooks(name, input.clone())
+            .run_before_tool_hooks(name, input.clone(), authorized)
             .await
         {
             Ok(outcome) => outcome,
@@ -434,7 +445,7 @@ impl ScopedToolService {
     /// an approval decision rather than a tool refusal because that is what it
     /// is: the authority to run was withheld, which is a separate fact from the
     /// call itself.
-    async fn record_gate_refusal(&self, name: &str, input: &Value, reason: &'static str) {
+    async fn record_gate_refusal(&self, name: &str, input: &Value, reason: &str) {
         let fingerprint = crate::sandbox::exec_approval::grant_fingerprint(name, input);
         self.record_approval_decision(name, &fingerprint, ApprovalRecord::Denied(reason))
             .await;
@@ -443,26 +454,32 @@ impl ScopedToolService {
     /// Confirmation gate: tools flagged `requires_confirmation`, permission
     /// `Ask` tier, or with destructive arguments must be approved by the user.
     /// Skipped when `approved_by_operator_gate` is true.
+    ///
+    /// Returns `true` when this call was authorized by a person (or by a
+    /// standing grant of theirs), `false` when no gate applied and nobody was
+    /// asked. The caller threads that on to the `BeforeToolCall` hook seam so
+    /// one dispatch raises at most one card — see `execute_inner`.
+    ///
+    /// Which rule gated the call comes from [`Self::confirmation_rule`], and its
+    /// prose goes to the human card and the model's refusal from that one
+    /// source. Before, both got the same sentence for all three arms, so a card
+    /// raised by an unremovable floor and a card raised by a stray glob read
+    /// identically.
     async fn check_confirmation_gate(
         &self,
         name: &str,
         input: &Value,
         approved_by_operator_gate: bool,
-    ) -> Result<(), ToolError> {
-        if approved_by_operator_gate
-            || !(self.inner.requires_confirmation(name)
-                || self.is_permission_ask(name)
-                || self.tier_asks_for_arguments(name, input))
-        {
-            return Ok(());
+    ) -> Result<bool, ToolError> {
+        if approved_by_operator_gate {
+            return Ok(true);
         }
+        let Some(rule) = self.confirmation_rule(name, input) else {
+            return Ok(false);
+        };
         match &self.approval_requester {
             Some(requester) => {
-                let action = ApprovalAction::for_tool_call(
-                    name,
-                    input,
-                    format!("Tool `{name}` requires your confirmation to run."),
-                );
+                let action = ApprovalAction::for_tool_call(name, input, rule.reason(name));
                 if let Err(denial) = self.confirm_with_memory(requester, &action, input).await {
                     if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                         return Err(ToolError::ApprovalExpired {
@@ -483,7 +500,7 @@ impl ScopedToolService {
                         ),
                     });
                 }
-                Ok(())
+                Ok(true)
             }
             // The confirm-gate twin of the branch above: refused without asking
             // anyone, and — until this — without recording anything either.
@@ -491,14 +508,19 @@ impl ScopedToolService {
                 self.record_gate_refusal(
                     name,
                     input,
-                    "auto-denied: confirmation required and no approval channel is available",
+                    &format!(
+                        "auto-denied ({}): confirmation required and no approval channel \
+                         is available",
+                        rule.id()
+                    ),
                 )
                 .await;
                 Err(ToolError::Execution {
                     name: name.to_string(),
                     cause: format!(
-                        "Tool `{name}` requires confirmation but no approval \
-                         channel is available. Do not retry."
+                        "{} No approval channel is available, so it cannot be \
+                         authorized here. Do not retry.",
+                        rule.reason(name)
                     ),
                 })
             }
@@ -665,6 +687,22 @@ impl ScopedToolService {
         // run on the 120 s approval timeout, per gated tool, before failing
         // anyway). Interactive turns leave `unattended = false` and are
         // unaffected.
+        //
+        // ## This block runs FIRST, above both memory short-circuits, and that
+        // ## is the trust boundary — not an accident of ordering.
+        //
+        // Reordering it below the session-grant check makes "approve once, the
+        // loop stops asking" work, and is the obvious-looking repair when a
+        // user complains that a grant they gave stopped applying. It was
+        // evaluated on 2026-08-07 and **ruled against by the user**: the point
+        // of the tax is that executing something with nobody watching rests on
+        // a *present* decision, never on a remembered click from earlier in the
+        // session. The refusal carries an actionable hint instead, so the run
+        // reports and hands back rather than stalling. See SECURITY.md
+        // *Unattended = fail closed* and FEATURE_LOCATOR §5.3; the regression
+        // test is `a_session_grant_does_not_survive_into_an_unattended_run`.
+        // If the ask returns, the answer is to make the continuation attended,
+        // not to move this block.
         if self.unattended {
             tracing::warn!(
                 tool = %name,
@@ -840,10 +878,16 @@ impl ScopedToolService {
         // Record a session-scoped grant so subsequent calls of THIS ACTION skip
         // the prompt. Keyed on the action, so the grant covers exactly the call
         // the user read and approved.
-        if outcome.is_session_grant() {
-            if let Some(ref key) = mem_key {
+        if let Some(ref key) = mem_key {
+            if outcome.is_session_grant() {
                 session_memory::global().remember(key, &fingerprint);
             }
+            // A yes ends the run of refusals the brute-force breaker counts.
+            // Without this the breaker measured "denials ever in this session"
+            // while calling itself consecutive, so three deliberate `no`s
+            // spread over an hour of productive work paused every gate for the
+            // rest of the conversation.
+            denial_ledger::global().record_approval(key);
         }
         self.record_approval_decision(name, &fingerprint, ApprovalRecord::GrantedByUser)
             .await;
@@ -943,10 +987,20 @@ impl ScopedToolService {
     /// input + any `context:` lines the interceptors emitted (to be wrapped
     /// into the tool result), or a `ToolError` when a hook blocks / denies
     /// the call or when an `Ask` decision is not approved by the user.
+    ///
+    /// `already_authorized` is `true` when a gate above already put THIS call in
+    /// front of a person and they said yes. A hook `Ask` then adds nothing but
+    /// a second card for a fingerprint the human just cleared: the deny and
+    /// block decisions still run (a hook may veto something a human approved —
+    /// that is the point of an interceptor), only the redundant *question* is
+    /// skipped. `confirm_with_memory` documents that a grant taken at one gate
+    /// satisfies the others for the same call; that was only ever true of
+    /// session-scoped grants, and "allow once" double-prompted.
     async fn run_before_tool_hooks(
         &self,
         name: &str,
         input: Value,
+        already_authorized: bool,
     ) -> Result<(Value, Vec<String>), ToolError> {
         let executor = match self.hook_executor.as_ref() {
             Some(e) if e.hook_count() > 0 => e.clone(),
@@ -985,6 +1039,17 @@ impl ScopedToolService {
         // Ask: route through the approval requester (same seam as
         // `confirm_tools`). Fails closed when no transport is wired.
         if let Some(PermissionDecision::Ask { reason }) = hook_result.permission_decision {
+            if already_authorized {
+                tracing::debug!(
+                    tool = %name,
+                    "hook asked for confirmation on a call a gate above already had \
+                     approved — not re-prompting"
+                );
+                return Ok((
+                    hook_result.updated_input.unwrap_or(input),
+                    hook_result.additional_contexts,
+                ));
+            }
             match &self.approval_requester {
                 Some(requester) => {
                     let action = ApprovalAction::for_tool_call(name, &input, reason);

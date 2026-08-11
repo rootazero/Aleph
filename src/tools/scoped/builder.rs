@@ -299,11 +299,6 @@ impl ScopedToolService {
         self.permission_for(name) == crate::extension::PermissionAction::Deny
     }
 
-    /// `true` when the permission policy requires confirmation for `name`.
-    pub(super) fn is_permission_ask(&self, name: &str) -> bool {
-        self.permission_for(name) == crate::extension::PermissionAction::Ask
-    }
-
     pub(super) fn is_allowed(&self, name: &str) -> bool {
         // Attached SubagentTool always passes the allow filter. It is appended
         // to listings independently of `allowed` (which is derived from the
