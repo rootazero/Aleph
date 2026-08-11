@@ -497,6 +497,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// cooperative per-run token (`cancel`) for each tracked child closes that
     /// leak; a child id that is not a live engine run (e.g. an in-process
     /// subagent) is simply a harmless `cancel` miss.
+    /// The session a live run belongs to. Inverse of
+    /// [`Self::active_run_for_session`]; see
+    /// [`crate::gateway::execution_adapter::ExecutionAdapter::session_of_run`]
+    /// for why a run-id-addressed stop needs it.
+    #[must_use]
+    pub async fn session_of_run(
+        &self,
+        run_id: &str,
+    ) -> Option<crate::routing::session_key::SessionKey> {
+        self.active_runs
+            .read()
+            .await
+            .get(run_id)
+            .map(|r| r.request.session_key.clone())
+    }
+
     pub async fn cancel_session(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
