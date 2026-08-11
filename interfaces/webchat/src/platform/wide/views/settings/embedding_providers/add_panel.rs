@@ -69,7 +69,14 @@ pub(super) fn AddProviderPanel(
                 }
                 Err(e) => {
                     set_testing.set(false);
-                    set_test_result.set(Some((false, e)));
+                    // Unframed on purpose — see `generation_providers/
+                    // add_custom.rs`'s twin.
+                    set_test_result.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )));
                 }
             }
         });

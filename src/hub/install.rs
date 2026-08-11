@@ -176,9 +176,10 @@ pub fn install_git_skill(
         return Err(format!("subdir '{leaf}' not found in {git_url}"));
     }
     // Enforce the content pin before the first write.
-    if let Err(e) =
-        crate::extension::marketplace::installer::verify_plugin_integrity(&src_leaf, sha256.as_deref())
-    {
+    if let Err(e) = crate::extension::marketplace::installer::verify_plugin_integrity(
+        &src_leaf,
+        sha256.as_deref(),
+    ) {
         let _ = std::fs::remove_dir_all(&checkout);
         return Err(e.to_string());
     }
@@ -186,9 +187,11 @@ pub fn install_git_skill(
     // rename onto the target. A mid-copy failure leaves the staging dir as
     // garbage (cleaned by official sync) and the existing target untouched.
     let target = skills_dir.join(&safe_name);
-    let staging = skills_dir
-        .join(".staging")
-        .join(format!("{}-{nonce}", safe_name, nonce = mcp_server_id(&entry.id)));
+    let staging = skills_dir.join(".staging").join(format!(
+        "{}-{nonce}",
+        safe_name,
+        nonce = mcp_server_id(&entry.id)
+    ));
     let _ = std::fs::remove_dir_all(&staging);
     if let Err(e) = crate::bundled::copy_skill_leaf(&src_leaf, &staging) {
         let _ = std::fs::remove_dir_all(&staging);

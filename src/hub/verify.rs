@@ -33,12 +33,13 @@ pub enum HealthObservation {
 /// or resource provider), so the failure condition is "exposes *nothing*" rather
 /// than "exposes no tools" — otherwise a working install gets defamed.
 #[must_use]
-pub fn verdict(
-    running: bool,
-    tool_count: usize,
-    other_capability_count: usize,
-) -> VerifyReport {
-    verdict_with_health(running, HealthObservation::Unknown, tool_count, other_capability_count)
+pub fn verdict(running: bool, tool_count: usize, other_capability_count: usize) -> VerifyReport {
+    verdict_with_health(
+        running,
+        HealthObservation::Unknown,
+        tool_count,
+        other_capability_count,
+    )
 }
 
 /// Same as [`verdict`] but exposes the health-classification alongside `ok` so
@@ -69,9 +70,7 @@ pub fn verdict_with_health(
             };
             VerifyReport {
                 ok: true,
-                detail: format!(
-                    "running; 0 tools, {other} resources/prompts{health_note}"
-                ),
+                detail: format!("running; 0 tools, {other} resources/prompts{health_note}"),
             }
         }
         (tools, _) => {

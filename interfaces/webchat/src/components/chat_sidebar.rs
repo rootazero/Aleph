@@ -322,6 +322,35 @@ pub(crate) async fn hydrate_session_history(
                     }));
                 }
             }
+
+            // The durable execution list, applied AFTER the replay loop.
+            //
+            // Order is the whole point. `replay_run` feeds every persisted
+            // `tool_call_completed` back through the same projection the live
+            // stream uses, so the Todo strip gets rebuilt from the trace — and
+            // that trace is the deliberately lossy mirror, replayed with none
+            // of the `settle_plan` reconciliation the live path has. Whatever
+            // it produced is a guess; this is the file the model works, so it
+            // speaks last.
+            //
+            // Applied only when the server actually sent one. `None` is
+            // ambiguous — no list, or a core too old to have the field — and
+            // clearing on ambiguity would take the strip away from the very
+            // clients that just got it back.
+            // `settle_plan`, not a hand-rolled `apply_plan_update` — the two
+            // are not the same and the difference is visible. Settling also
+            // SINKS a finished plan into the transcript, which is the terminal
+            // state the live client is already in; showing it without sinking
+            // pins a 100%-done checklist above this client's composer, and the
+            // next turn then sinks it a second time — a duplicate archive
+            // capsule, observed on a real machine (2026-08-10). Two clients of
+            // one conversation disagreeing is the exact defect this whole
+            // wiring exists to remove, so the cold path has to land on the same
+            // state, not merely on the same data.
+            if let Some(plan) = loaded.plan {
+                chat.settle_plan(Some(&plan));
+            }
+
             active_run
         }
         Err(e) => {

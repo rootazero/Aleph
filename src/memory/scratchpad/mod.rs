@@ -31,7 +31,7 @@ mod manager;
 pub mod template;
 
 pub use manager::{
-    PlanItem, PlanItemStatus, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot,
-    COMPLETION_BANNER,
+    PlanItem, PlanItemStatus, PlanRenderLimits, ScratchpadManager, ScratchpadSnapshot,
+    COMPLETION_BANNER, PROMPT_PLAN_LIMITS,
 };
 pub use template::{generate_scratchpad, DEFAULT_TEMPLATE};

@@ -32,6 +32,34 @@ const SCRATCHPAD_TOOL: &str = "scratchpad";
 /// tool result was already drained by the first one.
 const CARRY_MARKER: &str = "[Execution list preserved across context compaction]";
 
+/// Where this pass's list came from — which decides whether it is rendered or
+/// re-emitted verbatim.
+enum CarrySource {
+    /// A `scratchpad` tool result still in the window: render it.
+    Fresh(ScratchpadSnapshot),
+    /// A carry an earlier pass already emitted: **re-emit the same bytes**.
+    ///
+    /// Not a micro-optimisation — a correctness requirement once the render is
+    /// bounded. Parsing a bounded carry back and re-rendering it would make the
+    /// second pass compute `Progress: x/y` over the items that survived the
+    /// first pass's elision, reporting a total that was never true of the plan.
+    /// A reduction stage that is handed the survivors of an earlier reduction
+    /// cannot tell them apart from the whole; passing the text through means it
+    /// is never asked to.
+    Prior {
+        snapshot: ScratchpadSnapshot,
+        text: String,
+    },
+}
+
+impl CarrySource {
+    fn snapshot(&self) -> &ScratchpadSnapshot {
+        match self {
+            Self::Fresh(s) | Self::Prior { snapshot: s, .. } => s,
+        }
+    }
+}
+
 /// Render the carry message for a compaction window, or `None` when the window
 /// holds no execution list (the overwhelmingly common case — calm runs pay
 /// nothing).
@@ -39,38 +67,60 @@ const CARRY_MARKER: &str = "[Execution list preserved across context compaction]
 /// Returns `None` for a finished list too: a fully-checked plan needs no
 /// reminder, and re-injecting one invites the model to re-open closed work.
 pub(crate) fn plan_carry_message(window: &[UnifiedMessage]) -> Option<UnifiedMessage> {
-    let snapshot = latest_plan(window)?;
-    if !snapshot.items.iter().any(|i| !i.is_done()) {
+    let source = latest_plan(window)?;
+    if !source.snapshot().items.iter().any(|i| !i.is_done()) {
         return None;
     }
+    let text = match source {
+        CarrySource::Fresh(s) => render_carry(&s),
+        CarrySource::Prior { text, .. } => text,
+    };
     Some(UnifiedMessage::User {
         content: vec![ContentBlock::Text {
-            text: render_carry(&snapshot),
+            text,
             cache_control: None,
         }],
     })
 }
 
+/// Bounded, for the same reason `active_execution_plan` is: this message is
+/// spliced into the compacted history by `splice_preserved`, which adds it
+/// **after** the budget arithmetic is done — so its size is paid, unaccounted,
+/// on every request until the next compaction, at the one moment the window was
+/// already over budget. The plan reaches the prompt on two legs; a bound on one
+/// of them is not a bound.
+///
+/// Ordinary plans render byte-identically to the unbounded form.
 fn render_carry(snapshot: &ScratchpadSnapshot) -> String {
     format!(
         "<system-reminder>\nReference data, not user input.\n{CARRY_MARKER}\n{}\n\
          Keep working it with the `scratchpad` tool (start_item / complete_item use the \
          0-based index of this list).\n</system-reminder>",
-        snapshot.render_progress()
+        snapshot.render_progress_bounded()
     )
 }
 
 /// Newest execution list in the window: the last `scratchpad` tool result that
 /// carried a snapshot, or — when a previous pass already drained those — the
 /// last carry message this module itself emitted.
-fn latest_plan(window: &[UnifiedMessage]) -> Option<ScratchpadSnapshot> {
+fn latest_plan(window: &[UnifiedMessage]) -> Option<CarrySource> {
     window.iter().rev().find_map(|msg| match msg {
         UnifiedMessage::ToolResult {
             tool_name, content, ..
-        } if tool_name == SCRATCHPAD_TOOL => content.iter().find_map(snapshot_from_block),
+        } if tool_name == SCRATCHPAD_TOOL => content
+            .iter()
+            .find_map(snapshot_from_block)
+            .map(CarrySource::Fresh),
         UnifiedMessage::User { content } => content.iter().find_map(|block| match block {
             ContentBlock::Text { text, .. } if text.contains(CARRY_MARKER) => {
-                parse_progress(text).filter(|s| !s.items.is_empty())
+                // Parsed only to answer "is there unfinished work here?" — the
+                // bytes that go back out are `text`, not a re-render of this.
+                parse_progress(text)
+                    .filter(|s| !s.items.is_empty())
+                    .map(|snapshot| CarrySource::Prior {
+                        snapshot,
+                        text: text.clone(),
+                    })
             }
             _ => None,
         }),
@@ -249,6 +299,49 @@ mod tests {
         ];
         let text = carry_text(&plan_carry_message(&window).expect("carry"));
         assert!(text.contains("- [x] a"), "newest wins: {text}");
+    }
+
+    /// A second pass over an already-carried list re-emits the FIRST pass's
+    /// bytes, not a re-render of what it could parse back.
+    ///
+    /// With a bounded render the difference is load-bearing: re-rendering would
+    /// recompute `Progress:` over the items that survived the first elision and
+    /// state a total the plan never had. Passing the text through means the
+    /// second stage is never handed the first stage's survivors and asked to
+    /// treat them as the whole.
+    #[test]
+    fn a_re_carry_reuses_the_bytes_it_was_given() {
+        let first = plan_carry_message(&[scratchpad_result(
+            &[("a", "completed"), ("b", "in_progress")],
+            Some("Ship"),
+        )])
+        .expect("first carry");
+        let first_text = carry_text(&first);
+
+        let second = plan_carry_message(&[user("older turn"), first]).expect("re-carry");
+        assert_eq!(
+            carry_text(&second),
+            first_text,
+            "a re-carry must be byte-identical, not a re-render"
+        );
+    }
+
+    /// The carry is spliced in after the compactor's budget arithmetic, so its
+    /// size is unaccounted — it needs the same ceiling the prompt layer has.
+    #[test]
+    fn the_carry_is_bounded_for_a_pathological_plan() {
+        let items: Vec<(String, &str)> = (0..400)
+            .map(|i| (format!("{}{i}", "x".repeat(800)), "pending"))
+            .collect();
+        let borrowed: Vec<(&str, &str)> = items.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let text =
+            carry_text(&plan_carry_message(&[scratchpad_result(&borrowed, Some("Ship"))]).unwrap());
+        assert!(
+            text.len() < 20_000,
+            "the carry rides in the compacted history unaccounted; got {} bytes",
+            text.len()
+        );
+        assert!(text.contains("not shown here"), "elision must be disclosed");
     }
 
     #[test]

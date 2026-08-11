@@ -9,7 +9,16 @@
 //! means wiring it into that constructor in the same commit — a config surface
 //! that parses cleanly and changes nothing is worse than no surface at all.
 
-/// Default scratchpad template for new sessions
+/// Default scratchpad template for new sessions.
+///
+/// The three sections here are exactly the three a writing surface can reach:
+/// `## Objective` (`set_objective` / `set_plan`), `## Plan` (`set_plan` /
+/// `start_item` / `complete_item`), `## Notes` (`append_note`). A fourth,
+/// `## Working State`, used to be stamped into every scratchpad — no tool
+/// action could write it and only the (now withdrawn) `has_content` probe read
+/// it, so it was a section the model was shown and could never fill. Existing
+/// files that still carry it are unaffected: `section_span` locates sections by
+/// header, and an unknown one is simply never addressed.
 pub const DEFAULT_TEMPLATE: &str = r#"# Current Task
 
 ## Objective
@@ -17,9 +26,6 @@ pub const DEFAULT_TEMPLATE: &str = r#"# Current Task
 
 ## Plan
 - [ ] ...
-
-## Working State
-
 
 ## Notes
 
@@ -44,9 +50,6 @@ pub fn generate_scratchpad(objective: Option<&str>, session_id: &str) -> String 
 ## Plan
 - [ ] ...
 
-## Working State
-
-
 ## Notes
 
 
@@ -65,8 +68,38 @@ mod tests {
     fn test_default_template_has_sections() {
         assert!(DEFAULT_TEMPLATE.contains("## Objective"));
         assert!(DEFAULT_TEMPLATE.contains("## Plan"));
-        assert!(DEFAULT_TEMPLATE.contains("## Working State"));
         assert!(DEFAULT_TEMPLATE.contains("## Notes"));
+    }
+
+    /// Every section the template ships must have a writing surface. A section
+    /// nobody can fill is an affordance the model is shown and cannot use — it
+    /// is also how `## Working State` survived as dead structure in every
+    /// scratchpad on disk. If a new section is added here, add the action that
+    /// writes it in the same commit.
+    #[test]
+    fn every_shipped_section_has_a_writer() {
+        let shipped: Vec<&str> = DEFAULT_TEMPLATE
+            .lines()
+            .filter(|l| l.starts_with("## "))
+            .collect();
+        assert_eq!(
+            shipped,
+            vec!["## Objective", "## Plan", "## Notes"],
+            "a section with no `scratchpad` action behind it must not ship"
+        );
+        // The generated form must agree with the constant, or a brand-new
+        // scratchpad and a cleared one would have different shapes.
+        let generated: Vec<&str> = generate_scratchpad(Some("x"), "s")
+            .lines()
+            .filter(|l| l.starts_with("## "))
+            .map(|l| match l {
+                "## Objective" => "## Objective",
+                "## Plan" => "## Plan",
+                "## Notes" => "## Notes",
+                other => panic!("unexpected generated section {other}"),
+            })
+            .collect();
+        assert_eq!(generated, shipped);
     }
 
     #[test]

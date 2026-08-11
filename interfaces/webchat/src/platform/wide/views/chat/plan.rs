@@ -59,8 +59,15 @@ pub fn scratchpad_plan_update(action: &str, snapshot: Option<&Value>) -> PlanUpd
 /// lossy `agent_trace` mirror, so a dropped frame would otherwise strand the
 /// Todo strip on a stale checklist with no repair path. An empty snapshot
 /// means the run ended with the plan cleared → hide.
+///
+/// `pub(super)`, not `pub`: settling is two steps — reconcile, then sink a
+/// finished plan — and a caller outside this module that reaches for the
+/// projection alone gets the first without the second. That half-application
+/// shipped once (the cold-load path pinned a 100%-done checklist above the
+/// composer and then archived it twice). [`ChatState::settle_plan`] is the
+/// whole operation and the only way in from elsewhere.
 #[must_use]
-pub fn plan_settlement(summary_plan: Option<&PlanView>) -> PlanUpdate {
+pub(super) fn plan_settlement(summary_plan: Option<&PlanView>) -> PlanUpdate {
     match summary_plan {
         Some(plan) if plan.has_content() => PlanUpdate::Show(plan.clone()),
         Some(_) => PlanUpdate::Hide,

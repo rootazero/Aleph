@@ -360,10 +360,38 @@ pub async fn handle_abort(
 
 /// Handle chat.history RPC request
 ///
-/// Returns the chat history for a session, plus `active_run` — the run id of
-/// the turn in flight on this session right now, or `null`.
+/// Returns the chat history for a session, plus two facts about that session's
+/// *current* state that the transcript alone cannot express: `active_run` (the
+/// turn in flight right now, or `null`) and `plan` (the durable execution list,
+/// or `null`).
 ///
-/// # Why `active_run` rides on this response instead of its own RPC
+/// # Why `plan` rides here too
+///
+/// The scratchpad execution list is durable — a markdown file that the model,
+/// the `<execution_plan>` prompt layer and the stop verifier all read as the
+/// source of truth. The Panel's Todo strip did **not** read it. Its only
+/// sources were live `tool_call_completed` frames, the terminal `RunSummary`,
+/// and its own in-memory per-tab snapshot; a client that attached fresh
+/// reconstructed the list by *replaying* the persisted trace. That replay is a
+/// weaker thing than it looks:
+///
+/// * `agent_trace` is a deliberately lossy mirror (bounded `mpsc` + `try_send`,
+///   drop on full) — which is exactly why `RunSummary.plan` exists as the live
+///   path's reconciliation — and the replay path has no such reconciliation at
+///   all;
+/// * it only covers assistant rows inside the fetched window, so a plan older
+///   than that window, or one owned by an explicitly-named `project_id` shared
+///   across conversations, is simply not in the events being replayed;
+/// * a run in flight has not written its trace yet, so the case this response's
+///   `active_run` field was added for — join a conversation mid-turn — is
+///   precisely the case with no plan to replay.
+///
+/// So: refresh the page, open a second tab, attach from a second device, or
+/// come back tomorrow, and a half-finished checklist that the model is still
+/// being held to renders as nothing at all. The durable file is the fact; this
+/// field is it, and it is the last word over anything replay produced.
+///
+/// # Why both ride on this response instead of their own RPCs
 ///
 /// Opening (or re-opening) a conversation that is *already running* used to
 /// hand a client a transcript with no way to learn that more was coming: the
@@ -373,15 +401,16 @@ pub async fn handle_abort(
 /// front of a frozen transcript for the whole turn — the "two terminals share
 /// one thread" case failing silently on the second terminal.
 ///
-/// The pointer belongs on this response rather than beside it because the two
-/// facts are one snapshot. A separate call would open a window where a client
-/// holds the transcript but not the run (or the reverse), and every window of
-/// that kind eventually renders a turn twice or not at all. It also costs
-/// nothing extra to authorize: this handler has already resolved the session's
-/// metadata and passed `visibility::session_visible` before it asks, so
-/// `active_run` inherits that gate instead of needing a second one — no new
-/// method to register in `method_visibility`, no new entry in
-/// `lane::override_for`, no second existence oracle.
+/// Both belong on this response rather than beside it because the three facts
+/// are one snapshot. A separate call would open a window where a client holds
+/// the transcript but not the run (or the reverse), and every window of that
+/// kind eventually renders a turn twice or not at all; the same is true of a
+/// checklist that arrives a beat after the transcript it annotates. They also
+/// cost nothing extra to authorize: this handler has already resolved the
+/// session's metadata and passed `visibility::session_visible` before it asks,
+/// so both inherit that gate instead of needing one each — no new method to
+/// register in `method_visibility`, no new entry in `lane::override_for`, no
+/// second existence oracle.
 ///
 /// `run_manager` is `Option` because `chat.history` is registered
 /// unconditionally while the run manager is not (`common_handlers.rs`); absent,
@@ -465,8 +494,13 @@ pub async fn handle_history(
             // parses but is not byte-identical to canonical would silently get
             // "nothing running" — a miss that looks exactly like an idle
             // session.
-            let active_run = run_manager
-                .and_then(|rm| rm.active_run_for_session(&session_key.to_key_string()));
+            // Same canonical key, same post-gate position, same reason (see the
+            // rationale above). Resolved through the one "session → plan"
+            // function the prompt layer and the stop verifier also call, so a
+            // client and the model can never be told different lists.
+            let canonical = session_key.to_key_string();
+            let active_run = run_manager.and_then(|rm| rm.active_run_for_session(&canonical));
+            let plan = crate::builtin_tools::scratchpad::session_plan_snapshot(&canonical).await;
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -474,6 +508,7 @@ pub async fn handle_history(
                     "messages": chat_messages,
                     "count": count,
                     "active_run": active_run,
+                    "plan": plan,
                 }),
             )
         }
@@ -1130,6 +1165,112 @@ mod tests {
                 result["active_run"].is_null(),
                 "no run manager ⇒ no live turn this handler can confirm"
             );
+            assert!(
+                result.get("plan").is_some(),
+                "`plan` must always be emitted for the same reason: absent reads \
+                 to the client's parser as an old core, and it treats that as \
+                 `say nothing about the plan` rather than `there is no plan`"
+            );
+            assert!(
+                result["plan"].is_null(),
+                "this session never bound a scratchpad"
+            );
+        }
+
+        /// The reason this field exists: a client that just attached learns the
+        /// durable checklist from the FILE, not by replaying a lossy trace it
+        /// may not even have (mid-run, or a plan older than the fetch window).
+        #[tokio::test]
+        async fn history_serves_the_durable_execution_list() {
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let canonical = alice_key.to_key_string();
+
+            // Exactly what the `scratchpad` tool does on a `set_plan`.
+            let project = "hist-plan-probe";
+            crate::builtin_tools::scratchpad_registry::set_active(&canonical, project);
+            crate::memory::scratchpad::ScratchpadManager::new(project, &canonical)
+                .set_plan(
+                    Some("Ship auth"),
+                    &[
+                        crate::memory::scratchpad::PlanItem {
+                            text: "Design".into(),
+                            status: crate::memory::scratchpad::PlanItemStatus::Done,
+                        },
+                        crate::memory::scratchpad::PlanItem {
+                            text: "Build".into(),
+                            status: crate::memory::scratchpad::PlanItemStatus::InProgress,
+                        },
+                    ],
+                )
+                .await
+                .unwrap();
+
+            let resp = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_history(
+                        request("chat.history", json!({ "session_key": canonical })),
+                        store.clone(),
+                        None,
+                    ),
+                )
+                .await;
+            let result = resp.result.expect("alice may read her own history");
+            let plan = &result["plan"];
+            assert_eq!(plan["objective"], "Ship auth");
+            assert_eq!(plan["items"][0]["status"], "completed");
+            assert_eq!(plan["items"][1]["status"], "in_progress");
+            assert_eq!(plan["complete"], false);
+
+            crate::builtin_tools::scratchpad_registry::clear(&canonical);
+        }
+
+        /// The gate the plan inherits is the transcript's own. A caller who
+        /// cannot see the session must not learn its checklist either — and
+        /// must not be able to tell "denied" from "no such session".
+        #[tokio::test]
+        async fn a_denied_history_does_not_leak_the_execution_list() {
+            let _home = crate::utils::paths::IsolatedAlephHome::new();
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+            let canonical = alice_key.to_key_string();
+
+            let project = "hist-plan-leak-probe";
+            crate::builtin_tools::scratchpad_registry::set_active(&canonical, project);
+            crate::memory::scratchpad::ScratchpadManager::new(project, &canonical)
+                .set_plan(
+                    Some("Alice's secret objective"),
+                    &[crate::memory::scratchpad::PlanItem::pending("secret step")],
+                )
+                .await
+                .unwrap();
+
+            let as_bob = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_history(
+                        request("chat.history", json!({ "session_key": canonical })),
+                        store.clone(),
+                        None,
+                    ),
+                )
+                .await;
+            assert_eq!(
+                as_bob.error.as_ref().map(|e| e.code),
+                Some(RESOURCE_NOT_FOUND)
+            );
+            assert!(as_bob.result.is_none());
+            let rendered = serde_json::to_string(&as_bob).unwrap();
+            assert!(
+                !rendered.contains("secret"),
+                "the refusal leaked plan text: {rendered}"
+            );
+
+            crate::builtin_tools::scratchpad_registry::clear(&canonical);
         }
 
         #[tokio::test]
