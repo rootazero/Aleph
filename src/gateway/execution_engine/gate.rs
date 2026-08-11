@@ -112,22 +112,26 @@ where
             // absent → Steer) decides what happens to this message. The run
             // was never registered, so there is nothing to undo on either
             // path.
+            // ONE read of `active_runs` for the whole decision. Every arm below
+            // needs something from the same sibling — its author (the P2 room
+            // rule), its id and admission instant (`Interrupt`), its model and
+            // workspace (`Steer`) — and resolving each of those separately let
+            // the mode be chosen against one snapshot and applied against
+            // another. `find_busy_sibling` drops the read guard before
+            // returning: the `Interrupt` arm's `cancel_session` takes the same
+            // lock, and holding it across a queued writer would deadlock.
+            let sibling =
+                super::steering::find_busy_sibling(&self.active_runs, run_id, &request.session_key)
+                    .await;
+
             // P2 (spec §10): in a shared project room, `Steer` / `Interrupt`
-            // are authority over YOUR OWN turn, not a room-mate's. Resolve the
-            // sibling's metadata and let `for_shared_room` decide — the guard
-            // is a no-op outside a project scope and for two turns by the same
-            // author, so nothing pre-P2 changes shape. The read guard is
-            // dropped before the match: the `Interrupt` arm takes the same lock
-            // again, and holding it across a queued writer would deadlock.
-            let running_meta = {
-                let runs = self.active_runs.read().await;
-                super::steering::find_steering_target_id(&runs, run_id, &request.session_key)
-                    .and_then(|id| runs.get(&id).map(|r| r.request.metadata.clone()))
-            };
-            let busy_mode = match running_meta {
-                Some(m) => super::BusyInputMode::from_metadata(&request.metadata)
-                    .for_shared_room(&request.metadata, &m),
-                None => super::BusyInputMode::from_metadata(&request.metadata),
+            // are authority over YOUR OWN turn, not a room-mate's. The guard is
+            // a no-op outside a project scope and for two turns by the same
+            // author, so nothing pre-P2 changes shape.
+            let declared = super::BusyInputMode::from_metadata(&request.metadata);
+            let busy_mode = match sibling.as_ref() {
+                Some(s) => declared.for_shared_room(&request.metadata, &s.metadata),
+                None => declared,
             };
             match busy_mode {
                 super::BusyInputMode::Interrupt => {
@@ -163,18 +167,27 @@ where
                     // / `Steer` modes. (`/stop` and Panel `chat.abort` are explicit
                     // user-stops that already route straight through
                     // `cancel_session`, NOT this branch.)
-                    let has_sibling = if !super::steering::has_steering_content(request) {
-                        false
-                    } else {
-                        let runs = self.active_runs.read().await;
-                        super::steering::find_steering_target_id(
-                            &runs,
-                            run_id,
-                            &request.session_key,
-                        )
-                        .is_some()
-                    };
-                    if has_sibling {
+                    //
+                    // The third guard is temporal, and it is what keeps a
+                    // *burst* of interrupt-mode messages from eating itself.
+                    // Once the lane stopped holding an admitted run's ticket,
+                    // every queued message reached the engine while its own
+                    // predecessor was running and cancelled it — an N-message
+                    // burst left one survivor and N-1 destroyed turns. A
+                    // message may only supersede a run that was already
+                    // admitted when the message began waiting; see
+                    // `steering::interrupt_targets_an_unseen_run`.
+                    let cancel_target = sibling.as_ref().filter(|s| {
+                        super::steering::has_steering_content(request)
+                            && !super::steering::interrupt_targets_an_unseen_run(
+                                s.admitted_at,
+                                crate::gateway::busy_queue::waiting_since(
+                                    &request.session_key.to_key_string(),
+                                    run_id,
+                                ),
+                            )
+                    });
+                    if let Some(target) = cancel_target {
                         // Cancel the leader's own run AND its delegated children
                         // (no detached-member leak). A bare `self.cancel(target)`
                         // would kill only the parent and re-open that leak. No
@@ -193,6 +206,7 @@ where
                         }
                         info!(
                             session = %request.session_key.to_key_string(),
+                            superseded = %target.run_id,
                             "busy-input interrupt: cancelled running sibling and any delegated children; message will restart as a fresh run via the busy queue",
                         );
                     }
@@ -211,15 +225,23 @@ where
                     // Mid-loop steering: if the busy run is on THIS session,
                     // inject the message into the live event log so the running
                     // loop picks it up at its next turn boundary (codex parity).
-                    let injected = super::steering::try_inject_steering(
-                        self.config.mid_turn_steering,
-                        self.config.max_pending_steering,
-                        &self.active_runs,
-                        self.orchestrator.as_ref(),
-                        request,
-                        run_id,
-                    )
-                    .await;
+                    // No sibling on THIS session means a cross-session busy
+                    // agent — there is no live loop to fold into, so the
+                    // message waits its turn in the lane.
+                    let injected = match sibling.as_ref() {
+                        Some(s) => {
+                            super::steering::try_inject_steering(
+                                self.config.mid_turn_steering,
+                                self.config.max_pending_steering,
+                                s,
+                                self.orchestrator.as_ref(),
+                                request,
+                                run_id,
+                            )
+                            .await
+                        }
+                        None => false,
+                    };
                     if injected {
                         return Ok(GateOutcome::HandledInline);
                     }
@@ -275,6 +297,7 @@ where
                     request: request.clone(),
                     state: RunState::Running,
                     started_at: chrono::Utc::now(),
+                    admitted_at: std::time::Instant::now(),
                     completed_at: None,
                     steps_completed: 0,
                     current_tool: None,

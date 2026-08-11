@@ -269,6 +269,19 @@ impl ExecApprovalManager {
     ///
     /// The approval record
     pub fn create(&self, request: &ExecApprovalRequest, timeout_ms: u64) -> ExecApprovalRecord {
+        // The parser's `CommandAnalysis::error` is the single source of
+        // "this command is unparseable". Surfacing it as an approval card
+        // (delivered to a channel, presented to a human) is the wrong
+        // default — the caller already knows the command is unrunnable.
+        // `debug_assert!` is the right tier: a misconfigured caller logs
+        // the parser's `reason` rather than silently spending a delivery
+        // slot on a card that the human can only deny.
+        debug_assert!(
+            request.analysis.ok,
+            "ExecApprovalManager::create called with !analysis.ok — caller must reject \
+             before this point. Parser reason: {:?}",
+            request.analysis.reason,
+        );
         let record = ExecApprovalRecord::from_request(request, timeout_ms);
         debug!(id = %record.id, command = %record.command, "Created approval request");
         record
@@ -712,23 +725,32 @@ impl ExecApprovalManager {
     }
 
     /// Get snapshot of a pending approval
+    ///
+    /// Consults [`PendingEntry::is_live`] so a consumer that asks "is this
+    /// id still pending?" never sees a record whose sender is gone, whose
+    /// deadline has passed, or whose `decision` is set. `list_pending` is
+    /// the only path that may return a still-pending roster to a panel;
+    /// `get_pending` was the second one and is now in lock-step.
     #[must_use]
     pub fn get_pending(&self, id: &str) -> Option<PendingApproval> {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
-        pending.get(id).map(|entry| {
-            let now = Instant::now();
-            let elapsed = now.duration_since(entry.created_at);
-            let timeout_ms = entry
-                .record
-                .expires_at_ms
-                .saturating_sub(entry.record.created_at_ms);
-            let remaining = Duration::from_millis(timeout_ms).saturating_sub(elapsed);
+        pending
+            .get(id)
+            .filter(|entry| entry.is_live())
+            .map(|entry| {
+                let now = Instant::now();
+                let elapsed = now.duration_since(entry.created_at);
+                let timeout_ms = entry
+                    .record
+                    .expires_at_ms
+                    .saturating_sub(entry.record.created_at_ms);
+                let remaining = Duration::from_millis(timeout_ms).saturating_sub(elapsed);
 
-            PendingApproval {
-                record: entry.record.clone(),
-                remaining_ms: remaining.as_millis() as u64,
-            }
-        })
+                PendingApproval {
+                    record: entry.record.clone(),
+                    remaining_ms: remaining.as_millis() as u64,
+                }
+            })
     }
 
     /// List all LIVE pending approvals, oldest first.

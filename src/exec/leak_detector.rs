@@ -121,14 +121,16 @@ impl LeakDetector {
 
     /// Scan content for leaks (internal implementation).
     fn scan(&self, content: &str) -> ScanResult {
-        // The Aho-Corasick automaton is a SOFT hint, not a hard gate: many
-        // regex patterns (custom vault tokens, raw JWTs without a "Bearer "
-        // prefix, HMAC blobs, post-quantum secrets) carry no prefix the
-        // automaton knows about. Gating the regex on the prefix match used
-        // to let those high-value credentials escape every leak check
-        // (`is_clean() == true` despite a real secret being present).
-        // Now the prefix scan only chooses between "definitely run regex" and
-        // "very-likely-but-still-run-regex" — the regex pass is always taken.
+        // The Aho-Corasick automaton used to gate the regex sweep: only
+        // patterns whose prefix the automaton knew about were run. Many
+        // high-value credentials (raw JWTs without a `Bearer` prefix, HMAC
+        // blobs, post-quantum secrets) carry no known prefix and used to
+        // slip through every leak check. The current behaviour runs the
+        // regex sweep unconditionally; the automaton's `is_match` result
+        // is discarded because the regex pass is always taken. The
+        // automaton is kept in the struct for future Aho-Corasick use
+        // (set-level replacement, fuzzy match expansion) — the prefix
+        // list at construction is the source of truth for that hook.
         let _ = self.ac.is_match(content);
 
         // Always run the full regex sweep. The cost of `Regex::find` over a

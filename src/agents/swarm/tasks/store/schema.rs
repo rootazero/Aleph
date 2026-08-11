@@ -126,7 +126,15 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
         --   * deps::get_dependents  WHERE depends_on = ?1
         --   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
         --     (runs on every task completion)
-        --   * FK child scan for delete_team_tasks (O(deleted_tasks × total_edges))
+        --   * FK child scan for delete_team_tasks (O(deleted_tasks x total_edges))
+        -- NOTE: `--`, not `//`. This is a SQL string, not Rust: `//` made
+        -- `execute_batch` fail with `near "/": syntax error` at the FIRST
+        -- statement, so the WHOLE migration aborted: every coord-task table
+        -- went missing, teams / workflows / swarm tasks were dead at runtime,
+        -- every `CoordTaskStore::new` returned Err, boot took its supported
+        -- warn-and-continue degradation path so the coordination-task subsystem
+        -- went dark with no error a user could see — and 133 lib tests
+        -- failed. A comment syntax error is a migration outage.
         CREATE INDEX IF NOT EXISTS idx_coord_task_deps_depends_on
             ON coord_task_dependencies(depends_on);
         "#,
@@ -297,30 +305,36 @@ fn add_column_if_missing(
 mod tests {
     use super::*;
 
-    /// `migrate` must succeed against an empty database.
+    /// The whole schema has to apply to an empty database.
     ///
-    /// It did not, for a day: a `// …` comment block was written inside one of
-    /// the `execute_batch` SQL literals, and SQLite's line comment is `--`. The
-    /// whole batch failed to parse, so `SqliteCoordTaskStore` could not
-    /// initialise at all — every team task, workflow materialisation and swarm
-    /// dependency edge, at runtime, not just in tests.
+    /// `execute_batch` parses the entire literal, so ONE bad character in a
+    /// comment near the end kills the FIRST statement and nothing is created.
+    /// That is what a stray Rust-style `//` did (`near "/": syntax error`):
+    /// every `CoordTaskStore::new` returned `Err`, boot took its supported
+    /// warn-and-continue path, and the coordination-task subsystem went dark
+    /// with nothing a user could see — while the compiler was perfectly happy,
+    /// because the SQL is just a string to it.
     ///
-    /// The suite *did* catch it: 133 lib tests went red together. But 133
-    /// failures spread across `workflow::compile`, `teams::snapshots`,
-    /// `teams::dispatcher` and `hub::install` read as "the test environment is
-    /// broken", which is exactly the reading that gets a run dismissed. This
-    /// test fails **by name**, on the one thing that is actually wrong.
+    /// Cheap enough to keep forever: an in-memory connection and one call.
     #[test]
-    fn migrate_runs_on_an_empty_database() {
-        let conn = Connection::open_in_memory().expect("in-memory db opens");
-        migrate(&conn).expect("the schema migration must apply to a fresh database");
-        // Applying it twice is how every real boot after the first one goes.
-        migrate(&conn).expect("the schema migration must be idempotent");
+    fn the_schema_applies_to_an_empty_database() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        migrate(&conn).expect("the coord schema must apply cleanly");
+    }
+
+    /// Re-running it must be a no-op, not a second failure: `migrate` runs on
+    /// every open, and the ALTER-based column additions below the batch are
+    /// guarded by probes rather than by `IF NOT EXISTS`.
+    #[test]
+    fn the_schema_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        migrate(&conn).expect("first apply");
+        migrate(&conn).expect("second apply must be a no-op");
     }
 
     /// No SQL literal in this file may carry a Rust line comment.
     ///
-    /// The direct test above proves the schema parses *today*; this one names
+    /// The direct tests above prove the schema parses *today*; this one names
     /// the specific mistake, so the next person who explains an index in a
     /// `r#"…"#` block finds out at `cargo test` rather than at boot. Reads the
     /// source with `\r` stripped first — CLAUDE.md §10: a source-level guard

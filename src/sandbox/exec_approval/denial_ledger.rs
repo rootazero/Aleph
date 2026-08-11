@@ -12,14 +12,17 @@
 //!    fatigue / coercion loop at worst. A denial is sticky for that intent for
 //!    the rest of the session — the agent has to change its approach.
 //!
-//! 2. **Circuit breaker.** After enough distinct denials in one session, the
-//!    autonomous escalation path is paused: further elevation prompts
+//! 2. **Circuit breaker.** After enough *consecutive* denials in one session,
+//!    the autonomous escalation path is paused: further elevation prompts
 //!    auto-deny without bothering the user. This bounds how hard a runaway or
-//!    adversarial loop can push against the approval gate.
+//!    adversarial loop can push against the approval gate. Three states, like
+//!    the guardian judge's provider breaker it is modelled on: an approval
+//!    ([`DenialLedger::record_approval`]) closes it, and a cooldown lets one
+//!    probe through so a paused session is a pause and not a brick.
 //!
 //! Maps `OpenSquilla`'s `DenialLedger` (`sandbox/governance.py`) — its
 //! `action_fingerprint` (SHA over action+argv+cwd) + per-session counter +
-//! sticky `autonomous_paused` flag + `DenialReason` taxonomy — onto Aleph,
+//! `autonomous_paused` flag + `DenialReason` taxonomy — onto Aleph,
 //! reusing the same bounded-FIFO, process-wide, session-keyed shape as
 //! [`session_memory::SessionApprovalMemory`] so the two stores are structural
 //! mirrors and evict identically.
@@ -28,6 +31,7 @@ use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 /// The one way to address a session in this ledger — and in its positive twin,
 /// [`session_memory`](super::session_memory), which must share the bucket.
@@ -58,19 +62,51 @@ pub fn ledger_key(session: &SessionKey) -> String {
 /// identical memory ceiling.
 const MAX_SESSIONS: usize = 1024;
 
-/// Distinct denied intents in one session before the autonomous escalation
-/// path is paused (sticky). Conservative: a paused session only auto-denies
+/// **Consecutive** denied intents in one session before the autonomous
+/// escalation path is paused. Conservative: a paused session only auto-denies
 /// *elevation / confirm* prompts — it never blocks already-approved or
-/// auto-execute tools — so the cost of tripping it is at most a re-prompt the
-/// user can resolve by acting deliberately, never silent data loss.
+/// auto-execute tools — so the cost of tripping it is at most a delayed
+/// re-prompt, never silent data loss.
 ///
 /// Set to 3 to match the product spec ("3 consecutive denials → AI auto-pauses
 /// execution, preventing brute-force guessing") and `OpenSquilla`'s `DEFAULT_DENIAL_THRESHOLD = 3` — the
 /// circuit breaker should trip the moment a brute-force pattern is
-/// unmistakable, not give it two more free attempts. Tightening only (a
-/// session that paused at 5 still pauses at 3); no caller hard-codes the
-/// value, so the change is internal to the ledger.
+/// unmistakable, not give it two more free attempts.
+///
+/// # Consecutive, and it did not use to be
+///
+/// The counter was cumulative: it only ever went up, and no approval reset it.
+/// So the word "consecutive" — in this doc, in the module doc, and in the
+/// product spec all three quote — described something the code never did. A
+/// user who declined three *different* suggestions across an hour of otherwise
+/// productive work tripped a **permanent** pause, after which every confirm
+/// gate (including the operator gate a chat-tier device needs to get anything
+/// authorized) auto-denied with no card, for the rest of the conversation. The
+/// countermeasure built for a brute-force loop fired on the most attentive
+/// possible user, and the only way out was to widen `exec_tier` — a gate that
+/// pushes people toward the least safe setting has inverted its own purpose.
+/// [`DenialLedger::record_approval`] now ends the run, which is what makes the
+/// word true.
 const SESSION_PAUSE_THRESHOLD: u32 = 3;
+
+/// How long a tripped session pause holds before one probe is let through.
+///
+/// Mirrors `GUARDIAN_BREAKER_COOLDOWN` in `src/approval/guardian_requester.rs`
+/// — this repo's other circuit breaker, which guards the guardian judge's
+/// provider (`Closed` / `Open` / `HalfOpen`, 300 s, reset on success).
+///
+/// The two breakers answer the same question — "how does a tripped breaker
+/// recover?" — and used to answer it differently: the guardian breaker cools
+/// down and half-opens, this one never reopened at all. When twins disagree one
+/// of them is a bug, and permanence is the wrong answer here for the same
+/// reason it would be there: a breaker that cannot close is a fuse, and nobody
+/// shipped a way to replace it.
+///
+/// Five minutes is chosen from the attacker's side of the trade: a runaway or
+/// adversarial loop gets at most one prompt per cooldown (and a human's refusal
+/// re-opens it immediately), which is not a brute-force channel. From the
+/// user's side it is a pause, not a brick.
+const SESSION_PAUSE_COOLDOWN: Duration = Duration::from_secs(300);
 
 /// Why an action is being auto-denied by the ledger (independent of the live
 /// approval gate). Carries an agent-facing hint so the harness can tell the
@@ -112,13 +148,58 @@ impl DenialReason {
     }
 }
 
-/// Per-session denial state: counts keyed by action fingerprint, a running
-/// total, and a sticky pause flag once the threshold is crossed.
+/// Where a session's brute-force breaker stands.
+///
+/// Same three states as the guardian judge's `GuardianBreaker`, for the same
+/// reason: an `Open` breaker with no path back to `Closed` cannot distinguish a
+/// runaway loop from a user who simply said "no" a few times, and permanently
+/// punishes the second one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum PauseState {
+    /// Prompts flow normally.
+    #[default]
+    Closed,
+    /// Escalation is paused; every confirm gate in this session auto-denies
+    /// until the cooldown elapses.
+    Open { since: Instant },
+    /// The cooldown elapsed and exactly one prompt is being let through as a
+    /// probe. A refusal there re-opens immediately (no second free attempt); an
+    /// approval closes the breaker.
+    HalfOpen,
+}
+
+/// Per-session denial state: counts keyed by action fingerprint, the current
+/// **run** of consecutive refusals, and the breaker.
 #[derive(Default)]
 struct SessionDenials {
     counts: HashMap<String, u32>,
-    total: u32,
-    paused: bool,
+    /// Consecutive refusals since the last approval. Reset by
+    /// [`DenialLedger::record_approval`] — that reset is what makes the word
+    /// "consecutive" in [`SESSION_PAUSE_THRESHOLD`] true.
+    consecutive: u32,
+    state: PauseState,
+}
+
+impl SessionDenials {
+    /// Whether escalation is paused *right now*, transitioning `Open` →
+    /// `HalfOpen` when the cooldown has elapsed.
+    ///
+    /// Mutating inside a query mirrors `GuardianBreaker::allows`, and for the
+    /// same reason: the cooldown can only be observed to have elapsed by
+    /// something that looks, and the alternative is a timer task per session.
+    fn paused_now(&mut self) -> bool {
+        match self.state {
+            PauseState::Closed | PauseState::HalfOpen => false,
+            PauseState::Open { since } => {
+                if since.elapsed() >= SESSION_PAUSE_COOLDOWN {
+                    self.state = PauseState::HalfOpen;
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -168,16 +249,54 @@ impl DenialLedger {
     ///
     /// Ordering matters: a tripped session pause outranks a per-intent blind
     /// retry, because the circuit breaker is the stronger, session-wide signal.
+    ///
+    /// Takes `&self` and mutates: the `Open` → `HalfOpen` transition is
+    /// observed here, exactly as `GuardianBreaker::allows` observes its own.
+    /// A half-open session still honours per-intent stickiness — the probe is
+    /// about whether the *session* may ask again, not about re-litigating an
+    /// answer the user already gave.
     pub fn is_blocked(&self, session: &str, fingerprint: &str) -> Option<DenialReason> {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let denials = guard.by_session.get(session)?;
-        if denials.paused {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let denials = guard.by_session.get_mut(session)?;
+        if denials.paused_now() {
             return Some(DenialReason::ThresholdExceeded);
         }
         if denials.counts.contains_key(fingerprint) {
             return Some(DenialReason::RepeatedSameIntent);
         }
         None
+    }
+
+    /// The user said **yes** to something in this session.
+    ///
+    /// Ends the run of consecutive refusals and closes the breaker. Called from
+    /// both gates that can obtain a live approval — the tool confirm gate
+    /// (`ScopedToolService::confirm_with_memory`) and the sandbox capability
+    /// elevation gate — because they share one session bucket, so a yes at
+    /// either is a yes for the session's brute-force posture.
+    ///
+    /// Deliberately does NOT clear `counts`: an approval of action A says
+    /// nothing about the refusal of action B, and the per-intent stickiness is
+    /// the guard that keeps an agent from re-asking its way around a `no`.
+    ///
+    /// No-op for a session with no recorded denials, which is the overwhelming
+    /// majority — a plain `HashMap` miss, no insertion, so a healthy session
+    /// never allocates a bucket here.
+    pub fn record_approval(&self, session: &str) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(denials) = guard.by_session.get_mut(session) else {
+            return;
+        };
+        if denials.consecutive == 0 && denials.state == PauseState::Closed {
+            return;
+        }
+        tracing::debug!(
+            session = %session,
+            cleared = denials.consecutive,
+            "approval closed the denial circuit-breaker for this session"
+        );
+        denials.consecutive = 0;
+        denials.state = PauseState::Closed;
     }
 
     /// Record that `fingerprint` was denied in `session` for `reason`. Bumps
@@ -247,19 +366,35 @@ impl DenialLedger {
         }
         let denials = guard.by_session.entry(session.to_string()).or_default();
         *denials.counts.entry(fingerprint.to_string()).or_insert(0) += 1;
-        denials.total += 1;
-        // Only the false→true edge counts: a sticky pause must not re-fire the
-        // one-shot purge on every subsequent denial in the same session.
-        let just_tripped = !denials.paused && denials.total >= SESSION_PAUSE_THRESHOLD;
-        if just_tripped {
-            denials.paused = true;
+        denials.consecutive = denials.consecutive.saturating_add(1);
+        // A refusal at the half-open probe re-opens the breaker immediately —
+        // the probe asked "is this session still pushing?" and got its answer.
+        // Same rule as `GuardianBreaker::record_failure`.
+        //
+        // Redundant *today*: nothing reaches `HalfOpen` without leaving
+        // `consecutive` at or above the threshold (only `record_approval` clears
+        // the counter, and it closes the breaker in the same breath), so the
+        // second disjunct already covers this. Kept because it states the
+        // property we actually mean — a failed probe re-opens, whatever the
+        // counter says — and it is the only thing holding that rule the moment
+        // those two resets are decoupled.
+        let probe_failed = denials.state == PauseState::HalfOpen;
+        let trip = probe_failed || denials.consecutive >= SESSION_PAUSE_THRESHOLD;
+        // Only a Closed→Open edge counts: re-opening after a failed probe must
+        // not re-fire the one-shot cache purge, which already ran on the first
+        // trip and whose whole point is that it happens once.
+        let just_tripped = trip && denials.state == PauseState::Closed;
+        if trip {
+            denials.state = PauseState::Open {
+                since: Instant::now(),
+            };
         }
         tracing::info!(
             session = %session,
             fingerprint = %fingerprint,
             reason = ?reason,
-            session_total = denials.total,
-            paused = denials.paused,
+            consecutive = denials.consecutive,
+            state = ?denials.state,
             "denial ledger recorded a refused action"
         );
         just_tripped
@@ -280,12 +415,31 @@ impl DenialLedger {
             .unwrap_or(0)
     }
 
-    /// Total denials recorded for `session`. Test-only introspection: the
-    /// breaker-trip path reads `denials.total` inline, not through this accessor.
+    /// Consecutive refusals currently standing for `session`. Test-only
+    /// introspection: the breaker-trip path reads the field inline.
     #[cfg(test)]
-    fn session_total(&self, session: &str) -> u32 {
+    fn consecutive(&self, session: &str) -> u32 {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.by_session.get(session).map_or(0, |d| d.total)
+        guard.by_session.get(session).map_or(0, |d| d.consecutive)
+    }
+
+    /// Force a paused session's cooldown to look elapsed, so the half-open
+    /// behaviour is testable without sleeping for five minutes.
+    ///
+    /// Test-only, and it rewinds the clock rather than exposing a setter for
+    /// the state: a test that could write `HalfOpen` directly would stop
+    /// proving that the transition is reachable from `Open` by waiting, which
+    /// is the property that matters.
+    #[cfg(test)]
+    fn expire_cooldown(&self, session: &str) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(d) = guard.by_session.get_mut(session) {
+            if let PauseState::Open { .. } = d.state {
+                d.state = PauseState::Open {
+                    since: Instant::now() - SESSION_PAUSE_COOLDOWN - Duration::from_secs(1),
+                };
+            }
+        }
     }
 }
 
@@ -355,15 +509,127 @@ mod tests {
         assert_eq!(SESSION_PAUSE_THRESHOLD, 3);
     }
 
+    /// REGRESSION — the counter said "consecutive" and behaved cumulatively.
+    ///
+    /// Two refusals, a yes, two more refusals: five denials in the session,
+    /// none of them three in a row. Under the old cumulative `total` the
+    /// session was paused (permanently) by the fourth. The user was not
+    /// brute-forcing anything; they were reviewing suggestions and approving
+    /// some, which is the behaviour the gate exists to make possible.
     #[test]
-    fn threshold_trips_sticky_session_pause() {
+    fn an_approval_ends_the_run_of_consecutive_denials() {
         let led = DenialLedger::new();
-        // `SESSION_PAUSE_THRESHOLD` distinct denied intents trip the pause.
+        let deny = |i: u32| action_fingerprint("code_exec", &format!("intent-{i}"));
+
+        led.record_denial("s1", &deny(1), DenialReason::UserRejected);
+        led.record_denial("s1", &deny(2), DenialReason::UserRejected);
+        assert_eq!(led.consecutive("s1"), 2);
+
+        led.record_approval("s1");
+        assert_eq!(led.consecutive("s1"), 0, "a yes ends the run");
+
+        led.record_denial("s1", &deny(3), DenialReason::UserRejected);
+        led.record_denial("s1", &deny(4), DenialReason::UserRejected);
+        let fresh = action_fingerprint("code_exec", "never-asked-before");
+        assert_eq!(
+            led.is_blocked("s1", &fresh),
+            None,
+            "five denials, never three in a row — the session must not be paused"
+        );
+        // …and the intents that WERE refused stay refused. The reset is about
+        // the brute-force posture, not about forgetting a `no`.
+        assert_eq!(
+            led.is_blocked("s1", &deny(1)),
+            Some(DenialReason::RepeatedSameIntent)
+        );
+    }
+
+    /// A paused session recovers. Before, `paused` was set once and never
+    /// cleared by anything: every confirm gate in that conversation auto-denied
+    /// with no card for the rest of its life, and the documented way out was to
+    /// widen `exec_tier`. Its twin (`GuardianBreaker`) has always cooled down
+    /// and half-opened; this is that behaviour, here.
+    #[test]
+    fn a_paused_session_half_opens_after_the_cooldown_and_closes_on_a_yes() {
+        let led = DenialLedger::new();
         for i in 0..SESSION_PAUSE_THRESHOLD {
             let fp = action_fingerprint("code_exec", &format!("intent-{i}"));
             led.record_denial("s1", &fp, DenialReason::UserRejected);
         }
-        assert_eq!(led.session_total("s1"), SESSION_PAUSE_THRESHOLD);
+        let fresh = action_fingerprint("code_exec", "fresh");
+        assert_eq!(
+            led.is_blocked("s1", &fresh),
+            Some(DenialReason::ThresholdExceeded),
+            "the breaker is open while the cooldown holds"
+        );
+
+        led.expire_cooldown("s1");
+        assert_eq!(
+            led.is_blocked("s1", &fresh),
+            None,
+            "after the cooldown one probe is let through"
+        );
+
+        // The probe was approved → closed, and the consecutive run is cleared.
+        led.record_approval("s1");
+        assert_eq!(led.consecutive("s1"), 0);
+        let another = action_fingerprint("code_exec", "another");
+        assert_eq!(
+            led.is_blocked("s1", &another),
+            None,
+            "a closed breaker prompts normally again"
+        );
+    }
+
+    /// The other half: a refusal at the probe re-opens immediately. A session
+    /// that is genuinely pushing gets one prompt per cooldown, not a free run
+    /// back up to the threshold.
+    #[test]
+    fn a_refusal_at_the_probe_reopens_without_a_fresh_countdown() {
+        let led = DenialLedger::new();
+        for i in 0..SESSION_PAUSE_THRESHOLD {
+            let fp = action_fingerprint("code_exec", &format!("intent-{i}"));
+            led.record_denial("s1", &fp, DenialReason::UserRejected);
+        }
+        led.expire_cooldown("s1");
+        let probe = action_fingerprint("code_exec", "probe");
+        assert_eq!(led.is_blocked("s1", &probe), None, "probe is let through");
+
+        // The human says no again → straight back to Open, and the one-shot
+        // cache purge must NOT re-fire (it already ran on the first trip).
+        assert!(
+            !led.record_denial("s1", &probe, DenialReason::UserRejected),
+            "re-opening after a failed probe is not a fresh Closed→Open edge"
+        );
+        let other = action_fingerprint("code_exec", "other");
+        assert_eq!(
+            led.is_blocked("s1", &other),
+            Some(DenialReason::ThresholdExceeded),
+            "one refused probe re-pauses the session"
+        );
+    }
+
+    /// `record_approval` for a session with nothing recorded must not create a
+    /// bucket — otherwise every healthy session in a long-lived daemon would
+    /// allocate one and churn the bounded FIFO that protects the footprint.
+    #[test]
+    fn approving_in_a_clean_session_allocates_nothing() {
+        let led = DenialLedger::new();
+        led.record_approval("never-denied");
+        let guard = led.inner.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(guard.by_session.is_empty());
+        assert!(guard.order.is_empty());
+    }
+
+    #[test]
+    fn threshold_trips_sticky_session_pause() {
+        let led = DenialLedger::new();
+        // `SESSION_PAUSE_THRESHOLD` consecutive denied intents trip the pause.
+        for i in 0..SESSION_PAUSE_THRESHOLD {
+            let fp = action_fingerprint("code_exec", &format!("intent-{i}"));
+            led.record_denial("s1", &fp, DenialReason::UserRejected);
+        }
+        assert_eq!(led.consecutive("s1"), SESSION_PAUSE_THRESHOLD);
         // Even a brand-new, never-seen intent is now auto-denied by the pause.
         let fresh = action_fingerprint("code_exec", "totally-new-intent");
         assert_eq!(
@@ -404,7 +670,7 @@ mod tests {
                 "a timeout must never report a breaker trip"
             );
         }
-        assert_eq!(led.session_total("s1"), 0);
+        assert_eq!(led.consecutive("s1"), 0);
         let fresh = action_fingerprint("code_exec", "anything");
         assert_eq!(
             led.is_blocked("s1", &fresh),
@@ -428,7 +694,7 @@ mod tests {
             Some(DenialReason::RepeatedSameIntent),
             "a decided refusal must still block the blind retry"
         );
-        assert_eq!(led.session_total("s1"), 1, "only the decision was counted");
+        assert_eq!(led.consecutive("s1"), 1, "only the decision was counted");
     }
 
     #[test]

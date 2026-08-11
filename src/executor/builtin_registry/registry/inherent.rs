@@ -77,18 +77,32 @@ impl BuiltinToolRegistry {
     /// The handle stays as the fallback for any call site outside a turn scope;
     /// `fallback` is the last resort when neither source is present or parseable.
     ///
+    /// **Falling through to `fallback` is logged at `warn!`**: a tool that
+    /// cannot resolve its identity would otherwise silently operate on the
+    /// fallback's memory partition, ACL, and session routing. The warning
+    /// surfaces misconfigured dispatchers and the per-call fallbacks that
+    /// the boot path is still authorising.
+    ///
     /// [`ScopedToolService::execute`]: crate::tools::scoped::ScopedToolService
     pub(super) fn caller_agent_id(&self, fallback: &str) -> String {
         if let Some(agent_id) = crate::tools::turn_context::current_agent_id() {
             return agent_id;
         }
-        self.session_context_handle
+        if let Some(ctx) = self
+            .session_context_handle
             .as_ref()
             .and_then(|h| h.try_read().ok())
-            .map_or_else(
-                || fallback.to_string(),
-                |ctx| parse_caller_agent_id(&ctx.session_key_str, fallback),
-            )
+        {
+            return parse_caller_agent_id(&ctx.session_key_str, fallback);
+        }
+        tracing::warn!(
+            fallback = %fallback,
+            "BuiltinToolRegistry::caller_agent_id: no per-turn context and no session_context_handle; \
+             falling through to fallback (the tool will run under the wrong agent's identity). \
+             The call site is either outside a scoped turn or the session_context_handle is \
+             missing — both are dispatcher misconfigurations."
+        );
+        fallback.to_string()
     }
 
     /// The memory PARTITION this tool call reads and writes — the composed

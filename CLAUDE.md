@@ -266,7 +266,10 @@
 - **一个 fail-closed 的答案被当成值消费，就会反转成许可** —— 装饰器对外人返回的 `Ok(None)` 被 `.ok().flatten()` 折进 `leader: Option<_>`，再读成「没有 leader ⇒ 谁都能审」。闸要跑在折叠**之前**：`Ok(None)`（拒绝）一旦和「这东西本来就没有」合流，两者永远分不开。凡 `.ok().flatten()` / `unwrap_or_default()` 落在**装饰器**返回值上都要问：这个默认值和那个拒绝长得一样吗 → §5.22 round 2 ⑤
 - **第二个构造点默认继承不到第一个的任何档位** —— 加档位时 grep 它的 `::new(` 有几个调用点；**反向也要判断**，不是每个 builder 都该补齐，理由写进构造函数 doc → §2.19。⚠️ **数出来是七个就别再想构造点了**：`SecretMasker::new()` 有七个生产调用点，把配置线接到其中一个等于"一条腿打码、六条腿明文"，而且每条腿单测都绿。配置该接在**类型**上（进程级 `install_operator_patterns`），让不知道它存在的调用点也继承
 - **上限 / 信号量 / 注册表的生命周期必须不短于它约束的那个东西** —— 判据一句话：**这个约束会不会比被它约束的对象先死**？`SubagentTool` 是 per-request 构造，而后台子代理是刻意活过 run 的 detached task ⇒ 第 N 轮的孩子握着 S_N 的 permit，第 N+1 轮拿到全新的 S_{N+1} **又是满额**，operator 配 4 而实际几十个同时打 provider。同一个错配在 `BackgroundAgentTracker` 上以**相反症状**发生过（per-request tracker "silently dropped every result once the spawning run returned"）——那次丢的是结果，这次丢的是约束。修法是把它键到真正的约束单元（会话）上并用 `Weak` 持有：permit 自带 `Arc`，所以"还在飞的孩子"天然把条目撑住，空闲即可回收 → §4.13c
-- **两个子系统是孪生时，一边修好的判据要主动搬过去，而不是等它在另一边被重新发现** —— cron 与 heartbeat 在**三个**共同问题上曾有分歧（慢任务阻不阻塞循环 / 投递失败算不算失败 / 告警投递失败要不要寄存），每一次都是 heartbeat 对、cron 错，而 cron 那侧的错法各不相同、各自静默。改动其中一个时问：**这个判据的孪生子系统怎么回答同一个问题**？答案不同就有一个是 bug。收敛时真源落在被依赖的一侧（`tasks/shared/`），不要复制 → §4.13c
+- **一条只写在散文里的裁定，防不住下一个真诚的修复者** —— 「刻意不做」记录的用途是拦住**重提**，它拦不住**顺手修好**：本轮我读文档之前就已经把 §5.3 那条 2026-08-07 用户裁定（会话授权不进 unattended 续跑）当成 bug 修了，理由自洽、测试全绿、方向正好相反。入口不是"要不要重提这个议题"，而是**用户报的那个症状**（「我的会话授权怎么不生效了」）把人直接领到那两个代码块前面。判据两句：① **一条裁定如果只有散文，它欠一条会红的测试**——测试要**先证明该机制在正常情形下确实生效**（授权在 attended 会话里确实抑制重问），再断言被裁定的那一侧，否则它可能因为别的原因绿；② 反过来，**动一个"看起来是 bug"的顺序/默认值之前，先 grep 它在 `docs/reference/` 里有没有名字**——这类裁定按定义长得像 bug，那正是它需要被写下来的原因
+- **一个布尔够挡住调用，不够解释调用——而下游有三个消费者都在等那句解释** —— `a || b || c` 形状的闸，人看到的卡、模型收到的拒绝、审计读到的 detail 三处拿到的是同一句对**所有臂**都成立、对**哪条都不可行动**的套话。把"为什么"做成一个**有名字的有序枚举**（一个 `id()` 给机器、一个 `reason()` 给人），排序判据只有一条：**这句 reason 不许误导读者「改什么能改变结果」**——所以**不可移除的地板排第一**（对同时命中显式 `ask` 条目的 `vault_store` 报"策略说 ask"，等于把运维指向一个改了也没用的设置）。配一条「链分类的集合 == 闸住的集合」的守卫：有闸必有因、有因必有闸
+- **`HashMap` 上的"最严格者胜出"，动作是确定的，胜出的那条 key 不是** —— `restrictive_min` 可交换 ⇒ **值**不受迭代序影响，于是没人多想；但一旦要把**是哪条规则**说给人听（卡片引用 override key），同等严格度下引哪条就成了随机的，同一张卡两次渲染可能指向不同条目。判据：**把一个聚合结果的"来源"暴露出去之前，先问这个来源在无序容器上唯一吗**；不唯一就补一条确定性破平（字典序最小 key），并用「重建 N 次 map 重采样迭代序」的测试钉住——不是断言一次
+- **两个子系统是孪生时，一边修好的判据要主动搬过去，而不是等它在另一边被重新发现** —— cron 与 heartbeat 在**三个**共同问题上曾有分歧（慢任务阻不阻塞循环 / 投递失败算不算失败 / 告警投递失败要不要寄存），每一次都是 heartbeat 对、cron 错，而 cron 那侧的错法各不相同、各自静默。改动其中一个时问：**这个判据的孪生子系统怎么回答同一个问题**？答案不同就有一个是 bug。收敛时真源落在被依赖的一侧（`tasks/shared/`），不要复制 → §4.13c。**2026-08-11 第三次复发，这次孪生的是两个断路器**：`GuardianBreaker`（provider 健康）一直是 `Closed/Open/HalfOpen` + 300s 冷却 + `record_success` 复位，而 `DenialLedger` 的会话暂停**只增不减、任何批准都不复位、永不重开**——两者对「熔断了怎么恢复」给出了相反的答案，且后者的常量 doc 与模块 doc 都自称「**连续** 3 次」。症状最贵的那一面是**它打到的是最认真的用户**：对三件**不同**的事说「不」＝该会话此后每一道确认门（含 chat-tier 设备唯一的授权途径）无卡直接拒，出口只剩把档位拉宽——**一个把用户推向最不安全设置的闸已经反转了自己的目的**。判据补一句：**"熔断/暂停/降级"这类状态，写下它的同一笔里就要回答"什么让它恢复"**；答不上就不是断路器，是保险丝 → SECURITY.md《The denial breaker recovers》
 - **「先认领、后执行」的调度，界限要在执行时刻成立** —— 只在入队处判等于没判（`loop timeout_minutes` 曾在上限之后多跑 119 分钟）。**推论（适用于任何长跑单元）**：凡「先认领、后执行」的调度，界限要在**执行时刻**成立；只在入队处判等于没判。**2026-08-05 已在 goal 的 wait-barrier 上复发一次**——同一个形状，第二个子系统：那里绕过 claim 的 boot rearm 路径连一道界都没有，所以「谁绕过了认领，谁就得自己带界」是这条纪律的第二半。→ §4.1/§4.2
 - **「先记录意图、再做不可逆动作」：只记录"做完了"的机件，分不出"没做"和"做了但没记上"** —— 跨越不可逆边界**之前**盖持久戳，新进程拿到状态那一刻按"结果未知"退休 → §5.6
 - **一次性的章不能在动作确认之前花掉** —— 要么事后盖，要么必须可归还
@@ -360,6 +363,9 @@
 - **加了通道 adapter ≠ 用户能配** —— 必须手工进 `gateway/interfaces/plugin.rs` 的工厂表（`register_plain_channel!`）→ [GATEWAY.md](docs/reference/GATEWAY.md)
 - **`ChannelCapabilities` 的每个位都是承诺** —— 声明了就必须覆写对应的 `Channel` 方法（默认体一律 `Err` 并指名道姓）；频道寻址是**两步**（先 `channel_directory` 换 id）→ §5.18
 - **车道是候车室，不是运行登记簿** —— 取槽成功时必须 `busy_queue::mark_admitted`，否则 `Steer`/`Interrupt` **静默退化成 `Queue`**（三件事一起修或一起坏）→ §4.8
+- **修好一条堵塞之后，被它挡住的每一个动词都第一次真正开火——包括那些「开火」意味着破坏的** —— 上一条的第二半，同一个车道。`mark_admitted` 让后来者能在前驱运行期间够到引擎，这正是 `Steer` 需要的；而 `Interrupt` 拿到同一条通路的意思是**每条排队消息都会在毫秒内杀掉前驱刚变成的那个 run**，一个 burst 里 N 条只剩最后一条活着、N-1 轮工作被销毁，而没有任何人按过停止。判据是**时间性的**：只能取消一个「在本消息**开始等待之前**就已被接纳」的 run（车道半边 `busy_queue::waiting_since`、引擎半边 `ActiveRun.admitted_at`，两边都必须是**单调钟**——墙钟跳变会静默反转判决，而 `started_at` 是给人看的那一份）。⚠️ **两条更便宜的判据都是错的**：「目标是不是本车道最近接纳的那个」会连同「sibling 健康时新到达的真 Interrupt」一起压掉（那正是这个模式存在的理由）；而忘了给「没有 ticket 的生产者」留 `None ⇒ 不设限` 那条臂，修的就不是 burst 而是把 Interrupt 整个关掉 → §4.8 Round-8 ①
+- **一个 id 在客户端手里的时刻，和它在投递过滤器眼里可解析的时刻，是两回事** —— `chat.send` 一返回，客户端就握着 `run_id`；而 `EventVisibilityIndex` 的 run→session 种子只来自 `stream.run_accepted`，那是**准入之后**才发的。于是每一个「这个 run 从没进过引擎」的终局帧（车道满 / 等待超时 / 被停止清掉）都分类 `ByRunId`、解析落空、**fail-closed 拒给每一条连接，operator 也不例外**——三条写在文档里的用户回执因此全是静默丢弃，其中一条正是专门写来关掉「停不掉的 pending 气泡」的那条。修法是**让帧自报归属**（`RunError.session_key`，只有 `spawn_queued_run` 设它），并把播种判据从「topic 是不是那一个」改成「**这一帧有没有同时说出 run_id 和 session_key**」——`note_frame` 跑在过滤器之前，所以帧给自己播种。判据一句话：**加一个只在准入前发得出来的帧之前，先问它凭什么被解析**（同族＝ `src/gateway/CLAUDE.md` 地雷 H：解析句柄的安装条件不得比帧的生产条件更窄）→ §4.8 Round-8 ②
+- **「停止」这个动词有两种寻址方式，只有一种接了完整的那条线** —— 按 session key 停（channel `/stop`）走 `cancel_session`，它会 walk 委派子运行；按 run id 停（Panel `chat.abort` / TUI `/stop` / `aleph chat abort`）落在 `AgentRunManager::cancel_run`，而它调的是 `execution_adapter.cancel(run_id)` —— **只点一个令牌**。leader 停了，它 `task_manage`/delegate/后台子代理派出去的成员运行继续跑、继续烧 token，且此后没有任何 surface 够得到它们——正是那趟 walk 被写出来堵的 detach 泄漏。**而 `cancel_session` 自己的 doc、FEATURE_LOCATOR §4.8、CLAUDE.md 打磨话术三处都写着 `chat.abort` 已经走它**（「同一事实的两份表述」再来一次，这回是三份，代码那份才是真的）。修法是加一个**查询**而不是第三个动词（`ExecutionAdapter::session_of_run`，默认 `None`），让 run-id 那张脸解析出会话后走**同一个** `cancel_session`；引擎不握着这个 run（已结束 / 仍在车道里）时回退原语，那条路同时是 `cancel_queued_run` 需要的 → §4.8 Round-8 ③
 - **「提前返回的快路径」会静默吞掉请求上除它自己之外的一切** —— 判据不是「这条路径会不会崩」而是「它跳过了哪些本该发生的解析」；新增 per-request 指令字段必须在 `steering.rs::carries_more_than_text` 登记。**一个方向被想到、反方向没有**是这类缺陷最常见的形状 → §4.8
 - **`devices` 是 panel 与 cluster 共用的一张表，`device_id` 两边都是对端自报的** —— 任何「按 id 认领一行」的新路径必须先拒掉另一半命名空间（判据单一源 `PANEL_DEVICE_TYPE`）→ [SECURITY.md#auth-ux](docs/reference/SECURITY.md#auth-ux) · `src/gateway/CLAUDE.md`
 - **团队群聊投影前必须先按当前 `chat.team_id` 作用域** —— 订阅是 `team.*` 通配，否则后台团队的气泡挤进任意会话 → §4.5
@@ -458,6 +464,7 @@
 ### 10. 构建与验证
 
 - **`cargo check` 不编译 `#[cfg(test)]`** —— 删 `pub fn` / 字段的同一笔里必须跑 `cargo test --no-run`；只跑 `cargo check` 等于没验证 → [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md)
+- **嵌进字符串里的那门语言，编译器一个字都不看** —— `execute_batch(r#"…"#)` 里写 Rust 风格 `//` 注释，rustc 全绿、clippy 全绿、`cargo check` 全绿，而 SQLite 在第一个 `/` 上语法错误 ⇒ **整份迁移中止**，那批表在运行时压根不存在（`coord_task*` 一条没建，teams / workflow / swarm 任务全死，`--lib` **133 条红**，2026-08-11 修）。**注释语法写错不是排版问题，是一次停机**。判据：往 SQL / 正则 / shell / JSON-Schema 这类**嵌入式字符串**里加解释性文字时，注释符要按**那门语言**写（SQL 是 `--`），并且**改完必须跑一次真的执行它的测试**——本仓这段的守卫恰好存在（任何建表的单测都会红），只是提交那笔改动时没跑到
 - **源码级守卫里用 `\n` 锚定的分隔符，在 CRLF 检出上匹配不到任何东西** —— 本仓 Windows 检出是 CRLF（git 自动转换），所以 `src.split("\n#[cfg(test)]\n")` 的实际字节是 `\r\n#[cfg(test)]\r\n`，**永不匹配** ⇒ "生产前缀"变成整份文件，守卫开始扫自己的测试模块，把**断言字符串里的字面量**当成命中。症状是 Windows 红、CI（LF）绿，看起来像"平台差异"。**更贵的是安静的那一半**：`checked > 0` 这类"我确实扫到了东西"的自保断言，会被测试模块里的字面量满足 ⇒ 真的生产站点被删掉时它照样绿。写源码级守卫时分隔符**不要锚行首行尾**（`split("#[cfg(test)]")` 即可），且自保断言要能区分"扫到的是生产代码"。⚠️ **这条规则写下来之后，同一次会话新增的第二条守卫仍然带着它出厂**（`run_loop/tests.rs::scope_stamping_producers_are_all_accounted_for`，2026-08-09 修）——记下一条判据不等于扫过它的其余实例，**同批新增的守卫要一起扫**。⚠️ **判据比"含 `\n` 就有病"更锐利**：坏的是 **`\n` 前面还有字符**（`]\n` 在 CRLF 下是 `]\r\n`，不匹配）；**`\n` 开头的分隔符是安全的**（`"\n}"` 在 `\r\n}` 里照样命中，`cron/real.rs` 因此无恙）。最稳的形状是先 `.replace('\r', "")` 再 split——`server_init.rs` 就是范本，它连非空自保断言一起写了
 - **最小可信验证集是五条命令，不是一条**：
   ```
@@ -527,13 +534,15 @@
 
 ### 三根会话旋钮 (Session Knobs)
 
-三者**正交**，都由 Panel composer pill 或对话式工具切换：
+三者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
 
-| 旋钮 | 值 | 管什么 | 单一源 |
-|---|---|---|---|
-| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
-| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
-| **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
+| 旋钮 | 值 | 管什么 | 谁在拨 | 单一源 |
+|---|---|---|---|---|
+| **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | Panel pill + `chat.send{exec_tier}` | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
+| **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
+| **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
+
+> **别急着给它加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
 
 `[sandbox.command_policy]` 的硬底线**任何档位都压不下去**。
 

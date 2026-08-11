@@ -387,6 +387,15 @@ pub(crate) struct ActiveRun {
     pub(crate) request: RunRequest,
     pub(crate) state: RunState,
     pub(crate) started_at: chrono::DateTime<chrono::Utc>,
+    /// The same moment as [`Self::started_at`], on the monotonic clock.
+    ///
+    /// Not redundant: `started_at` is a wall-clock value that exists to be
+    /// *reported* (`RunStatus`, traces, the Panel), and the busy-input gate has
+    /// to *compare* it against `busy_queue::waiting_since` to decide whether an
+    /// interrupt-mode message is superseding a run it ever saw. Comparing wall
+    /// clocks across a clock step would flip that decision silently, and the
+    /// wrong answer is "cancel a run this message never knew about".
+    pub(crate) admitted_at: std::time::Instant,
     pub(crate) completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) steps_completed: u32,
     pub(crate) current_tool: Option<String>,

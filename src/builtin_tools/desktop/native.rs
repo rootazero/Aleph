@@ -311,6 +311,24 @@ fn invalid_args(message: impl Into<String>) -> DesktopOutput {
     }
 }
 
+/// Reject non-finite f64 values (`NaN`, `±Infinity`).
+///
+/// The standard `< 0.0` and `> MAX` comparisons silently let `NaN` through
+/// because `NaN` compares false to every number; `as u32` then casts `NaN` to
+/// `0` and `as i32` likewise, so an unfiltered coordinate lands at the screen
+/// origin instead of being refused. Centralizing the check here means every
+/// coordinate / duration / region field that flows from `DesktopArgs` into
+/// the limb goes through the same gate.
+fn finite_f64(v: f64, name: &str) -> std::result::Result<f64, DesktopOutput> {
+    if v.is_finite() {
+        Ok(v)
+    } else {
+        Err(invalid_args(format!(
+            "{name} must be a finite number (got {v})"
+        )))
+    }
+}
+
 /// Validate and convert the tool-level `region` (f64; possibly already
 /// normalized-then-rescaled by [`super::coord_resolve`]) into the limb-level
 /// [`aleph_desktop::ScreenRegion`] (u32).
@@ -329,6 +347,13 @@ fn screen_region_from_args(
         Some(r) => r,
         None => return Ok(None),
     };
+    // `NaN < 0.0` is false, so the negative check alone would let NaN through;
+    // the explicit finite-check closes that hole before the bound checks run.
+    if !r.x.is_finite() || !r.y.is_finite() || !r.width.is_finite() || !r.height.is_finite() {
+        return Err(invalid_args(format!(
+            "{action} region coordinates must be finite numbers"
+        )));
+    }
     if r.x < 0.0 || r.y < 0.0 || r.width < 0.0 || r.height < 0.0 {
         return Err(invalid_args(format!(
             "{action} region coordinates must be non-negative"
@@ -358,7 +383,7 @@ fn screen_region_from_args(
 /// system menu or a window's close button.
 fn require_xy(args: &DesktopArgs, action: &str) -> std::result::Result<(f64, f64), DesktopOutput> {
     match (args.x, args.y) {
-        (Some(x), Some(y)) => Ok((x, y)),
+        (Some(x), Some(y)) => Ok((finite_f64(x, "x")?, finite_f64(y, "y")?)),
         _ => Err(invalid_args(format!(
             "{action} requires numeric 'x' and 'y' coordinates"
         ))),
@@ -370,7 +395,12 @@ fn require_drag_points(
     args: &DesktopArgs,
 ) -> std::result::Result<(f64, f64, f64, f64), DesktopOutput> {
     match (args.start_x, args.start_y, args.end_x, args.end_y) {
-        (Some(sx), Some(sy), Some(ex), Some(ey)) => Ok((sx, sy, ex, ey)),
+        (Some(sx), Some(sy), Some(ex), Some(ey)) => Ok((
+            finite_f64(sx, "start_x")?,
+            finite_f64(sy, "start_y")?,
+            finite_f64(ex, "end_x")?,
+            finite_f64(ey, "end_y")?,
+        )),
         _ => Err(invalid_args(
             "drag requires numeric 'start_x', 'start_y', 'end_x' and 'end_y'",
         )),
@@ -461,8 +491,15 @@ const PIXELS_PER_SCROLL_CLICK: f64 = 100.0;
 /// no-op reported as success is the worse of the two. The caller says which
 /// happened instead of silently rounding to zero.
 fn scroll_clicks(pixels: f64) -> (i32, bool) {
+    // NaN/Infinity input would otherwise fall through (`NaN.round()` is NaN,
+    // `NaN < 1.0` is false, `NaN as i32` is 0 — reported as a successful
+    // zero-distance scroll). Saturate to the same extremes finite input would
+    // hit, and tell the caller we quantized away the impossible input.
+    if !pixels.is_finite() {
+        return (i32::MAX, true);
+    }
     let rounded = (pixels / PIXELS_PER_SCROLL_CLICK).round();
-    if rounded < 1.0 {
+    if !rounded.is_finite() || rounded < 1.0 {
         return (1, true);
     }
     // Float→int casts saturate in Rust, so an absurd delta lands on i32::MAX
@@ -1400,8 +1437,20 @@ impl super::DesktopTool {
                     Ok(region) => region,
                     Err(out) => return Ok(Some(out)),
                 };
+                // `Duration::from_secs_f64(NaN | Infinity)` panics inside the
+                // limb; refuse non-finite input explicitly instead of letting
+                // it crash the worker.
+                let duration_secs = match args.duration {
+                    Some(v) if !v.is_finite() => {
+                        return Ok(Some(invalid_args(
+                            "screen_record duration must be a finite number of seconds",
+                        )));
+                    }
+                    Some(v) => v,
+                    None => 5.0,
+                };
                 let config = aleph_desktop::screen_types::ScreenRecordConfig {
-                    duration_secs: args.duration.unwrap_or(5.0),
+                    duration_secs,
                     fps: args.fps.unwrap_or(30),
                     with_audio: args.with_audio.unwrap_or(false),
                     region,
@@ -2020,6 +2069,17 @@ mod tests {
     }
 
     #[test]
+    fn finite_f64_rejects_non_finite() {
+        // The shared helper used by require_xy and require_drag_points; its
+        // behavior is what every f64-typed caller ultimately depends on.
+        assert!(finite_f64(0.0, "x").is_ok());
+        assert!(finite_f64(-1.0, "x").is_ok()); // negatives are finite; bounded elsewhere
+        assert!(finite_f64(f64::NAN, "x").is_err());
+        assert!(finite_f64(f64::INFINITY, "x").is_err());
+        assert!(finite_f64(f64::NEG_INFINITY, "x").is_err());
+    }
+
+    #[test]
     fn screen_region_none_when_absent() {
         // No region supplied → capture the whole display (Ok(None)), shared by
         // screenshot and screen_record alike.
@@ -2056,11 +2116,40 @@ mod tests {
     }
 
     #[test]
+    fn screen_region_rejects_non_finite() {
+        // NaN < 0.0 is false, so a plain "< 0.0" check would let NaN through
+        // and then `NaN as u32` would silently shrink the region to (0,0,0,0).
+        let make = |val: f64| {
+            args(serde_json::json!({
+                "action": "screenshot",
+                "region": {"x": val, "y": 0.0, "width": 100.0, "height": 100.0}
+            }))
+        };
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = screen_region_from_args(&make(v), "screenshot")
+                .expect_err("non-finite must reject");
+            assert!(err.message.unwrap().contains("finite"));
+        }
+    }
+
+    #[test]
     fn scroll_pixels_convert_to_wheel_clicks() {
         // The tool's unit is pixels; the limb's is wheel detents.
         assert_eq!(scroll_clicks(300.0), (3, false));
         assert_eq!(scroll_clicks(100.0), (1, false));
         assert_eq!(scroll_clicks(50.0), (1, false));
+    }
+
+    #[test]
+    fn scroll_pixels_rejects_non_finite_with_clamped_max() {
+        // NaN / Infinity must not silently become "0 clicks, success".
+        // The dispatcher surfaces a refusal for NaN/Infinity inputs; the
+        // helper itself saturates to i32::MAX and flags quantization so a
+        // future caller that bypasses the dispatcher still sees a sane
+        // answer.
+        assert_eq!(scroll_clicks(f64::NAN), (i32::MAX, true));
+        assert_eq!(scroll_clicks(f64::INFINITY), (i32::MAX, true));
+        assert_eq!(scroll_clicks(f64::NEG_INFINITY), (i32::MAX, true));
     }
 
     #[test]

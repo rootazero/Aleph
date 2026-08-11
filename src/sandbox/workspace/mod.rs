@@ -304,6 +304,13 @@ impl Sandbox for WorkspaceSandbox {
                     // equivalent here.
                     ApprovalOutcome::Approved | ApprovalOutcome::ApprovedForSession => {
                         ws.granted_elevations.write().await.insert(normalized_caps);
+                        // A yes ends the run of consecutive refusals the
+                        // brute-force breaker counts. Both gates share one
+                        // session bucket (`led_key`), so the reset belongs at
+                        // both — omitting it here would leave the breaker
+                        // counting refusals across an approval, which is the
+                        // cumulative behaviour that made "consecutive" a lie.
+                        denial_ledger::global().record_approval(&led_key);
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
                         // Remember the refusal so the next blind retry of this

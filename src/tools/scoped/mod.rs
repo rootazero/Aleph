@@ -8,6 +8,7 @@
 //! ## Layout
 //! - [`traits`] — public extension points (`ToolDefinitionRewriter`, `ToolHookDecorator`)
 //! - [`builder`] — `new` + every `with_*` + small shape/helper utilities
+//! - [`gate_chain`] — the ordered rule chain that decides (and NAMES) what gates a call
 //! - [`dispatch`] — execute pipeline (`execute_inner` + hook seams + Layer-2 + sanitize)
 //! - [`artifact_harvest`] — settles `_media` tool output into the artifact store
 //! - [`ledger`] — what the signed operation ledger records at this chokepoint
@@ -21,6 +22,7 @@ mod builder;
 mod cat_guard;
 mod deferred;
 mod dispatch;
+mod gate_chain;
 mod ledger;
 mod progressive_disclosure;
 mod traits;

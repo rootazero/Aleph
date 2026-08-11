@@ -192,11 +192,16 @@ impl EventEmitter for RedactingEmitter {
                 seq,
                 error,
                 error_code,
+                session_key,
             } => StreamEvent::RunError {
                 run_id,
                 seq,
                 error: self.mask(&error),
                 error_code,
+                // Forwarded verbatim: it is an addressing field, not content,
+                // and dropping it here would re-open the fail-closed hole the
+                // producer set it to close.
+                session_key,
             },
             StreamEvent::UncertaintySignal {
                 run_id,

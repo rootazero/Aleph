@@ -45,11 +45,19 @@ pub async fn run_wait_visual(
         Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).min(MAX_TIMEOUT_MS));
     let poll_interval = Duration::from_millis(DEFAULT_POLL_MS.max(MIN_POLL_MS));
 
-    let desktop_region = region.map(|r| DesktopRegion {
-        x: r.x.max(0.0) as u32,
-        y: r.y.max(0.0) as u32,
-        width: r.width.max(0.0) as u32,
-        height: r.height.max(0.0) as u32,
+    let desktop_region = region.map(|r| {
+        // `NaN.max(0.0)` is NaN; `NaN as u32` is 0 — so a NaN coordinate
+        // would shrink the capture to the origin. Substitute 0 explicitly
+        // for any non-finite component so the dispatch path keeps a sane
+        // (zero-area) region instead of UB. The caller should be validating
+        // upstream, but defense in depth costs one branch.
+        let pick = |v: f64| if v.is_finite() { v.max(0.0) as u32 } else { 0 };
+        DesktopRegion {
+            x: pick(r.x),
+            y: pick(r.y),
+            width: pick(r.width),
+            height: pick(r.height),
+        }
     });
 
     let start = Instant::now();
