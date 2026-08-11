@@ -684,7 +684,12 @@ mod tests {
             // authorization question as starting one, and the run re-enters
             // under the SESSION's persisted owner/scope, never the caller's.
             // `handlers::resume` gates on `session_visible`, so a member can
-            // only name a session it can already see.
+            // only name a session it can already see — AND, since 2026-08-10,
+            // on `caller_may_act_as_agent`, so seeing a session is no longer
+            // enough to put its agent back to work. Until then this entry was
+            // the one member-open way past the agent axis: the sentence above
+            // claimed the two verbs ask the same question while only one of
+            // them was asking it.
             "agent.resume",
             "trace.by_runs",
             "gateway.metrics.run_concurrency",

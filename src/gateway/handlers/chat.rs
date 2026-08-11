@@ -465,8 +465,8 @@ pub async fn handle_history(
             // parses but is not byte-identical to canonical would silently get
             // "nothing running" — a miss that looks exactly like an idle
             // session.
-            let active_run = run_manager
-                .and_then(|rm| rm.active_run_for_session(&session_key.to_key_string()));
+            let active_run =
+                run_manager.and_then(|rm| rm.active_run_for_session(&session_key.to_key_string()));
             JsonRpcResponse::success(
                 request.id,
                 json!({

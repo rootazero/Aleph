@@ -46,8 +46,7 @@ fn is_projectable(t: &PresetTransport) -> bool {
             // interpolation (`<ENV_KEY>`) would have slipped through and the
             // secrets resolver would have no real env var to substitute — the
             // install would silently drop the placeholder. (review/hub-statics)
-            t.command.as_deref().map(clean).unwrap_or(false)
-                && t.args.iter().all(|a| clean(a))
+            t.command.as_deref().map(clean).unwrap_or(false) && t.args.iter().all(|a| clean(a))
         }
         McpTransportType::Http | McpTransportType::Sse => {
             t.url.as_deref().map(clean).unwrap_or(false)

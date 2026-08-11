@@ -226,7 +226,13 @@ pub(super) fn ProviderDetailView(
                 }
                 Err(e) => {
                     testing.set(false);
-                    test_result.set(Some((false, e)));
+                    // Unframed on purpose — see `add_custom.rs`'s twin.
+                    test_result.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )));
                 }
             }
         });

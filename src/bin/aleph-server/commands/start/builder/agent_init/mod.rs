@@ -1831,6 +1831,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         &run_manager,
         session_store,
         &router,
+        &agent_reg,
         full_config,
         daemon,
     );

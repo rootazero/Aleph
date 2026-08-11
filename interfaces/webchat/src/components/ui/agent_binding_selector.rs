@@ -106,7 +106,16 @@ pub fn AgentBindingSelector(
                     )));
                 }
                 Err(e) => {
-                    status_msg.set(Some((false, e)));
+                    // Binding a channel to an agent writes `channels.` config,
+                    // which is admin-gated: without this a member read the raw
+                    // protocol string in the status line under the picker.
+                    // Unframed — the success arm is a bare sentence too.
+                    status_msg.set(Some((
+                        false,
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            e.to_string()
+                        }),
+                    )));
                 }
             }
             // Clear status after 3 seconds

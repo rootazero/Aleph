@@ -121,6 +121,7 @@ pub(super) fn register_common_handlers(
     run_manager: &Option<Arc<AgentRunManager>>,
     session_store: Arc<dyn alephcore::gateway::session_store::SessionStore>,
     router: &Arc<AgentRouter>,
+    agent_registry: &Option<Arc<alephcore::gateway::agent_instance::AgentRegistry>>,
     full_config: &FullGatewayConfig,
     daemon: bool,
 ) {
@@ -184,10 +185,21 @@ pub(super) fn register_common_handlers(
     // enabled`): the handler resolves the coordinator itself at call time and
     // answers honestly when there is none, which is strictly better than a
     // method that silently does not exist on some boots.
+    //
+    // `agent_registry` is what makes the agent-admission gate real on this
+    // face: `agent.resume` is member-open (`method_admin.rs`), so without it a
+    // revoked user could put an agent back to work. `None` is the
+    // Simulated-execution build, which has no registry and runs no tools —
+    // see `resume_named_session`'s doc for why that is a construction fact
+    // rather than a hole, and why this is a parameter and not a global.
     let sm_resume = session_store.clone();
+    let reg_resume = agent_registry.clone();
     server.handlers_mut().register("agent.resume", move |req| {
         let manager = sm_resume.clone();
-        async move { alephcore::gateway::handlers::resume::handle_resume(req, manager).await }
+        let agents = reg_resume.clone();
+        async move {
+            alephcore::gateway::handlers::resume::handle_resume(req, manager, agents).await
+        }
     });
 
     // agent.list — returns available agents from the router
