@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::{ApprovalState, DialogState, APPROVAL_DECISIONS};
+use crate::tui::app::{ApprovalState, DialogState};
 use crate::tui::theme::DEFAULT_THEME;
 
 /// Render the confirmation dialog as a centered overlay.
@@ -96,7 +96,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
 /// consumers; the wrong abstraction would cost more than the duplication).
 pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) {
     let width = area.width.clamp(28, 60);
-    let option_count = u16::try_from(APPROVAL_DECISIONS.len()).unwrap_or(3);
+    let option_count = u16::try_from(approval.decisions.len()).unwrap_or(3);
     // 2 borders + 1 blank + question (2) + 1 blank + options + 1 hint
     let height = (option_count.saturating_add(7)).min(area.height);
     let rect = centered_rect(width, height, area);
@@ -143,7 +143,8 @@ pub fn render_approval(frame: &mut Frame, approval: &ApprovalState, area: Rect) 
         question_area,
     );
 
-    let option_lines: Vec<Line> = APPROVAL_DECISIONS
+    let option_lines: Vec<Line> = approval
+        .decisions
         .iter()
         .enumerate()
         .map(|(i, (label, _decision))| {

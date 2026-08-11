@@ -16,52 +16,79 @@ use crate::sandbox::exec_approval::gate::ApprovalOutcome;
 pub enum ApprovalDecisionType {
     /// Allow this execution only
     AllowOnce,
-    /// Allow for the remainder of this session — remembered in the in-memory
-    /// session approval store so the same command/tool is not re-prompted.
-    /// The widest grant Aleph offers; mirrors codex `ApprovedForSession` and
-    /// hermes' `session` consent tier.
+    /// Allow for the remainder of this session — remembered in the grant
+    /// store's session tier so the same command/tool is not re-prompted.
+    /// Mirrors codex `ApprovedForSession` and hermes' `session` consent tier.
     AllowSession,
-    /// Legacy wire value for "allow forever". No persistent allowlist exists,
-    /// so every resolver narrows this to [`Self::AllowSession`]
-    /// (`ExecApprovalManager::clamp_decision`). Kept only so in-flight callback
-    /// payloads and external clients still deserialize.
+    /// Allow until revoked, across restarts — the persistent tier of
+    /// [`GrantStore`](crate::sandbox::exec_approval::grants::GrantStore).
+    ///
+    /// Honored **only** when the approval record's `allowed_decisions` offered
+    /// it ([`crate::exec::allowed_decisions`]); on every other card it narrows
+    /// to [`Self::AllowSession`]. That narrowing is enforced server-side, at
+    /// [`Self::clamped_for`], not by a renderer declining to draw the button:
+    /// the wire value has always been accepted from external clients, so "no
+    /// surface offers it" was never a control.
     AllowAlways,
     /// Deny execution
     Deny,
 }
 
 impl ApprovalDecisionType {
-    /// Narrow the decision to a grant scope the system can actually honor.
+    /// Narrow the decision to a grant scope this particular request may honor.
     ///
-    /// No persistent allowlist exists, so `AllowAlways` cannot outlive the
-    /// process: it is a legacy wire value (old inline-keyboard callbacks,
-    /// `/approve always` text replies, external RPC clients) and resolves to
-    /// the session tier. An explicit human approval is never escalated or
-    /// turned into a denial here — only the grant scope is narrowed. This is
-    /// the ONE place that narrowing rule lives; resolvers
-    /// ([`crate::exec::manager::ExecApprovalManager`]) and outcome mapping
-    /// ([`Self::to_outcome`]) both go through it.
+    /// `allowed` is the decision set the card was *raised* with — one
+    /// derivation, computed at the gate ([`crate::exec::allowed_decisions`]) and
+    /// carried on the record — so the question "may this answer create a
+    /// standing grant?" is answered where the gate knows the rule and the
+    /// caller's tier, not where the button is drawn.
+    ///
+    /// Only the grant *scope* is narrowed: an explicit human approval is never
+    /// escalated, and never turned into a denial. Narrowing twice is a no-op,
+    /// so a defensive second call at a downstream surface is always safe.
     #[must_use]
-    pub const fn clamped(self) -> Self {
-        match self {
-            Self::AllowAlways => Self::AllowSession,
-            other => other,
+    pub fn clamped_for(self, allowed: &[Self]) -> Self {
+        // Walk DOWN the ladder one rung at a time rather than mapping straight
+        // to the bottom: a card that offers `once` and `always` but not
+        // `session` (the legacy backfill set) must narrow an unoffered tier to
+        // the widest tier it DID offer, not to something it also never showed.
+        let mut decision = self;
+        loop {
+            if allowed.contains(&decision) {
+                return decision;
+            }
+            decision = match decision {
+                Self::AllowAlways => Self::AllowSession,
+                Self::AllowSession => Self::AllowOnce,
+                // `AllowOnce` and `Deny` are the floor: a human's answer is
+                // never escalated, and never turned into a refusal here.
+                other => return other,
+            };
         }
     }
 
-    /// The [`ApprovalOutcome`] this decision resolves to — the SINGLE decision
-    /// → outcome mapping for every approval surface (channel bridge, operator
-    /// requester, cluster node approval). `AllowAlways` narrows to the session
-    /// grant via [`Self::clamped`], so the downgrade rule has one source.
+    /// The [`ApprovalOutcome`] this decision resolves to, within the decision
+    /// set the request offered — the SINGLE decision → outcome mapping for
+    /// every approval surface (channel bridge, operator requester, cluster node
+    /// approval).
+    ///
+    /// It takes `allowed` and there is no argument-free variant **on purpose**.
+    /// The unsafe direction here is a surface that turns a widest-tier wire
+    /// value into a persistent grant it was never authorized to create; making
+    /// every call site name the set it offered turns that into a compile error
+    /// rather than a rule someone has to remember (判据 §5.17: 编译错误强于
+    /// 注册表 pin). Sites that never offer a standing grant pass
+    /// [`crate::exec::allowed_decisions::session_max`] or
+    /// [`crate::exec::allowed_decisions::once_only`].
+    ///
     /// A missing decision (timeout / closed channel) is not representable
     /// here — callers map `None` to [`ApprovalOutcome::Timeout`] themselves.
     #[must_use]
-    pub const fn to_outcome(self) -> ApprovalOutcome {
-        match self.clamped() {
+    pub fn to_outcome_within(self, allowed: &[Self]) -> ApprovalOutcome {
+        match self.clamped_for(allowed) {
             Self::AllowOnce => ApprovalOutcome::Approved,
             Self::AllowSession => ApprovalOutcome::ApprovedForSession,
-            // Unreachable post-clamp; kept for exhaustiveness.
-            Self::AllowAlways => ApprovalOutcome::ApprovedForSession,
+            Self::AllowAlways => ApprovalOutcome::ApprovedAlways,
             Self::Deny => ApprovalOutcome::Denied,
         }
     }
@@ -92,10 +119,12 @@ mod tests {
     }
 
     #[test]
-    fn clamp_narrows_only_allow_always() {
+    fn clamp_narrows_to_what_the_card_offered() {
+        let session_max = crate::exec::allowed_decisions::session_max();
         assert_eq!(
-            ApprovalDecisionType::AllowAlways.clamped(),
-            ApprovalDecisionType::AllowSession
+            ApprovalDecisionType::AllowAlways.clamped_for(&session_max),
+            ApprovalDecisionType::AllowSession,
+            "a card that never offered the persistent tier cannot produce one"
         );
         // Other decisions pass through untouched; approvals are never escalated
         // or turned into denials here.
@@ -104,29 +133,66 @@ mod tests {
             ApprovalDecisionType::AllowSession,
             ApprovalDecisionType::Deny,
         ] {
-            assert_eq!(decision.clamped(), decision);
+            assert_eq!(decision.clamped_for(&session_max), decision);
         }
+        // When the card DID offer it, the human's answer stands.
+        let with_always = crate::exec::allowed_decisions::with_persistent();
+        assert_eq!(
+            ApprovalDecisionType::AllowAlways.clamped_for(&with_always),
+            ApprovalDecisionType::AllowAlways
+        );
+        // Narrowing is idempotent, so a defensive second clamp downstream is
+        // always safe.
+        assert_eq!(
+            ApprovalDecisionType::AllowAlways
+                .clamped_for(&session_max)
+                .clamped_for(&session_max),
+            ApprovalDecisionType::AllowSession
+        );
+    }
+
+    /// A card that only offers a one-shot allow (a cluster node approval, the
+    /// escalation banner) narrows the session tier too — the same rule, one
+    /// step further down.
+    #[test]
+    fn clamp_narrows_the_session_tier_when_it_was_not_offered() {
+        let once = crate::exec::allowed_decisions::once_only();
+        assert_eq!(
+            ApprovalDecisionType::AllowSession.clamped_for(&once),
+            ApprovalDecisionType::AllowOnce
+        );
+        assert_eq!(
+            ApprovalDecisionType::AllowAlways.clamped_for(&once),
+            ApprovalDecisionType::AllowOnce,
+            "two narrowing steps, not a jump past the missing tier"
+        );
     }
 
     /// The single decision → outcome mapping every approval surface shares.
     #[test]
     fn decision_maps_to_outcome() {
+        let session_max = crate::exec::allowed_decisions::session_max();
         assert_eq!(
-            ApprovalDecisionType::AllowOnce.to_outcome(),
+            ApprovalDecisionType::AllowOnce.to_outcome_within(&session_max),
             ApprovalOutcome::Approved
         );
         assert_eq!(
-            ApprovalDecisionType::AllowSession.to_outcome(),
+            ApprovalDecisionType::AllowSession.to_outcome_within(&session_max),
             ApprovalOutcome::ApprovedForSession
         );
-        // Legacy "allow always" degrades to the session grant — same narrowing
-        // `clamped` applies at the decision layer.
+        // "Allow always" on a card that did not offer it degrades to the
+        // session grant — the historical behaviour, now conditional.
         assert_eq!(
-            ApprovalDecisionType::AllowAlways.to_outcome(),
+            ApprovalDecisionType::AllowAlways.to_outcome_within(&session_max),
             ApprovalOutcome::ApprovedForSession
         );
         assert_eq!(
-            ApprovalDecisionType::Deny.to_outcome(),
+            ApprovalDecisionType::AllowAlways
+                .to_outcome_within(&crate::exec::allowed_decisions::with_persistent()),
+            ApprovalOutcome::ApprovedAlways
+        );
+        assert_eq!(
+            ApprovalDecisionType::Deny.to_outcome_within(&session_max),
             ApprovalOutcome::Denied
         );
     }

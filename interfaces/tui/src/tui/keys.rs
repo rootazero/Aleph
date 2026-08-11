@@ -9,7 +9,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui_textarea::{Input, TextArea};
 
-use super::app::{Action, AppState, Focus, APPROVAL_DECISIONS};
+use super::app::{Action, AppState, Focus};
 use super::command_tree;
 use super::event;
 use super::slash::{self, LocalCommand, ParsedInput};
@@ -467,7 +467,7 @@ fn handle_approval_key(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Down => {
             if let Some(approval) = &mut state.approval {
-                if approval.selected + 1 < APPROVAL_DECISIONS.len() {
+                if approval.selected + 1 < approval.decisions.len() {
                     approval.selected += 1;
                 }
             }

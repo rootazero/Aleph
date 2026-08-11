@@ -90,12 +90,20 @@ where
 fn acquire_or_held(data_dir: &Path) -> anyhow::Result<InstanceLock> {
     match instance_lock::try_acquire(data_dir)? {
         AcquireOutcome::Acquired(lock) => Ok(lock),
-        AcquireOutcome::HeldByLive { pid, lock_path } => Err(LockHeldError {
-            pid: pid as u32,
-            lock_path,
-            orphaned: false,
+        AcquireOutcome::HeldByLive { pid, lock_path } => {
+            // `pid == 0` here means the holder sidecar was missing or
+            // unreadable (see `instance_lock::try_acquire`). PID 0 is never
+            // a valid user-space process, so don't surface "server is
+            // running (PID 0)" — treat it as orphaned/unknown and let the
+            // operator message stay honest.
+            let orphaned = pid == 0;
+            Err(LockHeldError {
+                pid: pid as u32,
+                lock_path,
+                orphaned,
+            }
+            .into())
         }
-        .into()),
         AcquireOutcome::HeldByOrphaned { pid, lock_path } => Err(LockHeldError {
             pid: pid as u32,
             lock_path,
@@ -131,9 +139,25 @@ where
             Ok(lock) => local(&lock),
             Err(e) => {
                 if e.downcast_ref::<LockHeldError>().is_some() {
-                    crate::cli::ipc_client::forward_to_server::<T>(
-                        data_dir, method, route, ipc_body,
-                    )
+                    // Lock is held — try forwarding to the running server. If
+                    // the holder releases between our acquire-or-held check
+                    // and the IPC request landing, the forward will fail
+                    // with a confusing "server is initializing or crashed"
+                    // error. Retry local acquisition once: if the lock is
+                    // now free we run `local`; only the second failure is
+                    // surfaced.
+                    match crate::cli::ipc_client::forward_to_server::<T>(
+                        data_dir,
+                        method,
+                        route,
+                        ipc_body,
+                    ) {
+                        Ok(out) => Ok(out),
+                        Err(fwd_err) => match acquire_or_held(data_dir) {
+                            Ok(lock) => local(&lock),
+                            Err(_) => Err(fwd_err),
+                        },
+                    }
                 } else {
                     Err(e)
                 }
@@ -205,7 +229,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))] // POSIX-only: Windows LockFileEx blocks the held-lock PID readback
     fn try_with_policy_lock_only_returns_err_when_held() {
         let dir = tempfile::tempdir().unwrap();
         let _hold = match crate::utils::instance_lock::try_acquire(dir.path()).unwrap() {
@@ -220,5 +243,94 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(format!("{:?}", result.unwrap_err()).contains("server is running"));
+    }
+
+    /// M2: when the holder sidecar is unreadable, `try_acquire` returns
+    /// `HeldByLive { pid: 0 }`. `acquire_or_held` must surface that as
+    /// "orphaned / unknown" — never as "server is running (PID 0)" — so the
+    /// operator message stays honest.
+    #[test]
+    fn held_by_live_with_pid_zero_is_treated_as_orphaned() {
+        let dir = tempfile::tempdir().unwrap();
+        // Take the lock so subsequent acquires see HeldBy*.
+        let _hold = match crate::utils::instance_lock::try_acquire(dir.path()).unwrap() {
+            crate::utils::instance_lock::AcquireOutcome::Acquired(g) => g,
+            _ => panic!(),
+        };
+        // Wipe the sidecar: instance_lock falls back to HeldByLive { pid: 0 }
+        // when the sidecar is missing.
+        let holder_path = dir.path().join("aleph.lock.pid");
+        std::fs::remove_file(&holder_path).unwrap();
+        // The exclusive lock file is still held (we still own `_hold`),
+        // so the second acquire will return HeldByLive with pid 0.
+        let result: anyhow::Result<i32> = try_with_policy::<_, i32>(
+            CommandPolicy::LockOnly,
+            dir.path(),
+            |_lock| Ok(7),
+            serde_json::Value::Null,
+        );
+        let err = result.expect_err("should fail when held");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("orphaned lock detected"),
+            "expected orphaned-lock message, got: {msg}"
+        );
+        assert!(
+            !msg.contains("(PID 0)"),
+            "must not surface PID 0 as a live holder: {msg}"
+        );
+    }
+
+    /// M1: `LockOrIpc` should retry local acquisition when the IPC forward
+    /// fails. We simulate the failure by writing an endpoint URL that
+    /// points at a port nobody is listening on — the HTTP forward will
+    /// fail; the retry then tries to take the local lock, succeeds because
+    /// the holder has released (we drop `_hold` between the two phases),
+    /// and `local` runs.
+    #[test]
+    fn lock_or_ipc_retries_local_acquire_when_forward_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let _hold = match crate::utils::instance_lock::try_acquire(dir.path()).unwrap() {
+            crate::utils::instance_lock::AcquireOutcome::Acquired(g) => g,
+            _ => panic!(),
+        };
+        // Seed a bearer token + a real .ipc-endpoint.json pointing at an
+        // unbound port so `forward_to_server` will fail to connect.
+        let security_db = dir.path().join("security.db");
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&security_db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE shared_token (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plaintext_token TEXT,
+                created_at INTEGER
+             );
+             INSERT INTO shared_token (plaintext_token, created_at)
+             VALUES ('tok', 1);",
+        )
+        .unwrap();
+        drop(conn);
+        crate::cli::endpoint::write_endpoint(
+            dir.path(),
+            &crate::cli::endpoint::IpcEndpoint::current("http://127.0.0.1:1".to_string()),
+        )
+        .unwrap();
+
+        // Release the lock so the retry path can succeed.
+        drop(_hold);
+
+        // Run the policy with an `http://127.0.0.1:1` endpoint (no
+        // listener) and assert that the retry path takes the local lock
+        // and runs `local`.
+        let result: i32 = try_with_policy::<_, i32>(
+            CommandPolicy::LockOrIpc {
+                route: "/v1/admin/whatever",
+                method: HttpMethod::Get,
+            },
+            dir.path(),
+            |_lock| Ok(42),
+            serde_json::Value::Null,
+        )
+        .expect("retry path should run local");
+        assert_eq!(result, 42);
     }
 }

@@ -45,6 +45,18 @@ pub struct PendingApprovalView {
     /// `remaining_ms` snapshot. Absolute (not a duration) so the card can count
     /// down against the shared 1s clock instead of freezing at fetch time.
     pub expires_at_ms: i64,
+    /// The decision tiers the SERVER raised this card with (kebab-case wire
+    /// values: `allow-once` / `allow-session` / `allow-always` / `deny`).
+    ///
+    /// The card renders buttons from this list instead of a fixed three,
+    /// because which tiers a card may offer depends on why it fired and who is
+    /// being asked — an "always allow" is not offered to a member, nor on a
+    /// tool that declares its own confirmation floor. The server enforces the
+    /// same list when the decision comes back, so drawing a button we should
+    /// not have is a cosmetic bug, not a hole; drawing one too few is the
+    /// safe direction. A record from an older core arrives without the field
+    /// and falls back to the historical session ceiling.
+    pub allowed_decisions: Vec<String>,
 }
 
 impl PendingApprovalView {
@@ -177,6 +189,7 @@ mod tests {
             tool_call_id: None,
             reason: None,
             expires_at_ms: 60_000,
+            allowed_decisions: Vec::new(),
         };
         assert_eq!(a.remaining_secs(0), 60);
         assert_eq!(a.remaining_secs(30_500), 29);

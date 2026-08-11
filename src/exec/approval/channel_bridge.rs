@@ -9,6 +9,25 @@ use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::channel::{ChannelId, ConversationId, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 
+/// The reply menu a plain-text channel prints under an approval prompt, built
+/// from the tiers the card was actually raised with.
+///
+/// `/approve` / `/approve session` / `/approve always` are all parsed by
+/// `inbound_router` regardless; what this controls is which of them the user is
+/// *told* about — and telling somebody about `always` on a card whose record
+/// will narrow it to a session grant is the same defect as a button that lies.
+fn plain_text_menu(allowed: &[ApprovalDecisionType]) -> String {
+    let mut parts = vec!["回复 /approve 批准本次".to_string()];
+    if allowed.contains(&ApprovalDecisionType::AllowSession) {
+        parts.push("/approve session 本会话内不再询问".to_string());
+    }
+    if allowed.contains(&ApprovalDecisionType::AllowAlways) {
+        parts.push("/approve always 永久允许这次调用（可在设置里撤销）".to_string());
+    }
+    parts.push("/deny 拒绝（可附原因：/deny 原因…，会转告给 agent）".to_string());
+    format!("{}。", parts.join("、"))
+}
+
 const DELIVERY_TIMEOUT_SECS: u64 = 30;
 
 pub struct ChannelApprovalBridge {
@@ -95,6 +114,9 @@ impl ChannelApprovalBridge {
             // Session-grant identity of this action: a session-level decision
             // cascades to other pending cards of the same action.
             grant_key: action.grant_key.clone(),
+            // What the gate decided this card may offer — the keyboard below is
+            // built from the same list, and the resolver enforces it.
+            allowed_decisions: action.allowed_decisions.clone(),
         };
 
         let record = approval_manager.create(&request, timeout_ms);
@@ -143,14 +165,13 @@ impl ChannelApprovalBridge {
             .await_registered(record_id, rx, wait_timeout)
             .await;
         let outcome = match resolved.decision {
-            // Single decision → outcome mapping (`ApprovalDecisionType::to_outcome`):
-            // "allow once" approves this single invocation; both "allow session"
-            // and legacy "allow always" carry the session-scoped grant so the
-            // dispatch gate remembers it and stops re-prompting the same tool
-            // this session — this confirm-gated tool path has no on-disk
-            // allowlist of its own, so the strongest grant it can honor is
-            // session scope.
-            Some(decision) => decision.to_outcome(),
+            // Single decision → outcome mapping
+            // (`ApprovalDecisionType::to_outcome_within`), named against the set
+            // THIS card was raised with — the same `action.allowed_decisions`
+            // the keyboard was built from. The manager already clamped to it;
+            // passing it again is idempotent and keeps this site honest about
+            // which tiers it ever offered.
+            Some(decision) => decision.to_outcome_within(&action.allowed_decisions),
             None => {
                 self.send_timeout_notice(channel_id, conversation_id).await;
                 ApprovalOutcome::Timeout
@@ -222,13 +243,16 @@ impl ChannelApprovalBridge {
         let Some(capability) = capability else {
             // The action summary is the point of the prompt: `/approve` on a
             // bare tool name approves whatever the model happened to pass.
-            // Use the truncated form so the text-fallback message stays
-            // under every channel's limit.
+            // The truncated form keeps the fallback under every channel's
+            // message limit (Telegram's is 4096 chars).
+            //
+            // The reply menu is built from the same `allowed_decisions` the
+            // keyboard path uses. A plain-text channel that kept a fixed menu
+            // would be the third copy of "which tiers exist" — and the one that
+            // teaches the user a word (`always`) the resolver would narrow.
             let text = format!(
-                "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{summary}\n```\n{reason}\n\n\
-                 回复 /approve 批准本次、/approve session 本会话内不再询问、\
-                 /deny 拒绝（可附原因：/deny 原因…，会转告给 agent）。",
-                summary = summary,
+                "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{summary}\n```\n{reason}\n\n{}",
+                plain_text_menu(&action.allowed_decisions)
             );
             let ch = channel.read().await;
             return match ch
@@ -243,19 +267,17 @@ impl ChannelApprovalBridge {
             };
         };
 
-        // Confirm-gated tools can honor at most a session-scoped grant (no
-        // on-disk allowlist on this path), so the rendered decision set stops
-        // at the session tier — offering "always" here would be a lie.
+        // The rendered decision set is the gate's, not this function's: it was
+        // derived once (`exec::allowed_decisions::for_confirm_gate`) and rides
+        // the action. A literal here would be a second answer to "which tiers
+        // may this card offer", and the two would drift the first time either
+        // moved.
         let approval_req = crate::exec::approval::types::ApprovalRequest::Command(
             crate::exec::approval::types::CommandApprovalRequest {
                 command: action.summary.clone(),
                 cwd: action.cwd.clone(),
                 reason: Some(reason.to_string()),
-                allowed_decisions: vec![
-                    ApprovalDecisionType::AllowOnce,
-                    ApprovalDecisionType::AllowSession,
-                    ApprovalDecisionType::Deny,
-                ],
+                allowed_decisions: action.allowed_decisions.clone(),
             },
         );
         match timeout(

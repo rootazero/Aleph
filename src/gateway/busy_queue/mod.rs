@@ -51,8 +51,16 @@
 //!   ([`crate::gateway::execution_engine`]'s `SessionRunRegistry::release`
 //!   calls [`notify_slot_free`]) — the authoritative "you may try now" edge;
 //! * the engine admits a queued run ([`mark_admitted`]) — the symmetric
-//!   "the lane just got shorter" edge; or
-//! * a ticket leaves the lane ([`TicketGuard`]'s `Drop`), promoting the next.
+//!   "the lane just got shorter" edge;
+//! * a ticket leaves the lane ([`TicketGuard`]'s `Drop`), promoting the next;
+//!   or
+//! * the session's live loop drains its steering burst
+//!   ([`notify_burst_drained`], fired when an assistant turn lands in the
+//!   session log) — the edge for a waiter that is **not** waiting for the run
+//!   slot at all. A steer refused because the burst is at
+//!   `max_pending_steering` needs its target to keep running; what it waits for
+//!   is the loop answering, and only [`mark_awaiting_burst_drain`] tickets
+//!   receive this one.
 //!
 //! A bounded fallback tick (`wake_fallback_secs`) still runs, so a missed
 //! signal degrades to a slightly later delivery rather than a wedged lane.
@@ -101,6 +109,20 @@ struct Ticket {
     /// Set by [`purge`] / [`cancel_queued_run`]: this waiter should abandon
     /// its message.
     cancelled: bool,
+    /// Set by [`mark_awaiting_burst_drain`]: this waiter's message was refused
+    /// mid-loop steering because the running loop's un-consumed steering burst
+    /// is at `max_pending_steering`, so what it is waiting for is the *burst*
+    /// draining, not the run *slot* freeing. [`notify_burst_drained`] fires
+    /// only for lanes that hold at least one such ticket, so an assistant turn
+    /// does not change the retry cadence of ordinary `Queue`-mode waiters —
+    /// they still wait for the slot, which is the only thing that can help
+    /// them.
+    ///
+    /// Sticky for the ticket's lifetime: a later attempt deferred for some
+    /// other reason keeps the flag, costing at most one extra delivery attempt
+    /// per assistant turn. Cheaper than tracking why each attempt failed, and
+    /// wrong only in the harmless direction (a wake the waiter re-checks).
+    awaiting_burst_drain: bool,
 }
 
 /// One session's wait lane: arrival-ordered tickets plus the wake handle every
@@ -151,6 +173,7 @@ pub fn register(session_key: &str, max_per_session: usize, run_id: &str) -> Opti
         run_id: run_id.to_string(),
         enqueued_at: Instant::now(),
         cancelled: false,
+        awaiting_burst_drain: false,
     });
     Some(TicketGuard {
         session_key: session_key.to_string(),
@@ -167,6 +190,72 @@ pub fn notify_slot_free(session_key: &str) {
     let wake = {
         let map = lock();
         map.get(session_key).map(|lane| Arc::clone(&lane.wake))
+    };
+    if let Some(wake) = wake {
+        wake.notify_waiters();
+    }
+}
+
+/// Record that the message that would become `run_id` on `session_key` was
+/// refused mid-loop steering **for backpressure** — the running loop's
+/// un-consumed steering burst is at `max_pending_steering`.
+///
+/// Called from `execution_engine::steering::try_inject_steering`'s cap branch.
+/// A run that holds no ticket matches nothing and this is a no-op (fail open,
+/// same posture as [`waiting_since`]).
+///
+/// # Why the lane needs to know
+///
+/// Every other wake edge answers "is the run slot free?". This waiter is not
+/// waiting for the slot — the sibling it wants to steer must keep running for
+/// the steer to mean anything — it is waiting for that sibling to *answer* its
+/// burst. Without the mark, [`notify_burst_drained`] could not tell which lanes
+/// have anything to gain from an assistant turn, and the documented
+/// "redelivers once the burst drains" degraded to the `wake_fallback_secs`
+/// tick.
+///
+/// # The check-then-mark window is covered by the burst itself
+///
+/// The mark lands *after* the read that found the burst at the cap, so a drain
+/// that commits in between fires against an unmarked lane and is missed. That
+/// costs one turn, never the message: the burst is at the cap, so the loop has
+/// un-answered user messages to consume and every answer is another drain edge —
+/// and the last one of the run is followed by [`notify_slot_free`]. The waiter
+/// is armed on the lane's `Notify` before its attempt begins, so a drain during
+/// the attempt itself is delivered, not dropped.
+pub fn mark_awaiting_burst_drain(session_key: &str, run_id: &str) {
+    let mut map = lock();
+    let Some(lane) = map.get_mut(session_key) else {
+        return;
+    };
+    if let Some(ticket) = lane.tickets.iter_mut().find(|t| t.run_id == run_id) {
+        ticket.awaiting_burst_drain = true;
+    }
+}
+
+/// Signal that `session_key`'s live loop just drained its steering burst (it
+/// committed an assistant turn), so a steer refused for backpressure may now
+/// fit.
+///
+/// Fired from the gateway's single "an event was appended" seam via
+/// `execution_engine::steering::wake_lane_if_burst_drained`, which owns the
+/// predicate for *which* events drain a burst (it is derived from
+/// `count_pending_steering`, not restated).
+///
+/// Fires only for a lane that actually holds a backpressure-deferred waiter:
+/// an assistant turn is a frequent event and waking `Queue`-mode waiters on
+/// every one of them would replace their slot-free wake with a per-turn retry
+/// storm, gaining nothing (only the slot can admit them).
+pub fn notify_burst_drained(session_key: &str) {
+    let wake = {
+        let map = lock();
+        map.get(session_key)
+            .filter(|lane| {
+                lane.tickets
+                    .iter()
+                    .any(|t| t.awaiting_burst_drain && !t.cancelled)
+            })
+            .map(|lane| Arc::clone(&lane.wake))
     };
     if let Some(wake) = wake {
         wake.notify_waiters();
@@ -854,5 +943,74 @@ mod tests {
     #[test]
     fn notify_slot_free_on_an_unknown_session_is_a_no_op() {
         notify_slot_free("bq-test-notify-unknown");
+    }
+
+    /// The third wake edge. A steer refused for backpressure is NOT waiting for
+    /// the run slot — its target has to keep running for the steer to mean
+    /// anything — so neither slot-side edge fires for it and it used to wait out
+    /// `wake_fallback_secs` (30 s), not the burst.
+    #[tokio::test]
+    async fn a_backpressure_deferred_waiter_is_woken_when_the_burst_drains() {
+        let s = "bq-test-burst-drain";
+        let front = register(s, CAP, "bq-drain-a").unwrap();
+        let wake = front.wake_handle();
+        let parked = wake.notified();
+        tokio::pin!(parked);
+
+        // Unflagged, this lane holds an ordinary `Queue` waiter: an assistant
+        // turn cannot help it (only the slot can), so the edge must skip it
+        // rather than turn every turn into a retry tick.
+        notify_burst_drained(s);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "a lane with no backpressured waiter must not wake on a drained burst"
+        );
+
+        mark_awaiting_burst_drain(s, "bq-drain-a");
+        notify_burst_drained(s);
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut parked)
+            .await
+            .expect("a drained burst must wake the steer it deferred");
+    }
+
+    /// A stop already woke its waiters and told them to abandon the message;
+    /// a later drain has nothing to offer them, and the lane it leaves behind
+    /// must not keep waking on every assistant turn until the guards drop.
+    #[tokio::test]
+    async fn a_cancelled_waiter_does_not_keep_the_drain_edge_firing() {
+        let s = "bq-test-burst-drain-cancelled";
+        let front = register(s, CAP, "bq-drain-cancelled").unwrap();
+        mark_awaiting_burst_drain(s, "bq-drain-cancelled");
+        assert_eq!(purge(s), 1);
+
+        let wake = front.wake_handle();
+        let parked = wake.notified();
+        tokio::pin!(parked);
+        notify_burst_drained(s);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "an abandoned message is not waiting for the burst any more"
+        );
+    }
+
+    #[test]
+    fn marking_a_run_that_never_queued_is_a_no_op() {
+        // Loop ticks, goal continuations, delegated children and the
+        // OpenAI-compat surface reach the engine without a ticket.
+        mark_awaiting_burst_drain("bq-test-mark-unknown-session", "run-x");
+        notify_burst_drained("bq-test-mark-unknown-session");
+
+        let s = "bq-test-mark-unknown-run";
+        let held = register(s, CAP, "bq-mark-a").unwrap();
+        mark_awaiting_burst_drain(s, "some-other-run");
+        assert!(
+            held.is_front(),
+            "an unrelated mark must not disturb the lane"
+        );
+        assert_eq!(purge(s), 1, "and must not silently drop the ticket");
     }
 }

@@ -716,6 +716,7 @@ fn open_approval_sets_focus_and_state() {
         "ap-1".into(),
         "rm -rf /tmp/x".into(),
         Some("destructive".into()),
+        DEFAULT_APPROVAL_DECISIONS.to_vec(),
     );
     assert_eq!(state.focus, Focus::Approval);
     let approval = state.approval.as_ref().unwrap();
@@ -730,7 +731,12 @@ fn run_error_dismisses_pending_approval() {
     // the poll stops once current_run clears, so run-end has to retract it.
     let mut state = AppState::new("s".into(), "m".into());
     state.current_run = Some("run-1".into());
-    state.open_approval("ap-1".into(), "cmd".into(), None);
+    state.open_approval(
+        "ap-1".into(),
+        "cmd".into(),
+        None,
+        DEFAULT_APPROVAL_DECISIONS.to_vec(),
+    );
     assert_eq!(state.focus, Focus::Approval);
 
     state.handle_gateway_event(StreamEvent::RunError {

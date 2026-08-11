@@ -183,14 +183,48 @@ pub struct DialogState {
     pub selected: usize,
 }
 
-/// Decision options for the tool-approval overlay, in display order. Each is
+/// Every decision the overlay knows how to render, in display order. Each is
 /// `(label, wire_decision)`; the wire value is exactly what
 /// `exec.approval.resolve` expects (kebab-case, server-validated).
-pub const APPROVAL_DECISIONS: [(&str, &str); 3] = [
+///
+/// This is the vocabulary, **not** the offer: which of these a given card may
+/// use is the server's call (`exec::allowed_decisions::for_confirm_gate`),
+/// carried on the pending record and enforced when the answer comes back. See
+/// [`ApprovalState::decisions`].
+pub const APPROVAL_DECISIONS: [(&str, &str); 4] = [
+    ("Allow once", "allow-once"),
+    ("Allow for session", "allow-session"),
+    ("Always allow", "allow-always"),
+    ("Deny", "deny"),
+];
+
+/// What a card offers when the server did not say (a core older than
+/// 2026-08-11). The historical three, and never `allow-always`: a missing
+/// field may narrow what a client offers, never widen it.
+pub const DEFAULT_APPROVAL_DECISIONS: [(&str, &str); 3] = [
     ("Allow once", "allow-once"),
     ("Allow for session", "allow-session"),
     ("Deny", "deny"),
 ];
+
+/// The renderable decisions for a card, given the wire values the server said
+/// it may offer. Unknown wire values are dropped (a client cannot render a
+/// decision it has no label for), and an empty result falls back to
+/// [`DEFAULT_APPROVAL_DECISIONS`] — a card with no buttons is unanswerable,
+/// which is worse than a card with the historical ones.
+#[must_use]
+pub fn offered_decisions(allowed: &[String]) -> Vec<(&'static str, &'static str)> {
+    let offered: Vec<(&'static str, &'static str)> = APPROVAL_DECISIONS
+        .iter()
+        .filter(|(_, wire)| allowed.iter().any(|a| a == wire))
+        .copied()
+        .collect();
+    if offered.is_empty() {
+        DEFAULT_APPROVAL_DECISIONS.to_vec()
+    } else {
+        offered
+    }
+}
 
 /// State for the tool-execution approval overlay (Ask exec tier). A parked
 /// server run is waiting on `exec.approval.resolve` for this `id`. Kept
@@ -205,8 +239,14 @@ pub struct ApprovalState {
     pub command: String,
     /// Why the gate fired, when the server supplied a reason.
     pub reason: Option<String>,
-    /// Highlighted decision index into [`APPROVAL_DECISIONS`].
+    /// Highlighted decision index into [`Self::decisions`].
     pub selected: usize,
+    /// The decisions THIS card offers, in display order — from the record's
+    /// `allowed_decisions`, not from a fixed list. A card raised on a tool that
+    /// declares its own confirmation floor does not offer "always"; a member's
+    /// card does not either. Rendering a fixed set would put a button in front
+    /// of the user that the server narrows on arrival.
+    pub decisions: Vec<(&'static str, &'static str)>,
 }
 
 /// State for the command palette overlay.
@@ -649,12 +689,19 @@ impl AppState {
     /// and steal focus so the parked run gets a decision. The caller
     /// (`commands::poll_approvals`) has already confirmed the `id` belongs to
     /// this session.
-    pub fn open_approval(&mut self, id: String, command: String, reason: Option<String>) {
+    pub fn open_approval(
+        &mut self,
+        id: String,
+        command: String,
+        reason: Option<String>,
+        decisions: Vec<(&'static str, &'static str)>,
+    ) {
         self.approval = Some(ApprovalState {
             id,
             command,
             reason,
             selected: 0,
+            decisions,
         });
         self.focus = Focus::Approval;
     }

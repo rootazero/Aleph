@@ -68,6 +68,7 @@ mod tests {
             tool_call_id: tool_call_id.map(str::to_string),
             reason: None,
             expires_at_ms: 0,
+            allowed_decisions: Vec::new(),
         }
     }
 

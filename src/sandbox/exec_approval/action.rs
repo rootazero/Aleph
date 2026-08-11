@@ -70,6 +70,18 @@ pub struct ApprovalAction {
     /// ALREADY-PENDING approvals of the same action (concurrent subagent /
     /// teams broadcast), not just suppress later re-prompts.
     pub grant_key: Option<String>,
+    /// The decision tiers this card may offer — derived once at the gate
+    /// ([`crate::exec::allowed_decisions`]), carried to every renderer, and
+    /// **enforced** when the answer comes back
+    /// ([`ApprovalDecisionType::clamped_for`]). A renderer may draw fewer
+    /// buttons than this; nothing may honour more.
+    ///
+    /// Defaults to [`session_max`](crate::exec::allowed_decisions::session_max)
+    /// on every constructor: a card whose builder never thought about the
+    /// question must not be the one that hands out a permanent grant.
+    ///
+    /// [`ApprovalDecisionType::clamped_for`]: crate::exec::socket::ApprovalDecisionType::clamped_for
+    pub allowed_decisions: Vec<crate::exec::socket::ApprovalDecisionType>,
 }
 
 impl ApprovalAction {
@@ -85,7 +97,17 @@ impl ApprovalAction {
             analysis,
             reason: reason.into(),
             grant_key: Some(grant_fingerprint(name, input)),
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
         }
+    }
+
+    /// Widen (or narrow) the decision tiers this card offers. The value comes
+    /// from [`crate::exec::allowed_decisions`] — the one derivation — never
+    /// from a literal at a call site.
+    #[must_use]
+    pub fn offering(mut self, decisions: Vec<crate::exec::socket::ApprovalDecisionType>) -> Self {
+        self.allowed_decisions = decisions;
+        self
     }
 
     /// A sandboxed command asking to escalate beyond its baseline capabilities.
@@ -111,6 +133,10 @@ impl ApprovalAction {
             // The elevation gate keys its ledger on the normalized capability
             // summary, which this struct never sees — no grant identity here.
             grant_key: None,
+            // A capability elevation is cached per-session in the workspace's
+            // `granted_elevations`; there is no persistent tier for it, so the
+            // card must not offer one.
+            allowed_decisions: crate::exec::allowed_decisions::session_max(),
         }
     }
 
@@ -125,6 +151,9 @@ impl ApprovalAction {
             analysis: None,
             reason: reason.into(),
             grant_key: None,
+            // Nothing to remember: a route escalation has no action identity,
+            // so neither grant tier can key on it.
+            allowed_decisions: crate::exec::allowed_decisions::once_only(),
         }
     }
 

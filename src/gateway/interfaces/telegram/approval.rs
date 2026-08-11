@@ -207,18 +207,21 @@ mod tests {
         );
         let kb = TelegramChannelApprovalCapability::approval_keyboard(&request, "rec-123");
         let json = serde_json::to_string(&kb).unwrap();
-        for decision in ["once", "session", "deny"] {
+        // Every tier the request permits is rendered — including `always`,
+        // which the gate offers only to an operator-tier turn outside the
+        // declared-confirmation floor. This assertion used to be its negation
+        // ("no tier promises permanence — nothing persists an allow-always
+        // grant"), which was true until `sandbox::exec_approval::grants` gave
+        // the tier something to write to; a channel that kept suppressing the
+        // button would have made the Panel and Telegram disagree about what the
+        // same card offers.
+        for decision in ["once", "session", "always", "deny"] {
             let data = format!("approve:rec-123:{decision}");
             assert!(json.contains(&data), "missing button {data}: {json}");
             // Must be bidirectionally consistent with RPC-side ApprovalBridge::parse_callback
             let (id, _) = ApprovalBridge::parse_callback(&data).expect("parses");
             assert_eq!(id, "rec-123");
         }
-        // No tier promises permanence — nothing persists an allow-always grant.
-        assert!(
-            !json.contains("approve:rec-123:always"),
-            "keyboard must not offer allow-always: {json}"
-        );
     }
 
     #[test]

@@ -177,10 +177,7 @@ make several coordinated edits at once."#;
                 args.patch.len()
             )));
         }
-        let op_headers = args
-            .patch
-            .matches("\n*** Add File:")
-            .count()
+        let op_headers = args.patch.matches("\n*** Add File:").count()
             + args.patch.matches("\n*** Update File:").count()
             + args.patch.matches("\n*** Delete File:").count();
         if op_headers > MAX_PATCH_OPS {

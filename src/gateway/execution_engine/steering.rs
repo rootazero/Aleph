@@ -257,6 +257,9 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
 /// unbounded `UserMessage` events to the live log, bloating the very next
 /// prompt. Past the cap the injection is rejected so the busy wait lane
 /// redelivers the message once the burst drains — backpressure, never a drop.
+/// "Once the burst drains" is [`wake_lane_if_burst_drained`], not the lane's
+/// fallback tick: [`defer_for_backpressure`] marks the ticket on the way out so
+/// the assistant turn that empties the burst can find it.
 ///
 /// This constant is the single source for the `[execution] max_pending_steering`
 /// default (see `ExecutionEngineConfig::max_pending_steering`); the effective
@@ -287,6 +290,63 @@ pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
         .iter()
         .filter(|r| matches!(&r.event, SessionEvent::UserMessage { synthetic, .. } if !*synthetic))
         .count()
+}
+
+/// Does appending `event` to the session log drain the un-consumed steering
+/// burst — i.e. reset [`count_pending_steering`] to zero?
+///
+/// Derived from that function's boundary rather than restated: it counts the
+/// non-synthetic user messages *after the last assistant message*, so an
+/// assistant message is exactly the event that empties the count. Whoever moves
+/// that boundary has to move this with it, and
+/// `the_drain_predicate_agrees_with_the_count_it_resets` fails if they drift.
+fn drains_steering_burst(event: &SessionEvent) -> bool {
+    matches!(event, SessionEvent::AssistantMessage { .. })
+}
+
+/// Wake `session_key`'s busy lane when `event` drained its steering burst.
+///
+/// The lane's other wake edges are both about the run **slot**
+/// (`notify_slot_free` on release, `mark_admitted` on claim), and neither fires
+/// when the running loop merely answers the burst it is already carrying. So a
+/// steer refused by [`try_inject_steering`]'s `pending >= max_pending` branch —
+/// which this module documents as "the queue redelivers once the burst
+/// drains" — actually waited out `wake_fallback_secs` (30 s by default). That
+/// tick is the missed-signal safety net, not the mechanism; this is the
+/// mechanism.
+///
+/// Called from the gateway's one "an event was appended" seam
+/// (`session_projector::MessageProjector`'s observer), so it covers every
+/// producer of an assistant turn — harness run, fast path, simple engine —
+/// rather than whichever one happened to be in view.
+pub(crate) fn wake_lane_if_burst_drained(session_key: &str, event: &SessionEvent) {
+    if drains_steering_burst(event) {
+        crate::gateway::busy_queue::notify_burst_drained(session_key);
+    }
+}
+
+/// Refuse a steer because the running loop's un-consumed burst is at the cap,
+/// telling the lane *why* on the way out. Always returns `false` — the
+/// "deferred to the busy queue" answer [`try_inject_steering`] gives its
+/// caller.
+///
+/// Split out of that branch so the mark is reachable from a test: the branch
+/// itself sits behind a live `Orchestrator` and a real session read, and a wake
+/// edge whose producer is only exercised in production is how the first version
+/// of this shipped without one at all.
+///
+/// A request that never took a ticket (loop tick, goal continuation, delegated
+/// child, the OpenAI-compat surface) matches nothing in the lane and the mark
+/// is a no-op — the same fail-open posture as `busy_queue::waiting_since`.
+fn defer_for_backpressure(session_key: &str, run_id: &str, pending: usize, cap: usize) -> bool {
+    crate::gateway::busy_queue::mark_awaiting_burst_drain(session_key, run_id);
+    tracing::warn!(
+        session = %session_key,
+        pending,
+        cap,
+        "mid-loop steering: pending burst at cap; deferring to busy-queue backpressure",
+    );
+    false
 }
 
 /// How far back [`read_steering_events`] reads before falling back to the whole
@@ -537,13 +597,12 @@ pub(super) async fn try_inject_steering(
     // busy wait lane redelivers once the loop drains the burst or goes idle —
     // backpressure against a flooding channel, not a drop.
     if pending >= max_pending {
-        tracing::warn!(
-            session = %request.session_key.to_key_string(),
+        return defer_for_backpressure(
+            &request.session_key.to_key_string(),
+            new_run_id,
             pending,
-            cap = max_pending,
-            "mid-loop steering: pending burst at cap; deferring to busy-queue backpressure",
+            max_pending,
         );
-        return false;
     }
 
     // If this session is driving a scratchpad execution list, tell the model to
@@ -1006,6 +1065,70 @@ mod tests {
             rec_user("auto", true),
         ];
         assert_eq!(count_pending_steering(&events), 0);
+    }
+
+    /// The wake edge's predicate and the count it exists to reset have to agree.
+    /// Deliberately not a second `matches!` (that would restate
+    /// `drains_steering_burst`, and restatements agree with anything): build a
+    /// real burst, append the event the predicate calls a drain, and assert the
+    /// COUNT goes to zero. Move `count_pending_steering`'s boundary — to a
+    /// prompt watermark, say — without moving the predicate and this fails.
+    #[test]
+    fn the_drain_predicate_agrees_with_the_count_it_resets() {
+        let mut events = vec![rec_user("task", false), rec_assistant("turn-1")];
+        for i in 0..3 {
+            events.push(rec_user(&format!("steer-{i}"), false));
+        }
+        assert_eq!(count_pending_steering(&events), 3);
+
+        let drain = rec_assistant("turn-2");
+        assert!(drains_steering_burst(&drain.event));
+        events.push(drain);
+        assert_eq!(
+            count_pending_steering(&events),
+            0,
+            "the event the wake edge fires on must be the one that empties the burst"
+        );
+
+        // The counter-example, so a predicate that answered `true` for
+        // everything (waking the lane on every tool output) fails here too.
+        let not_a_drain = rec_user("steer-4", false);
+        assert!(!drains_steering_burst(&not_a_drain.event));
+        events.push(not_a_drain);
+        assert_eq!(count_pending_steering(&events), 1);
+    }
+
+    /// The producer half of that edge. `try_inject_steering`'s cap branch is
+    /// unreachable without a live `Orchestrator`, so the mark it leaves behind
+    /// is asserted through the helper it delegates to — and asserted by its
+    /// EFFECT: the lane wakes a waiter it would otherwise ignore. Drop the
+    /// `mark_awaiting_burst_drain` call and this goes red.
+    #[tokio::test]
+    async fn a_backpressure_defer_marks_the_ticket_the_drain_edge_looks_for() {
+        use crate::gateway::busy_queue;
+        let key = "steer-test-defer-marks";
+        let ticket = busy_queue::register(key, 8, "steer-defer-run").expect("lane accepts it");
+        let wake = ticket.wake_handle();
+        let parked = wake.notified();
+        tokio::pin!(parked);
+
+        // Unmarked, the drain edge deliberately ignores this lane.
+        busy_queue::notify_burst_drained(key);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "a lane with no backpressured waiter must not wake on an assistant turn"
+        );
+
+        assert!(
+            !defer_for_backpressure(key, "steer-defer-run", 16, 16),
+            "deferring must report `not injected` to try_inject_steering"
+        );
+        busy_queue::notify_burst_drained(key);
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut parked)
+            .await
+            .expect("after the defer, the drained burst must wake the message it deferred");
     }
 
     #[test]
