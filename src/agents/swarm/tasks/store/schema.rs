@@ -119,14 +119,20 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_team_status ON coord_tasks(team_id, status);
         CREATE INDEX IF NOT EXISTS idx_coord_tasks_owner ON coord_tasks(owner);
-        // B6-03: index on coord_task_dependencies(depends_on). The edge
-        // table's only prior index is the implicit PK (task_id, depends_on),
-        // which by the leftmost-prefix rule cannot serve any lookup keyed on
-        // depends_on. Three production paths are keyed exactly that way:
-        //   * deps::get_dependents  WHERE depends_on = ?1
-        //   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
-        //     (runs on every task completion)
-        //   * FK child scan for delete_team_tasks (O(deleted_tasks × total_edges))
+        -- B6-03: index on coord_task_dependencies(depends_on). The edge
+        -- table's only prior index is the implicit PK (task_id, depends_on),
+        -- which by the leftmost-prefix rule cannot serve any lookup keyed on
+        -- depends_on. Three production paths are keyed exactly that way:
+        --   * deps::get_dependents  WHERE depends_on = ?1
+        --   * deps::get_newly_unblocked  JOIN ... WHERE d.depends_on = ?1
+        --     (runs on every task completion)
+        --   * FK child scan for delete_team_tasks (O(deleted_tasks x total_edges))
+        -- NOTE: `--`, not `//`. This is a SQL string, not Rust: `//` made
+        -- `execute_batch` fail with `near "/": syntax error` at the FIRST
+        -- statement, so the whole coord schema never ran and every
+        -- `CoordTaskStore::new` returned Err. Boot treats that as the
+        -- supported warn-and-continue degradation, so the coordination-task
+        -- subsystem went dark with no error a user could see.
         CREATE INDEX IF NOT EXISTS idx_coord_task_deps_depends_on
             ON coord_task_dependencies(depends_on);
         "#,
@@ -291,4 +297,36 @@ fn add_column_if_missing(
         conn.execute(&sql, []).map_err(db_err)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole schema has to apply to an empty database.
+    ///
+    /// `execute_batch` parses the entire literal, so ONE bad character in a
+    /// comment near the end kills the FIRST statement and nothing is created.
+    /// That is what a stray Rust-style `//` did (`near "/": syntax error`):
+    /// every `CoordTaskStore::new` returned `Err`, boot took its supported
+    /// warn-and-continue path, and the coordination-task subsystem went dark
+    /// with nothing a user could see — while the compiler was perfectly happy,
+    /// because the SQL is just a string to it.
+    ///
+    /// Cheap enough to keep forever: an in-memory connection and one call.
+    #[test]
+    fn the_schema_applies_to_an_empty_database() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        migrate(&conn).expect("the coord schema must apply cleanly");
+    }
+
+    /// Re-running it must be a no-op, not a second failure: `migrate` runs on
+    /// every open, and the ALTER-based column additions below the batch are
+    /// guarded by probes rather than by `IF NOT EXISTS`.
+    #[test]
+    fn the_schema_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        migrate(&conn).expect("first apply");
+        migrate(&conn).expect("second apply must be a no-op");
+    }
 }
