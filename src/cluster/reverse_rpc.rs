@@ -5,7 +5,7 @@
 //! request; has `result` / `error` = response), not by id — so reverse RPC ids
 //! and the client's own id space can overlap without routing conflicts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use crate::sync_primitives::{Arc, Mutex};
@@ -25,6 +25,14 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 pub struct PendingInvokes {
     counter: AtomicU64,
     waiters: Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>,
+    /// (B3-02) Set of ids this table has ever held, retained across
+    /// `cancel()` / `cancel_all()` so `remembered()` can distinguish "the
+    /// receiver was already dropped (we handled it)" from "we have never
+    /// heard of this id". Bounded by the `u64` counter wrap horizon (~584M
+    /// years at 1 register/ms), so this set grows unboundedly for the
+    /// lifetime of the connection; that is acceptable — `drop` on disconnect
+    /// releases it.
+    seen_ids: Mutex<HashSet<String>>,
 }
 
 impl PendingInvokes {
@@ -46,6 +54,13 @@ impl PendingInvokes {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), tx);
+        // (B3-02) Track every id we've ever handed out so a late response
+        // for an already-cancelled/receiver-dropped id can be distinguished
+        // from a never-seen id.
+        self.seen_ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone());
         (id, rx)
     }
 
@@ -82,6 +97,17 @@ impl PendingInvokes {
             .unwrap_or_else(|e| e.into_inner())
             .remove(id)
             .is_some()
+    }
+
+    /// (B3-02) Test whether this id has been registered at any point in the
+    /// table's lifetime. The inbound loop uses this to distinguish "we
+    /// remember this id but the receiver was already dropped (e.g. the
+    /// caller timed out)" from "we have never heard of this id". The first
+    /// is a known-handled response, the second is a routing bug worth a
+    /// warning. Cheap O(1) lookup; the table also retains an internal
+    /// `seen_ids` set so the answer survives `cancel()` / `cancel_all()`.
+    pub(crate) fn remembered(&self, id: &str) -> bool {
+        self.seen_ids.lock().unwrap_or_else(|e| e.into_inner()).contains(id)
     }
 
     /// Drop **all** waiters (used for connection disconnect cleanup). Returns the
