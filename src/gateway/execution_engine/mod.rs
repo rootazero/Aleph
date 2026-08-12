@@ -37,6 +37,7 @@ pub(crate) mod topic;
 mod trace_sink_adapter;
 mod turn_mode;
 mod turn_permissions;
+mod turn_plan_phase;
 mod turn_thinking;
 mod unattended_redacting_sink;
 

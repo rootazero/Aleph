@@ -140,6 +140,13 @@ fn resolve(paradigm: InteractionParadigm) -> ResolvedContext {
     ctx.approval_tier = Some(crate::config::types::policies::ExecTier::default());
     ctx.session_mode = Some(crate::config::types::policies::SessionMode::default());
     ctx.sandbox_summary = Some(fixed_sandbox_summary());
+    // Fifth field on the same rule, and the one that most looks like it could be
+    // skipped: `Building` renders nothing, so setting it here moves no ratchet.
+    // It is set anyway because the rule above is about what production DOES, not
+    // about what currently costs bytes — and because leaving it `None` would let
+    // a future edit start rendering something for the default phase with every
+    // guard in this file still green.
+    ctx.plan_phase = Some(crate::config::types::policies::PlanPhase::default());
     ctx
 }
 
@@ -792,6 +799,11 @@ fn stable_prefix_ignores_per_run_facts() {
             )],
             ..fixed_sandbox_summary()
         });
+        // The plan phase varies *inside* a run, not merely between runs: an
+        // approved handoff lifts the read-only floor mid-conversation. That is
+        // strictly more volatile than everything above it here, so it is the
+        // last field that could be allowed anywhere near the cacheable prefix.
+        shifted.plan_phase = Some(crate::config::types::policies::PlanPhase::Planning);
 
         let input_a = production_shaped(&config, &baseline);
         let input_b = production_shaped(&config, &shifted);

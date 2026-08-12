@@ -128,6 +128,17 @@ pub struct TurnEnvelope {
     /// tool surface was built with so the model knows which families are
     /// deferred behind `tool_search` instead of learning it from failed calls.
     pub session_mode: Option<crate::config::types::policies::SessionMode>,
+    /// Whether this turn runs under the read-only planning floor — the third
+    /// half of the operating envelope, rendered by `OperatingEnvelopeLayer` as
+    /// `Plan phase:`.
+    ///
+    /// `None` on dispatch paths that resolve no per-turn facts, and
+    /// `Some(Building)` renders nothing either, so only a genuinely planning
+    /// turn spends a byte. Carries the phase the FLOOR will enforce — resolved
+    /// by the gateway and read live off the run's `PlanGate` — because the one
+    /// unforgivable failure for this line is promising a regime the gate does
+    /// not apply.
+    pub plan_phase: Option<crate::config::types::policies::PlanPhase>,
     /// The run's **effective** working directory: the project override when the
     /// user picked one, else the agent's `~/.aleph/workspaces/{id}`.
     ///
@@ -221,6 +232,7 @@ impl TurnEnvelope {
     pub fn is_empty(&self) -> bool {
         self.exec_tier.is_none()
             && self.session_mode.is_none()
+            && self.plan_phase.is_none()
             && self.cwd.is_none()
             && self.serving_model.is_none()
             && self.parent.is_none()
@@ -330,6 +342,15 @@ pub struct ResolvedContext {
     /// (request pill > session > global). `None` on internal / subagent
     /// dispatch, keeping their prompt byte-identical.
     pub session_mode: Option<crate::config::types::policies::SessionMode>,
+    /// The read-only planning floor, when this turn runs under it. Rendered by
+    /// `OperatingEnvelopeLayer` (priority 1758, Dynamic) as `Plan phase:`,
+    /// next to the approval and usage-mode lines it belongs beside. Filled in
+    /// the harness bridge from the turn's resolved
+    /// [`PlanPhase`](crate::config::types::policies::PlanPhase). `None` — and
+    /// `Some(Building)`, which is what an ordinary session resolves to — emits
+    /// nothing, keeping the prompt byte-identical for everyone who never asked
+    /// to plan.
+    pub plan_phase: Option<crate::config::types::policies::PlanPhase>,
     /// Sub-agent dispatch ONLY: the parent session that spawned this run.
     /// Rendered by `RuntimeContextLayer` (priority 1720, Dynamic) as a
     /// nested `<parent kind="…">…</parent>` element inside the
@@ -380,6 +401,7 @@ impl ContextAggregator {
             voice_vocabulary: None,
             approval_tier: None,
             session_mode: None,
+            plan_phase: None,
             envelope_parent: None,
             run_id: None,
         }

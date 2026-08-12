@@ -274,6 +274,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // only — schema-resident core set + deferred families — never
         // permissions; `Work` is the identity partition.
         let session_mode = self.resolve_turn_mode(request).await;
+        // This turn's plan phase. Unlike the three knobs above it has no global
+        // rung: an unstamped session is `Building`, which is what every session
+        // that never asked to plan already is. `Planning` mints the run's live
+        // latch, which is shared by BOTH tool services below — the parent's and
+        // the one children inherit — so a subagent is not a second, unlatched
+        // way to write, and one approval lifts the floor for both.
+        let plan_phase = self.resolve_turn_plan_phase(request).await;
+        let plan_gate = plan_phase.is_planning().then(|| {
+            let sink: Option<Arc<dyn crate::tools::scoped::PlanPhaseSink>> =
+                self.session_manager.as_ref().map(|store| {
+                    Arc::new(super::super::turn_plan_phase::PlanPhaseWriter::new(
+                        Arc::clone(store),
+                        request.session_key.clone(),
+                    )) as Arc<dyn crate::tools::scoped::PlanPhaseSink>
+                });
+            Arc::new(crate::tools::scoped::PlanGate::planning(sink))
+        });
         // Mode-effective schema-resident core set, fed to both
         // `build_request_tool_service` call sites and the SchemaLookupTool
         // registration gate below. Work returns the configured set unchanged.
@@ -934,6 +951,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     self.config.truncate_tool_descriptions,
                     deferred.clone(),
                     self.tool_health.clone(),
+                    // The SAME `Arc` the parent service gets below, on purpose:
+                    // a child that could write while the parent is planning
+                    // would be "two steps, each legal, together equivalent" —
+                    // the shape this repo's criteria list warns about — and a
+                    // child still locked after the parent's approval would
+                    // strand delegated work at the moment it becomes wanted.
+                    plan_gate.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -1207,6 +1231,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 self.config.truncate_tool_descriptions,
                 deferred.clone(),
                 self.tool_health.clone(),
+                // Cloned, not moved: this whole block is a retry loop, and the
+                // latch has to outlive an attempt. A gate rebuilt per attempt
+                // would silently re-engage the floor after an approval that
+                // already happened.
+                plan_gate.clone(),
             );
 
             // Legacy backfill: a session with `messages` rows but no
@@ -1340,6 +1369,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 envelope: crate::thinker::TurnEnvelope {
                     exec_tier: Some(exec_tier),
                     session_mode: Some(session_mode),
+                    //   - `plan_phase` is read back off the run's own gate, not
+                    //     off the `plan_phase` variable resolved at run start.
+                    //     They differ by exactly one event — an approved handoff
+                    //     earlier in this run — and on a retry attempt after one,
+                    //     the variable would re-assert a floor the gate has
+                    //     already lifted. `Building` renders nothing either way.
+                    plan_phase: Some(plan_gate.as_ref().map_or(plan_phase, |g| g.phase())),
                     // rust-doctor-disable-next-line excessive-clone
                     cwd: Some(effective_workspace.clone()),
                     //   - `serving_model` is NOT resolvable here: which model

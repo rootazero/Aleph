@@ -641,6 +641,15 @@ pub struct ChatState {
     /// composer's mode pill owns reads/writes. Session-scoped → rides along
     /// in [`SessionSnapshot`].
     pub session_mode: RwSignal<Option<String>>,
+    /// Whether this session is in the read-only planning phase (`Some("planning")`).
+    /// `None` — the overwhelming majority — means building.
+    ///
+    /// Unlike the two dials above, this one is **written by the server without
+    /// a request from us**: an approved plan handoff clears it mid-run. So the
+    /// composer must treat it as a mirror to be refreshed, never as a preference
+    /// to re-assert; the sidebar's session-list Effect writes it back exactly
+    /// like it does the mode. Session-scoped → rides along in [`SessionSnapshot`].
+    pub session_plan_phase: RwSignal<Option<String>>,
     /// The global `[policies] mode` default, mirrored from
     /// `config.get_tool_permissions` by the mode pill's fetch. Lets the
     /// right-rail mode dispatch (`events.rs`) resolve the EFFECTIVE mode for
@@ -718,6 +727,7 @@ impl ChatState {
             run_costs: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
             session_mode: RwSignal::new(None),
+            session_plan_phase: RwSignal::new(None),
             global_mode: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
@@ -1557,6 +1567,7 @@ impl ChatState {
         // one until the user picks otherwise.
         self.session_exec_tier.set(None);
         self.session_mode.set(None);
+        self.session_plan_phase.set(None);
     }
 
     /// Reset only the per-session state that [`SessionSnapshot`] does *not*
@@ -1608,6 +1619,7 @@ impl ChatState {
         self.run_costs.set(std::collections::HashMap::new());
         self.session_exec_tier.set(None);
         self.session_mode.set(None);
+        self.session_plan_phase.set(None);
         // agent_id is intentionally preserved
     }
 
@@ -1643,6 +1655,7 @@ impl ChatState {
             run_costs: self.run_costs.get_untracked(),
             session_exec_tier: self.session_exec_tier.get_untracked(),
             session_mode: self.session_mode.get_untracked(),
+            session_plan_phase: self.session_plan_phase.get_untracked(),
             plan: self.plan.get_untracked(),
         }
     }
@@ -1676,6 +1689,7 @@ impl ChatState {
         self.run_costs.set(snap.run_costs);
         self.session_exec_tier.set(snap.session_exec_tier);
         self.session_mode.set(snap.session_mode);
+        self.session_plan_phase.set(snap.session_plan_phase);
         self.next_msg_id.set(snap.next_msg_id);
         // Carried in the snapshot so the occupancy gauge survives a tab swap
         // (None for a fresh/empty tab, which correctly hides the gauge).
@@ -1733,6 +1747,11 @@ pub struct SessionSnapshot {
     /// Per-session usage-mode override (mode pill) — same carrier contract as
     /// `session_exec_tier`.
     pub session_mode: Option<String>,
+    /// Whether this session is in the read-only planning phase — same carrier
+    /// contract as the two above, and the one the user notices immediately if
+    /// it is dropped across a tab swap (the composer would look ordinary while
+    /// every mutating tool is still refused).
+    pub session_plan_phase: Option<String>,
     /// The session's live execution list, so the Todo strip survives a tab
     /// swap the same way the context gauge and per-run costs do.
     pub plan: Option<PlanView>,

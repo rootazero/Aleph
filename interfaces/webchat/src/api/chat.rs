@@ -195,6 +195,7 @@ impl ChatApi {
         model_override: Option<&crate::api::providers::ModelOverride>,
         exec_tier: Option<&str>,
         mode: Option<&str>,
+        plan_phase: Option<&str>,
         voice_input: bool,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
@@ -225,6 +226,12 @@ impl ChatApi {
             "exec_tier": exec_tier,
             // Same first-message carriage for the usage mode (mode pill).
             "mode": mode,
+            // And for the read-only planning phase — first message only, and
+            // for a stronger reason than the mode's: an approved handoff writes
+            // `building` onto the session server-side, so re-sending a cached
+            // `planning` would undo the user's own approval. Single source for
+            // that rule: `shared_ui_logic::state::session_dials_for_send`.
+            "plan_phase": plan_phase,
             "voice_input": voice_input,
         });
         let result = state.rpc_call("chat.send", params).await?;

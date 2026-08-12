@@ -193,6 +193,8 @@ explicit `[policies.tool_permissions]` entry names the tool.
 ### The lattice (who wins)
 
 ```
+read-only PLANNING FLOOR                     (PlanPhase::hides — above everything)
+        ↓  (the session is not planning, the overwhelming default)
 explicit [policies.tool_permissions] entry   (exact name > glob)
         ↓  (nothing named this tool)
 configured `default`   TIGHTENED BY   the tier's verdict
@@ -215,12 +217,29 @@ permissive tier. The variant doc on `ExecTier::Full` and the model-facing
 `approval_prompt_line` both used to say "nothing pauses for confirmation", which
 was the same statement told three times and false in all three.
 
-`effective_permission(permissions, tier, facts)` is the **only** place this
+⚠️ **The top row is a floor, not a default — and that is why it sits above the
+explicit entry.** Every other rule in this lattice answers "what did somebody
+configure"; the read-only planning phase answers "the user asked to read a plan
+before anything changes", and a promise a single `"bash" = "allow"` can hollow
+out is not one. It is the same kind of statement as the `[sandbox.command_policy]`
+hardline at the bottom, applied from the other end. Full contract, including why
+the phase is neither a fourth `SessionMode` nor a fourth `ExecTier`, in
+[PLAN_HANDOFF.md](PLAN_HANDOFF.md).
+
+The phase is also the only thing in this lattice that can move **inside** a run:
+an approved plan handoff (`GateRule::PlanHandoff` → an approval card that offers
+`once_only` to everyone, operator included) lifts the floor for the rest of that
+run. Nothing else here is live; the tier and the merged policy are resolved once
+at run start.
+
+`effective_permission(permissions, tier, phase, facts)` is the **only** place this
 precedence exists. Both consumers — `ScopedToolService::permission_for` (the
 loop) and the gateway slash-command fast path — call it, so the two surfaces
-cannot drift apart. Consulting the tier *before* the default (the pre-2026-07-14
-shape) inverted a `default = "deny"` install into ask-by-default for exactly the
-tools the tier meant to guard.
+cannot drift apart. `phase` is a **required parameter**, not an `Option` with a
+benign default: of the two call sites one is a fast path, and the history of this
+function is the history of a fast path missing a gate the loop had. Consulting the
+tier *before* the default (the pre-2026-07-14 shape) inverted a `default = "deny"`
+install into ask-by-default for exactly the tools the tier meant to guard.
 
 ### The rules read declared metadata, never the tool's name
 

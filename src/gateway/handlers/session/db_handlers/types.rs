@@ -73,6 +73,16 @@ pub struct SessionInfo {
     /// session reselect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Plan phase (`identity_meta.custom["plan_phase"]`). `None` ⇒ `building`,
+    /// which is where every session that never asked to plan already is — so
+    /// absent and `"building"` mean the same thing, and only the interesting
+    /// value is ever on the wire.
+    ///
+    /// A client MUST read this back rather than remembering what it sent: an
+    /// approved handoff writes `building` onto the session from the server
+    /// side, mid-conversation, with no request of the client's involved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_phase: Option<String>,
 }
 
 /// Session history message.

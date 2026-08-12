@@ -35,6 +35,23 @@ pub enum ScratchpadAction {
     AppendNote,
     /// Clear and reset the scratchpad
     Clear,
+    // The doc comment below is deliberately one line: `schemars` ships it in
+    // this tool's schema, and `scratchpad` is schema-resident in every mode, so
+    // prose here is prose on every request forever. The rest of the contract —
+    // when to call it, what happens on approval, what happens on refusal —
+    // reaches the model only while it is TRUE, through
+    // `PlanPhase::prompt_line`, which renders nothing in an ordinary session.
+    // (R9's first ruler: a runtime fact belongs where it is a fact.)
+    //
+    // Mechanically this is not an ordinary action: `ScopedToolService`
+    // intercepts it before dispatch (`GateRule::PlanHandoff`), raises the
+    // approval card, and lets this arm run only after the person says yes — by
+    // which point the read-only floor is already lifted. Outside the planning
+    // phase it is a no-op that says so rather than an error, because a model
+    // that reaches for it in an ordinary session made a harmless category
+    // mistake and an error would invite a retry loop.
+    /// Ask the user to approve the finished plan and unlock execution.
+    RequestBuild,
 }
 
 impl std::fmt::Display for ScratchpadAction {
@@ -48,6 +65,17 @@ impl std::fmt::Display for ScratchpadAction {
             Self::CompleteItem => write!(f, "complete_item"),
             Self::AppendNote => write!(f, "append_note"),
             Self::Clear => write!(f, "clear"),
+            // Spelled from the shared constant rather than a second literal:
+            // the permission floor matches on this exact string to recognise
+            // the handoff, and two spellings of one verb is the whole class of
+            // bug this repo keeps re-finding.
+            Self::RequestBuild => {
+                write!(
+                    f,
+                    "{}",
+                    crate::config::types::policies::plan_phase::HANDOFF_ACTION
+                )
+            }
         }
     }
 }
@@ -569,6 +597,36 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress: None,
                     snapshot: None,
+                })
+            }
+
+            ScratchpadAction::RequestBuild => {
+                // Reaching this arm means one of two things, and they are told
+                // apart by the phase — not by anything this tool did. Either
+                // the person approved (the floor is already lifted; the
+                // dispatch layer appends the "execution is unlocked" line to
+                // this result), or the session was never planning and this call
+                // is a category mistake. The plan itself is echoed either way,
+                // because that is the thing the next turn has to work from.
+                let planning = crate::tools::turn_context::current_plan_phase().is_planning();
+                let snapshot = plan_snapshot(&manager).await;
+                let message = if planning {
+                    // Belt and braces: the floor should have lifted before this
+                    // arm ran. If it did not, say nothing that implies it did.
+                    "Plan submitted. The session is still in the read-only planning phase — \
+                     wait for the user."
+                        .to_string()
+                } else {
+                    "The session is not in the read-only planning phase, so there is nothing \
+                     to hand off; you may already act. Work the plan one step at a time."
+                        .to_string()
+                };
+                Ok(ScratchpadOutput {
+                    success: true,
+                    message,
+                    content: Some(manager.read().await.unwrap_or_default()),
+                    progress: None,
+                    snapshot,
                 })
             }
         }

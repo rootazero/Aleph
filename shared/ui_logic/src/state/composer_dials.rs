@@ -13,23 +13,53 @@
 //!   value out-ranks the store — silently reverting a `session_set_mode` the
 //!   model made mid-conversation. Once a session row exists it is authoritative.
 //!
+//! * The **plan phase** follows the mode's rule and needs it more than the mode
+//!   does. An approved plan handoff writes `building` onto the session from the
+//!   *server* side, mid-conversation, with no request of the client's involved —
+//!   so a composer that re-asserted its cached `planning` on the next message
+//!   would undo the approval it had just watched the user give, and the read-only
+//!   floor would snap back on with the work half done. Live sessions therefore
+//!   carry nothing and read the phase back from the session row.
+//!
 //! Lives here because two composers (wide and phone) have to agree on it and
 //! neither can be host-tested through Leptos. The phone composer used to carry
 //! neither dial at all — it passed `None` for both — so a phone user could not
 //! arm a tier or a mode for the one turn the pickers exist for.
 
-/// The `(exec_tier, session_mode)` pair a send should carry, given the pills'
+/// What a send carries for the three per-session dials, given the pills'
 /// current values and whether the conversation already has a session row.
 ///
-/// `session_exists` is `session_key.is_some()`.
+/// A struct rather than a tuple from three onwards: `(Option<String>,
+/// Option<String>, Option<String>)` is three identical types in a row, and the
+/// call sites that destructure it are in two crates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SendDials {
+    /// Re-armed on every send: a session row does not out-rank the pill.
+    pub exec_tier: Option<String>,
+    /// First send only — the store is authoritative once it exists.
+    pub session_mode: Option<String>,
+    /// First send only, for a stronger reason than the mode's. See the module
+    /// doc.
+    pub plan_phase: Option<String>,
+}
+
+/// The dials a send should carry. `session_exists` is `session_key.is_some()`.
 #[must_use]
 pub fn session_dials_for_send(
     session_exists: bool,
     pill_tier: Option<String>,
     pill_mode: Option<String>,
-) -> (Option<String>, Option<String>) {
-    let mode = if session_exists { None } else { pill_mode };
-    (pill_tier, mode)
+    pill_plan_phase: Option<String>,
+) -> SendDials {
+    SendDials {
+        exec_tier: pill_tier,
+        session_mode: if session_exists { None } else { pill_mode },
+        plan_phase: if session_exists {
+            None
+        } else {
+            pill_plan_phase
+        },
+    }
 }
 
 #[cfg(test)]
@@ -41,34 +71,51 @@ mod tests {
     }
 
     #[test]
-    fn first_send_carries_both_dials() {
-        // No session row yet: this is the only chance either pill has to
-        // govern the turn it was armed for.
-        let (tier, mode) = session_dials_for_send(false, s("full"), s("code"));
-        assert_eq!(tier.as_deref(), Some("full"));
-        assert_eq!(mode.as_deref(), Some("code"));
+    fn first_send_carries_every_dial() {
+        // No session row yet: this is the only chance any pill has to govern
+        // the turn it was armed for.
+        let d = session_dials_for_send(false, s("full"), s("code"), s("planning"));
+        assert_eq!(d.exec_tier.as_deref(), Some("full"));
+        assert_eq!(d.session_mode.as_deref(), Some("code"));
+        assert_eq!(d.plan_phase.as_deref(), Some("planning"));
     }
 
     #[test]
     fn a_live_session_still_carries_the_tier() {
         // The tier is re-armed per send; a session row does not out-rank it.
-        let (tier, _) = session_dials_for_send(true, s("ask"), None);
-        assert_eq!(tier.as_deref(), Some("ask"));
+        let d = session_dials_for_send(true, s("ask"), None, None);
+        assert_eq!(d.exec_tier.as_deref(), Some("ask"));
     }
 
     #[test]
     fn a_live_session_drops_the_mode() {
         // The store is authoritative once it exists — re-sending the pill's
         // cached mode would revert a mid-conversation `session_set_mode`.
-        let (_, mode) = session_dials_for_send(true, None, s("chat"));
-        assert_eq!(mode, None);
+        let d = session_dials_for_send(true, None, s("chat"), None);
+        assert_eq!(d.session_mode, None);
+    }
+
+    #[test]
+    fn a_live_session_drops_the_plan_phase() {
+        // The one that matters most: an approved handoff writes `building` on
+        // the server. A composer re-asserting its cached `planning` here would
+        // undo the approval the user just gave and re-engage the read-only
+        // floor with the work half done.
+        let d = session_dials_for_send(true, None, None, s("planning"));
+        assert_eq!(d.plan_phase, None);
     }
 
     #[test]
     fn follow_global_carries_nothing() {
-        // Both pills on "follow global" = no override to carry, on either
-        // side of the session boundary.
-        assert_eq!(session_dials_for_send(false, None, None), (None, None));
-        assert_eq!(session_dials_for_send(true, None, None), (None, None));
+        // Every pill on "follow global" = no override to carry, on either side
+        // of the session boundary.
+        assert_eq!(
+            session_dials_for_send(false, None, None, None),
+            SendDials::default()
+        );
+        assert_eq!(
+            session_dials_for_send(true, None, None, None),
+            SendDials::default()
+        );
     }
 }

@@ -100,6 +100,21 @@ pub struct AgentRunParams {
     /// surface (schema-resident vs deferred), never permissions.
     #[serde(default)]
     pub mode: Option<String>,
+    /// Plan phase (`"planning"` / `"building"`) chosen in the composer.
+    ///
+    /// Rides the request for the same reason `exec_tier` and `mode` do: a
+    /// brand-new conversation has no session to write to, and "plan this before
+    /// you touch anything" is a thing people say in their FIRST message.
+    ///
+    /// Unlike those two it has no global default to fall back to — an unstamped
+    /// session is `building` — so omitting it is not a choice, it is the absence
+    /// of one, and the session's stored phase survives untouched. **Clients must
+    /// send it only when the user just changed it**, never as a cached value on
+    /// every message: an approved handoff writes `building` onto the session,
+    /// and a client re-asserting a stale `planning` on the next message would
+    /// undo the approval it just watched happen.
+    #[serde(default)]
+    pub plan_phase: Option<String>,
     /// Marks this run's user input as ASR-transcribed speech (the Panel voice
     /// loop). Wires the session voice-mode registry so `VoiceModeLayer`
     /// injects spoken-reply guidance into this turn's prompt, and applies the
@@ -846,6 +861,19 @@ pub async fn build_run_request(
         );
     }
 
+    // Composer-chosen plan phase. Same fail-loud contract as the two above, and
+    // here the direction of a silent fallback is the worst of the three: an
+    // unknown id would drop the user into `building` — the phase they were
+    // explicitly asking not to be in — with the composer showing "planning".
+    if let Some(raw) = params.plan_phase.as_deref() {
+        let phase = crate::config::types::policies::PlanPhase::from_id(raw)
+            .ok_or_else(|| format!("unknown plan_phase: {raw}"))?;
+        metadata.insert(
+            crate::config::types::policies::PLAN_PHASE_SESSION_KEY.to_string(),
+            phase.id().to_string(),
+        );
+    }
+
     // Caller-chosen thinking depth. The exact same argument as exec_tier above:
     // a caller who asks for `xhigh` and silently gets the default is paying for
     // one thing and receiving another — and reasoning tokens bill at the OUTPUT
@@ -1253,6 +1281,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -1296,6 +1325,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: true,
             project_id: None,
         };
@@ -1320,6 +1350,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -1391,6 +1422,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -1491,6 +1523,7 @@ mod tests {
             }),
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -1555,6 +1588,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         }
@@ -1631,6 +1665,7 @@ mod tests {
         let session_key = AgentRouter::new().route(None, None, None, None).await;
         let params = AgentRunParams {
             mode: Some("code".to_string()),
+            plan_phase: None,
             ..base_params()
         };
 
@@ -1659,6 +1694,7 @@ mod tests {
         let session_key = AgentRouter::new().route(None, None, None, None).await;
         let params = AgentRunParams {
             mode: Some("game".to_string()),
+            plan_phase: None,
             ..base_params()
         };
 
@@ -1699,6 +1735,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -1733,6 +1770,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -1767,6 +1805,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -1804,6 +1843,7 @@ mod tests {
             model_override: None,
             exec_tier: None,
             mode: None,
+            plan_phase: None,
             voice_input: false,
             project_id: None,
         };
@@ -2332,6 +2372,7 @@ mod tests {
                 model_override: None,
                 exec_tier: None,
                 mode: None,
+                plan_phase: None,
                 voice_input,
                 project_id: None,
             }
@@ -2441,6 +2482,7 @@ mod tests {
                 model_override: None,
                 exec_tier: None,
                 mode: None,
+                plan_phase: None,
                 voice_input: false,
                 project_id: project_id.map(str::to_string),
             }
@@ -2745,6 +2787,7 @@ mod tests {
                 model_override: None,
                 exec_tier: None,
                 mode: None,
+                plan_phase: None,
                 voice_input: false,
                 project_id: None,
             }

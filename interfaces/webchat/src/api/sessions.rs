@@ -41,6 +41,26 @@ pub async fn set_session_mode(
     Ok(())
 }
 
+/// Enter or leave the read-only planning phase for a session.
+///
+/// `true` stores `"planning"`; `false` writes a JSON null, which is how a user
+/// leaves planning **without** approving a plan (the approval path clears it
+/// server-side instead, from inside the run that asked). Takes effect on the
+/// next turn — the floor a run is already under was fixed when that run started,
+/// and only an approved handoff lifts it mid-run.
+pub async fn set_plan_phase(
+    state: &DashboardState,
+    session_key: &str,
+    planning: bool,
+) -> Result<(), String> {
+    let params = serde_json::json!({
+        "session_key": session_key,
+        "metadata": { "plan_phase": if planning { Some("planning") } else { None } },
+    });
+    state.rpc_call("sessions.patch", params).await?;
+    Ok(())
+}
+
 /// Persist (or clear) the project working directory bound to a session.
 /// `Some(path)` stores it; `None` reverts to the default agent workspace.
 /// Persists server-side (cross-device, R6) so the Panel can restore the active

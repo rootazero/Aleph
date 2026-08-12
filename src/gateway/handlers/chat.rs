@@ -72,6 +72,12 @@ pub struct SendParams {
     /// first-message carriage as `exec_tier` — see [`AgentRunParams::mode`].
     #[serde(default)]
     pub mode: Option<String>,
+    /// Plan phase (`"planning"` / `"building"`) picked in the composer. Same
+    /// first-message carriage as `exec_tier`, and one extra rule of its own —
+    /// see [`AgentRunParams::plan_phase`]: send it only when the user just
+    /// changed it, never as a cached value on every message.
+    #[serde(default)]
+    pub plan_phase: Option<String>,
     /// True when this message is an ASR-transcribed spoken utterance (the
     /// Panel voice loop). Forwarded to [`AgentRunParams::voice_input`] so the
     /// session gets the voice-mode prompt layer and the `[voice]` model pin.
@@ -257,6 +263,7 @@ pub async fn handle_send(
         model_override: params.model_override,
         exec_tier: params.exec_tier,
         mode: params.mode,
+        plan_phase: params.plan_phase,
         voice_input: params.voice_input,
         project_id: params.project_id,
     };

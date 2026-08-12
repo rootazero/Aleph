@@ -316,7 +316,12 @@
     "team_roster_done": "Done",
     "team_roster_error": "Error",
     "team_tasks_title": "Team Tasks",
-    "team_unread": "New messages"
+    "team_unread": "New messages",
+    "plan_phase": {
+      "label": "Plan",
+      "hint": "Read-only planning: research and write a plan; nothing is changed until you approve it.",
+      "banner": "Tools that change anything are refused. The agent will ask you to approve its plan before any work starts."
+    }
   },
   "memory": {
     "title": "Memory Vault",

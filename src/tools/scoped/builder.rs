@@ -47,6 +47,8 @@ impl ScopedToolService {
             tool_permissions: None,
             exec_tier: None,
             unattended: false,
+            plan_gate: None,
+            plan_gate_released_seen: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -77,6 +79,16 @@ impl ScopedToolService {
     #[must_use]
     pub fn with_unattended(mut self, unattended: bool) -> Self {
         self.unattended = unattended;
+        self
+    }
+
+    /// Attach the live read-only planning latch. Call this ONLY for a run that
+    /// starts in [`PlanPhase::Planning`](crate::config::types::policies::PlanPhase);
+    /// leaving it `None` is what makes the floor cost nothing for every other
+    /// run in the process.
+    #[must_use]
+    pub fn with_plan_gate(mut self, gate: Arc<super::PlanGate>) -> Self {
+        self.plan_gate = Some(gate);
         self
     }
 
@@ -235,8 +247,24 @@ impl ScopedToolService {
         crate::config::types::policies::effective_permission(
             self.tool_permissions.as_ref(),
             self.exec_tier,
+            self.plan_phase(),
             self.tool_facts(name),
         )
+    }
+
+    /// The plan phase this service currently imposes.
+    ///
+    /// Read live rather than snapshotted: an approved handoff flips the latch
+    /// mid-run, and every consumer of this answer — the tool surface, the
+    /// permission chokepoint, the dispatch floor — must see the same value at
+    /// the same moment. `None` gate = [`PlanPhase::Building`], the default that
+    /// adds no rule.
+    pub(super) fn plan_phase(&self) -> crate::config::types::policies::PlanPhase {
+        self.plan_gate
+            .as_ref()
+            .map_or(crate::config::types::policies::PlanPhase::Building, |g| {
+                g.phase()
+            })
     }
 
     /// The permission an override entry explicitly states for `name`, if any.

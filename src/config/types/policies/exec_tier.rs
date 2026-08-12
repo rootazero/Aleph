@@ -68,6 +68,17 @@ pub struct ToolFacts<'a> {
 /// are the serialized `FileOperation` variants (`src/builtin_tools/file_ops/types.rs`).
 const DESTRUCTIVE_FILE_OPS: &[&str] = &["delete", "move", "batch_move", "organize"];
 
+/// [`DESTRUCTIVE_FILE_OPS`], for the sibling module that answers the opposite
+/// question about the same argument
+/// ([`super::plan_phase`]'s read-only `file_ops` set). Exposed rather than
+/// duplicated: two hand-kept lists that must stay disjoint are two lists that
+/// will not, and the disjointness test needs to read this one to say so.
+#[cfg(test)]
+#[must_use]
+pub(super) const fn destructive_file_ops() -> &'static [&'static str] {
+    DESTRUCTIVE_FILE_OPS
+}
+
 /// Tools whose entire effect is to contact the human, and which therefore can
 /// never be gated behind contacting the human.
 ///
@@ -264,14 +275,29 @@ impl ExecTier {
     }
 }
 
-/// The effective permission for a tool: the operator's explicit decision, else
-/// their configured baseline TIGHTENED by the tier.
+/// The effective permission for a tool: the read-only planning floor, else the
+/// operator's explicit decision, else their configured baseline TIGHTENED by
+/// the tier.
 ///
 /// Precedence, most specific first:
+/// 0. the **planning floor** ([`PlanPhase::hides`]) — above everything, because
+///    it is the one rule whose promise ("nothing you do can change anything")
+///    an explicit `allow` must not be able to hollow out. It is a floor in the
+///    same sense as `[sandbox.command_policy]`'s hardline: not a default that
+///    something more specific overrides, but a ceiling on what anything more
+///    specific may grant. See [`super::plan_phase`] for why the phase is not a
+///    tier;
 /// 1. an **explicit** entry (exact name, then glob) in the merged
 ///    [`ToolPermissionsConfig`] — an operator who names a tool has decided;
 /// 2. the configured `default` (`Allow` when no policy is attached), tightened
 ///    by [`ExecTier::rule_for`] through the restrictiveness lattice.
+///
+/// `phase` is a REQUIRED parameter, not an `Option` with a benign default: the
+/// two call sites are the loop's enforcement chokepoint and the gateway's
+/// slash-command fast path, and the fast path has already once shipped with a
+/// gate the loop had (see this function's own "single composition point" note
+/// below). Making the compiler ask both of them the question is stronger than
+/// any note asking the next author to remember it.
 ///
 /// The tier only ever tightens, which is what [`ExecTier::rule_for`]'s contract
 /// promises: it yields at most `Ask`, and `restrictive_min` keeps a `Deny`
@@ -286,8 +312,12 @@ impl ExecTier {
 pub fn effective_permission(
     permissions: Option<&ToolPermissionsConfig>,
     tier: Option<ExecTier>,
+    phase: super::PlanPhase,
     facts: ToolFacts<'_>,
 ) -> PermissionAction {
+    if phase.hides(facts.name, facts.idempotent) {
+        return PermissionAction::Deny;
+    }
     if let Some(explicit) = permissions.and_then(|p| p.resolve_explicit(facts.name)) {
         return explicit;
     }
@@ -729,13 +759,23 @@ mod tests {
         };
         let merged = ToolPermissionsConfig::merge(&global, &ToolPermissionsConfig::default());
         assert_eq!(
-            effective_permission(Some(&merged), Some(ExecTier::Ask), builtin("bash")),
+            effective_permission(
+                Some(&merged),
+                Some(ExecTier::Ask),
+                crate::config::types::policies::PlanPhase::Building,
+                builtin("bash")
+            ),
             PermissionAction::Allow,
             "the operator named `bash` — the tier has nothing to say"
         );
         // An unnamed mutating tool is still tightened by the tier.
         assert_eq!(
-            effective_permission(Some(&merged), Some(ExecTier::Ask), builtin("file_write")),
+            effective_permission(
+                Some(&merged),
+                Some(ExecTier::Ask),
+                crate::config::types::policies::PlanPhase::Building,
+                builtin("file_write")
+            ),
             PermissionAction::Ask
         );
     }

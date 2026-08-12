@@ -53,6 +53,7 @@
 
 use serde_json::Value;
 
+use crate::config::types::policies::PlanAdmission;
 use crate::extension::PermissionAction;
 
 use super::ScopedToolService;
@@ -104,6 +105,17 @@ pub(super) enum GateRule<'a> {
     /// Nobody named this tool, and the execution tier raised the configured
     /// default to `ask` from the tool's DECLARED metadata (not from its name).
     TierRaised,
+    /// This call is the plan → build handoff: the session is in the read-only
+    /// planning phase and the model is asking the person to approve the plan
+    /// and unlock execution.
+    ///
+    /// Reported FIRST, ahead of even the declared floor, for the reason the
+    /// module doc gives: a reason must never mislead the reader about what
+    /// would change the outcome. Every other rule in this chain describes a
+    /// setting; this one describes a decision, and no setting reaches it. It is
+    /// also the only rule in the chain whose approval does something besides
+    /// let the call run — see `dispatch`'s handoff arm.
+    PlanHandoff,
 }
 
 impl GateRule<'_> {
@@ -121,6 +133,12 @@ impl GateRule<'_> {
             Self::DestructiveArguments => "destructive_arguments",
             Self::PolicyAsk { .. } => "policy_ask",
             Self::TierRaised => "tier_raised",
+            // One spelling, shared with the decision-set derivation that must
+            // refuse a standing grant on this rule's card
+            // (`exec::allowed_decisions::for_confirm_gate`): a plan is approved
+            // once, and "always approve my plans" is not a thing anyone can
+            // mean. A rename here is a compile error there.
+            Self::PlanHandoff => crate::exec::allowed_decisions::PLAN_HANDOFF_RULE,
         }
     }
 
@@ -169,6 +187,18 @@ impl GateRule<'_> {
                  itself read-only. Nothing in `[policies.tool_permissions]` names it, so \
                  the tier decides."
             ),
+            Self::PlanHandoff => {
+                // Deliberately does not mention `{tool}`: the reader is being
+                // asked about the PLAN, not about the scratchpad. Naming the
+                // mechanism here would invite "why is it asking me about a
+                // scratchpad", and the answer would be an implementation
+                // detail.
+                "The agent has finished planning and is asking to start work. \
+                 Approving lets it run the plan with the tools your current approval \
+                 mode allows; declining keeps the session read-only so you can keep \
+                 refining the plan together."
+                    .to_string()
+            }
         }
     }
 }
@@ -184,6 +214,14 @@ impl ScopedToolService {
         name: &str,
         input: &Value,
     ) -> Option<GateRule<'a>> {
+        // 0. The handoff. Ahead of everything because it is the only rule no
+        //    configuration participates in, and because its approval has an
+        //    effect the others do not (it lifts the read-only floor for the
+        //    rest of the run). `admits` returns `Handoff` only while the phase
+        //    is engaged, so this arm is unreachable in an ordinary session.
+        if self.plan_admission(name, input) == PlanAdmission::Handoff {
+            return Some(GateRule::PlanHandoff);
+        }
         // 1. The floor. Read independently of the tier and of any explicit
         //    `allow`, exactly as `check_confirmation_gate` has always read it.
         if self.inner.requires_confirmation(name) {
@@ -234,6 +272,14 @@ impl ScopedToolService {
                 .filter(|m| m.action == PermissionAction::Deny)
                 .map_or("default", |m| m.pattern),
         })
+    }
+
+    /// The read-only planning floor's verdict on this call, from the tool's own
+    /// declared idempotency — the same fact the tier rules read, through the
+    /// same seam ([`Self::tool_facts`]), so "mutating" means one thing here.
+    pub(super) fn plan_admission(&self, name: &str, input: &Value) -> PlanAdmission {
+        self.plan_phase()
+            .admits(name, input, self.tool_facts(name).idempotent)
     }
 
     /// The merged policy's explicit entry for `name`, if any — the borrow the

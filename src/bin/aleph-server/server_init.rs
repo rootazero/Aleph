@@ -428,6 +428,7 @@ where
         model_override: params.model_override,
         exec_tier: params.exec_tier,
         mode: params.mode,
+        plan_phase: params.plan_phase,
         voice_input: params.voice_input,
         project_id: params.project_id,
     };

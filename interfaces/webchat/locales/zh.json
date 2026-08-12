@@ -316,7 +316,12 @@
     "team_roster_done": "完成",
     "team_roster_error": "错误",
     "team_tasks_title": "团队任务",
-    "team_unread": "有新消息"
+    "team_unread": "有新消息",
+    "plan_phase": {
+      "label": "规划",
+      "hint": "只读规划：先调研、写计划，在你批准之前不改动任何东西。",
+      "banner": "会改动东西的工具都会被拒绝。Agent 会先请你批准计划，然后才开始动手。"
+    }
   },
   "memory": {
     "title": "记忆库",

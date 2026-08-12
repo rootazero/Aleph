@@ -344,6 +344,10 @@
 - **入参规范化要落在参数的解析处**（一个 `resolve_*` 边界），不是某个 handler —— 否则同一个模型对同一个分类得到互相矛盾的答案
 - **执行清单单一形状是 `shared/protocol/src/plan.rs::PlanSnapshot`** —— 分解 100% 归 LLM（R7），**不要新建 `todo` 工具**（Panel 按字面工具名 `"scratchpad"` 取数）→ §3.13
 - **执行档位唯一强制点是 `src/tools/scoped/`** —— 任何新的能执行工具的 surface（新 RPC / 快路径 / 后台产地）不经过它就自带旁路 → [SECURITY.md](docs/reference/SECURITY.md) §5.12
+- **一个「地板」如果排在 explicit 条目之下，它就不是地板，是默认值** —— `effective_permission` 让 explicit `[policies.tool_permissions]` 条目赢过 tier，这对 Ask/Auto/Full 完全正确（operator 点名了某个工具就是他决定了），对**只读规划相位**恰好完全错误：那条相位的全部承诺是「你做什么都改不了东西」，而一条 `"bash" = "allow"` 就能把它掏空。判据两句：① 写下一条新规则时先问**它是「更具体的东西可以覆盖」还是「更具体的东西也不许突破」**，后者要排在 explicit **之前**；② 让它成为那个函数的**必填参数**而不是带良性默认的 `Option`——两个调用点里总有一个是快路径，而快路径的历史就是「少一道循环有的闸」→ §3.16
+- **相位/阶段这类「本来就是要被离开的」状态，读取要 fail-OPEN，写入照旧 fail-loud** —— 与本仓大多数闸方向相反且是有意的：一个因为元数据里一个错字而永久只读、而**出口又在一张模型再也够不到的卡后面**的会话，比一个恢复干活的会话更糟。判据：问「这个状态被误读成'开'会怎样，被误读成'关'又会怎样」——两个方向不对称时，选那个还能自救的 → §3.16
+- **一次手势就该是一次手势** —— 「批准之后从下一条用户消息起生效」把一次批准变成两次操作。本仓有现成的失效机制可以让它当场生效（`ScopedToolService::cache_generation`，health 探针与 `tool_search` 晋升共用），所以规划相位的放行**在同一个 run 内**发生。顺序是**先写持久记录再动闩**，写失败就保持闩住并如实说明 → §3.16
+- **一条规则的第 N 份拷贝里，被忘记的总是你没在看的那一份** —— 「首条消息才载运」这条载运纪律在 Panel 有四个执行点（typed / queue-flush / 沉浸式 voice / 听写 voice），其中两个 voice 路径是手抄的；它们此前各自正确，而新增第三个 dial 时**正好会是被忘记的那两份**。判据：给一条已有 N 份实现的规则加一个新成员前，先把它收敛到单一源（`shared_ui_logic::state::session_dials_for_send`）→ §3.16
 - **「没有面画那个按钮」不是闸，它只是四个渲染器碰巧一致** —— 判据：**这个值在 wire 上收得下吗**？`allow-always` 从第一天起就是 `exec.approval.resolve` 接受的合法值，而"没有 surface 提供它"被当成了控制（`clamped()` 无条件降级是第三处答案，Panel 硬编码三按钮是第四处）。一个 RPC 客户端就绕过全部渲染器。修法是把「这张卡可以给哪几档」在**闸上算一次**（`exec::allowed_decisions::for_confirm_gate`，输入只有「哪条规则闸住的」和「发起者是不是 operator 档」）、随记录到达每个面、**回来时由 resolver 按同一份列表强制**；渲染器画得更少是安全方向，画得更多不再可能。⚠️ 配套一条：让「不提供某档」成为**编译期必须说出口的事**（`to_outcome_within(allowed)` 没有免参数版本），否则下一个 decision→outcome 调用点默认就是最宽的那档 → §5.12
 - **一句"任何配置都关不掉它"的卡片，不能同时提供一个能关掉它的按钮** —— 上一条的第二半，也是 §0「一句关于什么被闸住的话有三份拷贝」在**同一张卡**上的退化形式：`tool_declared` 那条规则的 `reason()` 逐字告诉读者"它在每个档位下都问，`allow` 也关不掉"，而持久授权按钮就是关掉它的那个动作。判据不是"这个按钮危险吗"，是**这张卡自己刚说过什么**。同族：装机级的授权（持久 allowlist ＝ `[policies.tool_permissions]` `allow` 的每调用版）不能由 member 建 —— 他建的那条会静默授权**其他人**的同款调用，而这一点在他的卡片上一个字都没写 → §5.12
 - **参数级审批闸只在能举卡的 surface 上成立**，且**举给人的那张卡必须包含闸所依据的那个字段**（按字典序渲染 + 200 字符截断会把被闸字段挤掉）；「操作者显式点名了这个工具」在代码里必须是**精确匹配**，不能用会匹配 glob 的查找 → §4.12
@@ -492,6 +496,7 @@
 | `src/thinker/` `src/context/` | 判据清单 §1 · FEATURE_LOCATOR §2.3 §2.18 §2.19 |
 | `src/tool_output/` | 判据清单 §2 · FEATURE_LOCATOR §2.7 §3.14 |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · §3.2–§3.14 |
+| `src/tools/scoped/plan_gate.rs` `src/config/types/policies/plan_phase.rs` | [PLAN_HANDOFF.md](docs/reference/PLAN_HANDOFF.md) · §3.16 |
 | `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 §6.9 |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
@@ -536,14 +541,15 @@
 - **MSRV = 1.95**（由 `sysinfo 0.39` 决定），在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明。
 - 仓库根的 `rust-toolchain.toml` 钉住具体 stable（当前 `1.96.0`），本地与 CI 自动使用同一工具链——无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新这两处。
 
-### 三根会话旋钮 (Session Knobs)
+### 四根会话旋钮 (Session Knobs)
 
-三者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
+四者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
 
 | 旋钮 | 值 | 管什么 | 谁在拨 | 单一源 |
 |---|---|---|---|---|
 | **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | Panel pill + `chat.send{exec_tier}` | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
 | **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
+| **规划相位 Plan Phase** | `Building`(默认) / `Planning` | 只读规划：**任何会改变东西的工具都被拒绝**（无可放行参数形态的那类直接从工具表消失）。出口只有一条——`scratchpad{action:"request_build"}` 举卡、人批准、**同一 run 内即刻放行**。⚠️ 它是**地板**，排在 explicit `tool_permissions` 条目**之上**：一条 `"bash"="allow"` 掀不翻它 | Panel pill + `chat.send{plan_phase}` + `sessions.patch`。**模型不能自己进入**（三家参考项目也都不让） | `src/config/types/policies/plan_phase.rs` → [PLAN_HANDOFF.md](docs/reference/PLAN_HANDOFF.md) |
 | **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
 
 > **别急着给它加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
@@ -619,6 +625,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) | 工具系统 |
 | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) | 预设 provider/模型四表 + 单一 join 点 + 漂移守卫契约 |
 | [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) | 会话模式 chat/work/code |
+| [PLAN_HANDOFF.md](docs/reference/PLAN_HANDOFF.md) | 只读规划相位 + 「计划 → 构建」交接（地板位置 / 活闩 / once-only 审批卡） |
 | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) | 记忆总览 |
 | └ [RAW_MEMORY.md](docs/reference/memory/RAW_MEMORY.md) · [NOTES.md](docs/reference/memory/NOTES.md) · [RETRIEVAL.md](docs/reference/memory/RETRIEVAL.md) | 三支柱分册 |
 | └ [DREAM_DAEMON.md](docs/reference/memory/DREAM_DAEMON.md) | 离线做梦 + 自进化纪律（**`DreamGate` 已删，勿复活**） |

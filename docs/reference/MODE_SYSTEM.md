@@ -138,6 +138,14 @@ request 携带的 `TEAM_RUN_MODE` 继续赢过 stored 值——工具回报"已�
 
 ## 4. 刻意不做 (Deliberately NOT)
 
+0. **不做「规划模式 / plan mode / 只读模式」这第四档。** 这不是「以后再说」，是**结构性不可以**：
+   本文件 §1 与 `session_mode.rs` 模块头都逐字承诺「模式不授予、不拒绝任何权限」，而
+   `SessionMode::prompt_line()` **每一轮都把这句话发给模型**。一个会拒绝的模式让那句话在
+   被读到的当场变假（判据 §0：一句关于「什么被闸住」的话有三份拷贝，最贵的那份是发给
+   模型的）。只读规划是**第四根正交旋钮** `PlanPhase`，住在
+   `src/config/types/policies/plan_phase.rs`，强制点在 `effective_permission` 的**地板位**
+   （explicit `tool_permissions` 条目**之上**）——详见 [PLAN_HANDOFF.md](PLAN_HANDOFF.md)。
+   要收窄工具**呈现面**才来这里；要收窄工具**权限**去那里。
 1. 不绑 per-mode 模型（`select_model`/agent hint 已覆盖；session_model_handle 重启即失）；
 2. 不动 PromptMode Full/Compact/Minimal（prompt_mode.rs 实测警告）；
 3. mode 不携带/不联动 exec tier（两 pill 各自显示、互不写入）；

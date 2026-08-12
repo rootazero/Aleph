@@ -125,10 +125,11 @@ pub fn PhoneComposer() -> impl IntoView {
             chat.active_project_root.get_untracked()
         };
         // Tier every send, mode only on the first — one rule, one place.
-        let (tier, mode) = session_dials_for_send(
+        let dials = session_dials_for_send(
             session_key.is_some(),
             chat.session_exec_tier.get_untracked(),
             chat.session_mode.get_untracked(),
+            chat.session_plan_phase.get_untracked(),
         );
         let dash = dashboard;
         spawn_local(async move {
@@ -142,8 +143,9 @@ pub fn PhoneComposer() -> impl IntoView {
                 room_project_id.as_deref(),
                 // No per-turn model pill on phone: the agent's model governs.
                 None,
-                tier.as_deref(),
-                mode.as_deref(),
+                dials.exec_tier.as_deref(),
+                dials.session_mode.as_deref(),
+                dials.plan_phase.as_deref(),
                 false,
             )
             .await;
@@ -290,10 +292,11 @@ pub fn PhoneComposer() -> impl IntoView {
         // Same rule as the typed send. A queue flush almost always has a live
         // session, so `mode` is `None` in practice — but not when the very
         // first thing a user does is queue two prompts.
-        let (tier, mode) = session_dials_for_send(
+        let dials = session_dials_for_send(
             session_key.is_some(),
             chat.session_exec_tier.get_untracked(),
             chat.session_mode.get_untracked(),
+            chat.session_plan_phase.get_untracked(),
         );
         let dash = dashboard;
         spawn_local(async move {
@@ -319,8 +322,9 @@ pub fn PhoneComposer() -> impl IntoView {
                     project_root.as_deref(),
                     room_project_id.as_deref(),
                     None,
-                    tier.as_deref(),
-                    mode.as_deref(),
+                    dials.exec_tier.as_deref(),
+                    dials.session_mode.as_deref(),
+                    dials.plan_phase.as_deref(),
                     false,
                 )
                 .await

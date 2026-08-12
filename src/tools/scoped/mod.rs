@@ -24,13 +24,17 @@ mod deferred;
 mod dispatch;
 mod gate_chain;
 mod ledger;
+mod plan_gate;
 mod progressive_disclosure;
 mod traits;
 
 #[cfg(test)]
+mod plan_floor_tests;
+#[cfg(test)]
 mod tests;
 
 pub use deferred::DeferredTools;
+pub use plan_gate::{PlanGate, PlanPhaseSink};
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
 pub use traits::{ToolDefinitionRewriter, ToolHookDecorator};
 
@@ -140,6 +144,20 @@ pub struct ScopedToolService {
     /// (auto-denied) instead of awaiting an approval that can never arrive.
     /// Defaults `false`; interactive turns are unaffected.
     pub(super) unattended: bool,
+    /// Live read-only planning latch for this run. `Some` only when the run
+    /// STARTED in the planning phase; an approved handoff releases it and the
+    /// tool surface rebuilds on the next turn (see
+    /// [`plan_gate`](self::plan_gate)). `None` — the overwhelmingly common
+    /// case — means the floor never applies and every read is one `Option`
+    /// check.
+    pub(super) plan_gate: Option<Arc<PlanGate>>,
+    /// Whether [`Self::metadata_schema`] has already folded a plan-gate release
+    /// into `cache_generation`. Mirrors `last_health_generation` /
+    /// `last_deferred_generation`: the latch is monotonic, so one bit is the
+    /// whole "has this edge been observed" state, and without it every
+    /// post-release call would bump the generation and rebuild the schema from
+    /// scratch on every turn.
+    pub(super) plan_gate_released_seen: std::sync::atomic::AtomicBool,
 }
 
 // =============================================================================
@@ -355,19 +373,29 @@ impl ToolService for ScopedToolService {
         // caller of every tool's `execute` — so they stay visible without
         // crossing a `tokio::spawn`.
         let fut = async move {
-            match self.turn_context.clone() {
-                Some(turn) => {
-                    let session = turn.session_key.clone();
-                    crate::sandbox::context::SESSION_ID
-                        .scope(
-                            session,
-                            crate::tools::turn_context::TURN_CONTEXT
-                                .scope(turn, self.execute_inner(name, input, cancel)),
-                        )
-                        .await
+            // The planning latch is scoped around BOTH branches, as the HANDLE
+            // rather than its current value: `execute_inner` can lift the floor
+            // partway through (an approved handoff), and the one tool that reads
+            // this is the one reporting whether that just happened.
+            let gate = self.plan_gate.clone();
+            let inner = async move {
+                match self.turn_context.clone() {
+                    Some(turn) => {
+                        let session = turn.session_key.clone();
+                        crate::sandbox::context::SESSION_ID
+                            .scope(
+                                session,
+                                crate::tools::turn_context::TURN_CONTEXT
+                                    .scope(turn, self.execute_inner(name, input, cancel)),
+                            )
+                            .await
+                    }
+                    None => self.execute_inner(name, input, cancel).await,
                 }
-                None => self.execute_inner(name, input, cancel).await,
-            }
+            };
+            crate::tools::turn_context::TURN_PLAN_GATE
+                .scope(gate, inner)
+                .await
         };
         fut.instrument(span).await
     }
@@ -443,6 +471,19 @@ impl ToolService for ScopedToolService {
                 .last_deferred_generation
                 .swap(live_gen, Ordering::AcqRel);
             if prev != live_gen {
+                self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        // And for the planning latch: an approved handoff un-hides every
+        // mutating tool, and the whole point of releasing mid-run is that the
+        // model can act on the very next turn. Folded in here for the same
+        // reason as the two above — the array the provider sees IS the answer
+        // to "what may I do now", so a stale one would tell the model the
+        // handoff did nothing. Monotonic, so the flip registers exactly once.
+        if let Some(gate) = self.plan_gate.as_ref() {
+            let released = !gate.phase().is_planning();
+            if released && !self.plan_gate_released_seen.swap(true, Ordering::AcqRel) {
                 self.cache_generation.fetch_add(1, Ordering::AcqRel);
             }
         }

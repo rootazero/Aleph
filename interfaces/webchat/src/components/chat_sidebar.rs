@@ -57,6 +57,13 @@ struct SessionEntry {
     /// reselect — same contract as `exec_tier`.
     #[serde(default)]
     mode: Option<String>,
+    /// Read-only planning phase persisted on the session (`"planning"`, or
+    /// absent for building). Restored into `chat.session_plan_phase` on
+    /// reselect — and, unlike the two above, refreshed for a reason that has
+    /// nothing to do with the user: an approved plan handoff clears this
+    /// SERVER-side mid-conversation, and the composer learns about it here.
+    #[serde(default)]
+    plan_phase: Option<String>,
 }
 
 /// An agent entry returned by the backend (agents.list).
@@ -656,6 +663,13 @@ pub fn ChatSidebar() -> impl IntoView {
         }
         if chat.session_exec_tier.get_untracked() != row.exec_tier {
             chat.session_exec_tier.set(row.exec_tier.clone());
+        }
+        // The one override the server changes on its own initiative. Everything
+        // above is "the user or the model picked something and we round-trip
+        // it"; this arm is how the composer stops showing a read-only banner
+        // one second after the user approved the plan that ended it.
+        if chat.session_plan_phase.get_untracked() != row.plan_phase {
+            chat.session_plan_phase.set(row.plan_phase.clone());
         }
     });
 

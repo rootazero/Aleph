@@ -859,6 +859,11 @@ async fn resolve_prompt_context(
     // exact partition the tool surface was built with. `None` on internal /
     // subagent dispatch leaves the mode line absent.
     resolved_context.session_mode = envelope.session_mode;
+    // Read-only planning floor: same pass-through, same reason. The gateway
+    // resolved it from the run's live gate, so the line the model reads and the
+    // rule the chokepoint enforces are the same value, not two readings of one
+    // config.
+    resolved_context.plan_phase = envelope.plan_phase;
     // Sub-agent binding: forwarded verbatim from the envelope so the
     // `<environment_context>` block can print `<parent kind="…">…</parent>` for
     // sub-agent / team / background dispatches that carry a parent session.

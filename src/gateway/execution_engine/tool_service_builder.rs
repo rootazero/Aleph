@@ -100,6 +100,11 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 /// * `tool_health` — the runtime probe cache shared with the `ToolCatalog`.
 ///   When present, a tool whose probe reports Unhealthy is stripped from the
 ///   model's list. `None` is fail-open: every tool stays visible.
+/// * `plan_gate` — the live read-only planning latch, `Some` **only** for a run
+///   that starts in `PlanPhase::Planning`. Carries the durable sink an approved
+///   handoff writes to. `None` is not a default that could be forgotten into a
+///   security hole: with no gate the phase is `Building`, which is where every
+///   session that never asked to plan already is.
 pub fn build_request_tool_service(
     tool_registry: Arc<LoopToolRegistry>,
     allowed_tools: BTreeSet<String>,
@@ -114,6 +119,7 @@ pub fn build_request_tool_service(
     truncate_tool_descriptions: bool,
     deferred: Arc<crate::tools::scoped::DeferredTools>,
     tool_health: Option<Arc<crate::tool_metadata::ToolHealthCache>>,
+    plan_gate: Option<Arc<crate::tools::scoped::PlanGate>>,
 ) -> Arc<dyn ToolService> {
     let session_id: String = session_id.into();
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
@@ -128,6 +134,9 @@ pub fn build_request_tool_service(
     }
     svc = svc.with_exec_tier(exec_tier);
     svc = svc.with_unattended(unattended);
+    if let Some(gate) = plan_gate {
+        svc = svc.with_plan_gate(gate);
+    }
     if let Some(tc) = turn_context {
         svc = svc.with_turn_context(tc);
     }
@@ -225,6 +234,7 @@ mod tests {
             false,
             crate::tools::scoped::DeferredTools::empty(),
             None,
+            None,
         );
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
@@ -267,6 +277,7 @@ mod tests {
             false,
             deferred,
             None,
+            None,
         );
         let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
         assert!(names.contains(&"read_file".to_string()));
@@ -296,6 +307,7 @@ mod tests {
             &[],
             false,
             crate::tools::scoped::DeferredTools::empty(),
+            None,
             None,
         );
         let defs = svc.list().await;
@@ -328,6 +340,7 @@ mod tests {
             false,
             crate::tools::scoped::DeferredTools::empty(),
             None,
+            None,
         );
         let off_names: Vec<String> = off.list().await.into_iter().map(|d| d.name).collect();
         assert!(off_names.contains(&"web_fetch".to_string()));
@@ -346,6 +359,7 @@ mod tests {
             &[],
             false,
             crate::tools::scoped::DeferredTools::new(["web_fetch".to_string()].into()),
+            None,
             None,
         );
         let on_names: Vec<String> = on.list().await.into_iter().map(|d| d.name).collect();
@@ -400,6 +414,7 @@ mod progressive_tests {
             false, // core, truncate
             crate::tools::scoped::DeferredTools::empty(),
             None,
+            None,
         );
         let schema = svc.metadata_schema();
         let bash = schema.iter().find(|d| d.name == "bash").unwrap();
@@ -429,6 +444,7 @@ mod progressive_tests {
             &["*".to_string()],
             false,
             crate::tools::scoped::DeferredTools::empty(),
+            None,
             None,
         );
         let nav = svc
