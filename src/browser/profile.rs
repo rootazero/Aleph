@@ -33,26 +33,50 @@ pub enum BrowserDriver {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileConfig {
     /// Which browser engine to use.
+    ///
+    /// **`existing_session` only.** The managed driver runs whatever browser
+    /// the Playwright CLI is provisioned with; it has no engine switch. A
+    /// managed profile that sets this is warned about at startup
+    /// (`ProfileManager::new` → `unhonored_managed_fields`).
     #[serde(default)]
     pub browser: BrowserType,
 
     /// Profile-level override for headless (None = follow global `playwright_cli.headless`).
+    /// Honored by both drivers.
     #[serde(default)]
     pub headless: Option<bool>,
 
     /// Proxy server URL (e.g. "<socks5://127.0.0.1:1080>").
+    ///
+    /// **`existing_session` only** — passed as Chrome's `--proxy-server`. The
+    /// Playwright CLI exposes no proxy flag; see [`Self::browser`] for how a
+    /// managed profile that sets it is told.
     #[serde(default)]
     pub proxy: Option<String>,
 
     /// Custom user data directory for browser state isolation.
+    ///
+    /// **`existing_session` only** — Chrome's `--user-data-dir`. Managed
+    /// sessions are isolated by their CLI session key instead; see
+    /// [`Self::browser`].
     #[serde(default)]
     pub user_data_dir: Option<String>,
 
     /// Extra command-line arguments passed to the browser process.
+    ///
+    /// **`existing_session` only** — appended last to the Chrome launch argv.
+    /// The managed driver never launches a browser process itself; see
+    /// [`Self::browser`].
     #[serde(default)]
     pub extra_args: Vec<String>,
 
-    /// Seconds of inactivity before the browser is automatically stopped.
+    /// Seconds of inactivity before the browser session is automatically torn
+    /// down.
+    ///
+    /// **`existing_session` only.** The Playwright CLI has no "stop session"
+    /// command, so a managed profile is reclaimed per *tab*
+    /// ([`Self::tab_idle_timeout_secs`]) and never as a whole; a managed
+    /// profile that changes this from the default is warned about at startup.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
 

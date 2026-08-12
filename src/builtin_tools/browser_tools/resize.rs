@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -49,10 +49,17 @@ impl AlephTool for BrowserResizeTool {
     type Output = BrowserResizeOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // A zero dimension is a model mistake, and it degrades to
+        // `success:false` with the contract spelled out rather than a hard
+        // `Err` — the convention `click::resolve_target` states for this
+        // family. Resize was the last holdout raising
+        // `AlephError::invalid_input`, which reaches the model as a tool
+        // failure rather than as a rule it can act on.
         if args.width == 0 || args.height == 0 {
-            return Err(AlephError::invalid_input(
-                "browser_resize requires non-zero width and height",
-            ));
+            return Ok(BrowserResizeOutput {
+                success: false,
+                message: Some("browser_resize requires non-zero width and height".into()),
+            });
         }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.resize(&tab_id, args.width, args.height).await {
@@ -65,12 +72,15 @@ impl AlephTool for BrowserResizeTool {
                 }),
                 Err(e) => Ok(BrowserResizeOutput {
                     success: false,
-                    message: Some(format!("Resize failed: {e}")),
+                    message: Some(format!(
+                        "Resize failed: {}",
+                        super::backend_error_text(&self.manager, &e)
+                    )),
                 }),
             },
             Err(e) => Ok(BrowserResizeOutput {
                 success: false,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }
@@ -81,8 +91,10 @@ mod tests {
     use super::*;
     use crate::browser::profile::BrowserSystemConfig;
 
+    /// A zero dimension degrades to `success:false` carrying the contract,
+    /// the shape the rest of the browser family uses, instead of a hard `Err`.
     #[tokio::test]
-    async fn test_resize_zero_dimension_is_input_error() {
+    async fn zero_dimension_degrades_with_the_contract_instead_of_erroring() {
         let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
         let tool = BrowserResizeTool::new(manager);
         let result = tool
@@ -91,8 +103,17 @@ mod tests {
                 width: 0,
                 height: 600,
             })
-            .await;
-        assert!(result.is_err());
+            .await
+            .expect("a malformed call is a result, not a hard error");
+        assert!(!result.success);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("non-zero")),
+            "got: {:?}",
+            result.message
+        );
     }
 
     #[tokio::test]

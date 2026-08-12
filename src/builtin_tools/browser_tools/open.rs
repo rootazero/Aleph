@@ -93,7 +93,7 @@ impl AlephTool for BrowserOpenTool {
                 return Ok(BrowserOpenOutput {
                     success: false,
                     tab_id: None,
-                    message: Some(e.to_string()),
+                    message: Some(super::backend_error_text(&self.manager, &e)),
                 });
             }
         };
@@ -106,7 +106,10 @@ impl AlephTool for BrowserOpenTool {
             Err(e) => Ok(BrowserOpenOutput {
                 success: false,
                 tab_id: None,
-                message: Some(format!("Failed to open tab: {e}")),
+                message: Some(format!(
+                    "Failed to open tab: {}",
+                    super::backend_error_text(&self.manager, &e)
+                )),
             }),
         }
     }

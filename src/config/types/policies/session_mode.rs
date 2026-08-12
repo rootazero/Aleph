@@ -64,10 +64,18 @@ const CODE_CORE_ADD: &[&str] = &["apply_patch", "ctx_search"];
 /// Added to that list 2026-08-10: `workspace_manage`. It reads like the
 /// `cron_manage` / `skill_manage` register — an admin surface — but its common
 /// use is the one-shot conversational question its group-mates already stay
-/// resident for ("which workspaces do I have?", "rename this one"), and
-/// deferring it saves no description bytes: the catalog ships those either way
-/// (`definitions.rs::CATALOG_DESCRIPTION_CEILING_BYTES`), so a defer entry buys
-/// only the schema, at the price of a `tool_search` round-trip.
+/// resident for ("which workspaces do I have?", "rename this one"), so it is
+/// kept listed deliberately.
+///
+/// The *reason* first recorded here was wrong, and the correction prices every
+/// future entry: deferring does not "buy only the schema". A deferred tool is
+/// dropped from the model's tool array outright — `ScopedToolService` `retain`s
+/// on `DeferredTools` — so its name, its description and the 118-byte "call
+/// get_tool_schema first" sentence the collapse rewriter appends all leave the
+/// wire. `definitions.rs::CATALOG_DESCRIPTION_CEILING_BYTES` bounds the
+/// *constants* the binary carries, not what a request sends. Deferral is the
+/// only mechanism here that makes a tool cost zero bytes per request;
+/// collapsing merely makes it cost less.
 const CHAT_DEFER_FAMILIES: &[&str] = &[
     "desktop",
     "browser",
@@ -112,8 +120,10 @@ const CHAT_DEFER_EXACT: &[&str] = &["media", "media_send"];
 
 /// Tool families deferred in Code mode: the desktop / generation / meeting
 /// families, which have no place in a development session's initial surface.
-/// Browser tools stay resident (dev-server preview), as do team/task tools
-/// (multi-agent development) and `media_understand` (screenshot debugging).
+/// The browser *core* stays resident (dev-server preview) while its satellites
+/// defer in every mode — see [`BROWSER_RESIDENT_CORE`]. Team/task tools
+/// (multi-agent development) and `media_understand` (screenshot debugging) stay
+/// listed whole.
 const CODE_DEFER_FAMILIES: &[&str] = &[
     "desktop",
     "image_generate",
@@ -126,6 +136,27 @@ const CODE_DEFER_FAMILIES: &[&str] = &[
 /// Exact tool names deferred in Code mode (same `media_understand` carve-out
 /// as chat).
 const CODE_DEFER_EXACT: &[&str] = &["media", "media_send"];
+
+/// The `browser_*` tools that stay in the model's initial list wherever the
+/// family is offered at all. Everything else in the family — hover, drag,
+/// cookies, emulate, pdf, network, dialog, … — is deferred, and `tool_search`
+/// promotes it the moment the model reaches for it.
+///
+/// These three are what a browsing session cannot *start* without: open a page,
+/// read its refs, then act on several refs in one batched call. Every satellite
+/// verb is a variation on the third.
+///
+/// Why the family needs a partition of its own when collapsing already exists:
+/// a listed-but-collapsed tool still ships its name, its whole description, a
+/// 45-byte placeholder schema and the 118-byte collapse sentence on **every**
+/// request. Measured 2026-08-12, all 26 browser tools cost 9,536 B per request
+/// in work and code — for a capability the overwhelming majority of turns never
+/// touch — of which this core is 1,590 B, so the partition returns 7,946 B a
+/// request. `browser_family_deferral_is_measured` re-measures both numbers from
+/// the live catalog and prints them, rather than trusting this sentence — which
+/// is the point: a description edit moves these figures, so read the test
+/// output, not the prose, when the exact number matters.
+const BROWSER_RESIDENT_CORE: &[&str] = &["browser_open", "browser_snapshot", "browser_exec"];
 
 /// Meta / lifeline tools that must never be deferred in any mode: deferring
 /// the discovery mechanism itself (or the human channel, or the R8 tool that
@@ -146,6 +177,14 @@ fn matches_family(entry: &str, name: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('_'))
 }
 
+/// Whether `name` is a browser *satellite*: a `browser_*` tool outside
+/// [`BROWSER_RESIDENT_CORE`]. True in every mode — chat defers the whole family
+/// through [`CHAT_DEFER_FAMILIES`] anyway, and work / code keep only the core
+/// listed.
+fn is_browser_satellite(name: &str) -> bool {
+    matches_family("browser", name) && !BROWSER_RESIDENT_CORE.contains(&name)
+}
+
 /// Session usage mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -153,9 +192,11 @@ pub enum SessionMode {
     /// Lightweight conversation: minimal schema-resident core, heavy tool
     /// families deferred (still `tool_search`-reachable).
     Chat,
-    /// Multi-step productivity work. The default — its surface is
-    /// byte-identical to the pre-mode behavior, so unconfigured installs and
-    /// existing sessions see no change.
+    /// Multi-step productivity work. The default, and the identity partition
+    /// for every family but one: the `browser_*` satellites defer here too
+    /// (see [`BROWSER_RESIDENT_CORE`]), because 26 listed browser tools charge
+    /// every request ~8.9 KB for a capability most turns never touch. Nothing
+    /// else about an unconfigured install's surface changed.
     #[default]
     Work,
     /// Software development: dev tools schema-resident, desktop/media
@@ -239,10 +280,18 @@ impl SessionMode {
     /// operator's server id (`goal_tracker`, `media_kit`, …) must not collide
     /// with a builtin family word. MCP deferral has its own dedicated knob
     /// (`[tools] defer_mcp_tools`).
+    ///
+    /// One rule is mode-independent: the browser satellites
+    /// ([`is_browser_satellite`]) defer everywhere. It is stated ahead of the
+    /// per-mode tables instead of being copied into each of them, so the
+    /// family's resident core is named in exactly one place.
     #[must_use]
     pub fn defers_tool(self, name: &str) -> bool {
         if NEVER_DEFER.contains(&name) || name.contains("__") {
             return false;
+        }
+        if is_browser_satellite(name) {
+            return true;
         }
         let (families, exact) = match self {
             Self::Chat => (CHAT_DEFER_FAMILIES, CHAT_DEFER_EXACT),
@@ -270,15 +319,16 @@ impl SessionMode {
             }
             Self::Work => {
                 "Usage mode: work — multi-step productivity work (documents, research, \
-                 channels, scheduling, media). The full standard tool surface is available; \
+                 channels, scheduling, media). The standard tool surface is available; \
                  plan visibly, aim for a concrete deliverable, and prefer finished outputs \
                  in plain language over technical process detail. The user picks the mode; \
                  call `session_set_mode` only when they ask to switch."
             }
             Self::Code => {
                 "Usage mode: code — a software development session. Dev tools (bash, \
-                 code_exec, file editing, apply_patch) carry full schemas; desktop/media \
-                 tool families are deferred but discoverable via `tool_search`. Verify your \
+                 code_exec, file editing, apply_patch) carry full schemas; desktop/media/\
+                 browser tool families are deferred but discoverable via `tool_search`. \
+                 Verify your \
                  changes with checks or tests where practical; technical detail (diffs, \
                  commands, logs) is welcome in replies. The user picks the mode; \
                  call `session_set_mode` only when they ask to switch."
@@ -292,7 +342,10 @@ impl SessionMode {
     /// promotes — but not the user-switching contract (`session_set_mode`
     /// belongs to the parent conversation, not an ephemeral child session).
     /// Lives beside [`Self::prompt_line`] so the two cannot drift (R9).
-    /// `Work` is the identity partition — callers skip the weld entirely.
+    /// Callers skip the weld for `Work` (`SpawnRequest::session_mode`): a child
+    /// of a work run inherits the surface its parent already runs under,
+    /// browser subtraction included, so the `Work` line below is kept in step
+    /// with [`Self::prompt_line`] rather than rendered.
     #[must_use]
     pub const fn subagent_prompt_line(self) -> &'static str {
         match self {
@@ -302,14 +355,14 @@ impl SessionMode {
                  your tool list but discoverable via `tool_search` when genuinely needed."
             }
             Self::Work => {
-                "Usage mode: work — multi-step productivity work. The full standard \
-                 tool surface is available."
+                "Usage mode: work — multi-step productivity work. The standard tool \
+                 surface is available."
             }
             Self::Code => {
                 "Usage mode: code — a software development session. Dev tools carry \
-                 full schemas; desktop/media tool families are deferred but discoverable \
-                 via `tool_search`. Verify your changes with checks or tests where \
-                 practical."
+                 full schemas; desktop/media/browser tool families are deferred but \
+                 discoverable via `tool_search`. Verify your changes with checks or \
+                 tests where practical."
             }
         }
     }
@@ -355,15 +408,21 @@ mod tests {
         assert_eq!(SessionMode::default(), SessionMode::Work);
     }
 
-    /// Work is the compatibility mode: it must not touch either partition, so
-    /// an unconfigured install behaves exactly as before modes existed.
+    /// Work is the compatibility mode everywhere except the browser family: it
+    /// must not touch the core set at all, and must defer nothing but the
+    /// browser satellites, so an unconfigured install behaves as it did before
+    /// modes existed for every other tool it owns.
     #[test]
-    fn work_mode_changes_nothing() {
+    fn work_mode_changes_nothing_but_the_browser_satellites() {
         let core = crate::config::types::tools::default_core_tools();
         assert_eq!(SessionMode::Work.effective_core_tools(&core), core);
         for name in ["bash", "desktop_som", "team_create", "image_generate"] {
             assert!(!SessionMode::Work.defers_tool(name));
         }
+        assert!(
+            SessionMode::Work.defers_tool("browser_hover"),
+            "the one subtraction work makes must actually be made"
+        );
     }
 
     #[test]
@@ -475,12 +534,21 @@ mod tests {
     }
 
     #[test]
-    fn code_mode_defers_desktop_and_media_only() {
-        for name in ["desktop_som", "media_send", "image_generate", "google_meet"] {
+    fn code_mode_defers_desktop_media_and_the_browser_satellites() {
+        for name in [
+            "desktop_som",
+            "media_send",
+            "image_generate",
+            "google_meet",
+            // Dev-server preview starts from the browser core; the satellites
+            // ride `tool_search` like every other deferred verb.
+            "browser_navigate",
+            "browser_console",
+        ] {
             assert!(SessionMode::Code.defers_tool(name));
         }
         for name in [
-            "browser_navigate",
+            "browser_open", // the family's entry point stays one call away
             "team_create",
             "bash",
             "apply_patch",
@@ -564,6 +632,131 @@ mod tests {
         assert!(builtin_modes()
             .iter()
             .all(|p| SessionMode::from_id(p.id).is_some()));
+    }
+
+    /// The resident core must be *derived*, not a wish list. A `browser_*`
+    /// rename that forgets this list would empty the core silently: the family
+    /// would defer whole, and browsing would still work — through a
+    /// `tool_search` round-trip nobody asked for — so nothing else would fail.
+    /// Fail by name instead.
+    #[test]
+    fn every_browser_core_name_exists_in_the_builtin_catalog() {
+        for name in BROWSER_RESIDENT_CORE {
+            assert!(
+                matches_family("browser", name),
+                "`{name}` is not a browser tool"
+            );
+            assert!(
+                crate::executor::BUILTIN_TOOL_DEFINITIONS
+                    .iter()
+                    .any(|d| d.name == *name),
+                "`{name}` is in BROWSER_RESIDENT_CORE but not in BUILTIN_TOOL_DEFINITIONS — \
+                 if it was renamed, rename it here too"
+            );
+        }
+    }
+
+    /// The partition itself: outside chat the core is listed and everything
+    /// else in the family is not. Chat still defers the family whole, so the
+    /// core is not a chat carve-out by accident.
+    #[test]
+    fn work_and_code_list_the_browser_core_and_defer_the_rest() {
+        for mode in [SessionMode::Work, SessionMode::Code] {
+            for name in BROWSER_RESIDENT_CORE {
+                assert!(
+                    !mode.defers_tool(name),
+                    "{mode:?} must keep `{name}` listed"
+                );
+            }
+            for name in [
+                "browser_hover",
+                "browser_cookies",
+                "browser_pdf",
+                "browser_drag",
+            ] {
+                assert!(mode.defers_tool(name), "{mode:?} must defer `{name}`");
+            }
+        }
+        for name in BROWSER_RESIDENT_CORE {
+            assert!(
+                SessionMode::Chat.defers_tool(name),
+                "chat defers the whole family, core included"
+            );
+        }
+    }
+
+    /// Bytes one *listed* browser tool costs on the wire — measured, not
+    /// modelled. Browser tools are not in `[tools] core`, so what a request
+    /// carries is the definition after the real `ProgressiveDisclosureRewriter`
+    /// has collapsed it; run it through that rewriter and weigh the result.
+    ///
+    /// `ENVELOPE_BYTES` is the only term that cannot be read off the definition:
+    /// the JSON scaffolding around one tool object,
+    /// `{"name":"","description":"","input_schema":}`.
+    fn resident_wire_bytes(name: &str, description: &str) -> usize {
+        use crate::tools::scoped::{ProgressiveDisclosureRewriter, ToolDefinitionRewriter};
+        use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolSource};
+
+        const ENVELOPE_BYTES: usize = 44;
+
+        let mut def = ToolDefinition {
+            name: name.to_string(),
+            description: description.to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            source: ToolSource::Builtin,
+            metadata: ToolDefinitionMetadata::default(),
+        };
+        ProgressiveDisclosureRewriter::new(std::collections::BTreeSet::new(), false)
+            .rewrite(&mut def);
+        ENVELOPE_BYTES
+            + def.name.len()
+            + def.description.len()
+            + serde_json::to_string(&def.input_schema)
+                .expect("a collapsed schema serializes")
+                .len()
+    }
+
+    /// What the partition is for, in bytes, re-measured from the live catalog
+    /// on every run — the numbers quoted in [`BROWSER_RESIDENT_CORE`]'s doc
+    /// come from this test's output, so a description edit moves both.
+    ///
+    /// The assertion is a ratio rather than a ceiling: pinning a byte count
+    /// would red on every wording change, while "the satellites are the bulk of
+    /// what the family costs, and they are gone" is the property that must hold.
+    #[test]
+    fn browser_family_deferral_is_measured() {
+        let family: Vec<(&str, &str)> = crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .filter(|d| matches_family("browser", d.name))
+            .map(|d| (d.name, d.description))
+            .collect();
+        assert!(!family.is_empty(), "the browser family must be registered");
+
+        let cost = |mode: Option<SessionMode>| -> usize {
+            family
+                .iter()
+                .filter(|(name, _)| mode.is_none_or(|m| !m.defers_tool(name)))
+                .map(|(name, desc)| resident_wire_bytes(name, desc))
+                .sum()
+        };
+
+        let all_listed = cost(None);
+        let work = cost(Some(SessionMode::Work));
+        let code = cost(Some(SessionMode::Code));
+        let chat = cost(Some(SessionMode::Chat));
+        eprintln!(
+            "browser family per-request wire cost ({} tools): all-listed {all_listed} B, \
+             work {work} B, code {code} B, chat {chat} B",
+            family.len()
+        );
+
+        assert_eq!(chat, 0, "chat defers the family whole");
+        assert_eq!(work, code, "the partition is mode-independent outside chat");
+        assert!(
+            work * 4 < all_listed,
+            "deferral must remove the bulk of the family's footprint: \
+             {work} B resident of {all_listed} B listed"
+        );
     }
 
     #[test]

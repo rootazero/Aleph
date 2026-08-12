@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::browser::types::ActionTarget;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -57,7 +57,15 @@ impl BrowserHoverTool {
     }
 }
 
-fn resolve_target(args: &BrowserHoverArgs) -> std::result::Result<ActionTarget, AlephError> {
+/// Lower the model's targeting arguments to an [`ActionTarget`].
+///
+/// Returns the contract as a message, not a hard `Err`: a malformed request
+/// degrades to `success:false` so the model reads the targeting rule and can
+/// retry. `click::resolve_target` documents this as the settled convention for
+/// the family; hover was the holdout still raising `AlephError::invalid_input`,
+/// which the tool layer surfaces as a tool *failure* rather than a result the
+/// model can act on.
+fn resolve_target(args: &BrowserHoverArgs) -> std::result::Result<ActionTarget, String> {
     if let Some(ref rid) = args.ref_id {
         Ok(ActionTarget::Ref {
             ref_id: rid.clone(),
@@ -65,9 +73,7 @@ fn resolve_target(args: &BrowserHoverArgs) -> std::result::Result<ActionTarget, 
     } else if let (Some(x), Some(y)) = (args.x, args.y) {
         Ok(ActionTarget::Coordinates { x, y })
     } else {
-        Err(AlephError::invalid_input(
-            "browser_hover requires a targeting method: ref_id or x/y coordinates",
-        ))
+        Err("browser_hover requires a targeting method: ref_id or x/y coordinates".into())
     }
 }
 
@@ -80,7 +86,17 @@ impl AlephTool for BrowserHoverTool {
     type Output = BrowserHoverOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let target = resolve_target(&args)?;
+        // Validate before the approval check: a malformed call is a model
+        // mistake and must not consume a user approval or touch the page.
+        let target = match resolve_target(&args) {
+            Ok(t) => t,
+            Err(message) => {
+                return Ok(BrowserHoverOutput {
+                    success: false,
+                    message: Some(message),
+                });
+            }
+        };
 
         if let Some(message) = super::check_browser_approval(
             self.approval_policy.as_ref(),
@@ -103,12 +119,15 @@ impl AlephTool for BrowserHoverTool {
                 }),
                 Err(e) => Ok(BrowserHoverOutput {
                     success: false,
-                    message: Some(format!("Hover failed: {e}")),
+                    message: Some(format!(
+                        "Hover failed: {}",
+                        super::backend_error_text(&self.manager, &e)
+                    )),
                 }),
             },
             Err(e) => Ok(BrowserHoverOutput {
                 success: false,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }
@@ -137,8 +156,11 @@ mod tests {
         assert!(result.message.is_some());
     }
 
+    /// A targetless hover degrades to `success:false` carrying the targeting
+    /// contract — the shape click / select / type / fill_form already use — so
+    /// the model reads the rule instead of a bare tool failure.
     #[tokio::test]
-    async fn test_hover_no_target_fails() {
+    async fn no_target_degrades_with_the_contract_instead_of_erroring() {
         let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
         let tool = BrowserHoverTool::new(manager);
         let result = tool
@@ -148,7 +170,16 @@ mod tests {
                 x: None,
                 y: None,
             })
-            .await;
-        assert!(result.is_err());
+            .await
+            .expect("a malformed call is a result, not a hard error");
+        assert!(!result.success);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("ref_id")),
+            "got: {:?}",
+            result.message
+        );
     }
 }

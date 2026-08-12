@@ -17,7 +17,7 @@ use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserBatchTool, BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool,
+    BrowserExecTool, BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool,
     BrowserDragTool, BrowserEmulateTool, BrowserEvaluateTool, BrowserFillFormTool,
     BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool,
     BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool,
@@ -121,16 +121,18 @@ impl BuiltinToolRegistry {
             PdfGenerateTool::new()
         };
 
-        // Approval policy — gates sensitive desktop/PIM actions. Loaded from
-        // `~/.aleph/approval-policy.json`; with no file present it falls back to
-        // a permissive default (desktop actions Allow, shell Deny), so wiring
-        // here is byte-identical to the previous unwired (allow-all) behavior
-        // until the user supplies a policy file. Shared by DesktopTool + PimTool
-        // and the sensitive browser tools (navigate/click/type/fill_form/
-        // evaluate + open/select/dialog/drag/hover/press_key/scroll/upload/
-        // cookies), whose `Browser*` action types the policy engine already
-        // models — previously advertised but never enforced. Also gates the
-        // `hooks_manage` control-plane write below.
+        // Approval policy — gates sensitive desktop/PIM/media actions. Loaded
+        // from `~/.aleph/approval-policy.json`. Nothing in the product writes
+        // that file, so the shipped posture is the file-absent fallback:
+        // `ConfigApprovalPolicy::default()`, the curated map (read-only browser
+        // motion — navigate/click/type/fill/press_key/scroll/hover — Allow;
+        // evaluate/open/select/dialog/drag/upload/cookies-write Ask; desktop,
+        // PIM, media and hooks Ask). A file that exists but is broken falls back
+        // the other way, to all-Ask, so a corrupt config cannot weaken the gate.
+        // Shared by DesktopTool + PimTool and the sensitive browser tools, whose
+        // `Browser*` action types the policy engine already models — previously
+        // advertised but never enforced. Also gates the `hooks_manage`
+        // control-plane write below.
         let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
             Arc::new(crate::approval::ConfigApprovalPolicy::load());
 
@@ -552,7 +554,7 @@ impl BuiltinToolRegistry {
         let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
-        let browser_batch_tool = BrowserBatchTool::new(Arc::clone(&browser_profile_manager))
+        let browser_exec_tool = BrowserExecTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));
         let browser_hover_tool = BrowserHoverTool::new(Arc::clone(&browser_profile_manager))
@@ -568,10 +570,20 @@ impl BuiltinToolRegistry {
         let browser_upload_tool = BrowserUploadTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_resize_tool = BrowserResizeTool::new(Arc::clone(&browser_profile_manager));
-        let browser_emulate_tool = BrowserEmulateTool::new(Arc::clone(&browser_profile_manager));
+        // `emulate` and `session` join the gated set: both move credentials.
+        // `emulate` sets `extra_http_headers` (an Authorization header is a
+        // credential the page never sees the model type) and spoofs the
+        // user-agent; `session` save/load moves the WHOLE auth state (every
+        // cookie plus localStorage) in one call — strictly more than the
+        // single cookie `browser_cookies set` has always asked about. Without
+        // this the tools' `check_browser_approval` sees `None` and allows, so
+        // the gate exists only in their unit tests.
+        let browser_emulate_tool = BrowserEmulateTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_cookies_tool = BrowserCookiesTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
-        let browser_session_tool = BrowserSessionTool::new(Arc::clone(&browser_profile_manager));
+        let browser_session_tool = BrowserSessionTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         // Start the idle-profile reaper (sweeps stale browsers every 60s).
         browser_profile_manager.spawn_idle_reaper(60);
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
@@ -725,7 +737,7 @@ impl BuiltinToolRegistry {
                 browser_fill_form_tool.definition(),
                 browser_press_key_tool.definition(),
                 browser_wait_for_tool.definition(),
-                browser_batch_tool.definition(),
+                browser_exec_tool.definition(),
                 browser_console_tool.definition(),
                 browser_hover_tool.definition(),
                 browser_scroll_tool.definition(),
@@ -1206,7 +1218,7 @@ impl BuiltinToolRegistry {
             browser_fill_form_tool,
             browser_press_key_tool,
             browser_wait_for_tool,
-            browser_batch_tool,
+            browser_exec_tool,
             browser_console_tool,
             browser_hover_tool,
             browser_scroll_tool,

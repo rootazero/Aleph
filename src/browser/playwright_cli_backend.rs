@@ -135,29 +135,31 @@ impl BrowserBackend for PlaywrightCliBackend {
         args.push(url);
         let _ = self.run(&args, self.nav_timeout()).await?;
         // Re-list once: the CLI's `tab-new` returns no id, so both the real
-        // tab id AND the post-navigation audit come from this single snapshot
-        // (the newly opened tab is the last-listed one). A failed listing
-        // degrades to an empty snapshot — the audit skips and the id falls
-        // back to the "last" sentinel rather than failing a successful open.
-        let tabs_text = self.list_tabs().await.unwrap_or_default();
-        let tab_id = super::tab_registry::parse_tab_ids(&tabs_text)
-            .last()
-            .cloned();
-        // Post-navigation audit: a redirect may have landed the new tab on a
-        // blocked origin the navigation-time guard never saw. On a violation,
-        // quarantine — best-effort close the fresh tab — then surface the
-        // policy error.
-        if let Err(e) =
-            super::post_nav::verify_landed_url(&self.ssrf_guard, &tabs_text, tab_id.as_deref())
-                .await
-        {
-            if let Some(ref id) = tab_id {
-                if let Err(close_err) = self.close_tab(id).await {
-                    tracing::warn!(tab = %id, error = %close_err, "post-navigation quarantine: failed to close blocked tab");
-                }
+        // tab id AND the post-navigation audit come from this single snapshot.
+        // A failed listing degrades to an empty snapshot — the audit skips and
+        // the id falls back to the "last" sentinel rather than failing a
+        // successful open — but the skip is LOGGED: a silently skipped SSRF
+        // audit is indistinguishable from one that passed.
+        let tabs_text = match self.list_tabs().await {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "post-navigation audit skipped after tab-new: tab-list failed (the new tab \
+                     keeps its unaudited landing, and its id is unknown)"
+                );
+                String::new()
             }
-            return Err(e);
-        }
+        };
+        // `tab-new` selects the tab it opened, so the CLI's own `[selected]`
+        // marker names it; last-listed is the fallback for a listing without a
+        // marker.
+        let tab_id = super::tab_registry::active_tab_id(&tabs_text);
+        // Post-navigation audit (quarantine included — it lives in `post_nav`):
+        // a redirect may have landed the new tab on a blocked origin the
+        // navigation-time guard never saw.
+        super::post_nav::audit_listing(self, &self.ssrf_guard, &tabs_text, tab_id.as_deref())
+            .await?;
         Ok(tab_id.unwrap_or_else(|| "last".into()))
     }
 
@@ -172,18 +174,41 @@ impl BrowserBackend for PlaywrightCliBackend {
         Ok(self.run(&["tab-list"], self.action_timeout()).await?.stdout)
     }
 
-    async fn navigate(&self, _tab_id: &str, url: &str) -> Result<(), BrowserError> {
+    async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
         self.ssrf_guard
             .check_navigation(url)
             .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        let _ = self.run(&["goto", url], self.nav_timeout()).await?;
+        // `goto` drives the CLI session's *selected* tab. Select the requested
+        // one first so the tab that is navigated, the tab that is audited and
+        // the tab whose content is read afterwards are the same tab — ignoring
+        // `tab_id` here is what let the audit vet tab N while the read hit
+        // tab M. The `"last"` sentinel (from `open_tab` on an unparseable
+        // listing) names no tab, so it keeps the current selection.
+        let addressable = !tab_id.is_empty() && tab_id.chars().all(|c| c.is_ascii_digit());
+        if addressable {
+            self.switch_tab(tab_id).await?;
+        }
+        let out = self.run(&["goto", url], self.nav_timeout()).await?;
         // Post-navigation audit: a redirect may have landed the tab on a
-        // blocked origin. `goto` drives the CLI session's current tab (the
-        // last-listed one by the tool layer's convention), so the audit
-        // resolves the active tab rather than the ignored `_tab_id`.
-        super::post_nav::audit_landed_tab(self, &self.ssrf_guard, None).await?;
-        Ok(())
+        // blocked origin. `goto` already reports the landed URL in its page
+        // header — that is the authoritative post-redirect answer, so use it
+        // instead of re-deriving it from a fresh `tab-list` round trip. Older
+        // CLI output without the header falls back to the listing.
+        let landed = out.page_meta.map(|m| m.url).filter(|u| !u.is_empty());
+        let offender = addressable.then(|| tab_id.to_string());
+        match (offender, landed) {
+            (Some(id), Some(landed)) => {
+                super::post_nav::audit_landed_url(self, &self.ssrf_guard, &landed, Some(&id)).await
+            }
+            // Either the CLI reported no landed URL, or we have no tab id to
+            // quarantine with — the listing path answers both, because it
+            // resolves the active tab and so can still close it. Skipping the
+            // round trip is a saving, never a reason to lose the close.
+            (offender, _) => {
+                super::post_nav::audit_landed_tab(self, &self.ssrf_guard, offender.as_deref()).await
+            }
+        }
     }
 
     async fn click(&self, _tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {

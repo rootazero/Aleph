@@ -3,18 +3,27 @@
 //! Aleph drives two browser backends and each has a distinct host dependency:
 //! the **existing-session** driver attaches to the user's real Chrome via
 //! `chrome-devtools-mcp` (needs a system Chromium *and* `npx`/Node), while the
-//! **managed** driver provisions its own Chromium through Playwright and only
-//! benefits from a headed display on Linux. When any of these is absent the
-//! failure today surfaces deep inside a tool call ("Chromium binary not found",
-//! "Failed to attach to browser") with no up-front signal. This check makes the
-//! browser runtime as observable as the core data dir / lock / config — the same
-//! ground both `openclaw browser-doctor` and hermes' `_browser_cdp_check` cover.
+//! **managed** driver runs the ledger-provisioned `playwright-cli` (which
+//! brings its own Chromium, and only benefits from a headed display on Linux).
+//! When any of these is absent the failure surfaces either deep inside a tool
+//! call ("Chromium binary not found", "Failed to attach to browser") or as a
+//! `browser_*` family that is not offered at all — both with no up-front
+//! signal. This check makes the browser runtime as observable as the core data
+//! dir / lock / config — the same ground both `openclaw browser-doctor` and
+//! hermes' `_browser_cdp_check` cover.
 //!
-//! All probes are read-only environment/binary lookups (no process spawns, no
-//! network), so the check is non-repairable: installing a browser or Node is a
-//! network download, not a mechanical fix, so we surface a `fix_hint` instead.
-//! The two binary probes run **concurrently** via `tokio::join!` — surpassing
-//! the reference doctors' sequential probing.
+//! All probes are read-only environment/binary/ledger lookups (no process
+//! spawns, no network), so the check is non-repairable: installing a browser,
+//! Node or the managed CLI is a network download, not a mechanical fix, so we
+//! surface a `fix_hint` instead. The three binary probes run **concurrently**
+//! via `tokio::join!` — surpassing the reference doctors' sequential probing.
+//!
+//! The managed probe deliberately calls the *same* function the tool-gating
+//! probe uses (`tools::probes::browser::managed_cli_path`). These two are twins
+//! — one hides the `browser_*` tools, the other explains why — and a twin that
+//! answers "is the managed driver provisioned?" with its own private lookup is
+//! how the family spent four rounds gated on `npx`, a binary the managed driver
+//! never runs.
 
 use async_trait::async_trait;
 
@@ -33,6 +42,13 @@ enum ChromiumProbe {
 /// Outcome of the Node/`npx` probe (the existing-session driver shells out to
 /// `npx chrome-devtools-mcp`).
 enum NodeProbe {
+    Found(String),
+    Missing,
+}
+
+/// Outcome of the managed-driver probe: whether a `playwright-cli` is already
+/// provisioned, so a managed call can run instead of first bootstrapping one.
+enum ManagedProbe {
     Found(String),
     Missing,
 }
@@ -68,6 +84,18 @@ impl BrowserRuntimeCheck {
         .unwrap_or(NodeProbe::Missing)
     }
 
+    /// Locate the managed driver's `playwright-cli`. Delegates to the
+    /// tool-gating probe's resolver so the doctor and the gate can never give
+    /// different answers about the same driver.
+    async fn probe_managed() -> ManagedProbe {
+        tokio::task::spawn_blocking(|| match crate::tools::probes::browser::managed_cli_path() {
+            Some(path) => ManagedProbe::Found(path.display().to_string()),
+            None => ManagedProbe::Missing,
+        })
+        .await
+        .unwrap_or(ManagedProbe::Missing)
+    }
+
     /// On Linux a *headed* managed browser needs an X11/Wayland display; with
     /// none set Playwright silently falls back to headless. Returns `true` when
     /// a display server is reachable. Non-Linux platforms always have a native
@@ -93,10 +121,14 @@ impl HealthCheck for BrowserRuntimeCheck {
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
-        // Both binary probes are independent — run them concurrently.
-        let (chromium, node) = tokio::join!(Self::probe_chromium(), Self::probe_node());
+        // All three binary probes are independent — run them concurrently.
+        let (chromium, node, managed) = tokio::join!(
+            Self::probe_chromium(),
+            Self::probe_node(),
+            Self::probe_managed()
+        );
 
-        let mut findings = Vec::with_capacity(3);
+        let mut findings = Vec::with_capacity(4);
 
         // Every finding is Info-level (advisory). The browser is an *optional*
         // subsystem and both drivers have legitimate prerequisite-free setups
@@ -115,8 +147,9 @@ impl HealthCheck for BrowserRuntimeCheck {
                 "System browser not detected (managed driver unaffected)",
                 "No Chrome/Chromium/Brave/Edge on PATH or in the well-known install \
                  locations. The existing-session driver (attach to your own Chrome) \
-                 needs one; the managed driver provisions its own Chromium via \
-                 Playwright and works without it.",
+                 needs one; the managed driver brings its own Chromium and works \
+                 without it — see the managed-runtime finding for whether that one \
+                 is provisioned.",
             )
             .with_fix_hint(
                 "Install Chrome/Chromium, or set ALEPH_CHROME_PATH, to enable the \
@@ -140,6 +173,29 @@ impl HealthCheck for BrowserRuntimeCheck {
             .with_fix_hint(
                 "Install Node.js (which provides `npx`) to enable the existing-session \
                  browser driver.",
+            ),
+        });
+
+        findings.push(match managed {
+            ManagedProbe::Found(path) => Finding::ok(
+                ID,
+                "Managed browser runtime provisioned",
+                format!("playwright-cli at {path} (used by the managed driver)."),
+            ),
+            ManagedProbe::Missing => Finding::ok(
+                ID,
+                "Managed browser runtime not provisioned",
+                "No `playwright-cli` on PATH or marked Ready in the capability ledger \
+                 (~/.aleph/runtimes/ledger.json). Browsing is available only through \
+                 the existing-session driver until one is provisioned — and with \
+                 neither driver runnable the `browser_*` tools are withheld from the \
+                 model entirely (`tools::probes::browser`), so the bootstrap will not \
+                 be triggered by a tool call.",
+            )
+            .with_fix_hint(
+                "Install the managed runtime from the Panel's Runtimes page (Browser \
+                 settings links to it), or install Chrome + Node to use the \
+                 existing-session driver.",
             ),
         });
 
@@ -168,17 +224,32 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn always_reports_chromium_and_node_findings() {
+    async fn always_reports_chromium_node_and_managed_findings() {
         let check = BrowserRuntimeCheck::new();
         let findings = check.run(Posture::Inspect).await;
-        // Chromium + Node probes always emit exactly one finding each; the
-        // display finding is conditional, so there are 2 or 3 total.
+        // Chromium + Node + managed probes always emit exactly one finding
+        // each; the display finding is conditional, so there are 3 or 4 total.
         assert!(
-            findings.len() == 2 || findings.len() == 3,
+            findings.len() == 3 || findings.len() == 4,
             "got {}",
             findings.len()
         );
         assert!(findings.iter().all(|f| f.check_id == ID));
+    }
+
+    /// The twin invariant: the doctor's managed finding and the tool gate must
+    /// be reading the same fact. A doctor that says "provisioned" while the
+    /// gate hides the tools (or the reverse) is worse than no finding — it
+    /// sends the user looking for a browser problem that is really a gating
+    /// problem.
+    #[tokio::test]
+    async fn the_managed_finding_agrees_with_the_tool_gate() {
+        let provisioned = crate::tools::probes::browser::managed_cli_path().is_some();
+        let findings = BrowserRuntimeCheck::new().run(Posture::Inspect).await;
+        let reported = findings
+            .iter()
+            .any(|f| f.title == "Managed browser runtime provisioned");
+        assert_eq!(reported, provisioned);
     }
 
     #[tokio::test]

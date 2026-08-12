@@ -34,6 +34,12 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
+// The `evaluate` step's script cap is the standalone tool's cap, imported
+// rather than copied: two constants kept in step by a drift guard are still two
+// constants, and the guard could only ever prove they matched the day someone
+// last read it.
+use super::evaluate::MAX_EVAL_SCRIPT_CHARS;
+
 /// Maximum actions in one call. openclaw allows 100 per `act batch`; 50 is the
 /// deliberate divergence — a procedure runs inside a single tool call, and 50
 /// actions bounds that call's output size without giving up the round-trip
@@ -63,18 +69,6 @@ const MAX_EXEC_ACTIONS: usize = 50;
 /// `budget::tests::browser_exec_budget_outlives_its_own_wall_clock` keeps the
 /// two ordered.
 pub(crate) const MAX_EXEC_BUDGET_MS: u64 = 600_000;
-
-/// Hard upper bound on a batched `evaluate` payload — the same cap
-/// `browser_evaluate` applies for the same reason (a multi-MB script blocks
-/// the backend serializer or starves the browser process), so a script refused
-/// as a standalone call is refused as a step.
-///
-/// Declared here rather than in `evaluate.rs` because this is the module that
-/// needs it visible; `evaluate.rs` still declares its own private copy and
-/// [`tests::evaluate_script_cap_matches_the_standalone_tool`] fails if the two
-/// ever drift. Collapsing that copy into this constant is a one-line follow-up
-/// in a file this change does not own.
-pub(crate) const MAX_EVAL_SCRIPT_CHARS: usize = 64 * 1024;
 
 /// Default per-wait timeout when a `wait` action omits `timeout_ms` — the
 /// same 5s default `browser_wait_for` uses.
@@ -108,11 +102,10 @@ pub enum ExecAction {
         /// Accessibility `ref_id` from a previous snapshot.
         ref_id: String,
     },
-    /// Type text into an element by snapshot ref_id (default: the focused
-    /// element).
+    /// Type text into an element by snapshot ref_id.
     Type {
-        /// Accessibility `ref_id` from a previous snapshot; omit to type into
-        /// whatever currently holds focus.
+        /// Accessibility `ref_id` from a previous snapshot. Required — there is
+        /// no coordinate or focus-relative form of this action.
         #[serde(default)]
         ref_id: Option<String>,
         /// Text to type.
@@ -354,20 +347,6 @@ fn ref_target(ref_id: &str) -> ActionTarget {
     }
 }
 
-/// The target `browser_type` uses: the named ref, or the literal `focused`
-/// pseudo-ref when none is given.
-///
-/// The `type` action used to advertise `x` / `y` like `click` does. Neither
-/// backend honours them: the playwright CLI drops the coordinates and types
-/// into whatever holds focus, and the Chrome DevTools backend rejects a
-/// coordinate target outright. The schema described a capability that never
-/// existed, so it is gone; "type into the focused element" — the behaviour the
-/// managed backend actually had — is now what omitting `ref_id` means, exactly
-/// as in `browser_type`.
-fn type_target(ref_id: Option<&String>) -> ActionTarget {
-    ref_target(ref_id.map_or("focused", String::as_str))
-}
-
 /// Validate the whole procedure and lower it to executable form. Fails BEFORE
 /// any approval check or backend call — a malformed action list is a model
 /// mistake and must not consume a user approval or touch the page.
@@ -396,8 +375,23 @@ fn plan_actions(actions: &[ExecAction]) -> std::result::Result<Vec<PlannedAction
                     PlannedAction::Click(resolve_xy_target("click", ref_id.as_ref(), *x, *y)?)
                 }
                 ExecAction::Dblclick { ref_id } => PlannedAction::Dblclick(ref_target(ref_id)),
+                // A targetless `type` is refused, not lowered to a `focused`
+                // pseudo-ref. That literal had zero readers under
+                // `src/browser/`: both backends resolve a `Ref` as a snapshot
+                // handle, so the promised "type into whatever holds focus"
+                // reached the page as a lookup for an element named `focused`
+                // and failed there. `browser_type` cut the same encoding and
+                // names the one targeting method that works; the two faces of
+                // the verb now say the same thing.
                 ExecAction::Type { ref_id, text } => {
-                    PlannedAction::Type(type_target(ref_id.as_ref()), text.clone())
+                    let Some(ref_id) = ref_id else {
+                        return Err(
+                            "type requires 'ref_id': add a snapshot step and pass the ref_id it \
+                             reports for the field you want to type into"
+                                .to_string(),
+                        );
+                    };
+                    PlannedAction::Type(ref_target(ref_id), text.clone())
                 }
                 ExecAction::Fill { ref_id, value } => {
                     PlannedAction::Fill(ref_target(ref_id), value.clone())
@@ -631,8 +625,15 @@ async fn run_one(
     tab_id: &str,
     action: &PlannedAction,
 ) -> std::result::Result<(&'static str, Option<String>), String> {
+    // Every backend error leaves through the same egress chokepoint the read
+    // steps and every standalone tool use: `BrowserError` carries raw
+    // playwright-cli stderr verbatim, which is unbounded and can echo a
+    // credential the page put in a URL — and this string is interpolated into
+    // the `aborted at #N: …` message the model reads. A bare `to_string()` on
+    // the write actions was the one path around it.
     let plain = |r: std::result::Result<(), crate::browser::BrowserError>| {
-        r.map(|()| ("ok", None)).map_err(|e| e.to_string())
+        r.map(|()| ("ok", None))
+            .map_err(|e| super::backend_error_text(manager, &e))
     };
     match action {
         // The navigation chain of `browser_navigate`, reused rather than
@@ -657,7 +658,7 @@ async fn run_one(
                 .navigate(tab_id, url)
                 .await
                 .map(|()| ("navigated", None))
-                .map_err(|e| e.to_string())
+                .map_err(|e| super::backend_error_text(manager, &e))
         }
         PlannedAction::Click(t) => plain(backend.click(tab_id, t.clone()).await),
         PlannedAction::Dblclick(t) => plain(backend.dblclick(tab_id, t.clone()).await),
@@ -679,7 +680,7 @@ async fn run_one(
             .wait_for(tab_id, condition, *timeout_ms)
             .await
             .map(|found| (if found { "found" } else { "not found" }, None))
-            .map_err(|e| e.to_string()),
+            .map_err(|e| super::backend_error_text(manager, &e)),
         PlannedAction::Snapshot { max_chars } => {
             read_guard(manager, backend, tab_id).await?;
             let snap = backend
@@ -713,15 +714,13 @@ async fn run_one(
 impl AlephTool for BrowserExecTool {
     const NAME: &'static str = "browser_exec";
     const DESCRIPTION: &'static str =
-        "Run one whole browser sub-procedure in ONE call: an ordered action list of navigate, \
-         click/dblclick/type/fill/hover/scroll/select/press_key, wait, and the READS (snapshot, \
-         evaluate). Prefer one call per sub-procedure — navigate, act, wait, then snapshot — \
-         over a call per action; read output comes back in results[].output, so no extra call \
-         is needed to see the page. Every step runs the same guards as its standalone tool \
-         (navigation SSRF, input secret scan, output redaction, per-action approval), and \
-         execution stops at the first failure reporting {completed, failed_at, results}. A ref \
-         is only valid on the page it was captured from, so put a snapshot step after anything \
-         that changes the page and target only refs read later in the same call; on failure, \
+        "Run a whole browser sub-procedure in ONE call: an ordered list of navigate, \
+         click/dblclick/type/fill/hover/scroll/select/press_key, wait, and the reads (snapshot, \
+         evaluate) whose output comes back in results[].output. Prefer one call per \
+         sub-procedure — navigate, act, wait, read — over a call per action. Every step runs its \
+         standalone tool's guards (SSRF, secret scan, redaction, approval); execution stops at \
+         the first failure with {completed, failed_at, results}. A ref is only valid on the page \
+         it was captured from: put a snapshot step after anything that changes the page, and \
          snapshot again before retrying.";
     type Args = BrowserExecArgs;
     type Output = BrowserExecOutput;
@@ -981,19 +980,20 @@ mod tests {
         assert!(err.contains("requires a target"), "got: {err}");
     }
 
-    /// A `type` with no ref means the focused element, exactly as in
-    /// `browser_type` — not a coordinate target neither backend honours.
+    /// A `type` with no ref is refused, exactly as in `browser_type`. It used
+    /// to lower to `Ref { ref_id: "focused" }` — a literal nothing under
+    /// `src/browser/` reads, so the step reached the page as a lookup for an
+    /// element named `focused` and failed there. The two faces of the verb must
+    /// answer the same way.
     #[test]
-    fn plan_actions_types_into_the_focused_element_by_default() {
-        let planned = plan_actions(&[ExecAction::Type {
+    fn plan_actions_rejects_a_targetless_type() {
+        let err = plan_actions(&[ExecAction::Type {
             ref_id: None,
             text: "hi".into(),
         }])
-        .unwrap();
-        assert!(matches!(
-            &planned[0],
-            PlannedAction::Type(ActionTarget::Ref { ref_id }, _) if ref_id == "focused"
-        ));
+        .unwrap_err();
+        assert!(err.contains("ref_id"), "got: {err}");
+        assert!(err.contains("snapshot"), "got: {err}");
     }
 
     #[test]
@@ -1003,30 +1003,6 @@ mod tests {
         }])
         .unwrap_err();
         assert!(err.contains("the cap is"), "got: {err}");
-    }
-
-    /// `browser_evaluate` keeps a private copy of this cap. Until it imports
-    /// [`MAX_EVAL_SCRIPT_CHARS`], this is what stops the two from drifting — a
-    /// script accepted as a step but refused as a standalone call (or the
-    /// reverse) is one tool telling the model two different things.
-    ///
-    /// CRLF-safe: `\r` is stripped before matching (CLAUDE.md §10).
-    #[test]
-    fn evaluate_script_cap_matches_the_standalone_tool() {
-        let src = include_str!("evaluate.rs").replace('\r', "");
-        let decl = src
-            .split("#[cfg(test)]")
-            .next()
-            .unwrap_or(&src)
-            .lines()
-            .find(|l| l.contains("MAX_EVAL_SCRIPT_CHARS") && l.contains('='))
-            .expect("browser_evaluate must still declare MAX_EVAL_SCRIPT_CHARS")
-            .to_string();
-        assert!(
-            decl.contains("64 * 1024"),
-            "browser_evaluate's script cap drifted from browser_exec's \
-             ({MAX_EVAL_SCRIPT_CHARS}): {decl}"
-        );
     }
 
     #[test]
@@ -1142,6 +1118,30 @@ mod tests {
         assert_eq!(backend.calls(), vec!["click:Ref{ref_id:\"e1\"}"]);
     }
 
+    /// Strict oracle for a read step's payload: the credential is gone and the
+    /// page bytes are bracketed by BOTH marker lines.
+    ///
+    /// `split_external_fence` is what makes this strict — it refuses anything it
+    /// cannot put back together byte-for-byte, so a half fence yields `None`
+    /// where a pair of `contains()` checks would pass on an opening marker with
+    /// no end. It also proves the page text sits INSIDE the boundary rather
+    /// than merely somewhere in the string.
+    fn assert_masked_and_wholly_fenced(output: &str) -> &str {
+        use crate::security::content_sanitizer::split_external_fence;
+        assert!(
+            !output.contains(FAKE_KEY),
+            "the credential survived: {output}"
+        );
+        assert!(output.contains("[REDACTED:"), "got: {output}");
+        let fenced = split_external_fence(output)
+            .unwrap_or_else(|| panic!("half or absent fence: {output}"));
+        assert!(
+            fenced.interior.contains("[REDACTED:"),
+            "the page text must sit inside the fence: {output}"
+        );
+        fenced.interior
+    }
+
     /// A read's payload crosses the same egress boundary the standalone read
     /// tools use: credentials scrubbed, page bytes fenced.
     #[tokio::test]
@@ -1154,16 +1154,131 @@ mod tests {
         let (results, failure) = run(&manager, &backend, &planned).await;
         assert!(failure.is_none(), "unexpected failure: {failure:?}");
         let output = results[0].output.as_deref().expect("a snapshot step reads");
+        let interior = assert_masked_and_wholly_fenced(output);
+        // A read that fits its budget is emitted whole: the ref the model needs
+        // is there and nothing claims a truncation that did not happen.
+        assert!(interior.contains("[ref=e2]"), "got: {interior}");
+        assert!(!output.contains("snapshot truncated"), "got: {output}");
+    }
+
+    /// The over-budget read path — the one every content-bounding line in the
+    /// `Ok(…)` arm lives on, and the one no test used to execute.
+    ///
+    /// Four properties at once, because each is invisible on its own: the cut
+    /// lands on a line boundary, no `[ref=eN]` token is split across it, the
+    /// refs the model can act on are exactly the whole lines that fit, and the
+    /// emitted text is still redacted and wholly fenced with the truncation
+    /// note OUTSIDE the boundary (it is ours, not the page's).
+    #[tokio::test]
+    async fn a_truncated_snapshot_step_cuts_on_a_line_boundary_without_splitting_a_ref() {
+        // Budget is clamped to `MIN_SNAPSHOT_CHARS`, so the tree must exceed
+        // that to truncate at all. The credential rides on the first line, i.e.
+        // inside the kept prefix, so the redaction assertion is not vacuous.
+        let mut lines = vec![format!("- text \"api key {FAKE_KEY}\" [ref=e0]\n")];
+        lines.extend((1..400).map(|i| format!("- button \"row {i:03}\" [ref=e{i}]\n")));
+        let tree: String = lines.concat();
+
+        let budget = crate::builtin_tools::browser_tools::snapshot::MIN_SNAPSHOT_CHARS;
+        // Whole lines that fit inside the budget — what `bound_content` keeps.
+        let kept = lines
+            .iter()
+            .scan(0usize, |end, line| {
+                *end += line.chars().count();
+                Some(*end)
+            })
+            .take_while(|end| *end <= budget)
+            .count();
         assert!(
-            !output.contains(FAKE_KEY),
-            "the credential survived: {output}"
+            kept > 0 && kept < lines.len(),
+            "the fixture must actually straddle the budget (kept {kept} of {})",
+            lines.len()
         );
-        assert!(output.contains("[REDACTED:"), "got: {output}");
+
+        let backend = FakeBackend::new(None).with_snapshot_text(tree);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Snapshot {
+            max_chars: Some(budget),
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        let output = results[0].output.as_deref().expect("a snapshot step reads");
+        let interior = assert_masked_and_wholly_fenced(output);
+
         assert!(
-            output.contains(crate::security::content_sanitizer::FENCE_OPEN_PREFIX)
-                && output.contains(crate::security::content_sanitizer::FENCE_CLOSE_PREFIX),
-            "page content reached the model unfenced: {output}"
+            interior.ends_with('\n'),
+            "the cut must land on a line boundary: {interior:?}"
         );
+        // Every emitted `[ref=` is closed on its own line, so no token was
+        // halved by the cut. (Counting `]` over the whole interior would not
+        // do: `[REDACTED:…]` contributes one too.)
+        assert!(
+            interior
+                .lines()
+                .filter(|l| l.contains("[ref="))
+                .all(|l| l.split("[ref=").nth(1).is_some_and(|r| r.contains(']'))),
+            "a ref token was split: {interior:?}"
+        );
+        // The refs actually present in the EMITTED text are the whole lines the
+        // budget admitted — the count `browser_snapshot` reports for the same
+        // read, derived the same way (post-bound, not pre-bound).
+        assert_eq!(interior.matches("[ref=").count(), kept);
+        // The note naming the lever is ours, so it sits outside the fence.
+        use crate::security::content_sanitizer::split_external_fence;
+        let suffix = split_external_fence(output).expect("whole fence").suffix;
+        assert!(
+            suffix.contains("snapshot truncated to") && suffix.contains("max_chars"),
+            "the model must be told what was cut and what to raise: {suffix}"
+        );
+    }
+
+    /// The `evaluate` read arm, end to end: a page that hands back a credential
+    /// must not put it into model context, and the value is fenced like any
+    /// other page-derived text.
+    #[tokio::test]
+    async fn an_evaluate_step_masks_a_credential_the_page_returned() {
+        let backend = FakeBackend::new(None)
+            .with_evaluate_responses([format!("{{\"token\":\"{FAKE_KEY}\"}}")]);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Evaluate {
+            js: "localStorage.getItem('session')".into(),
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        let output = results[0]
+            .output
+            .as_deref()
+            .expect("an evaluate step reads");
+        assert_masked_and_wholly_fenced(output);
+        // The read-time SSRF re-check runs before the evaluate, as for snapshot.
+        assert_eq!(
+            backend.calls(),
+            vec!["list_tabs", "evaluate:localStorage.getItem('session')"]
+        );
+        // The step label reports the script's size, never its text.
+        assert!(!results[0].action.contains("localStorage"));
+    }
+
+    /// A backend error is page-adjacent text too: raw playwright-cli stderr can
+    /// carry a credential the page put in a URL, and it is interpolated into the
+    /// `aborted at #N` message the model reads. The write actions used to hand
+    /// it back with a bare `to_string()`, around the egress chokepoint every
+    /// other path uses.
+    #[tokio::test]
+    async fn a_failing_write_step_redacts_the_backend_error() {
+        let backend = FakeBackend::new(Some(1))
+            .with_failure_message(format!("playwright: 401 for token {FAKE_KEY}"));
+        let manager = manager();
+        let planned = plan_actions(&[click("e1")]).unwrap();
+
+        let (_, failure) = run(&manager, &backend, &planned).await;
+        let (ordinal, err) = failure.expect("the backend failed");
+        assert_eq!(ordinal, 1);
+        assert!(!err.contains(FAKE_KEY), "the credential survived: {err}");
+        assert!(err.contains("[REDACTED:"), "got: {err}");
     }
 
     /// The read-time guard runs per read step, so a page an earlier step (or a

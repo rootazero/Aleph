@@ -95,6 +95,17 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     // harness, throwing that progress away and reporting only an opaque
     // overrun.
     ("task_wait", 630_000),
+    // Drives a whole browser sub-procedure — up to 50 actions, several of
+    // which can legitimately park on a clamped 120s wait. Same rule as
+    // `ask_user` and `task_wait`, third tool: the budget must sit ABOVE the
+    // tool's own ceiling (`browser_tools::exec::MAX_EXEC_BUDGET_MS`, 600s) so
+    // what fires is the tool's clock, which returns the steps it already
+    // completed plus the "take a fresh snapshot" recovery message. It used to
+    // be absent here, so it resolved to the 300s default — exactly half its
+    // own budget — and the harness was guaranteed to kill the call before that
+    // budget could ever fire, discarding the partial results in favour of an
+    // opaque overrun.
+    ("browser_exec", 630_000),
 ];
 
 /// Returns the configured wall-clock budget for a builtin tool, or
@@ -160,13 +171,13 @@ mod tests {
 
     #[test]
     fn table_size_matches_expected_count() {
-        // Locked at 20 entries (12 fast + 3 slow + 2 exec + ask_user +
-        // subagent + task_wait; the 2026-07 phantom sweep removed the
-        // never-registered `list_tools` / `search_tools` rows and renamed stale
-        // `skill_reader` to `skill_read`). Bumping this requires updating the
-        // table AND adjusting this constant in the same commit — the assertion
-        // is a code-review signal, not a value check.
-        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 20);
+        // Locked at 21 entries (12 fast + 3 slow + 2 exec + ask_user +
+        // subagent + task_wait + browser_exec; the 2026-07 phantom sweep
+        // removed the never-registered `list_tools` / `search_tools` rows and
+        // renamed stale `skill_reader` to `skill_read`). Bumping this requires
+        // updating the table AND adjusting this constant in the same commit —
+        // the assertion is a code-review signal, not a value check.
+        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 21);
     }
 
     #[test]
@@ -207,6 +218,28 @@ mod tests {
             budget > ceiling_ms,
             "task_wait budget {budget}ms must exceed its own {ceiling_ms}ms ceiling, \
              or the harness clock preempts the tool's and the progress report is lost"
+        );
+    }
+
+    /// Same rule, third tool — and the one where the two clocks were not even
+    /// close.
+    ///
+    /// `browser_exec` was absent from the table while its own doc comment
+    /// argued at length for 600s of real wall clock, so the resolution chain
+    /// gave it `DEFAULT_TOOL_BUDGET_MS` (300s) and the harness killed every
+    /// long procedure at half the tool's budget: its wall-clock check could
+    /// never fire, and the partial `results` plus the stale-ref recovery
+    /// message it exists to return were thrown away for an opaque overrun.
+    /// Neither number was wrong on its own — only the two in one assertion
+    /// catch it.
+    #[test]
+    fn browser_exec_budget_outlives_its_own_wall_clock() {
+        let own_ms = crate::builtin_tools::browser_tools::exec::MAX_EXEC_BUDGET_MS;
+        let budget = builtin_tool_budget_ms("browser_exec").expect("browser_exec is budgeted");
+        assert!(
+            budget > own_ms,
+            "browser_exec budget {budget}ms must exceed its own {own_ms}ms wall clock, \
+             or the harness clock preempts the tool's and the partial procedure is lost"
         );
     }
 

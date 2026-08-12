@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -54,19 +55,45 @@ pub struct BrowserSessionOutput {
 #[derive(Clone)]
 pub struct BrowserSessionTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserSessionTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate save/load behind the approval policy, classified as
+    /// [`ActionType::BrowserCookiesWrite`].
+    ///
+    /// `browser_cookies set` is gated on the stated ground that "a cookie value
+    /// is a credential by design" — and this tool moves EVERY cookie plus
+    /// localStorage in one call: `save` writes the whole authenticated identity
+    /// to a file on disk, `load` installs someone's whole authenticated
+    /// identity into the live browser. Leaving the bulk operation ungated while
+    /// the single-cookie one asks made the gate trivially avoidable, so both
+    /// route through the same policy key. A dedicated `BrowserSession` variant
+    /// would read better in a policy file but lives in `src/approval/types.rs`.
+    ///
+    /// With no policy wired the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
-/// Validate a session name and resolve it to an absolute path under the managed
-/// browser state directory (`~/.aleph/data/browser/sessions/<name>.json`),
-/// creating the directory. Rejects empty names, leading dots, and any character
-/// outside `[A-Za-z0-9._-]` so a caller can never escape the managed directory.
-async fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String> {
+/// Reject empty names, leading dots, and any character outside `[A-Za-z0-9._-]`
+/// so a caller can never escape the managed directory.
+///
+/// Split out from [`resolve_session_path`] because the two run at different
+/// points: the name is a pure check that must precede the approval gate (a
+/// malformed name is a model mistake and must not consume a user approval),
+/// while resolving the path CREATES the sessions directory — a side effect a
+/// denied call must not leave behind.
+fn validate_session_name(name: &str) -> std::result::Result<(), String> {
     if name.is_empty() {
         return Err("session name must not be empty".into());
     }
@@ -80,6 +107,14 @@ async fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String
              and do not start with '.' (no path separators)"
         ));
     }
+    Ok(())
+}
+
+/// Resolve a validated session name to an absolute path under the managed
+/// browser state directory (`~/.aleph/data/browser/sessions/<name>.json`),
+/// creating the directory.
+async fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String> {
+    validate_session_name(name)?;
     let dir = crate::discovery::aleph_home_dir()
         .map_err(|e| format!("cannot resolve aleph home: {e}"))?
         .join("data")
@@ -94,13 +129,44 @@ async fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String
 #[async_trait]
 impl AlephTool for BrowserSessionTool {
     const NAME: &'static str = "browser_session";
+    // One-sided capability — `BrowserBackend::{save_state,load_state}` are
+    // served only by the managed Playwright backend; see `pdf.rs`.
     const DESCRIPTION: &'static str =
         "Save or restore a browser login session (cookies + localStorage) by name, \
-         so a logged-in state can be reused without re-authenticating";
+         so a logged-in state can be reused without re-authenticating \
+         — managed profiles only (e.g. profile='default')";
     type Args = BrowserSessionArgs;
     type Output = BrowserSessionOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        if let Err(e) = validate_session_name(&args.name) {
+            return Ok(BrowserSessionOutput {
+                success: false,
+                path: None,
+                message: Some(e),
+            });
+        }
+
+        // Gate AFTER name validation (a malformed name must not consume an
+        // approval) and BEFORE both the sessions directory is created and the
+        // backend is constructed, so a denied call leaves nothing behind. The
+        // audit target names the session and direction, never the state file's
+        // contents.
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserCookiesWrite,
+            "session",
+            &format!("{:?} auth state '{}'", args.action, args.name),
+        )
+        .await
+        {
+            return Ok(BrowserSessionOutput {
+                success: false,
+                path: None,
+                message: Some(message),
+            });
+        }
+
         let path = match resolve_session_path(&args.name).await {
             Ok(p) => p,
             Err(e) => {
@@ -112,13 +178,14 @@ impl AlephTool for BrowserSessionTool {
             }
         };
         let path_str = path.to_string_lossy().to_string();
+
         let backend = match super::make_backend(&self.manager, &args.profile) {
             Ok(b) => b,
             Err(e) => {
                 return Ok(BrowserSessionOutput {
                     success: false,
                     path: None,
-                    message: Some(e.to_string()),
+                    message: Some(super::backend_error_text(&self.manager, &e)),
                 });
             }
         };
@@ -142,7 +209,11 @@ impl AlephTool for BrowserSessionTool {
             Err(e) => Ok(BrowserSessionOutput {
                 success: false,
                 path: None,
-                message: Some(format!("Session {:?} failed: {e}", args.action)),
+                message: Some(format!(
+                    "Session {:?} failed: {}",
+                    args.action,
+                    super::backend_error_text(&self.manager, &e)
+                )),
             }),
         }
     }
@@ -182,6 +253,84 @@ mod tests {
         // Without a running browser the save fails gracefully.
         assert!(!result.success);
         assert!(result.message.is_some());
+    }
+
+    fn deny_policy() -> Arc<crate::approval::ConfigApprovalPolicy> {
+        use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
+        let mut defaults = std::collections::HashMap::new();
+        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_session_save_is_gated_before_the_backend() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSessionTool::new(manager).with_approval_policy(deny_policy());
+        let result = tool
+            .call(BrowserSessionArgs {
+                profile: "default".into(),
+                action: SessionAction::Save,
+                name: "github".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        // The denial — not a "no browser running" error — proves the gate ran
+        // before the backend was constructed. And nothing was written.
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("denied by approval policy")),
+            "got: {:?}",
+            result.message
+        );
+        assert!(result.path.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_load_is_gated_before_the_backend() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSessionTool::new(manager).with_approval_policy(deny_policy());
+        let result = tool
+            .call(BrowserSessionArgs {
+                profile: "default".into(),
+                action: SessionAction::Load,
+                name: "github".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("denied by approval policy")),
+            "got: {:?}",
+            result.message
+        );
+    }
+
+    #[tokio::test]
+    async fn test_session_bad_name_does_not_consume_approval() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSessionTool::new(manager).with_approval_policy(deny_policy());
+        let result = tool
+            .call(BrowserSessionArgs {
+                profile: "default".into(),
+                action: SessionAction::Load,
+                name: "../evil".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("invalid session name"), "got: {message}");
+        assert!(!message.contains("denied"), "got: {message}");
     }
 
     #[tokio::test]

@@ -577,8 +577,8 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "browser_batch",
-        description: <crate::builtin_tools::browser_tools::batch::BrowserBatchTool as crate::tools::AlephTool>::DESCRIPTION,
+        name: "browser_exec",
+        description: <crate::builtin_tools::browser_tools::exec::BrowserExecTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -1190,7 +1190,7 @@ pub fn create_tool_boxed(
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
-        | "browser_batch" | "browser_console" | "browser_hover" | "browser_scroll"
+        | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
         | "browser_pdf" | "browser_network" | "browser_dialog" | "browser_drag"
         | "browser_upload" | "browser_resize" | "browser_emulate" | "browser_cookies"
         | "browser_session" | "browser_profile" => None,
@@ -1527,7 +1527,52 @@ mod tests {
     /// runtime `summary` string states it in the response itself, which is
     /// strictly better than paying for it on every request that merely lists
     /// the tool.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 94_306;
+    ///
+    /// Then `browser_exec` (2026-08-12, `browser_batch` renamed and widened
+    /// from nine write actions to a whole sub-procedure — navigate, act, wait,
+    /// and the reads): +467 B on that one entry, measured catalog 81,620 B.
+    /// The catalog figure also carries the rest of the same wave's browser
+    /// description work, so it is the measurement and not this entry's
+    /// arithmetic. Against the three questions: (1) four runtime facts survive — that ONE
+    /// call is meant to carry a whole sub-procedure, that the read output
+    /// comes back in `results[].output` (without which the model still spends
+    /// a second call to see the page, which is the entire point of the
+    /// change), that every step re-enters the standalone tool's guards (so it
+    /// neither treats the tool as an escape hatch nor avoids it fearing one),
+    /// and that a ref is only valid on the page it was captured from, which is
+    /// what makes a multi-page procedure either work or silently target the
+    /// wrong element; (2) none is derivable by a stronger model — "one call
+    /// per sub-procedure" is a fact about this deployment's cost model and ref
+    /// staleness is a property of this snapshot implementation, not of
+    /// browsers; (3) everything the schema already ships was cut — the meaning
+    /// of every per-action field lives in its `#[schemars]` doc on
+    /// `ExecAction`, and so do the `profile` argument, the wait clamps and the
+    /// `max_chars` window.
+    ///
+    /// Settled at the end of that wave: **94,896 B** (81,507 catalog + 13,389
+    /// registry-only), i.e. +590 B over the 94,306 B this round started at, and
+    /// 113 B BELOW the 95,009 B the `browser_exec` entry provisionally claimed.
+    /// The ceiling comes back down because the rest of the wave paid for it:
+    /// three managed-profile-only tools (`browser_pdf` / `browser_session` /
+    /// `browser_cookies`) gained a 50-byte restriction each — a runtime fact
+    /// that stops the model picking a tool its profile cannot run — and
+    /// `browser_emulate`'s claim of six overrides was corrected to the one the
+    /// default profile actually honours, while the `browser_exec` and
+    /// `browser_emulate` entries were then trimmed against question (3) until
+    /// the family fit under the number it was already spending.
+    ///
+    /// One thing this ratchet deliberately does NOT measure, worth stating
+    /// because it moved a long way in the opposite direction the same day: the
+    /// catalog is not the wire. 23 of the 26 browser tools are now deferred in
+    /// work and code mode (`SessionMode::defers_tool`), and a deferred tool is
+    /// dropped from `list()` entirely — name, description and the collapse hint
+    /// with it. So the browser family's per-request cost fell by roughly 7.6 KB
+    /// in the modes that carry it while this catalog total rose by 0.6 KB.
+    /// Raising the ceiling is still the wrong reflex; the point is that a
+    /// catalog byte and a request byte stopped being the same byte for this
+    /// family, and the guard that bounds the second one is
+    /// `session_mode::tests::browser_family_deferral_is_measured`.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 94_896;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -1716,7 +1761,7 @@ mod tests {
         assert!(names.contains(&"browser_fill_form".to_string()));
         assert!(names.contains(&"browser_press_key".to_string()));
         assert!(names.contains(&"browser_wait_for".to_string()));
-        assert!(names.contains(&"browser_batch".to_string()));
+        assert!(names.contains(&"browser_exec".to_string()));
         assert!(names.contains(&"browser_console".to_string()));
         assert!(names.contains(&"browser_hover".to_string()));
         assert!(names.contains(&"browser_scroll".to_string()));
@@ -1784,7 +1829,7 @@ mod tests {
         assert!(create_tool_boxed("browser_fill_form", None).is_none());
         assert!(create_tool_boxed("browser_press_key", None).is_none());
         assert!(create_tool_boxed("browser_wait_for", None).is_none());
-        assert!(create_tool_boxed("browser_batch", None).is_none());
+        assert!(create_tool_boxed("browser_exec", None).is_none());
         assert!(create_tool_boxed("browser_console", None).is_none());
         assert!(create_tool_boxed("browser_profile", None).is_none());
     }

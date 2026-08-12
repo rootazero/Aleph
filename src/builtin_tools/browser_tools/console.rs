@@ -60,13 +60,16 @@ impl AlephTool for BrowserConsoleTool {
                 Err(e) => Ok(BrowserConsoleOutput {
                     success: false,
                     messages: String::new(),
-                    message: Some(format!("Console read failed: {e}")),
+                    message: Some(format!(
+                        "Console read failed: {}",
+                        super::backend_error_text(&self.manager, &e)
+                    )),
                 }),
             },
             Err(e) => Ok(BrowserConsoleOutput {
                 success: false,
                 messages: String::new(),
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }

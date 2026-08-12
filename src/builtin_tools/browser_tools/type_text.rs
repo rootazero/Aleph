@@ -21,9 +21,8 @@ pub struct BrowserTypeArgs {
     pub profile: String,
     /// Text to type into the element.
     pub text: String,
-    /// CSS selector of the element to type into (optional, uses focused element if omitted).
-    pub selector: Option<String>,
-    /// Accessibility `ref_id` from a previous snapshot (optional).
+    /// Accessibility `ref_id` of the element to type into, from a previous
+    /// `browser_snapshot`.
     pub ref_id: Option<String>,
 }
 
@@ -34,7 +33,7 @@ pub struct BrowserTypeOutput {
     pub message: Option<String>,
 }
 
-/// Types text into an element on the page, identified by selector, `ref_id`, or the focused element.
+/// Types text into an element on the page, identified by its snapshot `ref_id`.
 #[derive(Clone)]
 pub struct BrowserTypeTool {
     manager: Arc<ProfileManager>,
@@ -61,11 +60,33 @@ impl BrowserTypeTool {
 impl AlephTool for BrowserTypeTool {
     const NAME: &'static str = "browser_type";
     const DESCRIPTION: &'static str =
-        "Type text into an element on the page by CSS selector, ref_id, or the currently focused element";
+        "Type text into an element on the page, addressed by the ref_id a browser_snapshot \
+         reported for it";
     type Args = BrowserTypeArgs;
     type Output = BrowserTypeOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // No-target typing is gone. It used to lower to `ActionTarget::Ref {
+        // ref_id: "focused" }`, and NOTHING under `src/browser/` ever read that
+        // literal — both backends treat a `Ref` as a snapshot handle, so the
+        // promised "type into whatever holds focus" behaviour reached the page
+        // as a lookup for an element named `focused` and failed. A channel with
+        // zero consumers is CUT, not reconnected (R10); the message names the
+        // one targeting method that does work.
+        let Some(ref ref_id) = args.ref_id else {
+            return Ok(BrowserTypeOutput {
+                success: false,
+                message: Some(
+                    "browser_type requires 'ref_id': call browser_snapshot and pass the ref_id \
+                     it reports for the field you want to type into."
+                        .into(),
+                ),
+            });
+        };
+        let target = ActionTarget::Ref {
+            ref_id: ref_id.clone(),
+        };
+
         // Input-side secret scan runs BEFORE the approval check: deterministic
         // policy beats interactive approval (and is cheaper).
         if let Some(message) = super::check_input_secret_block(&self.manager, &args.text) {
@@ -89,23 +110,6 @@ impl AlephTool for BrowserTypeTool {
             });
         }
 
-        let target = if let Some(ref rid) = args.ref_id {
-            ActionTarget::Ref {
-                ref_id: rid.clone(),
-            }
-        } else if args.selector.is_some() {
-            return Ok(BrowserTypeOutput {
-                success: false,
-                message: Some(
-                    "CSS selector targeting is no longer supported. Use 'ref_id' from browser_snapshot.".into(),
-                ),
-            });
-        } else {
-            ActionTarget::Ref {
-                ref_id: "focused".into(),
-            }
-        };
-
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.type_text(&tab_id, target, &args.text).await {
                 Ok(()) => Ok(BrowserTypeOutput {
@@ -118,12 +122,15 @@ impl AlephTool for BrowserTypeTool {
                 }),
                 Err(e) => Ok(BrowserTypeOutput {
                     success: false,
-                    message: Some(format!("Type failed: {e}")),
+                    message: Some(format!(
+                        "Type failed: {}",
+                        super::backend_error_text(&self.manager, &e)
+                    )),
                 }),
             },
             Err(e) => Ok(BrowserTypeOutput {
                 success: false,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }
@@ -135,28 +142,7 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_type_into_selector() {
-        let config = BrowserSystemConfig::default();
-        let manager = Arc::new(ProfileManager::new(config));
-        let tool = BrowserTypeTool::new(manager);
-
-        let result = tool
-            .call(BrowserTypeArgs {
-                profile: "default".into(),
-                text: "hello world".into(),
-                selector: Some("input#search".into()),
-                ref_id: None,
-            })
-            .await
-            .unwrap();
-
-        // Without a running browser, tools degrade gracefully
-        assert!(!result.success);
-        assert!(result.message.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_type_into_focused() {
+    async fn test_type_without_ref_id_names_the_supported_targeting() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserTypeTool::new(manager);
@@ -165,15 +151,17 @@ mod tests {
             .call(BrowserTypeArgs {
                 profile: "default".into(),
                 text: "test input".into(),
-                selector: None,
                 ref_id: None,
             })
             .await
             .unwrap();
 
-        // Without a running browser, tools degrade gracefully
+        // The old no-target path claimed to type into the focused element and
+        // silently did nothing of the sort; it now says what to do instead.
         assert!(!result.success);
-        assert!(result.message.is_some());
+        let message = result.message.unwrap();
+        assert!(message.contains("ref_id"), "got: {message}");
+        assert!(message.contains("browser_snapshot"), "got: {message}");
     }
 
     #[tokio::test]
@@ -186,14 +174,44 @@ mod tests {
             .call(BrowserTypeArgs {
                 profile: "default".into(),
                 text: "ref text".into(),
-                selector: None,
                 ref_id: Some("ref-10".into()),
             })
             .await
             .unwrap();
 
-        // Without a running browser, tools degrade gracefully
+        // ref_id is the supported targeting method and still reaches the
+        // backend, which degrades gracefully without a running browser.
         assert!(!result.success);
-        assert!(result.message.is_some());
+        let message = result.message.unwrap();
+        assert!(!message.contains("requires 'ref_id'"), "got: {message}");
+    }
+
+    #[tokio::test]
+    async fn test_type_malformed_call_does_not_consume_approval() {
+        use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
+        use std::collections::HashMap;
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserType, DefaultDecision::Deny);
+        let policy = Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        }));
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserTypeTool::new(manager).with_approval_policy(policy);
+
+        let result = tool
+            .call(BrowserTypeArgs {
+                profile: "default".into(),
+                text: "hello".into(),
+                ref_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("ref_id"), "got: {message}");
+        assert!(!message.contains("denied"), "got: {message}");
     }
 }
