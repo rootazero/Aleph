@@ -203,14 +203,13 @@ mod tests {
             Some(&key),
             "a stored current_session_key must parse back to the key that wrote it"
         );
-        let mut meta = sessions.get_or_create(&key).await.unwrap();
+        sessions.get_or_create(&key).await.unwrap();
         // Force the pre-P1 shape regardless of any ambient scope.
+        let mut guard = sessions.lock_metadata(&key.to_key_string()).await.unwrap();
+        let meta = guard.existing_mut().expect("just created");
         meta.owner_user_id = None;
         meta.scope_id = None;
-        sessions
-            .write_metadata(&key.to_key_string(), &meta)
-            .await
-            .unwrap();
+        guard.commit().await.unwrap();
 
         store
             .claim_session_key(&project.id, &key.to_key_string())
@@ -253,13 +252,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (projects, sessions, _project_id, key) = legacy_room(dir.path()).await;
 
-        let mut meta = sessions.get_metadata(&key).await.unwrap().expect("row");
+        let mut guard = sessions.lock_metadata(&key.to_key_string()).await.unwrap();
+        let meta = guard.existing_mut().expect("row");
         meta.owner_user_id = Some("u-bob".into());
         meta.scope_id = Some("personal:u-bob".into());
-        sessions
-            .write_metadata(&key.to_key_string(), &meta)
-            .await
-            .unwrap();
+        guard.commit().await.unwrap();
 
         let report = backfill_legacy_room_attribution(&projects, &sessions).await;
         assert_eq!(report.stamped, 0);

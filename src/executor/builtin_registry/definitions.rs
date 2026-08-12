@@ -2062,8 +2062,8 @@ mod tests {
             .map(|def| def.name)
             .chain(REGISTRY_ONLY_DESCRIPTIONS.iter().map(|(name, _)| *name))
             .filter(|name| {
-                !map.get(*name)
-                    .is_some_and(|tool| tool.parameters_schema.is_some())
+                map.get(*name)
+                    .is_none_or(|tool| tool.parameters_schema.is_none())
             })
             .collect();
         missing.sort_unstable();

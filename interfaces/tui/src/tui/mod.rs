@@ -306,8 +306,12 @@ async fn main_loop(
             }
             Action::PaletteConfirm => {
                 if let Some(palette) = state.palette.take() {
-                    if let Some(entry) = palette.filtered.get(palette.selected) {
-                        let cmd_str = entry.full_command.trim().to_string();
+                    // The entry names the command; anything the user typed
+                    // after it is its argument (`PaletteState::selected_command`).
+                    // Without that, the palette could only ever run a command
+                    // bare — and it is the only route to one, `/` on an empty
+                    // composer opening the palette instead of typing a slash.
+                    if let Some(cmd_str) = palette.selected_command() {
                         state.close_overlay();
                         // Parse through our unified parser
                         match slash::parse_input(&cmd_str) {

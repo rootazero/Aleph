@@ -29,6 +29,70 @@ pub struct DisplayEntry {
     pub full_command: String,
 }
 
+/// Split palette input into the part that narrows the list and the part that
+/// is arguments for whichever command is finally chosen.
+///
+/// # Why the palette has to carry arguments at all
+///
+/// It is the only way in. `/` on an empty composer opens this palette rather
+/// than typing a `/`, so a slash command's argument cannot be typed into the
+/// composer at all (short of typing a space first, which nothing tells anyone
+/// to do). Confirming an entry runs its `full_command` — the bare `/think` —
+/// so before this, every command that takes a value could only ever be
+/// invoked without one: `/tier`, `/mode`, `/think`, `/memory-mode` and
+/// `/tools` printed their current value and their usage line and nothing else,
+/// and `/compact <instructions>` could not be steered. The four session knobs
+/// shipped in that state — readable from the TUI, not settable from it.
+///
+/// The first run of whitespace splits it. Everything before narrows the list;
+/// everything after is passed through verbatim. When the head alone matches
+/// nothing, the caller falls back to narrowing on the whole string with no
+/// arguments — so a multi-word search over the entries' description text keeps
+/// working exactly as it did, and this is never a worse candidate list than
+/// before.
+pub fn split_palette_input(input: &str) -> (&str, &str) {
+    input
+        .split_once(char::is_whitespace)
+        .map_or((input, ""), |(head, rest)| (head, rest.trim_start()))
+}
+
+/// The bare word an entry is addressed by: its label without the leading `/`
+/// and without any parameter hint — `/think` → `think`, `new [topic]` → `new`.
+#[must_use]
+pub fn entry_command_word(label: &str) -> &str {
+    label
+        .trim_start_matches('/')
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+}
+
+/// Ranking for a filtered palette list: an entry whose command word IS the
+/// filter comes first, then entries whose word starts with it, then the rest
+/// (matched only through their description text).
+///
+/// # Why this is not cosmetic
+///
+/// The filter matches an entry's hint as well as its label, and confirming
+/// runs whatever is selected — index 0 by default. Typing `mode` therefore
+/// selected `/tools`, whose hint reads "Tool progress mode: …", ahead of
+/// `/mode` itself. That was merely annoying while the palette could only run
+/// a command bare; once it carries arguments
+/// ([`split_palette_input`]), `mode chat` would hand `chat` to `/tools`. An
+/// exact name has to outrank a mention.
+#[must_use]
+pub fn filter_rank(label: &str, filter: &str) -> u8 {
+    let word = entry_command_word(label).to_lowercase();
+    let filter = filter.trim_start_matches('/').to_lowercase();
+    if word == filter {
+        0
+    } else if word.starts_with(&filter) {
+        1
+    } else {
+        2
+    }
+}
+
 impl CommandEntry {
     /// Parse a list of `CommandEntry` from a JSON value (the "commands" array
     /// returned by the `commands.list` RPC).
@@ -137,6 +201,31 @@ impl CommandEntry {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_exact_command_name_outranks_a_mention_in_a_description() {
+        // `/tools`' hint contains the word "mode"; `/mode` is the command.
+        assert!(filter_rank("/mode", "mode") < filter_rank("/tools", "mode"));
+        // Prefix beats description-only.
+        assert!(filter_rank("/memory-mode", "mem") < filter_rank("/tools", "mem"));
+        // A namespace child is addressed by its own word, hint and all.
+        assert_eq!(filter_rank("new [topic]", "new"), 0);
+        assert_eq!(entry_command_word("new [topic]"), "new");
+    }
+
+    #[test]
+    fn palette_input_splits_a_command_from_its_argument() {
+        assert_eq!(split_palette_input("think high"), ("think", "high"));
+        assert_eq!(split_palette_input("think"), ("think", ""));
+        assert_eq!(split_palette_input(""), ("", ""));
+        // Extra spaces belong to neither half.
+        assert_eq!(
+            split_palette_input("compact   keep the api notes"),
+            ("compact", "keep the api notes")
+        );
+        // A trailing space is not an argument.
+        assert_eq!(split_palette_input("think "), ("think", ""));
+    }
 
     #[test]
     fn parse_tree_structure() {

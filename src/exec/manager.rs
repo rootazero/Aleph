@@ -870,12 +870,7 @@ mod tests {
             id: uuid::Uuid::new_v4().to_string(),
             command: "npm install".to_string(),
             cwd: Some("/project".to_string()),
-            analysis: CommandAnalysis {
-                ok: true,
-                reason: None,
-                segments: vec![],
-                chains: None,
-            },
+            analysis: CommandAnalysis::not_a_command(),
             agent_id: "main".to_string(),
             session_key: "agent:main:main".to_string(),
             reason: None,
@@ -1011,39 +1006,37 @@ mod tests {
         );
     }
 
+    /// A resolve stamps the decision, wakes the waiter, and takes the record
+    /// out of the pending set.
+    ///
+    /// That last part is the contract `get_pending` states — it filters on
+    /// `is_live()`, and an entry whose waiter has been woken is not live. This
+    /// asserted `is_some()` from back when a resolved record stayed readable
+    /// by id, and had been failing ever since the liveness filter (the thing
+    /// that stops a resolved-or-abandoned approval from being resolved twice)
+    /// landed. The decision is now read where it actually has to arrive: at
+    /// the waiter.
+    ///
+    /// It also goes through `register_pending` rather than reaching into the
+    /// map, so what is under test is the real registration path.
     #[tokio::test]
     async fn test_resolve_approval() {
         let manager = ExecApprovalManager::new();
-        let request = mock_request();
-        let record = manager.create(&request, 60_000);
-        let id = record.id.clone();
+        let record = manager.create(&mock_request(), 60_000);
+        let (id, rx, _timeout) = manager.register_pending(record);
 
-        // Spawn wait task
-        let manager_clone = ExecApprovalManager::new();
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        manager_clone
-            .pending
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                id.clone(),
-                PendingEntry {
-                    record: record.clone(),
-                    sender: Some(tx),
-                    created_at: Instant::now(),
-                },
-            );
-
-        // Resolve
-        let resolved = manager_clone.resolve(&id, ApprovalDecisionType::AllowOnce, None);
-        assert!(resolved);
-
-        // Check pending
-        let pending = manager_clone.get_pending(&id);
-        assert!(pending.is_some());
+        assert!(manager.resolve(&id, ApprovalDecisionType::AllowOnce, None));
         assert_eq!(
-            pending.unwrap().record.decision,
+            rx.await.expect("the waiter must be woken, not dropped"),
             Some(ApprovalDecisionType::AllowOnce)
+        );
+        assert!(
+            manager.get_pending(&id).is_none(),
+            "a resolved approval is no longer pending"
+        );
+        assert!(
+            !manager.resolve(&id, ApprovalDecisionType::Deny, None),
+            "a second resolve must report false rather than overwrite the decision"
         );
     }
 

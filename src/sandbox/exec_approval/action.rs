@@ -165,12 +165,9 @@ impl ApprovalAction {
     #[must_use]
     pub fn analysis_for_record(&self) -> CommandAnalysis {
         // rust-doctor-disable-next-line excessive-clone
-        self.analysis.clone().unwrap_or(CommandAnalysis {
-            ok: true,
-            reason: None,
-            segments: vec![],
-            chains: None,
-        })
+        self.analysis
+            .clone()
+            .unwrap_or_else(CommandAnalysis::not_a_command)
     }
 }
 

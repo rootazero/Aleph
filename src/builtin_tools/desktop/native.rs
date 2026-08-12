@@ -2119,11 +2119,19 @@ mod tests {
     fn screen_region_rejects_non_finite() {
         // NaN < 0.0 is false, so a plain "< 0.0" check would let NaN through
         // and then `NaN as u32` would silently shrink the region to (0,0,0,0).
+        // The value cannot be written as JSON: `serde_json::json!` turns NaN
+        // and the infinities into `null` (JSON has no way to spell them), and
+        // `null` will not deserialize into an `f64`. Built through the JSON
+        // fixture, this test failed on its own input — before reaching the
+        // guard it exists to check — on every run since it was written. So the
+        // non-finite value is installed after parsing.
         let make = |val: f64| {
-            args(serde_json::json!({
+            let mut a = args(serde_json::json!({
                 "action": "screenshot",
-                "region": {"x": val, "y": 0.0, "width": 100.0, "height": 100.0}
-            }))
+                "region": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}
+            }));
+            a.region.as_mut().expect("region present").x = val;
+            a
         };
         for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let err = screen_region_from_args(&make(v), "screenshot")

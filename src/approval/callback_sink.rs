@@ -79,7 +79,10 @@ mod tests {
             id: id.to_string(),
             command: "code_exec".to_string(),
             cwd: None,
-            analysis: CommandAnalysis::error("danger"),
+            // Not `error(..)`: this is a tool card, so there is no command
+            // line — and an unparseable one would trip the assertion in
+            // `ExecApprovalManager::create`.
+            analysis: CommandAnalysis::not_a_command(),
             agent_id: "main".to_string(),
             session_key: "telegram:123".to_string(),
             reason: None,

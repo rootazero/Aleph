@@ -253,10 +253,36 @@ pub struct ApprovalState {
 #[derive(Debug, Clone)]
 pub struct PaletteState {
     pub input: String,
+    /// The argument tail of `input` — everything after the first whitespace,
+    /// when the part before it was enough to narrow the list on its own (see
+    /// [`super::command_tree::split_palette_input`]).
+    ///
+    /// Resolved by `recompute_palette_filter` at the same moment as
+    /// `filtered`, and read by the confirm path, so the two cannot disagree
+    /// about whether a word was a search term or an argument.
+    pub args: String,
     pub filtered: Vec<DisplayEntry>,
     pub selected: usize,
     /// Stack of namespace names we have browsed into (e.g. `["session"]`)
     pub namespace_stack: Vec<String>,
+}
+
+impl PaletteState {
+    /// The command line to run for the current selection: the selected
+    /// entry's `full_command`, plus whatever arguments the input carried.
+    ///
+    /// `None` when the filter matched nothing — confirming an empty list is a
+    /// no-op, not a guess.
+    #[must_use]
+    pub fn selected_command(&self) -> Option<String> {
+        let entry = self.filtered.get(self.selected)?;
+        let command = entry.full_command.trim();
+        Some(if self.args.is_empty() {
+            command.to_string()
+        } else {
+            format!("{command} {}", self.args)
+        })
+    }
 }
 
 /// A single browsable session in the resume/switch picker.
@@ -609,12 +635,17 @@ impl AppState {
             return all;
         }
         let filter_lower = filter.to_lowercase();
-        all.into_iter()
+        let mut matched: Vec<DisplayEntry> = all
+            .into_iter()
             .filter(|e| {
                 e.label.to_lowercase().contains(&filter_lower)
                     || e.hint.to_lowercase().contains(&filter_lower)
             })
-            .collect()
+            .collect();
+        // Stable sort, so catalog order survives inside each rank — see
+        // `command_tree::filter_rank` for why an exact name has to win.
+        matched.sort_by_key(|e| super::command_tree::filter_rank(&e.label, filter));
+        matched
     }
 
     /// Open the command palette, pre-populated with root-level commands.
@@ -622,6 +653,7 @@ impl AppState {
         let all = self.palette_display_entries(&[]);
         self.palette = Some(PaletteState {
             input: String::new(),
+            args: String::new(),
             filtered: all,
             selected: 0,
             namespace_stack: Vec::new(),
@@ -644,6 +676,10 @@ impl AppState {
         if let Some(palette) = &mut self.palette {
             palette.namespace_stack = new_stack;
             palette.input.clear();
+            // The args belong to the input that was just cleared; carrying
+            // them into the namespace would attach a word the user typed at
+            // one level to a command chosen at another.
+            palette.args.clear();
             palette.selected = 0;
             palette.filtered = entries;
         }

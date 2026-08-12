@@ -26,6 +26,22 @@ impl fmt::Display for LockHeldError {
         } else {
             "server is running"
         };
+        // PID 0 is never a real user-space process: it is how `acquire_or_held`
+        // spells "the lock file is held but the sidecar recording WHO holds it
+        // is missing". That call site already says so, and flips `orphaned` for
+        // exactly this reason — but the rendering kept printing the number
+        // anyway, so the message read "no live server (PID 0)": a figure the
+        // reader can act on, sitting next to a sentence saying nobody is there.
+        // Both halves of the same fact have to agree.
+        if self.pid == 0 {
+            return write!(
+                f,
+                "{} (holder unknown). This command requires \
+                 exclusive access — run `aleph stop` first. Lock: {}",
+                status,
+                self.lock_path.display()
+            );
+        }
         write!(
             f,
             "{} (PID {}). This command requires \
@@ -147,10 +163,7 @@ where
                     // now free we run `local`; only the second failure is
                     // surfaced.
                     match crate::cli::ipc_client::forward_to_server::<T>(
-                        data_dir,
-                        method,
-                        route,
-                        ipc_body,
+                        data_dir, method, route, ipc_body,
                     ) {
                         Ok(out) => Ok(out),
                         Err(fwd_err) => match acquire_or_held(data_dir) {

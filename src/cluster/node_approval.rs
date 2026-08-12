@@ -79,7 +79,7 @@ impl ApprovalRequester for CenterApprovalRequester {
             static COUNTER: AtomicU64 = AtomicU64::new(0);
             const WARN_EVERY: u64 = 100;
             let n = COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-            if n == 1 || n % WARN_EVERY == 0 {
+            if n == 1 || n.is_multiple_of(WARN_EVERY) {
                 tracing::warn!(
                     count = n,
                     "node approval requested with no live center channel; denying"

@@ -198,8 +198,7 @@ mod tests {
         // The exact contract H1 in review-results/cli.md promises:
         // non-loopback HTTPS must be refused, not silently trusted.
         let err = build_client("https://10.0.0.1:9000/admin")
-            .err()
-            .expect("non-loopback https should fail");
+            .expect_err("non-loopback https should fail");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("refusing to connect"),

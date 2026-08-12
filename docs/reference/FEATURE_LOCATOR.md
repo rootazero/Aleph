@@ -2138,9 +2138,37 @@
 | `aleph chat --continue` / `aleph-tui --continue` attach 到同一线程，状态栏显示 `tier:auto │ mode:code │ think:high │ memory-mode:off` + pin + token | ✅ |
 | TUI 打字发消息不再 `INVALID_PARAMS`（上一轮 P0 ①） | ✅（服务端日志零命中） |
 | Panel 四个 pill 渲染 / 选择 / **刷新后仍在**；手机点开会话恢复四个 dial | ✅ |
-| **未能实测**：`think_level` 到 provider 的那一段——`127.0.0.1` 归 `EndpointClass::Local`，其 `supports_reasoning_effort: false` **按设计**剥掉该字段，本 rig 结构性观测不到（该半仍只有 `reasoning_effort.rs` 的单测覆盖） | ⚠️ |
-| **未做**：TUI 斜杠命令（`/think` 等）经 pty 驱动——命令面板会吞掉喂进去的按键，需要另一套按键序列 | ⚠️ |
+| `think_level` 到 provider 的那一段 | ✅（round-3，见下） |
+| TUI 斜杠命令（`/think` 等）经 pty 驱动 | ✅（round-3，见下） |
 
+
+#### round-3（2026-08-12）：丢更新、面板参数、以及两条「观测不到」的成因
+
+上一轮结尾留了五条，逐条如下。**其中两条的答案是「这不是缺口」**——记在这里，因为把一条不存在的缺口留在文档里，下一个人会去补它。
+
+- **① 读-改-写的丢更新已关闭（原子性只解决了另一半）。** 原子写保证「幸存者是一份完整文档」，不保证「没人丢更新」：两个写者仍各自读到同一份文档、各改各的字段，最后 rename 的那个静默回滚另一个。现在 `metadata.json` 的写只能由 `MetaGuard` 产生，而 guard 只能由 `MetaLocks::lock` 产生——它**先取该 session key 的锁、再读文档**，所以「读、改、写」按构造是一个临界区。锚点 `src/gateway/session_store/file_backend/meta.rs`（新模块）。
+  - **为什么是模块边界而不是源码级守卫**：私有的 `write` 从父模块**够不到**，所以「忘了拿锁」不是一条要记得的纪律，而是不可编译。源码级守卫只认得它被教过的那几种形状（见 §0 那条「守卫的绿只覆盖它的块识别器认得的那种块」）。
+  - **创建也在锁里**：`get_or_create` 的「不存在 ⇒ 创建」同样是读-改-写，两个同时到达的首轮否则会各自读到「没有」、各自创建，输的那次回滚赢的那次。
+  - **锁的作用域是进程内、按 session key**：进程是 singleton（`~/.aleph/data/aleph.lock` 的 OS 级 flock，CLI 写子命令走 IPC），所以第二个写盘进程本身已是 `doctor` 的 `core/duplicate-instance` 诊断项，不是这里要防的事。表按 `Weak` 存，空闲槽在超过 128 条时回收。
+  - **孪生早就答对了，这是核对出来的不是猜的**：SQLite 那半的 `patch_session` 全程持有连接 mutex 跨 `SELECT`+`UPDATE`，文件后端是两者里唯一没有边界的那个。
+  - **变异证过 RED**：把 `slot()` 改成每次新建一把锁（即「有锁但不共享」），store 级与模块级两条并发测试同时红（usage 计数 28/48、64 变 33）。live 复核：活服务器上 10 个并发 `sessions.patch` 各写一个键，10 个全部落盘。
+- **② `think_level` 到 provider 的那一段现在观测得到了——换一个协议就行。** 上一轮的结论「本 rig 结构性观测不到」只对 **OpenAI 协议**成立：`reasoning_effort` 的剥离由 `EndpointClass` 决定，而 `Local`（`127.0.0.1`）与 `Custom`（任何其他自建 host）**两个都**是 `supports_reasoning_effort: false`，所以没有任何本地 host 能观测它。Anthropic 协议不看 endpoint class，它按**模型名**决定 thinking 块（`proto_impl.rs::supports_extended_thinking` / `supports_adaptive_thinking`），所以一个本地 Anthropic mock + 一个 pre-4.6 的 Claude 模型 id 就把整段暴露在 wire 上。rig 加了 `mock_anthropic.py`（Messages SSE）+ 一个 `protocol = "anthropic"` 的 provider，实测四点：未设 ⇒ 无 thinking 块；`high` ⇒ `{"type":"enabled","budget_tokens":20000}` 且 `max_tokens` 从 16384 抬到 21024（预算挖坑补偿）；`low` ⇒ 4096；`off` ⇒ 无块。**判据**：一个「本地观测不到」的结论，先问它是不是**某一条协议**的性质——同一个 knob 常常有第二个载体，而那个载体的门是另一把。
+- **③ TUI 的斜杠命令不是「喂不进去」，是命令面板从来就丢掉参数。** `/` 在空 composer 上打开面板而不是键入斜杠，所以面板是**唯一**入口；而确认执行的是所选条目的 `full_command`（裸 `/think`），输入里跟在后面的字一个都不带。于是 `/tier` `/mode` `/think` `/memory-mode` `/tools` 只能被无参调用，而它们的无参行为恰好是「打印当前值 + 用法」——**读起来像功能，不像 bug**；上一轮把四个 knob 的 TUI 面标成已交付，正是这么标出来的。`/compress [instructions]` 同样无法被引导。修：`command_tree::split_palette_input` 把输入按第一段空白切成「过滤词 + 参数」，`recompute_palette_filter` 是**唯一**做这个判断的地方（结果存进 `PaletteState::args`，确认路径读它而不是第二次切分），`PaletteState::selected_command` 拼出最终命令行。头部匹配不到条目时整串仍当一个搜索词、参数为空——所以按描述文字搜索的行为一字未变，这个切分**永远不会给出比原来更差的候选表**。
+  - **修好之后第一次跑起来的那条路径**：过滤器同时匹配标签**和描述**，而确认执行的是 `selected = 0`。「mode」因此选中 `/tools`（它的描述里写着 "Tool progress mode: …"）而不是 `/mode`——在只能无参执行的年代这只是烦人，一旦能带参数，`mode chat` 就会把 `chat` 交给 `/tools`。现按 `command_tree::filter_rank` 排序：命令词**等于**过滤词的排第一，前缀次之，只靠描述命中的最后（稳定排序，同档内保留目录顺序）。
+  - **live 实测**（pty 驱动真 TUI）：`/think high` → 「/think now follows `high`」+ 状态栏 `think:high` + 下一轮请求带 20000 预算；`/think low` → 4096；`/think off` → 无块；`/tier ask` `/mode chat` `/memory-mode on` 各自生效。**第一次有人从 TUI 设成功过这四个 knob。**
+- **④「Settings 里没有 memory 全局开关」是记错了——它一直在，只是不在 Policies 页。** `Settings → Memory → Enable Memory` 写的就是 `[memory] enabled`（`memory_config.update`），而 composer 那颗 memory pill 的「跟随全局」行读的是 `config.get_tool_permissions` 的 `memory` 字段——**同一个值的两个面**。live 核对：用 Panel 用的那个 RPC 把它关掉，`get_tool_permissions` 的 `memory` 当场从 `on` 变 `off`。**所以没有东西要加**：把它同时放进 Policies 页会得到同一个设置的第二个写者。
+- **⑤ 推理档仍然刻意没有全局位**，理由与 round-2 相同（`turn_thinking` 的优先级是 请求 > 会话 > 什么都不发）。仓里唯一叫 `thinking_level` 的 config 键是 `providers.*.thinking_level`＝Gemini 3 的 provider 参数，与这个 knob 无关——**不要**把它接到会话档上。
+
+#### round-3 顺带：`cargo test -p alephcore --lib` 的 18 条既有红全部清零
+
+这批红在 base commit `370d26e4a` 上就存在（见 [[project-thread-persistence-2026-08-11]] 的基线记录），横跨四个家族，成因彼此无关但**都是「测试写下之后，被测代码换了契约而没人认领」**：
+
+- **11 条（`approval::callback_sink` ×3 / `gateway::handlers::exec_approvals` ×8）**：fixture 用 `CommandAnalysis::error("…")` 表达「一次工具审批」，而 `error` 的意思是**命令解析失败**；`ExecApprovalManager::create` 的 `debug_assert!` 正是拦这个（一张人只能拒的卡不值一个投递位）。生产路径 `ApprovalAction::analysis_for_record` 对没有命令行的卡返回 `ok: true, segments: []`——那份字面量现在有了名字 `CommandAnalysis::not_a_command()`，生产与三处 fixture 共用它。**判据**：「没有东西可解析」和「解析失败」是两个答案，把后者写成前者会撞上前者的断言。
+- **1 条（`exec::manager::test_resolve_approval`）**：断言一个已解决的审批仍能被 `get_pending` 读到，而 `get_pending` 后来加了 `is_live()` 过滤（正是那道防止二次解决的闸）。改成从**等待者**读决定（决定必须到达的地方），并断言「已解决 ⇒ 不再 pending」+「第二次 resolve 报 false」；顺带改走 `register_pending` 而不是手插 map。
+- **3 条（`hub::install`）**：本地 git URL 的测试豁免是一个**进程级环境变量**，三条 fixture 测试从来没设过它（所以恒红），而第四条测试为了验证生产 accept-set 会把它**删掉**——即便补上，并行跑的两者也会随机互相打架。改成 thread-local + RAII guard（`AllowLocalGitUrl`），兄弟测试够不到，`--test-threads=1` 下也会在 drop 时复位；那条验证 accept-set 的测试因此不再需要 save/restore 舞蹈。**判据**：`std::env` 是进程全局的，libtest 并行跑——**测试开关不能是环境变量**。
+- **1 条（`builtin_tools::desktop::native::screen_region_rejects_non_finite`）**：fixture 用 `serde_json::json!({"x": f64::NAN})` 构造入参，而 **JSON 没有 NaN**：`json!` 把它变成 `null`，`null` 又反序列化不进 `f64`。这条测试在自己的输入上失败、从未到达它要检查的那道有限性闸。改成解析之后再装非有限值。
+- **1 条（`agents::types::test_with_allowed_tool_sets_clears_constructor_wildcard`）**：`with_allowed_tool_sets` 清掉构造器默认的 `["*"]` 之后没有把 `allowed_tools_explicit` 置真，于是「被清空」与「没人碰过」不可区分；下一个读这个标志的人会回答「没人决定过」并好心补回一个通配默认——正好重开这套启发式要堵的洞（`explore` 悄悄拿回全部工具）。
+- **1 条（`cli::policy::held_by_live_with_pid_zero_is_treated_as_orphaned`）**：`acquire_or_held` 已经把「持有者 sidecar 缺失」翻成 `pid == 0` 并置 `orphaned`，注释也写明「别报 `server is running (PID 0)`」，但 `Display` 照旧印那个数字，于是消息读作「没有活着的 server（PID 0）」——一个读者可以照着行动的数字，紧挨着一句说没人在的话。现 `pid == 0` 印「holder unknown」。**判据**：同一事实的两份表述，只改一份就是静默说谎（§0）。
 
 ---
 

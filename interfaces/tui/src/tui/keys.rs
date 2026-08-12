@@ -386,16 +386,32 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
     }
 }
 
-/// Recompute the filtered display entries based on current palette input and namespace stack.
+/// Recompute the filtered display entries — and the argument tail — from the
+/// current palette input and namespace stack.
+///
+/// The one place that decides whether a word the user typed is a search term
+/// or an argument. The confirm path reads the answer off `palette.args` rather
+/// than splitting the input a second time, so the list on screen and the
+/// command that runs can never disagree about it.
 fn recompute_palette_filter(state: &mut AppState) {
-    let (stack, filter) = match &state.palette {
+    let (stack, input) = match &state.palette {
         Some(p) => (p.namespace_stack.clone(), p.input.clone()),
         None => return,
     };
-    let filtered = state.filter_display_entries(&stack, &filter);
+    let (head, tail) = command_tree::split_palette_input(&input);
+    let mut filtered = state.filter_display_entries(&stack, head);
+    let mut args = tail.to_string();
+    // Fallback: the head narrowed to nothing, so it was not a command name —
+    // treat the whole string as one search term, exactly as before there was
+    // a split at all, and carry no arguments.
+    if filtered.is_empty() && !args.is_empty() {
+        filtered = state.filter_display_entries(&stack, &input);
+        args.clear();
+    }
     if let Some(palette) = &mut state.palette {
         palette.filtered = filtered;
         palette.selected = 0;
+        palette.args = args;
     }
 }
 
@@ -515,5 +531,95 @@ fn handle_session_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
             Action::None
         }
         _ => Action::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::app::PaletteState;
+    use crossterm::event::KeyEventKind;
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    /// Type into an open palette, one character at a time, the way a user does.
+    fn type_into_palette(state: &mut AppState, text: &str) {
+        for c in text.chars() {
+            handle_palette_key(state, key(c));
+        }
+    }
+
+    fn palette_with(text: &str) -> AppState {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.open_command_palette();
+        type_into_palette(&mut state, text);
+        state
+    }
+
+    /// The regression this exists for: every session knob was readable from
+    /// the TUI and settable from nowhere.
+    ///
+    /// `/` on an empty composer opens the palette instead of typing a slash,
+    /// so the palette is the only route to a slash command — and it ran the
+    /// selected entry's bare `full_command`, dropping anything typed after it.
+    /// `/think high` therefore reached `parse_input` as `/think`, which prints
+    /// the current level and a usage line. Same for `/tier`, `/mode`,
+    /// `/memory-mode`, `/tools` and `/compact <instructions>`.
+    #[test]
+    fn a_value_typed_after_the_command_reaches_the_command() {
+        let state = palette_with("think high");
+        let palette = state.palette.as_ref().expect("palette open");
+        assert_eq!(palette.args, "high");
+        assert_eq!(
+            palette.selected_command().as_deref(),
+            Some("/think high"),
+            "the value the user typed must ride along to the parser"
+        );
+    }
+
+    /// Free text after the command survives verbatim, spaces and all — this
+    /// is what `/compress [instructions]` is.
+    #[test]
+    fn multi_word_arguments_survive_intact() {
+        let state = palette_with("compress keep the api decisions");
+        assert_eq!(
+            state
+                .palette
+                .as_ref()
+                .and_then(PaletteState::selected_command)
+                .as_deref(),
+            Some("/compress keep the api decisions")
+        );
+    }
+
+    /// With no argument, nothing changes: the bare command runs, as it always
+    /// did (and printing the current value is what a bare knob command is for).
+    #[test]
+    fn a_bare_command_is_unchanged() {
+        let state = palette_with("think");
+        let palette = state.palette.as_ref().expect("palette open");
+        assert!(palette.args.is_empty());
+        assert_eq!(palette.selected_command().as_deref(), Some("/think"));
+    }
+
+    /// The fallback: when the first word names no command, the whole string
+    /// stays one search term and nothing is treated as an argument — so
+    /// searching the entries' description text keeps working, and the split
+    /// can never produce a worse candidate list than no split at all.
+    #[test]
+    fn a_first_word_that_names_nothing_is_still_just_a_search() {
+        let state = palette_with("zzzznotacommand qqqq");
+        let palette = state.palette.as_ref().expect("palette open");
+        assert!(
+            palette.args.is_empty(),
+            "a failed head match must not leave an argument behind"
+        );
     }
 }
