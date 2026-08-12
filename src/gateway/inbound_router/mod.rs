@@ -1431,7 +1431,12 @@ mod tests {
             ],
         );
         let rx = clarification
-            .register(session_key.to_string(), request, Duration::from_secs(60), "")
+            .register(
+                session_key.to_string(),
+                request,
+                Duration::from_secs(60),
+                "",
+            )
             .await;
 
         let router = InboundMessageRouter::new(

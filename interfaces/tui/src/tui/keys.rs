@@ -496,12 +496,14 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::None
         }
-        KeyCode::Enter => dialog
-            .pending_reply()
-            .map_or(Action::None, |reply| Action::RespondToDialog {
-                session_key: dialog.session_key.clone(),
-                reply,
-            }),
+        KeyCode::Enter => {
+            dialog
+                .pending_reply()
+                .map_or(Action::None, |reply| Action::RespondToDialog {
+                    session_key: dialog.session_key.clone(),
+                    reply,
+                })
+        }
         _ => Action::None,
     }
 }

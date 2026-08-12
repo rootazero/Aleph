@@ -281,7 +281,10 @@ mod tests {
         let mut session = make_session();
         session.add_turn(
             2,
-            Speaker::Persona { id: "a".into(), name: "A".into() },
+            Speaker::Persona {
+                id: "a".into(),
+                name: "A".into(),
+            },
             "round 2 content".into(),
         );
         assert_eq!(session.history.len(), 1);
@@ -289,7 +292,10 @@ mod tests {
 
         session.add_turn(
             1,
-            Speaker::Persona { id: "b".into(), name: "B".into() },
+            Speaker::Persona {
+                id: "b".into(),
+                name: "B".into(),
+            },
             "regressed to round 1".into(),
         );
         // The out-of-order turn is dropped; history + current_round unchanged.

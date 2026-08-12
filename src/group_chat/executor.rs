@@ -40,7 +40,8 @@ pub struct GroupChatExecutor {
     /// requiring `&mut self` (which would conflict with the executor's
     /// caller-facing `&self` API). The critical section is a single
     /// HashSet insert — never held across an `.await`.
-    provider_fallback_warned: crate::sync_primitives::Mutex<std::collections::HashSet<(String, String)>>,
+    provider_fallback_warned:
+        crate::sync_primitives::Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 impl GroupChatExecutor {
@@ -304,9 +305,7 @@ impl GroupChatExecutor {
                 .participants
                 .iter()
                 .find(|p| p.id == respondent.persona_id)
-                .ok_or_else(|| {
-                    GroupChatError::PersonaNotFound(respondent.persona_id.clone())
-                })?;
+                .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?;
 
             // Build persona prompt with cumulative prior discussion
             let persona_prompt = build_persona_prompt(
@@ -417,11 +416,10 @@ impl GroupChatExecutor {
                 id: p.persona_id.clone(),
                 name: p.persona_name.clone(),
             };
-            let sequence = p
-                .i
-                .try_into()
-                .unwrap_or(u32::MAX)
-                .saturating_add(seq_offset);
+            let sequence =
+                p.i.try_into()
+                    .unwrap_or(u32::MAX)
+                    .saturating_add(seq_offset);
             let is_final = p.i + 1 == total_respondents;
             messages.push(GroupChatMessage {
                 session_id: session_id.clone(),
@@ -436,7 +434,6 @@ impl GroupChatExecutor {
         Ok(messages)
     }
 }
-
 
 // =============================================================================
 // Tests
@@ -989,17 +986,20 @@ mod tests {
                     Box::pin(async { Err(crate::error::AlephError::provider("model overloaded")) })
                 }
             }
-            fn name(&self) -> &str { "partial-fail" }
-            fn color(&self) -> &str { "#ff0000" }
+            fn name(&self) -> &str {
+                "partial-fail"
+            }
+            fn color(&self) -> &str {
+                "#ff0000"
+            }
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(PartialFailProvider {
             coordinator_response: coordinator_response.to_string(),
             call_count: AtomicUsize::new(0),
         });
-        let executor = GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(
-            provider,
-        )));
+        let executor =
+            GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(provider)));
         let mut session = make_session();
 
         let history_before = session.history.len();
@@ -1025,8 +1025,7 @@ mod tests {
         // Coordinator returns a single-persona plan; the persona references a
         // provider name that does not exist in the registry, so the executor
         // must fall back to the default AND emit the warn only on first miss.
-        let coordinator_response =
-            r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
 
         struct TwoCallProvider {
             coordinator_response: String,
@@ -1043,13 +1042,15 @@ mod tests {
                     let resp = self.coordinator_response.clone();
                     Box::pin(async move { Ok(ProviderResponse::text_only(resp)) })
                 } else {
-                    Box::pin(async move {
-                        Ok(ProviderResponse::text_only("ok".to_string()))
-                    })
+                    Box::pin(async move { Ok(ProviderResponse::text_only("ok".to_string())) })
                 }
             }
-            fn name(&self) -> &str { "two-call" }
-            fn color(&self) -> &str { "#000000" }
+            fn name(&self) -> &str {
+                "two-call"
+            }
+            fn color(&self) -> &str {
+                "#000000"
+            }
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(TwoCallProvider {
@@ -1063,17 +1064,14 @@ mod tests {
         // found, triggering the warn path.
         let _ = registry.register("other".to_string(), provider.clone());
 
-        let executor = GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(
-            provider,
-        )))
-        .with_provider_registry(Arc::new(registry));
+        let executor =
+            GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(provider)))
+                .with_provider_registry(Arc::new(registry));
 
         let mut session = make_session();
         session.participants[0].provider = Some("nonexistent".to_string());
 
-        let _ = executor
-            .execute_round(&mut session, "round 1", &[])
-            .await;
+        let _ = executor.execute_round(&mut session, "round 1", &[]).await;
 
         // After one round the dedupe set must contain exactly one entry;
         // a second round would also produce exactly one entry (no growth).
@@ -1084,9 +1082,7 @@ mod tests {
             .len();
         assert_eq!(set_size, 1, "first miss must insert one entry");
 
-        let _ = executor
-            .execute_round(&mut session, "round 2", &[])
-            .await;
+        let _ = executor.execute_round(&mut session, "round 2", &[]).await;
 
         let set_size_after = executor
             .provider_fallback_warned

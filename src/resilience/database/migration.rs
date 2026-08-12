@@ -509,7 +509,6 @@ fn extract_legacy_trace_text(content_json: &str) -> String {
     }
 }
 
-
 /// Migrate to add `owner_user_id` column to `group_chat_sessions`.
 ///
 /// Group chat sessions were originally created without persisting the P1
@@ -529,9 +528,7 @@ fn extract_legacy_trace_text(content_json: &str) -> String {
 pub fn migrate_add_group_chat_owner(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch("SAVEPOINT migration_group_chat_owner")
         .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to begin group_chat_owner migration: {e}"
-            ))
+            AlephError::config(format!("Failed to begin group_chat_owner migration: {e}"))
         })?;
 
     let column_exists: i64 = conn
@@ -569,9 +566,7 @@ pub fn migrate_add_group_chat_owner(conn: &Connection) -> Result<(), AlephError>
 
     conn.execute_batch("RELEASE migration_group_chat_owner")
         .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to commit group_chat_owner migration: {e}"
-            ))
+            AlephError::config(format!("Failed to commit group_chat_owner migration: {e}"))
         })?;
 
     Ok(())

@@ -1638,8 +1638,12 @@ mod tests {
             s.upsert_node(&node(id, NodeKind::Daemon, Origin::Llm))
                 .unwrap();
         }
-        s.upsert_node(&node("heartbeat:gone", NodeKind::LoopHeartbeat, Origin::Llm))
-            .unwrap();
+        s.upsert_node(&node(
+            "heartbeat:gone",
+            NodeKind::LoopHeartbeat,
+            Origin::Llm,
+        ))
+        .unwrap();
         for to in ["daemon:d1", "daemon:d2", "daemon:d3"] {
             s.upsert_edge(&GraphEdge::new(
                 "main",

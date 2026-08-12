@@ -469,7 +469,10 @@ mod tests {
             PersonaSource::Preset("nonexistent".into()),
         ];
         let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
-        assert!(matches!(result.unwrap_err(), GroupChatError::InvalidPersona(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            GroupChatError::InvalidPersona(_)
+        ));
     }
 
     /// Regression test: duplicate persona IDs in the same session are
