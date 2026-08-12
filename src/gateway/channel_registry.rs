@@ -218,7 +218,16 @@ impl ChannelRegistry {
         self
     }
 
-    /// Register a channel factory
+    /// Register a channel factory.
+    ///
+    /// Retained on the public API for callers that compose `ChannelRegistry`
+    /// outside the boot path (e.g. desktop shells that discover channel types
+    /// at runtime). Internal code reaches factories through
+    /// `handlers::channel::create_channel_from_config`, so the `factories`
+    /// table inside the registry stays empty for the in-tree server. A no-op
+    /// write here is harmless because the lookup falls through with a clear
+    /// `ConfigError` if the table is empty when `create_channel` runs.
+    #[allow(dead_code)]
     pub async fn register_factory(&self, factory: Arc<dyn ChannelFactory>) {
         let channel_type = factory.channel_type().to_string();
         let mut factories = self.factories.write().await;
@@ -226,7 +235,14 @@ impl ChannelRegistry {
         info!("Registered channel factory: {}", channel_type);
     }
 
-    /// Create and register a channel from configuration
+    /// Create and register a channel from configuration.
+    ///
+    /// Retained for symmetry with `register_factory` — see that method for
+    /// why the public surface is wider than the in-tree caller graph. The
+    /// boot path does not exercise this entry point because channel
+    /// construction is config-driven via
+    /// `handlers::channel::create_channel_from_config`.
+    #[allow(dead_code)]
     pub async fn create_channel(&self, config: ChannelConfig) -> ChannelResult<ChannelId> {
         let factories = self.factories.read().await;
         let factory = factories.get(&config.channel_type).ok_or_else(|| {
@@ -309,6 +325,12 @@ impl ChannelRegistry {
     }
 
     /// Get the capabilities for a channel by ID.
+    ///
+    /// Retained as part of the `ChannelRegistry` public API. In-tree callers
+    /// resolve capabilities via the `ChannelHandle::read` path returned by
+    /// `ChannelRegistry::get` (the typical pattern inside dispatch handlers),
+    /// so this convenience accessor is a thin wrapper kept for symmetry.
+    #[allow(dead_code)]
     pub async fn get_capabilities(&self, channel_id: &ChannelId) -> Option<ChannelCapabilities> {
         let channels = self.channels.read().await;
         if let Some(handle) = channels.get(channel_id) {
