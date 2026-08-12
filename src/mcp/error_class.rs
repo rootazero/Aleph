@@ -86,24 +86,39 @@ const AUTH_MARKERS: &[&str] = &[
 ];
 
 /// Server-side session-loss markers (credentials still valid).
+///
+/// Network-layer errors (`"broken pipe"`, `"connection closed"`) are
+/// intentionally absent: they describe a TCP RST or socket close, which is
+/// *also* what a load balancer or NAT does when a connection is silently
+/// killed. Classifying them as session-loss would force a reconnect path for
+/// a *network* blip that the recovery story handles as transient. The
+/// server-side session-loss signal is the JSON-RPC error string
+/// (`"session expired"`, …), which a server tells us about only when it
+/// recognizes the session.
 const SESSION_MARKERS: &[&str] = &[
     "session expired",
     "session has expired",
     "invalid or expired session",
     "session not found",
     "closed resource",
-    "broken pipe",
-    "connection closed",
 ];
 
 /// Transient network markers.
+///
+/// `"temporarily"` and `"try again"` are deliberately absent: both phrases
+/// appear in innocuous error messages (preview unavailable, please retry),
+/// and matching them produces a `Transient` classification that fires the
+/// retry path on what is actually a permanent failure. The phrases that
+/// *only* appear in network-shaped messages are listed here.
 const TRANSIENT_MARKERS: &[&str] = &[
     "timeout",
     "timed out",
     "connection reset",
     "connection refused",
-    "temporarily",
-    "try again",
+    "temporarily unavailable",
+    "try again later",
+    "broken pipe",
+    "connection closed",
     "502",
     "503",
     "504",
@@ -155,9 +170,30 @@ mod tests {
             classify_mcp_error("Server reports: session expired"),
             McpErrorKind::SessionExpired
         );
+        // "session not found" is server-side ("the session id is unknown").
+        assert_eq!(
+            classify_mcp_error("session not found"),
+            McpErrorKind::SessionExpired
+        );
+    }
+
+    #[test]
+    fn network_errors_classify_as_transient_not_session_expired() {
+        // A TCP RST or load-balancer close is a network event, not a
+        // server-side session loss. Misclassifying it forces an unnecessary
+        // reconnect (and, on the manager, a restart cycle) for a transient
+        // problem.
         assert_eq!(
             classify_mcp_error("broken pipe"),
-            McpErrorKind::SessionExpired
+            McpErrorKind::Transient
+        );
+        assert_eq!(
+            classify_mcp_error("connection closed"),
+            McpErrorKind::Transient
+        );
+        assert_eq!(
+            classify_mcp_error("connection closed by peer"),
+            McpErrorKind::Transient
         );
     }
 
@@ -183,6 +219,25 @@ mod tests {
         assert_eq!(
             classify_mcp_error("502 Bad Gateway"),
             McpErrorKind::Transient
+        );
+        assert_eq!(
+            classify_mcp_error("service temporarily unavailable"),
+            McpErrorKind::Transient
+        );
+    }
+
+    #[test]
+    fn generic_phrases_do_not_match_transient() {
+        // "temporarily" and "try again" alone are too broad — they appear in
+        // innocuous error strings ("this preview is temporarily unavailable")
+        // and would silently promote a permanent failure to a retry.
+        assert_eq!(
+            classify_mcp_error("this preview is temporarily slow"),
+            McpErrorKind::Unknown
+        );
+        assert_eq!(
+            classify_mcp_error("could you try again with a different key"),
+            McpErrorKind::Unknown
         );
     }
 
