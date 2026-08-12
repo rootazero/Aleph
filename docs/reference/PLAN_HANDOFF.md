@@ -120,10 +120,15 @@ cron tick、每一次 heartbeat 推进一个出口需要人的相位。无 chann
    是 Shift+Tab，codex 是 TUI picker）。零现实消费者不预建（R10 YAGNI）；而且保持
    `PlanGate` **单调**（只解不上）是一条比便利性更值钱的不变量。
 3. **规划期允许 `subagent`。** 一个能派出会写东西的孩子的只读相位不是只读的。
-   `parent_view_for_children` 已经共用同一个 `Arc<PlanGate>`（那是唯一正确的实参，
-   不是为未来留的口），但在把 `subagent` 放进许可集之前，需要先逐条验证三条委派路径
-   （前台子代理 / detached 后台子代理 / `task_manage` 团队派发）的相位传播——
    v1 靠「`subagent` 非 idempotent ⇒ 默认被拒」关掉它，零额外代码。
+   **已验证的那一段**：`parent_view_for_children` 与主工具服务共用同一个
+   `Arc<PlanGate>`（那是唯一正确的实参，不是为未来留的口），而
+   `subagent_spawner` 只在它外面套**只会收窄**的两层（`McpScopedToolService` /
+   `AllowlistToolService`）——所以**前台子代理**的相位传播是结构性成立的。
+   **未验证的那两段**：detached 后台子代理（活过 run，要确认它握的确实是同一个
+   服务而不是重建的）与 `task_manage` 团队派发（成员 run 是**新会话**，
+   `resolve_turn_plan_phase` 读不到父会话的相位）。把 `subagent` 放进许可集之前
+   先把这两条走一遍——第二条看起来就是个真缺口。
 4. **全局 `[policies] plan_phase` 默认。** 见 §3 每轮解析。
 5. **不重排 `ExecTier`**，不加第四档，不碰 `permissiveness()` / `most_restrictive`。
 6. **不给 `PlanPhase` 加 channel clamp / 非 operator 天花板**——进入只会收窄。
