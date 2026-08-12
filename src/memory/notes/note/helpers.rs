@@ -166,13 +166,23 @@ pub fn sanitize_note_path(note_path: &str) -> String {
 /// Strips path separators, null bytes, and filesystem-unsafe characters
 /// to prevent path traversal attacks from LLM-generated titles.
 ///
-/// Returns `Err(AlephError::Validation)` if the result is empty / all-dots /
-/// all-whitespace — callers should reject the operation rather than write a
-/// note with an unstable filename.
+/// Returns `Err(AlephError::Validation)` if the title contains a `..` (any
+/// path-traversal hint, before stripping — the lossy `replace("..", "")` made
+/// `..foo` collapse to `foo` and silently collide with an existing `foo.md`)
+/// or if the result is empty / all-dots / all-whitespace. Callers should
+/// reject the operation rather than write a note with an unstable filename.
 pub fn sanitize_title(title: &str) -> Result<String, crate::error::AlephError> {
+    // Reject any path-traversal hint up front: the previous `replace("..", "")`
+    // was lossy AND collision-prone. A legitimate note title never contains
+    // `..`; any occurrence is either an LLM mistake or an attack. Fail closed
+    // and let the caller re-prompt.
+    if title.contains("..") {
+        return Err(crate::error::AlephError::Validation(format!(
+            "note title contains '..' (path traversal): {title:?}"
+        )));
+    }
     let cleaned: String = title
         .replace(['/', '\\', '\0', ':', '*', '?', '"', '<', '>', '|'], "")
-        .replace("..", "")
         .trim()
         .to_string();
     // Titles are stored extensionless; a trailing ".md" leaking in (e.g. a
