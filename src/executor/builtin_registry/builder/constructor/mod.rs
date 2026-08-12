@@ -54,7 +54,9 @@ impl BuiltinToolRegistry {
             let mut tool = WebFetchTool::new();
             if let Some(ref cfg) = config.config {
                 let cfg_guard = cfg.read().await;
-                tool = tool.with_ssrf_policy(cfg_guard.ssrf.clone());
+                tool = tool
+                    .with_policy(&cfg_guard.policies.web_fetch)
+                    .with_ssrf_policy(cfg_guard.ssrf.clone());
                 if let Some(ref fetch_cfg) = cfg_guard.fetch {
                     if fetch_cfg.enabled {
                         let vault = config.shared_token_manager.clone();
