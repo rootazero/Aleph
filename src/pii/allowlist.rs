@@ -2,13 +2,13 @@
 
 use regex::Regex;
 use std::collections::HashSet;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-static SYSTEM_EMAIL_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+static SYSTEM_EMAIL_PATTERNS: OnceLock<Arc<Vec<Regex>>> = OnceLock::new();
 
-fn system_email_patterns() -> &'static Vec<Regex> {
+fn system_email_patterns() -> &'static Arc<Vec<Regex>> {
     SYSTEM_EMAIL_PATTERNS.get_or_init(|| {
-        vec![
+        Arc::new(vec![
             Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
             Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
             Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
@@ -16,53 +16,63 @@ fn system_email_patterns() -> &'static Vec<Regex> {
                 .expect("valid regex literal"),
             Regex::new(r"(?i)\.(example|test|local|internal|invalid)$")
                 .expect("valid regex literal"),
-        ]
+        ])
     })
 }
 
-fn test_phones() -> HashSet<String> {
-    [
-        "13800138000",
-        "18888888888",
-        "13900001111",
-        "13800000000",
-        "15800000000",
-        "18900000000",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+/// Known test phone numbers, stored once and looked up by `&str` to avoid
+/// the per-default `String` allocation of the previous implementation.
+static TEST_PHONES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+fn test_phones() -> &'static HashSet<&'static str> {
+    TEST_PHONES.get_or_init(|| {
+        [
+            "13800138000",
+            "18888888888",
+            "13900001111",
+            "13800000000",
+            "15800000000",
+            "18900000000",
+        ]
+        .into_iter()
+        .collect()
+    })
 }
 
-fn local_ips() -> HashSet<String> {
-    [
-        "127.0.0.1",
-        "0.0.0.0",
-        "192.168.0.1",
-        "192.168.1.1",
-        "10.0.0.1",
-        "172.16.0.1",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+/// Known local/internal IPs, stored once for the same reason as `TEST_PHONES`.
+static LOCAL_IPS: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+fn local_ips() -> &'static HashSet<&'static str> {
+    LOCAL_IPS.get_or_init(|| {
+        [
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.0.1",
+            "192.168.1.1",
+            "10.0.0.1",
+            "172.16.0.1",
+        ]
+        .into_iter()
+        .collect()
+    })
 }
 
 /// Allowlist of known non-PII values
 pub struct PiiAllowlist {
-    /// Known test phone numbers
-    pub(crate) test_phones: HashSet<String>,
-    /// System/example email patterns
-    pub(crate) system_email_patterns: Vec<Regex>,
-    /// Known local/internal IPs
-    pub(crate) local_ips: HashSet<String>,
+    /// Known test phone numbers (borrowed from the static set)
+    test_phones: &'static HashSet<&'static str>,
+    /// System/example email patterns (shared via `Arc` to avoid cloning the
+    /// regex `Vec` on every `Default::default()`)
+    system_email_patterns: Arc<Vec<Regex>>,
+    /// Known local/internal IPs (borrowed from the static set)
+    local_ips: &'static HashSet<&'static str>,
 }
 
 impl Default for PiiAllowlist {
     fn default() -> Self {
         Self {
             test_phones: test_phones(),
-            system_email_patterns: system_email_patterns().clone(),
+            system_email_patterns: Arc::clone(system_email_patterns()),
             local_ips: local_ips(),
         }
     }

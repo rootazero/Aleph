@@ -11,6 +11,5 @@ pub mod allowlist;
 pub mod engine;
 pub mod rules;
 
-pub use crate::config::{PiiAction, PlatformPiiPolicy, PrivacyConfig};
 pub use engine::{FilterResult, PiiEngine, PiiMatch, PiiSeverity};
 pub use rules::PiiRule;

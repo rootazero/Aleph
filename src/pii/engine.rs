@@ -5,6 +5,7 @@ use crate::config::PrivacyConfig;
 use crate::pii::allowlist::PiiAllowlist;
 use crate::pii::rules::PiiRule;
 use crate::sync_primitives::{Arc, RwLock};
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use tracing::warn;
 
@@ -78,6 +79,14 @@ pub struct PiiEngine {
     rules: Vec<Box<dyn PiiRule>>,
     allowlist: PiiAllowlist,
     config: PrivacyConfig,
+    /// Pre-computed `name → action` map for custom rules so the per-match
+    /// action lookup is O(1) instead of an O(M) linear scan over
+    /// `config.custom_rules`. Built-ins still resolve through `action_for_rule`'s
+    /// match arm.
+    custom_rule_actions: HashMap<String, PiiAction>,
+    /// Lower-cased provider names excluded from filtering, so the per-call
+    /// `is_provider_excluded` check is O(1).
+    excluded_providers: HashSet<String>,
 }
 
 impl PiiEngine {
@@ -86,10 +95,22 @@ impl PiiEngine {
     pub fn new(config: PrivacyConfig) -> Self {
         let rules = crate::pii::rules::build_rules(&config.custom_rules);
         let allowlist = PiiAllowlist::default();
+        let custom_rule_actions = config
+            .custom_rules
+            .iter()
+            .map(|r| (r.name.clone(), r.action.clone()))
+            .collect();
+        let excluded_providers = config
+            .exclude_providers
+            .iter()
+            .map(|p| p.to_ascii_lowercase())
+            .collect();
         Self {
             rules,
             allowlist,
             config,
+            custom_rule_actions,
+            excluded_providers,
         }
     }
 
@@ -109,11 +130,23 @@ impl PiiEngine {
     /// Reload configuration (hot-reload support)
     pub fn reload(config: PrivacyConfig) {
         if let Some(engine) = PII_ENGINE.get() {
-            // Build rules outside the lock to avoid blocking readers.
+            // Build rules and lookup tables outside the lock to avoid blocking readers.
             let new_rules = crate::pii::rules::build_rules(&config.custom_rules);
+            let custom_rule_actions = config
+                .custom_rules
+                .iter()
+                .map(|r| (r.name.clone(), r.action.clone()))
+                .collect();
+            let excluded_providers = config
+                .exclude_providers
+                .iter()
+                .map(|p| p.to_ascii_lowercase())
+                .collect();
             let mut guard = engine.write().unwrap_or_else(|e| e.into_inner());
             guard.rules = new_rules;
             guard.config = config;
+            guard.custom_rule_actions = custom_rule_actions;
+            guard.excluded_providers = excluded_providers;
         } else {
             warn!("PiiEngine::reload called but engine not initialized, ignoring");
         }
@@ -122,10 +155,44 @@ impl PiiEngine {
     /// Check if a specific provider should be excluded from filtering
     #[must_use]
     pub fn is_provider_excluded(&self, provider_name: &str) -> bool {
-        self.config
-            .exclude_providers
-            .iter()
-            .any(|p| p.eq_ignore_ascii_case(provider_name))
+        let lower = provider_name.to_ascii_lowercase();
+        self.excluded_providers.contains(&lower)
+    }
+
+    /// True when at least one platform-policy field is populated.
+///
+/// Used by [`effective_config`] to skip the full `PrivacyConfig` clone
+/// when the named platform policy has no effect (every field is `None`),
+/// or when no policy is defined for the requested platform.
+fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
+    policy.pii_filtering.is_some()
+        || policy.id_card.is_some()
+        || policy.bank_card.is_some()
+        || policy.phone.is_some()
+        || policy.api_key.is_some()
+        || policy.ssh_key.is_some()
+        || policy.email.is_some()
+        || policy.ip_address.is_some()
+}
+
+/// Look up a platform policy by key, case-insensitively.
+    ///
+    /// Operators may write `[platform_policies.Telegram]` while the runtime
+    /// passes `"telegram"` (or vice versa). Without a case-insensitive
+    /// lookup the policy is silently skipped, falling back to the global
+    /// config — which can mean PII that the operator explicitly relaxed on
+    /// that platform is now blocked, or vice versa. Try the literal key
+    /// first; fall back to the lower-cased key when the operator wrote
+    /// the policy in upper case.
+    fn lookup_platform_policy(&self, platform: &str) -> Option<&crate::config::PlatformPiiPolicy> {
+        if let Some(p) = self.config.platform_policies.get(platform) {
+            return Some(p);
+        }
+        let lower = platform.to_ascii_lowercase();
+        if lower == platform {
+            return None;
+        }
+        self.config.platform_policies.get(&lower)
     }
 
     /// Check whether a provider is excluded, considering platform overrides.
@@ -135,7 +202,7 @@ impl PiiEngine {
             return true;
         }
         if let Some(p) = platform {
-            if let Some(policy) = self.config.platform_policies.get(p) {
+            if let Some(policy) = self.lookup_platform_policy(p) {
                 if let Some(ref excluded) = policy.exclude_providers {
                     if excluded.iter().any(|e| e.eq_ignore_ascii_case(provider)) {
                         return true;
@@ -147,7 +214,16 @@ impl PiiEngine {
     }
 
     /// Get the configured action for a rule by name from the given config.
-    fn action_for_rule<'a>(config: &'a PrivacyConfig, rule_name: &str) -> &'a PiiAction {
+    ///
+    /// Built-in rule names hit the `match` arm (O(1)). Custom rule names
+    /// are resolved through the engine's pre-computed `custom_rule_actions`
+    /// HashMap (also O(1)) instead of an O(M) linear scan over
+    /// `config.custom_rules`. An unknown rule defaults to [`PiiAction::Block`].
+    fn action_for_rule<'a>(
+        config: &'a PrivacyConfig,
+        custom_actions: &'a HashMap<String, PiiAction>,
+        rule_name: &str,
+    ) -> &'a PiiAction {
         match rule_name {
             "phone" => &config.phone,
             "id_card" => &config.id_card,
@@ -156,56 +232,60 @@ impl PiiEngine {
             "ip_address" => &config.ip_address,
             "api_key" => &config.api_key,
             "ssh_key" => &config.ssh_key,
-            _ => {
-                // Look up custom rule action by name
-                config
-                    .custom_rules
-                    .iter()
-                    .find(|r| r.name == rule_name)
-                    .map_or_else(|| &PiiAction::Block, |r| &r.action)
-            }
+            _ => custom_actions
+                .get(rule_name)
+                .unwrap_or(&PiiAction::Block),
         }
     }
 
     /// Compute an effective `PrivacyConfig` by applying platform overrides.
     fn effective_config(&self, platform: Option<&str>) -> PrivacyConfig {
-        // Owned copy is required because platform overrides mutate the config.
+        let Some(p) = platform else {
+            // No platform override requested; the global config stands.
+            return self.config.clone();
+        };
+        let Some(policy) = self.lookup_platform_policy(p) else {
+            // Platform named but no policy defined for it (case-insensitive
+            // lookup already attempted) — fall back to global.
+            return self.config.clone();
+        };
+        if !policy_has_any_override(policy) {
+            // Policy exists but every field is `None`; treat as identity.
+            return self.config.clone();
+        }
+        // Owned copy is required because at least one override mutates the config.
         // rust-doctor-disable-next-line excessive-clone
         let mut cfg = self.config.clone();
-        if let Some(p) = platform {
-            if let Some(policy) = self.config.platform_policies.get(p) {
-                if let Some(v) = policy.pii_filtering {
-                    cfg.pii_filtering = v;
-                }
-                if let Some(ref v) = policy.id_card {
-                    // rust-doctor-disable-next-line excessive-clone
-                    cfg.id_card = v.clone();
-                }
-                if let Some(ref v) = policy.bank_card {
-                    // rust-doctor-disable-next-line excessive-clone
-                    cfg.bank_card = v.clone();
-                }
-                if let Some(ref v) = policy.phone {
-                    // rust-doctor-disable-next-line excessive-clone
-                    cfg.phone = v.clone();
-                }
-                if let Some(ref v) = policy.api_key {
-                    // rust-doctor-disable-next-line excessive-clone
-                    cfg.api_key = v.clone();
-                }
-                if let Some(ref v) = policy.ssh_key {
-                    // rust-doctor-disable-next-line excessive-clone
-                    cfg.ssh_key = v.clone();
-                }
-                if let Some(ref v) = policy.email {
-                    // rust-doctor-disable-next-line excessive-clone
-                    cfg.email = v.clone();
-                }
-                if let Some(ref v) = policy.ip_address {
-                    // rust-doctor-disable-next-line excessive-clone
-                    cfg.ip_address = v.clone();
-                }
-            }
+        if let Some(v) = policy.pii_filtering {
+            cfg.pii_filtering = v;
+        }
+        if let Some(ref v) = policy.id_card {
+            // rust-doctor-disable-next-line excessive-clone
+            cfg.id_card = v.clone();
+        }
+        if let Some(ref v) = policy.bank_card {
+            // rust-doctor-disable-next-line excessive-clone
+            cfg.bank_card = v.clone();
+        }
+        if let Some(ref v) = policy.phone {
+            // rust-doctor-disable-next-line excessive-clone
+            cfg.phone = v.clone();
+        }
+        if let Some(ref v) = policy.api_key {
+            // rust-doctor-disable-next-line excessive-clone
+            cfg.api_key = v.clone();
+        }
+        if let Some(ref v) = policy.ssh_key {
+            // rust-doctor-disable-next-line excessive-clone
+            cfg.ssh_key = v.clone();
+        }
+        if let Some(ref v) = policy.email {
+            // rust-doctor-disable-next-line excessive-clone
+            cfg.email = v.clone();
+        }
+        if let Some(ref v) = policy.ip_address {
+            // rust-doctor-disable-next-line excessive-clone
+            cfg.ip_address = v.clone();
         }
         cfg
     }
@@ -219,7 +299,7 @@ impl PiiEngine {
         let mut all_matches: Vec<PiiMatch> = Vec::new();
 
         for rule in &self.rules {
-            let action = Self::action_for_rule(config, rule.name());
+            let action = Self::action_for_rule(config, &self.custom_rule_actions, rule.name());
             if *action == PiiAction::Off {
                 continue;
             }
@@ -244,7 +324,8 @@ impl PiiEngine {
         // rule (e.g. phone=block) that overlaps it, leaking the lower-severity
         // PII in plaintext. Within equal block-ness, higher severity wins.
         all_matches.sort_by_key(|m| {
-            let blocks = *Self::action_for_rule(config, &m.rule_name) == PiiAction::Block;
+            let blocks = *Self::action_for_rule(config, &self.custom_rule_actions, &m.rule_name)
+                == PiiAction::Block;
             (std::cmp::Reverse(blocks), std::cmp::Reverse(m.severity))
         });
 
@@ -260,7 +341,7 @@ impl PiiEngine {
         let mut warned_count = 0;
 
         for detection in &sorted {
-            let action = Self::action_for_rule(config, &detection.rule_name);
+            let action = Self::action_for_rule(config, &self.custom_rule_actions, &detection.rule_name);
             match action {
                 PiiAction::Off => {}
                 PiiAction::Block => {
@@ -272,7 +353,12 @@ impl PiiEngine {
                         result
                             .replace_range(detection.start..detection.end, &detection.placeholder);
                         blocked_count += 1;
-                        warn!(
+                        // Per-match lines go to `debug!` to avoid log floods
+                        // at normal traffic (1–3 PII matches per outbound
+                        // message). The audit pipeline (`runtime_guard`) emits
+                        // a single `PiiDetected` entry per call, which is the
+                        // operator-facing signal.
+                        tracing::debug!(
                             rule = %detection.rule_name,
                             severity = %detection.severity,
                             "PII detected and blocked before API call"
@@ -289,6 +375,9 @@ impl PiiEngine {
                 }
                 PiiAction::Warn => {
                     warned_count += 1;
+                    // Warn-mode detections are operator-visible; keep at
+                    // `warn!`. Volume is bounded by user opt-in to the
+                    // Warn action — not on by default for most categories.
                     warn!(
                         rule = %detection.rule_name,
                         severity = %detection.severity,
@@ -469,6 +558,77 @@ mod tests {
         assert!(engine.is_platform_excluded(None, "ollama"));
         assert!(engine.is_platform_excluded(Some("telegram"), "local-llm"));
         assert!(!engine.is_platform_excluded(Some("telegram"), "anthropic"));
+    }
+
+    #[test]
+    fn test_platform_lookup_is_case_insensitive() {
+        // Operator writes `[platform_policies.Telegram]` (capital T);
+        // runtime passes "telegram". The policy MUST apply — otherwise
+        // the operator's per-platform PII overrides are silently dropped
+        // when case drifts between config and runtime.
+        let mut config = PrivacyConfig::default();
+        let policy = PlatformPiiPolicy {
+            exclude_providers: Some(vec!["local-llm".to_string()]),
+            ..Default::default()
+        };
+        config
+            .platform_policies
+            .insert("Telegram".to_string(), policy);
+        let engine = PiiEngine::new(config);
+
+        // Lower-case runtime key against upper-case config key.
+        assert!(engine.is_platform_excluded(Some("telegram"), "local-llm"));
+        assert!(!engine.is_platform_excluded(Some("telegram"), "anthropic"));
+        // Upper-case runtime key against lower-case config key (reverse).
+        let mut config = PrivacyConfig::default();
+        let policy = PlatformPiiPolicy {
+            exclude_providers: Some(vec!["local-llm".to_string()]),
+            ..Default::default()
+        };
+        config
+            .platform_policies
+            .insert("telegram".to_string(), policy);
+        let engine = PiiEngine::new(config);
+        assert!(engine.is_platform_excluded(Some("TELEGRAM"), "local-llm"));
+    }
+
+    #[test]
+    fn test_filter_with_platform_override_case_insensitive() {
+        // Same regression as `test_platform_lookup_is_case_insensitive`
+        // but exercised through the production `filter_with_platform` path.
+        let mut config = PrivacyConfig {
+            phone: PiiAction::Block,
+            ..Default::default()
+        };
+        let policy = PlatformPiiPolicy {
+            phone: Some(PiiAction::Warn),
+            ..Default::default()
+        };
+        // Operator writes the policy in upper case.
+        config
+            .platform_policies
+            .insert("Discord".to_string(), policy);
+        let engine = PiiEngine::new(config);
+
+        // Runtime passes "discord" (lower case) — the override MUST take
+        // effect; otherwise the phone would be redacted as `[PHONE]`.
+        let result = engine.filter_with_platform("Call 13812345678", Some("discord"));
+        assert_eq!(
+            result.text, "Call 13812345678",
+            "platform override must apply despite case drift between config and runtime"
+        );
+        assert!(result.warned_count > 0);
+    }
+
+    #[test]
+    fn test_effective_config_no_override_avoids_clone() {
+        // Sanity check that the no-platform-override fast path still
+        // returns a usable config (this exercises the `return self.config.clone()`
+        // short-circuit added alongside the case-insensitive lookup).
+        let config = PrivacyConfig::default();
+        let engine = PiiEngine::new(config.clone());
+        let result = engine.filter("Phone: 13812345678");
+        assert!(result.text.contains("[PHONE]"));
     }
 
     #[test]
