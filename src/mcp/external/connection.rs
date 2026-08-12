@@ -1349,11 +1349,6 @@ impl McpServerConnection {
             .messages
             .into_iter()
             .map(|m| {
-                let role = match m.role {
-                    mcp_types::PromptRole::User => "user",
-                    mcp_types::PromptRole::Assistant => "assistant",
-                    mcp_types::PromptRole::System => "system",
-                };
                 let content = match m.content {
                     mcp_types::PromptContentItem::Text { text } => {
                         crate::mcp::prompts::PromptContent::Text { text }
@@ -1381,7 +1376,7 @@ impl McpServerConnection {
                     }
                 };
                 crate::mcp::prompts::PromptMessage {
-                    role: role.to_string(),
+                    role: m.role,
                     content,
                 }
             })

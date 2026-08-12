@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::mcp::protocol::PromptRole;
+
 /// MCP prompt definition from a server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpPrompt {
@@ -34,8 +36,10 @@ pub struct McpPromptArgument {
 /// A message in a prompt response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptMessage {
-    /// Role of the message (user, assistant, system)
-    pub role: String,
+    /// Role of the message. Uses the wire-level [`PromptRole`] enum so a
+    /// new variant (e.g. `Tool`, added in later revisions) round-trips
+    /// rather than silently collapsing to "".
+    pub role: PromptRole,
     /// Content of the message
     pub content: PromptContent,
 }
