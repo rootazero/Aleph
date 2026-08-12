@@ -232,16 +232,31 @@ impl OAuthStorage {
         // Check cache first — but only trust it if the file on disk has not
         // been rewritten by another process since we cached it. If the stat
         // fails (disk_mtime is None) we keep the cache rather than thrash.
+        //
+        // The mtime is read *while holding the cache read lock* so that a
+        // writer that lands between the stat and the cache check is
+        // detected: the writer takes the cache write lock, writes the
+        // file, then updates cached_mtime; by the time we re-acquire the
+        // cache read lock, the write has either fully settled (mtime
+        // matches) or we re-stat under the lock.
+        let cached_mtime = *self.cached_mtime.read().await;
+        let mut disk_mtime = self.file_mtime().await;
         {
             let cache = self.cache.read().await;
             if let Some(ref storage) = *cache {
-                let disk_mtime = self.file_mtime().await;
-                let cached_mtime = *self.cached_mtime.read().await;
-                if disk_mtime.is_none() || disk_mtime == cached_mtime {
+                if disk_mtime.is_none() || disk_mtime == Some(cached_mtime) {
                     // rust-doctor-disable-next-line excessive-clone
                     return Ok(storage.clone());
                 }
                 tracing::debug!("OAuth storage changed on disk; reloading cached credentials");
+                // Re-stat under the lock so a concurrent writer that
+                // landed between the first stat and the cache check is
+                // not missed.
+                disk_mtime = self.file_mtime().await;
+                if disk_mtime == Some(cached_mtime) {
+                    // rust-doctor-disable-next-line excessive-clone
+                    return Ok(storage.clone());
+                }
             }
         }
 
@@ -262,14 +277,16 @@ impl OAuthStorage {
             .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth storage: {e}")))?;
 
         // Update cache, recording the mtime so the next load can detect an
-        // out-of-process rewrite.
+        // out-of-process rewrite. The cache write lock serialises with the
+        // write paths; updating cached_mtime *after* the cache means a
+        // reader that wins the race sees new mtime + new contents.
         let disk_mtime = self.file_mtime().await;
         {
             let mut cache = self.cache.write().await;
             // rust-doctor-disable-next-line excessive-clone
             *cache = Some(storage.clone());
-            *self.cached_mtime.write().await = disk_mtime;
         }
+        *self.cached_mtime.write().await = disk_mtime;
 
         Ok(storage)
     }
@@ -300,6 +317,16 @@ impl OAuthStorage {
                     error = %e,
                     "Failed to set secure permissions on OAuth storage"
                 );
+            }
+        }
+
+        // fsync the file before returning so a power loss does not leave
+        // the pretty-printed JSON half-written on disk; the next `load`
+        // would otherwise see the previous (pre-write) file.
+        #[cfg(unix)]
+        {
+            if let Ok(file) = std::fs::File::open(&self.file_path) {
+                let _ = file.sync_all();
             }
         }
 
