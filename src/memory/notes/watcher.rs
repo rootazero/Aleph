@@ -172,6 +172,36 @@ where
         None,
         move |result: DebounceEventResult| match result {
             Ok(events) => {
+                // Classify BEFORE allocating the per-tick Vec. A bulk `git
+                // checkout` can fire thousands of events; the previous
+                // collect-all-then-filter wasted an allocation per tick. Walk
+                // the events once, count the .md paths, and only allocate
+                // the Vec when there is something to send.
+                let md_count = events
+                    .iter()
+                    .flat_map(|e| e.paths.iter())
+                    .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+                    .count();
+                if md_count == 0 {
+                    return;
+                }
+                // Big-burst short-circuit: a `git checkout` syncing a 10k-file
+                // vault can deliver more paths in one tick than the consumer
+                // can reconcile individually. Drop the per-path Vec here and
+                // signal "everything" by sending a single sentinel; the
+                // consumer's `reconcile_corpus` per-corpus sweep is the cheap
+                // path at that size. `MAX_PATHS_PER_BATCH` is the threshold
+                // the consumer also uses to escalate to bulk reconcile.
+                if md_count > MAX_PATHS_PER_BATCH {
+                    tracing::info!(
+                        files = md_count,
+                        "note vault watcher: bulk change, escalating to whole-corpus reconcile"
+                    );
+                    // A closed receiver means the watcher outlived its task;
+                    // the watch is about to be dropped with it.
+                    let _ = tx.send(Vec::new()); // empty vec = "reconcile every corpus"
+                    return;
+                }
                 let mut paths: Vec<PathBuf> = events
                     .iter()
                     .flat_map(|e| e.paths.iter().cloned())
@@ -179,9 +209,6 @@ where
                     .collect();
                 paths.sort();
                 paths.dedup();
-                if paths.is_empty() {
-                    return;
-                }
                 // A closed receiver means the watcher outlived its task; the
                 // watch is about to be dropped with it.
                 let _ = tx.send(paths);
@@ -216,10 +243,52 @@ where
 }
 
 /// Reconcile one settled batch of changed paths.
+///
+/// An empty `paths` is a sentinel from the producer (debouncer) meaning
+/// "bulk change, reconcile every corpus". The producer only emits the
+/// sentinel for batches larger than `MAX_PATHS_PER_BATCH`; the consumer
+/// here walks every corpus under the watch root and reconciles each.
 async fn reconcile_batch<S>(indexer: &NoteIndexer<S>, root: &Path, paths: Vec<PathBuf>)
 where
     S: NoteStore + Send + Sync + 'static,
 {
+    // Bulk-reconcile sentinel: an empty Vec from the debouncer means a
+    // burst exceeded MAX_PATHS_PER_BATCH and we should reconcile every
+    // corpus. Walk the watch root once to discover corpora (already a
+    // BTreeSet, so the order is stable across restarts).
+    if paths.is_empty() {
+        let corpora: BTreeSet<String> = match std::fs::read_dir(root) {
+            Ok(entries) => entries
+                .flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().into_string().ok()?;
+                    if name.is_empty() || name.starts_with('.') {
+                        return None;
+                    }
+                    if e.file_type().is_ok_and(|t| t.is_dir()) {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "note vault: bulk reconcile dir read failed");
+                return;
+            }
+        };
+        tracing::info!(
+            corpora = corpora.len(),
+            "note vault: bulk change, reconciling every corpus wholesale"
+        );
+        for corpus in corpora {
+            if let Err(e) = indexer.reconcile_corpus(&corpus).await {
+                tracing::warn!(corpus, error = %e, "note vault: bulk reconcile failed");
+            }
+        }
+        return;
+    }
+
     let keys: Vec<(PathBuf, NoteKey)> = paths
         .into_iter()
         .filter_map(|p| classify(root, &p).map(|k| (p, k)))
