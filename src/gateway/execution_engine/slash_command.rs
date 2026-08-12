@@ -401,10 +401,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             ));
         }
         // The argument-keyed filter: `file_ops` hides `delete` behind the same
-        // name as `list`, so no name-keyed rule can see it.
+        // name as `list`, so no name-keyed rule can see it. Includes the floor
+        // (`ExecTier::floor_asks_for_arguments`), which is why this clause
+        // fires at `full` too — `/self_config` writing the approval settings
+        // has to reach the gated path whatever the tier says.
         if exec_tier.asks_for_arguments(name, arguments) {
             return Some(format!(
-                "`/{name}` arguments trip the tier's destructive filter"
+                "`/{name}` arguments trip the tier's destructive filter or the \
+                 gate-removal floor"
             ));
         }
         // Declared `requires_confirmation` gates at EVERY tier, including Full.

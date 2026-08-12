@@ -1,10 +1,10 @@
 //! Session-scoped denial ledger — the **negative twin** of
-//! [`session_memory`](super::session_memory).
+//! [`grants`](super::grants).
 //!
-//! `session_memory` remembers what the user *approved* for the rest of a
-//! session so a confirm-gated tool is not re-prompted. This module remembers
-//! what the user *denied*, for two reasons that the positive store cannot
-//! cover:
+//! [`GrantStore`](super::grants::GrantStore) remembers what the user *approved*
+//! — for the rest of a session, or until revoked — so a confirm-gated tool is
+//! not re-prompted. This module remembers what the user *denied*, for two
+//! reasons that the positive store cannot cover:
 //!
 //! 1. **Blind-retry guard.** Once a user denies a specific action, an agent
 //!    must not be able to re-request the *identical* intent and re-prompt the
@@ -24,8 +24,8 @@
 //! `action_fingerprint` (SHA over action+argv+cwd) + per-session counter +
 //! `autonomous_paused` flag + `DenialReason` taxonomy — onto Aleph,
 //! reusing the same bounded-FIFO, process-wide, session-keyed shape as
-//! [`session_memory::SessionApprovalMemory`] so the two stores are structural
-//! mirrors and evict identically.
+//! [`grants::GrantStore`](super::grants::GrantStore) so the two stores are
+//! structural mirrors and evict identically.
 
 use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Mutex;
@@ -34,7 +34,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 /// The one way to address a session in this ledger — and in its positive twin,
-/// [`session_memory`](super::session_memory), which must share the bucket.
+/// [`grants`](super::grants), which must share the bucket.
 ///
 /// Two gates write here: the tool confirm gate
 /// (`ScopedToolService::confirm_with_memory`) and the sandbox capability
@@ -58,8 +58,8 @@ pub fn ledger_key(session: &SessionKey) -> String {
 }
 
 /// Max distinct sessions retained before FIFO eviction kicks in. Matches
-/// [`session_memory`](super::session_memory)'s bound so the two stores have an
-/// identical memory ceiling.
+/// [`grants`](super::grants)'s bound so the two stores have an identical
+/// memory ceiling.
 const MAX_SESSIONS: usize = 1024;
 
 /// **Consecutive** denied intents in one session before the autonomous
@@ -122,11 +122,50 @@ pub enum DenialReason {
     Timeout,
     /// The exact same intent was already denied — a blind retry.
     RepeatedSameIntent,
+    /// **Nobody could be asked.** No approval transport is wired, the channel
+    /// refused or failed the delivery, no route resolves, or the run is
+    /// unattended. Like [`Self::Timeout`] it refuses the call *this* turn and
+    /// is never written to the ledger — see [`DenialLedger::record_denial`].
+    Unreachable,
     /// The session crossed the denial threshold; escalation is paused.
     ThresholdExceeded,
 }
 
 impl DenialReason {
+    /// The ledger reason a **refusal** carries, derived from the outcome the
+    /// requester returned. `None` for an approved outcome.
+    ///
+    /// The one mapping. Both gates that can refuse — the tool confirm gate and
+    /// the sandbox capability elevation gate — used to spell it out inline, and
+    /// both spelled it the same wrong way: `Timeout` was special-cased and
+    /// *everything else* fell through to [`Self::UserRejected`], so a delivery
+    /// failure, an unwired requester and an unattended run were all filed as
+    /// "the user said no". Deriving it here means a new
+    /// [`ApprovalOutcome`] variant is a compile error at one site instead of a
+    /// silent mislabel at two.
+    #[must_use]
+    pub const fn for_refusal(outcome: super::gate::ApprovalOutcome) -> Option<Self> {
+        use super::gate::ApprovalOutcome as O;
+        match outcome {
+            O::Approved | O::ApprovedForSession | O::ApprovedAlways => None,
+            O::Denied => Some(Self::UserRejected),
+            O::Timeout => Some(Self::Timeout),
+            O::Unavailable => Some(Self::Unreachable),
+        }
+    }
+
+    /// Whether this refusal is **a decision a person made**.
+    ///
+    /// The ledger's two stores only answer questions about those: `counts` is
+    /// "what did the user refuse?" and the breaker is "how hard is this session
+    /// pushing against the gate?". A non-decision answers neither, so
+    /// [`DenialLedger::record_denial`] drops it — and a surface rendering the
+    /// refusal must not attribute it to the user either.
+    #[must_use]
+    pub const fn is_a_human_decision(self) -> bool {
+        matches!(self, Self::UserRejected)
+    }
+
     /// Short, model-facing explanation appended to the refusal so the agent
     /// stops re-attempting and changes approach instead of looping.
     #[must_use]
@@ -143,6 +182,9 @@ impl DenialReason {
             }
             Self::ThresholdExceeded => {
                 "Too many actions were denied this session, so autonomous escalation is paused. Stop and let the user decide how to proceed."
+            }
+            Self::Unreachable => {
+                "This action needs a person's approval and there is no way to reach one on this run — nobody refused it. Do not retry: either take an approach that needs no approval, or hand back to the user so they can run it themselves."
             }
         }
     }
@@ -357,9 +399,11 @@ impl DenialLedger {
     /// (anti-reference-bypass). The return is advisory: existing callers that
     /// ignore it are unaffected.
     ///
-    /// # A timeout is not a denial
+    /// # Only a decision the user made is recorded
     ///
-    /// [`DenialReason::Timeout`] is deliberately **not recorded**. Both stores
+    /// [`DenialReason::Timeout`] and [`DenialReason::Unreachable`] are
+    /// deliberately **not recorded** — the gate is
+    /// [`DenialReason::is_a_human_decision`]. Both stores
     /// this ledger keeps answer questions about a *decision the user made*:
     /// `counts` is "what did the user refuse?" (sticky, so the agent cannot
     /// re-prompt its way around a `no`), and `total` is "how hard is this
@@ -378,28 +422,49 @@ impl DenialLedger {
     /// capability, so there is no brute-force avenue to bound here, and an agent
     /// looping against an absent user is already bounded by the approval timeout
     /// itself plus the run-level turn timeout. The refusal still reaches the
-    /// model this turn, carrying [`DenialReason::Timeout::agent_hint`], which
-    /// tells it to surface the blocker rather than retry.
+    /// model this turn, carrying [`DenialReason::agent_hint`], which tells it to
+    /// surface the blocker rather than retry.
+    ///
+    /// [`DenialReason::Unreachable`] is the same argument one step further out
+    /// and it was getting the opposite treatment: a Telegram delivery that
+    /// failed, a channel with no approval capability, an unwired requester and
+    /// an unattended run all arrived here spelled `UserRejected`. Each one made
+    /// the intent sticky for the session and advanced the breaker, so three
+    /// network hiccups paused every gate in the conversation for five minutes —
+    /// and the model was told, in words it relays to the user, that *the user
+    /// had already declined it*. Nobody had declined anything.
     ///
     /// The rule lives here, at the ledger, rather than at the two call sites
     /// (the confirm gate and the sandbox elevation path) so a third caller
     /// cannot reintroduce it by forgetting.
     ///
-    /// [`DenialReason::Timeout::agent_hint`]: DenialReason::agent_hint
+    /// # A repeat of an intent already refused is not a second strike
+    ///
+    /// `counts` is per-intent and `consecutive` is the brute-force signal, and
+    /// the second used to advance on every *card* rather than every *intent*.
+    /// One tool call can raise several identical cards at once — concurrent
+    /// subagents, a teams broadcast — and every one of them lands here with the
+    /// same fingerprint after the human says "no" once. Three siblings therefore
+    /// tripped the three-strike breaker on a single refusal: the countermeasure
+    /// built for an agent *guessing* fired on a user answering a fan-out the
+    /// system itself raised. A blind retry cannot reach this line at all (it is
+    /// short-circuited by [`Self::is_blocked`]), so the only thing this rule
+    /// gives up is double-counting.
     pub fn record_denial(&self, session: &str, fingerprint: &str, reason: DenialReason) -> bool {
-        if matches!(reason, DenialReason::Timeout) {
+        if !reason.is_a_human_decision() {
             tracing::info!(
                 session = %session,
                 fingerprint = %fingerprint,
-                "approval expired with no answer — not recorded as a denial \
-                 (a timeout is not a decision); the same intent stays askable"
+                reason = ?reason,
+                "refusal not recorded — nobody decided it (only a person's `no` \
+                 makes an intent sticky or moves the breaker)"
             );
             return false;
         }
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !guard.by_session.contains_key(session) {
             // New session: enforce the bound before inserting so the map and
-            // the FIFO order stay in lockstep (mirrors session_memory).
+            // the FIFO order stay in lockstep (mirrors the grant store).
             while guard.order.len() >= MAX_SESSIONS {
                 match guard.order.pop_front() {
                     Some(evicted) => {
@@ -411,8 +476,12 @@ impl DenialLedger {
             guard.order.push_back(session.to_string());
         }
         let denials = guard.by_session.entry(session.to_string()).or_default();
+        // Distinct intents in a row, not clicks in a row — see the doc above.
+        let first_refusal_of_this_intent = !denials.counts.contains_key(fingerprint);
         *denials.counts.entry(fingerprint.to_string()).or_insert(0) += 1;
-        denials.consecutive = denials.consecutive.saturating_add(1);
+        if first_refusal_of_this_intent {
+            denials.consecutive = denials.consecutive.saturating_add(1);
+        }
         // A refusal at the half-open probe re-opens the breaker immediately —
         // the probe asked "is this session still pushing?" and got its answer.
         // Same rule as `GuardianBreaker::record_failure`.
@@ -493,7 +562,7 @@ static GLOBAL: LazyLock<DenialLedger> = LazyLock::new(DenialLedger::new);
 
 /// Process-wide denial ledger shared by the confirm gate and the sandbox
 /// elevation path — the negative counterpart to
-/// [`session_memory::global`](super::session_memory::global).
+/// [`grants::global`](super::grants::global).
 #[must_use]
 pub fn global() -> &'static DenialLedger {
     &GLOBAL
@@ -902,8 +971,96 @@ mod tests {
             DenialReason::Timeout,
             DenialReason::RepeatedSameIntent,
             DenialReason::ThresholdExceeded,
+            DenialReason::Unreachable,
         ] {
             assert!(!r.agent_hint().is_empty());
         }
+    }
+
+    /// Exactly one outcome is a decision a person made. The mapping is the one
+    /// both gates read, so a new [`ApprovalOutcome`] variant lands here rather
+    /// than in a `_ =>` arm that silently calls it a user's refusal.
+    #[test]
+    fn only_a_real_denial_maps_to_a_user_rejection() {
+        use crate::sandbox::exec_approval::gate::ApprovalOutcome as O;
+        assert_eq!(
+            DenialReason::for_refusal(O::Denied),
+            Some(DenialReason::UserRejected)
+        );
+        assert_eq!(
+            DenialReason::for_refusal(O::Timeout),
+            Some(DenialReason::Timeout)
+        );
+        assert_eq!(
+            DenialReason::for_refusal(O::Unavailable),
+            Some(DenialReason::Unreachable)
+        );
+        for approved in [O::Approved, O::ApprovedForSession, O::ApprovedAlways] {
+            assert_eq!(DenialReason::for_refusal(approved), None);
+        }
+        assert!(DenialReason::UserRejected.is_a_human_decision());
+        for not_a_decision in [
+            DenialReason::Timeout,
+            DenialReason::Unreachable,
+            DenialReason::RepeatedSameIntent,
+            DenialReason::ThresholdExceeded,
+        ] {
+            assert!(!not_a_decision.is_a_human_decision(), "{not_a_decision:?}");
+        }
+    }
+
+    /// A refusal nobody made is not recorded — the `Timeout` rule, applied to
+    /// the refusals that used to arrive dressed as a person's answer.
+    ///
+    /// This is the shape that bricked sessions: a channel that could not
+    /// deliver returned `Denied`, so three transient failures made three
+    /// intents permanently sticky AND paused every gate in the conversation,
+    /// while the model told the user they had declined.
+    #[test]
+    fn an_unreachable_refusal_neither_sticks_nor_moves_the_breaker() {
+        let led = DenialLedger::new();
+        for i in 0..5 {
+            let fp = action_fingerprint("bash", &format!("deploy {i}"));
+            assert!(!led.record_denial("s", &fp, DenialReason::Unreachable));
+            assert_eq!(
+                led.is_blocked("s", &fp),
+                None,
+                "a delivery failure must leave the intent askable"
+            );
+        }
+        assert_eq!(led.consecutive("s"), 0);
+    }
+
+    /// The breaker counts refused **intents**, not the cards the system chose
+    /// to raise for them. One tool call can park several identical cards
+    /// (concurrent subagents, a teams broadcast); answering that fan-out with a
+    /// single "no" is one refusal, and it used to be three.
+    #[test]
+    fn a_fan_out_of_identical_cards_is_one_strike() {
+        let led = DenialLedger::new();
+        let fp = action_fingerprint("bash", "rm -rf build");
+        for _ in 0..(SESSION_PAUSE_THRESHOLD + 2) {
+            led.record_denial("s", &fp, DenialReason::UserRejected);
+        }
+        assert_eq!(led.consecutive("s"), 1);
+        assert_eq!(
+            led.denial_count("s", &fp),
+            SESSION_PAUSE_THRESHOLD + 2,
+            "the per-intent count still sees every card"
+        );
+        // A different intent is still askable: the session is not paused.
+        let other = action_fingerprint("bash", "ls");
+        assert_eq!(led.is_blocked("s", &other), None);
+
+        // And three DISTINCT refusals still trip it — the countermeasure is
+        // intact, it just stopped firing on the fan-out it caused itself.
+        for i in 0..SESSION_PAUSE_THRESHOLD {
+            let fp = action_fingerprint("bash", &format!("guess {i}"));
+            led.record_denial("s2", &fp, DenialReason::UserRejected);
+        }
+        assert_eq!(
+            led.is_blocked("s2", &action_fingerprint("bash", "anything")),
+            Some(DenialReason::ThresholdExceeded)
+        );
     }
 }

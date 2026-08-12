@@ -29,13 +29,14 @@
 //!    identical call. On an operator *escalation* card — raised precisely
 //!    because the requester is not operator-tier — this is false, so answering
 //!    "always" cannot permanently strip an operator gate a member has to pass.
-//! 2. **The gate is not the tool's own declared floor** (`tool_declared`). That
-//!    rule's card says, in the sentence the same card renders, that it "asks
-//!    under every execution tier — including `full` — and an `allow` entry does
-//!    not switch it off". Offering a button that would switch it off makes that
-//!    sentence false at the moment it is read, which is the most expensive
+//! 2. **The gate is not a floor** ([`FLOOR_RULES`]). A floor's card says, in
+//!    the sentence the same card renders, that it asks under every execution
+//!    tier — including `full`. Offering a button that would switch it off makes
+//!    that sentence false at the moment it is read, which is the most expensive
 //!    place in this repo to be wrong (判据 §0: 一句关于"什么被闸住"的话，往往有
-//!    三份拷贝，其中一份是发给模型的).
+//!    三份拷贝，其中一份是发给模型的). Written as a set rather than a single
+//!    equality because the chain grew a second floor, and an equality is the
+//!    enumeration that goes stale on the day it does.
 
 use super::socket::ApprovalDecisionType;
 
@@ -97,17 +98,34 @@ pub fn with_persistent() -> Vec<ApprovalDecisionType> {
 /// those two, decide it.
 #[must_use]
 pub fn for_confirm_gate(rule_id: &str, caller_is_operator: bool) -> Vec<ApprovalDecisionType> {
-    if caller_is_operator && rule_id != DECLARED_FLOOR_RULE {
+    if caller_is_operator && !rule_is_a_floor(rule_id) {
         with_persistent()
     } else {
         session_max()
     }
 }
 
-/// The rule id whose card must never offer a persistent grant. Named here
-/// rather than matched inline so the coupling to `GateRule::ToolDeclared` is
+/// Whether `rule_id` names a gate no tier and no `allow` entry can lower.
+///
+/// The one predicate. `GateRule::is_floor` is pinned against it by a test in
+/// `tools::scoped::gate_chain`, so a new floor variant that forgets this side
+/// fails there by name rather than shipping a card that offers to retire
+/// something the same card just called unremovable.
+#[must_use]
+pub fn rule_is_a_floor(rule_id: &str) -> bool {
+    FLOOR_RULES.contains(&rule_id)
+}
+
+/// The rule ids whose card must never offer a persistent grant. Named here
+/// rather than matched inline so the coupling to the `GateRule` variants is
 /// greppable from both ends.
+pub const FLOOR_RULES: &[&str] = &[DECLARED_FLOOR_RULE, GATE_REMOVAL_RULE];
+
+/// `GateRule::ToolDeclared` — the tool's own `requires_confirmation`.
 pub const DECLARED_FLOOR_RULE: &str = "tool_declared";
+
+/// `GateRule::GateRemoval` — a write that can reach the approval settings.
+pub const GATE_REMOVAL_RULE: &str = "gate_removal";
 
 #[cfg(test)]
 mod tests {
@@ -144,6 +162,26 @@ mod tests {
             .contains(&ApprovalDecisionType::AllowAlways));
     }
 
+    /// Every floor, not just the first one written. A card that has just told
+    /// the reader "no tier switches this off" must not carry the button that
+    /// switches it off — the property is about the class, so the assertion is
+    /// over the class.
+    #[test]
+    fn no_floor_card_offers_a_persistent_grant() {
+        for rule in FLOOR_RULES {
+            assert!(rule_is_a_floor(rule));
+            for is_operator in [true, false] {
+                assert!(
+                    !for_confirm_gate(rule, is_operator)
+                        .contains(&ApprovalDecisionType::AllowAlways),
+                    "`{rule}` is a floor; its card must not offer 'always allow'"
+                );
+            }
+        }
+        assert!(!rule_is_a_floor("tier_raised"));
+        assert!(!rule_is_a_floor("policy_ask"));
+    }
+
     /// Every set a live card can be raised with keeps the two decisions that
     /// are never optional — a card you can neither take nor refuse is not a
     /// card.
@@ -166,7 +204,8 @@ mod tests {
     /// this pins the *value*, which is what already-written ledger rows, logs
     /// and tests key on.
     #[test]
-    fn the_declared_floor_token_is_stable() {
+    fn the_floor_tokens_are_stable() {
         assert_eq!(DECLARED_FLOOR_RULE, "tool_declared");
+        assert_eq!(GATE_REMOVAL_RULE, "gate_removal");
     }
 }

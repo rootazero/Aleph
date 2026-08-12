@@ -290,8 +290,30 @@ impl ScopedToolService {
         if self.explicitly_named(name) {
             return false;
         }
+        if self.gate_removal_floor(name, input) {
+            return true;
+        }
         self.exec_tier
             .is_some_and(|tier| tier.asks_for_arguments(name, input))
+    }
+
+    /// `true` when this call trips the argument-level rule **no tier stands
+    /// down** — today, a `self_config` write that can reach the configuration
+    /// deciding whether the gates fire at all
+    /// ([`ExecTier::floor_asks_for_arguments`]).
+    ///
+    /// Read independently of `self.exec_tier`, which is `Option`: a service
+    /// with no tier attached would otherwise skip the floor entirely, and a
+    /// floor with an off switch is a tier rule wearing the word.
+    ///
+    /// Still stands down for an explicitly-named tool, same as the tier rules —
+    /// that entry is a decision a person wrote, and the write that creates one
+    /// cards through this very rule.
+    ///
+    /// [`ExecTier::floor_asks_for_arguments`]: crate::config::types::policies::ExecTier::floor_asks_for_arguments
+    pub(super) fn gate_removal_floor(&self, name: &str, input: &Value) -> bool {
+        !self.explicitly_named(name)
+            && crate::config::types::policies::ExecTier::floor_asks_for_arguments(name, input)
     }
 
     /// `true` when the permission policy denies `name` outright.

@@ -1781,8 +1781,10 @@ mod tests {
     /// alone. Against the three questions: (1) every added clause is a runtime
     /// fact — the four-question cap, that `question` and `questions` are two
     /// shapes of one call, that free text is accepted so an "other" choice is
-    /// wasted, that `secret` REFUSES a messaging channel rather than merely
-    /// masking, and that `request_approval` returns a verdict in
+    /// wasted, that a `secret` question is SKIPPED on a messaging channel
+    /// rather than merely masked (the rest of the call is still asked, and the
+    /// per-call reason rides `AskUserOutput.withheld` where it costs nothing
+    /// unless it happens), and that `request_approval` returns a verdict in
     /// `decision`/`feedback`; (2) a stronger model still cannot infer any of
     /// them, and the "never add an other choice" clause is the one that pays
     /// for itself immediately — without it a model spends an option slot per
@@ -1793,7 +1795,20 @@ mod tests {
     /// is ambiguous…" sentence (-226 B against the first draft): telling a
     /// strong model when a decision is the user's to make is question 1's
     /// second half.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 97_533;
+    /// 2026-08-12, +6 B (97,533 → 97,539), and it is a **correction, not an
+    /// addition**: `ask_user`'s clause said `secret` "refuses a messaging
+    /// channel", which stopped being true when the rule became per-question —
+    /// a secret is now withheld and the rest of the call is asked normally.
+    /// Against the three questions: (1) which questions a channel turn will
+    /// actually be shown is a runtime fact about the transport, invisible in
+    /// the schema; (2) a stronger model cannot infer it either, and needs it
+    /// *before* the call to decide whether to put the credential question in
+    /// the same batch as three it needs answered; (3) nothing else says it at
+    /// call time — the per-call detail rides `AskUserOutput.withheld`, which
+    /// costs nothing on the calls where it does not happen. Six bytes to stop
+    /// the catalog telling the model something false is the cheap side of this
+    /// trade.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 97_539;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

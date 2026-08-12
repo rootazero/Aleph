@@ -95,6 +95,11 @@ fn wrap_value_with_hook_contexts(value: Value, contexts: &[String]) -> Value {
 /// [`DenialReason::agent_hint`]: crate::sandbox::exec_approval::denial_ledger::DenialReason::agent_hint
 struct ConfirmDenial {
     outcome: ApprovalOutcome,
+    /// Why, in the ledger's vocabulary. Read for exactly one thing the outcome
+    /// alone cannot answer: **may the sentence we hand the model attribute this
+    /// refusal to the user?** Every branch here used to say "the user did not
+    /// approve", including the ones where nobody was asked at all.
+    reason: denial_ledger::DenialReason,
     hint: Option<&'static str>,
     /// The human's own free-text reason (`/deny <reason>` or the RPC `reason`
     /// field), when they gave one. Relayed verbatim into the model-facing
@@ -112,6 +117,22 @@ impl ConfirmDenial {
             .as_deref()
             .map(|r| format!(" The user said: \"{r}\"."))
             .unwrap_or_default()
+    }
+
+    /// The opening sentence of the model-facing refusal, naming who refused.
+    ///
+    /// One rendering for both gates, because both had the same hardcoded lead
+    /// ("The user did not approve …") on top of an outcome that is frequently
+    /// nothing of the sort: an unattended run, an unwired requester, a channel
+    /// that could not deliver. The model relays that sentence to the person it
+    /// is talking to, so a wrong attribution does not stay inside the process.
+    fn lead(&self, subject: &str) -> String {
+        let outcome = self.outcome;
+        if self.reason.is_a_human_decision() {
+            format!("The user did not approve {subject} ({outcome:?}).")
+        } else {
+            format!("{subject} was not authorized — nobody was asked ({outcome:?}).")
+        }
     }
 }
 
@@ -389,14 +410,9 @@ impl ScopedToolService {
                 // the requester is not operator-tier, so the default session
                 // ceiling is exactly right — answering it must not permanently
                 // retire the escalation for everyone who follows.
-                let action = ApprovalAction::for_tool_call(
-                    name,
-                    input,
-                    format!(
-                        "A chat-tier device asked to run `{name}`, which changes Aleph's \
-                         own configuration. Approve to allow this change."
-                    ),
-                );
+                let rule = super::gate_chain::GateRule::OperatorRequired;
+                let action = ApprovalAction::for_tool_call(name, input, rule.reason(name))
+                    .gated_by(rule.id());
                 if let Err(denial) = self.confirm_with_memory(req, &action, input).await {
                     if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                         return Err(ToolError::ApprovalExpired {
@@ -405,12 +421,13 @@ impl ScopedToolService {
                         });
                     }
                     let said = denial.user_reason_clause();
+                    let lead = denial.lead(&format!("the config change via `{name}`"));
                     return Err(ToolError::PermissionDenied {
                         name: name.to_string(),
                         reason: format!(
-                            "config change via `{name}` was not authorized by the server \
-                             operator ({:?}).{said} Do not retry until authorized.",
-                            denial.outcome
+                            "{lead} It changes Aleph's own configuration, which needs the \
+                             server operator's authorization.{said} Do not retry until \
+                             authorized."
                         ),
                     });
                 }
@@ -425,6 +442,7 @@ impl ScopedToolService {
                 self.record_gate_refusal(
                     name,
                     input,
+                    super::gate_chain::GateRule::OperatorRequired,
                     "auto-denied: operator authorization required and no approval channel \
                      is available",
                 )
@@ -449,10 +467,21 @@ impl ScopedToolService {
     /// an approval decision rather than a tool refusal because that is what it
     /// is: the authority to run was withheld, which is a separate fact from the
     /// call itself.
-    async fn record_gate_refusal(&self, name: &str, input: &Value, reason: &str) {
+    async fn record_gate_refusal(
+        &self,
+        name: &str,
+        input: &Value,
+        rule: super::gate_chain::GateRule<'_>,
+        reason: &str,
+    ) {
         let fingerprint = crate::sandbox::exec_approval::grant_fingerprint(name, input);
-        self.record_approval_decision(name, &fingerprint, ApprovalRecord::Denied(reason))
-            .await;
+        self.record_approval_decision(
+            name,
+            &fingerprint,
+            Some(rule.id()),
+            ApprovalRecord::Denied(reason),
+        )
+        .await;
     }
 
     /// Confirmation gate: tools flagged `requires_confirmation`, permission
@@ -494,8 +523,9 @@ impl ScopedToolService {
                         .as_ref()
                         .is_none_or(crate::tools::turn_context::TurnContext::caller_is_operator),
                 );
-                let action =
-                    ApprovalAction::for_tool_call(name, input, rule.reason(name)).offering(offered);
+                let action = ApprovalAction::for_tool_call(name, input, rule.reason(name))
+                    .offering(offered)
+                    .gated_by(rule.id());
                 if let Err(denial) = self.confirm_with_memory(requester, &action, input).await {
                     if matches!(denial.outcome, ApprovalOutcome::Timeout) {
                         return Err(ToolError::ApprovalExpired {
@@ -505,14 +535,13 @@ impl ScopedToolService {
                     }
                     let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                     let said = denial.user_reason_clause();
+                    let lead = denial.lead(&format!("running `{name}`"));
                     return Err(ToolError::Execution {
                         name: name.to_string(),
                         cause: format!(
-                            "The user did not approve running `{name}` ({:?}).{said} Do not \
-                             retry this call, do not rewrite it, and do not attempt to \
-                             achieve the same result by other means.{hint} Ask the user what \
-                             they would like to do instead.",
-                            denial.outcome
+                            "{lead}{said} Do not retry this call, do not rewrite it, and do \
+                             not attempt to achieve the same result by other means.{hint} Ask \
+                             the user what they would like to do instead."
                         ),
                     });
                 }
@@ -524,11 +553,8 @@ impl ScopedToolService {
                 self.record_gate_refusal(
                     name,
                     input,
-                    &format!(
-                        "auto-denied ({}): confirmation required and no approval channel \
-                         is available",
-                        rule.id()
-                    ),
+                    rule,
+                    "auto-denied: confirmation required and no approval channel is available",
                 )
                 .await;
                 Err(ToolError::Execution {
@@ -727,13 +753,19 @@ impl ScopedToolService {
             self.record_approval_decision(
                 name,
                 &fingerprint,
+                action.rule_id,
                 ApprovalRecord::Denied(
                     "auto-denied: unattended run, no human available to approve",
                 ),
             )
             .await;
             return Err(ConfirmDenial {
-                outcome: ApprovalOutcome::Denied,
+                // Not `Denied`: nobody refused this, there was simply nobody to
+                // ask. The distinction is what keeps the ledger from making the
+                // intent sticky and what keeps the model from telling the user
+                // they said no to something they never saw.
+                outcome: ApprovalOutcome::Unavailable,
+                reason: denial_ledger::DenialReason::Unreachable,
                 hint: Some(
                     "This run is unattended (no human is watching it) — \
                      interactive approval is unavailable, so confirm-gated tools \
@@ -784,6 +816,7 @@ impl ScopedToolService {
             self.record_approval_decision(
                 name,
                 &fingerprint,
+                action.rule_id,
                 ApprovalRecord::GrantedByStandingGrant(scope),
             )
             .await;
@@ -806,6 +839,7 @@ impl ScopedToolService {
                 self.record_approval_decision(
                     name,
                     &fingerprint,
+                    action.rule_id,
                     ApprovalRecord::Denied(reason_kind.agent_hint()),
                 )
                 .await;
@@ -813,6 +847,7 @@ impl ScopedToolService {
                 // so the circuit breaker actually breaks the loop.
                 return Err(ConfirmDenial {
                     outcome: ApprovalOutcome::Denied,
+                    reason: reason_kind,
                     hint: Some(reason_kind.agent_hint()),
                     user_reason: None,
                     waited_ms: 0,
@@ -863,15 +898,18 @@ impl ScopedToolService {
         let outcome = response.outcome;
         let waited_ms = u64::try_from(asked_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         if !outcome.is_approved() {
-            let reason_kind = match outcome {
-                ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
-                _ => denial_ledger::DenialReason::UserRejected,
-            };
+            // One derivation of "what kind of refusal was that", shared with the
+            // sandbox elevation gate. It used to be spelled out here as
+            // `Timeout => Timeout, _ => UserRejected`, and that wildcard is what
+            // filed a failed Telegram delivery as a decision the user made.
+            let reason_kind = denial_ledger::DenialReason::for_refusal(outcome)
+                .unwrap_or(denial_ledger::DenialReason::UserRejected);
             // Record the refusal so a blind retry of this exact intent — or a
             // session past the threshold — is short-circuited next time. A
-            // `Timeout` reaches the ledger too but is deliberately dropped
-            // there (an expired card is not a decision), so it can neither
-            // stick nor trip the breaker — see `DenialLedger::record_denial`.
+            // `Timeout` or an `Unavailable` reaches the ledger too and is
+            // deliberately dropped there (neither is a decision), so it can
+            // neither stick nor trip the breaker — see
+            // `DenialLedger::record_denial`.
             if let Some(ref key) = mem_key {
                 let just_paused =
                     denial_ledger::global().record_denial(key, &fingerprint, reason_kind);
@@ -891,10 +929,19 @@ impl ScopedToolService {
                     }
                 }
             }
+            // The trail says who refused, not just that something did: naming
+            // the user on an `Unavailable` would put a decision they never made
+            // into a signed, non-repudiable ledger row.
+            let trail = if reason_kind.is_a_human_decision() {
+                format!("user did not approve ({outcome:?})")
+            } else {
+                format!("not authorized — nobody was asked ({outcome:?})")
+            };
             self.record_approval_decision(
                 name,
                 &fingerprint,
-                ApprovalRecord::Denied(&format!("user did not approve ({outcome:?})")),
+                action.rule_id,
+                ApprovalRecord::Denied(&trail),
             )
             .await;
             // Carry the same hint on the *first* live denial too, so the agent
@@ -902,6 +949,7 @@ impl ScopedToolService {
             // the auto-deny path above.
             return Err(ConfirmDenial {
                 outcome,
+                reason: reason_kind,
                 hint: Some(reason_kind.agent_hint()),
                 user_reason: response.deny_reason,
                 waited_ms,
@@ -972,8 +1020,13 @@ impl ScopedToolService {
             // rest of the conversation.
             denial_ledger::global().record_approval(key);
         }
-        self.record_approval_decision(name, &fingerprint, ApprovalRecord::GrantedByUser)
-            .await;
+        self.record_approval_decision(
+            name,
+            &fingerprint,
+            action.rule_id,
+            ApprovalRecord::GrantedByUser,
+        )
+        .await;
         Ok(())
     }
 
@@ -1002,6 +1055,7 @@ impl ScopedToolService {
         &self,
         name: &str,
         fingerprint: &str,
+        rule: Option<&str>,
         decision: ApprovalRecord<'_>,
     ) {
         use crate::session::events::{now_ms, SessionEvent};
@@ -1024,7 +1078,16 @@ impl ScopedToolService {
             target: name.to_string(),
             outcome: decision.ledger_outcome(),
             args_fp: Some(fingerprint.to_string()),
-            detail: decision.detail(),
+            // Which rule required the approval, appended to the human-readable
+            // detail rather than given a column of its own: the ledger's signed
+            // preimage is append-ordered, so a new optional field would
+            // invalidate every existing chain (see AGENT_IDENTITY.md), while
+            // `detail` is already in it. Absent for the gates that raise a card
+            // outside the named chain (sandbox capability elevation).
+            detail: match rule {
+                Some(rule) => format!("{} [gate: {rule}]", decision.detail()),
+                None => decision.detail(),
+            },
         })
         .await;
 
@@ -1140,8 +1203,12 @@ impl ScopedToolService {
                     // can neither hand out an install-wide grant nor be
                     // satisfied by one. The tier gate above is the only site
                     // that knows which RULE fired, which is half of what
-                    // `for_confirm_gate` needs.
-                    let action = ApprovalAction::for_tool_call(name, &input, reason);
+                    // `for_confirm_gate` needs. The rule id is still stamped,
+                    // so the trail can say a *hook* stopped this call and not
+                    // the tier — the first thing an operator asks when a card
+                    // appears for a tool their configuration allows.
+                    let action = ApprovalAction::for_tool_call(name, &input, reason)
+                        .gated_by(super::gate_chain::GateRule::HookRequested.id());
                     if let Err(denial) = self.confirm_with_memory(requester, &action, &input).await
                     {
                         // An expired card is not a refusal — mirror the confirm
@@ -1155,12 +1222,12 @@ impl ScopedToolService {
                         }
                         let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         let said = denial.user_reason_clause();
+                        let lead = denial.lead(&format!("running `{name}`"));
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
-                                "Hook requested user confirmation for `{name}` and the \
-                                 user did not approve ({:?}).{said}{hint}",
-                                denial.outcome
+                                "A BeforeToolCall hook required confirmation. \
+                                 {lead}{said}{hint}"
                             ),
                         });
                     }
@@ -1179,6 +1246,7 @@ impl ScopedToolService {
                     self.record_gate_refusal(
                         name,
                         &input,
+                        super::gate_chain::GateRule::HookRequested,
                         "auto-denied: a BeforeToolCall hook requested confirmation and no \
                          approval channel is available",
                     )

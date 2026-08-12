@@ -416,48 +416,92 @@ fn recompute_palette_filter(state: &mut AppState) {
 }
 
 /// Handle key events when the dialog is focused.
+///
+/// Two modes, because the overlay has to be able to produce **every** answer
+/// the server accepts, and free text is a legal answer to every question — a
+/// menu never forbids it, which is why `ask_user` tells the model not to add an
+/// "other" choice:
+///
+/// * **pick** — digits answer outright, arrows move the highlight, Enter
+///   confirms it. Offered only when a single index *can* answer the question
+///   ([`DialogState::has_quick_pick`]), the same predicate the server uses to
+///   decide whether a channel gets an inline keyboard.
+/// * **type** — printable keys build a free-text answer, Backspace deletes,
+///   Enter sends it. It is the *only* mode a free-text or multi-select
+///   question has, and the mode `Tab` reaches from a menu.
+///
+/// Before this, the overlay was menu-only: a question with no choices had no
+/// answerable key at all, and `Esc` is deliberately swallowed for this overlay
+/// (the run is parked on a oneshot), so the TUI was held by a modal nothing
+/// could dismiss.
 fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
+    let Some(dialog) = &mut state.dialog else {
+        return Action::None;
+    };
+    // A chord is a command, not text. Ctrl+C / Ctrl+D are already claimed by
+    // the global handler; everything else with a modifier must not silently
+    // land in the answer buffer.
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
     match key.code {
-        // Number keys for quick select (1-9)
-        KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+        // Tab flips between the menu and a typed answer. Only meaningful when
+        // there is a menu to flip away from.
+        KeyCode::Tab if dialog.has_quick_pick() => {
+            dialog.typing = !dialog.typing;
+            Action::None
+        }
+        // Quick pick: 1–9 answers outright while the menu has focus. In text
+        // mode a digit is just a character — that is what makes "3 days" a
+        // sendable answer to a three-choice question.
+        //
+        // A digit PAST the end of the menu is not a pick, so it falls through
+        // to the typing arm below rather than being eaten: on a two-choice
+        // question, "5 minutes" has to be typeable, and swallowing the leading
+        // "5" would silently send "minutes".
+        KeyCode::Char(c)
+            if plain
+                && !dialog.typing
+                && c.is_ascii_digit()
+                && c != '0'
+                && (c as usize) - ('1' as usize) < dialog.options.len() =>
+        {
             let idx = (c as usize) - ('1' as usize);
-            if let Some(dialog) = &state.dialog {
-                if idx < dialog.options.len() {
-                    let session_key = dialog.session_key.clone();
-                    let reply = dialog.options[idx].clone();
-                    return Action::RespondToDialog { session_key, reply };
-                }
+            Action::RespondToDialog {
+                session_key: dialog.session_key.clone(),
+                // 1-based index, not the label — see `pending_reply`.
+                reply: (idx + 1).to_string(),
             }
-            Action::DialogSelect(idx)
         }
-        KeyCode::Up => {
-            if let Some(dialog) = &mut state.dialog {
-                if dialog.selected > 0 {
-                    dialog.selected -= 1;
-                }
+        // Any other printable key is an answer being typed. On a menu question
+        // the first one switches modes, so the character is never lost.
+        KeyCode::Char(c) if plain => {
+            dialog.typing = true;
+            dialog.input.push(c);
+            Action::None
+        }
+        KeyCode::Backspace if plain => {
+            dialog.input.pop();
+            Action::None
+        }
+        // Arrows drive the menu only. In text mode they do nothing rather than
+        // moving a highlight the Enter key is not going to read.
+        KeyCode::Up if !dialog.typing => {
+            dialog.selected = dialog.selected.saturating_sub(1);
+            Action::None
+        }
+        KeyCode::Down if !dialog.typing => {
+            if dialog.selected + 1 < dialog.options.len() {
+                dialog.selected += 1;
             }
             Action::None
         }
-        KeyCode::Down => {
-            if let Some(dialog) = &mut state.dialog {
-                if dialog.selected + 1 < dialog.options.len() {
-                    dialog.selected += 1;
-                }
-            }
-            Action::None
-        }
-        KeyCode::Enter => {
-            let Some(dialog) = &state.dialog else {
-                return Action::None;
-            };
-            dialog
-                .options
-                .get(dialog.selected)
-                .map_or(Action::None, |choice| Action::RespondToDialog {
-                    session_key: dialog.session_key.clone(),
-                    reply: choice.clone(),
-                })
-        }
+        KeyCode::Enter => dialog
+            .pending_reply()
+            .map_or(Action::None, |reply| Action::RespondToDialog {
+                session_key: dialog.session_key.clone(),
+                reply,
+            }),
         _ => Action::None,
     }
 }
@@ -535,7 +579,19 @@ fn handle_session_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
 }
 
 #[cfg(test)]
-mod tests {
+// Two complementary test modules live here:
+//
+// * `palette_key_tests` covers `handle_palette_key`: a regression where the
+//   session knobs were readable from the TUI but settable from nowhere
+//   because everything typed after the command name was being dropped.
+// * `dialog_key_tests` covers `handle_dialog_key`: the modal overlay's
+//   free-text / quick-pick / secret path. Before this module existed the
+//   overlay was menu-only — a question with no choices had no answerable
+//   key at all, and `Esc` is deliberately swallowed for it.
+//
+// They are named (not both `mod tests`) so the file keeps two co-existing
+// `#[cfg(test)]` modules in one file without Rust complaining.
+mod palette_key_tests {
     use super::*;
     use crate::tui::app::PaletteState;
     use crossterm::event::KeyEventKind;
@@ -621,5 +677,183 @@ mod tests {
             palette.args.is_empty(),
             "a failed head match must not leave an argument behind"
         );
+    }
+}
+
+#[cfg(test)]
+mod dialog_key_tests {
+    use super::*;
+    use crate::tui::app::AskDialogView;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn state_with(view: AskDialogView) -> AppState {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.show_dialog("telegram:bot:1:u1".into(), view);
+        state
+    }
+
+    fn menu() -> AskDialogView {
+        AskDialogView {
+            question: "Deploy where?".into(),
+            options: vec!["staging — shared QA".into(), "prod — live".into()],
+            multi_select: false,
+            secret: false,
+        }
+    }
+
+    fn free_text() -> AskDialogView {
+        AskDialogView {
+            question: "Which language?".into(),
+            options: vec![],
+            multi_select: false,
+            secret: false,
+        }
+    }
+
+    /// The bug this whole path exists to fix. Every key a user could plausibly
+    /// press on a free-text question used to resolve to `Action::None`, and
+    /// `Esc` is swallowed by the global handler for this overlay, so the only
+    /// way out of the modal was killing the process.
+    #[test]
+    fn a_free_text_question_can_be_answered() {
+        let mut state = state_with(free_text());
+        for c in "Ελληνικά".chars() {
+            assert!(matches!(
+                handle_dialog_key(&mut state, key(KeyCode::Char(c))),
+                Action::None
+            ));
+        }
+        let action = handle_dialog_key(&mut state, key(KeyCode::Enter));
+        match action {
+            Action::RespondToDialog { session_key, reply } => {
+                assert_eq!(session_key, "telegram:bot:1:u1");
+                assert_eq!(reply, "Ελληνικά");
+            }
+            other => panic!("a typed answer must be sendable, got {other:?}"),
+        }
+    }
+
+    /// Enter on an empty buffer must not post a blank answer — core would take
+    /// it as the user's free-text reply and unpark the tool with nothing.
+    #[test]
+    fn an_empty_buffer_sends_nothing() {
+        let mut state = state_with(free_text());
+        assert!(matches!(
+            handle_dialog_key(&mut state, key(KeyCode::Enter)),
+            Action::None
+        ));
+        handle_dialog_key(&mut state, key(KeyCode::Char(' ')));
+        assert!(matches!(
+            handle_dialog_key(&mut state, key(KeyCode::Enter)),
+            Action::None
+        ));
+    }
+
+    /// One keypress still answers a menu question, and it answers with the
+    /// INDEX — the label carries its `— description` suffix and core matches
+    /// labels exactly, so a label reply lands as free text.
+    #[test]
+    fn a_digit_still_answers_a_menu_outright() {
+        let mut state = state_with(menu());
+        match handle_dialog_key(&mut state, key(KeyCode::Char('2'))) {
+            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "2"),
+            other => panic!("expected an immediate answer, got {other:?}"),
+        }
+    }
+
+    /// …and the same index arrives via the arrow + Enter route.
+    #[test]
+    fn arrows_move_the_highlight_and_enter_confirms_it() {
+        let mut state = state_with(menu());
+        handle_dialog_key(&mut state, key(KeyCode::Down));
+        assert_eq!(state.dialog.as_ref().unwrap().selected, 1);
+        // Clamped at both ends rather than wrapping.
+        handle_dialog_key(&mut state, key(KeyCode::Down));
+        assert_eq!(state.dialog.as_ref().unwrap().selected, 1);
+        handle_dialog_key(&mut state, key(KeyCode::Up));
+        handle_dialog_key(&mut state, key(KeyCode::Up));
+        assert_eq!(state.dialog.as_ref().unwrap().selected, 0);
+        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
+            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "1"),
+            other => panic!("expected the highlighted choice, got {other:?}"),
+        }
+    }
+
+    /// A menu never forbids free text — `ask_user` tells the model not to add
+    /// an "other" choice precisely because this exists. Tab reaches it, and a
+    /// digit typed there is a character, not a pick: "3 days" must be sendable
+    /// as an answer to a three-choice question.
+    #[test]
+    fn tab_reaches_free_text_from_a_menu_and_digits_become_characters() {
+        let mut state = state_with(menu());
+        handle_dialog_key(&mut state, key(KeyCode::Tab));
+        assert!(state.dialog.as_ref().unwrap().typing);
+        for c in "3 days".chars() {
+            handle_dialog_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(state.dialog.as_ref().unwrap().input, "3 days");
+        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
+            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "3 days"),
+            other => panic!("expected the typed answer, got {other:?}"),
+        }
+    }
+
+    /// Tab is a no-op where there is no menu to go back to, and must not eat
+    /// the mode a free-text question opened in.
+    #[test]
+    fn tab_cannot_strand_a_free_text_question_in_menu_mode() {
+        let mut state = state_with(free_text());
+        handle_dialog_key(&mut state, key(KeyCode::Tab));
+        assert!(
+            state.dialog.as_ref().unwrap().typing,
+            "a question with no menu has nowhere else to be"
+        );
+    }
+
+    /// A digit PAST the end of the menu is not a pick. It must start a typed
+    /// answer instead of being swallowed: on a two-choice question "5 minutes"
+    /// has to be sendable, and eating the leading "5" would silently send
+    /// "minutes" — an answer the user never wrote.
+    #[test]
+    fn a_digit_beyond_the_menu_starts_a_typed_answer() {
+        let mut state = state_with(menu());
+        for c in "5 minutes".chars() {
+            handle_dialog_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert!(state.dialog.as_ref().unwrap().typing);
+        assert_eq!(state.dialog.as_ref().unwrap().input, "5 minutes");
+        match handle_dialog_key(&mut state, key(KeyCode::Enter)) {
+            Action::RespondToDialog { reply, .. } => assert_eq!(reply, "5 minutes"),
+            other => panic!("expected the typed answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backspace_deletes_the_last_character() {
+        let mut state = state_with(free_text());
+        for c in "ab".chars() {
+            handle_dialog_key(&mut state, key(KeyCode::Char(c)));
+        }
+        handle_dialog_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.dialog.as_ref().unwrap().input, "a");
+    }
+
+    /// A chord is a command, not text. Without this guard every unclaimed
+    /// Ctrl-key would silently deposit its letter into the answer.
+    #[test]
+    fn a_modified_key_never_lands_in_the_buffer() {
+        let mut state = state_with(free_text());
+        handle_dialog_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        );
+        handle_dialog_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+        );
+        assert!(state.dialog.as_ref().unwrap().input.is_empty());
     }
 }

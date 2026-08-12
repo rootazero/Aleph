@@ -104,16 +104,21 @@ pub enum ExecTier {
     /// irreversible operations now stop for a human.
     #[default]
     Auto,
-    /// The tier itself asks nothing. **Two floors survive it**, and neither is
+    /// The tier itself asks nothing. **Three floors survive it**, and none is
     /// reachable by any configuration:
     ///
-    /// 1. the `[sandbox.command_policy]` hardline, and
+    /// 1. the `[sandbox.command_policy]` hardline;
     /// 2. a tool's own `requires_confirmation` declaration
     ///    (`CONFIRMATION_REQUIRED_TOOLS` + MCP `destructiveHint`), which
     ///    `ScopedToolService::check_confirmation_gate` reads independently of
     ///    the tier — so `vault_store`, `agent_delete`, `team_disband` and
     ///    friends still raise a card here, and in an unattended run still
-    ///    fail closed.
+    ///    fail closed; and
+    /// 3. [`ExecTier::floor_asks_for_arguments`] — a `self_config` write that
+    ///    can reach the approval settings themselves. That one is here because
+    ///    this tier is a **per-request** knob and the config change is
+    ///    permanent: without it, one message at `full` retires a gate for every
+    ///    later session at every later tier.
     ///
     /// "Full" therefore means "the tier gates nothing", not "nothing is
     /// gated". Both the variant doc and
@@ -197,12 +202,20 @@ impl ExecTier {
     /// `true` when this *call* must ask because of its arguments, whatever the
     /// name-keyed rules said. See [`DESTRUCTIVE_FILE_OPS`].
     ///
-    /// Only `Auto` needs it: `Ask` already gates these tools wholesale (they
-    /// are not idempotent) and `Full` never asks (its documented contract —
-    /// the residual "model writes a root reference under Full" risk is the
-    /// same trust decision Full makes everywhere, noted in GRAPH_LAYER.md).
+    /// Two layers, and the difference matters:
+    ///
+    /// * The **tier-scoped** rules below only `Auto` needs: `Ask` already gates
+    ///   these tools wholesale (they are not idempotent) and `Full` never asks
+    ///   (its documented contract — the residual "model writes a root reference
+    ///   under Full" risk is the same trust decision Full makes everywhere,
+    ///   noted in GRAPH_LAYER.md).
+    /// * The **floor** ([`Self::floor_asks_for_arguments`]) applies under every
+    ///   tier, including `Full`.
     #[must_use]
     pub fn asks_for_arguments(self, name: &str, input: &Value) -> bool {
+        if Self::floor_asks_for_arguments(name, input) {
+            return true;
+        }
         if self != Self::Auto {
             return false;
         }
@@ -219,11 +232,42 @@ impl ExecTier {
             // transport fails closed — the machine is structurally unable to
             // touch the graph's ground.
             "loop_graph" => loop_graph_touches_protected(input),
-            // The gate must cover the verb that removes the gate. See
-            // `self_config_touches_the_gate`.
-            "self_config" => self_config_touches_the_gate(input),
             _ => false,
         }
+    }
+
+    /// The argument-level rules **no tier can stand down** — the third floor,
+    /// alongside the command-policy hardline and a tool's own
+    /// `requires_confirmation`.
+    ///
+    /// Exactly one rule today: a `self_config` write that can reach the
+    /// configuration deciding whether these gates fire at all.
+    ///
+    /// # Why this cannot be a tier rule
+    ///
+    /// [`self_config_touches_the_gate`] exists because "write the override,
+    /// then act freely" is two legal steps whose composition equals the gated
+    /// one-step write. It was written as an `Auto`-only rule, which left the
+    /// composition open on the tier where it is cheapest: under `Full` the
+    /// model could retire the gate in one un-carded call — and the removal is
+    /// **install-wide and permanent**, while the tier that permitted it is a
+    /// per-request knob (`chat.send{exec_tier}`). One message at `full` bought
+    /// a config change that outlives it, in every later session at every later
+    /// tier. A gate whose own justification is "cover the verb that removes the
+    /// gate" cannot be switched off by the thing it is protecting.
+    ///
+    /// `Ask` and `Auto` reach the same call through their own rules, so this
+    /// changes the gated set at `Full` only. It is deliberately narrow: it does
+    /// not fire for `self_config` generally, only for a write whose path
+    /// intersects [`GATE_DECIDING_CONFIG_PATHS`].
+    ///
+    /// An explicit `[policies.tool_permissions]` entry still stands it down
+    /// (`ScopedToolServiceBuilder::explicitly_named`) — that entry is a
+    /// decision a person wrote, and the first write that creates one cards
+    /// through this very rule.
+    #[must_use]
+    pub fn floor_asks_for_arguments(name: &str, input: &Value) -> bool {
+        name == "self_config" && self_config_touches_the_gate(input)
     }
 
     /// One model-facing line describing this tier's approval regime, for the
@@ -254,10 +298,11 @@ impl ExecTier {
             Self::Full => {
                 "Approval mode: full — the tier gates nothing. You are the last line of \
                  defense: double-check destructive or irreversible actions yourself before \
-                 running them. Two floors still apply under every mode: the command-policy \
-                 hardline (fork bombs, `rm -rf /`, device wipes), and the handful of tools \
+                 running them. Three floors still apply under every mode: the command-policy \
+                 hardline (fork bombs, `rm -rf /`, device wipes), the handful of tools \
                  that declare their own confirmation gate (credential writes, deleting an \
-                 agent, disbanding a team, installing a skill) — those still pause for the \
+                 agent, disbanding a team, installing a skill), and a `self_config` write \
+                 that changes the approval settings themselves — those still pause for the \
                  user."
             }
         }
@@ -811,6 +856,66 @@ mod tests {
     fn rolling_back_a_snapshot_asks() {
         let rollback = serde_json::json!({"action": "rollback_config", "timestamp": "x"});
         assert!(ExecTier::Auto.asks_for_arguments("self_config", &rollback));
+    }
+
+    /// …and it asks under **every** tier, `full` included.
+    ///
+    /// The composition above ("write the override, then act freely") was left
+    /// open on the tier where it costs least: `asks_for_arguments` opened with
+    /// `if self != Auto { return false }`, so at `full` the model could retire
+    /// the checkpoint in one un-carded call. The tier is a per-request knob
+    /// (`chat.send{exec_tier}`) and the config change is install-wide and
+    /// permanent, so one message at `full` bought a gate removal that outlived
+    /// it — in every later session, at every later tier.
+    #[test]
+    fn the_gate_removal_write_asks_under_every_tier() {
+        let writes = [
+            serde_json::json!({
+                "action": "update_config",
+                "config_path": "policies.tool_permissions.overrides",
+                "config_value": {"loop_graph": "allow"},
+            }),
+            serde_json::json!({
+                "action": "update_config",
+                "config_path": "policies.exec_tier",
+                "config_value": "full",
+            }),
+            serde_json::json!({"action": "rollback_config", "timestamp": "x"}),
+        ];
+        for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+            for write in &writes {
+                assert!(
+                    tier.asks_for_arguments("self_config", write),
+                    "{tier:?} must not stand down the gate-removal floor"
+                );
+                assert!(ExecTier::floor_asks_for_arguments("self_config", write));
+            }
+        }
+        // Narrow: the floor is about the gate-deciding paths, not about
+        // `self_config`. Ordinary configuration work is untouched at `full`.
+        let ordinary = serde_json::json!({"action": "update_config", "config_path": "memory"});
+        assert!(!ExecTier::Full.asks_for_arguments("self_config", &ordinary));
+        assert!(!ExecTier::floor_asks_for_arguments(
+            "self_config",
+            &ordinary
+        ));
+        // And nothing else joins the floor by accident.
+        assert!(!ExecTier::floor_asks_for_arguments(
+            "file_ops",
+            &serde_json::json!({"operation": "delete"})
+        ));
+    }
+
+    /// The model is told what still stops at `full`, and the copy has to name
+    /// the floors that exist. Adding a third floor without touching this line
+    /// is the "三份拷贝，其中一份是发给模型的" failure.
+    #[test]
+    fn the_full_tier_prompt_line_names_every_floor() {
+        let line = ExecTier::Full.approval_prompt_line();
+        assert!(line.contains("Three floors"), "{line}");
+        assert!(line.contains("self_config"), "{line}");
+        assert!(line.contains("command-policy"), "{line}");
+        assert!(line.contains("confirmation gate"), "{line}");
     }
 
     /// The cost has to stay narrow, or the card becomes noise and gets turned

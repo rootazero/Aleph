@@ -704,6 +704,120 @@ widen `exec_tier` — a gate that pushes people onto the least safe setting has
 inverted its own purpose. The bound on an actual attacker is unchanged: one
 prompt per cooldown, and their refusal re-opens it.
 
+### A refusal nobody made (2026-08-12)
+
+`ApprovalOutcome` had one word for two facts. **Four** production paths answered
+`Denied` without any card ever reaching a person:
+
+| path | when |
+|---|---|
+| `ApprovalGate` with no requester wired | boot ordering, headless installs |
+| `ChannelApprovalBridgeAdapter` with no route | cron / webhook / non-channel turns |
+| `ChannelApprovalBridge` delivery `Some(false)` | **a Telegram send that failed** |
+| `ChannelApprovalBridge` delivery `None` | a channel with no approval capability |
+
+Every one of them was filed by `DenialLedger::record_denial` as
+`DenialReason::UserRejected`, which means:
+
+1. the intent became **sticky for the rest of the session** — the identical call
+   was auto-refused from then on, never asked again;
+2. it advanced the **brute-force breaker**, so three transient delivery failures
+   paused every confirm gate in the conversation for five minutes (including the
+   operator gate a chat-tier device needs); and
+3. the model was told *"The user already declined this exact action this
+   session"* — a sentence it relays to the person it is talking to, about a
+   decision they never made.
+
+The ledger already drew this exact line for `DenialReason::Timeout` ("a timeout
+is not a decision"), and its doc says the rule lives at the ledger "so a third
+caller cannot reintroduce it by forgetting" — but the ledger can only apply a
+rule to reasons it can tell apart, and these arrived wearing a person's label.
+
+Now: `ApprovalOutcome::Unavailable` is the fourth refusal outcome, mapped by the
+one derivation `DenialReason::for_refusal` (shared by the tool confirm gate and
+the sandbox elevation gate, which had each written the mapping out inline and
+each written it the same wrong way — `Timeout => Timeout, _ => UserRejected`).
+`record_denial` records **only** `DenialReason::is_a_human_decision`, and both
+gates' model-facing sentences are built from `ConfirmDenial::lead` /
+`reason_kind.is_a_human_decision()` instead of a hardcoded "the user did not
+approve". Security posture is unchanged — `is_approved()` is false, everything
+still fails closed. What changed is that a transport failure stops being
+recorded as a person's refusal.
+
+**The unattended tax now has both gates.** `ApprovalGate::request_approval_for_action`
+— the chokepoint serving sandbox capability elevation *and* the failover route
+escalation — refuses with `Unavailable` when `TurnContext.unattended`, instead of
+parking for the full approval timeout **per escalation** and being refused at the
+end of it anyway. The tool confirm gate has charged this since 2026-07-14; these
+two gates have now been found divergent three times (the ledger key, the
+approval that closes the breaker, and this), so the tax sits on the shared
+chokepoint rather than at a third call site.
+
+### One "no", one strike, and it reaches the cards beside it (2026-08-12)
+
+Two halves of the same defect, in the concurrent-card case the `AllowSession`
+cascade was built for (parallel subagents, a teams broadcast).
+
+- **`Deny` now cascades** to every *live* pending record in the same session
+  with the same `grant_key`, carrying the human's `/deny <reason>` with it. It
+  did not, on the stated grounds that "a deny is about THIS call, not the
+  action" — but `DenialLedger` two files over answers the same question the
+  other way, and auto-refuses the *next* identical call with no card. So whether
+  one "no" covered the identical call parked beside it was decided by a **race**
+  between the sibling's ledger check and the human's click. `AllowOnce` still
+  never cascades. Narrower than opencode, which rejects the whole session's
+  pending queue: keying on the action means a cascade can never refuse something
+  the user did not read.
+- **The breaker counts intents, not cards.** Each dismissed sibling was another
+  `record_denial` on the *same fingerprint*, so a three-way fan-out tripped the
+  three-strike pause on a single refusal — the countermeasure for an agent
+  *guessing* firing on a user answering a fan-out the system raised itself.
+  `consecutive` now advances only on a fingerprint not already refused this
+  session; `counts` still sees every card, and three **distinct** refusals still
+  trip it. A blind retry never reaches that line at all (`is_blocked`
+  short-circuits it), so nothing but double-counting is given up.
+
+### The third floor: the write that retires the gates (2026-08-12)
+
+`ExecTier::floor_asks_for_arguments` — a `self_config` write whose path
+intersects `policies.tool_permissions` / `policies.exec_tier`, or a
+`rollback_config` — now raises a card under **every** tier, `full` included.
+
+`self_config_touches_the_gate` was added (round 11, §4.12) precisely because
+"write the override, then act freely" is two legal steps whose composition
+equals the gated one-step write. It was written as an `Auto`-only rule, and
+`asks_for_arguments` opened with `if self != Auto { return false }` — leaving the
+composition open on the tier where it costs least. The asymmetry that makes this
+worse than it looks: **the tier is a per-request knob** (`chat.send{exec_tier}`,
+one message) and **the config change is install-wide and permanent**. One
+message at `full` bought a gate removal that outlived it, in every later session
+at every later tier.
+
+The rule is narrow (ordinary `self_config` work is untouched) and still stands
+down for an explicitly-named `[policies.tool_permissions]` entry — that entry is
+a decision a person wrote, and the write that creates one cards through this
+very rule. Three copies of the sentence were updated in the same change: the
+`ExecTier::Full` variant doc, `approval_prompt_line(Full)` (**the one the model
+reads**, now "Three floors"), and the card's own `GateRule::GateRemoval::reason`.
+Its card may not offer a persistent grant — `allowed_decisions::FLOOR_RULES`
+replaced the single `rule_id != DECLARED_FLOOR_RULE` equality, pinned to
+`GateRule::is_floor` from both ends by
+`every_floor_variant_is_declared_a_floor_on_both_sides`.
+
+### The chain names every gate, and the trail hears it (2026-08-12)
+
+`GateRule` gained `OperatorRequired` and `HookRequested`: the two gates that
+raise a card outside `confirmation_rule` and had their prose hand-written at
+their call sites. And `GateRule::id` — which the chain's own module doc has
+always described as "the stable token the ledger and the tests key on" — now
+actually reaches the ledger: `ApprovalAction::gated_by` carries it to
+`record_approval_decision`, which appends `[gate: <rule_id>]` to the signed
+`detail`. (Appended to `detail` rather than given a field of its own: the
+identity ledger's signed preimage is append-ordered, so a new optional field
+would invalidate every existing chain — see AGENT_IDENTITY.md.) An auditor
+reading an `ApprovalGranted` row can now tell a tier-raised card from a floor
+the operator could not have removed.
+
 ---
 
 ## Command allowlist
@@ -767,13 +881,22 @@ it — masking our copy would protect the one place that was never the exposure.
 So the flag changes **transport**, not rendering
 (`src/clarification/ask.rs`):
 
-- when the turn's channel is a **registered** `ChannelRegistry` transport, a
-  secret question is **refused outright** with an actionable error telling the
-  model to have the user set the value another way (Panel, configuration) and
-  continue without it;
+- when the turn's channel is a **registered** `ChannelRegistry` transport, the
+  secret questions are **withheld** — dropped from the request before it is
+  registered, so they never reach the renderer, the channel, or the pending
+  registry. Their ids come back on `AskUserOutput.withheld` with an actionable
+  reason (have the user set the value through the Panel or configuration, and
+  do not re-ask here);
 - otherwise — the Panel's `gui:chat` pseudo-channel, which is never registered
   — the question goes **only** onto the gateway event bus, where the Panel and
   TUI render a masked input.
+
+The rule is per **question**, not per call. It began as a per-call refusal,
+which threw away the three ordinary questions that happened to travel with a
+fourth asking for a token: the human never saw them, and the model got an error
+instead of three answers. A call whose questions are *all* secret still fails
+outright — withholding every question would park the tool on a request no reply
+can complete.
 
 Two consequences worth stating rather than discovering: the model still
 receives the answer (it asked for a value it needs, and withholding it would
@@ -782,6 +905,19 @@ like any other tool result. The property bought here is precisely one — **a
 credential never travels over a third-party channel** — and it is structural:
 it follows from the shape of the delivery ladder, not from a caller remembering
 to check.
+
+**That covers the return leg too**, which is the half worth checking rather
+than assuming — this codebase has been bitten before by a value that was masked
+on one leg and shipped in clear on another (`RedactingEmitter` wrapped the
+trace sink while the same run's text still went out through
+`OriginFanoutEmitter`). Here the two directions are governed by the *same*
+predicate: a secret question is only ever registered when
+`ChannelRegistry::get(turn.channel_id)` is `None`, so on any turn that could
+carry the answer outward there is no answer to carry. And the fanout mirrors
+only `RunComplete.final_response` — model-authored prose — never tool results.
+Pinned by `clarification::ask::tests::a_secret_among_others_withholds_only_itself`,
+which asserts that nothing marked `secret` reaches the pending registry on a
+turn with a registered channel.
 
 ---
 

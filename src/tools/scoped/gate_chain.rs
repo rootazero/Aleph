@@ -89,6 +89,19 @@ pub(super) enum GateRule<'a> {
     /// arguments, not the tool: the same tool with different arguments runs
     /// without a card.
     DestructiveArguments,
+    /// This call can reach the configuration that decides whether the approval
+    /// gates fire at all — a `self_config` write intersecting
+    /// `policies.tool_permissions` / `policies.exec_tier`, or a config
+    /// rollback.
+    ///
+    /// The second **floor**: like [`Self::ToolDeclared`] it asks under every
+    /// tier including `full`, so its reason must not point the reader at a
+    /// setting, and its card must not offer to retire it
+    /// ([`crate::exec::allowed_decisions::for_confirm_gate`]). Reported before
+    /// [`Self::DestructiveArguments`] for that reason alone: the two are the
+    /// same predicate family, but only one of them is removable, and naming
+    /// the removable one would invite a repair that cannot work.
+    GateRemoval,
     /// An explicit `[policies.tool_permissions]` entry resolves the tool to
     /// `ask`. The operator named it — by exact name or by glob — and the tier
     /// never gets a word in (see
@@ -104,6 +117,27 @@ pub(super) enum GateRule<'a> {
     /// Nobody named this tool, and the execution tier raised the configured
     /// default to `ask` from the tool's DECLARED metadata (not from its name).
     TierRaised,
+    /// The tool changes Aleph's own configuration and the requesting connection
+    /// is not operator-tier, so the call is escalated to whoever is
+    /// (`check_operator_gate`).
+    ///
+    /// Never returned by [`ScopedToolService::confirmation_rule`] — it is
+    /// decided one gate earlier, from the caller's role rather than from the
+    /// tool's facts — but it lives in this enum for the reason the enum exists:
+    /// it is a reason a call can stop, its sentence reaches a human and a model,
+    /// and the trail has to be able to name it. It was the one gate whose prose
+    /// was still hand-written at its call site. Same shape as
+    /// [`Self::PolicyDeny`], which [`ScopedToolService::deny_rule`] answers.
+    OperatorRequired,
+    /// A `BeforeToolCall` interceptor answered `Ask` for this call.
+    ///
+    /// Also outside [`ScopedToolService::confirmation_rule`] — the decision
+    /// belongs to a plugin, not to the tool facts — and here for the same
+    /// reason as [`Self::OperatorRequired`]: the trail has to be able to say
+    /// that a *hook* stopped this call and not the tier, which is the first
+    /// thing an operator wants to know when a card appears for a tool their
+    /// configuration allows.
+    HookRequested,
 }
 
 impl GateRule<'_> {
@@ -119,8 +153,41 @@ impl GateRule<'_> {
             // compile error there, not a silently widened button set.
             Self::ToolDeclared => crate::exec::allowed_decisions::DECLARED_FLOOR_RULE,
             Self::DestructiveArguments => "destructive_arguments",
+            // Second spelling shared with the decision-set derivation, same as
+            // `ToolDeclared` above: a rename here is a compile error there.
+            Self::GateRemoval => crate::exec::allowed_decisions::GATE_REMOVAL_RULE,
             Self::PolicyAsk { .. } => "policy_ask",
             Self::TierRaised => "tier_raised",
+            Self::OperatorRequired => "operator_required",
+            Self::HookRequested => "hook_requested",
+        }
+    }
+
+    /// Whether this rule is a **floor**: a gate no execution tier and no
+    /// `allow` entry can lower. Read for exactly one thing — whether the card
+    /// may offer a persistent grant.
+    ///
+    /// Deliberately `#[cfg(test)]` and deliberately an exhaustive `match`.
+    /// Production asks
+    /// [`allowed_decisions::rule_is_a_floor`](crate::exec::allowed_decisions::rule_is_a_floor)
+    /// — the one derivation, which the gate reaches through
+    /// [`Self::id`] — so a second production predicate here would be the second
+    /// source that `FLOOR_RULES` exists to avoid. What this *is* for is the
+    /// forcing function: adding a variant is a compile error on this `match`,
+    /// and `every_floor_variant_is_declared_a_floor_on_both_sides` then makes
+    /// the two answers agree. A `matches!` would have quietly answered `false`
+    /// for the new one, which is the shape of every enumeration that goes
+    /// stale (判据 §0).
+    #[cfg(test)]
+    pub(super) const fn is_floor(self) -> bool {
+        match self {
+            Self::ToolDeclared | Self::GateRemoval => true,
+            Self::PolicyDeny { .. }
+            | Self::DestructiveArguments
+            | Self::PolicyAsk { .. }
+            | Self::TierRaised
+            | Self::OperatorRequired
+            | Self::HookRequested => false,
         }
     }
 
@@ -153,6 +220,12 @@ impl GateRule<'_> {
                  `{tool}` explicitly in `[policies.tool_permissions.overrides]` stands this \
                  filter down."
             ),
+            Self::GateRemoval => format!(
+                "This `{tool}` call can change the settings that decide which tool calls \
+                 stop for you (`policies.tool_permissions` / `policies.exec_tier`), so it \
+                 asks under every execution tier — including `full`. Raising the tier does \
+                 not stand it down: the tier lasts one turn and this change would outlive it."
+            ),
             Self::PolicyAsk {
                 pattern,
                 exact: true,
@@ -169,6 +242,18 @@ impl GateRule<'_> {
                  itself read-only. Nothing in `[policies.tool_permissions]` names it, so \
                  the tier decides."
             ),
+            Self::OperatorRequired => format!(
+                "A chat-tier device asked to run `{tool}`, which changes Aleph's own \
+                 configuration. Approve to allow this change."
+            ),
+            // The only rule whose sentence is not authored here: a hook's
+            // `Ask` carries the plugin author's own words, and replacing them
+            // with a generic line would throw away the only thing that says
+            // WHICH hook and why. The `{tool}` suffix keeps the card readable
+            // when the plugin wrote a bare phrase.
+            Self::HookRequested => {
+                format!("A `BeforeToolCall` hook asked for confirmation before `{tool}` runs.")
+            }
         }
     }
 }
@@ -189,13 +274,22 @@ impl ScopedToolService {
         if self.inner.requires_confirmation(name) {
             return Some(GateRule::ToolDeclared);
         }
-        // 2. This call's arguments. Already stands down for an exactly-named
-        //    tool (`tier_asks_for_arguments`), which is what keeps it and rule 3
+        // 2. The second floor: a write that can retire the gates themselves.
+        //    Read before rule 3 because `tier_asks_for_arguments` answers `true`
+        //    for it as well (the floor is folded into the tier predicate), and
+        //    the two must not be reported with the same sentence — one names a
+        //    tier setting that would change the outcome, the other names one
+        //    that would not.
+        if self.gate_removal_floor(name, input) {
+            return Some(GateRule::GateRemoval);
+        }
+        // 3. This call's arguments. Already stands down for an exactly-named
+        //    tool (`tier_asks_for_arguments`), which is what keeps it and rule 4
         //    mutually exclusive.
         if self.tier_asks_for_arguments(name, input) {
             return Some(GateRule::DestructiveArguments);
         }
-        // 3/4. `Ask` from the merged policy — either because an entry says so,
+        // 4/5. `Ask` from the merged policy — either because an entry says so,
         //      or because the tier tightened the default. `permission_for` is
         //      the chokepoint that composes them; `explain` says which one it
         //      was, without recomputing the composition.
@@ -548,6 +642,7 @@ mod tests {
         let rules = [
             GateRule::PolicyDeny { pattern: "*" },
             GateRule::ToolDeclared,
+            GateRule::GateRemoval,
             GateRule::DestructiveArguments,
             GateRule::PolicyAsk {
                 pattern: "bash",
@@ -558,6 +653,8 @@ mod tests {
                 exact: false,
             },
             GateRule::TierRaised,
+            GateRule::OperatorRequired,
+            GateRule::HookRequested,
         ];
         let mut ids = std::collections::HashSet::new();
         for rule in rules {
@@ -569,5 +666,48 @@ mod tests {
         // Both `PolicyAsk` shapes share one id — they are one rule with two
         // renderings, which is the point of separating `id` from `reason`.
         assert_eq!(ids.len(), rules.len() - 1);
+    }
+
+    /// The two halves of "is this a floor" live in two crates-worth of module
+    /// apart — the chain names the rule, `exec::allowed_decisions` decides what
+    /// the card may offer — and a floor that is only declared on one side ships
+    /// a card that offers to permanently retire a gate whose own sentence just
+    /// said nothing can. Pinned by id, over every variant, so adding one forces
+    /// the decision instead of inheriting a default.
+    #[test]
+    fn every_floor_variant_is_declared_a_floor_on_both_sides() {
+        for (rule, expected) in [
+            (GateRule::ToolDeclared, true),
+            (GateRule::GateRemoval, true),
+            (GateRule::DestructiveArguments, false),
+            (GateRule::TierRaised, false),
+            (GateRule::OperatorRequired, false),
+            (GateRule::HookRequested, false),
+            (
+                GateRule::PolicyAsk {
+                    pattern: "bash",
+                    exact: true,
+                },
+                false,
+            ),
+            (GateRule::PolicyDeny { pattern: "*" }, false),
+        ] {
+            assert_eq!(rule.is_floor(), expected, "{:?}", rule.id());
+            assert_eq!(
+                crate::exec::allowed_decisions::rule_is_a_floor(rule.id()),
+                expected,
+                "`{}` disagrees between the chain and the decision-set derivation",
+                rule.id()
+            );
+        }
+        // And nothing is on the floor list that the chain cannot produce.
+        for id in crate::exec::allowed_decisions::FLOOR_RULES {
+            assert!(
+                [GateRule::ToolDeclared, GateRule::GateRemoval]
+                    .iter()
+                    .any(|r| r.id() == *id),
+                "`{id}` is listed as a floor but no `GateRule` variant emits it"
+            );
+        }
     }
 }

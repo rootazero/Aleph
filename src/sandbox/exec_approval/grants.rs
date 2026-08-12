@@ -1,7 +1,9 @@
 //! Approval **grants** — what a human said *yes* to, and for how long.
 //!
 //! The positive twin of [`denial_ledger`](super::denial_ledger), and the store
-//! `session_memory` grew into. Two scopes, one store:
+//! the former `session_memory` grew into (removed 2026-08-11 — its name still
+//! appeared in five doc links here and in the ledger for a day after). Two
+//! scopes, one store:
 //!
 //! * [`GrantScope::Session`] — in-memory, keyed by the conversation's
 //!   `SessionKey`, gone when the process is. The historical "approve for the

@@ -167,20 +167,104 @@ fn close_overlay_resets_focus() {
     assert!(state.dialog.is_none());
 }
 
+/// A menu question, with the two labels this fixture reuses.
+fn menu_view(question: &str) -> AskDialogView {
+    AskDialogView {
+        question: question.to_string(),
+        options: vec!["Yes".into(), "No".into()],
+        multi_select: false,
+        secret: false,
+    }
+}
+
 #[test]
 fn show_dialog_sets_focus() {
     let mut state = AppState::new("s".into(), "m".into());
-    state.show_dialog(
-        "telegram:bot:1:u1".into(),
-        "Approve?".into(),
-        vec!["Yes".into(), "No".into()],
-    );
+    state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
     assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Approve?");
     assert_eq!(dialog.options.len(), 2);
     assert_eq!(dialog.selected, 0);
+    // A menu question opens on the menu.
+    assert!(!dialog.typing);
+    assert!(dialog.has_quick_pick());
+}
+
+/// The defect the answer buffer exists to close: a question with no choices had
+/// no answerable key at all, and `Esc` is swallowed for this overlay, so the
+/// TUI was held by a modal nothing could dismiss. Such a question must open
+/// straight into text mode.
+#[test]
+fn a_free_text_question_opens_ready_to_type() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog(
+        "telegram:bot:1:u1".into(),
+        AskDialogView {
+            question: "Which language?".into(),
+            options: vec![],
+            multi_select: false,
+            secret: false,
+        },
+    );
+    let dialog = state.dialog.as_ref().unwrap();
+    assert!(dialog.typing, "a question with no menu must accept typing");
+    assert!(!dialog.has_quick_pick());
+    // Nothing typed yet ⇒ Enter has nothing to send (rather than sending "").
+    assert_eq!(dialog.pending_reply(), None);
+}
+
+/// A single index cannot express a multi-select answer, so there is nothing to
+/// quick-pick — the same reason the server suppresses a channel's inline
+/// keyboard for these (`clarification::render::keyboard_for`).
+#[test]
+fn a_multi_select_question_opens_ready_to_type() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog(
+        "telegram:bot:1:u1".into(),
+        AskDialogView {
+            multi_select: true,
+            ..menu_view("Which ones?")
+        },
+    );
+    let dialog = state.dialog.as_ref().unwrap();
+    assert!(dialog.typing);
+    assert!(!dialog.has_quick_pick());
+}
+
+/// A pick sends the 1-BASED INDEX. Labels carry a `— description` suffix and
+/// core matches labels exactly, so replying with the label would arrive as free
+/// text with no selected index — right to a human, `custom` to the model.
+#[test]
+fn a_pick_replies_with_the_index_not_the_label() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog(
+        "k".into(),
+        AskDialogView {
+            options: vec!["staging — shared QA".into(), "prod — live".into()],
+            ..menu_view("Deploy where?")
+        },
+    );
+    let dialog = state.dialog.as_mut().unwrap();
+    assert_eq!(dialog.pending_reply().as_deref(), Some("1"));
+    dialog.selected = 1;
+    assert_eq!(dialog.pending_reply().as_deref(), Some("2"));
+}
+
+/// Free text always beats the menu in text mode — a menu never forbids it,
+/// which is why `ask_user` tells the model never to add an "other" choice.
+#[test]
+fn a_typed_answer_is_sent_verbatim() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog("k".into(), menu_view("Approve?"));
+    let dialog = state.dialog.as_mut().unwrap();
+    dialog.typing = true;
+    dialog.input = "  neither, wait for Ana  ".into();
+    assert_eq!(dialog.pending_reply().as_deref(), Some("neither, wait for Ana"));
+    // Tabbing back to the list means the list, buffer or no buffer.
+    dialog.typing = false;
+    assert_eq!(dialog.pending_reply().as_deref(), Some("1"));
 }
 
 #[test]
@@ -1248,4 +1332,48 @@ fn a_locally_recorded_knob_is_visible_before_the_next_attach() {
     // Clearing back to "follow global" is `None`, not a literal.
     state.record_local_knob(SessionKnob::ExecTier, None);
     assert_eq!(state.session_knobs().exec_tier, None);
+}
+
+/// A question that ends without this client answering it must take its card
+/// with it. Before the protocol carried the terminal frame, an expired or
+/// cancelled clarification left the overlay holding focus and claiming the
+/// agent was waiting — for up to the 600 s timeout.
+#[test]
+fn a_clarification_that_ends_elsewhere_retires_the_card() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
+    assert_eq!(state.focus, Focus::Dialog);
+
+    state.handle_gateway_event(StreamEvent::ClarificationEnded {
+        session_key: "telegram:bot:1:u1".into(),
+        outcome: "expired".into(),
+    });
+
+    assert!(state.dialog.is_none(), "the card must go with the question");
+    assert_eq!(state.focus, Focus::Input);
+    // The user is told WHICH ending it was: vanishing silently leaves them
+    // unable to tell "answered" from "timed out while I was reading".
+    match state.messages.last() {
+        Some(ChatMessage::System { content }) => {
+            assert!(content.contains("expired"), "{content}");
+        }
+        other => panic!("expected a system line naming the outcome, got {other:?}"),
+    }
+}
+
+/// …but only its own. Two sessions are live in one TUI whenever a background
+/// run answers elsewhere; closing on a foreign frame would yank a card the user
+/// is mid-answer on.
+#[test]
+fn a_clarification_ending_in_another_session_leaves_this_card_alone() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
+
+    state.handle_gateway_event(StreamEvent::ClarificationEnded {
+        session_key: "telegram:bot:1:SOMEONE-ELSE".into(),
+        outcome: "cancelled".into(),
+    });
+
+    assert!(state.dialog.is_some(), "a foreign frame must not close this card");
+    assert_eq!(state.focus, Focus::Dialog);
 }

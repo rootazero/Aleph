@@ -35,6 +35,14 @@ const fn outcome_to_wire(outcome: ApprovalOutcome) -> &'static str {
         ApprovalOutcome::ApprovedForSession | ApprovalOutcome::ApprovedAlways => "approved_session",
         ApprovalOutcome::Denied => "denied",
         ApprovalOutcome::Timeout => "timeout",
+        // A node asked its center and the center had nobody to ask. Distinct
+        // from "denied" for the same reason it is distinct in-process: the
+        // node's own ledger would otherwise make the intent sticky and advance
+        // its brute-force breaker over a decision nobody made. A center running
+        // an older build never sends this token, and a node running an older
+        // build maps the unknown token to `Denied` — fail-closed, which is the
+        // pre-existing behaviour.
+        ApprovalOutcome::Unavailable => "unavailable",
     }
 }
 

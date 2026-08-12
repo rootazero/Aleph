@@ -12,13 +12,57 @@ use ratatui::{
 use crate::tui::app::{ApprovalState, DialogState};
 use crate::tui::theme::DEFAULT_THEME;
 
+/// The answer buffer as it should appear on screen.
+///
+/// Masked when the question asked for a credential — the cleartext never leaves
+/// [`DialogState::input`], so a screen share, a scrollback, or a terminal
+/// recording sees dots. (The property that makes `secret` more than cosmetic is
+/// enforced server-side: `clarification::ask` refuses to hand a secret question
+/// to a messaging channel at all, so this overlay and the Panel are the only
+/// places it can be typed.)
+///
+/// Tail-truncated rather than head-truncated: what the user just typed is what
+/// they need to see.
+fn input_display(input: &str, secret: bool, width: usize) -> String {
+    let shown: String = if secret {
+        "•".repeat(input.chars().count())
+    } else {
+        input.to_string()
+    };
+    let len = shown.chars().count();
+    if width == 0 || len <= width {
+        return shown;
+    }
+    shown.chars().skip(len - width).collect()
+}
+
+/// The one-line key legend for the overlay's current mode.
+///
+/// Mode-specific because the wrong legend is worse than none: this overlay
+/// swallows `Esc` (the run is parked on a oneshot), so the legend is the only
+/// place a user learns that a typed answer is possible at all.
+fn hint_for(dialog: &DialogState) -> &'static str {
+    if dialog.typing {
+        if dialog.has_quick_pick() {
+            "Type your answer · Enter send · Tab back to the list"
+        } else if dialog.multi_select {
+            "Type numbers separated by commas, or your own answer · Enter send"
+        } else {
+            "Type your answer · Enter send"
+        }
+    } else {
+        "1-9 select · ↑↓ move · Enter confirm · Tab type your own"
+    }
+}
+
 /// Render the confirmation dialog as a centered overlay.
 pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     // Calculate dialog dimensions
     let dialog_width = area.width.clamp(20, 50);
     let option_count = u16::try_from(dialog.options.len()).unwrap_or(u16::MAX);
-    // Height: 2 borders + 1 blank + question lines (estimate 2) + 1 blank + options + 1 hint
-    let dialog_height = (option_count.saturating_add(7)).min(area.height);
+    // Height: 2 borders + 1 blank + question lines (estimate 2) + 1 blank +
+    // options + 1 input + 1 hint
+    let dialog_height = (option_count.saturating_add(8)).min(area.height);
 
     // Center the dialog
     let dialog_rect = centered_rect(dialog_width, dialog_height, area);
@@ -38,19 +82,21 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
         return;
     }
 
-    // Split inner area into question + options + hint
+    // Split inner area into question + options + answer line + hint
     let chunks = Layout::vertical([
-        Constraint::Length(1),                   // blank line
-        Constraint::Min(2),                      // question
-        Constraint::Length(1),                   // blank line
-        Constraint::Length(option_count.max(1)), // options
-        Constraint::Length(1),                   // hint line
+        Constraint::Length(1),             // blank line
+        Constraint::Min(2),                // question
+        Constraint::Length(1),             // blank line
+        Constraint::Length(option_count),  // options (absent for free text)
+        Constraint::Length(1),             // typed answer
+        Constraint::Length(1),             // hint line
     ])
     .split(inner);
 
     let question_area = chunks.get(1).copied().unwrap_or_default();
     let options_area = chunks.get(3).copied().unwrap_or_default();
-    let hint_area = chunks.get(4).copied().unwrap_or_default();
+    let input_area = chunks.get(4).copied().unwrap_or_default();
+    let hint_area = chunks.get(5).copied().unwrap_or_default();
 
     // Render question
     let question = Paragraph::new(Line::from(Span::styled(
@@ -81,9 +127,29 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
     let options_widget = Paragraph::new(option_lines);
     frame.render_widget(options_widget, options_area);
 
+    // Render the typed answer. Always present, including in pick mode where it
+    // is empty: a permanently reserved line is how the user discovers that
+    // typing is an option on a question that also offers a menu.
+    let caret = if dialog.typing { "▏" } else { "" };
+    let prefix = "> ";
+    let room = usize::from(input_area.width).saturating_sub(prefix.len() + caret.len());
+    let typed = input_display(&dialog.input, dialog.secret, room);
+    let input_style = if dialog.typing {
+        Style::default().fg(DEFAULT_THEME.primary)
+    } else {
+        Style::default().fg(DEFAULT_THEME.muted)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("{prefix}{typed}{caret}"),
+            input_style,
+        ))),
+        input_area,
+    );
+
     // Render hint
     let hint = Paragraph::new(Line::from(Span::styled(
-        "Press number key to select, Enter to confirm".to_string(),
+        hint_for(dialog),
         Style::default().fg(DEFAULT_THEME.muted),
     )));
     frame.render_widget(hint, hint_area);
@@ -201,5 +267,51 @@ mod tests {
         // Width and height should be clamped
         assert_eq!(r.width, 20);
         assert_eq!(r.height, 10);
+    }
+
+    /// A credential must never be legible on screen — a screen share, a
+    /// scrollback buffer and a terminal recording all outlive the question.
+    #[test]
+    fn a_secret_answer_is_masked_character_for_character() {
+        let shown = input_display("hunter2", true, 40);
+        assert_eq!(shown, "•••••••");
+        assert!(!shown.contains("hunter"));
+        // Non-secret input is shown as typed.
+        assert_eq!(input_display("hunter2", false, 40), "hunter2");
+    }
+
+    /// Tail, not head: what the user just typed is what they need to see.
+    #[test]
+    fn an_overlong_answer_shows_its_tail() {
+        assert_eq!(input_display("abcdefghij", false, 4), "ghij");
+        // A zero-width line must not panic.
+        assert_eq!(input_display("abc", false, 0), "abc");
+    }
+
+    /// The legend is the only place a user learns typing is possible at all —
+    /// this overlay swallows `Esc`, so a wrong legend is a trapped user.
+    #[test]
+    fn the_legend_follows_the_mode() {
+        let mut dialog = DialogState {
+            session_key: "k".into(),
+            question: "?".into(),
+            options: vec!["a".into()],
+            selected: 0,
+            multi_select: false,
+            secret: false,
+            input: String::new(),
+            typing: false,
+        };
+        assert!(hint_for(&dialog).contains("Tab type your own"));
+        dialog.typing = true;
+        assert!(hint_for(&dialog).contains("back to the list"));
+
+        // No menu ⇒ no mention of a list that is not there.
+        dialog.options.clear();
+        assert!(!hint_for(&dialog).contains("list"));
+        assert!(hint_for(&dialog).contains("Enter send"));
+
+        dialog.multi_select = true;
+        assert!(hint_for(&dialog).contains("commas"));
     }
 }

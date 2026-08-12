@@ -73,7 +73,9 @@ impl WeChatChannel {
             rich_text: false,
             max_message_length: 4000,
             max_attachment_size: 10 * 1024 * 1024,
-            stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
+            // NOT EditBased: `edit` below returns `UnsupportedFeature`
+            // unconditionally. Same contradiction as LINE — see that channel.
+            stream_protocol: crate::gateway::channel::StreamProtocol::None,
         }
     }
 }

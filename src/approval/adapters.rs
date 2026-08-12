@@ -163,9 +163,12 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
             warn!(
                 tool = %action.tool_name,
                 "ChannelApprovalBridgeAdapter: no channel route from TURN_CONTEXT \
-                 or SESSION_ID — cannot route approval prompt, denying"
+                 or SESSION_ID — cannot route approval prompt, failing closed"
             );
-            return ApprovalOutcome::Denied.into();
+            // `Unavailable`, not `Denied`: no card was ever rendered, so this is
+            // the absence of a decision. Spelling it `Denied` made the ledger
+            // treat an unroutable turn as a refusal the user had made.
+            return ApprovalOutcome::Unavailable.into();
         };
 
         // The originating channel user (raw sender), published run-tree-wide by
@@ -265,7 +268,7 @@ mod tests {
 
     /// Negative path: no TURN_CONTEXT and no SESSION_ID → Denied.
     #[tokio::test]
-    async fn adapter_denies_when_no_route_source() {
+    async fn adapter_fails_closed_when_no_route_source() {
         use crate::gateway::channel_registry::ChannelRegistry;
 
         let registry = Arc::new(ChannelRegistry::new());
@@ -274,13 +277,17 @@ mod tests {
 
         // Neither task-local scoped.
         let out = adapter.request_approval(&code_action("ls")).await;
-        assert_eq!(out.outcome, ApprovalOutcome::Denied);
+        // `Unavailable`, not `Denied`: the card was never rendered, so nobody
+        // refused it — and the denial ledger must not make it sticky or count
+        // it toward the brute-force breaker.
+        assert_eq!(out.outcome, ApprovalOutcome::Unavailable);
+        assert!(!out.outcome.is_approved());
     }
 
     /// Negative path: TURN_CONTEXT set but turn has no originating channel
-    /// (cron / webhook) → Denied before the bridge is even consulted.
+    /// (cron / webhook) → fails closed before the bridge is even consulted.
     #[tokio::test]
-    async fn adapter_denies_when_turn_not_channel_routable() {
+    async fn adapter_fails_closed_when_turn_not_channel_routable() {
         let bridge = Arc::new(ChannelApprovalBridge::for_test_always_approved());
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
         let non_channel_turn = TurnContext {
@@ -299,8 +306,9 @@ mod tests {
             .await;
         // Even with an always-approved bridge, an unroutable turn falls
         // through to SESSION_ID fallback; with no SESSION_ID scoped either,
-        // we deny.
-        assert_eq!(out.outcome, ApprovalOutcome::Denied);
+        // we fail closed — as "nobody could be asked", not as a refusal.
+        assert_eq!(out.outcome, ApprovalOutcome::Unavailable);
+        assert!(!out.outcome.is_approved());
     }
 
     /// A Panel turn: `gui:chat` resolves as a route but is never a registered

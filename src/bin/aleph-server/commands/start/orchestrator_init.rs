@@ -83,6 +83,16 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester>,
     >,
 ) -> anyhow::Result<Arc<Orchestrator>> {
+    // Install the process-wide UI locale from the same `[general] language`
+    // key that already drives the gateway's system messages and the model's
+    // response language (two lines apart, below). Strings a human reads that
+    // are built too deep to be handed a `Locale` — the clarification reply
+    // hint, the plan-approval verdict labels — resolve through it. Boot is the
+    // right place: this is the one call that happens once, before any run.
+    alephcore::gateway::i18n::install_locale(alephcore::gateway::i18n::Locale::from_config(
+        config.general.language.as_deref(),
+    ));
+
     // P2 Stage E: load user/project agent definitions from filesystem.
     // Shadow events (higher-tier overrides) are logged at info level; the
     // trace_sink is not yet available at this point in startup.

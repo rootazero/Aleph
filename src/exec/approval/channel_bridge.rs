@@ -143,21 +143,27 @@ impl ChannelApprovalBridge {
                 tracing::warn!(
                     tool = %tool_name,
                     id = %record_id,
-                    "Approval delivery failed — denying"
+                    "Approval delivery failed — failing closed (the card never reached anyone)"
                 );
                 // Retire the just-registered entry so a later session-FIFO
                 // "/approve" cannot consume it.
                 approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
-                return ApprovalOutcome::Denied.into();
+                // `Unavailable`: the prompt did not arrive, so nobody refused
+                // it. Returning `Denied` here made a transient Telegram failure
+                // stick to the intent for the rest of the session and count
+                // toward the brute-force breaker — three hiccups paused every
+                // gate in the conversation and told the model the user had
+                // declined. See `DenialLedger::record_denial`.
+                return ApprovalOutcome::Unavailable.into();
             }
             None => {
                 tracing::warn!(
                     tool = %tool_name,
                     id = %record_id,
-                    "No channel capability for approval delivery — denying"
+                    "No channel capability for approval delivery — failing closed"
                 );
                 approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
-                return ApprovalOutcome::Denied.into();
+                return ApprovalOutcome::Unavailable.into();
             }
         }
 
