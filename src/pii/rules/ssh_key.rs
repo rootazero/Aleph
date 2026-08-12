@@ -14,9 +14,17 @@ fn ssh_key_regex() -> &'static Regex {
     SSH_KEY_RE.get_or_init(|| {
         // Match the full PEM block from BEGIN to END, including key body.
         // (?s) enables dot-matches-newline so .* spans across lines.
-        Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----")
-            // rust-doctor-disable-next-line unwrap-in-production
-            .expect("static SSH key regex compiles")
+        // The capture group + back-reference (`\1`) requires the BEGIN
+        // and END labels to MATCH: `BEGIN RSA PRIVATE KEY` ... `END RSA
+        // PRIVATE KEY` matches, but `BEGIN RSA PRIVATE KEY` ... `END EC
+        // PRIVATE KEY` (malformed concatenated bundle) does NOT. This
+        // prevents a malformed input from being accepted as a single
+        // block spanning unrelated keys.
+        Regex::new(
+            r"(?s)-----BEGIN ([A-Z ]*PRIVATE) KEY-----.*?-----END \1 KEY-----",
+        )
+        // rust-doctor-disable-next-line unwrap-in-production
+        .expect("static SSH key regex compiles")
     })
 }
 
@@ -123,5 +131,20 @@ mod tests {
     fn test_no_match_certificate() {
         let matches = rule().detect("-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----");
         assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_no_match_mismatched_begin_end_labels() {
+        // BEGIN/END labels must match (back-reference). A concatenated
+        // bundle with mismatched labels — e.g. `cat rsa.pem ec.pem`
+        // producing `... END RSA PRIVATE KEY ... BEGIN EC PRIVATE KEY
+        // ...` — must NOT be accepted as a single key block.
+        let text = "-----BEGIN RSA PRIVATE KEY-----\nrsadata\n-----END EC PRIVATE KEY-----";
+        let matches = rule().detect(text);
+        assert_eq!(
+            matches.len(),
+            0,
+            "mismatched BEGIN/END labels must not match (back-reference guard)"
+        );
     }
 }

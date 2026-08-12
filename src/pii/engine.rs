@@ -93,7 +93,20 @@ impl PiiEngine {
     /// Create a new PII engine with the given configuration
     #[must_use]
     pub fn new(config: PrivacyConfig) -> Self {
+        let configured_custom = config.custom_rules.len();
         let rules = crate::pii::rules::build_rules(&config.custom_rules);
+        let loaded_custom = rules.len().saturating_sub(7); // 7 built-ins
+        if loaded_custom < configured_custom {
+            // `build_rules` already warns on each invalid pattern; this
+            // summary surfaces a single operator-facing signal so a
+            // dashboard / health check can flag a half-loaded config.
+            warn!(
+                configured_custom_rules = configured_custom,
+                loaded_custom_rules = loaded_custom,
+                skipped = configured_custom - loaded_custom,
+                "Custom PII rules partially loaded; some patterns failed to compile"
+            );
+        }
         let allowlist = PiiAllowlist::default();
         let custom_rule_actions = config
             .custom_rules
