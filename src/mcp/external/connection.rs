@@ -727,6 +727,7 @@ impl McpServerConnection {
                 }
 
                 let description = t.description.unwrap_or_default();
+                let description = crate::mcp::tool_sanitize::truncate_description(&description);
                 if let Some(marker) = crate::mcp::scan_description_for_injection(&description) {
                     tracing::warn!(
                         server = %self.name,
