@@ -249,15 +249,40 @@ mod tests {
     // File loading tests
     // -----------------------------------------------------------------------
 
+    /// A missing policy file yields the CURATED defaults, not all-Ask.
+    ///
+    /// The first assertion used to demand `Ask` for `BrowserNavigate` on the
+    /// ground that a missing file "must escalate to Ask (safe default), not
+    /// silently Allow". That reading only holds if `Ask` is a question someone
+    /// can answer — and at this layer it is not: `check_browser_approval`
+    /// turns `Ask` into a refusal *string* handed back to the model, and
+    /// nothing in this repo ever writes `~/.aleph/approval-policy.json`, so
+    /// the user has nothing to edit and no card to click. What the old
+    /// assertion pinned was therefore not a gate but a wall: every browser
+    /// entry point refused on every install that had not hand-written a policy
+    /// file. See `ConfigApprovalPolicy::load_from` for the split by cause —
+    /// file ABSENT takes the curated map, file BROKEN still takes all-Ask.
+    ///
+    /// The four desktop/pim assertions below are unchanged and are the point
+    /// of keeping this test: they prove the loosening is scoped to browser
+    /// motion and did not leak into the action families that genuinely need a
+    /// human.
     #[tokio::test]
-    async fn test_load_missing_file_returns_safe_default() {
+    async fn test_load_missing_file_yields_curated_defaults() {
         let temp_path = std::env::temp_dir().join("aleph-test-approval-nonexistent");
         let policy = ConfigApprovalPolicy::load_from(temp_path.join("policy.json"));
 
         let req = make_request(ActionType::BrowserNavigate, "https://example.com");
         assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Allow),
+            "Missing policy file must fall back to the curated map, where browser \
+             navigation is Allow — an unconfigured install has to be able to browse"
+        );
+
+        let req = make_request(ActionType::BrowserEvaluate, "fetch('/admin')");
+        assert!(
             matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
-            "Missing policy file must escalate to Ask (safe default), not silently Allow"
+            "…while the powerful browser verbs stay Ask in that same map"
         );
 
         let req = make_request(ActionType::DesktopClick, "click(10,20)");
