@@ -2,22 +2,59 @@
 //!
 //! Three modes driven by `selected`:
 //! - `__new__` → blank custom form
-//! - `__preset__<name>` → preset hydration (read-only protocol, editable `api_key` etc.)
-//! - any other → existing provider edit (full form, including OAuth section for
-//!   `auth_type == "oauth"` presets such as Codex/ChatGPT)
+//! - `__preset__<id>` → prefill from the catalogue row (protocol, base URL,
+//!   default model, colour, signup link)
+//! - any other → existing provider edit (full form, including the OAuth
+//!   section for rows the server marks `auth_kind: oauth`)
+//!
+//! # The model field is a ladder, not a string
+//!
+//! `providers.update` takes `models: [..]` and replaces the stored list
+//! wholesale. This page used to send a single `model`, so saving anything here
+//! — including a bare "enabled" toggle — truncated a provider's failover ladder
+//! to its first rung. The editor is therefore ordered and says so: `models[0]`
+//! is what a turn uses when it names no model, the rest are the failover rungs.
+//!
+//! The roster it offers comes from the catalogue row (`entry.roster`), which the
+//! backend merged through the same leaf the failover walk uses. It is an offer,
+//! not a whitelist: `select_model` accepts ids nobody has heard of, so a picker
+//! that refused them would be stricter than the tool, and the free-text row
+//! below the list is how you name one.
 
-use crate::api::{OAuthStatus, ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
+use aleph_protocol::providers::{DiscoveryFailureKind, ModelSource, ModelStatus, ModelsRefreshRow};
+
+use crate::api::{
+    AuthKind, CatalogEntry, OAuthStatus, ProviderConfigJson, ProviderInfo, ProvidersApi, TestResult,
+};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
-use crate::preset_data::find_preset;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+
+/// Find the catalogue row a selection key edits.
+///
+/// Matches aliases as well as the id, because a provider configured under an
+/// alias (`kimi` for `moonshot`) attaches to the canonical catalogue row.
+fn row_for<'a>(catalog: &'a [CatalogEntry], key: &str) -> Option<&'a CatalogEntry> {
+    catalog
+        .iter()
+        .find(|e| e.id == key || e.aliases.iter().any(|a| a == key))
+}
+
+/// The provider id a selection refers to, with the `__preset__` marker peeled
+/// off. `None` for the sentinels that name no provider (`__new__`).
+fn provider_key(selected: Option<&str>) -> Option<String> {
+    let sel = selected?;
+    let key = sel.strip_prefix("__preset__").unwrap_or(sel);
+    (!key.starts_with("__")).then(|| key.to_string())
+}
 
 #[component]
 pub(super) fn ProviderDetailPanel(
     providers: RwSignal<Vec<ProviderInfo>>,
+    catalog: RwSignal<Vec<CatalogEntry>>,
     selected: RwSignal<Option<String>>,
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
@@ -27,7 +64,8 @@ pub(super) fn ProviderDetailPanel(
     // Form state
     let form_name = RwSignal::new(String::new());
     let form_protocol = RwSignal::new(String::from("openai"));
-    let form_model = RwSignal::new(String::new());
+    // The ordered ladder, not a single id — see the module doc.
+    let form_model = RwSignal::new(Vec::<String>::new());
     let form_api_key = RwSignal::new(String::new());
     let form_base_url = RwSignal::new(String::new());
     let form_enabled = RwSignal::new(true);
@@ -41,6 +79,12 @@ pub(super) fn ProviderDetailPanel(
     let oauth_status = RwSignal::new(Option::<OAuthStatus>::None);
     let oauth_loading = RwSignal::new(false);
 
+    // Equality-gated so the hydration Effect below re-runs exactly once when
+    // the catalogue arrives — a plain `catalog.get()` would also re-run after
+    // every "Fetch models" refetch and clobber whatever the operator was
+    // typing.
+    let catalog_ready = Memo::new(move |_| !catalog.get().is_empty());
+
     let is_new = move || {
         let sel = selected.get();
         sel.as_deref() == Some("__new__")
@@ -50,8 +94,9 @@ pub(super) fn ProviderDetailPanel(
                 .unwrap_or(false)
     };
 
-    // Load form when selection changes
+    // Load form when selection changes (or when the catalogue first lands).
     Effect::new(move || {
+        let _ = catalog_ready.get();
         test_result.set(None);
         error.set(None);
 
@@ -59,20 +104,28 @@ pub(super) fn ProviderDetailPanel(
             if sel == "__new__" {
                 form_name.set(String::new());
                 form_protocol.set("openai".to_string());
-                form_model.set(String::new());
+                form_model.set(Vec::new());
                 form_api_key.set(String::new());
                 form_base_url.set(String::new());
                 form_enabled.set(true);
                 form_timeout.set(300);
                 form_max_tokens.set(String::new());
                 form_temperature.set(String::new());
-            } else if let Some(preset_name) = sel.strip_prefix("__preset__") {
-                if let Some(preset) = find_preset(preset_name) {
-                    form_name.set(preset.name.to_string());
-                    form_protocol.set(preset.protocol.to_string());
-                    form_model.set(preset.model.to_string());
+            } else if let Some(preset_id) = sel.strip_prefix("__preset__") {
+                let cat = catalog.get_untracked();
+                if let Some(entry) = row_for(&cat, preset_id) {
+                    form_name.set(entry.id.clone());
+                    form_protocol.set(entry.protocol.clone());
+                    // Seed with the preset's own default. A preset that ships
+                    // none (`requires_explicit_model`) seeds nothing rather
+                    // than an empty-string rung the server would reject.
+                    form_model.set(if entry.default_model.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![entry.default_model.clone()]
+                    });
                     form_api_key.set(String::new());
-                    form_base_url.set(preset.base_url.to_string());
+                    form_base_url.set(entry.base_url.clone());
                     form_enabled.set(true);
                     form_timeout.set(300);
                     form_max_tokens.set(String::new());
@@ -91,7 +144,7 @@ pub(super) fn ProviderDetailPanel(
                             .clone()
                             .unwrap_or_else(|| provider.name.clone()),
                     );
-                    form_model.set(provider.model.clone());
+                    form_model.set(provider.models.clone());
                     // Never pre-fill the stored secret; empty submit = keep existing key.
                     form_api_key.set(String::new());
                     form_enabled.set(provider.enabled);
@@ -114,50 +167,44 @@ pub(super) fn ProviderDetailPanel(
         }
     });
 
-    // Check OAuth status when an OAuth provider is selected
+    // Check OAuth status when a subscription-login provider is selected. Which
+    // providers those are is `auth_kind` on the catalogue row — the Panel no
+    // longer keeps its own list.
     Effect::new(move || {
+        let _ = catalog_ready.get();
         let sel = selected.get();
-        let provider_name = sel
-            .as_deref()
-            .and_then(|s| s.strip_prefix("__preset__").or(Some(s)))
-            .and_then(|name| {
-                if name.starts_with("__") {
-                    None
-                } else {
-                    Some(name.to_string())
+        if let Some(key) = provider_key(sel.as_deref()) {
+            let cat = catalog.get_untracked();
+            if let Some(entry) = row_for(&cat, &key) {
+                if entry.auth_kind == AuthKind::OAuth {
+                    let id = entry.id.clone();
+                    oauth_loading.set(true);
+                    let state = expect_context::<DashboardState>();
+                    spawn_local(async move {
+                        match ProvidersApi::oauth_status(&state, id).await {
+                            Ok(status) => oauth_status.set(Some(status)),
+                            Err(_) => oauth_status.set(Some(OAuthStatus {
+                                connected: false,
+                                provider: None,
+                                expires_in_seconds: None,
+                                error: None,
+                            })),
+                        }
+                        oauth_loading.set(false);
+                    });
+                    return;
                 }
-            });
-
-        if let Some(name) = provider_name {
-            if find_preset(&name)
-                .map(|p| p.auth_type == "oauth")
-                .unwrap_or(false)
-            {
-                oauth_loading.set(true);
-                let state = expect_context::<DashboardState>();
-                spawn_local(async move {
-                    match ProvidersApi::oauth_status(&state, name).await {
-                        Ok(status) => oauth_status.set(Some(status)),
-                        Err(_) => oauth_status.set(Some(OAuthStatus {
-                            connected: false,
-                            expires_in_seconds: None,
-                            error: None,
-                        })),
-                    }
-                    oauth_loading.set(false);
-                });
-                return;
             }
         }
         oauth_status.set(None);
     });
 
     // Build config from form
-    let build_config = move || -> ProviderConfig {
-        ProviderConfig {
+    let build_config = move || -> ProviderConfigJson {
+        ProviderConfigJson {
             protocol: Some(form_protocol.get()),
             enabled: form_enabled.get(),
-            model: form_model.get(),
+            models: form_model.get(),
             api_key: {
                 let key = form_api_key.get();
                 if key.is_empty() {
@@ -184,6 +231,7 @@ pub(super) fn ProviderDetailPanel(
                     t.parse().ok()
                 }
             },
+            context_window: None,
             temperature: {
                 let t = form_temperature.get();
                 if t.is_empty() {
@@ -200,17 +248,34 @@ pub(super) fn ProviderDetailPanel(
     let on_save = move |_| {
         let name = form_name.get();
         if name.is_empty() {
-            error.set(Some("Provider name is required".to_string()));
+            error.set(Some(
+                t_string!(i18n, settings.providers.name_required).to_string(),
+            ));
             return;
         }
         if form_model.get().is_empty() {
-            error.set(Some("Model is required".to_string()));
+            error.set(Some(
+                t_string!(i18n, settings.providers.model_required).to_string(),
+            ));
             return;
         }
 
         saving.set(true);
         error.set(None);
         let config = build_config();
+        // Whether a post-save discovery sweep could possibly return anything:
+        // the server only visits providers that are enabled AND have a
+        // resolvable key, and only ones that publish a listing at all. A row we
+        // have never seen is a custom provider being created — those are
+        // OpenAI-compatible by construction and the server does probe them.
+        let cat = catalog.get();
+        let discoverable = row_for(&cat, &name).is_none_or(|e| e.discoverable);
+        let has_credential = config.api_key.is_some()
+            || providers
+                .get()
+                .iter()
+                .any(|p| p.name == name && p.has_api_key);
+        let sweep_worthwhile = discoverable && has_credential && config.enabled;
 
         spawn_local(async move {
             let result = if is_new() {
@@ -224,7 +289,27 @@ pub(super) fn ProviderDetailPanel(
                     if let Ok(list) = ProvidersApi::list(&state).await {
                         providers.set(list);
                     }
-                    selected.set(Some(name));
+                    selected.set(Some(name.clone()));
+                    // Fire-and-forget: a vendor that is down must not make
+                    // "save my API key" slow, so the sweep runs in its own task
+                    // and the save has already reported success by the time it
+                    // answers. Failures are visible on the row's own refresh
+                    // status, which is where the operator would look.
+                    if sweep_worthwhile {
+                        spawn_local(async move {
+                            if ProvidersApi::models_refresh(&state, Some(name))
+                                .await
+                                .is_ok()
+                            {
+                                if let Ok(items) =
+                                    ProvidersApi::catalog(&state, crate::api::CatalogView::All)
+                                        .await
+                                {
+                                    catalog.set(items);
+                                }
+                            }
+                        });
+                    }
                 }
                 Err(e) => error.set(Some(
                     crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
@@ -334,46 +419,62 @@ pub(super) fn ProviderDetailPanel(
                 } else {
                     None
                 };
+                let cat = catalog.get();
+                let key = provider_key(Some(sel.as_str()));
+                let entry = key.as_deref().and_then(|k| row_for(&cat, k)).cloned();
                 let title = if sel == "__new__" {
                     t_string!(i18n, settings.providers.custom_provider).to_string()
-                } else if let Some(ref pn) = preset_name {
-                    format!("{} {}", t_string!(i18n, settings.providers.setup_prefix), pn)
+                } else if preset_name.is_some() {
+                    let label = entry.as_ref().map_or_else(
+                        || preset_name.clone().unwrap_or_default(),
+                        |e| e.display_name.clone(),
+                    );
+                    format!("{} {}", t_string!(i18n, settings.providers.setup_prefix), label)
                 } else {
                     sel.clone()
                 };
 
-                let preset_info = preset_name.as_deref()
-                    .or(if !sel.starts_with("__") { Some(sel.as_str()) } else { None })
-                    .and_then(find_preset);
+                let is_oauth = entry.as_ref().is_some_and(|e| e.auth_kind == AuthKind::OAuth);
+                // A local endpoint (Ollama, LM Studio, …) needs no credential;
+                // neither does a subscription login. Both facts come off the
+                // row rather than from a `needs_api_key` column this crate used
+                // to maintain by hand.
+                let keyless = is_oauth || entry.as_ref().is_some_and(|e| e.endpoint == "local");
+                let signup_url = entry.as_ref().and_then(|e| e.signup_url.clone());
+                let icon_color = entry.as_ref().map(|e| e.color.clone());
+                let base_url_hint = entry.as_ref().map(|e| e.base_url.clone());
+                let description = entry.as_ref().and_then(|e| e.notes.clone());
+                let oauth_provider_id = entry.as_ref().map(|e| e.id.clone());
+                let title_char = entry.as_ref().map_or_else(
+                    || sel.chars().next().unwrap_or('?'),
+                    |e| e.display_name.chars().next().unwrap_or('?'),
+                );
 
                 view! {
                     <div class="flex flex-col h-full">
                         // Header
                         <div class="px-6 py-4 border-b border-border">
                             <div class="flex items-center gap-3">
-                                {if let Some(preset) = preset_info {
-                                    let ch = preset.name.chars().next().unwrap_or('?').to_uppercase().to_string();
-                                    view! {
+                                {match icon_color {
+                                    Some(color) => view! {
                                         <div
                                             class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold"
-                                            style=format!("background-color: {}", preset.icon_color)
+                                            style=format!("background-color: {color}")
                                         >
-                                            {ch}
+                                            {title_char.to_uppercase().to_string()}
                                         </div>
-                                    }.into_any()
-                                } else {
-                                    view! {
+                                    }.into_any(),
+                                    None => view! {
                                         <div class="w-10 h-10 rounded-xl bg-surface-sunken flex items-center justify-center text-text-tertiary font-bold">
                                             "?"
                                         </div>
-                                    }.into_any()
+                                    }.into_any(),
                                 }}
                                 <div class="flex-1">
                                     <h2 class="text-lg font-semibold text-text-primary capitalize">{title}</h2>
-                                    {if let Some(preset) = preset_info {
-                                        view! { <p class="text-xs text-text-tertiary">{preset.description}</p> }.into_any()
-                                    } else {
-                                        view! { <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.custom_provider_desc)}</p> }.into_any()
+                                    {match description {
+                                        Some(d) => view! { <p class="text-xs text-text-tertiary">{d}</p> }.into_any(),
+                                        None => view! { <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.custom_provider_desc)}</p> }.into_any(),
                                     }}
                                 </div>
                             </div>
@@ -386,8 +487,10 @@ pub(super) fn ProviderDetailPanel(
                                 <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
                             })}
 
-                            // OAuth login section (for subscription providers like Codex)
-                            {if preset_info.map(|p| p.auth_type == "oauth").unwrap_or(false) {
+                            // OAuth login section (subscription providers)
+                            {if is_oauth {
+                                let login_id = oauth_provider_id.clone().unwrap_or_default();
+                                let logout_id = login_id.clone();
                                 view! {
                                     <div class="space-y-6">
                                         // Connection Status card (reactive)
@@ -444,16 +547,18 @@ pub(super) fn ProviderDetailPanel(
                                             {move || {
                                                 let is_connected = oauth_status.get().as_ref().map(|s| s.connected).unwrap_or(false);
                                                 if is_connected {
+                                                    let provider_name = logout_id.clone();
                                                     view! {
                                                         <button
                                                             on:click=move |_| {
-                                                                let provider_name = "codex".to_string();
+                                                                let provider_name = provider_name.clone();
                                                                 let state = expect_context::<DashboardState>();
                                                                 spawn_local(async move {
                                                                     match ProvidersApi::oauth_logout(&state, provider_name).await {
                                                                         Ok(()) => {
                                                                             oauth_status.set(Some(OAuthStatus {
                                                                                 connected: false,
+                                                                                provider: None,
                                                                                 expires_in_seconds: None,
                                                                                 error: None,
                                                                             }));
@@ -463,7 +568,7 @@ pub(super) fn ProviderDetailPanel(
                                                                             }
                                                                         }
                                                                         Err(e) => {
-                                                                            error.set(Some(crate::components::admin_refusal::settings_load_error(
+                                                                            error.set(Some(crate::components::admin_refusal::settings_write_error(
                                                                                 i18n,
                                                                                 &e,
                                                                                 |e| format!("Logout failed: {e}"),
@@ -478,22 +583,27 @@ pub(super) fn ProviderDetailPanel(
                                                         </button>
                                                     }.into_any()
                                                 } else {
+                                                    let provider_name = login_id.clone();
                                                     view! {
                                                         <button
                                                             on:click=move |_| {
-                                                                let provider_name = "codex".to_string();
+                                                                let provider_name = provider_name.clone();
                                                                 oauth_loading.set(true);
                                                                 let state = expect_context::<DashboardState>();
                                                                 spawn_local(async move {
                                                                     match ProvidersApi::oauth_login(&state, provider_name).await {
                                                                         Ok(status) => {
+                                                                            // The status echoes the canonical
+                                                                            // provider the login speaks for, which
+                                                                            // is not always the id we asked about.
+                                                                            let canonical = status.provider.clone();
                                                                             oauth_status.set(Some(status));
-                                                                            // Refresh providers list and switch to the actual provider
                                                                             if let Ok(list) = ProvidersApi::list(&state).await {
-                                                                                // Find the actual provider name (e.g. "chatgpt")
-                                                                                let actual = list.iter()
-                                                                                    .find(|p| p.name == "chatgpt" || p.name == "codex")
-                                                                                    .map(|p| p.name.clone());
+                                                                                let actual = canonical
+                                                                                    .filter(|c| list.iter().any(|p| &p.name == c))
+                                                                                    .or_else(|| list.iter()
+                                                                                        .find(|p| p.name == "chatgpt" || p.name == "codex")
+                                                                                        .map(|p| p.name.clone()));
                                                                                 providers.set(list);
                                                                                 if let Some(name) = actual {
                                                                                     selected.set(Some(name));
@@ -524,20 +634,16 @@ pub(super) fn ProviderDetailPanel(
                                             }}
                                         </div>
 
-                                        // Model configuration card (simplified for OAuth)
+                                        // Model ladder
+                                        <ModelLadder
+                                            provider_id=key.clone()
+                                            models=form_model
+                                            catalog=catalog
+                                            error=error
+                                        />
+
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                                             <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.configuration)}</h3>
-                                            <div>
-                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.model)}</label>
-                                                <input
-                                                    type="text"
-                                                    prop:value=move || form_model.get()
-                                                    on:input=move |ev| form_model.set(event_target_value(&ev))
-                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="e.g. gpt-4o, gpt-4o-mini"
-                                                />
-                                                <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.model_hint)}</p>
-                                            </div>
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.timeout)}</label>
                                                 <input
@@ -591,6 +697,7 @@ pub(super) fn ProviderDetailPanel(
                                 }.into_any()
                             } else {
                                 // Standard API key provider view
+                                let sel_for_name = sel.clone();
                                 view! {
                                     <div class="space-y-6">
                                         // Configuration form card
@@ -598,7 +705,7 @@ pub(super) fn ProviderDetailPanel(
                                             <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.configuration)}</h3>
 
                                             // Name (editable only for new custom)
-                                            {move || if sel == "__new__" {
+                                            {move || if sel_for_name == "__new__" {
                                                 view! {
                                                     <div>
                                                         <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.name)}</label>
@@ -642,35 +749,29 @@ pub(super) fn ProviderDetailPanel(
                                                             .map(|p| p.has_api_key)
                                                             .unwrap_or(false)
                                                     });
-                                                    match preset_info.map(|p| p.api_key_placeholder.to_string()) {
-                                                        Some(hint) => view! {
-                                                            <ProviderKeyField value=form_api_key has_api_key=has_api_key hint=hint />
-                                                        }.into_any(),
-                                                        None => view! {
-                                                            <ProviderKeyField value=form_api_key has_api_key=has_api_key />
-                                                        }.into_any(),
+                                                    view! {
+                                                        <ProviderKeyField value=form_api_key has_api_key=has_api_key />
                                                     }
                                                 }
-                                                {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
+                                                {if keyless {
                                                     view! {
                                                         <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.no_api_key_needed)}</p>
                                                     }.into_any()
                                                 } else {
-                                                    view! { <span></span> }.into_any()
+                                                    match signup_url.clone() {
+                                                        Some(url) => view! {
+                                                            <a
+                                                                href=url
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                class="mt-1 inline-block text-xs text-primary hover:underline"
+                                                            >
+                                                                {t!(i18n, settings.providers.get_a_key)}
+                                                            </a>
+                                                        }.into_any(),
+                                                        None => view! { <span></span> }.into_any(),
+                                                    }
                                                 }}
-                                            </div>
-
-                                            // Model
-                                            <div>
-                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.model)}</label>
-                                                <input
-                                                    type="text"
-                                                    prop:value=move || form_model.get()
-                                                    on:input=move |ev| form_model.set(event_target_value(&ev))
-                                                    class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
-                                                />
-                                                <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.model_hint)}</p>
                                             </div>
 
                                             // Base URL
@@ -681,9 +782,7 @@ pub(super) fn ProviderDetailPanel(
                                                     prop:value=move || form_base_url.get()
                                                     on:input=move |ev| form_base_url.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                    placeholder=move || {
-                                                        preset_info.map(|p| p.base_url.to_string()).unwrap_or_else(|| "https://api.example.com/v1".to_string())
-                                                    }
+                                                    placeholder=base_url_hint.clone().unwrap_or_else(|| "https://api.example.com/v1".to_string())
                                                 />
                                             </div>
 
@@ -701,6 +800,14 @@ pub(super) fn ProviderDetailPanel(
                                                 </div>
                                             </label>
                                         </div>
+
+                                        // Model ladder
+                                        <ModelLadder
+                                            provider_id=key.clone()
+                                            models=form_model
+                                            catalog=catalog
+                                            error=error
+                                        />
 
                                         // Advanced Settings card
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
@@ -759,7 +866,16 @@ pub(super) fn ProviderDetailPanel(
                                             {move || {
                                                 let s = selected.get();
                                                 let is_existing = s.as_ref().map(|s| !s.starts_with("__")).unwrap_or(false);
-                                                let is_preset = s.as_deref().map(|n| find_preset(n).is_some()).unwrap_or(false);
+                                                // Delete removes the `[providers.<id>]` section, so
+                                                // it is offered for anything that has one. It used
+                                                // to be hidden for presets, on the theory that a
+                                                // preset row cannot be deleted — but the row is not
+                                                // what is deleted, the configuration is, and that is
+                                                // the only way to clear a preset's key from this
+                                                // page. The preset itself comes back unconfigured.
+                                                let deletable = s.as_ref().is_some_and(|s| {
+                                                    providers.get().iter().any(|p| &p.name == s)
+                                                });
                                                 if is_existing {
                                                     view! {
                                                         <div class="flex gap-2">
@@ -772,7 +888,7 @@ pub(super) fn ProviderDetailPanel(
                                                             >
                                                                 {t!(i18n, settings.providers.set_default)}
                                                             </button>
-                                                            {if !is_preset {
+                                                            {if deletable {
                                                                 view! {
                                                                     {move || if confirming.get() {
                                                                         view! {
@@ -849,5 +965,359 @@ pub(super) fn ProviderDetailPanel(
                 }.into_any()
             }}
         </div>
+    }
+}
+
+/// What the last `providers.modelsRefresh` said about this provider.
+#[derive(Clone)]
+enum RefreshState {
+    Idle,
+    Running,
+    /// The sweep answered about this provider.
+    Row(Box<ModelsRefreshRow>),
+    /// The sweep succeeded and said nothing about this provider. It only visits
+    /// providers that are enabled **and** have a resolvable key, so an absent
+    /// row means "not swept" — which is a different thing from "no models", and
+    /// reporting it as success would be the more expensive lie.
+    NotSwept,
+}
+
+impl RefreshState {
+    /// A sweep is in flight.
+    const fn is_running(&self) -> bool {
+        matches!(self, Self::Running)
+    }
+}
+
+/// The ordered model ladder editor plus the roster it offers.
+#[component]
+fn ModelLadder(
+    /// Provider id this ladder belongs to; `None` while adding a brand-new
+    /// custom provider, which has no catalogue row (and so no roster and
+    /// nothing to refresh) until it is saved.
+    provider_id: Option<String>,
+    models: RwSignal<Vec<String>>,
+    catalog: RwSignal<Vec<CatalogEntry>>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    let state = expect_context::<DashboardState>();
+    let typed = RwSignal::new(String::new());
+    let refresh = RwSignal::new(RefreshState::Idle);
+
+    let pid = provider_id.clone();
+    let entry = Signal::derive(move || {
+        let id = pid.as_ref()?;
+        catalog
+            .get()
+            .into_iter()
+            .find(|e| &e.id == id || e.aliases.iter().any(|a| a == id))
+    });
+
+    let add = move |id: String| {
+        let id = id.trim().to_string();
+        if id.is_empty() {
+            return;
+        }
+        let mut current = models.get_untracked();
+        if !current.iter().any(|m| m == &id) {
+            current.push(id);
+            models.set(current);
+        }
+    };
+
+    // `StoredValue` keeps the handler `Copy`, which it has to be: it is
+    // installed from inside a reactive block that re-runs whenever the
+    // catalogue changes, and a handler owning a `String` could only be
+    // installed once.
+    let refresh_id = StoredValue::new(provider_id.clone());
+    let on_refresh = move |_| {
+        let Some(id) = refresh_id.get_value() else {
+            return;
+        };
+        refresh.set(RefreshState::Running);
+        spawn_local(async move {
+            match ProvidersApi::models_refresh(&state, Some(id.clone())).await {
+                Ok(result) => {
+                    let row = result.providers.into_iter().find(|r| r.provider == id);
+                    refresh.set(
+                        row.map_or(RefreshState::NotSwept, |r| RefreshState::Row(Box::new(r))),
+                    );
+                    // The discovered ids reach the picker through the catalogue
+                    // (the server folds the on-disk cache into `roster`), so a
+                    // refresh is only half done until the row is re-read.
+                    if let Ok(items) =
+                        ProvidersApi::catalog(&state, crate::api::CatalogView::All).await
+                    {
+                        catalog.set(items);
+                    }
+                }
+                Err(e) => {
+                    refresh.set(RefreshState::Idle);
+                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| format!("Failed to fetch models: {e}"),
+                    )));
+                }
+            }
+        });
+    };
+
+    let can_refresh = provider_id.is_some();
+
+    view! {
+        <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
+            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">
+                {t!(i18n, settings.providers.models_label)}
+            </h3>
+            <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.models_order_hint)}</p>
+
+            // The selected ladder, in order.
+            {move || {
+                let list = models.get();
+                if list.is_empty() {
+                    return view! {
+                        <p class="text-xs text-text-tertiary italic">
+                            {t!(i18n, settings.providers.models_empty)}
+                        </p>
+                    }.into_any();
+                }
+                let last = list.len() - 1;
+                view! {
+                    <div class="space-y-1">
+                        {list.into_iter().enumerate().map(|(idx, id)| {
+                            let lifecycle = entry.get()
+                                .and_then(|e| e.roster.iter().find(|r| r.id == id).cloned())
+                                .map(|r| r.lifecycle);
+                            let retired = lifecycle.as_ref().is_some_and(|l| l.status == ModelStatus::Deprecated);
+                            let successor = lifecycle.and_then(|l| l.successor.map(|s| s.to_string()));
+                            view! {
+                                <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface-sunken border border-border">
+                                    <span class="text-[10px] uppercase tracking-wider text-text-tertiary w-14 shrink-0">
+                                        {if idx == 0 {
+                                            t_string!(i18n, settings.providers.models_first).to_string()
+                                        } else {
+                                            format!("#{}", idx + 1)
+                                        }}
+                                    </span>
+                                    <span class="flex-1 text-xs font-mono text-text-primary truncate">{id.clone()}</span>
+                                    {retired.then(|| view! {
+                                        <span class="text-[9px] uppercase tracking-wider text-warning shrink-0"
+                                              title=successor.clone().unwrap_or_default()>
+                                            {t!(i18n, settings.providers.models_retired)}
+                                        </span>
+                                    })}
+                                    <button
+                                        type="button"
+                                        title=move || t_string!(i18n, settings.providers.models_move_up).to_string()
+                                        prop:disabled=idx == 0
+                                        on:click=move |_| {
+                                            let mut cur = models.get_untracked();
+                                            if idx > 0 && idx < cur.len() {
+                                                cur.swap(idx - 1, idx);
+                                                models.set(cur);
+                                            }
+                                        }
+                                        class="px-1.5 text-text-tertiary hover:text-text-primary disabled:opacity-30"
+                                    >"↑"</button>
+                                    <button
+                                        type="button"
+                                        title=move || t_string!(i18n, settings.providers.models_move_down).to_string()
+                                        prop:disabled=idx == last
+                                        on:click=move |_| {
+                                            let mut cur = models.get_untracked();
+                                            if idx + 1 < cur.len() {
+                                                cur.swap(idx, idx + 1);
+                                                models.set(cur);
+                                            }
+                                        }
+                                        class="px-1.5 text-text-tertiary hover:text-text-primary disabled:opacity-30"
+                                    >"↓"</button>
+                                    <button
+                                        type="button"
+                                        title=move || t_string!(i18n, settings.providers.models_remove).to_string()
+                                        on:click=move |_| {
+                                            let mut cur = models.get_untracked();
+                                            if idx < cur.len() {
+                                                cur.remove(idx);
+                                                models.set(cur);
+                                            }
+                                        }
+                                        class="px-1.5 text-text-tertiary hover:text-danger"
+                                    >"✕"</button>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                }.into_any()
+            }}
+
+            // The roster this provider offers, minus what is already picked.
+            {move || {
+                let Some(e) = entry.get() else {
+                    return view! { <span></span> }.into_any();
+                };
+                let chosen = models.get();
+                let offer: Vec<_> = e.roster.into_iter()
+                    .filter(|r| !chosen.iter().any(|m| m == &r.id))
+                    .collect();
+                if offer.is_empty() {
+                    return view! { <span></span> }.into_any();
+                }
+                view! {
+                    <div class="space-y-1">
+                        <p class="text-[10px] uppercase tracking-wider text-text-tertiary">
+                            {t!(i18n, settings.providers.models_offered)}
+                        </p>
+                        <div class="flex flex-wrap gap-1.5">
+                            {offer.into_iter().map(|r| {
+                                let id = r.id.clone();
+                                let retired = r.lifecycle.status == ModelStatus::Deprecated;
+                                let hint = r.lifecycle.successor.map(|s| s.to_string()).unwrap_or_default();
+                                let source = match r.source {
+                                    ModelSource::Configured => t_string!(i18n, settings.providers.source_configured).to_string(),
+                                    ModelSource::Discovered => t_string!(i18n, settings.providers.source_discovered).to_string(),
+                                    ModelSource::PresetDefault
+                                    | ModelSource::PresetFallback
+                                    | ModelSource::PresetAux => t_string!(i18n, settings.providers.source_curated).to_string(),
+                                };
+                                view! {
+                                    <button
+                                        type="button"
+                                        title=hint
+                                        on:click=move |_| add(id.clone())
+                                        class="flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-surface-sunken hover:border-primary/40 transition-colors"
+                                    >
+                                        <span class="text-xs font-mono text-text-secondary">{r.id.clone()}</span>
+                                        <span class="text-[9px] uppercase tracking-wider text-text-tertiary">{source}</span>
+                                        {retired.then(|| view! {
+                                            <span class="text-[9px] uppercase tracking-wider text-warning">
+                                                {t!(i18n, settings.providers.models_retired)}
+                                            </span>
+                                        })}
+                                    </button>
+                                }
+                            }).collect_view()}
+                        </div>
+                    </div>
+                }.into_any()
+            }}
+
+            // Free-text escape hatch. `select_model` accepts ids that are in no
+            // roster, so this picker must too.
+            <div class="flex gap-2">
+                <input
+                    type="text"
+                    prop:value=move || typed.get()
+                    on:input=move |ev| typed.set(event_target_value(&ev))
+                    on:keydown=move |ev| {
+                        if ev.key() == "Enter" {
+                            ev.prevent_default();
+                            add(typed.get_untracked());
+                            typed.set(String::new());
+                        }
+                    }
+                    placeholder=move || t_string!(i18n, settings.providers.models_add_placeholder).to_string()
+                    class="flex-1 px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+                <button
+                    type="button"
+                    on:click=move |_| { add(typed.get_untracked()); typed.set(String::new()); }
+                    class="px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-secondary hover:border-primary/40"
+                >
+                    {t!(i18n, settings.providers.models_add)}
+                </button>
+            </div>
+
+            // Live discovery: a button only where one can succeed.
+            {move || {
+                if !can_refresh {
+                    return view! { <span></span> }.into_any();
+                }
+                let discoverable = entry.get().is_some_and(|e| e.discoverable);
+                if !discoverable {
+                    return view! {
+                        <p class="text-xs text-text-tertiary">
+                            {t!(i18n, settings.providers.fetch_unsupported)}
+                        </p>
+                    }.into_any();
+                }
+                view! {
+                    <div class="space-y-2">
+                        <button
+                            type="button"
+                            on:click=on_refresh
+                            prop:disabled=move || refresh.get().is_running()
+                            class="px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-secondary hover:border-primary/40 disabled:opacity-50"
+                        >
+                            {move || if refresh.get().is_running() {
+                                t_string!(i18n, settings.providers.fetching).to_string()
+                            } else {
+                                t_string!(i18n, settings.providers.fetch_models).to_string()
+                            }}
+                        </button>
+                        {move || match refresh.get() {
+                            RefreshState::Idle | RefreshState::Running => view! { <span></span> }.into_any(),
+                            RefreshState::NotSwept => view! {
+                                <p class="text-xs text-warning">{t!(i18n, settings.providers.fetch_not_swept)}</p>
+                            }.into_any(),
+                            RefreshState::Row(row) => {
+                                let count = row.models.len();
+                                let kind = row.kind.map(|k| failure_kind_label(i18n, k));
+                                if row.ok && !row.stale {
+                                    view! {
+                                        <p class="text-xs text-success">
+                                            {t!(i18n, settings.providers.fetch_live)}
+                                            " · "
+                                            {count.to_string()}
+                                        </p>
+                                    }.into_any()
+                                } else if row.ok {
+                                    view! {
+                                        <div class="text-xs text-warning">
+                                            <p>{t!(i18n, settings.providers.fetch_stale)}" · "{count.to_string()}</p>
+                                            {kind.map(|k| view! { <p class="text-text-tertiary">{k}</p> })}
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <div class="text-xs text-danger">
+                                            <p>{t!(i18n, settings.providers.fetch_failed)}</p>
+                                            {kind.map(|k| view! { <p class="text-text-tertiary">{k}</p> })}
+                                        </div>
+                                    }.into_any()
+                                }
+                            }
+                        }}
+                    </div>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
+/// One localized sentence per discovery failure, because "no listing endpoint"
+/// and "the request timed out" are the same prose but opposite advice: one is
+/// never worth retrying, the other is.
+fn failure_kind_label(
+    i18n: leptos_i18n::I18nContext<crate::i18n::Locale>,
+    kind: DiscoveryFailureKind,
+) -> String {
+    match kind {
+        DiscoveryFailureKind::Unsupported => {
+            t_string!(i18n, settings.providers.kind_unsupported).to_string()
+        }
+        DiscoveryFailureKind::MissingCredential => {
+            t_string!(i18n, settings.providers.kind_missing_credential).to_string()
+        }
+        DiscoveryFailureKind::Transport => {
+            t_string!(i18n, settings.providers.kind_transport).to_string()
+        }
+        DiscoveryFailureKind::Status => t_string!(i18n, settings.providers.kind_status).to_string(),
+        DiscoveryFailureKind::Shape => t_string!(i18n, settings.providers.kind_shape).to_string(),
+        DiscoveryFailureKind::Timeout => {
+            t_string!(i18n, settings.providers.kind_timeout).to_string()
+        }
     }
 }

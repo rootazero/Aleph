@@ -1,184 +1,36 @@
+//! `providers.*` RPC client.
+//!
+//! # No DTOs live here
+//!
+//! Every request/response shape is re-exported from
+//! [`aleph_protocol::providers`], which `alephcore` *builds* its responses
+//! from. The Panel used to declare its own copies, and they had drifted in
+//! both directions:
+//!
+//! * the write DTO said `model: String` where the server says
+//!   `models: Vec<String>`, and the persistence path replaces `models`
+//!   wholesale — so a provider carrying a model ladder was truncated to its
+//!   first rung the moment anyone toggled its "enabled" switch here;
+//! * `capabilities` and `cost` were not declared at all, so the server
+//!   serialised both on every `providers.catalog` call and serde dropped them
+//!   on arrival — a context window and a price we were already paying to
+//!   transmit, and could not show.
+//!
+//! Sharing the types makes a rename a compile error on both sides at once,
+//! which is the only guard that holds for a contract whose halves live in
+//! different crates.
+
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderInfo {
-    pub name: String,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
-    pub models: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-    #[serde(default = "default_provider_color")]
-    pub color: String,
-    #[serde(default = "default_timeout")]
-    pub timeout_seconds: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(default)]
-    pub is_default: bool,
-    #[serde(default)]
-    pub verified: bool,
-    #[serde(default)]
-    pub has_api_key: bool,
-}
-
-fn default_provider_color() -> String {
-    "#808080".to_string()
-}
-const fn default_timeout() -> u64 {
-    300
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<String>,
-    pub enabled: bool,
-    pub model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeout_seconds: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestResult {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latency_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuthStatus {
-    pub connected: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_in_seconds: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// One catalog row returned by `providers.catalog`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CatalogEntry {
-    pub id: String,
-    pub display_name: String,
-    pub default_model: String,
-    pub base_url: String,
-    pub protocol: String,
-    pub color: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub notes: Option<String>,
-    #[serde(default)]
-    pub modalities: Vec<String>,
-    #[serde(default)]
-    pub models: Vec<String>,
-    /// Curated alternatives the preset ships for this provider. Informational
-    /// only — the authoritative picker list is [`CatalogEntry::roster`],
-    /// computed backend-side through the same ladder leaf the failover walk
-    /// uses (including the "operator moved base_url ⇒ no curated rungs"
-    /// guard, which this frontend has no way to evaluate on its own).
-    #[serde(default)]
-    pub fallback_models: Vec<String>,
-    /// The exact model ids the picker offers, computed by the backend
-    /// (`providers.catalog`). Rendered verbatim — never re-derived here (R4).
-    /// Empty for bring-your-own-model relays.
-    #[serde(default)]
-    pub roster: Vec<String>,
-    #[serde(default)]
-    pub has_api_key: bool,
-    #[serde(default)]
-    pub verified: bool,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub is_default: bool,
-    /// Lifecycle of `default_model` — lets the picker mark an id the vendor has
-    /// retired instead of offering it as a live choice.
-    #[serde(default)]
-    pub lifecycle: ModelLifecycle,
-    /// This provider ships no default; the operator must name a model.
-    #[serde(default)]
-    pub requires_explicit_model: bool,
-}
-
-/// Wire form of the backend's `model_catalog::ModelLifecycle`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModelLifecycle {
-    /// `"active"` / `"preview"` / `"deprecated"`.
-    pub status: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub successor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
-impl Default for ModelLifecycle {
-    fn default() -> Self {
-        Self {
-            status: "active".to_string(),
-            successor: None,
-            note: None,
-        }
-    }
-}
-
-impl ModelLifecycle {
-    #[must_use]
-    pub fn is_deprecated(&self) -> bool {
-        self.status == "deprecated"
-    }
-}
-
-/// Filter applied by the chat-window picker when querying the catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CatalogView {
-    /// Verified, enabled providers (default — what the picker shows).
-    Configured,
-    /// API key present (verified or not) — useful for "add a key" hints.
-    Available,
-    /// Every chat-capable preset, regardless of credential state.
-    All,
-}
-
-impl CatalogView {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Configured => "configured",
-            Self::Available => "available",
-            Self::All => "all",
-        }
-    }
-}
+pub use aleph_protocol::providers::{
+    CatalogResult, ProviderGetResult, ProviderListResult,
+    AuthKind, CatalogEntry, CatalogParams, CatalogView, DiscoveryFailureKind, ModelCapabilities,
+    ModelLifecycle, ModelSource, ModelStatus, ModelsRefreshParams, ModelsRefreshResult,
+    ModelsRefreshRow, OAuthStatus, ProviderConfigJson, ProviderInfo, RateBasis, RateCard,
+    RosterModel, TestResult,
+};
 
 /// Wire form of [`crate::api::chat::ChatApi::send`]'s `model_override` —
 /// mirrors `src/gateway/model_override::ModelOverride` byte-for-byte.
@@ -215,31 +67,27 @@ impl ProvidersApi {
     /// List all providers
     pub async fn list(state: &DashboardState) -> Result<Vec<ProviderInfo>, String> {
         let result = state.rpc_call("providers.list", Value::Null).await?;
-
-        // Extract providers array from result
-        result
-            .get("providers")
-            .ok_or_else(|| "Invalid response: missing providers".to_string())
-            .and_then(|providers| {
-                serde_json::from_value(providers.clone())
-                    .map_err(|e| format!("Failed to parse providers: {e}"))
-            })
+        serde_json::from_value::<ProviderListResult>(result)
+            .map(|r| r.providers)
+            .map_err(|e| format!("Failed to parse providers: {e}"))
     }
 
-    /// Chat-window model picker — fetch the credential-aware catalog.
+    /// Fetch the credential-aware preset catalogue.
+    ///
+    /// `view` decides how much of it comes back: `Configured` for a picker,
+    /// `All` for the settings page (which must offer presets nobody has set up
+    /// yet). There is deliberately no query parameter — filtering happens
+    /// client-side through `aleph_protocol::providers::search`.
     pub async fn catalog(
         state: &DashboardState,
         view: CatalogView,
     ) -> Result<Vec<CatalogEntry>, String> {
-        let params = serde_json::json!({ "view": view.as_str() });
+        let params = serde_json::to_value(CatalogParams::for_view(view))
+            .map_err(|e| format!("Failed to serialize params: {e}"))?;
         let result = state.rpc_call("providers.catalog", params).await?;
-        result
-            .get("items")
-            .ok_or_else(|| "Invalid response: missing items".to_string())
-            .and_then(|items| {
-                serde_json::from_value(items.clone())
-                    .map_err(|e| format!("Failed to parse catalog: {e}"))
-            })
+        serde_json::from_value::<CatalogResult>(result)
+            .map(|r| r.items)
+            .map_err(|e| format!("Failed to parse catalog: {e}"))
     }
 
     /// Get a specific provider
@@ -249,22 +97,16 @@ impl ProvidersApi {
         });
 
         let result = state.rpc_call("providers.get", params).await?;
-
-        // Extract provider from result
-        result
-            .get("provider")
-            .ok_or_else(|| "Invalid response: missing provider".to_string())
-            .and_then(|provider| {
-                serde_json::from_value(provider.clone())
-                    .map_err(|e| format!("Failed to parse provider: {e}"))
-            })
+        serde_json::from_value::<ProviderGetResult>(result)
+            .map(|r| r.provider)
+            .map_err(|e| format!("Failed to parse provider: {e}"))
     }
 
     /// Create a new provider
     pub async fn create(
         state: &DashboardState,
         name: String,
-        config: ProviderConfig,
+        config: ProviderConfigJson,
     ) -> Result<(), String> {
         let config_value = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize config: {e}"))?;
@@ -282,7 +124,7 @@ impl ProvidersApi {
     pub async fn update(
         state: &DashboardState,
         name: String,
-        config: ProviderConfig,
+        config: ProviderConfigJson,
     ) -> Result<(), String> {
         let config_value = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize config: {e}"))?;
@@ -320,7 +162,7 @@ impl ProvidersApi {
     pub async fn test_connection(
         state: &DashboardState,
         name: Option<&str>,
-        config: ProviderConfig,
+        config: ProviderConfigJson,
     ) -> Result<TestResult, String> {
         let params = serde_json::json!({
             "name": name,
@@ -330,6 +172,26 @@ impl ProvidersApi {
         let result = state.rpc_call("providers.test", params).await?;
 
         serde_json::from_value(result).map_err(|e| format!("Failed to parse test result: {e}"))
+    }
+
+    /// Ask providers what models they serve now.
+    ///
+    /// `provider` narrows the sweep to one id (what a per-row refresh button
+    /// wants); `None` sweeps every provider that is enabled **and** has a
+    /// resolvable credential. Per-provider failures come back as rows carrying
+    /// a [`DiscoveryFailureKind`], never as an RPC error, so one unreachable
+    /// vendor does not blank the result — and a provider that is not
+    /// configured at all yields no row at all, which is a third state a caller
+    /// has to render rather than read as success.
+    pub async fn models_refresh(
+        state: &DashboardState,
+        provider: Option<String>,
+    ) -> Result<ModelsRefreshResult, String> {
+        let params = serde_json::to_value(ModelsRefreshParams { provider })
+            .map_err(|e| format!("Failed to serialize params: {e}"))?;
+        let result = state.rpc_call("providers.modelsRefresh", params).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse models refresh result: {e}"))
     }
 
     /// Trigger OAuth browser login for a subscription provider

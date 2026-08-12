@@ -14,6 +14,7 @@ use crate::tui::widgets::{
     command_palette::render_command_palette,
     dialog::{render_approval, render_dialog},
     input_area::{input_height, InputWidget},
+    provider_picker::render_provider_picker,
     session_picker::render_session_picker,
     status_bar::StatusBar,
 };
@@ -70,6 +71,9 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
     }
     if let Some(picker) = &state.session_picker {
         render_session_picker(frame, picker, input_area);
+    }
+    if let Some(picker) = &state.provider_picker {
+        render_provider_picker(frame, picker, input_area);
     }
     if let Some(dialog) = &state.dialog {
         render_dialog(frame, dialog, frame.area());

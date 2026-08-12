@@ -1,266 +1,290 @@
-//! Left-panel list sections — Subscription / Preset / Custom.
+//! Left-panel list sections — Subscription / Configured / Quick setup.
 //!
-//! All three render a vertical stack of provider cards. They take the shared
-//! `providers` + `selected` signals from the parent `ProvidersView` and emit
-//! click handlers that mutate `selected` (preset → `__preset__<name>`,
-//! configured → real name).
+//! All three render a vertical stack of provider cards over the rows
+//! `providers.catalog` sent. They take the shared `catalog` + `providers` +
+//! `selected` + `search` signals from the parent `ProvidersView` and emit click
+//! handlers that mutate `selected` (unconfigured → `__preset__<id>`,
+//! configured → the real config key).
+//!
+//! # Why the sections are these three and not "preset vs custom"
+//!
+//! The server merges presets, operator-defined providers and the MoA pseudo
+//! row into one list and does **not** mark which is which, so that partition is
+//! not recoverable here — and re-deriving it would mean keeping a copy of the
+//! preset table, which is the drift this page was rewritten to delete. What
+//! *is* on the row is whether the operator has a `[providers.<id>]` section for
+//! it (a non-empty `models` ladder) and how it authenticates (`auth_kind`), so
+//! those are the cuts: sign-in providers, providers you have set up, and the
+//! rest of the catalogue.
 
-use crate::api::ProviderInfo;
+use aleph_protocol::providers::search::filter_catalog;
+
+use crate::api::{AuthKind, CatalogEntry, ProviderInfo};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
-use crate::preset_data::{OAUTH_PRESETS, PRESETS};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use super::canonical_oauth_name;
 use crate::api::ProvidersApi;
+
+/// The config key a catalogue row edits, when the operator has one.
+///
+/// A preset configured under an alias (`kimi` for `moonshot`, `codex` for
+/// `chatgpt`) attaches to the canonical catalogue row server-side, so the row's
+/// id is not necessarily the key `providers.list` reports. The aliases come off
+/// the row itself — this used to be a `codex → chatgpt` literal in this crate,
+/// which covered exactly one of the vendors that have alternative names.
+pub(super) fn configured_key(entry: &CatalogEntry, providers: &[ProviderInfo]) -> Option<String> {
+    providers
+        .iter()
+        .find(|p| p.name == entry.id || entry.aliases.contains(&p.name))
+        .map(|p| p.name.clone())
+}
+
+/// Rows this page can edit, filtered by the search box.
+///
+/// The MoA pseudo-provider (`protocol == "moa"`) is dropped: it is a virtual
+/// multiplexer over other providers' credentials with no config section of its
+/// own, so a settings row for it would open an editor that can only write
+/// nonsense. Same exclusion, same reason, as `moa::options::available_options`.
+fn editable(catalog: &[CatalogEntry], query: &str) -> Vec<CatalogEntry> {
+    filter_catalog(catalog, query)
+        .into_iter()
+        .filter(|e| e.protocol != "moa")
+        .collect()
+}
+
+/// True when the operator has a `[providers.<id>]` section for this row.
+///
+/// `models` is the operator's ladder and the wire rejects an empty one, so a
+/// non-empty ladder is exactly "there is a config entry" — as opposed to
+/// `has_api_key`, which is also true for a key sitting in an env var for a
+/// provider nobody has configured.
+fn is_configured(entry: &CatalogEntry) -> bool {
+    !entry.models.is_empty()
+}
+
+fn badge_state(entry: &CatalogEntry) -> BadgeState {
+    BadgeState {
+        is_default: entry.is_default,
+        verified: entry.verified,
+    }
+}
 
 #[component]
 pub(super) fn SubscriptionLoginSection(
+    catalog: RwSignal<Vec<CatalogEntry>>,
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
+    search: RwSignal<String>,
 ) -> impl IntoView {
     let i18n = use_i18n();
-    // Track OAuth connection status for each OAuth preset
-    let oauth_statuses: Vec<(&'static str, RwSignal<Option<bool>>)> = OAUTH_PRESETS
-        .iter()
-        .map(|preset| (preset.name, RwSignal::new(None::<bool>)))
-        .collect();
-    let oauth_statuses = std::rc::Rc::new(oauth_statuses);
+    // Live OAuth connection state, keyed by the catalogue id. A row is only
+    // here because the SERVER said `auth_kind == oauth`, so this map grows and
+    // shrinks with the catalogue instead of with a list in this file.
+    let oauth_connected: RwSignal<Vec<(String, bool)>> = RwSignal::new(Vec::new());
 
-    // Query OAuth status on mount and when providers change
-    {
-        let oauth_statuses = oauth_statuses.clone();
-        Effect::new(move || {
-            let _ = providers.get(); // track providers changes
-            let state = expect_context::<DashboardState>();
-            for (name, status_signal) in oauth_statuses.iter() {
-                let name = name.to_string();
-                let status_signal = *status_signal;
-                spawn_local(async move {
-                    match ProvidersApi::oauth_status(&state, name).await {
-                        Ok(status) => status_signal.set(Some(status.connected)),
-                        Err(_) => status_signal.set(Some(false)),
-                    }
-                });
-            }
-        });
-    }
-
-    let oauth_statuses_view = oauth_statuses.clone();
-    view! {
-        <div>
-            <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                {t!(i18n, settings.providers.subscription_login)}
-            </h2>
-            <div class="grid grid-cols-1 gap-2">
-                {OAUTH_PRESETS.iter().enumerate().map(|(idx, preset)| {
-                    let name = preset.name;
-                    let description = preset.description;
-                    let icon_color = preset.icon_color;
-                    let oauth_connected = oauth_statuses_view[idx].1;
-
-                    // OAuth providers may be stored under canonical name (e.g. "chatgpt" for "codex")
-                    let canonical = canonical_oauth_name(name);
-
-                    let is_configured = move || {
-                        providers.get().iter().any(|p| p.name == name || p.name == canonical)
-                    };
-
-                    let on_click = move || {
-                        if is_configured() {
-                            // Select by the name that actually exists in providers list
-                            let actual_name = providers.get().iter()
-                                .find(|p| p.name == name || p.name == canonical)
-                                .map(|p| p.name.clone())
-                                .unwrap_or_else(|| name.to_string());
-                            selected.set(Some(actual_name));
-                        } else {
-                            selected.set(Some(format!("__preset__{name}")));
+    Effect::new(move || {
+        let ids: Vec<String> = catalog
+            .get()
+            .iter()
+            .filter(|e| e.auth_kind == AuthKind::OAuth)
+            .map(|e| e.id.clone())
+            .collect();
+        let state = expect_context::<DashboardState>();
+        for id in ids {
+            spawn_local(async move {
+                // A failed status read is not "disconnected" — it is no answer,
+                // so the row simply keeps whatever it last knew rather than
+                // claiming the subscription is gone.
+                if let Ok(status) = ProvidersApi::oauth_status(&state, id.clone()).await {
+                    // `try_update`, not read-then-set: one task per OAuth row
+                    // lands here and a read/write pair split around the `await`
+                    // would let the last writer erase its siblings' answers.
+                    // `None` means the scope is gone (page tearing down).
+                    oauth_connected.try_update(|rows| {
+                        match rows.iter_mut().find(|(k, _)| *k == id) {
+                            Some(row) => row.1 = status.connected,
+                            None => rows.push((id, status.connected)),
                         }
-                    };
-
-                    view! {
-                        <ProviderRowCard
-                            name=name.to_string()
-                            icon_color=icon_color.to_string()
-                            subtitle=description.to_string()
-                            is_selected=move || {
-                                let sel = selected.get();
-                                sel.as_deref() == Some(name)
-                                    || sel.as_deref() == Some(canonical)
-                                    || sel.as_deref() == Some(&format!("__preset__{name}"))
-                            }
-                            is_configured=move || {
-                                let connected = oauth_connected.get().unwrap_or(false);
-                                let is_verified = providers.get().iter()
-                                    .find(|p| p.name == name || p.name == canonical)
-                                    .is_some_and(|p| p.verified);
-                                connected || is_verified
-                            }
-                            dot=move || {
-                                let connected = oauth_connected.get().unwrap_or(false);
-                                let is_verified = providers.get().iter()
-                                    .find(|p| p.name == name || p.name == canonical)
-                                    .is_some_and(|p| p.verified);
-                                if connected || is_verified { RowDot::Verified } else { RowDot::None }
-                            }
-                            badge=move || {
-                                let connected = oauth_connected.get().unwrap_or(false);
-                                let list = providers.get();
-                                let provider = list.iter().find(|p| p.name == name || p.name == canonical);
-                                let state = BadgeState {
-                                    is_default: provider.is_some_and(|p| p.is_default),
-                                    verified: connected || provider.is_some_and(|p| p.verified),
-                                };
-                                view! { <ProviderBadges state=state /> }.into_any()
-                            }
-                            large_icon=true
-                            trailing=move || view! {
-                                <svg class="w-4 h-4 text-text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                                </svg>
-                            }.into_any()
-                            on_click=on_click
-                        />
-                    }
-                }).collect_view()}
-            </div>
-        </div>
-    }
-}
-
-#[component]
-pub(super) fn PresetGrid(
-    providers: RwSignal<Vec<ProviderInfo>>,
-    selected: RwSignal<Option<String>>,
-) -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <div>
-            <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                {t!(i18n, settings.providers.quick_setup)}
-            </h2>
-            <div class="grid grid-cols-1 gap-2">
-                {PRESETS.iter().map(|preset| {
-                    let name = preset.name;
-                    let description = preset.description;
-                    let icon_color = preset.icon_color;
-
-                    view! {
-                        <ProviderRowCard
-                            name=name.to_string()
-                            icon_color=icon_color.to_string()
-                            subtitle=description.to_string()
-                            is_selected=move || {
-                                let sel = selected.get();
-                                sel.as_deref() == Some(name)
-                                    || sel.as_deref() == Some(&format!("__preset__{name}"))
-                            }
-                            is_configured=move || providers.get().iter().any(|p| p.name == name)
-                            dot=move || {
-                                let list = providers.get();
-                                let provider = list.iter().find(|p| p.name == name);
-                                if provider.is_some_and(|p| p.verified) {
-                                    RowDot::Verified
-                                } else {
-                                    RowDot::None
-                                }
-                            }
-                            badge=move || {
-                                let p = providers.get();
-                                let entry = p.iter().find(|p| p.name == name);
-                                let state = crate::components::provider_badge::BadgeState {
-                                    is_default: entry.map(|p| p.is_default).unwrap_or(false),
-                                    verified: entry.map(|p| p.verified).unwrap_or(false),
-                                };
-                                view! { <ProviderBadges state=state /> }.into_any()
-                            }
-                            on_click=move || {
-                                if providers.get().iter().any(|p| p.name == name) {
-                                    selected.set(Some(name.to_string()));
-                                } else {
-                                    selected.set(Some(format!("__preset__{name}")));
-                                }
-                            }
-                        />
-                    }
-                }).collect_view()}
-            </div>
-        </div>
-    }
-}
-
-#[component]
-pub(super) fn CustomProvidersList(
-    providers: RwSignal<Vec<ProviderInfo>>,
-    selected: RwSignal<Option<String>>,
-) -> impl IntoView {
-    let i18n = use_i18n();
-    let mut preset_names: Vec<&str> = PRESETS
-        .iter()
-        .chain(OAUTH_PRESETS.iter())
-        .map(|p| p.name)
-        .collect();
-    // Also exclude canonical OAuth names (e.g. "chatgpt" for "codex")
-    for preset in OAUTH_PRESETS.iter() {
-        let canonical = canonical_oauth_name(preset.name);
-        if !preset_names.contains(&canonical) {
-            preset_names.push(canonical);
+                    });
+                }
+            });
         }
-    }
+    });
 
     view! {
         {move || {
-            let list = providers.get();
-            let custom: Vec<_> = list.into_iter()
-                .filter(|p| !preset_names.contains(&p.name.as_str()))
+            let rows: Vec<CatalogEntry> = editable(&catalog.get(), &search.get())
+                .into_iter()
+                .filter(|e| e.auth_kind == AuthKind::OAuth)
                 .collect();
-            if custom.is_empty() {
-                view! { <div></div> }.into_any()
-            } else {
-                view! {
+            if rows.is_empty() {
+                return view! { <div></div> }.into_any();
+            }
+            view! {
+                <div>
+                    <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                        {t!(i18n, settings.providers.subscription_login)}
+                    </h2>
+                    <div class="grid grid-cols-1 gap-2">
+                        {rows.into_iter().map(|entry| {
+                            // `StoredValue` so every slot below can be `FnMut`:
+                            // a row renders four closures and a `String` can
+                            // only be moved into one of them.
+                            let id = StoredValue::new(entry.id.clone());
+                            let row = StoredValue::new(entry.clone());
+                            let state = badge_state(&entry);
+                            let subtitle = entry.notes.clone()
+                                .unwrap_or_else(|| entry.default_model.clone());
+                            // A subscription row counts as live when the token
+                            // is there OR the provider verified — the two are
+                            // written by different flows.
+                            let live = move || {
+                                state.verified
+                                    || oauth_connected.get().iter()
+                                        .any(|(k, c)| *c && id.with_value(|i| i == k))
+                            };
+                            view! {
+                                <ProviderRowCard
+                                    name=entry.display_name.clone()
+                                    icon_color=entry.color.clone()
+                                    subtitle=subtitle
+                                    is_selected=move || {
+                                        let sel = selected.get();
+                                        id.with_value(|i| {
+                                            sel.as_deref() == Some(i.as_str())
+                                                || sel.as_deref() == Some(&format!("__preset__{i}"))
+                                        })
+                                    }
+                                    is_configured=live
+                                    dot=move || if live() { RowDot::Verified } else { RowDot::None }
+                                    badge=move || {
+                                        let state = BadgeState { verified: live(), ..state };
+                                        view! { <ProviderBadges state=state /> }.into_any()
+                                    }
+                                    large_icon=true
+                                    trailing=move || view! {
+                                        <svg class="w-4 h-4 text-text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                        </svg>
+                                    }.into_any()
+                                    on_click=move || {
+                                        let target = row.with_value(|e| {
+                                            configured_key(e, &providers.get())
+                                                .unwrap_or_else(|| format!("__preset__{}", e.id))
+                                        });
+                                        selected.set(Some(target));
+                                    }
+                                />
+                            }
+                        }).collect_view()}
+                    </div>
+                </div>
+            }.into_any()
+        }}
+    }
+}
+
+/// Catalogue rows the operator has already configured, and the ones they have
+/// not, as two stacks under one component so the split rule lives in one place.
+#[component]
+pub(super) fn PresetGrid(
+    catalog: RwSignal<Vec<CatalogEntry>>,
+    providers: RwSignal<Vec<ProviderInfo>>,
+    selected: RwSignal<Option<String>>,
+    search: RwSignal<String>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    view! {
+        {move || {
+            let rows: Vec<CatalogEntry> = editable(&catalog.get(), &search.get())
+                .into_iter()
+                .filter(|e| e.auth_kind != AuthKind::OAuth)
+                .collect();
+            let known = providers.get();
+            let (mine, rest): (Vec<CatalogEntry>, Vec<CatalogEntry>) =
+                rows.into_iter().partition(is_configured);
+            view! {
+                {(!mine.is_empty()).then(|| view! {
                     <div>
                         <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                            {t!(i18n, settings.providers.custom_providers)}
+                            {t!(i18n, settings.providers.configured_providers)}
                         </h2>
                         <div class="grid grid-cols-1 gap-2">
-                            {custom.into_iter().map(|p| {
-                                let name = p.name.clone();
-                                let name_click = name.clone();
-                                let name_check = name.clone();
-                                let model = p.model.clone();
-                                let color = p.color.clone();
-                                let is_default = p.is_default;
-                                let verified = p.verified;
-
-                                view! {
-                                    <ProviderRowCard
-                                        name=name
-                                        icon_color=color
-                                        subtitle=model
-                                        is_selected=move || {
-                                            selected.get().as_deref() == Some(&name_check)
-                                        }
-                                        is_configured=|| true
-                                        dot=move || if verified { RowDot::Verified } else { RowDot::Inactive }
-                                        badge=move || {
-                                            let state = crate::components::provider_badge::BadgeState {
-                                                is_default,
-                                                verified,
-                                            };
-                                            view! { <ProviderBadges state=state /> }.into_any()
-                                        }
-                                        on_click=move || selected.set(Some(name_click.clone()))
-                                    />
-                                }
+                            {mine.into_iter().map(|e| {
+                                let key = configured_key(&e, &known);
+                                view! { <CatalogRow entry=e configured_key=key selected=selected /> }
                             }).collect_view()}
                         </div>
                     </div>
-                }.into_any()
+                })}
+                {(!rest.is_empty()).then(|| view! {
+                    <div>
+                        <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3 mt-6">
+                            {t!(i18n, settings.providers.quick_setup)}
+                        </h2>
+                        <div class="grid grid-cols-1 gap-2">
+                            {rest.into_iter().map(|e| {
+                                let key = configured_key(&e, &known);
+                                view! { <CatalogRow entry=e configured_key=key selected=selected /> }
+                            }).collect_view()}
+                        </div>
+                    </div>
+                })}
             }
         }}
+    }
+}
+
+/// One catalogue row. `configured_key` is `Some` when the operator has a config
+/// section for it — resolved by the caller because it needs `providers.list`,
+/// which the row itself cannot see.
+#[component]
+fn CatalogRow(
+    entry: CatalogEntry,
+    configured_key: Option<String>,
+    selected: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let id = entry.id.clone();
+    let target = configured_key
+        .clone()
+        .unwrap_or_else(|| format!("__preset__{id}"));
+    let target_click = target.clone();
+    let self_key = configured_key.unwrap_or_else(|| entry.id.clone());
+    let subtitle = if entry.default_model.is_empty() {
+        entry
+            .notes
+            .clone()
+            .unwrap_or_else(|| entry.base_url.clone())
+    } else {
+        entry.default_model.clone()
+    };
+    let configured = is_configured(&entry);
+    let verified = entry.verified;
+    let state = badge_state(&entry);
+
+    view! {
+        <ProviderRowCard
+            name=entry.display_name.clone()
+            icon_color=entry.color.clone()
+            subtitle=subtitle
+            is_selected=move || {
+                let sel = selected.get();
+                sel.as_deref() == Some(self_key.as_str()) || sel.as_deref() == Some(target.as_str())
+            }
+            is_configured=move || configured
+            dot=move || if verified {
+                RowDot::Verified
+            } else if configured {
+                RowDot::Inactive
+            } else {
+                RowDot::None
+            }
+            badge=move || view! { <ProviderBadges state=state /> }.into_any()
+            on_click=move || selected.set(Some(target_click.clone()))
+        />
     }
 }

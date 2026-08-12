@@ -88,6 +88,9 @@ pub enum LocalCommand {
     },
     /// Browse and switch to another session (opens the session picker)
     Sessions,
+    /// Browse providers and their models (opens the provider picker).
+    /// `query` pre-filters both levels through the shared ranker.
+    Providers { query: String },
 }
 
 /// A per-conversation knob reachable from a slash command.
@@ -199,6 +202,10 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "Inject curated memory + notes + recall: on|off|default",
     ),
     ("/sessions", "Browse & switch session (alias: /resume)"),
+    (
+        "/providers",
+        "Browse providers & models and pick one (/providers [query])",
+    ),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
     ("/help", "Show available commands"),
@@ -275,6 +282,16 @@ pub fn parse_input(input: &str) -> ParsedInput {
             ParsedInput::Local(LocalCommand::Knob { knob, value })
         }
         "/sessions" | "/resume" => ParsedInput::Local(LocalCommand::Sessions),
+        // Deliberately no `/models` alias: gateway commands come from the live
+        // tool catalog, which grows with every installed skill / MCP server, and
+        // a local word that matches one makes it UNREACHABLE rather than merely
+        // shadowed. One claim on the shared namespace is enough for one picker.
+        "/providers" => ParsedInput::Local(LocalCommand::Providers {
+            // Forwarded verbatim (lowercased by the ranker, not here): the query
+            // may name a model id, and model ids are case-sensitive on the wire
+            // even though matching is not.
+            query: args.to_string(),
+        }),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
         "/replay" => {
             if args.is_empty() {
@@ -548,10 +565,41 @@ mod tests {
         }
     }
 
+    /// `/providers` takes an optional query, and it has to survive the trip.
+    ///
+    /// The palette is the only route to a slash command from an empty composer,
+    /// and it runs the entry's `full_command` plus `PaletteState.args` — so a
+    /// command whose parser drops its tail is a command that can only ever be
+    /// invoked bare. Four session knobs shipped in exactly that state.
+    #[test]
+    fn parse_providers_carries_its_query() {
+        assert_eq!(
+            parse_input("/providers"),
+            ParsedInput::Local(LocalCommand::Providers {
+                query: String::new()
+            })
+        );
+        assert_eq!(
+            parse_input("/providers gpt-5.6"),
+            ParsedInput::Local(LocalCommand::Providers {
+                query: "gpt-5.6".to_string()
+            })
+        );
+        // Case is preserved: the ranker lowercases both sides, but the query may
+        // name a model id and the picker shows it back to the user.
+        assert_eq!(
+            parse_input("/PROVIDERS Claude"),
+            ParsedInput::Local(LocalCommand::Providers {
+                query: "Claude".to_string()
+            })
+        );
+    }
+
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 17);
+        assert_eq!(cmds.len(), 18);
+        assert!(cmds.iter().any(|(name, _)| *name == "/providers"));
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
         assert!(cmds.iter().any(|(name, _)| *name == "/tier"));
         assert!(cmds.iter().any(|(name, _)| *name == "/sessions"));

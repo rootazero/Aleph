@@ -16,40 +16,12 @@
 //! to the `pricing` price table — the first declared prefix that matches the
 //! canonicalised id wins, so specific prefixes precede broad ones.
 
-use serde::Serialize;
-
 use super::alias::{canonicalize_model_id, prefix_matches};
 
-/// Capability metadata for one model family.
-///
-/// Figures are best-effort reference data (vendor docs as of 2026-08),
-/// mirroring `pricing`'s "operators upgrade Aleph to refresh" stance — no
-/// runtime config knob, no network lookup.
-///
-/// # On `max_output_tokens` when a catalog reports it equal to the window
-///
-/// Several host catalogs publish `maxTokens == contextWindow`. That is a
-/// statement that the output is not *separately* capped, not an output budget,
-/// and copying it here is actively harmful: the compaction budget is
-/// `window - max_output_tokens` (see `deps_builder::context_budget`), so an
-/// equal pair collapses the usable budget to its floor and the agent compacts
-/// on every turn. Where a family's output cap is not separately published,
-/// this table records the highest figure that *is* — usually the same family's
-/// sibling model. That is why `deepseek-v4` reads 65_536 against a vendor
-/// figure of 384_000, and why `step-3.7-flash` reads its sibling's 65_536.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ModelCapabilities {
-    /// Maximum total context window in tokens (input + output budget).
-    pub context_window: u32,
-    /// Maximum output tokens the model will emit in one response.
-    pub max_output_tokens: u32,
-    /// Accepts image input (multimodal vision).
-    pub supports_vision: bool,
-    /// Supports native tool / function calling.
-    pub supports_tools: bool,
-    /// Has an extended-thinking / reasoning mode.
-    pub supports_reasoning: bool,
-}
+// Shape lives in `aleph_protocol::providers::catalog` so this table and the
+// `providers.catalog` wire row cannot describe different structs. The literals
+// below are untouched — the type is still `Copy` and const-constructible.
+pub use aleph_protocol::providers::ModelCapabilities;
 
 /// `(canonical model-id prefix, capabilities)`. Declaration order matters —
 /// list specific prefixes (`claude-opus-4`) before broad ones (`claude-3`).

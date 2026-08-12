@@ -10,15 +10,6 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::json;
 
-/// Get the effective model list for a catalog entry: use models if present, otherwise fall back to [`default_model`].
-fn effective_models(e: &CatalogEntry) -> Vec<String> {
-    if e.models.is_empty() {
-        vec![e.default_model.clone()]
-    } else {
-        e.models.clone()
-    }
-}
-
 /// One row of the admission-list picker.
 pub struct AccessRow {
     pub user_id: String,
@@ -336,9 +327,16 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         {move || {
                             catalog.get().into_iter().flat_map(|entry: CatalogEntry| {
                                 let provider_id = entry.id.clone();
-                                let models = effective_models(&entry);
+                                // `roster` verbatim (R4). The local rebuild
+                                // this replaced was `models` else
+                                // `[default_model]`, which missed the curated
+                                // rungs entirely and had no way to apply the
+                                // "operator moved base_url ⇒ no curated rungs"
+                                // guard the backend merge does.
+                                let models = entry.roster;
                                 let dn = entry.display_name;
                                 models.into_iter().map(move |m| {
+                                    let m = m.id;
                                     let val = format!("{provider_id}\u{1f}{m}");
                                     let label = format!("{dn} / {m}");
                                     view! { <option value=val>{label}</option> }
@@ -349,7 +347,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                     {move || {
                         let sel = selected_model.get();
                         let in_catalog = sel.is_empty() || catalog.get().iter().any(|e| {
-                            effective_models(e).iter().any(|m| format!("{}\u{1f}{}", e.id, m) == sel)
+                            e.roster.iter().any(|m| format!("{}\u{1f}{}", e.id, m.id) == sel)
                         });
                         (!in_catalog).then(|| view! {
                             <p class="mt-1 text-xs text-danger/80">

@@ -31,41 +31,13 @@ use super::endpoint::{endpoint_kind_for_base_url, EndpointKind};
 use super::lifecycle::{lifecycle_for, ModelLifecycle};
 use crate::pricing::{rate_card, RateCard};
 
-/// How the caller came to know about this model id.
-///
-/// Provenance is not derivable from the id, so the enumerator supplies it. It
-/// matters to both audiences: an operator reading the picker wants to know
-/// whether a row is something they configured or something Aleph suggested,
-/// and the LLM choosing via `list_models` should be able to tell a curated
-/// vendor fallback from a raw id scraped off a live `/models` endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelSource {
-    /// The provider preset's `default_model`.
-    PresetDefault,
-    /// One of the preset's curated `fallback_models`.
-    PresetFallback,
-    /// The preset's cheap `default_aux_model`.
-    PresetAux,
-    /// Listed by the operator in `[providers.<id>] models`.
-    Configured,
-    /// Returned by the provider's live `/models` endpoint.
-    Discovered,
-}
-
-impl ModelSource {
-    /// Stable wire string for RPC / tool JSON.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::PresetDefault => "preset_default",
-            Self::PresetFallback => "preset_fallback",
-            Self::PresetAux => "preset_aux",
-            Self::Configured => "configured",
-            Self::Discovered => "discovered",
-        }
-    }
-}
+// `ModelSource` is the wire's, not this module's: the picker, `list_models` and
+// the roster all render it, and two of the crates that do cannot depend on
+// `alephcore`. Provenance is not derivable from the id, so every enumerator
+// supplies it — an operator wants to know whether a row is something they
+// configured or something Aleph suggested, and a raw id scraped off a live
+// `/models` endpoint has no curated window or price behind it.
+pub use aleph_protocol::providers::ModelSource;
 
 /// Everything the reference tables know about one `(provider, model)` pair.
 ///
@@ -176,7 +148,7 @@ mod tests {
     fn deprecated_id_surfaces_through_the_record() {
         let r = ModelRecord::resolve("deepseek", "deepseek-chat", None, ModelSource::Configured);
         assert!(r.lifecycle.is_deprecated());
-        assert_eq!(r.lifecycle.successor, Some("deepseek-v4-flash"));
+        assert_eq!(r.lifecycle.successor.as_deref(), Some("deepseek-v4-flash"));
     }
 
     /// End-of-pipe check for the 2026-08 refresh: a table row is only worth
@@ -219,7 +191,7 @@ mod tests {
             ModelSource::Configured,
         );
         assert!(on_groq.lifecycle.is_deprecated());
-        assert_eq!(on_groq.lifecycle.successor, Some("openai/gpt-oss-120b"));
+        assert_eq!(on_groq.lifecycle.successor.as_deref(), Some("openai/gpt-oss-120b"));
 
         let on_together = ModelRecord::resolve(
             "together",

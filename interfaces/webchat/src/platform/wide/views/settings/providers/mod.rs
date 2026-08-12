@@ -1,42 +1,35 @@
 //! AI Providers Configuration View.
 //!
 //! Split-pane layout matching Embedding/Generation Providers:
-//! - Left panel: Preset provider grid + configured provider list
+//! - Left panel: provider list (from `providers.catalog`), grouped and searchable
 //! - Right panel: Detail/form editor for selected provider
-//! - Preset quick-setup for common AI services
+//!
+//! ## Where the preset list comes from
+//!
+//! `providers.catalog` with `view: "all"`, not a table in this crate. The
+//! hand-written one carried 13 of the core's 56 presets, defaulted two of them
+//! to models the core marks retired, and named two providers (`anthropic`,
+//! `ollama`) that do not resolve in the core registry at all — the same drift
+//! `preset_providers.rs` had already killed for generation providers by
+//! fetching. Which rows are subscription logins is `auth_kind` on the row, so
+//! there is no second list of "which of these are OAuth" to go stale either.
 //!
 //! ## Layout
-//! - this module — top-level `ProvidersView` + shared `canonical_oauth_name`
-//! - [`list`] — left-panel sections (Subscription / Preset / Custom)
+//! - this module — top-level `ProvidersView`, owns the two fetches
+//! - [`list`] — left-panel sections (Subscription / Configured / Quick setup)
 //! - [`detail_panel`] — right-panel detail editor
 
 mod detail_panel;
 mod list;
 
-use crate::api::{ProviderInfo, ProvidersApi};
+use crate::api::{CatalogEntry, CatalogView, ProviderInfo, ProvidersApi};
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n};
-use crate::preset_data::OAUTH_PRESETS;
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use detail_panel::ProviderDetailPanel;
-use list::{CustomProvidersList, PresetGrid, SubscriptionLoginSection};
-
-/// Map OAuth preset name to the canonical name used in config (e.g. "codex" → "chatgpt").
-pub(super) fn canonical_oauth_name(name: &str) -> &'static str {
-    match name {
-        "codex" => "chatgpt",
-        other => {
-            // Return a static str — for known presets only
-            OAUTH_PRESETS
-                .iter()
-                .find(|p| p.name == other)
-                .map(|p| p.name)
-                .unwrap_or("chatgpt")
-        }
-    }
-}
+use list::{PresetGrid, SubscriptionLoginSection};
 
 #[component]
 #[must_use]
@@ -45,12 +38,30 @@ pub fn ProvidersView() -> impl IntoView {
     let i18n = use_i18n();
 
     let providers = RwSignal::new(Vec::<ProviderInfo>::new());
+    // Every preset the core ships, credential state included. `All` rather
+    // than `Configured`: this page's whole job is offering providers nobody
+    // has set up yet.
+    let catalog = RwSignal::new(Vec::<CatalogEntry>::new());
     let selected = RwSignal::new(Option::<String>::None);
-    let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
+    // Filter term for the left-panel list. Applied to rows the server already
+    // sent, through the shared ranker (R4) — never a query parameter.
+    let search = RwSignal::new(String::new());
 
-    // Load providers on mount
+    // Load providers + catalog on mount. `rpc_call` parks on a bounded
+    // readiness wait, so a cold load (direct URL / refresh) does not have to
+    // race the handshake here — see `DashboardState::await_gateway_ready`.
     spawn_local(async move {
+        match ProvidersApi::catalog(&state, CatalogView::All).await {
+            Ok(items) => catalog.set(items),
+            Err(e) => {
+                error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load providers: {e}"),
+                )));
+            }
+        }
         match ProvidersApi::list(&state).await {
             Ok(list) => {
                 // `try_get_untracked`: this view can be disposed while the RPC
@@ -73,7 +84,6 @@ pub fn ProvidersView() -> impl IntoView {
                     }
                 }
                 providers.set(list);
-                error.set(None);
             }
             Err(e) => {
                 error.set(Some(crate::components::admin_refusal::settings_load_error(
@@ -83,7 +93,6 @@ pub fn ProvidersView() -> impl IntoView {
                 )));
             }
         }
-        loading.set(false);
     });
 
     view! {
@@ -111,14 +120,22 @@ pub fn ProvidersView() -> impl IntoView {
                         </div>
                     })}
 
-                    // Subscription login section (OAuth providers)
-                    <SubscriptionLoginSection providers=providers selected=selected />
+                    // Search — filters the catalogue rows already in hand.
+                    <div>
+                        <input
+                            type="text"
+                            prop:value=move || search.get()
+                            on:input=move |ev| search.set(event_target_value(&ev))
+                            placeholder=move || t_string!(i18n, settings.providers.search_placeholder).to_string()
+                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                    </div>
 
-                    // Preset grid (badges shown inline for configured providers)
-                    <PresetGrid providers=providers selected=selected />
+                    // Subscription login section (auth_kind == oauth rows)
+                    <SubscriptionLoginSection catalog=catalog providers=providers selected=selected search=search />
 
-                    // Custom providers (not matching any preset)
-                    <CustomProvidersList providers=providers selected=selected />
+                    // Configured providers, then the rest of the catalogue.
+                    <PresetGrid catalog=catalog providers=providers selected=selected search=search />
 
                     // Add Custom Provider button
                     <div class="pt-2">
@@ -136,6 +153,7 @@ pub fn ProvidersView() -> impl IntoView {
             <div class="w-7/12 min-w-0 overflow-y-auto aleph-md-detail">
                 <ProviderDetailPanel
                     providers=providers
+                    catalog=catalog
                     selected=selected
                     error=error
                 />
