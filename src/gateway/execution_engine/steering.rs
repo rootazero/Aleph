@@ -266,27 +266,60 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
 /// bound is the configured one.
 pub(super) const MAX_PENDING_STEERING: usize = 16;
 
-/// Count the non-synthetic user messages sitting *after* the last assistant
-/// message in `events` — the steering burst already injected into this run that
-/// the model has not yet answered.
+/// Count the non-synthetic user messages sitting after this run's *prompt
+/// boundary* in `events` — the steering burst already injected into the running
+/// loop that the model has not yet answered.
 ///
 /// Mirrors the harness follow-up predicate
 /// ([`crate::harness::agent::AgentHarness::has_unanswered_user_message`]) but
-/// from the gateway side, which has no access to the harness's prompt-boundary
-/// watermark and so uses the last assistant turn as the boundary. Returns `0`
-/// before any assistant turn has run: the loop is still processing its opening
-/// prompt, so there is no prior preamble-bearing steering injection to coalesce
-/// against, and the original task prompt must not be miscounted as a steering
-/// message. Pure and positional (R10-safe): no intent or relevance judgement,
-/// only the log's shape.
+/// from the gateway side, which has no access to the harness's `last_prompt_seq`
+/// watermark and so reconstructs the boundary from the log's shape. Pure and
+/// positional (R10-safe): no intent or relevance judgement.
+///
+/// # The boundary is the LATER of two events, and the second one is load-bearing
+///
+/// * the last `AssistantMessage` — everything before it has been answered;
+/// * the last [`SessionEvent::RunStarted`] — the marker the harness bridge
+///   emits **after** `session_seed` appends the run's opening user message and
+///   before the first Think.
+///
+/// Without the second, the message that *started the current run* is counted as
+/// a steering message for the whole of the run's first provider call — seconds
+/// on a fast model, a minute on a slow one, and precisely the window in which a
+/// user is most likely to add "oh, and also…". Two things went wrong there:
+///
+/// * **coalescing inverted.** [`try_inject_steering`] suppresses the scratchpad
+///   reconcile preamble when `pending > 0` ("an earlier message in this burst
+///   already carries it"). With the seed counted, the *first* steer of a run
+///   looked like the second and lost the preamble — the opposite of the rule.
+/// * **the cap was off by one**, bounding 15 injected steers instead of the
+///   configured 16.
+///
+/// This function's own doc has always said the opening prompt "must not be
+/// miscounted as a steering message", and the bare `return 0` implemented that
+/// for the first run of a session only — on every later run there *is* a
+/// preceding assistant turn, so the boundary fell behind the new seed. Stating
+/// the intent was not the same as covering it.
+///
+/// `RunStarted` cannot mislead in the other direction: per-session mutual
+/// exclusion means it is only ever appended while no run is live, so it can
+/// never move the boundary out from under a burst that a running loop is
+/// carrying. That is also why [`drains_steering_burst`] stays assistant-only —
+/// see its doc.
+///
+/// Falls back to `0` when the log holds neither boundary event (a surface that
+/// emits no `RunStarted`, e.g. the L0 fast path): the same fail-open posture as
+/// before, never a false positive.
 pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
-    let Some(last_assistant) = events
-        .iter()
-        .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-    else {
+    let Some(boundary) = events.iter().rposition(|r| {
+        matches!(
+            r.event,
+            SessionEvent::AssistantMessage { .. } | SessionEvent::RunStarted { .. }
+        )
+    }) else {
         return 0;
     };
-    events[last_assistant + 1..]
+    events[boundary + 1..]
         .iter()
         .filter(|r| matches!(&r.event, SessionEvent::UserMessage { synthetic, .. } if !*synthetic))
         .count()
@@ -295,10 +328,17 @@ pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
 /// Does appending `event` to the session log drain the un-consumed steering
 /// burst — i.e. reset [`count_pending_steering`] to zero?
 ///
-/// Derived from that function's boundary rather than restated: it counts the
-/// non-synthetic user messages *after the last assistant message*, so an
-/// assistant message is exactly the event that empties the count. Whoever moves
-/// that boundary has to move this with it, and
+/// Derived from that function's boundary rather than restated, and narrower on
+/// purpose. The count's boundary is the later of the last assistant turn and
+/// the last `RunStarted`; this predicate asks a strictly smaller question —
+/// *which newly appended event moves that boundary forward **while a run is
+/// live**?* Per-session mutual exclusion means a `RunStarted` is only ever
+/// appended when no run is live, so it can never drain a burst a running loop
+/// is carrying, and a lane waiter that would care about it is already served by
+/// `notify_slot_free` on the previous run's release. An assistant message is
+/// therefore exactly the event that empties a live count.
+///
+/// Whoever moves the *live* half of that boundary has to move this with it, and
 /// `the_drain_predicate_agrees_with_the_count_it_resets` fails if they drift.
 fn drains_steering_burst(event: &SessionEvent) -> bool {
     matches!(event, SessionEvent::AssistantMessage { .. })
@@ -338,6 +378,46 @@ pub(crate) fn wake_lane_if_burst_drained(session_key: &str, event: &SessionEvent
 /// A request that never took a ticket (loop tick, goal continuation, delegated
 /// child, the OpenAI-compat surface) matches nothing in the lane and the mark
 /// is a no-op — the same fail-open posture as `busy_queue::waiting_since`.
+/// Complete a successful injection: wake whatever on this session is
+/// deliberately asleep, then say so. Always returns `true` — the "injected"
+/// answer [`try_inject_steering`] gives its caller, and the mirror image of
+/// [`defer_for_backpressure`]'s `false`.
+///
+/// # Why the wake edge is here and not left inline
+///
+/// The running loop reads the log at its next turn boundary, and that boundary
+/// is milliseconds away — unless the turn's Act phase is parked inside a tool
+/// that waits on purpose (`subagent{action:"wait"}` up to 600 s,
+/// `bash{process_action:"wait"}` up to 170 s). For that whole window the
+/// message above is durably written, the caller was told `HandledInline`, and
+/// nothing happens. [`crate::session::steer_signal`] is what those parks select
+/// on, and this is its only production producer — see that module's doc for why
+/// one producer is structural rather than lucky, and
+/// `note_steer_has_exactly_one_production_call_site` for the guard.
+///
+/// # Why it is split out
+///
+/// Same reason [`defer_for_backpressure`] is: this arm sits behind a live
+/// `Orchestrator` and a real session append, so anything left inline is only
+/// ever exercised in production — which is exactly how the backpressure wake
+/// edge shipped without one at all. Split out, it is asserted by its EFFECT
+/// (`a_successful_injection_wakes_a_tool_parked_on_that_session`): a watch on
+/// this session wakes, and a watch on a neighbouring session does not.
+fn accept_injection(session_key: &SessionKey, new_run_id: &str) -> bool {
+    crate::session::steer_signal::note_steer(session_key);
+    // Log new_run_id so an operator can correlate a deferred steering message
+    // with the target run if the sibling leaves Running in the
+    // find_target→emit window (then only the sibling's Completed-only teardown
+    // rescue re-drives it; a Cancelled/Failed sibling defers the message to the
+    // next user turn — never dropped, but otherwise opaque).
+    tracing::info!(
+        session = %session_key.to_key_string(),
+        new_run_id = %new_run_id,
+        "mid-loop steering: injected user message into running loop",
+    );
+    true
+}
+
 fn defer_for_backpressure(session_key: &str, run_id: &str, pending: usize, cap: usize) -> bool {
     crate::gateway::busy_queue::mark_awaiting_burst_drain(session_key, run_id);
     tracing::warn!(
@@ -527,6 +607,16 @@ pub(super) async fn build_steering_rescue_request(
 /// already torn down (no live loop to continue) does it defer to the next
 /// interaction, when `get_events` returns it alongside the next user turn. It
 /// is never dropped.
+///
+/// # Reaching a turn that is asleep
+///
+/// "Next turn boundary" is milliseconds away unless the Act phase is sitting
+/// inside a tool that parks on purpose — up to 600 s for `subagent` `wait`,
+/// 170 s for `bash` `wait`. Appending the event does not shorten that sleep,
+/// so a successful injection is also announced on
+/// [`crate::session::steer_signal`], which those parks select on alongside
+/// their cancel token. The message is answered either way; the edge is what
+/// decides whether that happens now or ten minutes from now.
 pub(super) async fn try_inject_steering(
     enabled: bool,
     max_pending: usize,
@@ -648,19 +738,7 @@ pub(super) async fn try_inject_steering(
         .emit_event(&session_id, event)
         .await
     {
-        Ok(_) => {
-            // Log new_run_id so an operator can correlate a deferred steering
-            // message with the target run if the sibling leaves Running in the
-            // find_target→emit window (then only the sibling's Completed-only
-            // teardown rescue re-drives it; a Cancelled/Failed sibling defers the
-            // message to the next user turn — never dropped, but otherwise opaque).
-            tracing::info!(
-                session = %request.session_key.to_key_string(),
-                new_run_id = %new_run_id,
-                "mid-loop steering: injected user message into running loop",
-            );
-            true
-        }
+        Ok(_) => accept_injection(&request.session_key, new_run_id),
         Err(e) => {
             tracing::warn!(
                 session = %request.session_key.to_key_string(),
@@ -1038,6 +1116,62 @@ mod tests {
         );
     }
 
+    fn rec_run_started() -> SessionEventRecord {
+        SessionEventRecord {
+            seq: 0,
+            created_at_ms: now_ms(),
+            event: SessionEvent::RunStarted {
+                run_id: uuid::Uuid::new_v4().to_string(),
+                at: now_ms(),
+                project_root: None,
+            },
+        }
+    }
+
+    /// Round-10 — the run's own opening message is not a steering message, on
+    /// **every** run and not merely the first one on a session.
+    ///
+    /// `pending_is_zero_before_any_assistant_turn` above covers the first run
+    /// (no assistant turn exists, so the boundary search finds nothing). On the
+    /// second and later runs there IS a preceding assistant turn, so the old
+    /// boundary fell behind the new seed and counted it — for the whole of that
+    /// run's first provider call. Two visible consequences, both silent:
+    /// the *first* steer of the run looked like the second and lost the
+    /// scratchpad reconcile preamble, and the burst cap bound N-1.
+    #[test]
+    fn a_later_runs_seed_prompt_is_not_counted_as_a_steer() {
+        // Turn 1 answered, then turn 2 starts. Nothing has been steered yet.
+        let fresh = [
+            rec_user("task-1", false),
+            rec_run_started(),
+            rec_assistant("done"),
+            rec_user("task-2", false),
+            rec_run_started(),
+        ];
+        assert_eq!(
+            count_pending_steering(&fresh),
+            0,
+            "the message that started this run is what the run is answering, \
+             not a steer waiting to be answered"
+        );
+
+        // ...and the first real steer of that run is its first, so the
+        // reconcile preamble applies to it.
+        let mut steered = fresh.to_vec();
+        steered.push(rec_user("actually, also do X", false));
+        assert_eq!(count_pending_steering(&steered), 1);
+    }
+
+    /// The narrower half of the same boundary: `RunStarted` is only ever
+    /// appended while no run is live (per-session mutual exclusion), so it must
+    /// not be treated as an event that drains a LIVE burst. Widening
+    /// `drains_steering_burst` alongside the count would wake lane waiters on
+    /// an edge that can never help them.
+    #[test]
+    fn a_run_start_is_not_a_live_burst_drain() {
+        assert!(!drains_steering_burst(&rec_run_started().event));
+    }
+
     #[test]
     fn pending_counts_user_after_last_assistant() {
         let one = [
@@ -1129,6 +1263,39 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_millis(500), &mut parked)
             .await
             .expect("after the defer, the drained burst must wake the message it deferred");
+    }
+
+    /// Round-10 — the success arm's producer half, asserted the same way and
+    /// for the same reason: a wake edge that only ever runs in production is a
+    /// wake edge nobody notices is missing.
+    ///
+    /// Two assertions, because the load-bearing part is not "an edge fired" but
+    /// "it fired on the INTERRUPTING request's session". Both sides derive the
+    /// registry key inside `steer_signal`, and this is what proves the producer
+    /// hands it the right `SessionKey` in the first place.
+    #[tokio::test]
+    async fn a_successful_injection_wakes_a_tool_parked_on_that_session() {
+        use crate::session::steer_signal;
+
+        let steered = SessionKey::peer("main", "steer-accept-wakes");
+        let bystander = SessionKey::peer("main", "steer-accept-bystander");
+        let mut parked = steer_signal::watch_session(&steered);
+        let mut elsewhere = steer_signal::watch_session(&bystander);
+
+        assert!(
+            accept_injection(&steered, "run-accept"),
+            "a successful injection reports `injected` to try_inject_steering"
+        );
+
+        tokio::time::timeout(std::time::Duration::from_millis(500), parked.steered())
+            .await
+            .expect("a tool parked on the steered session must be woken");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), elsewhere.steered())
+                .await
+                .is_err(),
+            "a park on another session must be left alone"
+        );
     }
 
     #[test]

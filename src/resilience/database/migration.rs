@@ -509,6 +509,74 @@ fn extract_legacy_trace_text(content_json: &str) -> String {
     }
 }
 
+
+/// Migrate to add `owner_user_id` column to `group_chat_sessions`.
+///
+/// Group chat sessions were originally created without persisting the P1
+/// ownership stamp that `GroupChatSession::new` reads from
+/// `crate::scope::current_scope()`. The stamp was held in memory only and
+/// silently lost on daemon restart, breaking
+/// `stamped_owner_visible`-style visibility queries that fall through to the
+/// operator-default branch when `owner_user_id IS NULL`.
+///
+/// This migration adds the column if absent. Existing rows are backfilled with
+/// `NULL`, which keeps the operator-default visibility behavior for legacy
+/// sessions — the same behavior they had before, so this is non-breaking.
+///
+/// # Safety
+/// - Uses savepoint for atomic migration
+/// - Idempotent: skips if column already exists
+pub fn migrate_add_group_chat_owner(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_group_chat_owner")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to begin group_chat_owner migration: {e}"
+            ))
+        })?;
+
+    let column_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('group_chat_sessions') WHERE name='owner_user_id'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_group_chat_owner") {
+                tracing::warn!(error = %rollback_err, "Rollback of migration_group_chat_owner failed");
+            }
+            AlephError::config(format!(
+                "Failed to check group_chat_sessions.owner_user_id column: {e}"
+            ))
+        })?;
+
+    if column_exists == 0 {
+        conn.execute_batch(
+            "ALTER TABLE group_chat_sessions ADD COLUMN owner_user_id TEXT",
+        )
+        .map_err(|e| {
+            if let Err(rollback_err) = conn.execute_batch("ROLLBACK TO migration_group_chat_owner") {
+                tracing::warn!(error = %rollback_err, "Rollback of migration_group_chat_owner failed");
+            }
+            AlephError::config(format!(
+                "Failed to add owner_user_id column to group_chat_sessions: {e}"
+            ))
+        })?;
+
+        tracing::info!("Added owner_user_id column to group_chat_sessions");
+    } else {
+        tracing::debug!("group_chat_sessions.owner_user_id already exists, skipping");
+    }
+
+    conn.execute_batch("RELEASE migration_group_chat_owner")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to commit group_chat_owner migration: {e}"
+            ))
+        })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

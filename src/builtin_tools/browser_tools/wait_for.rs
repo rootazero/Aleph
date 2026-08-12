@@ -71,6 +71,27 @@ pub struct BrowserWaitForOutput {
     pub success: bool,
     pub found: bool,
     pub message: Option<String>,
+    /// Set only when a mid-run steer cut the wait short — see
+    /// [`crate::session::steer_signal`].
+    ///
+    /// It exists because `found` is a `bool` and therefore cannot say "I don't
+    /// know". On every other path `found: false` is a **verdict** ("the
+    /// condition did not hold within the window"); on this one we stopped
+    /// looking, so reporting the same shape unqualified would be the
+    /// "a refusal must not be read as an absence" mistake in tool-output form —
+    /// the model would conclude the text never appeared and act on it.
+    ///
+    /// Skipped when false, so every pre-existing path stays byte-identical on
+    /// the wire.
+    #[serde(skip_serializing_if = "is_false")]
+    pub interrupted_by_user: bool,
+}
+
+/// `skip_serializing_if` predicate for a plain `bool` field. `std::ops::Not::not`
+/// cannot be used directly: serde hands the predicate a `&bool`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Clone)]
@@ -120,6 +141,33 @@ fn resolve_condition(args: &BrowserWaitForArgs) -> std::result::Result<WaitCondi
     }
 }
 
+/// The report for a wait a mid-run steer cut short.
+///
+/// Split out because the branch that builds it needs a live browser to reach,
+/// and the load-bearing part of it is not the early return but the **wording**:
+/// `found` is a `bool`, so on this path it has to carry a value it cannot mean.
+/// Everywhere else `found: false` is a verdict ("the condition did not hold");
+/// here we stopped looking. A model that reads it as a verdict concludes the
+/// text never appeared and acts on that — the tool-output form of "a refusal
+/// must not be read as an absence". So the payload says so twice: a dedicated
+/// `interrupted_by_user` flag, and a message that names the trap explicitly.
+fn interrupted_output(condition: &WaitCondition, timeout_ms: u64) -> BrowserWaitForOutput {
+    BrowserWaitForOutput {
+        success: true,
+        // NOT a verdict — see this function's doc and `interrupted_by_user`.
+        found: false,
+        message: Some(format!(
+            "The user sent new input, so this wait returned early instead of using its \
+             full {timeout_ms}ms window — their message is in your context, read it \
+             before deciding what to do next. {} was NOT observed either way: \
+             `found: false` here means \"stopped looking\", not \"absent\". Re-issue the \
+             same wait if the condition still matters.",
+            describe_condition(condition),
+        )),
+        interrupted_by_user: true,
+    }
+}
+
 /// Human-readable "what was waited on" for the output message.
 fn describe_condition(condition: &WaitCondition) -> String {
     match condition {
@@ -152,6 +200,7 @@ impl AlephTool for BrowserWaitForTool {
                     success: false,
                     found: false,
                     message: Some(message),
+                    interrupted_by_user: false,
                 });
             }
         };
@@ -159,9 +208,46 @@ impl AlephTool for BrowserWaitForTool {
         // would overflow the polling backend's `Instant + Duration` (panic) and
         // pin a tab indefinitely.
         let timeout_ms = clamp_timeout(args.timeout_ms);
+
+        // A park owes an arm to a mid-loop steer as well as to the cancel
+        // token — for up to `MAX_TIMEOUT_MS` (120 s) this wait *is* the running
+        // loop's turn, so the message the user just sent (already written to
+        // the session log, already reported as delivered) would sit unread
+        // until it ends. See `crate::session::steer_signal`.
+        //
+        // Armed before the backend handshake so a steer landing during that is
+        // remembered rather than dropped.
+        //
+        // # Why this races and drops, where `wait_visual` hooks its own loop
+        //
+        // `backend.wait_for` is ONE opaque call: the default impl polls
+        // internally (`wait_probe::poll_wait_for`) and the Chrome-MCP `Text`
+        // arm hands the whole wait to the MCP server. There is no loop of ours
+        // to hook, so the only seam is to drop the future — which is what
+        // `SteerWatch::race` does, and why it is a named, unit-tested
+        // combinator rather than an inline `select!` nobody can reach in a test
+        // (this call site is unreachable without a live browser).
+        //
+        // Dropping is safe here because it is not a new kind of event: the tool
+        // dispatch chokepoint already drops this exact future when the user
+        // presses stop (`tools::adapters::registry_adapter::execute` selects on
+        // the cancel token and relies on drop propagating downward). If a drop
+        // mid-request could wedge the MCP transport, `/stop` on a
+        // `browser_wait_for` would wedge it today — and the driver's
+        // `is_transport_error` path already tears the session down and rebuilds
+        // it on the next call. This adds a second trigger for an existing drop,
+        // not a new drop site.
+        let mut steer = crate::session::steer_signal::watch_current_turn();
+
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => {
-                match backend.wait_for(&tab_id, &condition, timeout_ms).await {
+                let settled = steer
+                    .race(backend.wait_for(&tab_id, &condition, timeout_ms))
+                    .await;
+                let Some(outcome) = settled else {
+                    return Ok(interrupted_output(&condition, timeout_ms));
+                };
+                match outcome {
                     Ok(found) => Ok(BrowserWaitForOutput {
                         success: true,
                         found,
@@ -170,11 +256,13 @@ impl AlephTool for BrowserWaitForTool {
                             describe_condition(&condition),
                             if found { "found" } else { "not found" }
                         )),
+                        interrupted_by_user: false,
                     }),
                     Err(e) => Ok(BrowserWaitForOutput {
                         success: false,
                         found: false,
                         message: Some(format!("Wait failed: {e}")),
+                        interrupted_by_user: false,
                     }),
                 }
             }
@@ -182,6 +270,7 @@ impl AlephTool for BrowserWaitForTool {
                 success: false,
                 found: false,
                 message: Some(format!("{e}")),
+                interrupted_by_user: false,
             }),
         }
     }
@@ -277,6 +366,54 @@ mod tests {
         assert!(err.contains("mutually exclusive"), "got: {err}");
         let err = resolve_condition(&args(Some("t"), Some("g"), None, None, None)).unwrap_err();
         assert!(err.contains("mutually exclusive"), "got: {err}");
+    }
+
+    /// Round-10 — the steered report must not be mistakable for a verdict.
+    ///
+    /// The wiring itself (`SteerWatch::race` around `backend.wait_for`) is
+    /// covered where it is testable — `steer_signal`'s `race_*` tests — because
+    /// the call site needs a live browser. What is testable here, and what
+    /// actually costs something when it is wrong, is the payload: `found` is a
+    /// `bool` and on this one path it means "stopped looking", not "absent".
+    #[test]
+    fn an_interrupted_wait_does_not_report_a_verdict() {
+        let out = interrupted_output(&WaitCondition::Text("Loading".into()), 120_000);
+        assert!(out.success, "nothing failed; we stopped looking");
+        assert!(
+            out.interrupted_by_user,
+            "the flag is the only field that can say `found` is not a verdict"
+        );
+        assert!(!out.found);
+        let message = out.message.expect("message present");
+        assert!(
+            message.contains("stopped looking"),
+            "the message must name the trap, not just describe the interruption: {message}"
+        );
+        assert!(
+            message.contains("Text 'Loading'"),
+            "it must still say WHAT was being waited on: {message}"
+        );
+    }
+
+    /// The flag is skipped when false, so every pre-existing path stays
+    /// byte-identical on the wire — a new always-present key in a tool output
+    /// is a cost paid on every call for one rare branch.
+    #[test]
+    fn the_interrupted_flag_is_absent_from_an_ordinary_report() {
+        let ordinary = BrowserWaitForOutput {
+            success: true,
+            found: true,
+            message: None,
+            interrupted_by_user: false,
+        };
+        let json = serde_json::to_value(&ordinary).expect("serializes");
+        assert!(
+            json.get("interrupted_by_user").is_none(),
+            "unset flag must not reach the wire: {json}"
+        );
+        let steered = interrupted_output(&WaitCondition::Time(500), 500);
+        let json = serde_json::to_value(&steered).expect("serializes");
+        assert_eq!(json["interrupted_by_user"], serde_json::Value::Bool(true));
     }
 
     #[tokio::test]

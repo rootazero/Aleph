@@ -2320,6 +2320,213 @@ async fn wait_cancelled_carries_unknown_request_ids() {
     }
 }
 
+/// Scope `body` inside a `TURN_CONTEXT` for `session`, the way
+/// `ScopedToolService::execute` does in production — which is where the wait's
+/// steer watch reads its session from.
+async fn in_turn_on<T>(session: &crate::routing::session_key::SessionKey, body: T) -> T::Output
+where
+    T: std::future::Future,
+{
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+    TURN_CONTEXT
+        .scope(
+            TurnContext {
+                session_key: session.clone(),
+                run_id: String::new(),
+                channel_id: String::new(),
+                conversation_id: String::new(),
+                caller_role: None,
+                channel_tool_permissions: None,
+                unattended: false,
+            },
+            body,
+        )
+        .await
+}
+
+/// Round-10 — a parked `wait` must also observe a **mid-loop steer**, not only
+/// the cancel token (codex `WaitOutcome::Steered` parity).
+///
+/// The message is already durably in the session log and the caller was told
+/// the send succeeded; what the steer cannot do on its own is shorten this
+/// park, and the park is the turn. Without the arm this call sits for its full
+/// 600 s window while the user's correction goes unread — no error, no failing
+/// test, just an agent that ignores its user for ten minutes.
+///
+/// Asserted against a wall clock and on the **consumer** end (the wait really
+/// came back, and came back saying *why*): "the signal is published" is exactly
+/// the kind of wiring that can be present and still not connected. Deleting the
+/// `steer.steered()` arm from `loop_tool.rs` makes this hang to the 10 s bound
+/// and fail.
+#[tokio::test]
+async fn wait_returns_promptly_when_the_user_steers() {
+    use crate::routing::session_key::SessionKey;
+
+    let session = SessionKey::peer("main", "steer-wakes-wait");
+    let tracker = make_tracker();
+    register_owned(&tracker, "slow-child", "sess-steer");
+    let tool = tool_for_session(tracker, "sess-steer");
+
+    let steered = session.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        crate::session::steer_signal::note_steer(&steered);
+    });
+
+    let started = std::time::Instant::now();
+    // Bounded, not merely measured: with the arm removed this call parks for
+    // its full 600 s, and a test that WEDGES for ten minutes costs the whole
+    // suite its signal — a red test has to be red quickly.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        in_turn_on(
+            &session,
+            tool.execute(
+                json!({ "action": "wait", "request_id": "slow-child", "timeout_secs": 600 }),
+                CancellationToken::new(),
+            ),
+        ),
+    )
+    .await
+    .expect("a steered wait must not run out its window");
+    let elapsed = started.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+    match result {
+        // Success, not Error: nothing failed and nothing was cancelled.
+        ToolResult::Success { output } => {
+            assert_eq!(
+                output["status"], "wait_interrupted_by_user",
+                "a steer and a stop ask for opposite things, so they must not \
+                 report the same status"
+            );
+            assert_eq!(output["still_running"][0]["request_id"], "slow-child");
+        }
+        other => unreachable!("expected a steered-wait report, got {other:?}"),
+    }
+}
+
+/// The fan-out arm of the same rule: `wait` over a SET is a second `select!`,
+/// and "I added the arm to the one I was looking at" is how the second half of
+/// a two-site fix goes missing.
+#[tokio::test]
+async fn wait_any_returns_promptly_when_the_user_steers() {
+    use crate::routing::session_key::SessionKey;
+
+    let session = SessionKey::peer("main", "steer-wakes-wait-any");
+    let tracker = make_tracker();
+    register_owned(&tracker, "child-a", "sess-steer-many");
+    register_owned(&tracker, "child-b", "sess-steer-many");
+    let tool = tool_for_session(tracker, "sess-steer-many");
+
+    let steered = session.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        crate::session::steer_signal::note_steer(&steered);
+    });
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        in_turn_on(
+            &session,
+            tool.execute(
+                json!({
+                    "action": "wait",
+                    "request_ids": ["child-a", "child-b"],
+                    "timeout_secs": 600,
+                }),
+                CancellationToken::new(),
+            ),
+        ),
+    )
+    .await
+    .expect("a steered fan-out wait must not run out its window");
+    match result {
+        ToolResult::Success { output } => {
+            assert_eq!(output["status"], "wait_interrupted_by_user");
+            let mut still: Vec<&str> = output["still_running"]
+                .as_array()
+                .expect("still_running is an array")
+                .iter()
+                .map(|r| r["request_id"].as_str().expect("request_id is a string"))
+                .collect();
+            still.sort_unstable();
+            assert_eq!(
+                still,
+                vec!["child-a", "child-b"],
+                "a steer stops the WAIT, never the children"
+            );
+        }
+        other => unreachable!("expected a steered-wait report, got {other:?}"),
+    }
+}
+
+/// A steer on somebody else's session must not cut this wait short. The watch
+/// is keyed by the turn's session, and a shared process-global registry is
+/// exactly where that keying quietly degrades into "wake everyone".
+#[tokio::test]
+async fn a_steer_on_another_session_does_not_cut_this_wait_short() {
+    use crate::routing::session_key::SessionKey;
+
+    let mine = SessionKey::peer("main", "steer-scoped-mine");
+    let theirs = SessionKey::peer("main", "steer-scoped-theirs");
+    let tracker = make_tracker();
+    register_owned(&tracker, "slow-child", "sess-steer-scoped");
+    let tool = tool_for_session(tracker, "sess-steer-scoped");
+
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        crate::session::steer_signal::note_steer(&theirs);
+    });
+
+    // Short window: the assertion is that we reach the TIMEOUT report rather
+    // than the steered one, so the window has to be short enough to wait out.
+    let result = in_turn_on(
+        &mine,
+        tool.execute(
+            json!({ "action": "wait", "request_id": "slow-child", "timeout_secs": 1 }),
+            CancellationToken::new(),
+        ),
+    )
+    .await;
+    match result {
+        ToolResult::Success { output } => assert_eq!(
+            output["status"], "still_running",
+            "another session's steer must leave this wait alone"
+        ),
+        other => unreachable!("expected a timed-out wait report, got {other:?}"),
+    }
+}
+
+/// An **inert** watch — no `TURN_CONTEXT`, i.e. every non-gateway run (cron,
+/// internal, tests) — must leave the park alone.
+///
+/// The inert arm is `pending()`, and the tempting one-character alternative
+/// ("nothing to watch, so treat it as already steered") would make every
+/// headless `wait` return instantly with a report about a user who does not
+/// exist, turning the fan-out drain loop into a hot loop. Cheap to write, silent
+/// to miss, so it gets its own test rather than a comment.
+#[tokio::test]
+async fn an_unscoped_wait_still_parks_for_its_window() {
+    let tracker = make_tracker();
+    register_owned(&tracker, "slow-child", "sess-steer-inert");
+    let tool = tool_for_session(tracker, "sess-steer-inert");
+
+    // No `in_turn_on`: this is the shape a cron / internal run has.
+    let result = tool
+        .execute(
+            json!({ "action": "wait", "request_id": "slow-child", "timeout_secs": 1 }),
+            CancellationToken::new(),
+        )
+        .await;
+    match result {
+        ToolResult::Success { output } => assert_eq!(
+            output["status"], "still_running",
+            "an unscoped wait must time out normally, not report a steer"
+        ),
+        other => unreachable!("expected a timed-out wait report, got {other:?}"),
+    }
+}
+
 /// Cancelling a background sub-agent is the parent deciding its outcome, so the
 /// proactive announce must stay quiet about it — otherwise a whole fresh parent
 /// turn is spent reporting the death of a child the parent itself ordered.
