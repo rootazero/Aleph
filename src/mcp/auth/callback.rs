@@ -217,6 +217,17 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
         }
     };
 
+    // Strict state validation BEFORE the constant-time compare. The spec
+    // pins the state to the URL-safe base64 alphabet we generated; a raw
+    // value that contains anything else is a malformed callback (the
+    // sender is not the authorization server we started the flow with).
+    // Treating it as a successful CSRF match would let a hostile
+    // redirect URL slip past the strict equality check.
+    if !is_valid_state(&state) {
+        send_error_response(&mut stream, 400, "Malformed state parameter").await;
+        return None;
+    }
+
     // Send success response
     send_success_response(
         &mut stream,
@@ -228,6 +239,22 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
     let iss = params.get("iss").map(|s| url_decode(s));
 
     Some(CallbackResult { iss, code, state })
+}
+
+/// Strict validation of the OAuth `state` parameter.
+///
+/// The spec pins the state to the URL-safe base64 alphabet we generated
+/// (see `provider::generate_state`). A raw value that contains anything
+/// else is a malformed callback (the sender is not the authorization server
+/// we started the flow with). Rejecting it before the constant-time
+/// compare stops a hostile redirect URL from slipping past the strict
+/// equality check by varying the malformed-character set.
+fn is_valid_state(state: &str) -> bool {
+    !state.is_empty()
+        && state.len() >= 22
+        && state
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Simple URL decoding (percent-decoding)
@@ -397,6 +424,21 @@ mod tests {
 
         assert_eq!(result.code, "test_code");
         assert_eq!(result.state, "test_state");
+    }
+
+    #[test]
+    fn state_validation_rejects_malformed_values() {
+        // The spec pins the state to URL-safe base64. Anything else is a
+        // malformed callback and must be rejected before the CSRF compare.
+        assert!(is_valid_state("test_state_1234567890abcd"));
+        assert!(is_valid_state("a-b-c-d_e-f-g-h-i-j-k-l-m-n-o-p"));
+        assert!(!is_valid_state(""));
+        assert!(!is_valid_state("short"));
+        assert!(!is_valid_state("has space"));
+        assert!(!is_valid_state("has/slash"));
+        assert!(!is_valid_state("has+plus"));
+        assert!(!is_valid_state("has%percent"));
+        assert!(!is_valid_state("has=equals"));
     }
 
     #[tokio::test]
