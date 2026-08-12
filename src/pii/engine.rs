@@ -52,6 +52,12 @@ pub struct FilterResult {
     pub blocked_count: usize,
     /// Number of PII matches that were warned (not replaced)
     pub warned_count: usize,
+    /// Number of PII matches that were detected but skipped due to
+    /// invalid offsets (the offsets returned by `regex.find_iter` were
+    /// outside the text or on a non-char boundary). Non-zero indicates
+    /// a bug in offset tracking or upstream mutation; the audit pipeline
+    /// (`runtime_guard`) can use this as a triage signal.
+    pub skipped_count: usize,
 }
 
 impl FilterResult {
@@ -61,6 +67,7 @@ impl FilterResult {
             text: text.to_string(),
             blocked_count: 0,
             warned_count: 0,
+            skipped_count: 0,
         }
     }
 
@@ -352,6 +359,7 @@ fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
         let mut result = text.to_string();
         let mut blocked_count = 0;
         let mut warned_count = 0;
+        let mut skipped_count = 0;
 
         for detection in &sorted {
             let action = Self::action_for_rule(config, &self.custom_rule_actions, &detection.rule_name);
@@ -377,6 +385,7 @@ fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
                             "PII detected and blocked before API call"
                         );
                     } else {
+                        skipped_count += 1;
                         warn!(
                             rule = %detection.rule_name,
                             start = detection.start,
@@ -404,6 +413,7 @@ fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
             text: result,
             blocked_count,
             warned_count,
+            skipped_count,
         }
     }
 
@@ -642,6 +652,42 @@ mod tests {
         let engine = PiiEngine::new(config.clone());
         let result = engine.filter("Phone: 13812345678");
         assert!(result.text.contains("[PHONE]"));
+    }
+
+    #[test]
+    fn test_init_idempotent_warns_and_keeps_first_config() {
+        // `PiiEngine::init` is intended to be called once at boot. A
+        // second call must NOT replace the engine (that would surprise
+        // every concurrent reader of the global) — only log a warning.
+        // This test guards that contract.
+        let mut first = PrivacyConfig::default();
+        first.custom_rules.push(crate::config::types::CustomPiiRule {
+            name: "init_test_first".to_string(),
+            pattern: r"INIT_FIRST_[A-Z0-9]{4}".to_string(),
+            placeholder: "[FIRST]".to_string(),
+            severity: crate::config::types::CustomPiiSeverity::High,
+            action: PiiAction::Block,
+        });
+        PiiEngine::init(first);
+
+        let mut second = PrivacyConfig::default();
+        second.custom_rules.push(crate::config::types::CustomPiiRule {
+            name: "init_test_second".to_string(),
+            pattern: r"INIT_SECOND_[A-Z0-9]{4}".to_string(),
+            placeholder: "[SECOND]".to_string(),
+            severity: crate::config::types::CustomPiiSeverity::High,
+            action: PiiAction::Block,
+        });
+        PiiEngine::init(second);
+
+        // The first config must still be live: the first rule matches,
+        // the second does not.
+        let engine = PiiEngine::global().expect("global engine should be set");
+        let guard = engine.read().unwrap_or_else(|e| e.into_inner());
+        let hit_first = guard.filter("hit INIT_FIRST_AB12");
+        assert!(hit_first.text.contains("[FIRST]"));
+        let miss_second = guard.filter("hit INIT_SECOND_AB12");
+        assert_eq!(miss_second.blocked_count, 0);
     }
 
     #[test]

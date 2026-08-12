@@ -74,15 +74,15 @@ impl PhoneRule {
         false
     }
 
-    /// Check if match is in a timestamp context (surrounding ~80 chars)
+    /// Check if match is in a timestamp context (surrounding ~120 chars)
     fn is_timestamp_context(text: &str, start: usize) -> bool {
         // Snap to valid UTF-8 character boundaries to avoid panicking
         // on multi-byte characters (e.g. Chinese text).
-        let mut ctx_start = start.saturating_sub(40);
+        let mut ctx_start = start.saturating_sub(60);
         while ctx_start > 0 && !text.is_char_boundary(ctx_start) {
             ctx_start -= 1;
         }
-        let mut ctx_end = (start + 40).min(text.len());
+        let mut ctx_end = (start + 60).min(text.len());
         while ctx_end < text.len() && !text.is_char_boundary(ctx_end) {
             ctx_end += 1;
         }
