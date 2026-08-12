@@ -271,4 +271,29 @@ mod tests {
         session.end();
         assert_eq!(session.status, GroupChatStatus::Ended);
     }
+
+    /// Regression test for the audit finding: `add_turn` used to silently
+    /// accept a non-monotonic round, leaving `current_round` ahead of a
+    /// stray row in `history`. The replays (ORDER BY round, sequence) would
+    /// float the stray row to the top.
+    #[test]
+    fn test_add_turn_rejects_non_monotonic_round() {
+        let mut session = make_session();
+        session.add_turn(
+            2,
+            Speaker::Persona { id: "a".into(), name: "A".into() },
+            "round 2 content".into(),
+        );
+        assert_eq!(session.history.len(), 1);
+        assert_eq!(session.current_round, 2);
+
+        session.add_turn(
+            1,
+            Speaker::Persona { id: "b".into(), name: "B".into() },
+            "regressed to round 1".into(),
+        );
+        // The out-of-order turn is dropped; history + current_round unchanged.
+        assert_eq!(session.history.len(), 1);
+        assert_eq!(session.current_round, 2);
+    }
 }

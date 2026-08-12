@@ -446,4 +446,61 @@ mod tests {
         let session = remaining[0].1.lock().await;
         assert_eq!(session.topic, Some("Session B".to_string()));
     }
+
+    /// Regression test: validate inline personas BEFORE resolve() so an
+    /// inline persona's validation error surfaces even when a later source
+    /// is a missing preset.
+    #[tokio::test]
+    async fn test_create_session_inline_validation_before_resolve() {
+        let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
+
+        // First source: invalid inline (empty id). Second source: missing preset.
+        // Pre-fix: resolve() short-circuits on the missing preset and the inline
+        // error is never surfaced. Post-fix: inline validation runs first.
+        let sources = vec![
+            PersonaSource::Inline(crate::group_chat::protocol::Persona {
+                id: String::new(), // empty id -> invalid
+                name: "Bad".into(),
+                system_prompt: "prompt".into(),
+                provider: None,
+                model: None,
+                thinking_level: None,
+            }),
+            PersonaSource::Preset("nonexistent".into()),
+        ];
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        assert!(matches!(result.unwrap_err(), GroupChatError::InvalidPersona(_)));
+    }
+
+    /// Regression test: duplicate persona IDs in the same session are
+    /// rejected. Without this, the coordinator's id-based lookup routes to
+    /// whichever persona appears first, silently misrouting responses.
+    #[tokio::test]
+    async fn test_create_session_rejects_duplicate_persona_ids() {
+        let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
+
+        let sources = vec![
+            PersonaSource::Preset("arch".into()),
+            PersonaSource::Inline(crate::group_chat::protocol::Persona {
+                id: "arch".into(), // duplicate of the preset
+                name: "Shadow Arch".into(),
+                system_prompt: "you are shadow arch".into(),
+                provider: None,
+                model: None,
+                thinking_level: None,
+            }),
+        ];
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        match result.unwrap_err() {
+            GroupChatError::InvalidPersona(msg) => {
+                assert!(
+                    msg.contains("duplicate"),
+                    "error should mention duplicate: {msg}"
+                );
+                assert!(msg.contains("arch"), "error should name the id: {msg}");
+            }
+            other => panic!("expected InvalidPersona, got: {other:?}"),
+        }
+        assert_eq!(orch.all_sessions().len(), 0);
+    }
 }
