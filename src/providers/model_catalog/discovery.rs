@@ -70,19 +70,10 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 static REFRESH_LOCKS: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// One model id as the provider itself reports it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiscoveredModel {
-    /// The id to send on the wire.
-    pub id: String,
-    /// Vendor-supplied label, when the listing carries one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    /// Context window the provider advertises. Only some listings report it;
-    /// `None` means "the provider did not say", not "small".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<u32>,
-}
+// One model as the provider itself reports it. The shape is the wire's:
+// `providers.modelsRefresh` hands these rows straight to a client, so a local
+// copy would be a second definition of the same three fields.
+pub use aleph_protocol::providers::DiscoveredModel;
 
 /// A provider's live inventory, as cached on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

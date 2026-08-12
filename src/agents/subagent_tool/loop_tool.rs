@@ -393,12 +393,28 @@ impl LoopTool for SubagentTool {
                 // W11 — scoped addressing (see CheckStatus).
                 let scope = self.parent_session_id.as_deref();
 
+                // A park owes an arm to EVERY signal whose worst-case latency
+                // it would otherwise become. `cancel` covers "stop"; this
+                // covers "change of plan" — a mid-loop steer lands in the
+                // session log, but the loop only reads that log at its next
+                // turn boundary, and this park IS the turn. Ten minutes of
+                // ignoring the user, with the message durably written and the
+                // client told the send succeeded (codex `WaitOutcome::Steered`
+                // parity; the doc on `wait_cancelled` has cited it since before
+                // this arm existed).
+                //
+                // Armed once here, before either branch and before the first
+                // poll of any of them: the subscription remembers a steer that
+                // lands in the gap, which a bare `Notify` would drop.
+                let mut steer = crate::session::steer_signal::watch_current_turn();
+
                 // Single id → the simple wait (nicer elapsed_secs on timeout).
                 if request_ids.len() == 1 {
                     let request_id = &request_ids[0];
                     let outcome = tokio::select! {
                         biased;
                         () = cancel.cancelled() => return self.wait_cancelled(&request_ids).await,
+                        () = steer.steered() => return self.wait_steered(&request_ids).await,
                         outcome = self.background_tracker.wait(request_id, scope, dur) => outcome,
                     };
                     return match outcome {
@@ -455,6 +471,7 @@ impl LoopTool for SubagentTool {
                 let outcome = tokio::select! {
                     biased;
                     () = cancel.cancelled() => return self.wait_cancelled(&request_ids).await,
+                    () = steer.steered() => return self.wait_steered(&request_ids).await,
                     outcome = self.background_tracker.wait_any(&request_ids, scope, dur) => outcome,
                 };
                 let unknown = self.background_tracker.unknown_ids(&request_ids, scope);
@@ -1465,13 +1482,57 @@ impl SubagentTool {
     /// `wait` parks for up to `MAX_WAIT_TIMEOUT_SECS` (600 s). The park used to
     /// ignore the per-call `CancellationToken` entirely, so a `/stop` — or a
     /// per-tool cancel — landed on a run that then stayed wedged inside the
-    /// sleep for up to ten more minutes. codex's `wait_agent` treats new input
-    /// as a first-class wake reason (`WaitOutcome::Steered`) for the same
-    /// reason: a blocking wait must never outlive the intent to stop.
+    /// sleep for up to ten more minutes. A blocking wait must never outlive the
+    /// intent to stop.
     ///
-    /// # Why this is a Success, not an Error
+    /// codex draws the same rule one notch wider: its `wait_agent` treats new
+    /// *input* as a first-class wake reason too (`WaitOutcome::Steered`),
+    /// because a wait must not outlive a change of plan either. That half is
+    /// [`Self::wait_steered`].
+    async fn wait_cancelled(&self, request_ids: &[String]) -> ToolResult {
+        self.wait_interrupted(
+            request_ids,
+            "wait_interrupted",
+            "The wait was interrupted before any sub-agent finished. The sub-agents \
+             themselves were not cancelled by this — their completions are still \
+             announced to you, and 'check_status' still reads their results.",
+        )
+        .await
+    }
+
+    /// Report a `wait` that was cut short because the user interjected
+    /// mid-run — the other half of the rule [`Self::wait_cancelled`] states
+    /// (codex `WaitOutcome::Steered` parity).
     ///
-    /// Nothing failed. The sub-agents are untouched — the token cancels *this
+    /// The steering message is already in the session log, so the next Think
+    /// reads it as part of the ordinary prompt: nothing has to be restated
+    /// here, and restating it would put a second copy of the user's words in
+    /// the context. The report's whole job is to say *why* the wait returned
+    /// early, so the model does not read a 3-second wait as "everything
+    /// finished instantly".
+    ///
+    /// A distinct `status` from the cancel path on purpose: the two ask for
+    /// opposite things. Cancelled means the turn is going away; steered means
+    /// the turn continues against new instructions — and re-issuing the same
+    /// wait may well be the right call once those instructions are read.
+    async fn wait_steered(&self, request_ids: &[String]) -> ToolResult {
+        self.wait_interrupted(
+            request_ids,
+            "wait_interrupted_by_user",
+            "The user sent new input while this wait was parked, so the wait returned \
+             early. Their message is in your context — read it before deciding what to \
+             do. Nothing was cancelled: the sub-agents are still running, their \
+             completions are still announced to you, and 'wait' or 'check_status' still \
+             reach their results.",
+        )
+        .await
+    }
+
+    /// The shared body of the two interrupted-wait reports.
+    ///
+    /// # Why these are a Success, not an Error
+    ///
+    /// Nothing failed. The sub-agents are untouched — an interrupt ends *this
     /// wait*, not the children (a run-level cancel reaches them through their
     /// own tokens). Reporting a failure here would feed the harness's
     /// consecutive-failure counter and the cross-batch memo a verdict about a
@@ -1484,14 +1545,18 @@ impl SubagentTool {
     /// `request_id`s. The model can see the interrupted state in
     /// `still_running` but had no signal that some of its ids were never
     /// registered at all — it would re-issue the same wait and hit the
-    /// cancel again without learning anything. Mirror the `annotate_unknown`
-    /// pattern the success path uses so the model sees its typo even on
-    /// cancel.
+    /// interrupt again without learning anything. Mirror the `annotate_unknown`
+    /// pattern the success path uses so the model sees its typo either way.
     /// `async` for the durable-recovery lookup below: "unknown" has to mean the
-    /// same thing on the cancel path as on the success path, or the model learns
-    /// one story when its wait completes and a different one when it is
+    /// same thing on the interrupted path as on the success path, or the model
+    /// learns one story when its wait completes and a different one when it is
     /// interrupted.
-    async fn wait_cancelled(&self, request_ids: &[String]) -> ToolResult {
+    async fn wait_interrupted(
+        &self,
+        request_ids: &[String],
+        status: &'static str,
+        note: &'static str,
+    ) -> ToolResult {
         // W11 — scoped addressing, same as the wait it reports on.
         let scope = self.parent_session_id.as_deref();
         let still_running: Vec<Value> = request_ids
@@ -1509,9 +1574,9 @@ impl SubagentTool {
         let unknown = self.background_tracker.unknown_ids(request_ids, scope);
         let recovered = self.resolve_forgotten(&unknown, scope).await;
         let mut output = json!({
-            "status": "wait_interrupted",
+            "status": status,
             "still_running": still_running,
-            "note": "The wait was interrupted before any sub-agent finished. The sub-agents themselves were not cancelled by this — their completions are still announced to you, and 'check_status' still reads their results.",
+            "note": note,
         });
         annotate_unknown(&mut output, &unknown, &recovered);
         ToolResult::Success { output }

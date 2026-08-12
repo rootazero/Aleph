@@ -8,6 +8,8 @@
 //! Existing entries keep their 4-field shape; new fields default safely and
 //! are opt-in via the `with_*` const builders.
 
+use aleph_protocol::providers::{ModelSource, RosterModel};
+
 use crate::providers::metadata::{Modality, ProviderMetadata};
 
 mod registry;
@@ -297,18 +299,76 @@ pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// background jobs, not a failover candidate for the main loop.
 #[must_use]
 pub fn model_ladder(name: &str, base: Vec<String>, operator_base_url: Option<&str>) -> Vec<String> {
-    let mut models = base;
+    model_roster(
+        name,
+        base,
+        ModelSource::Configured,
+        &[],
+        operator_base_url,
+    )
+    .into_iter()
+    .map(|m| m.id)
+    .collect()
+}
+
+/// The same merge, with each rung's provenance and lifecycle attached.
+///
+/// [`model_ladder`] is this function with the provenance projected away, so
+/// there is still exactly one place that decides which ids a provider offers
+/// and in what order. Passing an empty `discovered` reproduces the ladder
+/// byte for byte, which is what the failover walk does — its behaviour is
+/// unchanged by live discovery.
+///
+/// # Why discovered ids come last
+///
+/// A relay can answer `/models` with several hundred ids. Curated rungs carry a
+/// context window, a price and a lifecycle; a freshly scraped id carries none
+/// of those, and Aleph deliberately does not invent them. Appending the long
+/// tail keeps every id reachable (through the picker's search) without burying
+/// the handful the catalogue can actually reason about.
+///
+/// # Why the base_url guard does not apply to them
+///
+/// Curated rungs are skipped when the operator moved `base_url` off the preset,
+/// because those ids are opaque 400s at a relocated endpoint. Discovered ids
+/// came *from* that endpoint, so the same reasoning says the opposite: they are
+/// the only ids known to be valid there.
+#[must_use]
+pub fn model_roster(
+    name: &str,
+    base: Vec<String>,
+    base_source: ModelSource,
+    discovered: &[String],
+    operator_base_url: Option<&str>,
+) -> Vec<RosterModel> {
+    let mut out: Vec<RosterModel> = Vec::with_capacity(base.len() + discovered.len() + 4);
+    let push = |id: String, source: ModelSource, out: &mut Vec<RosterModel>| {
+        if id.is_empty() || out.iter().any(|m| m.id.eq_ignore_ascii_case(&id)) {
+            return;
+        }
+        let lifecycle = crate::providers::model_catalog::lifecycle_for(Some(name), &id);
+        out.push(RosterModel {
+            id,
+            source,
+            lifecycle,
+        });
+    };
+
+    for id in base {
+        push(id, base_source, &mut out);
+    }
     if let Some(preset) = get_preset(name) {
         let unmoved = operator_base_url.is_none_or(|u| u == preset.base_url);
         if unmoved {
             for rung in preset.fallback_models {
-                if !rung.is_empty() && !models.iter().any(|m| m.eq_ignore_ascii_case(rung)) {
-                    models.push((*rung).to_string());
-                }
+                push((*rung).to_string(), ModelSource::PresetFallback, &mut out);
             }
         }
     }
-    models
+    for id in discovered {
+        push(id.clone(), ModelSource::Discovered, &mut out);
+    }
+    out
 }
 
 /// Get a preset with override support.

@@ -603,9 +603,26 @@ pub enum ProvidersAction {
         /// Base URL (optional)
         #[arg(long)]
         base_url: Option<String>,
+        /// Model id to offer; repeat to declare failover rungs (the first is
+        /// the one a turn naming no model gets)
+        ///
+        /// Required: `providers.create` rejects an empty ladder outright, so
+        /// there is no "let the server pick" to fall back on. Long-only, like
+        /// every other flag on this subcommand.
+        #[arg(long = "model", value_name = "ID")]
+        models: Vec<String>,
     },
     /// Test provider connectivity
     Test { name: String },
+    /// List the models a provider offers, or refresh them from the vendor
+    Models {
+        /// Provider name — omit to cover every provider
+        name: Option<String>,
+        /// Ask each provider's /models endpoint instead of reading the
+        /// catalogue, and report how it answered
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Set as default provider
     SetDefault { name: String },
     /// Remove a provider

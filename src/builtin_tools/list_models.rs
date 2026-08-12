@@ -344,8 +344,8 @@ fn enrich(
         }),
         endpoint: record.endpoint.as_str().to_string(),
         status: record.lifecycle.status.as_str().to_string(),
-        successor: record.lifecycle.successor.map(str::to_string),
-        status_note: record.lifecycle.note.map(str::to_string),
+        successor: record.lifecycle.successor.map(|s| s.into_owned()),
+        status_note: record.lifecycle.note.map(|s| s.into_owned()),
         source: record.source.as_str().to_string(),
     }
 }

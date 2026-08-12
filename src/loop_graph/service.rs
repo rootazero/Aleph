@@ -443,7 +443,7 @@ pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
-    render_session_topology_inner(store, session).ok()
+    render_session_topology_inner(store, session).ok()?
 }
 
 /// Strict variant of [`render_session_topology_in`] — propagates the store
@@ -456,6 +456,7 @@ pub(crate) fn render_session_topology_in(
 /// `Result<None, Err>` shape below lets a caller that cares (doctor, lint,
 /// tests) tell "no governance row" (genuine ungoverned → None) from "could
 /// not read" (transient store failure → Err).
+#[allow(dead_code)] // retained for doctor/lint consumers per doc above; not yet wired
 pub(crate) fn render_session_topology_strict(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,

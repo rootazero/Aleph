@@ -6,18 +6,21 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use super::helpers::{
-    build_provider_config_for_persistence, normalize_optional_string, resolve_api_key, save_config,
-    vault_key,
+    build_provider_config_for_persistence, normalize_optional_string, provider_info_row,
+    resolve_api_key, save_config, vault_key,
 };
 use super::parse_params;
 use super::types::{
-    CatalogEntryView, CatalogParams, CreateParams, DeleteParams, GetParams, ProviderHealthRow,
-    ProviderInfo, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    failure_kind, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
+    DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
+    ModelsRefreshRow, ProviderGetResult, ProviderHealthRow, ProviderInfo, ProviderListResult,
+    RosterModel, SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
+use crate::providers::model_catalog::ModelSource;
 use crate::providers::probe::probe_provider_bounded;
 
 // ============================================================================
@@ -38,27 +41,15 @@ pub async fn handle_list(
         .iter()
         .map(|(name, cfg)| {
             let has_api_key = resolve_api_key(name, &vault).is_some();
-            ProviderInfo {
-                name: name.clone(),
-                enabled: cfg.enabled,
-                model: cfg.models.first().cloned().unwrap_or_default(),
-                models: cfg.models.clone(),
-                provider_type: Some(cfg.protocol()),
-                base_url: cfg.base_url.clone(),
-                color: cfg.color.clone(),
-                timeout_seconds: cfg.timeout_seconds,
-                max_tokens: cfg.max_tokens,
-                context_window: cfg.context_window,
-                temperature: cfg.temperature,
-                has_api_key,
-                api_key: None,
-                is_default: default_provider.as_ref() == Some(name),
-                verified: cfg.verified,
-            }
+            provider_info_row(name, cfg, default_provider.as_ref(), has_api_key)
         })
         .collect();
 
-    JsonRpcResponse::success(request.id, json!({ "providers": providers }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(ProviderListResult { providers })
+            .unwrap_or_else(|_| json!({ "providers": [] })),
+    )
 }
 
 // ============================================================================
@@ -80,24 +71,17 @@ pub async fn handle_get(
     match config.providers.get(&params.name) {
         Some(cfg) => {
             let default_provider = config.general.default_provider.clone();
-            let info = ProviderInfo {
-                name: params.name.clone(),
-                enabled: cfg.enabled,
-                model: cfg.models.first().cloned().unwrap_or_default(),
-                models: cfg.models.clone(),
-                provider_type: Some(cfg.protocol()),
-                base_url: cfg.base_url.clone(),
-                color: cfg.color.clone(),
-                timeout_seconds: cfg.timeout_seconds,
-                max_tokens: cfg.max_tokens,
-                context_window: cfg.context_window,
-                temperature: cfg.temperature,
-                has_api_key: resolve_api_key(&params.name, &vault).is_some(),
-                api_key: None,
-                is_default: default_provider.as_ref() == Some(&params.name),
-                verified: cfg.verified,
-            };
-            JsonRpcResponse::success(request.id, json!({ "provider": info }))
+            let info = provider_info_row(
+                &params.name,
+                cfg,
+                default_provider.as_ref(),
+                resolve_api_key(&params.name, &vault).is_some(),
+            );
+            JsonRpcResponse::success(
+                request.id,
+                serde_json::to_value(ProviderGetResult { provider: info })
+                    .unwrap_or_else(|_| json!({})),
+            )
         }
         None => JsonRpcResponse::error(
             request.id,
@@ -680,21 +664,50 @@ pub async fn handle_healthcheck(
 /// per-row refresh button wants); omitted, it sweeps every enabled provider
 /// concurrently. Per-provider failures are reported as rows, not as an RPC
 /// error — one unreachable vendor must not blank the whole result.
+///
+/// # Every target gets a row, including the ones that cannot be probed
+///
+/// A provider with no resolvable credential used to be dropped from the target
+/// list with nothing but a `warn!`. From the caller's side that is
+/// indistinguishable from "the sweep did nothing": they asked to refresh a
+/// specific provider and got an empty array back. Skipping a bad record is
+/// usually right; doing it *silently* is what costs — so the skip is now a row
+/// carrying [`DiscoveryFailureKind::MissingCredential`], which is also the one
+/// state the UI can actually act on ("link this provider first").
 pub async fn handle_models_refresh(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
-    let only: Option<String> = request
-        .params
-        .as_ref()
-        .and_then(|p| p.get("provider"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
+    let params: ModelsRefreshParams = match request.params {
+        Some(ref v) if !v.is_null() => match serde_json::from_value(v.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("invalid params: {e}"),
+                )
+            }
+        },
+        _ => ModelsRefreshParams::default(),
+    };
+    let only = params.provider;
+
+    /// One provider to sweep, or a reason it cannot be swept.
+    enum Target {
+        Probe {
+            name: String,
+            base_url: String,
+            protocol: String,
+            api_key: String,
+        },
+        Blocked(ModelsRefreshRow),
+    }
 
     // Same discipline as `handle_healthcheck`: snapshot under the read lock,
     // release before any network I/O.
-    let targets: Vec<(String, String, String, String)> = {
+    let targets: Vec<Target> = {
         let cfg = config.read().await;
         cfg.providers
             .iter()
@@ -712,64 +725,89 @@ pub async fn handle_models_refresh(
                     .clone()
                     .or_else(|| preset.map(|p| p.protocol.to_string()))
                     .unwrap_or_else(|| "openai".to_string());
-                let api_key = pc.api_key.clone().or_else(|| resolve_api_key(name, &vault));
-                if api_key.is_none() {
-                    warn!(
-                        provider = %name,
-                        "Skipping modelsRefresh: no API key resolvable"
-                    );
-                    return None;
-                }
-                Some((name.clone(), base_url, protocol, api_key.unwrap()))
+                let Some(api_key) = pc.api_key.clone().or_else(|| resolve_api_key(name, &vault))
+                else {
+                    warn!(provider = %name, "modelsRefresh: no API key resolvable");
+                    return Some(Target::Blocked(ModelsRefreshRow {
+                        provider: name.clone(),
+                        ok: false,
+                        stale: false,
+                        fetched_at: None,
+                        models: Vec::new(),
+                        kind: Some(DiscoveryFailureKind::MissingCredential),
+                        error: Some(format!("no credential configured for provider '{name}'")),
+                    }));
+                };
+                Some(Target::Probe {
+                    name: name.clone(),
+                    base_url,
+                    protocol,
+                    api_key,
+                })
             })
             .collect()
     };
 
-    let sweeps = targets
-        .into_iter()
-        .map(|(name, base_url, protocol, api_key)| async move {
-            let outcome = crate::providers::model_catalog::refresh_models(
-                &name, &base_url, &protocol, &api_key,
-            )
-            .await;
-            match outcome {
-                Ok(listing) => json!({
-                    "provider": name,
-                    "ok": true,
-                    "fetched_at": listing.fetched_at,
-                    "models": listing.models,
-                }),
-                Err(e) => {
-                    // Stale snapshot beats an error row: report what the
-                    // provider served last time, marked so the picker can
-                    // show it as dated rather than live.
-                    match crate::providers::model_catalog::cached_models(&name, &base_url) {
-                        Some(stale) => json!({
-                            "provider": name,
-                            "ok": true,
-                            "stale": true,
-                            "error": e.to_string(),
-                            "fetched_at": stale.fetched_at,
-                            "models": stale.models,
-                        }),
-                        None => json!({
-                            "provider": name,
-                            "ok": false,
-                            "error": e.to_string(),
-                        }),
-                    }
+    let sweeps = targets.into_iter().map(|target| async move {
+        let (name, base_url, protocol, api_key) = match target {
+            Target::Blocked(row) => return row,
+            Target::Probe {
+                name,
+                base_url,
+                protocol,
+                api_key,
+            } => (name, base_url, protocol, api_key),
+        };
+        match crate::providers::model_catalog::refresh_models(&name, &base_url, &protocol, &api_key)
+            .await
+        {
+            Ok(listing) => ModelsRefreshRow {
+                provider: name,
+                ok: true,
+                stale: false,
+                fetched_at: Some(listing.fetched_at),
+                models: listing.models,
+                kind: None,
+                error: None,
+            },
+            Err(e) => {
+                let kind = failure_kind(&e);
+                // Stale snapshot beats an error row: report what the provider
+                // served last time, marked so the picker can show it as dated
+                // rather than live. The `kind` rides along either way — on a
+                // stale row it explains why the data is old.
+                match crate::providers::model_catalog::cached_models(&name, &base_url) {
+                    Some(stale) => ModelsRefreshRow {
+                        provider: name,
+                        ok: true,
+                        stale: true,
+                        fetched_at: Some(stale.fetched_at),
+                        models: stale.models,
+                        kind: Some(kind),
+                        error: Some(e.to_string()),
+                    },
+                    None => ModelsRefreshRow {
+                        provider: name,
+                        ok: false,
+                        stale: false,
+                        fetched_at: None,
+                        models: Vec::new(),
+                        kind: Some(kind),
+                        error: Some(e.to_string()),
+                    },
                 }
             }
-        });
-
-    let mut rows = futures::future::join_all(sweeps).await;
-    rows.sort_by(|a, b| {
-        a.get("provider")
-            .and_then(serde_json::Value::as_str)
-            .cmp(&b.get("provider").and_then(serde_json::Value::as_str))
+        }
     });
 
-    JsonRpcResponse::success(request.id, json!({ "providers": rows }))
+    let mut providers = futures::future::join_all(sweeps).await;
+    providers.sort_by(|a, b| a.provider.cmp(&b.provider));
+
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(ModelsRefreshResult { providers })
+            .unwrap_or_else(|_| json!({ "providers": [] })),
+    )
 }
 
 // ============================================================================
@@ -1025,9 +1063,9 @@ pub async fn handle_catalog(
     let default_provider = config_guard.general.default_provider.clone();
 
     let entries = catalog::presets_for_modality(Modality::Chat);
-    let view = params.view.as_deref().unwrap_or("configured");
+    let view = params.view();
 
-    let mut items: Vec<CatalogEntryView> = entries
+    let mut items: Vec<CatalogEntry> = entries
         .into_iter()
         .filter_map(|entry| {
             // Built-in template (always present for chat entries returned by
@@ -1079,11 +1117,35 @@ pub async fn handle_catalog(
             );
 
             // The picker roster merges through the same leaf the failover
-            // walk uses (`presets::model_ladder`), seeded with the operator's
+            // walk uses (`presets::model_roster`), seeded with the operator's
             // `models` or, when none are listed, the preset default. This is
             // what stops the picker from recommending curated ids on a relay
             // whose base_url the operator moved — they would 400 there.
-            let roster = chat_presets::model_ladder(
+            //
+            // Live-discovered ids join here too, read from the on-disk cache
+            // only: `providers.catalog` is a read RPC and must not dial a
+            // vendor. `list_models` has folded discovered ids in since the
+            // round that added discovery, so until now the model could see a
+            // freshly fetched id and the human could not — one cache, one TTL,
+            // two different answers.
+            //
+            // Gated on `has_api_key`: `cached_models` is a synchronous file
+            // read, and discovery refuses to run without a credential, so a
+            // preset that has never had one cannot have a cache entry. Without
+            // this the catalogue would stat 56 files on every call — a page
+            // the Panel opens on every settings visit and every picker click.
+            let discovered = if has_api_key {
+                let effective_base_url = cfg
+                    .and_then(|c| c.base_url.as_deref())
+                    .unwrap_or(preset.base_url);
+                crate::providers::model_catalog::cached_models(cfg_name, effective_base_url)
+                    .map(|d| d.models.into_iter().map(|m| m.id).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            let roster = chat_presets::model_roster(
                 entry.name,
                 if models.is_empty() {
                     let d = preset.default_model;
@@ -1095,10 +1157,16 @@ pub async fn handle_catalog(
                 } else {
                     models.clone()
                 },
+                if models.is_empty() {
+                    ModelSource::PresetDefault
+                } else {
+                    ModelSource::Configured
+                },
+                &discovered,
                 cfg.and_then(|c| c.base_url.as_deref()),
             );
 
-            Some(CatalogEntryView {
+            Some(CatalogEntry {
                 id: entry.name.to_string(),
                 display_name,
                 default_model: preset.default_model.to_string(),
@@ -1125,11 +1193,25 @@ pub async fn handle_catalog(
                 verified,
                 enabled,
                 is_default: default_provider.as_deref() == Some(entry.name),
+                // Derived from the preset, so a client never has to keep its
+                // own list of which providers log in versus paste a key — the
+                // Panel kept one, and it went stale.
+                auth_kind: if crate::gateway::handlers::oauth::is_supported_oauth_provider(
+                    entry.name,
+                ) {
+                    AuthKind::OAuth
+                } else {
+                    AuthKind::ApiKey
+                },
                 capabilities: record.capabilities,
                 cost: record.cost,
                 endpoint: record.endpoint.as_str().to_string(),
                 lifecycle: record.lifecycle,
                 requires_explicit_model: preset.requires_explicit_model,
+                // Same bit `discovery` itself gates on, surfaced so a client
+                // can render manual entry instead of a refresh button that can
+                // only ever fail for these six presets.
+                discoverable: preset.supports_health_check,
                 roster,
             })
         })
@@ -1140,7 +1222,7 @@ pub async fn handle_catalog(
     // `providers.create`). The catalog above is preset-driven, so without this
     // a fully configured custom provider stays invisible to the model picker.
     let preset_ids: std::collections::HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
-    let mut custom: Vec<CatalogEntryView> = config_guard
+    let mut custom: Vec<CatalogEntry> = config_guard
         .providers
         .iter()
         // Custom = no built-in preset answers to this name, canonical *or*
@@ -1158,7 +1240,7 @@ pub async fn handle_catalog(
                 cfg.base_url.as_deref(),
                 crate::providers::model_catalog::ModelSource::Configured,
             );
-            CatalogEntryView {
+            CatalogEntry {
                 id: name.clone(),
                 display_name: name.clone(),
                 default_model,
@@ -1177,6 +1259,7 @@ pub async fn handle_catalog(
                 verified: cfg.verified,
                 enabled: cfg.enabled,
                 is_default: default_provider.as_deref() == Some(name.as_str()),
+                auth_kind: AuthKind::ApiKey,
                 capabilities: record.capabilities,
                 cost: record.cost,
                 endpoint: record.endpoint.as_str().to_string(),
@@ -1185,7 +1268,28 @@ pub async fn handle_catalog(
                 // in `models` is the roster, so there is never a "no default
                 // shipped" state to announce.
                 requires_explicit_model: false,
-                roster: cfg.models.clone(),
+                // No preset to opt out, and the endpoint is OpenAI-compatible
+                // by construction, so a `/models` probe is worth offering.
+                discoverable: true,
+                roster: chat_presets::model_roster(
+                    name,
+                    cfg.models.clone(),
+                    ModelSource::Configured,
+                    // Same credential gate as the preset arm above: no key
+                    // means discovery never ran, so there is no cache file to
+                    // read.
+                    &if has_api_key {
+                        crate::providers::model_catalog::cached_models(
+                            name,
+                            cfg.base_url.as_deref().unwrap_or_default(),
+                        )
+                        .map(|d| d.models.into_iter().map(|m| m.id).collect::<Vec<_>>())
+                        .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
+                    cfg.base_url.as_deref(),
+                ),
             }
         })
         .collect();
@@ -1193,9 +1297,9 @@ pub async fn handle_catalog(
 
     // Apply the requested credential view filter to the merged catalog.
     items.retain(|item| match view {
-        "configured" => item.verified && item.enabled,
-        "available" => item.has_api_key,
-        _ => true, // "all" or unrecognised — return everything chat-capable
+        CatalogView::Configured => item.verified && item.enabled,
+        CatalogView::Available => item.has_api_key,
+        CatalogView::All => true,
     });
 
     // Round-2 E3: MoA presets ride the picker as a pseudo-provider row.
@@ -1223,7 +1327,7 @@ pub async fn handle_catalog(
                 .clone()
                 .filter(|d| names.contains(d))
                 .unwrap_or_else(|| names[0].clone());
-            items.push(CatalogEntryView {
+            items.push(CatalogEntry {
                 id: "moa".to_string(),
                 display_name: "Mixture of Agents".to_string(),
                 default_model,
@@ -1246,6 +1350,7 @@ pub async fn handle_catalog(
                 verified: true,
                 enabled: true,
                 is_default: false,
+                auth_kind: AuthKind::ApiKey,
                 // No single capability/cost profile applies across a preset's
                 // mixed advisors + aggregator; leave both absent rather than
                 // guess from one slot.
@@ -1259,10 +1364,18 @@ pub async fn handle_catalog(
                 // models is caught where those slots are resolved, not here.)
                 lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
                 requires_explicit_model: false,
-                roster: names,
+                // Virtual multiplexer: nothing to ask for a model listing.
+                discoverable: false,
+                roster: names
+                    .into_iter()
+                    .map(|n| RosterModel::new(n, ModelSource::Configured))
+                    .collect(),
             });
         }
     }
 
-    JsonRpcResponse::success(request.id, json!({ "items": items }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(CatalogResult { items }).unwrap_or_else(|_| json!({ "items": [] })),
+    )
 }

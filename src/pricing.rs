@@ -77,34 +77,6 @@ impl CostEstimate {
     }
 }
 
-/// Which vendor table a set of rates was resolved through.
-///
-/// Aleph prices per *vendor*, but a model is frequently served by somebody
-/// other than its vendor — aggregators (OpenRouter, Groq, Together,
-/// Fireworks, SiliconFlow…), clouds (Bedrock, Vertex) and private relays all
-/// resell another vendor's model under their own provider id. Those provider
-/// ids have no price section of their own, so a provider-id-only lookup
-/// returned `Unknown` for roughly 30 of the 52 built-in presets — and since
-/// unpriced *cloud* candidates sort at `u64::MAX` under
-/// [`cost_aware`](crate::providers::route_policy) routing, the aggregators
-/// (often the cheapest tier available) were systematically ranked last.
-///
-/// Falling back to the model id's own vendor fixes that, but the two answers
-/// are not equally trustworthy: a reseller's margin is real. This flag keeps
-/// them distinguishable everywhere the figure surfaces (picker, `list_models`,
-/// route status) instead of silently blending them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RateBasis {
-    /// The provider id itself resolves to a vendor that prices this model —
-    /// the rate is the vendor's published price for its own endpoint.
-    Direct,
-    /// The provider id has no price section; rates were taken from the vendor
-    /// named by the *model* id. Reseller margin is not modelled, so treat the
-    /// figure as a floor rather than a quote.
-    VendorInferred,
-}
-
 /// Confidence band attached to every [`CostEstimate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1056,37 +1028,11 @@ fn canonicalize_model(model: &str) -> String {
     crate::providers::model_catalog::canonicalize_model_id(model)
 }
 
-/// Per-million-token rate summary for the picker / catalog UI. A serialisable
-/// projection of the matched [`Rates`] entry — the input/output/cache-read
-/// rates a user cares about when choosing a model. `None`-valued components
-/// in the table serialise as `null`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct RateCard {
-    /// USD per million input tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_per_mtok: Option<f64>,
-    /// USD per million output tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_per_mtok: Option<f64>,
-    /// USD per million cached-prompt-read tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_read_per_mtok: Option<f64>,
-    /// USD per million cached-prompt-write tokens (prompt-cache creation). A
-    /// slight premium over input; `None` for vendors without a cache-write
-    /// surcharge (most non-Anthropic). Surfaced so the picker's
-    /// cost-at-a-glance is honest for cache-heavy Anthropic usage.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_per_mtok: Option<f64>,
-    /// USD per million reasoning tokens, when the vendor bills them
-    /// separately (Gemini). `None` when reasoning is folded into the output
-    /// rate (Anthropic, `OpenAI` o-series), so a `None` here is not "free".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_per_mtok: Option<f64>,
-    /// How these rates were resolved. `vendor_inferred` means the serving
-    /// provider (an aggregator / cloud / relay) has no price section of its
-    /// own and the vendor's own rate was used — a floor, not a quote.
-    pub basis: RateBasis,
-}
+// `RateBasis` and `RateCard` live in `aleph_protocol::providers::catalog`: the
+// Panel picker, the CLI and `list_models` all render them, and two of those
+// crates cannot depend on `alephcore`. `RateCard` stays what it was — a
+// serialisable projection of the matched `Rates` entry.
+pub use aleph_protocol::providers::{RateBasis, RateCard};
 
 /// A resolved price-table hit: the rates, the vendor section they came from
 /// (needed for the parallel [`TIER_TABLE`] lookup) and how we got there.

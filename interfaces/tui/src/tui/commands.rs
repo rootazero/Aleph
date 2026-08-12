@@ -9,6 +9,7 @@
 use serde_json::{json, Value};
 use tui_textarea::TextArea;
 
+use aleph_protocol::providers::{CatalogEntry, CatalogParams, CatalogResult, CatalogView};
 use aleph_protocol::{
     AgentRunAccepted, AgentRunRequest, AgentTraceReplay, AgentTraceTaskSummary, SessionSnapshot,
 };
@@ -17,6 +18,7 @@ use aleph_client::AlephClient;
 
 use super::app::{self, AppState};
 use super::command_tree;
+use super::gateway_error;
 use super::slash::{self, LocalCommand, SessionKnob as SlashKnob, ToolProgressMode};
 
 /// Fire a message to the agent via `agent.run`.
@@ -117,6 +119,7 @@ pub(super) async fn execute_local_command(
         LocalCommand::Tools { mode } => execute_tools(state, mode),
         LocalCommand::Knob { knob, value } => execute_knob(state, client, knob, value).await,
         LocalCommand::Sessions => execute_sessions(state, client).await,
+        LocalCommand::Providers { query } => execute_providers(state, client, query).await,
     }
 
     // Ensure textarea still has focus hint after command execution
@@ -178,6 +181,76 @@ pub(super) async fn confirm_session_switch(state: &mut AppState, client: &AlephC
     // banner; `attach_session` then restores the incoming conversation's own.
     state.switch_session(&key);
     attach_session(state, client, &key).await;
+}
+
+// ---------------------------------------------------------------------------
+// Provider / model picker.
+// ---------------------------------------------------------------------------
+
+/// Fetch the provider/model catalogue and open the picker overlay.
+///
+/// `view: all` on purpose. The narrower `configured` default hides every preset
+/// the operator has not linked yet — which is exactly the row someone opens a
+/// provider browser to find. Deciding what to show from what the server sent is
+/// this client's whole job here; deciding which models exist is not (R4).
+async fn execute_providers(state: &mut AppState, client: &AlephClient, query: String) {
+    // Built from the contract type, not a `json!` literal. This crate cannot
+    // depend on `alephcore`, so a hand-written request shape has nothing to
+    // disagree with — which is how `agent.run` and `workspace create` both
+    // shipped from here permanently broken, green tests and all.
+    let params = CatalogParams::for_view(CatalogView::All);
+    match client
+        .call::<_, Value>("providers.catalog", Some(params))
+        .await
+    {
+        Ok(result) => match catalog_entries(&result) {
+            Ok(entries) if entries.is_empty() => state.add_system_message(
+                "The gateway answered, and reports no chat providers at all.".to_string(),
+            ),
+            Ok(entries) => state.open_provider_picker(entries, query),
+            Err(e) => state.add_system_message(format!(
+                "Provider catalogue unreadable ({e}); this client and the gateway disagree \
+                 about its shape."
+            )),
+        },
+        // A refusal is not an empty catalogue: `providers.*` is operator-only,
+        // so a member gets one here and must not be told there are no
+        // providers. See `gateway_error`.
+        Err(e) => state.add_system_message(gateway_error::explain(&e, "the provider catalogue")),
+    }
+}
+
+/// Pull the catalogue rows out of the response envelope.
+///
+/// Deserialised straight into the shared [`CatalogEntry`], so a field this
+/// client renders that the server stops sending is a parse failure the user is
+/// told about, not a column that quietly prints a placeholder forever.
+fn catalog_entries(result: &Value) -> Result<Vec<CatalogEntry>, serde_json::Error> {
+    serde_json::from_value::<CatalogResult>(result.clone()).map(|r| r.items)
+}
+
+/// Confirm the highlighted picker row.
+///
+/// A provider row descends into its roster; a model row pins the model. The pin
+/// travels as `/model <id>` on the normal gateway path — `slash::parse_input`
+/// classifies it as `Gateway`, so it reaches `select_model`, which stays the
+/// single authority on a session's model (it writes both the process-global map
+/// the run builder reads and the session row). The picker adds no second
+/// writer, and in particular does not patch `identity_meta.custom`: a pin
+/// written there alone is honoured after a restart and ignored before one.
+pub(super) async fn confirm_provider_pick(state: &mut AppState, client: &AlephClient) {
+    match state.selected_provider_pick() {
+        Some(app::ProviderPick::Provider(index)) => state.enter_provider(index),
+        Some(app::ProviderPick::Model(id)) => {
+            state.close_overlay();
+            let command = format!("/model {id}");
+            state.add_user_message(command.clone());
+            send_to_agent(state, client, &command, "Model select error").await;
+        }
+        // Nothing highlighted (the filter matched nothing) — closing is the
+        // honest answer; guessing a row is not.
+        None => state.close_overlay(),
+    }
 }
 
 /// Load a conversation: its transcript **and** the settings that govern it.
@@ -644,20 +717,6 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     format!("{}...", &text[..end])
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cost_line_renders_amount_and_na() {
-        assert_eq!(
-            cost_line("claude-sonnet-4-6", Some(1.2345)),
-            "Cost estimate (claude-sonnet-4-6): $1.2345"
-        );
-        assert!(cost_line("mystery-model", None).contains("n/a"));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -770,4 +829,18 @@ pub(super) async fn fetch_gateway_commands(
             },
             |result| command_tree::CommandEntry::parse_from_json(&result),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cost_line_renders_amount_and_na() {
+        assert_eq!(
+            cost_line("claude-sonnet-4-6", Some(1.2345)),
+            "Cost estimate (claude-sonnet-4-6): $1.2345"
+        );
+        assert!(cost_line("mystery-model", None).contains("n/a"));
+    }
 }

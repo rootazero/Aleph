@@ -23,6 +23,7 @@ mod ids;
 pub mod jsonrpc;
 pub mod paths;
 pub mod plan;
+pub mod providers;
 pub mod session_thread;
 pub mod subagent_tree;
 pub mod team_topic;

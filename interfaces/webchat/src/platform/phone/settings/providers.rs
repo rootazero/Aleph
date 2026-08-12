@@ -3,46 +3,48 @@
 //! Scope (v1): list configured providers, set-default, toggle-enable, edit API key.
 //! Out of scope for v1: add/remove providers, model-picker, subscription login, connectivity checks.
 
-use crate::api::{ProviderConfig, ProviderInfo, ProvidersApi};
+use crate::api::{ProviderConfigJson, ProviderInfo, ProvidersApi};
 use crate::context::DashboardState;
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-/// Build a minimal `ProviderConfig` carrying only `enabled` (preserves all
-/// other fields at their current server values by using `None` / passing
-/// the existing `model` through).
-fn config_enabled(info: &ProviderInfo, enabled: bool) -> ProviderConfig {
-    ProviderConfig {
+/// The fields both writers below pass through untouched.
+///
+/// `providers.update` replaces the stored config wholesale, so every write from
+/// this screen has to re-send everything it is not changing. The ladder is the
+/// field that used to be lost: this screen sent a single `model`, so toggling a
+/// provider's switch on a phone truncated its failover ladder to the first rung.
+fn passthrough(info: &ProviderInfo) -> ProviderConfigJson {
+    ProviderConfigJson {
         protocol: info.provider_type.clone(),
-        enabled,
-        model: info.model.clone(),
+        enabled: info.enabled,
+        models: info.models.clone(),
         api_key: None,
         base_url: info.base_url.clone(),
         color: None,
         timeout_seconds: Some(info.timeout_seconds),
         max_tokens: info.max_tokens,
+        context_window: info.context_window,
         temperature: info.temperature,
         top_p: None,
         top_k: None,
     }
 }
 
-/// Build a `ProviderConfig` carrying only a new `api_key` (all other fields
-/// passed through from the existing provider).
-fn config_with_key(info: &ProviderInfo, key: String) -> ProviderConfig {
-    ProviderConfig {
-        protocol: info.provider_type.clone(),
-        enabled: info.enabled,
-        model: info.model.clone(),
+/// Build a minimal config carrying only a changed `enabled`.
+fn config_enabled(info: &ProviderInfo, enabled: bool) -> ProviderConfigJson {
+    ProviderConfigJson {
+        enabled,
+        ..passthrough(info)
+    }
+}
+
+/// Build a config carrying only a new `api_key`.
+fn config_with_key(info: &ProviderInfo, key: String) -> ProviderConfigJson {
+    ProviderConfigJson {
         api_key: if key.is_empty() { None } else { Some(key) },
-        base_url: info.base_url.clone(),
-        color: None,
-        timeout_seconds: Some(info.timeout_seconds),
-        max_tokens: info.max_tokens,
-        temperature: info.temperature,
-        top_p: None,
-        top_k: None,
+        ..passthrough(info)
     }
 }
 

@@ -618,6 +618,7 @@ async fn dispatch_providers(
             r#type,
             api_key,
             base_url,
+            models,
         } => {
             providers_cmd::add(
                 server_url,
@@ -626,12 +627,16 @@ async fn dispatch_providers(
                 &r#type,
                 &api_key,
                 base_url.as_deref(),
+                &models,
                 json,
             )
             .await
         }
         ProvidersAction::Test { name } => {
             providers_cmd::test(server_url, config, &name, json).await
+        }
+        ProvidersAction::Models { name, refresh } => {
+            providers_cmd::models(server_url, config, name.as_deref(), refresh, json).await
         }
         ProvidersAction::SetDefault { name } => {
             providers_cmd::set_default(server_url, config, &name, json).await
@@ -1083,7 +1088,24 @@ async fn dispatch_chat_control(
 #[cfg(test)]
 mod tests {
     use super::Cli;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
+
+    /// clap validates its own argument definitions with `debug_assert`s that
+    /// only run inside `Args::parse()` — so a duplicate short flag is not a
+    /// compile error, it is a panic before the first line of `main`, and a
+    /// release build silently gives the letter to one of the two claimants
+    /// instead. `aleph-tui` shipped exactly that (`-c` claimed by both
+    /// `--config` and a new `--continue`): every debug invocation died on
+    /// startup, and nothing in the workspace noticed, because this is not a
+    /// compile error, `cargo check` does not build tests, and the repo's
+    /// minimal verification set does not reach the client crates.
+    ///
+    /// Running clap's own validator as a test is the guard. It costs one
+    /// assertion and covers every flag anyone adds afterwards.
+    #[test]
+    fn the_argument_definitions_pass_claps_own_validator() {
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn parse_trace_list_command() {
