@@ -1616,6 +1616,84 @@ mod tests {
         assert!(s.list_edges("main").unwrap().is_empty());
     }
 
+    /// `gc` is supposed to converge the graph: either every deletable dangling
+    /// edge is gone and the report matches, or none is deleted. The previous
+    /// implementation deleted edges one statement at a time, so a mid-loop
+    /// failure left a half-deleted graph and a report that lied about what
+    /// had actually changed. Asserted by making the first delete fail
+    /// (`owns_reference` is normally retained, not deleted; we instead make
+    /// the first non-protected delete fail by attaching a CHECK constraint
+    /// to the edges table only after the first edge is queued for removal).
+    ///
+    /// This test uses a simpler construction: make the FIRST queued edge's
+    /// delete fail by tampering with its primary key after the snapshot was
+    /// read, so the second delete then succeeds. With a real transaction
+    /// the second one rolls back; without one, it stays deleted.
+    #[test]
+    fn gc_is_atomic_across_multiple_dangling_edges() {
+        let (_d, s) = store();
+        // Three optimizer nodes plus one watcher; deleting the watcher leaves
+        // three dangling `watches` edges that `gc` must remove atomically.
+        for id in ["daemon:d1", "daemon:d2", "daemon:d3"] {
+            s.upsert_node(&node(id, NodeKind::Daemon, Origin::Llm))
+                .unwrap();
+        }
+        s.upsert_node(&node("heartbeat:gone", NodeKind::LoopHeartbeat, Origin::Llm))
+            .unwrap();
+        for to in ["daemon:d1", "daemon:d2", "daemon:d3"] {
+            s.upsert_edge(&GraphEdge::new(
+                "main",
+                "heartbeat:gone",
+                to,
+                EdgeKind::Watches,
+                Origin::Llm,
+            ))
+            .unwrap();
+        }
+        assert!(s.delete_node("main", "heartbeat:gone").unwrap());
+
+        // Force the FIRST DELETE in the transaction to fail: arm a
+        // SQL trigger that raises an error on the first row touched. The
+        // remaining two DELETEs in the loop must roll back.
+        s.lock()
+            .execute_batch(
+                "CREATE TRIGGER gc_break_first_delete BEFORE DELETE ON graph_edges
+                 WHEN NOT EXISTS (SELECT 1 FROM _gc_break_fired)
+                 BEGIN
+                     INSERT INTO _gc_break_fired DEFAULT VALUES;
+                     SELECT RAISE(ABORT, 'gc_fail_simulation');
+                 END;
+                 CREATE TABLE _gc_break_fired (id INTEGER PRIMARY KEY);",
+            )
+            .unwrap();
+
+        let report = s.gc("main");
+        assert!(
+            report.is_err(),
+            "the simulated delete failure must propagate, not be swallowed"
+        );
+
+        // Atomicity: even if the SECOND and THIRD DELETEs in the loop ran
+        // before the failure (rusqlite executes them sequentially within one
+        // transaction), the transaction commit must roll them all back. The
+        // graph must look exactly as it did before `gc` was called.
+        let remaining = s.list_edges("main").unwrap();
+        assert_eq!(
+            remaining.len(),
+            3,
+            "gc atomicity: a failed gc must leave every dangling edge in place \
+             (the report cannot lie about what was removed): {remaining:?}"
+        );
+
+        // Drop the trigger and re-run: gc now succeeds and removes all three.
+        s.lock()
+            .execute_batch("DROP TRIGGER gc_break_first_delete;")
+            .unwrap();
+        let report = s.gc("main").unwrap();
+        assert_eq!(report.removed.len(), 3, "{report:?}");
+        assert!(s.list_edges("main").unwrap().is_empty());
+    }
+
     #[test]
     fn lint_flags_naked_loop_and_clears_when_watched() {
         let (_d, s) = store();

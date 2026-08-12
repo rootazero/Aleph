@@ -713,6 +713,28 @@ mod tests {
         }
     }
 
+    /// `render_session_topology_strict` distinguishes "genuinely ungoverned"
+    /// from "could not read the store". The Option-returning wrapper would
+    /// silently fold the latter into the former and a transient busy store
+    /// would re-shape a governed session's prompt as if ungoverned. The
+    /// strict variant exists for callers (doctor, lint, tests) that need to
+    /// tell them apart.
+    #[test]
+    fn strict_render_distinguishes_ungoverned_from_unreadable() {
+        let (_dir, store) = seeded_store();
+        // Genuinely ungoverned: Ok(None), not an Err.
+        assert_eq!(
+            render_session_topology_strict(&store, "sess-missing").unwrap(),
+            None,
+            "session not in graph ⇒ Ok(None), not Ok(Some(\"...\"))"
+        );
+        // Governed session: Ok(Some(rendered)).
+        let rendered = render_session_topology_strict(&store, "sess-1")
+            .expect("store is healthy")
+            .expect("session is governed");
+        assert!(rendered.contains("根参照 root:aleph"));
+    }
+
     #[test]
     fn governing_owner_and_topology_render() {
         let (_dir, store) = seeded_store();
