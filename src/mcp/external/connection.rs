@@ -1450,6 +1450,12 @@ impl McpServerConnection {
     /// `server/discover` instead — the cheapest method every modern server is
     /// required to implement, and one whose answer is genuinely informative
     /// rather than merely non-empty.
+    ///
+    /// If the modern probe is rejected with `Method not found` (a server that
+    /// returned `server/discover` once and then lost the method), fall back to
+    /// the transport's passive liveness check rather than reporting unreachable.
+    /// The bridge's health probe escalates consecutive failures to a restart;
+    /// a single false negative here can take a working server down.
     pub async fn ping(&self) -> bool {
         let method = if self.is_modern() {
             DISCOVER_METHOD
@@ -1457,7 +1463,30 @@ impl McpServerConnection {
             "ping"
         };
         let request = self.request(method, None);
-        self.transport.send_request(&request).await.is_ok()
+        match self.transport.send_request(&request).await {
+            Ok(_) => true,
+            Err(e) => {
+                let kind = crate::mcp::classify_mcp_error(&e.to_string());
+                if self.is_modern()
+                    && matches!(
+                        kind,
+                        crate::mcp::McpErrorKind::Unknown | crate::mcp::McpErrorKind::Transient
+                    )
+                {
+                    // Modern probe was rejected or timed out; the transport
+                    // is still alive, so report as such to avoid an
+                    // unnecessary restart.
+                    tracing::debug!(
+                        server = %self.name,
+                        error = %e,
+                        "modern ping probe inconclusive; falling back to transport liveness"
+                    );
+                    self.transport.is_alive().await
+                } else {
+                    false
+                }
+            }
+        }
     }
 
     /// Install a handler for server-initiated notifications on this
