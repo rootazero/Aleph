@@ -192,15 +192,24 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
                 // `StoredValue` so the closure stays `Copy` — the text field's
                 // Enter handler and the Answer button both need it.
                 let session_key_q = StoredValue::new(ask.session_key.clone());
+                // Enter in a text field. On a one-question card it answers
+                // outright. On a form it submits the WHOLE set once every
+                // question has something in it — pressing Enter used to do
+                // nothing at all there, silently, which reads as a broken
+                // field rather than as "there is a button below". Incomplete
+                // is still a no-op, and visibly so: the submit button is
+                // disabled by the same predicate.
                 let submit_text = move || {
+                    if !instant {
+                        submit_all();
+                        return;
+                    }
                     let reply = draft.get_untracked().trim().to_string();
                     if reply.is_empty() {
                         return;
                     }
-                    if instant {
-                        draft.set(String::new());
-                        answer(dashboard, session_key_q.get_value(), vec![reply]);
-                    }
+                    draft.set(String::new());
+                    answer(dashboard, session_key_q.get_value(), vec![reply]);
                 };
                 view! {
                     <div class=move || if qi == 0 { "mt-1" } else { "mt-3 pt-3 border-t border-border/60" }>

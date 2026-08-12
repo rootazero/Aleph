@@ -12,6 +12,7 @@ use tracing::info;
 use crate::builtin_tools::scratchpad_registry;
 use crate::clarification::ClarificationResult;
 use crate::error::Result;
+use crate::gateway::i18n::{t_ui, Msg};
 use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadManager, ScratchpadSnapshot};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -299,15 +300,19 @@ pub struct ScratchpadOutput {
     pub feedback: Option<String>,
 }
 
-/// Verdicts offered on a plan-approval card.
+/// Verdicts offered on a plan-approval card, as `(wire value, label key)`.
 ///
 /// Free text is a fourth outcome the menu deliberately does not list: anything
 /// that is not one of these three IS the revision, which is how pi's
 /// "Refine the plan" reads without making the human pick twice.
-const APPROVAL_CHOICES: [(&str, &str); 3] = [
-    ("approved", "Approve — start working the plan"),
-    ("revise", "Revise — tell me what to change"),
-    ("rejected", "Reject — do not do this"),
+///
+/// The **value** is an English key and stays one: `verdict_of` reads it and the
+/// model is told it received it, so a display setting must not be able to
+/// change what the verdict *is*. Only the label a person reads is translated.
+const APPROVAL_CHOICES: [(&str, Msg<'static>); 3] = [
+    ("approved", Msg::PlanApproveLabel),
+    ("revise", Msg::PlanReviseLabel),
+    ("rejected", Msg::PlanRejectLabel),
 ];
 
 /// Decision reported when the human answered with something not on the menu.
@@ -369,7 +374,8 @@ fn approval_message(decision: &str, feedback: Option<&str>) -> String {
 fn render_plan_for_approval(snapshot: &ScratchpadSnapshot, note: Option<&str>) -> String {
     let mut out = String::new();
     if let Some(objective) = snapshot.objective.as_deref() {
-        out.push_str(&format!("**Objective:** {objective}\n\n"));
+        let lead = t_ui(Msg::PlanObjectiveLead);
+        out.push_str(&format!("**{lead}:** {objective}\n\n"));
     }
     for (i, item) in snapshot.items.iter().enumerate() {
         let mark = match item.status {
@@ -382,7 +388,8 @@ fn render_plan_for_approval(snapshot: &ScratchpadSnapshot, note: Option<&str>) -
     if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
         out.push_str(&format!("\n{note}\n"));
     }
-    out.push_str("\nApprove this plan?");
+    out.push('\n');
+    out.push_str(&t_ui(Msg::PlanApprovePrompt));
     out
 }
 
@@ -763,7 +770,7 @@ impl ScratchpadTool {
 
         let options: Vec<ClarificationOption> = APPROVAL_CHOICES
             .iter()
-            .map(|(value, label)| ClarificationOption::new(value, label))
+            .map(|(value, label)| ClarificationOption::new(value, &t_ui(*label)))
             .collect();
         let request = ClarificationRequest::new(vec![ClarificationQuestion::select(
             "plan_approval",
@@ -773,7 +780,15 @@ impl ScratchpadTool {
         .with_header("Plan")])
         .map_err(crate::error::AlephError::tool)?;
 
-        let result = crate::clarification::ask(deps, request)
+        // `withheld_secret` is structurally empty here: the plan gate asks one
+        // question and never marks it a secret, so there is nothing the
+        // transport rule can hold back. Written out in full rather than with
+        // `..` so that a new field on `AskOutcome` stops the compiler here and
+        // this site gets a decision, instead of inheriting a silent default.
+        let crate::clarification::AskOutcome {
+            result,
+            withheld_secret: _,
+        } = crate::clarification::ask(deps, request)
             .await
             .map_err(|e| crate::error::AlephError::tool(format!("scratchpad: {e}")))?;
 

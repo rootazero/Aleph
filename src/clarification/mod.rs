@@ -31,7 +31,7 @@ pub mod ask;
 pub mod render;
 pub mod session;
 
-pub use ask::{ask, ClarificationDeps};
+pub use ask::{ask, AskOutcome, ClarificationDeps};
 pub use session::{ClarificationManager, ResolveOutcome, DEFAULT_CLARIFY_TIMEOUT};
 
 // `PendingClarification` is constructed by `ClarificationManager::list_pending`

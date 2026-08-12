@@ -881,13 +881,22 @@ it — masking our copy would protect the one place that was never the exposure.
 So the flag changes **transport**, not rendering
 (`src/clarification/ask.rs`):
 
-- when the turn's channel is a **registered** `ChannelRegistry` transport, a
-  secret question is **refused outright** with an actionable error telling the
-  model to have the user set the value another way (Panel, configuration) and
-  continue without it;
+- when the turn's channel is a **registered** `ChannelRegistry` transport, the
+  secret questions are **withheld** — dropped from the request before it is
+  registered, so they never reach the renderer, the channel, or the pending
+  registry. Their ids come back on `AskUserOutput.withheld` with an actionable
+  reason (have the user set the value through the Panel or configuration, and
+  do not re-ask here);
 - otherwise — the Panel's `gui:chat` pseudo-channel, which is never registered
   — the question goes **only** onto the gateway event bus, where the Panel and
   TUI render a masked input.
+
+The rule is per **question**, not per call. It began as a per-call refusal,
+which threw away the three ordinary questions that happened to travel with a
+fourth asking for a token: the human never saw them, and the model got an error
+instead of three answers. A call whose questions are *all* secret still fails
+outright — withholding every question would park the tool on a request no reply
+can complete.
 
 Two consequences worth stating rather than discovering: the model still
 receives the answer (it asked for a value it needs, and withholding it would
@@ -896,6 +905,19 @@ like any other tool result. The property bought here is precisely one — **a
 credential never travels over a third-party channel** — and it is structural:
 it follows from the shape of the delivery ladder, not from a caller remembering
 to check.
+
+**That covers the return leg too**, which is the half worth checking rather
+than assuming — this codebase has been bitten before by a value that was masked
+on one leg and shipped in clear on another (`RedactingEmitter` wrapped the
+trace sink while the same run's text still went out through
+`OriginFanoutEmitter`). Here the two directions are governed by the *same*
+predicate: a secret question is only ever registered when
+`ChannelRegistry::get(turn.channel_id)` is `None`, so on any turn that could
+carry the answer outward there is no answer to carry. And the fanout mirrors
+only `RunComplete.final_response` — model-authored prose — never tool results.
+Pinned by `clarification::ask::tests::a_secret_among_others_withholds_only_itself`,
+which asserts that nothing marked `secret` reaches the pending registry on a
+turn with a registered channel.
 
 ---
 

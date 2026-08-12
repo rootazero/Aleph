@@ -17,7 +17,13 @@ fn request(id: &str) -> ApprovalRequest {
         id: id.to_string(),
         command: "code_exec".to_string(),
         cwd: None,
-        analysis: CommandAnalysis::error("danger-tier"),
+        // A PARSEABLE command that needs approval — which is what this suite is
+        // about. It used to be `CommandAnalysis::error("danger-tier")`, meaning
+        // "the parser could not read this at all"; `ExecApprovalManager::create`
+        // later grew a `debug_assert!` rejecting exactly that (a card a human
+        // can only ever deny should never be raised), so all three tests
+        // panicked before reaching the resolve loop they exist to cover.
+        analysis: CommandAnalysis::success(Vec::new(), Vec::new()),
         agent_id: "main".to_string(),
         session_key: "telegram:123456".to_string(),
         reason: None,

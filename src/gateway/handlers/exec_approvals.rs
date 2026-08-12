@@ -276,6 +276,11 @@ mod tests {
             id: uuid::Uuid::new_v4().to_string(),
             command: "rm -rf ./build".to_string(),
             cwd: None,
+            // `not_a_command()` mirrors a tool card (file_ops / browser / MCP)
+            // — there is no argv to parse, but `ok: true` so the manager's
+            // `debug_assert!` (a card the human can only deny is not worth
+            // a delivery slot) is happy. The handlers being tested here are
+            // about visibility, not parser correctness.
             analysis: CommandAnalysis::not_a_command(),
             agent_id: "main".to_string(),
             session_key: session_key.to_string(),
@@ -407,6 +412,9 @@ mod tests {
             id: uuid::Uuid::new_v4().to_string(),
             command: "loop_graph node kind=root id=root:aleph".to_string(),
             cwd: None,
+            // Same `not_a_command()` rationale as `park_approval` above: a
+            // fixture for a tool card, not a shell line, with `ok: true` so
+            // `ExecApprovalManager::create` does not trip its `debug_assert!`.
             analysis: CommandAnalysis::not_a_command(),
             agent_id: "main".to_string(),
             session_key: session_key.to_string(),

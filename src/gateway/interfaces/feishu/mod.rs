@@ -83,6 +83,11 @@ impl FeishuChannel {
             video: false,
             reactions: true,
             replies: true,
+            // Truthful despite the `Channel::edit` override below: that
+            // override delegates to `MessageOps::edit`, which refuses
+            // unconditionally. The override's *existence* is not evidence of
+            // the capability — read what it returns. (Feishu's real streaming
+            // runs through the orchestrated card emitter, not `Channel::edit`.)
             editing: false,
             deletion: false,
             // Feishu has no typing endpoint: the streaming emitter *emulates*

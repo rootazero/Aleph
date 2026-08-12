@@ -27,8 +27,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::clarification::{
-    ask, ClarificationAnswer, ClarificationDeps, ClarificationManager, ClarificationOption,
-    ClarificationQuestion, ClarificationRequest, ClarificationResult, ClarificationResultType,
+    ask, AskOutcome, ClarificationAnswer, ClarificationDeps, ClarificationManager,
+    ClarificationOption, ClarificationQuestion, ClarificationRequest, ClarificationResultType,
 };
 use crate::error::{AlephError, Result};
 use crate::gateway::channel_registry::ChannelRegistry;
@@ -159,10 +159,30 @@ pub struct AskUserAnswer {
     pub selected_indices: Vec<u32>,
 }
 
+/// Questions the human was never shown, and why.
+///
+/// One field rather than two (a bare id list plus a sentence somewhere else):
+/// the reason is what the model has to act on, and an id list with the reason
+/// living in a tool description is a fact split across two places that can
+/// drift. Present exactly when something was withheld — the shape answers "did
+/// they see everything I asked", so no consumer has to keep a list of the
+/// situations in which they might not have.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WithheldQuestions {
+    /// The `id`s that were not asked, in the order they were passed.
+    pub question_ids: Vec<String>,
+    /// What to do about it, phrased for the model.
+    pub reason: String,
+}
+
 /// Output of the `ask_user` tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct AskUserOutput {
     /// `"answered"`, `"timeout"`, or `"cancelled"`.
+    ///
+    /// Describes the questions that were **asked**. When `withheld` is present
+    /// the set asked was smaller than the set passed, and `"answered"` means
+    /// every *asked* question got an answer — never that nothing was held back.
     pub status: String,
 
     /// The first answer — the one-question shorthand. Absent on timeout or
@@ -178,6 +198,10 @@ pub struct AskUserOutput {
     /// Every answer, in question order. One entry for a single question.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<AskUserAnswer>,
+
+    /// Present only when some questions could not be put to the human at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<WithheldQuestions>,
 }
 
 // =============================================================================
@@ -278,8 +302,12 @@ impl AskUserTool {
         ClarificationRequest::new(questions).map_err(AlephError::tool)
     }
 
-    /// Map a resolved [`ClarificationResult`] onto the tool output.
-    fn result_to_output(result: ClarificationResult) -> AskUserOutput {
+    /// Map what [`ask`] came back with onto the tool output.
+    fn result_to_output(outcome: AskOutcome) -> AskUserOutput {
+        let AskOutcome {
+            result,
+            withheld_secret,
+        } = outcome;
         let status = match result.result_type {
             ClarificationResultType::Answered => "answered",
             ClarificationResultType::Timeout => "timeout",
@@ -299,9 +327,24 @@ impl AskUserTool {
             answer: result.value().map(ToString::to_string),
             selected_index: result.selected_index(),
             answers,
+            withheld: (!withheld_secret.is_empty()).then(|| WithheldQuestions {
+                question_ids: withheld_secret,
+                reason: WITHHELD_SECRET_REASON.to_string(),
+            }),
         }
     }
 }
+
+/// What to tell the model about a question it asked that the human never saw.
+///
+/// Actionable, and explicitly *not* a retry instruction: asking again over the
+/// same channel produces the same result, and the point of answering the rest
+/// of the call is that the run can continue.
+const WITHHELD_SECRET_REASON: &str =
+    "these ask for a credential, and this conversation runs over a messaging channel where the \
+     reply would be a permanent message in a third party's history — so they were not shown. The \
+     other questions were asked normally. Do not re-ask them here: have the user set the value \
+     through the Panel or configuration, and continue without it.";
 
 #[async_trait]
 impl AlephTool for AskUserTool {
@@ -311,18 +354,18 @@ impl AlephTool for AskUserTool {
          guessing a detail that is theirs to decide. Pass `question` for one, or `questions` \
          for several in one interaction. Choices are strings or `{label, description}`; free \
          text is always accepted, so never add an \"other\" choice. `multi_select` takes several \
-         picks; `secret` masks the input and refuses a messaging channel. The run pauses until \
-         they answer; the replies — or a timeout — come back.";
+         picks; `secret` masks the input and is skipped on a messaging channel. The run pauses \
+         until they answer; the replies — or a timeout — come back.";
 
     type Args = AskUserArgs;
     type Output = AskUserOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let request = Self::build_request(&args)?;
-        let result = ask(&self.deps, request)
+        let outcome = ask(&self.deps, request)
             .await
             .map_err(|e| AlephError::tool(format!("ask_user: {e}")))?;
-        Ok(Self::result_to_output(result))
+        Ok(Self::result_to_output(outcome))
     }
 }
 
@@ -333,7 +376,7 @@ impl AlephTool for AskUserTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clarification::ClarificationAnswer;
+    use crate::clarification::{ClarificationAnswer, ClarificationResult};
     use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
     fn tool() -> AskUserTool {
@@ -544,35 +587,83 @@ mod tests {
         assert_eq!(request.first().options.len(), 2);
     }
 
+    /// Nothing withheld — the ordinary case, and the one that must keep
+    /// `withheld` absent from the JSON entirely.
+    fn asked(result: ClarificationResult) -> AskOutcome {
+        AskOutcome {
+            result,
+            withheld_secret: Vec::new(),
+        }
+    }
+
     #[test]
     fn result_to_output_maps_each_status() {
-        let answered = AskUserTool::result_to_output(ClarificationResult::answered(vec![
+        let answered = AskUserTool::result_to_output(asked(ClarificationResult::answered(vec![
             ClarificationAnswer {
                 question_id: "q1".into(),
                 selected_indices: vec![],
                 value: "hi".into(),
             },
-        ]));
+        ])));
         assert_eq!(answered.status, "answered");
         assert_eq!(answered.answer.as_deref(), Some("hi"));
         assert_eq!(answered.answers.len(), 1);
+        assert!(answered.withheld.is_none());
 
-        let selected = AskUserTool::result_to_output(ClarificationResult::answered(vec![
+        let selected = AskUserTool::result_to_output(asked(ClarificationResult::answered(vec![
             ClarificationAnswer {
                 question_id: "q1".into(),
                 selected_indices: vec![1],
                 value: "beta".into(),
             },
-        ]));
+        ])));
         assert_eq!(selected.selected_index, Some(1));
 
-        let timed_out = AskUserTool::result_to_output(ClarificationResult::timeout());
+        let timed_out = AskUserTool::result_to_output(asked(ClarificationResult::timeout()));
         assert_eq!(timed_out.status, "timeout");
         assert!(timed_out.answer.is_none());
         assert!(timed_out.answers.is_empty());
 
-        let cancelled = AskUserTool::result_to_output(ClarificationResult::cancelled());
+        let cancelled = AskUserTool::result_to_output(asked(ClarificationResult::cancelled()));
         assert_eq!(cancelled.status, "cancelled");
+    }
+
+    /// A partly-askable call reports BOTH halves: the answers it got and the
+    /// questions the human never saw. `status` describes the questions that
+    /// were asked, so the only thing standing between "answered" and "answered
+    /// everything" is this field being present — which is why it carries its
+    /// own reason rather than an id list the model has to interpret.
+    #[test]
+    fn a_withheld_secret_is_named_alongside_the_answers_it_did_get() {
+        let out = AskUserTool::result_to_output(AskOutcome {
+            result: ClarificationResult::answered(vec![ClarificationAnswer {
+                question_id: "env".into(),
+                selected_indices: vec![0],
+                value: "staging".into(),
+            }]),
+            withheld_secret: vec!["token".into()],
+        });
+        assert_eq!(out.status, "answered");
+        assert_eq!(out.answers.len(), 1);
+        let withheld = out.withheld.expect("a withheld question must be reported");
+        assert_eq!(withheld.question_ids, vec!["token".to_string()]);
+        // Actionable, and explicitly not a retry instruction.
+        assert!(
+            withheld.reason.contains("Do not re-ask"),
+            "{}",
+            withheld.reason
+        );
+        assert!(withheld.reason.contains("Panel"), "{}", withheld.reason);
+
+        // Absent — not `null`, not an empty object — when nothing was withheld.
+        let clean = serde_json::to_value(AskUserTool::result_to_output(asked(
+            ClarificationResult::timeout(),
+        )))
+        .expect("output serializes");
+        assert!(
+            clean.get("withheld").is_none(),
+            "an ordinary call must not carry an empty withheld object: {clean}"
+        );
     }
 
     /// The one-question shorthands (`answer` / `selected_index`) are the FIRST
@@ -580,7 +671,7 @@ mod tests {
     /// multi-question call must get one question's answer, not a merged blob.
     #[test]
     fn multi_question_output_keeps_the_shorthand_pointing_at_the_first() {
-        let out = AskUserTool::result_to_output(ClarificationResult::answered(vec![
+        let out = AskUserTool::result_to_output(asked(ClarificationResult::answered(vec![
             ClarificationAnswer {
                 question_id: "env".into(),
                 selected_indices: vec![0],
@@ -591,7 +682,7 @@ mod tests {
                 selected_indices: vec![],
                 value: "ALEPH-1".into(),
             },
-        ]));
+        ])));
         assert_eq!(out.answer.as_deref(), Some("staging"));
         assert_eq!(out.selected_index, Some(0));
         assert_eq!(out.answers.len(), 2);

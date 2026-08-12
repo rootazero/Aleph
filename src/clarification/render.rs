@@ -20,6 +20,7 @@
 
 use super::{ClarificationOption, ClarificationQuestion};
 use crate::gateway::channel::{InlineButton, InlineKeyboard};
+use crate::gateway::i18n::Msg;
 
 /// Max button label length (chars) before truncation.
 const MAX_LABEL_CHARS: usize = 32;
@@ -122,17 +123,28 @@ pub fn render(question: &ClarificationQuestion, index: usize, total: usize) -> R
         .unwrap_or_default();
 
     let mut text = format!("❓{position} {header}{}", question.prompt);
+    // The hint is read by a person, so it is translated (the prompt and the
+    // option labels are the model's own words and are already in the user's
+    // language). Everything `ask` produces for the MODEL — the headless denial,
+    // the delivery failure, the withheld-secret reason — stays English on
+    // purpose: see `gateway::i18n`.
+    let hint = crate::gateway::i18n::t_ui(if question.has_options() {
+        if question.multi_select {
+            Msg::ClarifyReplyPickMany
+        } else {
+            Msg::ClarifyReplyPickOne
+        }
+    } else {
+        Msg::ClarifyReplyFreeText
+    });
     if question.has_options() {
         text.push_str("\n\n");
         text.push_str(&menu(&question.options));
         text.push('\n');
-        text.push_str(if question.multi_select {
-            "Reply with the numbers separated by commas, or your own answer."
-        } else {
-            "Reply with the number or your answer."
-        });
+        text.push_str(&hint);
     } else {
-        text.push_str("\n\nReply with your answer.");
+        text.push_str("\n\n");
+        text.push_str(&hint);
     }
 
     RenderedQuestion {
@@ -152,10 +164,22 @@ mod tests {
         ]
     }
 
+    /// The hint the user reads comes from the catalog, so a translated install
+    /// gets a translated hint. Compared against the catalog entry rather than a
+    /// literal: the two used to be the same string in two places, and that is
+    /// the shape that drifts.
+    fn hint(msg: Msg<'static>) -> String {
+        crate::gateway::i18n::t(msg, crate::gateway::i18n::Locale::En)
+    }
+
     #[test]
     fn free_text_question_has_no_menu_and_no_keyboard() {
         let r = render(&ClarificationQuestion::text("q", "Pick?"), 0, 1);
-        assert!(r.text.contains("Reply with your answer"));
+        assert!(
+            r.text.ends_with(&hint(Msg::ClarifyReplyFreeText)),
+            "{}",
+            r.text
+        );
         assert!(r.keyboard.is_none());
         // Single question: no progress marker.
         assert!(!r.text.contains("(1/"));
@@ -177,7 +201,11 @@ mod tests {
             r.text
         );
         assert!(r.text.contains("2. blue-green\n"), "{}", r.text);
-        assert!(r.text.contains("Reply with the number"));
+        assert!(
+            r.text.ends_with(&hint(Msg::ClarifyReplyPickOne)),
+            "{}",
+            r.text
+        );
     }
 
     #[test]
@@ -209,7 +237,11 @@ mod tests {
         assert!(keyboard_for(&q).is_none());
         let r = render(&q, 0, 1);
         assert!(r.text.contains("1. in-place"));
-        assert!(r.text.contains("numbers separated by commas"));
+        assert!(
+            r.text.ends_with(&hint(Msg::ClarifyReplyPickMany)),
+            "{}",
+            r.text
+        );
     }
 
     #[test]

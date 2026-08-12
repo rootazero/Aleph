@@ -2,6 +2,18 @@
 //!
 //! Uses the same language codes as the Panel (`en`, `zh-Hans`).
 //! Locale is resolved from `GeneralConfig.language` at runtime.
+//!
+//! # What belongs in here, and what does not
+//!
+//! Only bytes a **human reads**. A tool error, a deny reason, a `withheld`
+//! explanation and a plan verdict sentence all read like prose but their
+//! audience is the model, and translating those would make the model's input
+//! depend on a display setting — the one thing a prompt must not do. The split
+//! runs straight through single files: `clarification::render` builds the reply
+//! hint a person reads (translated) while `clarification::ask` builds the
+//! refusal the model reads (never translated).
+
+use std::sync::OnceLock;
 
 use crate::orchestrator::dispatch::TerminateReason;
 
@@ -31,14 +43,74 @@ impl Locale {
     }
 }
 
+/// The process-wide UI locale, installed once at server boot.
+///
+/// # Why a process global rather than a parameter
+///
+/// The strings this serves are built deep inside code with no run in hand: the
+/// clarification renderer is called from the tool that asks (`ask`), from the
+/// registry that advances the cursor after a reply (`session::resolve_many`),
+/// and from the inbound router. Threading a `Locale` to all three would put the
+/// setting on every constructor between here and there, and the day one of them
+/// is added without it, that path silently reverts to English — the same shape
+/// as `SecretMasker`'s seven construction sites, where the fix was to install
+/// the configuration on the *type* so a call site that has never heard of it
+/// still inherits it.
+///
+/// It is also not lossy **today**: both existing consumers resolve the locale
+/// from the one `[general] language` key at boot, and the per-run
+/// `metadata["locale"]` stamp is written from that same key. If a per-session
+/// language ever lands, this becomes a parameter and the compiler will find
+/// every reader.
+///
+/// # Changing the language takes a restart, and that is the declared contract
+///
+/// `OnceLock` means an edit to `[general] language` does not reach these
+/// strings until the process restarts. That matches what the config system
+/// already promises: `general` is **not** in `reload_impact::LIVE_SECTIONS`
+/// (`route` / `behavior` / `execution`), so `ReloadImpact::classify` reports
+/// `Restart` for it and `self_config` tells the user so. Note the gateway's
+/// *other* locale readers happen to be more live than that promise — they
+/// re-read config per run — so a hot language change moves them and not this.
+/// If `general` is ever promoted to a live section, this global has to become
+/// a per-run parameter in the same change.
+static INSTALLED_LOCALE: OnceLock<Locale> = OnceLock::new();
+
+/// Install the process-wide UI locale. First call wins; later calls are
+/// ignored, which is why boot resolves it from one config read.
+pub fn install_locale(locale: Locale) {
+    let _ = INSTALLED_LOCALE.set(locale);
+}
+
+/// Translate a **human-facing** message using the installed locale.
+///
+/// Falls back to [`Locale::En`] when nothing installed one — unit tests, CLI
+/// subcommands, and any embedding that never booted a gateway. That default is
+/// deliberate and is *not* [`Locale::from_config`]'s `Zh`: the strings this
+/// serves were English literals before they were catalog entries, so an
+/// uninstalled process keeps emitting the same bytes it always did.
+///
+/// Never use this for text the model reads — see the module docs.
+#[must_use]
+pub fn t_ui(msg: Msg<'_>) -> String {
+    t(msg, INSTALLED_LOCALE.get().copied().unwrap_or(Locale::En))
+}
+
 // ---------------------------------------------------------------------------
 // Message keys
 // ---------------------------------------------------------------------------
 
 /// All user-facing system messages that need translation.
+///
+/// `Copy` so a key can sit in a `const` table next to the wire value it labels
+/// (`scratchpad::APPROVAL_CHOICES`) — that pairing is what keeps a translated
+/// label from drifting away from the untranslated value it stands for.
+#[derive(Clone, Copy)]
 pub enum Msg<'a> {
     // --- /new command ---
-    NewSessionStarted { topic_suffix: &'a str },
+    NewSessionStarted {
+        topic_suffix: &'a str,
+    },
 
     // --- /stop command ---
     RunStopped,
@@ -48,10 +120,34 @@ pub enum Msg<'a> {
     ErrReceipt(ReceiptKind),
 
     // --- busy queue (§4.8) ---
-    QueuedMessagesDropped { count: usize },
+    QueuedMessagesDropped {
+        count: usize,
+    },
 
     // --- topic generation prompt (sent to LLM, not shown to user) ---
-    TopicGenerationPrompt { conversation: &'a str },
+    TopicGenerationPrompt {
+        conversation: &'a str,
+    },
+
+    // --- clarification card (`src/clarification/render.rs`) ---
+    /// Reply hint under a question with no choices.
+    ClarifyReplyFreeText,
+    /// Reply hint under a pick-one menu.
+    ClarifyReplyPickOne,
+    /// Reply hint under a pick-several menu.
+    ClarifyReplyPickMany,
+
+    // --- plan-approval card (`scratchpad(action='request_approval')`) ---
+    /// Verdict label: approve as written.
+    PlanApproveLabel,
+    /// Verdict label: approve with changes, described in free text.
+    PlanReviseLabel,
+    /// Verdict label: do not do this.
+    PlanRejectLabel,
+    /// Lead-in for the plan's objective line.
+    PlanObjectiveLead,
+    /// The question itself, under the rendered plan.
+    PlanApprovePrompt,
 }
 
 /// The user-facing classification of a failed run — the **single** bucket set
@@ -254,6 +350,44 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
                  (under 10 words, no punctuation):\n\n{conversation}"
             )
         }
+
+        // ============================================================
+        // Clarification card
+        //
+        // The English arms are byte-identical to the literals these
+        // replaced, so an install that never calls `install_locale`
+        // renders exactly what it rendered before the catalog existed.
+        // ============================================================
+        (Msg::ClarifyReplyFreeText, Locale::En) => "Reply with your answer.".into(),
+        (Msg::ClarifyReplyFreeText, Locale::Zh) => "请回复你的答案。".into(),
+        (Msg::ClarifyReplyPickOne, Locale::En) => "Reply with the number or your answer.".into(),
+        (Msg::ClarifyReplyPickOne, Locale::Zh) => "请回复序号，或直接写出你的答案。".into(),
+        (Msg::ClarifyReplyPickMany, Locale::En) => {
+            "Reply with the numbers separated by commas, or your own answer.".into()
+        }
+        (Msg::ClarifyReplyPickMany, Locale::Zh) => {
+            "请回复多个序号（用逗号分隔），或直接写出你的答案。".into()
+        }
+
+        // ============================================================
+        // Plan-approval card
+        //
+        // Only the LABELS are translated. Each option's `value` stays the
+        // English key (`approved` / `revise` / `rejected`) because that is
+        // what `verdict_of` reads and what the model is told it received —
+        // translating it would make the verdict depend on a display
+        // setting.
+        // ============================================================
+        (Msg::PlanApproveLabel, Locale::En) => "Approve — start working the plan".into(),
+        (Msg::PlanApproveLabel, Locale::Zh) => "批准 — 按这份计划开始执行".into(),
+        (Msg::PlanReviseLabel, Locale::En) => "Revise — tell me what to change".into(),
+        (Msg::PlanReviseLabel, Locale::Zh) => "修改 — 告诉我要改什么".into(),
+        (Msg::PlanRejectLabel, Locale::En) => "Reject — do not do this".into(),
+        (Msg::PlanRejectLabel, Locale::Zh) => "否决 — 不要做这件事".into(),
+        (Msg::PlanObjectiveLead, Locale::En) => "Objective".into(),
+        (Msg::PlanObjectiveLead, Locale::Zh) => "目标".into(),
+        (Msg::PlanApprovePrompt, Locale::En) => "Approve this plan?".into(),
+        (Msg::PlanApprovePrompt, Locale::Zh) => "是否批准这份计划？".into(),
     }
 }
 
@@ -659,5 +793,57 @@ mod tests {
         let msg = t(Msg::ErrReceipt(ReceiptKind::Auth), Locale::En);
         assert!(msg.contains("API key"), "{msg}");
         assert!(!msg.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
+    }
+
+    /// Every clarification-card key must actually be translated. A new entry
+    /// whose Zh arm was pasted from the En arm is the failure mode this
+    /// catches: it reads as "localized" everywhere else in the codebase and
+    /// ships an English string to a Chinese user.
+    #[test]
+    fn every_clarification_key_is_translated_in_both_locales() {
+        let keys = [
+            Msg::ClarifyReplyFreeText,
+            Msg::ClarifyReplyPickOne,
+            Msg::ClarifyReplyPickMany,
+            Msg::PlanApproveLabel,
+            Msg::PlanReviseLabel,
+            Msg::PlanRejectLabel,
+            Msg::PlanObjectiveLead,
+            Msg::PlanApprovePrompt,
+        ];
+        for key in keys {
+            let en = t(key, Locale::En);
+            let zh = t(key, Locale::Zh);
+            assert!(!en.trim().is_empty(), "empty en arm");
+            assert!(!zh.trim().is_empty(), "empty zh arm");
+            assert_ne!(en, zh, "a key rendered identically in both locales: {en}");
+            assert!(
+                zh.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "the zh arm carries no Chinese: {zh}"
+            );
+            assert!(
+                !en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "the en arm carries Chinese: {en}"
+            );
+        }
+    }
+
+    /// An uninstalled process keeps emitting the bytes it emitted before the
+    /// catalog existed. This is deliberately NOT `Locale::from_config`'s `Zh`
+    /// default: these strings were English literals, and unit tests, CLI
+    /// subcommands and embeddings never call `install_locale`.
+    ///
+    /// ⚠️ Reads a process-global, so it holds only while nothing in this test
+    /// binary calls `install_locale` — today only the server binary does. A lib
+    /// test that installs a locale would break this one and every English
+    /// assertion in `clarification::render`; if one is ever needed, the global
+    /// has to become a parameter first.
+    #[test]
+    fn the_ui_fallback_is_english_not_the_config_default() {
+        assert_eq!(
+            t_ui(Msg::ClarifyReplyPickOne),
+            t(Msg::ClarifyReplyPickOne, Locale::En)
+        );
+        assert_eq!(Locale::from_config(None), Locale::Zh);
     }
 }

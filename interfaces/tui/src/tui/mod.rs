@@ -334,13 +334,10 @@ async fn main_loop(
             }
 
             // -- Dialog --
-            Action::DialogSelect(idx) => {
-                if let Some(dialog) = &mut state.dialog {
-                    if idx < dialog.options.len() {
-                        dialog.selected = idx;
-                    }
-                }
-            }
+            // `DialogSelect` is gone: its only producer was the out-of-range
+            // branch of the digit key, and an out-of-range digit is now the
+            // first character of a typed answer. Moving the highlight is what
+            // the arrow keys do, and they mutate `DialogState` in place.
             Action::RespondToDialog { session_key, reply } => {
                 // The AskUser answer resolves the clarification the server's
                 // `ask_user` tool is parked on — keyed by session, not run

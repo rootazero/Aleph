@@ -115,6 +115,29 @@ pub enum StreamEvent {
         answered: usize,
     },
 
+    /// Terminal twin of [`Self::AskUser`]: the question on `session_key` is
+    /// over and nothing is parked on an answer any more.
+    ///
+    /// Without it a terminal client cannot know a question ended, so a card
+    /// that timed out (600 s) or was cancelled with its run keeps holding
+    /// focus and claiming the agent is waiting. Core has published
+    /// `stream.clarification_ended` since the card was introduced; the Panel
+    /// consumed it and this enum simply had no variant for it, which is why the
+    /// TUI never saw it.
+    ///
+    /// Keyed by session, not run — the clarification registry is per-session
+    /// and so is the answer route, exactly as for [`Self::AskUser`].
+    ClarificationEnded {
+        #[serde(default)]
+        session_key: String,
+        /// How it ended, verbatim from core (`resolved` / `cancelled` /
+        /// `expired`). Opaque on purpose: it is displayed, never branched on,
+        /// so core's outcome vocabulary does not acquire a second definition
+        /// here that can drift from the first.
+        #[serde(default)]
+        outcome: String,
+    },
+
     /// Structured reasoning block with semantic type
     ReasoningBlock {
         run_id: String,
@@ -577,6 +600,12 @@ impl StreamEvent {
             | Self::RunRetrying { run_id, .. }
             | Self::ModelResolved { run_id, .. }
             | Self::ContextGauge { run_id, .. } => run_id,
+            // Session-keyed, not run-keyed: the clarification registry has one
+            // live entry per session and the frame is published out of band by
+            // the registry itself, which holds no run. Returning "" is honest —
+            // an empty run id is what every run-keyed consumer already treats
+            // as "not mine".
+            Self::ClarificationEnded { .. } => "",
         }
     }
 }

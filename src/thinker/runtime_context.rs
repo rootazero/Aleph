@@ -701,10 +701,15 @@ mod tests {
         });
         std::thread::sleep(std::time::Duration::from_millis(20));
         let cache = REPO_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        let try_result = cache.try_lock();
+        // Sample, then release *before* joining. Binding the guard across
+        // `join()` deadlocks on success: the worker's closing insert needs this
+        // same mutex, so the pass case was the wedge case — and under the full
+        // suite's parallel load (where 20 ms rarely outlasts the worker) it hung
+        // the whole run instead of failing it.
+        let free_during_io = cache.try_lock().is_ok();
         handle.join().unwrap();
         assert!(
-            try_result.is_ok(),
+            free_during_io,
             "lock was held during I/O — concurrent callers would have blocked"
         );
     }

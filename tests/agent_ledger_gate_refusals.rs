@@ -146,8 +146,14 @@ async fn a_gate_that_refuses_without_an_approval_channel_still_signs_a_record() 
         .execute("needs_confirmation", json!({}))
         .await
         .unwrap_err();
+    // Matched case-insensitively on the PHRASE, not on a sentence-initial
+    // "no approval": the refusal grew a leading clause when confirmation
+    // reasons became a named enum, which moved "No approval channel…" to the
+    // middle of the message and silently turned this assertion red.
     assert!(
-        err.to_string().contains("no approval"),
+        err.to_string()
+            .to_lowercase()
+            .contains("no approval channel"),
         "expected the fail-closed confirmation refusal, got {err:?}"
     );
 

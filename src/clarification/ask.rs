@@ -42,9 +42,18 @@
 //! message in a third party's datastore — Telegram keeps it forever, and no
 //! amount of masking on our side reaches it. So a secret question is delivered
 //! **only** over the event bus, and when the turn's channel is a real
-//! registered transport the tool refuses outright with an actionable error
-//! rather than routing the credential through it. That is a property of the
-//! shape, not of a caller remembering to check.
+//! registered transport the credential is never handed to it. That is a
+//! property of the shape, not of a caller remembering to check.
+//!
+//! The rule is per **question**, not per call. It began as a per-call refusal,
+//! which meant one secret question among four threw away the three that had
+//! nothing wrong with them: the human never saw them, the model got an error
+//! instead of three answers, and the round trip bought nothing. A call is now
+//! **partitioned** — the answerable questions go to the channel in order, the
+//! secret ones are withheld and named in [`AskOutcome::withheld_secret`] so the
+//! caller can tell the model exactly what it did not get and why. A call whose
+//! questions are *all* secret still fails: there is nothing left to ask, and a
+//! parked tool with no question is a 600-second stall.
 
 use tracing::{info, warn};
 
@@ -118,19 +127,50 @@ const HEADLESS_DENIAL: &str = "no human is reachable on this run (it is unattend
      do not retry: decide with the information you have and state the assumption you made, or \
      stop and report what you needed.";
 
+/// What [`ask`] came back with.
+///
+/// Two facts, because a call can partly succeed: the answers the human gave,
+/// and the questions they were never shown. A bare [`ClarificationResult`]
+/// could only express the first, so the second used to be an error that
+/// discarded the first along with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskOutcome {
+    /// One answer per question that was actually asked, in order.
+    pub result: ClarificationResult,
+    /// Ids of the questions withheld because they ask for a credential and the
+    /// turn's only transport is a third-party channel. Empty on every other
+    /// path — the caller's branch on it is the branch on "did the human see
+    /// everything I asked".
+    pub withheld_secret: Vec<String>,
+}
+
+/// Why a secret question cannot go to `channel`, phrased for the model.
+fn secret_refusal(channel_id: &str) -> String {
+    format!(
+        "a reply on `{channel_id}` is a permanent message in that service's history, so a \
+         credential must not be asked for there. Have the user set it through the Panel, or via \
+         configuration, and continue without it."
+    )
+}
+
 /// Register `request` for the current turn, deliver it, and park until the
 /// human has answered every question (or the wait times out).
+///
+/// Secret questions are dropped from `request` when the turn's transport is a
+/// registered third-party channel; the ids come back in
+/// [`AskOutcome::withheld_secret`] and the rest of the call proceeds normally.
 ///
 /// # Errors
 ///
 /// Returns a tool error when no human can be reached — no turn context, an
-/// unattended run, no transport that can carry the question, or a secret
-/// question on a channel turn. Every one of them is immediate: a tool that
-/// cannot be answered must fail fast, never occupy the 600-second wait.
+/// unattended run, no transport that can carry the question, or *every*
+/// question being a secret on a channel turn. Every one of them is immediate: a
+/// tool that cannot be answered must fail fast, never occupy the 600-second
+/// wait.
 pub async fn ask(
     deps: &ClarificationDeps,
-    request: ClarificationRequest,
-) -> Result<ClarificationResult> {
+    mut request: ClarificationRequest,
+) -> Result<AskOutcome> {
     let Some(turn) = current_turn_context() else {
         return Err(AlephError::tool(
             "this tool is only available inside an interactive channel turn",
@@ -143,20 +183,36 @@ pub async fn ask(
     }
     let session_key = turn.session_key.to_string();
 
-    let wants_secret = request.questions.iter().any(|q| q.secret);
     let channel = ChannelId::new(&turn.channel_id);
     // Resolved BEFORE registering so a refusal never leaves a pending entry
     // behind. `None` is the Panel's `gui:chat` pseudo-channel (and any turn
     // whose channel is stopped): no third-party transport exists, so a secret
     // has somewhere safe to go.
     let channel_is_third_party = deps.channels.get(&channel).await.is_some();
-    if wants_secret && channel_is_third_party {
-        return Err(AlephError::tool(format!(
-            "cannot ask for a secret over `{}`: the reply would be a permanent message in that \
-             service's history. Ask the user to set it through the Panel, or via configuration, \
-             and continue without it.",
-            turn.channel_id
-        )));
+    let mut withheld_secret: Vec<String> = Vec::new();
+    if channel_is_third_party && request.questions.iter().any(|q| q.secret) {
+        // `take` rather than `iter().cloned()`: every question is moved into
+        // exactly one of the two halves, and the only two ways out of this
+        // block both replace `request` (or return), so the emptied original is
+        // never observable.
+        let (askable, secret): (Vec<_>, Vec<_>) = std::mem::take(&mut request.questions)
+            .into_iter()
+            .partition(|q| !q.secret);
+        withheld_secret = secret.into_iter().map(|q| q.id).collect();
+        // Nothing left to ask: parking on an empty request is a stall, so this
+        // is the one case that still fails the whole call.
+        let Ok(narrowed) = ClarificationRequest::new(askable) else {
+            return Err(AlephError::tool(format!(
+                "nothing in this call can be asked here: {}",
+                secret_refusal(&turn.channel_id)
+            )));
+        };
+        info!(
+            channel = %turn.channel_id,
+            withheld = withheld_secret.len(),
+            "ask: withholding secret questions from a third-party channel"
+        );
+        request = narrowed;
     }
 
     // Register BEFORE delivery so a reply arriving immediately is not lost.
@@ -170,6 +226,12 @@ pub async fn ask(
         )
         .await;
 
+    // Recomputed AFTER the partition, so it can only be true on a turn with no
+    // third-party transport (the Panel's `gui:chat`, or a stopped channel).
+    // The bus is then not a fallback but the only route the credential may
+    // take, and saying so here keeps that explicit rather than leaving it to a
+    // channel send that would have failed anyway.
+    let wants_secret = request.questions.iter().any(|q| q.secret);
     let delivered = if wants_secret {
         // Bus only — see the module doc.
         publish_to_event_bus(&turn, &request)
@@ -211,19 +273,24 @@ pub async fn ask(
     // cleanup pass reaps the registry entry. Cancellation of the run drops this
     // whole future (run-level `tokio::select!` in `execution_engine::execute`),
     // which closes the receiver and lets `is_live` retire the entry.
-    match tokio::time::timeout(DEFAULT_CLARIFY_TIMEOUT, rx).await {
-        Ok(Ok(result)) => Ok(result),
+    let result = match tokio::time::timeout(DEFAULT_CLARIFY_TIMEOUT, rx).await {
+        Ok(Ok(result)) => result,
         // Sender dropped without sending — treat as cancelled.
-        Ok(Err(_)) => Ok(ClarificationResult::cancelled()),
+        Ok(Err(_)) => ClarificationResult::cancelled(),
         // Timed out — reap the stale registry entry. `cleanup_expired` rather
         // than `cancel` so the terminal frame clients receive says `expired`,
         // matching the status returned here; the entry is past its deadline by
         // construction (same duration, registered first).
         Err(_) => {
             deps.clarification.cleanup_expired().await;
-            Ok(ClarificationResult::timeout())
+            ClarificationResult::timeout()
         }
-    }
+    };
+
+    Ok(AskOutcome {
+        result,
+        withheld_secret,
+    })
 }
 
 #[cfg(test)]
@@ -300,10 +367,7 @@ mod tests {
         }
     }
 
-    async fn ask_in(
-        turn: TurnContext,
-        request: ClarificationRequest,
-    ) -> Result<ClarificationResult> {
+    async fn ask_in(turn: TurnContext, request: ClarificationRequest) -> Result<AskOutcome> {
         let d = deps();
         TURN_CONTEXT
             .scope(turn, async move { ask(&d, request).await })
@@ -364,32 +428,130 @@ mod tests {
         assert!(err.to_string().contains("failed to deliver"), "{err}");
     }
 
-    /// A secret must never be routed to a third-party channel. The registry in
-    /// this fixture holds no channel, so `gui:chat`-shaped turns fall through
-    /// to the bus and only the delivery error remains — which is the point:
-    /// the refusal below is about the transport, not about the question.
-    #[tokio::test]
-    async fn a_secret_question_is_refused_when_the_turn_has_a_real_channel() {
+    /// A registry holding one live `telegram` transport, so
+    /// `deps.channels.get(..)` answers `Some` — the only thing the secret
+    /// partition reads.
+    async fn deps_with_registered_channel() -> ClarificationDeps {
         let registry = Arc::new(ChannelRegistry::new());
         registry
             .register(Box::new(RegisteredChannel::new("telegram")))
             .await;
-        let d = ClarificationDeps::new(Arc::new(ClarificationManager::new()), registry);
-        let request = ClarificationRequest::new(vec![ClarificationQuestion::text(
-            "token",
-            "Paste the API token",
-        )
-        .with_secret(true)])
-        .expect("one question");
+        ClarificationDeps::new(Arc::new(ClarificationManager::new()), registry)
+    }
+
+    fn secret_question(id: &str) -> ClarificationQuestion {
+        ClarificationQuestion::text(id, "Paste the API token").with_secret(true)
+    }
+
+    /// A call with nothing BUT secrets still fails outright: withholding every
+    /// question would park the tool on a request no reply can complete.
+    #[tokio::test]
+    async fn an_all_secret_call_is_refused_when_the_turn_has_a_real_channel() {
+        let d = deps_with_registered_channel().await;
+        let request =
+            ClarificationRequest::new(vec![secret_question("token")]).expect("one question");
 
         let err = TURN_CONTEXT
             .scope(routable_turn(), async move { ask(&d, request).await })
             .await
             .expect_err("a secret must not be routed through a third-party channel");
         let msg = err.to_string();
-        assert!(msg.contains("secret"), "{msg}");
         assert!(msg.contains("permanent message"), "{msg}");
-        // No pending entry may be left behind by a refusal.
         assert!(msg.contains("continue without it"), "{msg}");
+    }
+
+    /// The partition. One secret question among several used to throw away the
+    /// answerable ones with it — the human never saw three perfectly ordinary
+    /// questions because a fourth asked for a token.
+    ///
+    /// The delivery error is what this fixture can observe (no bus is wired in
+    /// a unit test, and the fake channel's `send` is the only transport), and
+    /// it is enough for the claim being made: the call got PAST the secret gate
+    /// on a turn whose channel is a registered third-party transport, which the
+    /// all-secret test above proves it does not do when there is nothing else
+    /// to ask. What reaches the human is covered end-to-end in the real-machine
+    /// walk.
+    #[tokio::test]
+    async fn a_secret_among_others_withholds_only_itself() {
+        let registry = Arc::new(ChannelRegistry::new());
+        registry
+            .register(Box::new(RegisteredChannel::new("telegram")))
+            .await;
+        let manager = Arc::new(ClarificationManager::new());
+        let d = ClarificationDeps::new(Arc::clone(&manager), registry);
+        let request = ClarificationRequest::new(vec![
+            ClarificationQuestion::text("env", "Which environment?"),
+            secret_question("token"),
+            ClarificationQuestion::text("ticket", "Ticket id?"),
+        ])
+        .expect("three questions");
+
+        // The fake channel accepts the send, so the call parks. Drive it from a
+        // second task: answer the two askable questions and confirm the secret
+        // one is neither asked nor waited for.
+        //
+        // ONE turn, and the key read off it — `SessionKey::ephemeral` mints a
+        // fresh UUID per call, so building the fixture twice would leave this
+        // test resolving a session the tool never registered.
+        let turn = routable_turn();
+        let key = turn.session_key.to_string();
+        let asker = tokio::spawn(TURN_CONTEXT.scope(turn, async move { ask(&d, request).await }));
+
+        // Wait for registration, then walk the questions one reply at a time —
+        // exactly what the inbound router does for a channel turn.
+        let registered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !manager.has_pending(&key).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(registered.is_ok(), "the call must park on a live question");
+
+        let pending = manager.list_pending().await;
+        let entry = pending.first().expect("one pending clarification");
+        let asked: Vec<&str> = entry.questions.iter().map(|q| q.id.as_str()).collect();
+        assert_eq!(
+            asked,
+            vec!["env", "ticket"],
+            "the secret question must not be registered for a channel turn"
+        );
+        assert!(
+            entry.questions.iter().all(|q| !q.secret),
+            "nothing marked secret may reach a third-party transport"
+        );
+
+        assert!(manager.resolve(&key, "staging").await.consumed());
+        assert!(manager.resolve(&key, "ABC-1").await.consumed());
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), asker)
+            .await
+            .expect("the parked call must resolve")
+            .expect("task must not panic")
+            .expect("a partly-askable call must succeed");
+        assert_eq!(outcome.withheld_secret, vec!["token".to_string()]);
+        let answers: Vec<&str> = outcome
+            .result
+            .answers
+            .iter()
+            .map(|a| a.question_id.as_str())
+            .collect();
+        assert_eq!(answers, vec!["env", "ticket"]);
+    }
+
+    /// The Panel's `gui:chat` is never in the registry, so nothing is withheld
+    /// there — that is the whole reason a secret has somewhere to go at all.
+    #[tokio::test]
+    async fn a_secret_is_not_withheld_when_there_is_no_third_party_transport() {
+        let d = deps();
+        let request =
+            ClarificationRequest::new(vec![secret_question("token")]).expect("one question");
+        let err = TURN_CONTEXT
+            .scope(routable_turn(), async move { ask(&d, request).await })
+            .await
+            .expect_err("no bus is wired in a unit test, so delivery still fails");
+        // The refusal is about delivery, NOT about the question being secret.
+        let msg = err.to_string();
+        assert!(msg.contains("failed to deliver"), "{msg}");
+        assert!(!msg.contains("permanent message"), "{msg}");
     }
 }
