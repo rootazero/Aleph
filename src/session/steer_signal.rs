@@ -8,10 +8,25 @@
 //! milliseconds away — except when the turn's Act phase is sitting inside a
 //! tool that is deliberately asleep:
 //!
-//! | park site | ceiling |
-//! |---|---|
-//! | `subagent{action:"wait"}` | `MAX_WAIT_TIMEOUT_SECS` = 600 s |
-//! | `bash{process_action:"wait"}` | `WAIT_MAX_TIMEOUT_SECS` = 170 s |
+//! | park site | ceiling | seam |
+//! |---|---|---|
+//! | `subagent{action:"wait"}` | 600 s | arm in its existing `select!` |
+//! | `bash{process_action:"wait"}` | 170 s | arm at the call site, re-poll on wake |
+//! | `browser{action:"wait_for"}` | 120 s | [`SteerWatch::race`] — one opaque call |
+//! | `desktop{wait_visual}` | 60 s | arm on the inter-poll sleep |
+//!
+//! Two seams, and which one a park gets is not taste. **Where we own the loop,
+//! hook the loop** — nothing in flight is abandoned to get out, and the
+//! worst-case latency is one iteration rather than the remaining window.
+//! **Where the wait is one opaque call** with no loop of ours (a backend
+//! method, an MCP server-side wait), the only seam is to race and drop, which
+//! [`SteerWatch::race`] names so it can be unit-tested; a call site that takes
+//! that route owes an argument for why a drop is already safe there.
+//!
+//! `ask_user` and the exec approval gate are **not** on this list and should
+//! not be added: a park that exists to ask the user a question must not be
+//! ended by the user answering somewhere else, and a fail-closed approval may
+//! only be resolved by a decision.
 //!
 //! For that whole window the steer is durably written, the client was told
 //! `HandledInline` (success), and **nothing happens** — no error, no red test,
@@ -220,6 +235,37 @@ impl SteerWatch {
         std::future::pending::<()>().await
     }
 
+    /// Run `fut` unless a steer lands first: `Some(output)` if it finished,
+    /// `None` if a steer arrived — in which case `fut` is **dropped, not
+    /// awaited**.
+    ///
+    /// For the parks that are a single opaque call with no loop of ours to hook
+    /// (`browser_wait_for` hands its whole wait to a backend). Parks we own the
+    /// loop of should arm [`Self::steered`] as one branch of their existing
+    /// `select!` instead — that way no in-flight work is abandoned to get out.
+    ///
+    /// # Ordering: finished work beats the interruption
+    ///
+    /// `biased` with `fut` first, so a future that is *already* ready when the
+    /// steer lands still yields its answer. Reporting "interrupted" for a wait
+    /// that had just succeeded would throw away a real result and cost the
+    /// model a turn to rediscover it — the same rule the `bash` wait applies by
+    /// re-polling for `Done` on its steer path. A pending `fut` falls through to
+    /// the steer branch on the same poll, so nothing is delayed.
+    ///
+    /// Dropping `fut` is only appropriate where a drop is already this call's
+    /// cancellation semantics; see the call site's own justification.
+    pub async fn race<F>(&mut self, fut: F) -> Option<F::Output>
+    where
+        F: std::future::Future,
+    {
+        tokio::select! {
+            biased;
+            out = fut => Some(out),
+            () = self.steered() => None,
+        }
+    }
+
     /// Whether this watch can ever fire — `false` outside a turn scope.
     /// Exposed for tests and for callers that want to say so in a log line.
     #[must_use]
@@ -378,6 +424,57 @@ mod tests {
             !lock().contains_key(&key),
             "an idle session must hold no station"
         );
+    }
+
+    // ---- race(): the wrapper shape, for parks that are one opaque call ----
+
+    #[tokio::test]
+    async fn race_yields_the_future_when_no_steer_arrives() {
+        let s = sk("race-no-steer");
+        let mut w = watch_session(&s);
+        assert_eq!(w.race(async { 7 }).await, Some(7));
+    }
+
+    #[tokio::test]
+    async fn race_drops_a_pending_future_when_a_steer_lands() {
+        let s = sk("race-steer-wins");
+        let mut w = watch_session(&s);
+        let steered = s.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            note_steer(&steered);
+        });
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            w.race(async {
+                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                7
+            }),
+        )
+        .await
+        .expect("a steer must end the race well inside the future's own window");
+        assert_eq!(out, None, "a steer yields None, and the future is dropped");
+    }
+
+    /// A future that is already ready when the steer lands must still win: the
+    /// alternative throws away a real answer and costs a turn to rediscover it.
+    #[tokio::test]
+    async fn race_prefers_a_ready_future_over_a_simultaneous_steer() {
+        let s = sk("race-ready-beats-steer");
+        let mut w = watch_session(&s);
+        note_steer(&s); // pending before the race even starts
+        assert_eq!(
+            w.race(std::future::ready(7)).await,
+            Some(7),
+            "finished work beats the interruption"
+        );
+    }
+
+    #[tokio::test]
+    async fn race_on_an_inert_watch_always_yields_the_future() {
+        let mut inert = watch_current_turn();
+        assert!(!inert.is_armed());
+        assert_eq!(inert.race(std::future::ready(7)).await, Some(7));
     }
 
     #[test]
