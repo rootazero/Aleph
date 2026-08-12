@@ -149,18 +149,35 @@ impl TabRegistry {
     }
 }
 
-/// Parse one `list_tabs` line into `(id, url)`.
+/// One parsed line of a backend `list_tabs` listing.
+///
+/// `selected` carries the driver's own answer to "which tab is active" — the
+/// `" [selected]"` annotation both drivers append. It used to be parsed and
+/// thrown away, which forced every caller to guess "active = last-listed"; a
+/// `switch_tab` falsifies that guess, and the guess is what the post-navigation
+/// audit and the read-time SSRF re-check run on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabLine {
+    pub id: String,
+    pub url: String,
+    /// The listing marked this line as the driver's currently selected tab.
+    pub selected: bool,
+}
+
+/// Parse one `list_tabs` line.
 ///
 /// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
-/// CLI format `"Tab N: URL"`, and strips a trailing annotation such as
+/// CLI format `"Tab N: URL"`, splitting off a trailing annotation such as
 /// `" [selected]"` from the URL. Returns `None` for lines without a numeric id.
 ///
 /// Mirrors `parse_tab_line` in the browser-tools layer
 /// (`builtin_tools::browser_tools::mod`) — an acknowledged layering
 /// duplication: the `browser` crate layer may not reach up into
 /// `builtin_tools`, so the reaper and the post-navigation audit keep their own
-/// copy here.
-fn parse_tab_line(line: &str) -> Option<(String, String)> {
+/// copy here. That copy still guesses "active = last-listed"; it should call
+/// [`active_tab_id`] instead.
+#[must_use]
+pub fn parse_tab_line(line: &str) -> Option<TabLine> {
     let line = line.trim();
     // Normalize "Tab N: URL" → "N: URL" so both formats share one parser.
     let rest = line.strip_prefix("Tab ").unwrap_or(line);
@@ -170,13 +187,21 @@ fn parse_tab_line(line: &str) -> Option<(String, String)> {
         return None;
     }
     let url_part = rest.get(colon + 2..)?.trim();
-    // Strip a trailing " [selected]" / " [active]" style annotation so the URL
-    // round-trips through a strict parser.
-    let url = match url_part.rfind(" [") {
-        Some(pos) if url_part.ends_with(']') => url_part.get(..pos).unwrap_or(url_part).trim(),
-        _ => url_part,
+    // Split a trailing " [selected]" / " [active]" style annotation off the URL
+    // so the URL round-trips through a strict parser AND the marker survives.
+    let (url, annotation) = match url_part.rfind(" [") {
+        Some(pos) if url_part.ends_with(']') => (
+            url_part.get(..pos).unwrap_or(url_part).trim(),
+            url_part.get(pos..).unwrap_or("").trim(),
+        ),
+        _ => (url_part, ""),
     };
-    Some((id.to_string(), url.to_string()))
+    let marker = annotation.to_ascii_lowercase();
+    Some(TabLine {
+        id: id.to_string(),
+        url: url.to_string(),
+        selected: marker.contains("selected") || marker.contains("active"),
+    })
 }
 
 /// Extract numeric tab ids from a backend `list_tabs` listing.
@@ -190,18 +215,43 @@ pub fn parse_tab_ids(tabs_text: &str) -> Vec<String> {
     tabs_text
         .lines()
         .filter_map(parse_tab_line)
-        .map(|(id, _)| id)
+        .map(|t| t.id)
         .collect()
 }
 
-/// The active (most recent) tab's URL, or `None` if no tabs parse.
-/// Uses the last entry because newly opened tabs append to the list.
-pub(crate) fn parse_active_tab_url(tabs_text: &str) -> Option<String> {
-    tabs_text
-        .lines()
-        .filter_map(parse_tab_line)
-        .map(|(_, url)| url)
-        .next_back()
+/// The active tab of a listing — **the single source for that question**.
+///
+/// Prefers the driver's explicit `[selected]` marker and falls back to the
+/// last-listed line only when the listing carries no marker at all (newly
+/// opened tabs append, so "last" is the right guess for a listing that cannot
+/// answer). The distinction matters for correctness, not cosmetics: the
+/// post-navigation audit and the read-time SSRF re-check must vet the very tab
+/// whose content is then read, and after a `switch_tab` the last-listed tab is
+/// not that tab.
+#[must_use]
+pub fn active_tab(tabs_text: &str) -> Option<TabLine> {
+    let mut last = None;
+    for line in tabs_text.lines() {
+        let Some(tab) = parse_tab_line(line) else {
+            continue;
+        };
+        if tab.selected {
+            return Some(tab);
+        }
+        last = Some(tab);
+    }
+    last
+}
+
+/// The active tab's id — see [`active_tab`].
+#[must_use]
+pub fn active_tab_id(tabs_text: &str) -> Option<String> {
+    active_tab(tabs_text).map(|t| t.id)
+}
+
+/// The active tab's URL — see [`active_tab`].
+pub(crate) fn active_tab_url(tabs_text: &str) -> Option<String> {
+    active_tab(tabs_text).map(|t| t.url)
 }
 
 /// The current URL of `tab_id` as reported by `list_tabs`, if present.
@@ -209,8 +259,8 @@ pub(crate) fn tab_url_for(tabs_text: &str, tab_id: &str) -> Option<String> {
     tabs_text
         .lines()
         .filter_map(parse_tab_line)
-        .rfind(|(id, _)| id == tab_id)
-        .map(|(_, url)| url)
+        .rfind(|t| t.id == tab_id)
+        .map(|t| t.url)
 }
 
 #[cfg(test)]
@@ -229,14 +279,40 @@ mod tests {
     }
 
     #[test]
-    fn parse_active_tab_url_picks_last_and_strips_annotation() {
+    fn active_tab_prefers_the_selected_marker_over_the_last_line() {
+        // The marker is the driver's own answer; "last-listed" is only the
+        // fallback for a listing that carries no marker.
+        let text = "1: https://a.com [selected]\nTab 2: http://10.0.0.1/x";
+        assert_eq!(active_tab_id(text).as_deref(), Some("1"));
+        assert_eq!(active_tab_url(text).as_deref(), Some("https://a.com"));
+        // …and the URL still has the annotation stripped when the marked tab
+        // is the annotated one.
         let text = "1: https://a.com\nTab 2: http://10.0.0.1/x [selected]";
-        assert_eq!(
-            parse_active_tab_url(text).as_deref(),
-            Some("http://10.0.0.1/x")
-        );
-        assert_eq!(parse_active_tab_url(""), None);
-        assert_eq!(parse_active_tab_url("noise only"), None);
+        assert_eq!(active_tab_id(text).as_deref(), Some("2"));
+        assert_eq!(active_tab_url(text).as_deref(), Some("http://10.0.0.1/x"));
+    }
+
+    #[test]
+    fn active_tab_falls_back_to_last_listed_without_a_marker() {
+        let text = "1: https://a.com\nTab 2: https://b.com";
+        assert_eq!(active_tab_id(text).as_deref(), Some("2"));
+        assert_eq!(active_tab_url(text).as_deref(), Some("https://b.com"));
+        assert_eq!(active_tab_id(""), None);
+        assert_eq!(active_tab_url("noise only"), None);
+    }
+
+    #[test]
+    fn parse_tab_line_reports_the_selection_marker() {
+        let plain = parse_tab_line("1: https://a.com").unwrap();
+        assert!(!plain.selected);
+        assert_eq!(plain.url, "https://a.com");
+        let marked = parse_tab_line("Tab 2: https://b.com [selected]").unwrap();
+        assert!(marked.selected);
+        assert_eq!(marked.url, "https://b.com");
+        // An unrelated bracket annotation is not a selection claim.
+        let other = parse_tab_line("3: https://c.com [background]").unwrap();
+        assert!(!other.selected);
+        assert_eq!(other.url, "https://c.com");
     }
 
     #[test]

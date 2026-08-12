@@ -120,49 +120,30 @@ impl BrowserBackend for ChromeMcpBackend {
             .check_navigation(url)
             .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        // DNS-pin before any tool call so the pin is staged for the next
-        // Chrome launch (defense against rebinding between check_url and
-        // Chrome's own resolver). Playwright CLI path keeps gateway validation
-        // only — pin is Chrome-specific.
-        let pin = self
-            .ssrf_guard
-            .pin_host_resolver_args(url)
-            .await
-            .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        self.driver.set_pending_launch_pin(&self.profile_name, pin);
         // Hold the per-profile lock across new_page + re-list so a concurrent
         // open on the same profile can't append a tab between the two calls and
-        // steal our "newest is last" id. List inline (not via the public
-        // `list_tabs`, which would re-acquire the same lock and deadlock).
+        // steal the id of the tab we just opened. List inline (not via the
+        // public `list_tabs`, which would re-acquire the same lock and
+        // deadlock).
         let _guard = self.profile_guard().await;
         self.call("new_page", json!({ "url": url })).await?;
         let tabs_text = Self::extract_text(&self.call("list_pages", json!({})).await?);
-        // Parse last numeric id (newest tab is last). Reuse the shared parser
-        // so the chrome-devtools-mcp "N: URL" and the playwright-cli
-        // "Tab N: URL" formats both yield the same id.
-        let last_id = super::tab_registry::parse_tab_ids(&tabs_text)
-            .last()
-            .cloned();
+        // `new_page` also *selects* the page it opened, so the driver's own
+        // `[selected]` marker names our tab; last-listed is the fallback for a
+        // listing that carries no marker. Shared parser, so the
+        // chrome-devtools-mcp "N: URL" and playwright-cli "Tab N: URL" formats
+        // both yield the same id.
+        let new_id = super::tab_registry::active_tab_id(&tabs_text);
 
-        // Post-navigation audit on the listing already fetched above (no
-        // extra round trip): a redirect may have landed the new tab on a
-        // blocked origin the navigation-time guard never saw. On a violation,
-        // quarantine — best-effort close the fresh tab — then surface the
-        // policy error. `close_tab` takes no profile lock, so calling it
-        // under `_guard` cannot deadlock.
-        if let Err(e) =
-            super::post_nav::verify_landed_url(&self.ssrf_guard, &tabs_text, last_id.as_deref())
-                .await
-        {
-            if let Some(ref id) = last_id {
-                if let Err(close_err) = self.close_tab(id).await {
-                    tracing::warn!(tab = %id, error = %close_err, "post-navigation quarantine: failed to close blocked tab");
-                }
-            }
-            return Err(e);
-        }
+        // Post-navigation audit on the listing already fetched above (no extra
+        // round trip): a redirect may have landed the new tab on a blocked
+        // origin the navigation-time guard never saw. The quarantine (closing
+        // the tab) lives in `post_nav`, not here — `close_tab` takes no profile
+        // lock, so running it under `_guard` cannot deadlock.
+        super::post_nav::audit_listing(self, &self.ssrf_guard, &tabs_text, new_id.as_deref())
+            .await?;
 
-        last_id.ok_or_else(|| {
+        new_id.ok_or_else(|| {
             BrowserError::TabNotFound(format!("Could not determine tab ID after opening {url}"))
         })
     }
@@ -188,17 +169,6 @@ impl BrowserBackend for ChromeMcpBackend {
             .check_navigation(url)
             .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        // DNS-pin: see open_tab. Re-staged on every navigate so the pin tracks
-        // the latest target hostname within the session. (Process-wide flag —
-        // Chrome's --host-resolver-rules applies to its whole lifetime, so a
-        // mid-session host change is a known residual TOCTOU window that
-        // check_url still validates at navigation time.)
-        let pin = self
-            .ssrf_guard
-            .pin_host_resolver_args(url)
-            .await
-            .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        self.driver.set_pending_launch_pin(&self.profile_name, pin);
         self.select_and_call(tab_id, "navigate_page", json!({ "url": url }))
             .await?;
         // Post-navigation audit: a redirect may have landed the tab on a
@@ -378,6 +348,16 @@ impl BrowserBackend for ChromeMcpBackend {
     /// `Text` waits use the MCP-native `wait_for` tool (server-side wait, no
     /// polling round-trips). The MCP tool has no selector/URL arms, so those
     /// conditions fall back to the shared evaluate-polling loop.
+    ///
+    /// Lock scope is deliberately narrower than every other action here: the
+    /// per-profile guard is held across `select_page` and then released before
+    /// the wait is issued. The wait binds to the page the server has selected
+    /// when the request arrives, and it can legitimately run for the full
+    /// clamped budget (up to 120s) — holding the guard for that long freezes
+    /// every other operation on the profile, including the `close_tab` or
+    /// navigation that would end the wait. A concurrent op that re-selects
+    /// inside the one round-trip window is the residual cost, and it is a
+    /// cheaper one than a two-minute profile-wide stall.
     async fn wait_for(
         &self,
         tab_id: &str,
@@ -387,38 +367,22 @@ impl BrowserBackend for ChromeMcpBackend {
         let WaitCondition::Text(text) = condition else {
             return super::wait_probe::poll_wait_for(self, tab_id, condition, timeout_ms).await;
         };
-        match self
-            .select_and_call(
-                tab_id,
+        {
+            let _guard = self.profile_guard().await;
+            self.select_page(tab_id).await?;
+        }
+        let outcome = self
+            .call(
                 "wait_for",
                 // Note: chrome-devtools-mcp rejects a `timeout` above its own
                 // ceiling with a validation error (not a timeout result) — the
                 // tool layer's clamp (≤120s) keeps us inside the accepted range.
                 json!({ "text": text, "timeout": timeout_ms }),
             )
-            .await
-        {
+            .await;
+        match outcome {
             Ok(_) => Ok(true),
-            // A genuine wait *timeout* means "text did not appear" → Ok(false).
-            // A structured TabNotFound (tab closed/navigated away mid-wait) or any
-            // other transport error is a real failure and must propagate — do NOT
-            // fold it into Ok(false). Note the previous broad `contains("not found")`
-            // collided with the "Tab not found" message and silently swallowed it.
-            Err(BrowserError::TabNotFound(_)) => Err(BrowserError::TabNotFound(format!(
-                "tab '{tab_id}' disappeared while waiting for text"
-            ))),
-            Err(e) => {
-                let msg = e.to_string().to_lowercase();
-                if msg.contains("timeout")
-                    || msg.contains("timed out")
-                    || msg.contains("did not appear")
-                    || msg.contains("exceeded")
-                {
-                    Ok(false)
-                } else {
-                    Err(e)
-                }
-            }
+            Err(e) => classify_wait_error(e, tab_id),
         }
     }
 
@@ -587,6 +551,40 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 }
 
+/// Turn a failed MCP `wait_for` call into a wait outcome.
+///
+/// Only ONE failure means "the text did not appear": the tool answered, and its
+/// answer was its own timeout. That folds to `Ok(false)` — an absent condition
+/// is an answer, not an error.
+///
+/// Everything else propagates:
+/// - [`BrowserError::ChromeMcpTransport`] — nothing ever looked at the page
+///   (dead pipe, or the MCP client's own 60s request timeout firing under a
+///   120s wait budget). Its message contains the word "timeout" too, which is
+///   exactly why the classification cannot be a string match: reporting "the
+///   text is not on the page" when the transport died is a confident lie.
+/// - [`BrowserError::TabNotFound`] — the tab went away mid-wait.
+fn classify_wait_error(err: BrowserError, tab_id: &str) -> Result<bool, BrowserError> {
+    match err {
+        BrowserError::TabNotFound(_) => Err(BrowserError::TabNotFound(format!(
+            "tab '{tab_id}' disappeared while waiting for text"
+        ))),
+        BrowserError::ChromeMcpError(ref msg) => {
+            let lower = msg.to_lowercase();
+            if lower.contains("timeout")
+                || lower.contains("timed out")
+                || lower.contains("did not appear")
+                || lower.contains("exceeded")
+            {
+                Ok(false)
+            } else {
+                Err(err)
+            }
+        }
+        other => Err(other),
+    }
+}
+
 /// Best-effort extraction of page URL and title from the first few lines of a snapshot.
 /// Chrome `DevTools` MCP snapshot text begins with header lines like:
 ///
@@ -641,6 +639,43 @@ mod tests {
     fn test_extract_text_plain_string() {
         let result = serde_json::json!("plain");
         assert_eq!(ChromeMcpBackend::extract_text(&result), "plain");
+    }
+
+    #[test]
+    fn wait_error_folds_only_the_tools_own_timeout() {
+        // The tool answered "I waited and the text never showed" → Ok(false).
+        let found = classify_wait_error(
+            BrowserError::ChromeMcpError("Timeout 5000ms exceeded".into()),
+            "1",
+        )
+        .expect("the tool's own timeout is an answer, not an error");
+        assert!(!found);
+    }
+
+    #[test]
+    fn wait_error_never_folds_a_transport_failure() {
+        // Same word, opposite meaning: nothing looked at the page. Folding this
+        // into Ok(false) tells the model the text is not on the page.
+        let err = classify_wait_error(
+            BrowserError::ChromeMcpTransport("request timeout after 60s".into()),
+            "1",
+        )
+        .expect_err("a transport failure is not a wait verdict");
+        assert!(
+            matches!(err, BrowserError::ChromeMcpTransport(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn wait_error_reports_a_vanished_tab() {
+        let err = classify_wait_error(BrowserError::TabNotFound("gone".into()), "7")
+            .expect_err("a closed tab is a failure");
+        assert!(err.to_string().contains("tab '7' disappeared"), "{err}");
+        // A non-timeout tool error is a real failure too.
+        assert!(
+            classify_wait_error(BrowserError::ChromeMcpError("invalid args".into()), "1").is_err()
+        );
     }
 
     #[test]

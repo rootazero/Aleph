@@ -159,7 +159,13 @@ impl AlephTool for BrowserWaitForTool {
         // would overflow the polling backend's `Instant + Duration` (panic) and
         // pin a tab indefinitely.
         let timeout_ms = clamp_timeout(args.timeout_ms);
-        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+        // The GUARDED resolver: every wait except a bare delay polls the page
+        // through `backend.evaluate` JS probes (see `browser::wait_probe`), so
+        // this is a content read and owes the same read-time SSRF re-check
+        // every other content read performs. Navigation-time guards only vet
+        // the URL navigated *to*; a redirect or a JS `location` change can put
+        // a forbidden internal origin under the probe afterwards.
+        match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => {
                 match backend.wait_for(&tab_id, &condition, timeout_ms).await {
                     Ok(found) => Ok(BrowserWaitForOutput {
@@ -174,14 +180,17 @@ impl AlephTool for BrowserWaitForTool {
                     Err(e) => Ok(BrowserWaitForOutput {
                         success: false,
                         found: false,
-                        message: Some(format!("Wait failed: {e}")),
+                        message: Some(format!(
+                            "Wait failed: {}",
+                            super::backend_error_text(&self.manager, &e)
+                        )),
                     }),
                 }
             }
             Err(e) => Ok(BrowserWaitForOutput {
                 success: false,
                 found: false,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }
@@ -208,6 +217,36 @@ mod tests {
             time_ms,
             timeout_ms: 1000,
         }
+    }
+
+    /// `browser_wait_for` reads the page (its probes run through
+    /// `backend.evaluate`), so it must resolve its tab through the GUARDED
+    /// helper — the one that re-checks the tab's CURRENT url against the SSRF
+    /// policy. It used the unguarded helper, which vets only the URL that was
+    /// navigated *to*, so a redirect or a JS `location` change could park a
+    /// forbidden internal origin under the probe.
+    ///
+    /// Source-level because there is no seam to inject a fake backend into a
+    /// `ProfileManager`; what is being asserted is "which helper does this call
+    /// site name", which no runtime observation can answer.
+    ///
+    /// CRLF-safe: `\r` is stripped before splitting and the split token is not
+    /// anchored to a line boundary — on a Windows checkout an anchored `"\n…"`
+    /// token matches nothing and the guard silently scans its own test module
+    /// instead of the production code (CLAUDE.md §10).
+    #[test]
+    fn wait_for_resolves_its_tab_through_the_guarded_helper() {
+        let src = include_str!("wait_for.rs").replace('\r', "");
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(&src).to_string();
+        assert!(
+            prod.contains("make_backend_and_tab_guarded(&self.manager"),
+            "the production half of wait_for.rs no longer resolves through the guarded helper"
+        );
+        assert!(
+            !prod.contains("make_backend_and_tab(&self.manager"),
+            "wait_for.rs resolves through the UNGUARDED helper: page reads skip the \
+             read-time SSRF re-check"
+        );
     }
 
     #[test]
