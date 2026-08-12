@@ -168,6 +168,15 @@ fn is_http_token(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c))
 }
 
+/// Maximum recursion depth for schema walking.
+///
+/// A server that emits a deeply-nested `anyOf` chain (or any other
+/// composition keyword) can otherwise drive the recursive walk to a
+/// stack overflow. The cap is well above the practical schema depth
+/// (the spec example is 2–3 levels) and the error case is
+/// `Unreachable` so the tool is rejected cleanly.
+const MAX_SCHEMA_DEPTH: usize = 32;
+
 /// Collect the parameter-mirroring annotations from a tool's `inputSchema`.
 ///
 /// Returns `Err` when the tool definition must be rejected outright. Schemas
@@ -175,7 +184,7 @@ fn is_http_token(value: &str) -> bool {
 /// costs one walk of a small object.
 pub fn collect_param_headers(input_schema: &Value) -> Result<Vec<ParamHeader>, ParamHeaderError> {
     let mut found = Vec::new();
-    walk_schema(input_schema, &mut Vec::new(), true, &mut found)?;
+    walk_schema(input_schema, &mut Vec::new(), true, 0, &mut found)?;
 
     let mut seen: HashSet<String> = HashSet::new();
     for header in &found {
@@ -213,12 +222,27 @@ const UNREACHABLE_KEYS: &[&str] = &[
 /// `reachable` tracks whether the current node sits on a chain of `properties`
 /// keys from the root. Descending through anything in [`UNREACHABLE_KEYS`]
 /// clears it permanently for that subtree.
+///
+/// `depth` caps the recursion at [`MAX_SCHEMA_DEPTH`] so a server that
+/// emits a deeply-nested chain (and nothing the spec actually requires)
+/// cannot drive the walk to a stack overflow. The cap is checked here
+/// rather than at the top of `collect_param_headers` because the
+/// `properties` recursion is the path where depth actually grows.
 fn walk_schema(
     node: &Value,
     path: &mut Vec<String>,
     reachable: bool,
+    depth: usize,
     found: &mut Vec<ParamHeader>,
 ) -> Result<(), ParamHeaderError> {
+    if depth > MAX_SCHEMA_DEPTH {
+        // Treat the deepest annotation we would have surfaced as if it
+        // sat under an unreachable key — the static walker cannot reach
+        // it, so the tool must be rejected.
+        let deepest = path.last().cloned().unwrap_or_default();
+        return Err(ParamHeaderError::Unreachable(deepest));
+    }
+
     let Some(object) = node.as_object() else {
         return Ok(());
     };
@@ -251,7 +275,7 @@ fn walk_schema(
     if let Some(properties) = object.get("properties").and_then(Value::as_object) {
         for (key, child) in properties {
             path.push(key.clone());
-            let result = walk_schema(child, path, reachable, found);
+            let result = walk_schema(child, path, reachable, depth + 1, found);
             path.pop();
             result?;
         }
@@ -264,15 +288,20 @@ fn walk_schema(
         match child {
             Value::Array(items) => {
                 for item in items {
-                    walk_schema(item, path, false, found)?;
+                    walk_schema(item, path, false, depth + 1, found)?;
                 }
             }
             Value::Object(map) if matches!(*key, "$defs" | "definitions" | "patternProperties") => {
                 for sub in map.values() {
-                    walk_schema(sub, path, false, found)?;
+                    walk_schema(sub, path, false, depth + 1, found)?;
                 }
             }
-            other => walk_schema(other, path, false, found)?,
+            Value::Null => {
+                // `null` is not a schema; nothing to walk. The previous code
+                // called walk_schema recursively on every null, which is a
+                // perf footgun on large schemas with many null defaults.
+            }
+            other => walk_schema(other, path, false, depth + 1, found)?,
         }
     }
 
@@ -556,6 +585,24 @@ mod tests {
                 declared: "<unspecified>".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn depth_is_capped() {
+        // A chain of 64 nested `anyOf` exceeds the cap and surfaces as
+        // Unreachable; the tool is rejected outright rather than blowing
+        // the stack.
+        let mut schema = serde_json::json!({"type": "string", "x-mcp-header": "Deep"});
+        for _ in 0..64 {
+            schema = serde_json::json!({
+                "type": "object",
+                "properties": {"inner": schema},
+            });
+        }
+        assert!(matches!(
+            collect_param_headers(&schema),
+            Err(ParamHeaderError::Unreachable(_))
+        ));
     }
 
     #[test]
