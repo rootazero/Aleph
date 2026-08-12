@@ -179,23 +179,7 @@ impl PiiEngine {
         self.excluded_providers.contains(&lower)
     }
 
-    /// True when at least one platform-policy field is populated.
-///
-/// Used by [`effective_config`] to skip the full `PrivacyConfig` clone
-/// when the named platform policy has no effect (every field is `None`),
-/// or when no policy is defined for the requested platform.
-fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
-    policy.pii_filtering.is_some()
-        || policy.id_card.is_some()
-        || policy.bank_card.is_some()
-        || policy.phone.is_some()
-        || policy.api_key.is_some()
-        || policy.ssh_key.is_some()
-        || policy.email.is_some()
-        || policy.ip_address.is_some()
-}
-
-/// Look up a platform policy by key, case-insensitively.
+    /// Look up a platform policy by key, case-insensitively.
     ///
     /// Operators may write `[platform_policies.Telegram]` while the runtime
     /// passes `"telegram"` (or vice versa). Without a case-insensitive
@@ -429,6 +413,23 @@ fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
         let config = self.effective_config(platform);
         self.filter_with_config(text, &config)
     }
+}
+
+/// True when at least one platform-policy field is populated.
+///
+/// Used by [`PiiEngine::effective_config`] to skip the full
+/// `PrivacyConfig` clone when the named platform policy has no effect
+/// (every field is `None`), or when no policy is defined for the
+/// requested platform.
+fn policy_has_any_override(policy: &crate::config::PlatformPiiPolicy) -> bool {
+    policy.pii_filtering.is_some()
+        || policy.id_card.is_some()
+        || policy.bank_card.is_some()
+        || policy.phone.is_some()
+        || policy.api_key.is_some()
+        || policy.ssh_key.is_some()
+        || policy.email.is_some()
+        || policy.ip_address.is_some()
 }
 
 /// Remove overlapping matches, keeping the highest-priority one.
