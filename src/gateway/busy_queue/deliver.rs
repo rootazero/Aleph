@@ -66,7 +66,9 @@ impl DeliveryOutcome {
 /// lane's wake signal (fired by the engine's slot release, by ticket
 /// departures, and — for a steer refused because the running loop's burst is at
 /// `max_pending_steering` — by that burst draining), with `wake_fallback_secs`
-/// as a safety net; it never polls on a short timer.
+/// as a safety net; it never polls on a short timer. A drain that raced the
+/// backpressure mark emits no signal to catch, so the waiter also compares the
+/// lane's drain epoch across its attempt.
 ///
 /// Takes an already-issued [`TicketGuard`] rather than registering internally,
 /// because the ticket must be taken **synchronously on the arrival path**
@@ -102,6 +104,13 @@ where
         tokio::pin!(notified);
         notified.as_mut().enable();
 
+        // Snapshot the burst-drain level for the same reason the wake is armed
+        // here, but for the signal arming cannot cover: a drain that commits
+        // between the steering check and its mark emits no wake at all (see
+        // `mark_awaiting_burst_drain`), so there is no edge to have caught —
+        // only this counter moving.
+        let drain_epoch = ticket.drain_epoch();
+
         if ticket.is_cancelled() {
             return DeliveryOutcome::Purged;
         }
@@ -118,6 +127,15 @@ where
                             ticket = ticket.id(),
                             "session busy; message queued for FIFO delivery"
                         );
+                    }
+                    // This attempt was refused for steering backpressure and a
+                    // drain landed while it ran: the wake for it was suppressed
+                    // (the lane was still unmarked when it fired), so parking
+                    // would sleep through the exact edge being waited on. Retry
+                    // instead. Only a deferred attempt asks — a `Queue`-mode
+                    // waiter is never marked and keeps its slot-free cadence.
+                    if ticket.awaits_burst_drain() && ticket.drain_epoch() != drain_epoch {
+                        continue;
                     }
                 }
                 other => return DeliveryOutcome::Executed(other),
@@ -138,7 +156,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::busy_queue::{mark_admitted, notify_slot_free, purge, register};
+    use crate::gateway::busy_queue::{
+        mark_admitted, mark_awaiting_burst_drain, notify_burst_drained, notify_slot_free, purge,
+        register,
+    };
     use crate::sync_primitives::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -320,6 +341,45 @@ mod tests {
             .await
             .expect("the slot-free signal must wake the waiter")
             .expect("delivery task panicked");
+        assert!(matches!(outcome, DeliveryOutcome::Executed(Ok(()))));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    /// The check-then-mark window (`mark_awaiting_burst_drain`'s own caveat).
+    /// `try_inject_steering` reads the burst, finds it at the cap, and only
+    /// *then* marks the ticket — so a drain committing in between fires
+    /// `notify_burst_drained` against a lane whose ticket is not yet marked,
+    /// the lane filter suppresses it, and **no wake is emitted at all**.
+    /// Arming the `Notify` early cannot rescue a signal that never fired,
+    /// which is why the waiter also snapshots the lane's drain epoch.
+    ///
+    /// `wake_fallback_secs` is an hour and nothing else signals this lane, so
+    /// a pass proves the deferred steer noticed the drain it raced rather than
+    /// sleeping through it and degrading into a separate run.
+    #[tokio::test]
+    async fn a_drain_that_races_the_mark_does_not_park_the_deferred_steer() {
+        let s = "bqd-drain-race";
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let a = Arc::clone(&attempts);
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            deliver(s, "run-drain-race", cfg(4), move || {
+                let a = Arc::clone(&a);
+                async move {
+                    if a.fetch_add(1, Ordering::SeqCst) == 0 {
+                        // Production order, verbatim: the drain commits while
+                        // the lane is still unmarked, the mark lands after it.
+                        notify_burst_drained(s);
+                        mark_awaiting_burst_drain(s, "run-drain-race");
+                        Err(ExecutionError::AgentBusy("agent".into()))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }),
+        )
+        .await
+        .expect("a deferred steer must not park on the drain it raced");
         assert!(matches!(outcome, DeliveryOutcome::Executed(Ok(()))));
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
