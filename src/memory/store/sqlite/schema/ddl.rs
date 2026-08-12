@@ -129,6 +129,11 @@ CREATE TABLE IF NOT EXISTS notes_links (
 CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_note);
 CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(agent_id, to_note);
 CREATE INDEX IF NOT EXISTS idx_notes_links_to_raw ON notes_links(agent_id, to_raw);
+-- Partial index over the dangling subset: relink_unresolved scans only
+-- rows with status = 'dangling', which is typically << 1 % of the table.
+-- The full (agent_id, status) index would bloat; the partial variant is
+-- O(1) lookups and lives in the same page as the data.
+CREATE INDEX IF NOT EXISTS idx_notes_links_dangling ON notes_links(agent_id) WHERE status = 'dangling';
 "#;
 
 pub const NOTES_SOURCES_DDL: &str = r#"
