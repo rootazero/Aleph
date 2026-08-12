@@ -147,10 +147,7 @@ where
                     // now free we run `local`; only the second failure is
                     // surfaced.
                     match crate::cli::ipc_client::forward_to_server::<T>(
-                        data_dir,
-                        method,
-                        route,
-                        ipc_body,
+                        data_dir, method, route, ipc_body,
                     ) {
                         Ok(out) => Ok(out),
                         Err(fwd_err) => match acquire_or_held(data_dir) {
