@@ -45,7 +45,7 @@ pub use reload_impact::ReloadImpact;
 pub use schema::generate_config_schema_json;
 
 // Re-export UI hints
-pub use ui_hints::{build_ui_hints, ConfigUiHints};
+pub use ui_hints::ConfigUiHints;
 
 // Re-export types for backward compatibility
 pub use types::*;

@@ -83,26 +83,8 @@ impl ConfigUiHints {
 /// preserved while the producer is intentionally retired. Re-introduce a
 /// `definitions.rs` builder when a genuine schema-driven settings form is
 /// actually wired.
+#[allow(dead_code)] // no caller today; remove when the producer is reintroduced or the DTO drops
 #[must_use]
 pub fn build_ui_hints() -> ConfigUiHints {
     ConfigUiHints::new()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_empty_hints() {
-        let hints = ConfigUiHints::new();
-        assert!(hints.groups.is_empty());
-        assert!(hints.fields.is_empty());
-    }
-
-    #[test]
-    fn test_build_ui_hints_returns_empty() {
-        let hints = build_ui_hints();
-        assert!(hints.groups.is_empty());
-        assert!(hints.fields.is_empty());
-    }
 }

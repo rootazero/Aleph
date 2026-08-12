@@ -13,7 +13,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 
 use super::search::default_true;
 
@@ -64,34 +63,11 @@ impl Default for ToolServiceConfig {
 }
 
 impl ToolServiceConfig {
-    /// Resolve the default timeout as a `Duration`.
-    ///
-    /// `pub(crate)` — no external caller; the `ToolService` builder that used
-    /// to consume this was removed in 2026-05-20 when the Phase 2 facade chain
-    /// was deleted. Kept crate-scoped so sibling `config` modules can still
-    /// reach the `Duration` without forcing a public API surface.
-    pub(crate) const fn default_timeout(&self) -> Duration {
-        Duration::from_secs(self.default_timeout_seconds)
-    }
-
     /// Resolve the Act-phase parallel-dispatch cap as the harness's
     /// `Option<usize>` knob: `Some(n)` enables the fast path with concurrency
     /// `n`; the harness itself treats `Some(0..=1)` as disabled.
     pub const fn parallel_tool_concurrency_opt(&self) -> Option<usize> {
         Some(self.parallel_tool_concurrency)
-    }
-
-    /// Resolve the per-tool overrides as `Duration` values.
-    ///
-    /// `pub(crate)` — the only consumer is the `ToolService` constructor that
-    /// builds the `TimeoutLayer` overrides; promoting this to the public API
-    /// would advertise a `Duration` surface that callers should reach via the
-    /// `per_tool_seconds` field directly.
-    pub(crate) fn per_tool_durations(&self) -> HashMap<String, Duration> {
-        self.per_tool_seconds
-            .iter()
-            .map(|(k, v)| (k.clone(), Duration::from_secs(*v)))
-            .collect()
     }
 }
 
@@ -440,6 +416,7 @@ impl UnifiedToolsConfig {
     ///
     /// `pub(crate)` — no production caller; the master-and-per-tool gate is
     /// read by sibling `config` modules via the `native.fs` field directly.
+    #[allow(dead_code)] // lib build doesn't compile `#[cfg(test)]`; the in-module test exercises this
     pub(crate) fn is_fs_enabled(&self) -> bool {
         self.enabled && self.native.fs.as_ref().is_none_or(|c| c.enabled)
     }
@@ -447,6 +424,7 @@ impl UnifiedToolsConfig {
     /// Check if git service is enabled.
     ///
     /// `pub(crate)` — same rationale as [`is_fs_enabled`](Self::is_fs_enabled).
+    #[allow(dead_code)] // lib build doesn't compile `#[cfg(test)]`; the in-module test exercises this
     pub(crate) fn is_git_enabled(&self) -> bool {
         self.enabled && self.native.git.as_ref().is_none_or(|c| c.enabled)
     }
@@ -455,6 +433,7 @@ impl UnifiedToolsConfig {
     ///
     /// `pub(crate)` — no production caller; native shell gating is read via
     /// `native.shell` directly.
+    #[allow(dead_code)] // lib build doesn't compile `#[cfg(test)]`; the in-module test exercises this
     pub(crate) fn is_shell_enabled(&self) -> bool {
         self.enabled && self.native.shell.as_ref().is_some_and(|c| c.enabled)
     }
@@ -463,95 +442,14 @@ impl UnifiedToolsConfig {
     ///
     /// `pub(crate)` — no production caller; native system_info gating is read
     /// via `native.system_info` directly.
+    #[allow(dead_code)] // lib build doesn't compile `#[cfg(test)]`; the in-module test exercises this
     pub(crate) fn is_system_info_enabled(&self) -> bool {
         self.enabled && self.native.system_info.as_ref().is_none_or(|c| c.enabled)
-    }
-
-    /// Get filesystem allowed roots.
-    ///
-    /// `pub(crate)` — no external caller; left at crate scope so the helper
-    /// stays useful to other `config` modules without advertising a public
-    /// accessor that drifts from the underlying `NativeToolsConfig` shape.
-    pub(crate) fn fs_allowed_roots(&self) -> Vec<String> {
-        self.native
-            .fs
-            .as_ref()
-            .map_or(Vec::new(), |c| c.allowed_roots.clone())
-    }
-
-    /// Get git allowed repos.
-    ///
-    /// `pub(crate)` for the same reason as [`fs_allowed_roots`](Self::fs_allowed_roots).
-    pub(crate) fn git_allowed_repos(&self) -> Vec<String> {
-        self.native
-            .git
-            .as_ref()
-            .map_or(Vec::new(), |c| c.allowed_repos.clone())
-    }
-
-    /// Get shell configuration.
-    ///
-    /// `pub(crate)` — no production caller; native shell is read via
-    /// `native.shell` directly.
-    pub(crate) fn shell_config(&self) -> ShellToolConfig {
-        self.native.shell.clone().unwrap_or_default()
     }
 
     /// Check if clipboard service is enabled
     pub fn is_clipboard_enabled(&self) -> bool {
         self.enabled && self.native.clipboard.as_ref().is_none_or(|c| c.enabled)
-    }
-
-    /// Check if screen capture service is enabled.
-    ///
-    /// `pub(crate)` — there is no production consumer of this accessor in the
-    /// current code base; the unified tools surface is consulted per-tool
-    /// through the `native.screen_capture` field directly. Kept crate-scoped
-    /// so the master-switch / per-tool enable ladder stays available to
-    /// sibling `config` modules without inflating the public API.
-    pub(crate) fn is_screen_capture_enabled(&self) -> bool {
-        self.enabled
-            && self
-                .native
-                .screen_capture
-                .as_ref()
-                .is_none_or(|c| c.enabled)
-    }
-
-    /// Get screen capture configuration.
-    ///
-    /// `pub(crate)` — same rationale as [`is_screen_capture_enabled`](Self::is_screen_capture_enabled).
-    pub(crate) fn screen_capture_config(&self) -> ScreenCaptureToolConfig {
-        self.native.screen_capture.clone().unwrap_or_default()
-    }
-
-    /// Check if search tool service is enabled.
-    ///
-    /// `pub(crate)` — the search tool is enabled through
-    /// `native.search` directly; this accessor is a convenience for sibling
-    /// `config` modules and tests.
-    pub(crate) fn is_search_tool_enabled(&self) -> bool {
-        self.enabled && self.native.search.as_ref().is_none_or(|c| c.enabled)
-    }
-
-    /// Get search tool configuration.
-    ///
-    /// `pub(crate)` — same rationale as [`is_search_tool_enabled`](Self::is_search_tool_enabled).
-    pub(crate) fn search_tool_config(&self) -> SearchToolConfig {
-        self.native.search.clone().unwrap_or_default()
-    }
-
-    /// Get all enabled MCP servers.
-    ///
-    /// `pub(crate)` — there is no external caller; the MCP server roster is
-    /// read through the `mcp` field directly by the MCP manager. Kept
-    /// crate-scoped so the master-switch / per-server enable ladder remains
-    /// available to sibling `config` modules.
-    pub(crate) fn enabled_mcp_servers(&self) -> Vec<(&String, &McpServerConfig)> {
-        self.mcp
-            .iter()
-            .filter(|(_, config)| config.enabled)
-            .collect()
     }
 }
 

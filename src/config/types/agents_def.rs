@@ -160,9 +160,7 @@ impl AgentModelRef {
     /// Returns the model id (carried by both variants). Used only for display
     /// and "no-validation" paths; the real drop-detection resolution lives in
     /// `agent_resolver::resolve_model_ref`.
-    ///
-    /// `pub(crate)` — the only consumer is this module's own test; the real
-    /// production code pattern-matches [`AgentModelRef`] directly.
+    #[allow(dead_code)] // crated so the test pattern-matches via the helper; revisit with a real display consumer
     pub(crate) fn model_str(&self) -> &str {
         match self {
             Self::Qualified { model, .. } => model,

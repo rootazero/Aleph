@@ -51,12 +51,15 @@ impl BuiltinToolRegistry {
             SearchTool::with_api_key(config.tavily_api_key.clone())
         };
         let web_fetch_tool = {
-            let mut tool = WebFetchTool::new();
+            let mut tool = if let Some(ref cfg) = config.config {
+                let cfg_guard = cfg.read().await;
+                WebFetchTool::with_policy(&cfg_guard.policies.web_fetch)
+                    .with_ssrf_policy(cfg_guard.ssrf.clone())
+            } else {
+                WebFetchTool::new()
+            };
             if let Some(ref cfg) = config.config {
                 let cfg_guard = cfg.read().await;
-                tool = tool
-                    .with_policy(&cfg_guard.policies.web_fetch)
-                    .with_ssrf_policy(cfg_guard.ssrf.clone());
                 if let Some(ref fetch_cfg) = cfg_guard.fetch {
                     if fetch_cfg.enabled {
                         let vault = config.shared_token_manager.clone();
