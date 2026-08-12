@@ -83,6 +83,43 @@ task_local! {
     pub static TURN_CONTEXT: TurnContext;
 }
 
+task_local! {
+    /// The run's read-only planning latch, for the tool call currently
+    /// executing. `None` on every run that never entered the planning phase.
+    ///
+    /// Scoped by `ScopedToolService::execute` — the same chokepoint that scopes
+    /// [`TURN_CONTEXT`], and the same one that enforces the floor.
+    ///
+    /// **The handle, not a snapshot of its value**, and that distinction is the
+    /// whole reason this exists rather than a field on [`TurnContext`]: the
+    /// approved handoff lifts the floor from *inside* `execute_inner`, after
+    /// this scope was entered but before the tool body runs. A value copied at
+    /// scope time would tell the handoff tool it is still planning at the exact
+    /// moment it stopped being true — and that tool's only job is to report
+    /// which of the two happened.
+    ///
+    /// Read by exactly one consumer (`scratchpad`'s handoff arm, to tell "the
+    /// person approved" from "this session was never planning"). Tools do NOT
+    /// consult it to decide whether they may act: that judgement belongs to the
+    /// floor, at the chokepoint, where no tool can forget to ask.
+    pub static TURN_PLAN_GATE: Option<crate::sync_primitives::Arc<crate::tools::scoped::PlanGate>>;
+}
+
+/// The plan phase in force for the current tool call, read live.
+///
+/// [`PlanPhase::Building`](crate::config::types::policies::PlanPhase::Building)
+/// outside a scope — direct calls, non-gateway paths, tests — which is the
+/// correct answer there: nothing outside a gated run is planning.
+#[must_use]
+pub fn current_plan_phase() -> crate::config::types::policies::PlanPhase {
+    TURN_PLAN_GATE
+        .try_with(|g| {
+            g.as_ref()
+                .map_or_else(Default::default, |gate| gate.phase())
+        })
+        .unwrap_or_default()
+}
+
 tokio::task_local! {
     /// Raw channel user id of the human whose message triggered the current
     /// run — the approval "originator".

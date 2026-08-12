@@ -11,6 +11,10 @@ behaviour that a unit test can only assert about a pure function.
 ./qa/busy_input/run.sh interrupt     # §4.8 Round-8 ①, channel inbound
 ./qa/busy_input/run.sh queue         # channel inbound, nothing cancelled
 KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
+
+./qa/plan_handoff/run.sh handoff     # §3.16 refuse -> card -> approve -> unlock
+./qa/plan_handoff/run.sh deny        # a declined plan leaves the floor engaged
+./qa/plan_handoff/run.sh floor       # explicit `allow` + `full` tier still lose
 ```
 
 Knobs (all optional): `KEEP=1` keeps the scratch dir, `SKIP_BUILD=1` reuses the
@@ -31,6 +35,27 @@ scripts both. Its `api_key` is inlined in the QA config, which works because
 `ProviderConfig.api_key` is `skip_serializing` but still *deserializes* — so
 the QA server never opens the real `secrets.vault`, and a run costs nothing and
 reaches no network.
+
+## What a scenario has to carry to be worth running
+
+**A control group, in the same process.** Every "X is absent while planning"
+claim is satisfied just as well by "X was never offered in this session mode at
+all", and the fixture cannot tell those apart from the inside. So
+`plan_handoff` opens every plan with one ordinary `building` turn and reads the
+absence claims against it: 179 tools offered to the control, 51 to the planning
+turn, and `file_write`/`bash` in the first set and not the second. Without that
+first number the whole scenario is a tautology with a green verdict.
+
+**Evidence the code under test cannot fake.** `mock_plan.py` records the
+`tools[]` array of every request. That array is assembled by the real server
+and is the only place the "hide the tool / rebuild the surface after the latch
+lifts" half of the floor is observable at all — a unit test can assert about
+`PlanPhase::hides` and about `cache_generation`, but not that the two meet on a
+live run.
+
+**A claim about wording, not just about effect.** Refusals reach the model as
+prose. `plan_handoff` asserts on the tool_result text, which is how it caught
+the one real defect this fixture has found so far — see below.
 
 ## Traps — each of these cost a debugging session
 
@@ -70,6 +95,26 @@ startup banner. "No output" is not "nothing happened".
 one level and you silently build a whole empty state tree, and every assertion
 that reads it passes vacuously.
 
+**`$REPO/target` may not exist.** This repo resolves a shared target directory,
+so a build launched from a git worktree lands in the MAIN checkout's tree.
+`busy_input/run.sh` hardcodes `$REPO/target` and works only because it has
+always been run from the main checkout; `plan_handoff/run.sh` asks
+`cargo metadata` instead. The failure is loud (`no binary at …`), which is the
+only reason it is a trap and not a bug.
+
+**A generated config already contains
+`[policies.tool_permissions.overrides]`** — an empty table. Appending your own
+copy of that header produces `duplicate key 'overrides'` and the server refuses
+to boot. It refuses correctly, but it prints its startup banner *first*, showing
+the DEFAULT gateway port, so the symptom reads as "it came up on the wrong
+port". `plan_handoff/add_overrides.py` inserts into the existing table.
+
+**`file_ops list` with `path: "."` fails** (`Directory not found: .`) — a run's
+tool calls do not resolve relative paths against the repo. That failure is a
+call that got *past* every gate, so a scenario asserting "the floor admitted it"
+must assert on the absence of the floor's refusal, not on the tool succeeding.
+Asserting success is asserting something the claim never said.
+
 ## What each scenario has actually proved on real hardware
 
 Last run 2026-08-11, debug build, mock provider, isolated HOME.
@@ -79,6 +124,36 @@ Last run 2026-08-11, debug build, mock provider, isolated HOME.
 | `burst-drain` | PASS | Steer #2 parked at `pending burst at cap; deferring to busy-queue backpressure, pending=1, cap=1`, then `injected user message into running loop` **6 ms** after the draining `assistant_message` committed, with the run still alive. The fallback tick was 600 s, so 6 ms can only be the drain edge. |
 | `interrupt` | PASS | `busy-input interrupt: cancelled running sibling and any delegated children`, and `run_finished{outcome: cancelled}` for the run that predated the arrival. The mode travelled config → `ChannelConfig` → run metadata → engine busy branch. |
 | `queue` | PASS | Zero cancellations, and `session busy; message queued for FIFO delivery, ticket=2` — proving the arrival was *queued*, not dropped. (Check that log line: "no cancellation" alone would also be satisfied by silently discarding the message.) |
+
+Last run 2026-08-12, debug build, mock provider, isolated HOME.
+
+| Scenario | Result | The evidence, not the verdict |
+|---|---|---|
+| `handoff` | PASS (13/13) | Control turn: 179 tools, `file_write` and `bash` both present. Planning turns: 51 tools, neither present. The card carried `allowed_decisions=["allow-once","deny"]` — no standing grant even though the connection was operator — and its text named the plan, not the scratchpad. After `allow-once`, **the very next turn of the same run** was offered 179 tools again and the `file_write` returned `Wrote 17 bytes to …`. `sessions.list` then reported `plan_phase: "building"`. |
+| `deny` | PASS (7/7) | Same card, answered `deny`. The tool result was `The user did not approve running 'scratchpad' (Denied)`, the next turn was still 51 tools, the `file_write` after it was still refused by the floor, and the session still read `plan_phase: "planning"`. A declined plan is not a lifted latch. |
+| `floor` | PASS (8/8) | Config carried `[policies.tool_permissions.overrides] bash = "allow"`, `file_write = "allow"`, session ran at `exec_tier: "full"` — the two things that beat the tier, and neither put either tool back in the 51-tool surface. `bash` refused by the floor. Same turn sequence: `file_ops list` admitted, `file_ops delete` refused — the argument-aware half, on one tool, on real hardware. |
+
+### The defect this fixture found
+
+`handoff` failed its first run on one claim, and the claim it failed was about
+*wording*: a `file_write` that reached dispatch anyway came back as
+
+> `file_write` is denied by `default` in the merged tool permission policy
+> (`[policies.tool_permissions]`, global → agent → channel, most restrictive wins).
+
+The effect was right and every word of the explanation was invented. No policy
+entry decided it — the read-only floor did — and the knob the sentence names
+would not have changed the outcome, while the one action that would
+(`request_build`) went unmentioned. The floor resolves a hidden tool to `Deny`
+at the chokepoint, an explicit policy entry produces the same `Deny`, and the
+consumer downstream had exactly one story to tell about both. Fixed by
+`GateRule::PlanFloor` + the attribution fork in `deny_rule`; pinned by
+`gate_chain::tests::a_floor_deny_names_the_floor_and_not_the_policy` (proven RED).
+
+Worth noting *why* only a live run could find it: the code comment at that gate
+asserted these calls "never reach here at all — they are absent from the
+surface". Absent from the surface is not unreachable, and a real model proved it
+in the first minute.
 
 ## Pairing is not optional
 

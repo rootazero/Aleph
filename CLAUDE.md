@@ -269,6 +269,8 @@
 - **上限 / 信号量 / 注册表的生命周期必须不短于它约束的那个东西** —— 判据一句话：**这个约束会不会比被它约束的对象先死**？`SubagentTool` 是 per-request 构造，而后台子代理是刻意活过 run 的 detached task ⇒ 第 N 轮的孩子握着 S_N 的 permit，第 N+1 轮拿到全新的 S_{N+1} **又是满额**，operator 配 4 而实际几十个同时打 provider。同一个错配在 `BackgroundAgentTracker` 上以**相反症状**发生过（per-request tracker "silently dropped every result once the spawning run returned"）——那次丢的是结果，这次丢的是约束。修法是把它键到真正的约束单元（会话）上并用 `Weak` 持有：permit 自带 `Arc`，所以"还在飞的孩子"天然把条目撑住，空闲即可回收 → §4.13c
 - **一条只写在散文里的裁定，防不住下一个真诚的修复者** —— 「刻意不做」记录的用途是拦住**重提**，它拦不住**顺手修好**：本轮我读文档之前就已经把 §5.3 那条 2026-08-07 用户裁定（会话授权不进 unattended 续跑）当成 bug 修了，理由自洽、测试全绿、方向正好相反。入口不是"要不要重提这个议题"，而是**用户报的那个症状**（「我的会话授权怎么不生效了」）把人直接领到那两个代码块前面。判据两句：① **一条裁定如果只有散文，它欠一条会红的测试**——测试要**先证明该机制在正常情形下确实生效**（授权在 attended 会话里确实抑制重问），再断言被裁定的那一侧，否则它可能因为别的原因绿；② 反过来，**动一个"看起来是 bug"的顺序/默认值之前，先 grep 它在 `docs/reference/` 里有没有名字**——这类裁定按定义长得像 bug，那正是它需要被写下来的原因
 - **一个布尔够挡住调用，不够解释调用——而下游有三个消费者都在等那句解释** —— `a || b || c` 形状的闸，人看到的卡、模型收到的拒绝、审计读到的 detail 三处拿到的是同一句对**所有臂**都成立、对**哪条都不可行动**的套话。把"为什么"做成一个**有名字的有序枚举**（一个 `id()` 给机器、一个 `reason()` 给人），排序判据只有一条：**这句 reason 不许误导读者「改什么能改变结果」**——所以**不可移除的地板排第一**（对同时命中显式 `ask` 条目的 `vault_store` 报"策略说 ask"，等于把运维指向一个改了也没用的设置）。配一条「链分类的集合 == 闸住的集合」的守卫：有闸必有因、有因必有闸
+- **⚠️ 第二半：那个枚举一旦有了第二个作者，归因就会被「发明」出来——而且发明它的是一段一直很正确的老代码** —— 上一条讲的是把套话拆成枚举；这条讲的是**枚举建好之后新增一个产出同一个值的规则**。只读规划地板让 `effective_permission` 对被隐藏的工具返回 `Deny`，而 `Deny` 一直是显式 `[policies.tool_permissions]` 条目的产物，于是 `deny_rule` 对一次**地板**拒绝报出「`file_write` is denied by `default` in the merged tool permission policy」——没有任何策略条目做过这个决定，它点名的旋钮改了也不会改变结果，而唯一能改变结果的动作一个字没提。**老代码一行没动、单测全绿、效果完全正确，只有那句话是编的。** 判据三句：① 新增一条**产出既有裁决值**的规则时，去看**谁在把那个值翻译成一句话**，那句话现在有两个可能的作者而它只认识一个；② 归因的问法不是「谁赢了」而是**「把我这条规则拿掉，原来那个还拒不拒」**（一个反事实查询，`permission_ignoring_plan_floor`）——拒 ⇒ 老规则是诚实答案（我这条即使解除也没用），不拒 ⇒ 我是作者；③ **胜出顺序与解释顺序回答的是两个问题，允许相反**：地板在 chokepoint 上必须赢在最前（否则一条 `allow` 掏空它），在解释链上却排在策略之后（因为策略拒绝时批准也没用）。配套：尾巴上那句「去改 X」也属于规则而非调用点（`GateRule::deny_followup`）——对策略拒绝是对的，对地板是把人指向一个改不动它的旋钮。
+- **「不在工具表里」不等于「够不到」——而这条差别只有真机看得见** —— 上一条的成因。我在那道闸上写下的注释是「这类调用 never reach here at all，它们已经被 `permission_for` 判成 `Deny` 且不在工具表里」，于是那条路径的文案四轮无人检查。真机第一分钟就证伪：**名字可以从对话上文记得、可以猜、可以被一个 `BeforeToolCall` 改写进来**。判据：写下「X 到不了这里」之前，先问 **X 是不是一个字符串**；是字符串就到得了，隐藏只降低概率不构成不变量——所以那条路径上的每一句话都得是真的，不能只是「理论上无人读」。（同族：§0「守卫要断言效果到达了，不是调用发生了」——这条是它的反面，**断言一条路径不可达之前先证明它不可达**。）
 - **`HashMap` 上的"最严格者胜出"，动作是确定的，胜出的那条 key 不是** —— `restrictive_min` 可交换 ⇒ **值**不受迭代序影响，于是没人多想；但一旦要把**是哪条规则**说给人听（卡片引用 override key），同等严格度下引哪条就成了随机的，同一张卡两次渲染可能指向不同条目。判据：**把一个聚合结果的"来源"暴露出去之前，先问这个来源在无序容器上唯一吗**；不唯一就补一条确定性破平（字典序最小 key），并用「重建 N 次 map 重采样迭代序」的测试钉住——不是断言一次
 - **两个子系统是孪生时，一边修好的判据要主动搬过去，而不是等它在另一边被重新发现** —— cron 与 heartbeat 在**三个**共同问题上曾有分歧（慢任务阻不阻塞循环 / 投递失败算不算失败 / 告警投递失败要不要寄存），每一次都是 heartbeat 对、cron 错，而 cron 那侧的错法各不相同、各自静默。改动其中一个时问：**这个判据的孪生子系统怎么回答同一个问题**？答案不同就有一个是 bug。收敛时真源落在被依赖的一侧（`tasks/shared/`），不要复制 → §4.13c。**2026-08-11 第三次复发，这次孪生的是两个断路器**：`GuardianBreaker`（provider 健康）一直是 `Closed/Open/HalfOpen` + 300s 冷却 + `record_success` 复位，而 `DenialLedger` 的会话暂停**只增不减、任何批准都不复位、永不重开**——两者对「熔断了怎么恢复」给出了相反的答案，且后者的常量 doc 与模块 doc 都自称「**连续** 3 次」。症状最贵的那一面是**它打到的是最认真的用户**：对三件**不同**的事说「不」＝该会话此后每一道确认门（含 chat-tier 设备唯一的授权途径）无卡直接拒，出口只剩把档位拉宽——**一个把用户推向最不安全设置的闸已经反转了自己的目的**。判据补一句：**"熔断/暂停/降级"这类状态，写下它的同一笔里就要回答"什么让它恢复"**；答不上就不是断路器，是保险丝 → SECURITY.md《The denial breaker recovers》
 - **「先认领、后执行」的调度，界限要在执行时刻成立** —— 只在入队处判等于没判（`loop timeout_minutes` 曾在上限之后多跑 119 分钟）。**推论（适用于任何长跑单元）**：凡「先认领、后执行」的调度，界限要在**执行时刻**成立；只在入队处判等于没判。**2026-08-05 已在 goal 的 wait-barrier 上复发一次**——同一个形状，第二个子系统：那里绕过 claim 的 boot rearm 路径连一道界都没有，所以「谁绕过了认领，谁就得自己带界」是这条纪律的第二半。→ §4.1/§4.2
@@ -344,6 +346,10 @@
 - **入参规范化要落在参数的解析处**（一个 `resolve_*` 边界），不是某个 handler —— 否则同一个模型对同一个分类得到互相矛盾的答案
 - **执行清单单一形状是 `shared/protocol/src/plan.rs::PlanSnapshot`** —— 分解 100% 归 LLM（R7），**不要新建 `todo` 工具**（Panel 按字面工具名 `"scratchpad"` 取数）→ §3.13
 - **执行档位唯一强制点是 `src/tools/scoped/`** —— 任何新的能执行工具的 surface（新 RPC / 快路径 / 后台产地）不经过它就自带旁路 → [SECURITY.md](docs/reference/SECURITY.md) §5.12
+- **一个「地板」如果排在 explicit 条目之下，它就不是地板，是默认值** —— `effective_permission` 让 explicit `[policies.tool_permissions]` 条目赢过 tier，这对 Ask/Auto/Full 完全正确（operator 点名了某个工具就是他决定了），对**只读规划相位**恰好完全错误：那条相位的全部承诺是「你做什么都改不了东西」，而一条 `"bash" = "allow"` 就能把它掏空。判据两句：① 写下一条新规则时先问**它是「更具体的东西可以覆盖」还是「更具体的东西也不许突破」**，后者要排在 explicit **之前**；② 让它成为那个函数的**必填参数**而不是带良性默认的 `Option`——两个调用点里总有一个是快路径，而快路径的历史就是「少一道循环有的闸」→ §3.16
+- **相位/阶段这类「本来就是要被离开的」状态，读取要 fail-OPEN，写入照旧 fail-loud** —— 与本仓大多数闸方向相反且是有意的：一个因为元数据里一个错字而永久只读、而**出口又在一张模型再也够不到的卡后面**的会话，比一个恢复干活的会话更糟。判据：问「这个状态被误读成'开'会怎样，被误读成'关'又会怎样」——两个方向不对称时，选那个还能自救的 → §3.16
+- **一次手势就该是一次手势** —— 「批准之后从下一条用户消息起生效」把一次批准变成两次操作。本仓有现成的失效机制可以让它当场生效（`ScopedToolService::cache_generation`，health 探针与 `tool_search` 晋升共用），所以规划相位的放行**在同一个 run 内**发生。顺序是**先写持久记录再动闩**，写失败就保持闩住并如实说明 → §3.16
+- **一条规则的第 N 份拷贝里，被忘记的总是你没在看的那一份** —— 「首条消息才载运」这条载运纪律在 Panel 有四个执行点（typed / queue-flush / 沉浸式 voice / 听写 voice），其中两个 voice 路径是手抄的；它们此前各自正确，而新增第三个 dial 时**正好会是被忘记的那两份**。判据：给一条已有 N 份实现的规则加一个新成员前，先把它收敛到单一源（`shared_ui_logic::state::session_dials_for_send`）→ §3.16
 - **「没有面画那个按钮」不是闸，它只是四个渲染器碰巧一致** —— 判据：**这个值在 wire 上收得下吗**？`allow-always` 从第一天起就是 `exec.approval.resolve` 接受的合法值，而"没有 surface 提供它"被当成了控制（`clamped()` 无条件降级是第三处答案，Panel 硬编码三按钮是第四处）。一个 RPC 客户端就绕过全部渲染器。修法是把「这张卡可以给哪几档」在**闸上算一次**（`exec::allowed_decisions::for_confirm_gate`，输入只有「哪条规则闸住的」和「发起者是不是 operator 档」）、随记录到达每个面、**回来时由 resolver 按同一份列表强制**；渲染器画得更少是安全方向，画得更多不再可能。⚠️ 配套一条：让「不提供某档」成为**编译期必须说出口的事**（`to_outcome_within(allowed)` 没有免参数版本），否则下一个 decision→outcome 调用点默认就是最宽的那档 → §5.12
 - **一句"任何配置都关不掉它"的卡片，不能同时提供一个能关掉它的按钮** —— 上一条的第二半，也是 §0「一句关于什么被闸住的话有三份拷贝」在**同一张卡**上的退化形式：`tool_declared` 那条规则的 `reason()` 逐字告诉读者"它在每个档位下都问，`allow` 也关不掉"，而持久授权按钮就是关掉它的那个动作。判据不是"这个按钮危险吗"，是**这张卡自己刚说过什么**。同族：装机级的授权（持久 allowlist ＝ `[policies.tool_permissions]` `allow` 的每调用版）不能由 member 建 —— 他建的那条会静默授权**其他人**的同款调用，而这一点在他的卡片上一个字都没写 → §5.12
 - **参数级审批闸只在能举卡的 surface 上成立**，且**举给人的那张卡必须包含闸所依据的那个字段**（按字典序渲染 + 200 字符截断会把被闸字段挤掉）；「操作者显式点名了这个工具」在代码里必须是**精确匹配**，不能用会匹配 glob 的查找 → §4.12
@@ -492,6 +498,7 @@
 | `src/thinker/` `src/context/` | 判据清单 §1 · FEATURE_LOCATOR §2.3 §2.18 §2.19 |
 | `src/tool_output/` | 判据清单 §2 · FEATURE_LOCATOR §2.7 §3.14 |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · §3.2–§3.14 |
+| `src/tools/scoped/plan_gate.rs` `src/config/types/policies/plan_phase.rs` | [PLAN_HANDOFF.md](docs/reference/PLAN_HANDOFF.md) · §3.16 |
 | `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 §6.9 |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
@@ -536,14 +543,15 @@
 - **MSRV = 1.95**（由 `sysinfo 0.39` 决定），在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明。
 - 仓库根的 `rust-toolchain.toml` 钉住具体 stable（当前 `1.96.0`），本地与 CI 自动使用同一工具链——无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新这两处。
 
-### 三根会话旋钮 (Session Knobs)
+### 四根会话旋钮 (Session Knobs)
 
-三者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
+四者**正交**。⚠️ **前两根由 Panel composer pill 或对话式工具切换，第三根不是**——见下表「谁在拨」列，这一栏此前写成「都由 pill 切换」，而 Busy Input 从来没有过 pill、没有过工具、`chat.send`/`agent.run` 里也没有过它的参数。
 
 | 旋钮 | 值 | 管什么 | 谁在拨 | 单一源 |
 |---|---|---|---|---|
 | **执行档位 Exec Tier** | `Ask` / `Auto`(默认) / `Full` | 工具执行**审批**。读工具**声明的元数据**（幂等/destructive），不认名字；未知工具在 `Ask` 档 fail-closed | Panel pill + `chat.send{exec_tier}` | `src/tools/scoped/`（唯一强制点）→ [SECURITY.md](docs/reference/SECURITY.md) |
 | **会话模式 Session Mode** | `chat` / `work`(默认) / `code` | 工具**呈现面**静态分区（R10 渐进披露例外）。不授予不拒绝任何权限 | Panel pill + `chat.send{mode}` | `src/config/types/policies/session_mode.rs` → [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) |
+| **规划相位 Plan Phase** | `Building`(默认) / `Planning` | 只读规划：**任何会改变东西的工具都被拒绝**（无可放行参数形态的那类直接从工具表消失）。出口只有一条——`scratchpad{action:"request_build"}` 举卡、人批准、**同一 run 内即刻放行**。⚠️ 它是**地板**，排在 explicit `tool_permissions` 条目**之上**：一条 `"bash"="allow"` 掀不翻它 | Panel pill + `chat.send{plan_phase}` + `sessions.patch`。**模型不能自己进入**（三家参考项目也都不让） | `src/config/types/policies/plan_phase.rs` → [PLAN_HANDOFF.md](docs/reference/PLAN_HANDOFF.md) |
 | **繁忙输入 Busy Input** | `Steer`(默认) / `Interrupt` / `Queue` | 会话已有 run 在跑时新消息怎么办 | **per-channel 配置**（channel 实例配置块里的扁平键 `busy_input_mode`，经 `ChannelPolicyConfig` 解析）+ 三个写死的生产者（team run / OpenAI 兼容面 / 续跑，全钉 `queue`）。**Panel 靠手势而非旋钮**：`＋`/Enter = 客户端幽灵队列（≈Queue，且可 ↑ 撤回）· 轮边界自动 flush = Steer（服务端默认档）· `⚡`/Esc = abort + 重排（≈Interrupt） | `src/gateway/busy_queue/` → FEATURE_LOCATOR §4.8 |
 
 > **别急着给它加参数**：三种处置在 Panel 上都已可达且各自正确，加一条 `busy_input` wire 参数会得到零消费者的通道（R10）。要改的是**手势与模式的对应关系**，不是新增旋钮面。
@@ -619,6 +627,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) | 工具系统 |
 | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) | 预设 provider/模型四表 + 单一 join 点 + 漂移守卫契约 |
 | [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) | 会话模式 chat/work/code |
+| [PLAN_HANDOFF.md](docs/reference/PLAN_HANDOFF.md) | 只读规划相位 + 「计划 → 构建」交接（地板位置 / 活闩 / once-only 审批卡） |
 | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) | 记忆总览 |
 | └ [RAW_MEMORY.md](docs/reference/memory/RAW_MEMORY.md) · [NOTES.md](docs/reference/memory/NOTES.md) · [RETRIEVAL.md](docs/reference/memory/RETRIEVAL.md) | 三支柱分册 |
 | └ [DREAM_DAEMON.md](docs/reference/memory/DREAM_DAEMON.md) | 离线做梦 + 自进化纪律（**`DreamGate` 已删，勿复活**） |

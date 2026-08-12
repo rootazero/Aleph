@@ -20,6 +20,8 @@ use std::rc::Rc;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use shared_ui_logic::state::session_dials_for_send;
+
 use crate::api::chat::ChatApi;
 use crate::context::{DashboardState, GatewayEvent};
 use crate::state::sessions::SessionMap;
@@ -1019,14 +1021,18 @@ async fn send_utterance(
         chat.active_project_root.get_untracked()
     };
     let mo = chat.selected_model.get_untracked();
-    let tier = chat.session_exec_tier.get_untracked();
-    // First-send-only carriage (see composer/mod.rs typed path): an existing
-    // session's store value is authoritative.
-    let mode = if sk.is_some() {
-        None
-    } else {
-        chat.session_mode.get_untracked()
-    };
+    // The per-session dials, through the shared rule rather than a fourth
+    // hand-rolled copy of it. This path used to spell the first-send-only test
+    // inline — correctly, but a copy of a rule is a rule that will be updated in
+    // three places and forgotten in the fourth, which is exactly what happened
+    // when the plan phase joined: the two typed composers learned it and the two
+    // voice paths would not have.
+    let dials = session_dials_for_send(
+        sk.is_some(),
+        chat.session_exec_tier.get_untracked(),
+        chat.session_mode.get_untracked(),
+        chat.session_plan_phase.get_untracked(),
+    );
     // Bind to the conversation active at send time (I1), same as the typed
     // path, so run events route to this conversation's bubble.
     let send_conv = sessions.active_conv();
@@ -1041,8 +1047,9 @@ async fn send_utterance(
         pr.as_deref(),
         room_project_id.as_deref(),
         mo.as_ref(),
-        tier.as_deref(),
-        mode.as_deref(),
+        dials.exec_tier.as_deref(),
+        dials.session_mode.as_deref(),
+        dials.plan_phase.as_deref(),
         true,
     )
     .await

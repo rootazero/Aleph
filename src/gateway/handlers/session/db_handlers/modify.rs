@@ -439,6 +439,32 @@ pub async fn handle_patch_db(
         }
     }
 
+    // Same paired-validation contract again, for the plan phase — and here the
+    // stakes are the reverse of the two above. A junk value is IGNORED by
+    // `resolve_turn_plan_phase` (it falls back to `building`, deliberately:
+    // a session wedged read-only by a typo, with the exit behind a card the
+    // model can no longer reach, is a worse failure than one that resumes
+    // working). So an unrefused typo here means the composer shows "planning"
+    // while every tool runs. `null` stays legal — it clears the phase, which
+    // is how a user leaves planning without approving a plan.
+    if let Some(v) = params
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(crate::config::types::policies::PLAN_PHASE_SESSION_KEY))
+    {
+        let valid = v.is_null()
+            || v.as_str()
+                .and_then(crate::config::types::policies::PlanPhase::from_id)
+                .is_some();
+        if !valid {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Unknown plan_phase: {v}"),
+            );
+        }
+    }
+
     let patch = crate::gateway::session_manager::SessionPatch {
         label: params
             .get("label")

@@ -102,10 +102,19 @@ impl PromptLayer for OperatingEnvelopeLayer {
             .and_then(crate::sandbox::SandboxSummary::permission_profile_prompt_line)
             .map(|line| format!("- {line}\n"));
 
+        // The read-only planning floor, when it is on. `Building` — which is
+        // what an ordinary session resolves to — renders `None`, so this line
+        // costs zero bytes for everyone who never asked to plan, and the gate
+        // below still asks the same question the body answers.
+        let plan_line = ctx
+            .plan_phase
+            .and_then(crate::config::types::policies::PlanPhase::prompt_line);
+
         // Nothing resolved (internal / sub-agent / estimate dispatch): emit
         // nothing rather than a guessed default.
         if ctx.approval_tier.is_none()
             && ctx.session_mode.is_none()
+            && plan_line.is_none()
             && writable_roots.is_none()
             && run_id_line.is_none()
             && network_line.is_none()
@@ -115,6 +124,16 @@ impl PromptLayer for OperatingEnvelopeLayer {
         }
 
         output.push_str("## Operating Envelope\n\n");
+
+        // The planning floor goes FIRST, ahead of the approval line, because it
+        // is the only one of the two that can make the other's promise
+        // inapplicable: "auto — routine calls run without interruption" is
+        // misleading read before "nothing that changes anything runs at all".
+        // Order in a bullet list is the only tool this layer has for saying
+        // which rule wins, and it costs nothing to use it correctly.
+        if let Some(line) = plan_line {
+            output.push_str(&format!("- {line}\n"));
+        }
 
         // Approval regime (codex `<approval_policy>` parity): the complement of
         // `SecurityLayer`'s sandbox posture — sandbox says what the agent may
@@ -189,6 +208,59 @@ mod tests {
         let mut out = String::new();
         OperatingEnvelopeLayer.inject(&mut out, &input);
         out
+    }
+
+    #[test]
+    fn a_building_session_spends_no_bytes_on_the_plan_phase() {
+        // The overwhelming majority of turns. `Some(Building)` must render
+        // byte-identically to `None`, or every install that never heard of this
+        // feature pays for it on every request.
+        let mut absent = ctx();
+        absent.approval_tier = Some(ExecTier::Auto);
+        absent.session_mode = Some(SessionMode::Work);
+        let baseline = render(&absent);
+
+        let mut building = absent.clone();
+        building.plan_phase = Some(crate::config::types::policies::PlanPhase::Building);
+        assert_eq!(render(&building), baseline);
+    }
+
+    #[test]
+    fn planning_renders_ahead_of_the_approval_line() {
+        use crate::config::types::policies::PlanPhase;
+
+        let mut c = ctx();
+        c.approval_tier = Some(ExecTier::Auto);
+        c.session_mode = Some(SessionMode::Work);
+        c.plan_phase = Some(PlanPhase::Planning);
+        let out = render(&c);
+
+        let plan_at = out
+            .find(PlanPhase::Planning.prompt_line().expect("planning speaks"))
+            .expect("the planning line must render");
+        let tier_at = out
+            .find(ExecTier::Auto.approval_prompt_line())
+            .expect("the approval line must still render");
+        // Order is the only tool a bullet list has for saying which rule wins,
+        // and "auto — routine calls run without interruption" read BEFORE
+        // "nothing that changes anything runs at all" is actively misleading.
+        assert!(
+            plan_at < tier_at,
+            "the planning floor must precede the approval regime:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_planning_line_is_the_one_the_floor_owns() {
+        use crate::config::types::policies::PlanPhase;
+
+        // Single-source pin, same shape as the sandbox test below: the layer
+        // must print the enum's own copy, not a paraphrase of it, so the rule
+        // and its description cannot drift.
+        let mut c = ctx();
+        c.plan_phase = Some(PlanPhase::Planning);
+        let out = render(&c);
+        assert!(out.contains(PlanPhase::Planning.prompt_line().unwrap()));
     }
 
     // SandboxCapabilities::strict is used to construct a posture with

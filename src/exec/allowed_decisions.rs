@@ -97,6 +97,15 @@ pub fn with_persistent() -> Vec<ApprovalDecisionType> {
 /// those two, decide it.
 #[must_use]
 pub fn for_confirm_gate(rule_id: &str, caller_is_operator: bool) -> Vec<ApprovalDecisionType> {
+    // A plan approval is about ONE plan. Neither standing tier means anything
+    // here: "approve my plans for this session" and "approve my plans forever"
+    // both describe consent to work nobody has read yet, which is the single
+    // thing this card exists to prevent. So it is the only confirm-gate card
+    // narrowed all the way to once-only, for every caller including an
+    // operator.
+    if rule_id == PLAN_HANDOFF_RULE {
+        return once_only();
+    }
     if caller_is_operator && rule_id != DECLARED_FLOOR_RULE {
         with_persistent()
     } else {
@@ -108,6 +117,11 @@ pub fn for_confirm_gate(rule_id: &str, caller_is_operator: bool) -> Vec<Approval
 /// rather than matched inline so the coupling to `GateRule::ToolDeclared` is
 /// greppable from both ends.
 pub const DECLARED_FLOOR_RULE: &str = "tool_declared";
+
+/// The rule id of the plan → build handoff card, whose approval may never carry
+/// past the one plan it is answering. Same greppability contract as
+/// [`DECLARED_FLOOR_RULE`]; `GateRule::PlanHandoff::id` reads this constant.
+pub const PLAN_HANDOFF_RULE: &str = "plan_handoff";
 
 #[cfg(test)]
 mod tests {
@@ -155,10 +169,30 @@ mod tests {
             with_persistent(),
             for_confirm_gate("policy_ask", true),
             for_confirm_gate("policy_ask", false),
+            for_confirm_gate(PLAN_HANDOFF_RULE, true),
+            for_confirm_gate(PLAN_HANDOFF_RULE, false),
         ] {
             assert!(set.contains(&ApprovalDecisionType::AllowOnce));
             assert!(set.contains(&ApprovalDecisionType::Deny));
         }
+    }
+
+    /// A plan approval is once-only for everyone — the one card where even an
+    /// operator gets no standing tier, because a standing "yes" would be
+    /// consent to a plan that has not been written yet.
+    #[test]
+    fn a_plan_handoff_card_carries_no_standing_grant() {
+        for operator in [true, false] {
+            let set = for_confirm_gate(PLAN_HANDOFF_RULE, operator);
+            assert_eq!(set, once_only(), "operator={operator}");
+            assert!(!set.contains(&ApprovalDecisionType::AllowSession));
+            assert!(!set.contains(&ApprovalDecisionType::AllowAlways));
+        }
+    }
+
+    #[test]
+    fn the_plan_handoff_token_is_stable() {
+        assert_eq!(PLAN_HANDOFF_RULE, "plan_handoff");
     }
 
     /// The token has to keep meaning what the card says. `GateRule::id` reads

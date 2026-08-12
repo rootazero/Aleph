@@ -26,6 +26,7 @@
 pub mod exec_tier;
 pub mod memory;
 pub mod metrics;
+pub mod plan_phase;
 pub mod session_mode;
 pub mod tool_permissions;
 pub mod web_fetch;
@@ -35,6 +36,7 @@ pub use exec_tier::{
 };
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
+pub use plan_phase::{PlanAdmission, PlanPhase, PLAN_PHASE_SESSION_KEY};
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use tool_permissions::{PermissionMatch, ToolPermissionsConfig};
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};

@@ -4,6 +4,7 @@
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::types::policies::PlanAdmission;
 use crate::extension::hooks::{budget_hook_contexts, HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
@@ -185,10 +186,33 @@ impl ScopedToolService {
             }
             return Err(ToolError::PermissionDenied {
                 name: name.to_string(),
-                reason: format!(
-                    "{explanation} Do not retry; ask the user to adjust \
-                     `[policies.tool_permissions]` if this tool is needed."
-                ),
+                // The follow-up advice belongs to the rule, not to this call
+                // site: "adjust `[policies.tool_permissions]`" is right for a
+                // policy deny and misleading for the planning floor, whose only
+                // exit is an approval. See `GateRule::deny_followup`.
+                reason: format!("{explanation}{}", rule.deny_followup()),
+            });
+        }
+
+        // Read-only planning floor, argument-aware half. Above the tier and
+        // above every explicit `[policies.tool_permissions]` entry, because the
+        // phase promises the person that nothing can change while they read the
+        // plan, and a promise an `allow` can hollow out is not one.
+        //
+        // Reaches the argument-dependent calls (`file_ops` delete while
+        // planning). The wholly-refused ones (`file_write`, `bash`) are already
+        // `Deny` at the chokepoint and are stopped by `deny_rule` above — which
+        // is why that gate has to be able to say the floor's name. An earlier
+        // version of this comment claimed they "never reach here at all", and a
+        // real run disproved it: a hidden tool is absent from the surface, not
+        // unreachable.
+        if let Some(refusal) = self.plan_refusal(name, &input) {
+            if let Some(ref l) = ledger {
+                l.commit_refusal(&input, &refusal).await;
+            }
+            return Err(ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason: refusal,
             });
         }
 
@@ -249,8 +273,41 @@ impl ScopedToolService {
         // overwhelmingly common case: no hook, or a hook that did not rewrite,
         // leaves the two values equal and skips this entirely.
         if effective_input != input {
+            // Same argument for the planning floor one gate up: a rewrite from
+            // `file_ops{operation:"list"}` to `delete` must not walk through a
+            // floor that was judged on the original bytes.
+            if let Some(refusal) = self.plan_refusal(name, &effective_input) {
+                if let Some(ref l) = ledger {
+                    l.commit_refusal(&effective_input, &refusal).await;
+                }
+                return Err(ToolError::PermissionDenied {
+                    name: name.to_string(),
+                    reason: refusal,
+                });
+            }
             self.check_confirmation_gate(name, &effective_input, approved_by_operator_gate)
                 .await?;
+        }
+
+        // The handoff took its approval above (`GateRule::PlanHandoff`, the
+        // first rule in the chain). Judged on `effective_input` — the bytes
+        // that will actually run — for the same reason the re-check above
+        // exists. Releasing writes the durable record FIRST; a failed write
+        // leaves the floor engaged and says so, rather than governing the rest
+        // of the run with a decision that would not survive a restart.
+        if authorized && self.plan_admission(name, &effective_input) == PlanAdmission::Handoff {
+            match self.release_plan_gate().await {
+                Ok(note) => pre_hook_contexts.push(note),
+                Err(err) => {
+                    if let Some(ref l) = ledger {
+                        l.commit_refusal(&effective_input, &err).await;
+                    }
+                    return Err(ToolError::Execution {
+                        name: name.to_string(),
+                        cause: err,
+                    });
+                }
+            }
         }
 
         // Cat-guard: when a raw `file_read` / shell read targets a file inside

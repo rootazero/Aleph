@@ -9,6 +9,7 @@ pub mod messages;
 pub mod mode_picker;
 pub mod plan;
 mod plan_archive_cell;
+pub mod plan_phase_pill;
 pub mod project_menu;
 pub mod reasoning;
 pub mod state;

@@ -53,6 +53,7 @@
 
 use serde_json::Value;
 
+use crate::config::types::policies::PlanAdmission;
 use crate::extension::PermissionAction;
 
 use super::ScopedToolService;
@@ -104,6 +105,38 @@ pub(super) enum GateRule<'a> {
     /// Nobody named this tool, and the execution tier raised the configured
     /// default to `ask` from the tool's DECLARED metadata (not from its name).
     TierRaised,
+    /// This call is the plan → build handoff: the session is in the read-only
+    /// planning phase and the model is asking the person to approve the plan
+    /// and unlock execution.
+    ///
+    /// Reported FIRST, ahead of even the declared floor, for the reason the
+    /// module doc gives: a reason must never mislead the reader about what
+    /// would change the outcome. Every other rule in this chain describes a
+    /// setting; this one describes a decision, and no setting reaches it. It is
+    /// also the only rule in the chain whose approval does something besides
+    /// let the call run — see `dispatch`'s handoff arm.
+    PlanHandoff,
+    /// The read-only planning floor refused this call outright.
+    ///
+    /// **Deny-chain only** — [`ScopedToolService::deny_rule`] returns it and
+    /// [`ScopedToolService::confirmation_rule`] never does. It is not a card:
+    /// nobody is being asked anything, because the answer to "may this run"
+    /// while planning is no, and the way to change it is to get the plan
+    /// approved.
+    ///
+    /// It exists because a real run proved the alternative wrong. The floor
+    /// resolves a hidden tool to `Deny` at the chokepoint, and a `Deny` is
+    /// *also* what an explicit `[policies.tool_permissions]` entry produces —
+    /// so a model that called `file_write` anyway (a hidden tool is absent
+    /// from the surface, which is not the same as unreachable: a name can be
+    /// remembered from earlier in the conversation, guessed, or rewritten in
+    /// by a hook) was told its call "is denied by `default` in the merged tool
+    /// permission policy". Every word of that is a fabrication: no policy
+    /// entry decided it, and the knob it names would not change the outcome —
+    /// while the one thing that WOULD (`scratchpad{action:"request_build"}`)
+    /// went unmentioned. One `Deny` value, two authors, and a downstream
+    /// consumer inventing the attribution.
+    PlanFloor,
 }
 
 impl GateRule<'_> {
@@ -121,6 +154,13 @@ impl GateRule<'_> {
             Self::DestructiveArguments => "destructive_arguments",
             Self::PolicyAsk { .. } => "policy_ask",
             Self::TierRaised => "tier_raised",
+            // One spelling, shared with the decision-set derivation that must
+            // refuse a standing grant on this rule's card
+            // (`exec::allowed_decisions::for_confirm_gate`): a plan is approved
+            // once, and "always approve my plans" is not a thing anyone can
+            // mean. A rename here is a compile error there.
+            Self::PlanHandoff => crate::exec::allowed_decisions::PLAN_HANDOFF_RULE,
+            Self::PlanFloor => "plan_floor",
         }
     }
 
@@ -169,6 +209,42 @@ impl GateRule<'_> {
                  itself read-only. Nothing in `[policies.tool_permissions]` names it, so \
                  the tier decides."
             ),
+            Self::PlanHandoff => {
+                // Deliberately does not mention `{tool}`: the reader is being
+                // asked about the PLAN, not about the scratchpad. Naming the
+                // mechanism here would invite "why is it asking me about a
+                // scratchpad", and the answer would be an implementation
+                // detail.
+                "The agent has finished planning and is asking to start work. \
+                 Approving lets it run the plan with the tools your current approval \
+                 mode allows; declining keeps the session read-only so you can keep \
+                 refining the plan together."
+                    .to_string()
+            }
+            // The floor's own words, from the floor's own module — the same
+            // sentence the argument-dependent refusal one gate down uses, so
+            // "why can't I run this while planning" has one answer however the
+            // call was stopped.
+            Self::PlanFloor => crate::config::types::policies::PlanPhase::refusal(tool),
+        }
+    }
+
+    /// What a hard refusal should add after [`Self::reason`], for the deny
+    /// chain only.
+    ///
+    /// The policy suffix ("ask the user to adjust `[policies.tool_permissions]`")
+    /// is right for a policy deny and actively harmful for the floor: it points
+    /// at a knob that cannot lift the floor, in the one phase whose prompt line
+    /// tells the model in as many words not to look for a way around a refusal.
+    /// [`PlanPhase::refusal`](crate::config::types::policies::PlanPhase::refusal)
+    /// already ends with the correct advice, so the floor adds nothing.
+    pub(super) const fn deny_followup(self) -> &'static str {
+        match self {
+            Self::PlanFloor => "",
+            _ => {
+                " Do not retry; ask the user to adjust \
+                  `[policies.tool_permissions]` if this tool is needed."
+            }
         }
     }
 }
@@ -184,6 +260,14 @@ impl ScopedToolService {
         name: &str,
         input: &Value,
     ) -> Option<GateRule<'a>> {
+        // 0. The handoff. Ahead of everything because it is the only rule no
+        //    configuration participates in, and because its approval has an
+        //    effect the others do not (it lifts the read-only floor for the
+        //    rest of the run). `admits` returns `Handoff` only while the phase
+        //    is engaged, so this arm is unreachable in an ordinary session.
+        if self.plan_admission(name, input) == PlanAdmission::Handoff {
+            return Some(GateRule::PlanHandoff);
+        }
         // 1. The floor. Read independently of the tier and of any explicit
         //    `allow`, exactly as `check_confirmation_gate` has always read it.
         if self.inner.requires_confirmation(name) {
@@ -225,6 +309,16 @@ impl ScopedToolService {
         if self.permission_for(name) != PermissionAction::Deny {
             return None;
         }
+        // Two rules can author that one `Deny`, and they differ in the only
+        // way the reader cares about: whether getting the plan approved
+        // changes the outcome. Ask the policy with the floor lifted. If it
+        // denies on its own, approval would NOT help and naming the policy is
+        // the honest answer — so the policy is checked first even though the
+        // floor *wins* first at the chokepoint. Winning order and explaining
+        // order answer different questions and are allowed to differ.
+        if self.permission_ignoring_plan_floor(name) != PermissionAction::Deny {
+            return Some(GateRule::PlanFloor);
+        }
         Some(GateRule::PolicyDeny {
             // A `Deny` with no explicit entry came from `default = "deny"`;
             // quote that rather than inventing a pattern that is not in the
@@ -234,6 +328,14 @@ impl ScopedToolService {
                 .filter(|m| m.action == PermissionAction::Deny)
                 .map_or("default", |m| m.pattern),
         })
+    }
+
+    /// The read-only planning floor's verdict on this call, from the tool's own
+    /// declared idempotency — the same fact the tier rules read, through the
+    /// same seam ([`Self::tool_facts`]), so "mutating" means one thing here.
+    pub(super) fn plan_admission(&self, name: &str, input: &Value) -> PlanAdmission {
+        self.plan_phase()
+            .admits(name, input, self.tool_facts(name).idempotent)
     }
 
     /// The merged policy's explicit entry for `name`, if any — the borrow the
@@ -516,6 +618,77 @@ mod tests {
         assert!(rule.reason("t").contains("`default`"));
         // A denied tool is a refusal, never an ask — the two chains are disjoint.
         assert_eq!(svc.confirmation_rule("t", &json!({})), None);
+    }
+
+    /// A `Deny` authored by the planning floor must say so.
+    ///
+    /// Found on real hardware, not here: `qa/plan_handoff` watched a model call
+    /// a tool the floor had hidden and get back "`file_write` is denied by
+    /// `default` in the merged tool permission policy" — a config entry that
+    /// does not exist, describing a knob that would not have helped, while the
+    /// one action that WOULD (`request_build`) went unmentioned. The effect was
+    /// right and every word of the explanation was wrong.
+    #[test]
+    fn a_floor_deny_names_the_floor_and_not_the_policy() {
+        let svc = service(
+            vec![Declared {
+                name: "file_write",
+                idempotent: false,
+                confirm: false,
+            }],
+            // The WIDEST tier and a permissive policy: nothing here denies
+            // anything, so the floor is provably the only possible author.
+            ExecTier::Full,
+            Some(perms(PermissionAction::Allow, &[])),
+        )
+        .with_plan_gate(crate::sync_primitives::Arc::new(
+            super::super::PlanGate::planning(None),
+        ));
+
+        let rule = svc.deny_rule("file_write").expect("the floor denies it");
+        assert_eq!(rule.id(), "plan_floor");
+        let reason = rule.reason("file_write");
+        assert!(
+            reason.contains("request_build"),
+            "the refusal must name the exit: {reason}"
+        );
+        assert!(
+            !reason.contains("tool_permissions"),
+            "it must not point at a policy that decided nothing: {reason}"
+        );
+        assert_eq!(
+            rule.deny_followup(),
+            "",
+            "the policy follow-up would tell the model to go edit a knob that \
+             cannot lift the floor"
+        );
+    }
+
+    /// The other half of the same fork: while planning, a tool the OPERATOR
+    /// denied still reports the operator's entry. Getting the plan approved
+    /// would not make this call run, so naming the floor would mislead in the
+    /// opposite direction.
+    #[test]
+    fn a_policy_deny_still_names_the_policy_while_planning() {
+        let svc = service(
+            vec![Declared {
+                name: "file_write",
+                idempotent: false,
+                confirm: false,
+            }],
+            ExecTier::Full,
+            Some(perms(
+                PermissionAction::Allow,
+                &[("file_write", PermissionAction::Deny)],
+            )),
+        )
+        .with_plan_gate(crate::sync_primitives::Arc::new(
+            super::super::PlanGate::planning(None),
+        ));
+
+        let rule = svc.deny_rule("file_write").expect("denied");
+        assert_eq!(rule.id(), "policy_deny");
+        assert!(rule.reason("file_write").contains("`file_write`"));
     }
 
     #[test]

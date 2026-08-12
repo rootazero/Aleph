@@ -110,6 +110,19 @@ pub async fn handle_list_db(
                             .map(String::from)
                     });
 
+                    // The plan phase, so a reloaded Panel shows the read-only
+                    // banner instead of a composer that looks ordinary. Absent
+                    // — the overwhelming majority — reads as `building`; the
+                    // client is told nothing rather than told "building",
+                    // because those are the same fact and one of them costs a
+                    // field on every row.
+                    let plan_phase = m.identity_meta.as_ref().and_then(|im| {
+                        im.custom
+                            .get(crate::config::types::policies::PLAN_PHASE_SESSION_KEY)
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    });
+
                     SessionInfo {
                         key: m.key,
                         agent_id: m.agent_id,
@@ -136,6 +149,7 @@ pub async fn handle_list_db(
                         project_root,
                         exec_tier,
                         mode,
+                        plan_phase,
                     }
                 })
                 .collect();
