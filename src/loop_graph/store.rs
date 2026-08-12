@@ -416,7 +416,7 @@ impl LoopGraphStore {
     /// §6.2 write protection, right next to the `unlink` door the Auto-tier card
     /// now covers. The one way out stays the carded `unlink`.
     pub fn gc(&self, agent_id: &str) -> Result<GcReport> {
-        let conn = self.lock();
+        let mut conn = self.lock();
         let ids = node_ids_present(&conn, agent_id, "gc")?;
 
         let mut stmt = conn
@@ -428,10 +428,26 @@ impl LoopGraphStore {
         let rows = stmt
             .query_map(rusqlite::params![agent_id], row_to_edge)
             .map_err(|e| AlephError::other(format!("loop_graph gc edges query: {e}")))?;
-        let edges: Vec<GraphEdge> = rows.filter_map(|r| r.ok().and_then(|e| e)).collect();
+        let mut edges = Vec::new();
+        for r in rows {
+            // Mid-iteration decode errors must propagate here (not be
+            // silently dropped): a `row_to_edge` that fails to parse one row
+            // would otherwise leave `gc` deleting edges against an INCOMPLETE
+            // `node_ids_present` picture — the exact reverse of the "do not
+            // delete edges into a node I merely failed to parse" rule the
+            // rest of this function enforces.
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph gc row: {e}")))?;
+            if let Some(e) = row {
+                edges.push(e);
+            }
+        }
         drop(stmt);
 
+        // Build the report BEFORE the transaction so a failed delete still
+        // returns a structured "what would have been removed" instead of
+        // either an empty report or a half-truth.
         let mut report = GcReport::default();
+        let mut to_delete: Vec<&GraphEdge> = Vec::new();
         for e in &edges {
             if ids.contains(&e.from_id) && ids.contains(&e.to_id) {
                 continue;
@@ -441,14 +457,29 @@ impl LoopGraphStore {
                 report.retained_acl.push(described);
                 continue;
             }
-            conn.execute(
+            to_delete.push(e);
+            report.removed.push(described);
+        }
+
+        // Atomic delete: `gc` converges the graph, so a partial delete that
+        // leaves some dangling rows and some deleted rows would mismatch the
+        // report (and the next `lint` against the same store). One
+        // transaction: either every deletable edge is gone and the report
+        // matches, or nothing was deleted and the caller still has the
+        // pre-gc graph.
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::other(format!("loop_graph gc begin: {e}")))?;
+        for e in &to_delete {
+            tx.execute(
                 "DELETE FROM graph_edges
                      WHERE agent_id = ?1 AND from_id = ?2 AND to_id = ?3 AND kind = ?4",
                 rusqlite::params![agent_id, e.from_id, e.to_id, e.kind.as_str()],
             )
             .map_err(|err| AlephError::other(format!("loop_graph gc: {err}")))?;
-            report.removed.push(described);
         }
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("loop_graph gc commit: {e}")))?;
         Ok(report)
     }
 
