@@ -252,6 +252,28 @@ impl ScopedToolService {
         )
     }
 
+    /// What [`Self::permission_for`] would answer if this session were not
+    /// planning.
+    ///
+    /// Exists for exactly one question, asked by
+    /// [`Self::deny_rule`](super::gate_chain): when the chokepoint says `Deny`,
+    /// **which** rule said so? The floor and an explicit
+    /// `[policies.tool_permissions]` entry produce the same value, and a reader
+    /// told the wrong one is told a knob would help when it would not (or the
+    /// reverse). Everything else must keep asking `permission_for` — this
+    /// deliberately answers a counterfactual and is never the live verdict.
+    pub(super) fn permission_ignoring_plan_floor(
+        &self,
+        name: &str,
+    ) -> crate::extension::PermissionAction {
+        crate::config::types::policies::effective_permission(
+            self.tool_permissions.as_ref(),
+            self.exec_tier,
+            crate::config::types::policies::PlanPhase::Building,
+            self.tool_facts(name),
+        )
+    }
+
     /// The plan phase this service currently imposes.
     ///
     /// Read live rather than snapshotted: an approved handoff flips the latch

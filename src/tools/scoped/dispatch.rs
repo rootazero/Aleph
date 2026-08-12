@@ -186,21 +186,26 @@ impl ScopedToolService {
             }
             return Err(ToolError::PermissionDenied {
                 name: name.to_string(),
-                reason: format!(
-                    "{explanation} Do not retry; ask the user to adjust \
-                     `[policies.tool_permissions]` if this tool is needed."
-                ),
+                // The follow-up advice belongs to the rule, not to this call
+                // site: "adjust `[policies.tool_permissions]`" is right for a
+                // policy deny and misleading for the planning floor, whose only
+                // exit is an approval. See `GateRule::deny_followup`.
+                reason: format!("{explanation}{}", rule.deny_followup()),
             });
         }
 
-        // Read-only planning floor. Above the tier and above every explicit
-        // `[policies.tool_permissions]` entry, because the phase promises the
-        // person that nothing can change while they read the plan, and a
-        // promise an `allow` can hollow out is not one. Tools with no
-        // admissible argument shape never reach here at all — `permission_for`
-        // already resolved them to `Deny` and they are absent from the surface;
-        // this catches the argument-dependent ones (`file_ops` delete while
-        // planning) and any name the model guessed.
+        // Read-only planning floor, argument-aware half. Above the tier and
+        // above every explicit `[policies.tool_permissions]` entry, because the
+        // phase promises the person that nothing can change while they read the
+        // plan, and a promise an `allow` can hollow out is not one.
+        //
+        // Reaches the argument-dependent calls (`file_ops` delete while
+        // planning). The wholly-refused ones (`file_write`, `bash`) are already
+        // `Deny` at the chokepoint and are stopped by `deny_rule` above — which
+        // is why that gate has to be able to say the floor's name. An earlier
+        // version of this comment claimed they "never reach here at all", and a
+        // real run disproved it: a hidden tool is absent from the surface, not
+        // unreachable.
         if let Some(refusal) = self.plan_refusal(name, &input) {
             if let Some(ref l) = ledger {
                 l.commit_refusal(&input, &refusal).await;

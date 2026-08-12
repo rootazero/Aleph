@@ -146,13 +146,60 @@ cron tick、每一次 heartbeat 推进一个出口需要人的相位。无 chann
 - **Panel 手机端没有这个 pill**（wide 端有）。`session_dials_for_send` 已经三个 dial
   全接，所以手机端补 UI 时不需要碰载运逻辑。
 
+## 5.5 真机验证 (Real-machine QA · 2026-08-12)
+
+`qa/plan_handoff/run.sh {handoff|deny|floor}` — 隔离 HOME、mock provider、真
+`aleph-server`、真 JSON-RPC。三场景 **28 条断言全 PASS**。
+
+每个场景都先跑一轮**普通 `building` 会话**当控制组。这不是礼节：没有它，
+「规划期看不到 `bash`」与「这个 session mode 本来就没有 `bash`」在夹具内部
+**逐字节相同**，整个场景会一边全绿一边什么都没测。实测两个数字是 **179 vs 51**。
+
+| 场景 | 证据（不是结论） |
+|---|---|
+| `handoff` | 控制组 179 个工具（含 `file_write`/`bash`），规划期 51 个（都不含）。卡的 `allowed_decisions` 实为 `["allow-once","deny"]`——连 operator 连接也拿不到常驻档。`allow-once` 之后**同一个 run 的下一轮**工具表回到 179，`file_write` 返回 `Wrote 17 bytes to …`，`sessions.list` 读回 `plan_phase: "building"`。 |
+| `deny` | 同一张卡答 `deny`。工具结果是 `The user did not approve running 'scratchpad' (Denied)`，下一轮仍是 51 个工具，其后的 `file_write` 仍被地板拒，会话仍是 `planning`。**被拒的计划不是被抬起的闩。** |
+| `floor` | 配置写着 `[policies.tool_permissions.overrides] bash = "allow"`、`file_write = "allow"`，会话跑在 `exec_tier: "full"`——两个能赢过 tier 的东西，一个都没能把工具放回那 51 个里。同一轮里 `file_ops list` 放行、`file_ops delete` 拒绝：参数感知那一半，在真机上，在同一个工具上。 |
+
+### 它抓到的缺陷：一个 `Deny`，两个作者
+
+`handoff` 第一次跑挂在一条**关于文案**的断言上。一个到达了 dispatch 的
+`file_write` 收到的是：
+
+> `file_write` is denied by `default` in the merged tool permission policy
+> (`[policies.tool_permissions]`, global → agent → channel, most restrictive wins)。
+
+效果是对的，解释的**每一个字**是编的：没有任何策略条目做过这个决定（地板做的），
+它点名的旋钮改了也不会改变结果，而唯一真能改变结果的动作（`request_build`）一个字
+没提——同一相位的 prompt 还刚刚告诉过模型「不要绕开拒绝」。
+
+成因：`effective_permission` 现在有两个作者能产出同一个 `Deny`，而下游 `deny_rule`
+只有一个故事可讲（判据 §0「一个布尔够挡住调用，不够解释调用」）。
+
+修法在 `gate_chain.rs`：新增 `GateRule::PlanFloor`（**只在 deny 链上**，不是卡），
+`deny_rule` 先问一个反事实——**把地板拿掉，策略自己还拒不拒**
+（`permission_ignoring_plan_floor`）。拒 ⇒ 策略是诚实答案（批准也没用）；不拒 ⇒
+地板是作者。**胜出顺序与解释顺序回答的是两个问题，允许不同**：地板在 chokepoint
+上赢在最前，在解释链上排在策略之后，因为每条理由都必须对「改什么能改变结果」说真话。
+配套 `GateRule::deny_followup()`：「去改 `[policies.tool_permissions]`」这句尾巴对
+策略拒绝是对的，对地板是有害的。守卫
+`gate_chain::tests::a_floor_deny_names_the_floor_and_not_the_policy`（变异证过 RED）。
+
+> 为什么只有真机抓得到：那道闸上原本有一句我自己写的注释，说这类调用「never reach
+> here at all — 它们不在工具表里」。**不在工具表里不等于够不到**——名字可以从对话
+> 上文记得、可以猜、可以被一个 `BeforeToolCall` 改写进来。一个真模型在第一分钟就
+> 证明了这句注释是错的。
+
 ## 6. 排查话术 (Troubleshooting)
 
 - 「模型说工具被拒绝了」→ 先看会话相位。规划期的拒绝**是功能在工作**；拒绝文案里
   逐字带着出口（`request_build`）。
-- 「批准了但工具还是没出现」→ 工具表在**下一轮**重建。若跨轮仍不出现，查
-  `PlanGate::release` 是不是返回了 `Err`（持久化失败时闩**不动**，模型会收到一句
-  点名 storage 问题的话）。
+- 「批准了但工具还是没出现」→ 工具表在**下一轮**重建（真机实测：同一个 run 的
+  下一轮就回来了，见 §5.5）。若跨轮仍不出现，查 `PlanGate::release` 是不是返回了
+  `Err`（持久化失败时闩**不动**，模型会收到一句点名 storage 问题的话）。
+- 「拒绝文案说的是 `[policies.tool_permissions]`，可我没写过那条」→ 回归。地板拒
+  绝必须报 `plan_floor` 而不是 `policy_deny`，见 §5.5；跑
+  `gate_chain::tests::a_floor_deny_names_the_floor_and_not_the_policy`。
 - 「刷新页面后 pill 又亮了 / 又灭了」→ pill 是**镜像**不是偏好。查
   `SessionInfo.plan_phase` 投影与侧栏那条 Effect；客户端不许记住自己发过什么。
 - 「`/bash` 在规划期还能跑」→ 不应发生。slash 快路径同源
