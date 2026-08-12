@@ -369,7 +369,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         use crate::config::types::policies::{effective_permission, ToolFacts};
         use crate::extension::PermissionAction;
 
-        let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, agent).await;
+        // `plan_gate` is deliberately dropped: the fast path enforces nothing
+        // (it only DECLINES the shortcut), and a plan-mode slash call resolves
+        // to `Deny` on the very next line, which is a fallthrough reason. The
+        // full loop then re-evaluates it with the run's own gate — the one
+        // that a plan approval can actually lift.
+        let super::turn_permissions::TurnPermissions {
+            tier: exec_tier,
+            explicit: tool_permissions,
+            plan_gate: _,
+        } = self.resolve_turn_permissions(request, agent).await;
         // The permissions resolver above persists a request-carried tier onto
         // the session as a side effect (stamp-on-carry). The mode and
         // think-level twins carry the same contract, and a fast-path dispatch

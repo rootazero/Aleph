@@ -262,7 +262,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // by the shared `turn_permissions` module: the slash-command fast path
         // consults the same resolution before it is allowed to dispatch, so the
         // two surfaces cannot enforce different rules.
-        let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, &agent).await;
+        let super::super::turn_permissions::TurnPermissions {
+            tier: exec_tier,
+            explicit: tool_permissions,
+            plan_gate,
+        } = self.resolve_turn_permissions(request, &agent).await;
         // This turn's reasoning depth (composer pill / RPC `thinking` param /
         // the model's own `self_config` call, else whatever the session was
         // last stamped with). `None` = send no thinking directive, which is the
@@ -648,6 +652,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
                 .cloned(),
             unattended,
+            // Cloned into BOTH tool services this run builds (its own and the
+            // parent view handed to spawned children), so the one human
+            // approval that lifts the gate lifts it everywhere this run can
+            // reach. `None` on every non-planning turn.
+            plan_gate: plan_gate.clone(),
         };
 
         loop {

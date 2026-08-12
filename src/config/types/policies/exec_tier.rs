@@ -1,6 +1,9 @@
 //! Execution permission tier — the single user-facing dial over tool permissions.
 //!
-//! Three tiers (codex-style): **Ask** / **Auto** / **Full**. A tier is *not* a
+//! Four tiers: **Plan** / **Ask** / **Auto** / **Full**, strictest first. The
+//! last three are the install's posture (codex-style); `Plan` is a
+//! per-conversation posture that ends when a human approves a plan — see the
+//! variant doc and [`session_tiers`] vs [`builtin_tiers`]. A tier is *not* a
 //! second policy axis and *not* a second enforcement mechanism: it is a rule
 //! consulted by the one chokepoint every gate already funnels through
 //! ([`crate::tools::scoped::ScopedToolService::permission_for`]) whenever no
@@ -91,10 +94,79 @@ const DESTRUCTIVE_FILE_OPS: &[&str] = &["delete", "move", "batch_move", "organiz
 /// touch the user's system.
 const HUMAN_CONTACT_TOOLS: &[&str] = &["ask_user"];
 
+/// The two tools that stay reachable by name while the session is PLANNING
+/// ([`ExecTier::Plan`]), despite declaring themselves non-idempotent.
+///
+/// This is not a "tools planning finds handy" list and must not become one. A
+/// mutating tool the model wants mid-plan is a signal that the plan is
+/// finished, not that this list is short. Each entry needs an argument of the
+/// shape below — a reason the tier would be *incoherent* without it — and
+/// there are exactly two:
+///
+/// * **`scratchpad`** — the plan itself. It is where the execution list lives
+///   (`## Objective` / `## Plan` / `## Notes`, the single on-disk shape every
+///   plan surface reads, FEATURE_LOCATOR §3.13), so denying it would deny the
+///   one deliverable the tier exists to produce. It also carries
+///   `action='request_approval'`, the handoff that LEAVES this tier — gating
+///   that behind the gate it opens is the circularity [`HUMAN_CONTACT_TOOLS`]
+///   documents one const up. Its writes never leave the agent's own markdown.
+///
+/// * **`subagent`** — read-only delegation. A spawned child does not get a
+///   tool service of its own: `subagent_spawner` wraps the PARENT's
+///   `ScopedToolService` (`parent_view_for_children`), which carries this tier
+///   and the very same `PlanGate` `Arc`. So every tool call a child makes is
+///   refused by the same gate that refuses the parent's, and one human
+///   approval releases both. Delegated exploration is how a plan for a large
+///   codebase gets written, and there is no hole to trade for it.
+///
+///   Note what is deliberately NOT here for the same reason: `session_send`,
+///   `task_manage` and the `team_*` family delegate to a SEPARATE run, which
+///   resolves its own tier against its own session key and would not be
+///   planning at all. Those stay refused — a two-step path whose composition
+///   equals the gated one-step call is the escape hatch this tier would
+///   otherwise have.
+///
+/// Name-keyed for the same reason the other curated sets are: Aleph defines
+/// both of these tools, so their names ARE contracts.
+const PLAN_REACHABLE_TOOLS: &[&str] = &["scratchpad", "subagent"];
+
 /// Execution permission tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecTier {
+    /// **Planning.** Nothing that mutates runs at all — not "asks", *refuses*.
+    /// The conversation reads, searches, and writes its plan; the first
+    /// mutating call is the one that would start doing the work, and holding
+    /// that back until a human has seen the plan is the whole point.
+    ///
+    /// Three things make it a tier rather than a sixth session dial:
+    ///
+    /// 1. it answers the tier's own question ("does this call run, ask, or
+    ///    refuse?") from the same DECLARED metadata every other tier reads;
+    /// 2. it composes through [`ExecTier::most_restrictive`] as the strictest
+    ///    rung (`Plan` < `Ask` < `Auto` < `Full`), so every ceiling that
+    ///    already exists — the channel clamp, the non-operator ceiling — keeps
+    ///    holding without a second lattice; and
+    /// 3. it is per-conversation and reversible, which is exactly what the
+    ///    `custom["exec_tier"]` carrier already is.
+    ///
+    /// Deliberately NOT offerable as the install-wide `[policies] exec_tier`
+    /// default — see [`builtin_tiers`] vs [`session_tiers`]. A global `plan`
+    /// would have nothing to hand back to when a plan is approved.
+    ///
+    /// Carve-outs: [`HUMAN_CONTACT_TOOLS`] (asking the user is how planning
+    /// resolves what exploration cannot) and [`PLAN_REACHABLE_TOOLS`] (the plan
+    /// file plus the handoff that leaves this tier, and read-only delegation,
+    /// which runs through this very gate).
+    ///
+    /// The per-CALL half lives at the enforcement chokepoint rather than here:
+    /// [`ExecTier::rule_for`] only sees a tool's name-level facts, so a
+    /// read/write multiplexer like `file_ops` (`list`/`search`/`stats` vs
+    /// `move`/`delete`/…) is refused here and re-admitted for its READ arm by
+    /// `ScopedToolService`, which holds the arguments and asks the one
+    /// per-call read classifier this repo already maintains
+    /// (`LoopTool::concurrency_claim(input) == Shared`).
+    Plan,
     /// Every mutating / side-effecting tool needs human confirmation.
     /// Read-only tools stay allowed so the model can still investigate.
     Ask,
@@ -131,6 +203,7 @@ impl ExecTier {
     #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
         match id {
+            "plan" => Some(Self::Plan),
             "ask" => Some(Self::Ask),
             "auto" => Some(Self::Auto),
             "full" => Some(Self::Full),
@@ -142,13 +215,15 @@ impl ExecTier {
     #[must_use]
     pub const fn id(self) -> &'static str {
         match self {
+            Self::Plan => "plan",
             Self::Ask => "ask",
             Self::Auto => "auto",
             Self::Full => "full",
         }
     }
 
-    /// How permissive this tier is: `Ask` (0) < `Auto` (1) < `Full` (2).
+    /// How permissive this tier is: `Plan` (0) < `Ask` (1) < `Auto` (2) <
+    /// `Full` (3).
     ///
     /// Deliberately a method rather than a derived `Ord`. `ExecTier` is
     /// `Serialize`/`Deserialize`/`JsonSchema`, and a derived `Ord` would make
@@ -158,9 +233,10 @@ impl ExecTier {
     #[must_use]
     const fn permissiveness(self) -> u8 {
         match self {
-            Self::Ask => 0,
-            Self::Auto => 1,
-            Self::Full => 2,
+            Self::Plan => 0,
+            Self::Ask => 1,
+            Self::Auto => 2,
+            Self::Full => 3,
         }
     }
 
@@ -180,13 +256,24 @@ impl ExecTier {
     /// This tier's verdict on a tool with these declared facts.
     ///
     /// `None` = the tier has nothing to say; the caller falls back to the
-    /// configured `default`. The tier never *widens* a permission — it only
-    /// raises tools to `Ask`.
+    /// configured `default`. The tier never *widens* a permission — it raises
+    /// tools to `Ask`, or, under [`Self::Plan`] alone, to `Deny`.
     #[must_use]
     pub fn rule_for(self, facts: ToolFacts<'_>) -> Option<PermissionAction> {
         // Contacting the human is never gated behind contacting the human.
         if HUMAN_CONTACT_TOOLS.contains(&facts.name) {
             return None;
+        }
+        // Planning is the one tier that REFUSES rather than asks: the point of
+        // the mode is that no work starts, and an approval card per mutating
+        // call would turn "hold everything until the plan is reviewed" into
+        // "review the plan one edit at a time". Same input as every other
+        // tier — the tool's DECLARED idempotency, never its name.
+        if self == Self::Plan {
+            if PLAN_REACHABLE_TOOLS.contains(&facts.name) {
+                return None;
+            }
+            return (!facts.idempotent).then_some(PermissionAction::Deny);
         }
         let asks = match self {
             // Not idempotent = mutating. Destructive is folded in so a tool
@@ -194,7 +281,9 @@ impl ExecTier {
             // still stops.
             Self::Ask => !facts.idempotent || is_destructive(facts),
             Self::Auto => is_destructive(facts),
-            Self::Full => false,
+            // Answered above; listed so a new variant is a compile error here
+            // rather than a silent `false`.
+            Self::Plan | Self::Full => false,
         };
         asks.then_some(PermissionAction::Ask)
     }
@@ -284,6 +373,26 @@ impl ExecTier {
     #[must_use]
     pub const fn approval_prompt_line(self) -> &'static str {
         match self {
+            // Describes the whole PROTOCOL, not just the current state. A line
+            // that said only "everything is read-only" would still be on the
+            // wire, unchanged, for the rest of the turn in which the plan gets
+            // approved and the gate lifts — and 判据 §0 says the copy the model
+            // reads is the most expensive of the three places a claim about
+            // what is blocked can go stale. Stating the exit here means the
+            // sentence stays true on both sides of the handoff.
+            Self::Plan => {
+                "Approval mode: plan — this conversation is PLANNING. Every tool that \
+                 does not declare itself read-only is refused, so no work starts yet; \
+                 reading, searching and `ask_user` all run freely, and `scratchpad` is \
+                 writable because the plan is the deliverable. Explore first and ask \
+                 only what exploration cannot answer, then write the objective and an \
+                 ordered, decision-complete checklist with `scratchpad` (`set_objective` \
+                 + `set_plan`) and call `scratchpad` with `action='request_approval'`. \
+                 If the user approves, the read-only gate lifts IMMEDIATELY — in this \
+                 same turn — and you continue straight into implementing the plan you \
+                 just had approved. If they ask for changes, revise the checklist and \
+                 request approval again."
+            }
             Self::Ask => {
                 "Approval mode: ask — every mutating or side-effecting tool call \
                  pauses for the user's confirmation before it runs; read-only tools run \
@@ -484,10 +593,35 @@ fn is_destructive(facts: ToolFacts<'_>) -> bool {
 /// five session knobs, so it lives once in [`super::DialPreset`].
 pub type TierPreset = super::DialPreset;
 
-/// The three built-in tiers, ordered least → most permissive.
+/// The three tiers an INSTALL may sit at, ordered least → most permissive.
+///
+/// `plan` is deliberately absent: it is a per-conversation posture that ENDS
+/// when a human approves a plan, and ending it means falling back to whatever
+/// the install's own `[policies] exec_tier` says. An install whose default was
+/// `plan` would have nothing to fall back to — every conversation would return
+/// from its approved plan straight into planning again. See [`session_tiers`]
+/// for the list a composer offers.
 #[must_use]
 pub const fn builtin_tiers() -> &'static [TierPreset] {
     &[
+        TierPreset { id: "ask" },
+        TierPreset { id: "auto" },
+        TierPreset { id: "full" },
+    ]
+}
+
+/// The tiers a single CONVERSATION may sit at — [`builtin_tiers`] plus `plan`,
+/// which leads because it is the strictest.
+///
+/// Two lists rather than one because the two questions genuinely differ: "what
+/// posture does this machine run at" admits no answer that expires, and "what
+/// is this conversation doing right now" does. Both are served from one RPC
+/// (`config.get_tool_permissions`) so a surface decodes them together and
+/// cannot pair a session dial with a stale install dial.
+#[must_use]
+pub const fn session_tiers() -> &'static [TierPreset] {
+    &[
+        TierPreset { id: "plan" },
         TierPreset { id: "ask" },
         TierPreset { id: "auto" },
         TierPreset { id: "full" },
@@ -820,6 +954,142 @@ mod tests {
         assert!(builtin_tiers()
             .iter()
             .all(|p| ExecTier::from_id(p.id).is_some()));
+    }
+
+    /// The two lists are one list plus `plan`, in that order, and every id in
+    /// both parses. A census rather than a literal on each side: the failure
+    /// this pins is a fourth tier reaching only ONE of the two surfaces.
+    #[test]
+    fn session_tiers_are_the_install_tiers_plus_plan() {
+        let session: Vec<&str> = session_tiers().iter().map(|p| p.id).collect();
+        let install: Vec<&str> = builtin_tiers().iter().map(|p| p.id).collect();
+        assert_eq!(session.first(), Some(&"plan"));
+        assert_eq!(&session[1..], install.as_slice());
+        assert!(session_tiers()
+            .iter()
+            .all(|p| ExecTier::from_id(p.id).is_some()));
+        // Every variant reaches a user surface. `Plan` reaches exactly one of
+        // them, which is the whole asymmetry — an install cannot sit at it.
+        assert!(!install.contains(&ExecTier::Plan.id()));
+    }
+
+    /// The strictest rung. Every ceiling in the repo composes through
+    /// `most_restrictive`, so a `Plan` that were not the minimum would be
+    /// silently raised by the channel clamp / non-operator ceiling.
+    #[test]
+    fn plan_is_the_most_restrictive_rung() {
+        for other in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+            assert_eq!(
+                ExecTier::most_restrictive(ExecTier::Plan, other),
+                ExecTier::Plan
+            );
+            assert_eq!(
+                ExecTier::most_restrictive(other, ExecTier::Plan),
+                ExecTier::Plan
+            );
+        }
+    }
+
+    /// `Plan` refuses; it does not ask. An approval card per mutating call
+    /// would turn "hold everything until the plan is reviewed" into "review
+    /// the plan one edit at a time".
+    #[test]
+    fn plan_denies_every_tool_that_does_not_declare_itself_read_only() {
+        assert_eq!(
+            ExecTier::Plan.rule_for(unknown("some_mcp__write")),
+            Some(PermissionAction::Deny)
+        );
+        assert_eq!(
+            ExecTier::Plan.rule_for(unknown("file_write")),
+            Some(PermissionAction::Deny)
+        );
+        // Read-only by DECLARATION runs freely — same input every tier reads.
+        let read = ToolFacts {
+            name: "file_read",
+            idempotent: true,
+            requires_approval: false,
+        };
+        assert_eq!(ExecTier::Plan.rule_for(read), None);
+    }
+
+    /// The carve-outs, and the reason each exists: without them the tier is
+    /// circular — you would need approval to ask for approval, you could not
+    /// write the plan the approval is about, and you could not send a reader
+    /// into the codebase you are planning against.
+    #[test]
+    fn plan_keeps_the_human_channel_the_plan_file_and_delegation_open() {
+        for name in ["ask_user", "scratchpad", "subagent"] {
+            assert_eq!(
+                ExecTier::Plan.rule_for(unknown(name)),
+                None,
+                "`{name}` must stay reachable while planning"
+            );
+        }
+    }
+
+    /// The delegation carve-out is exactly one verb wide. `subagent` is
+    /// admissible only because its child runs through the PARENT's gated tool
+    /// service; every other delegation verb starts a SEPARATE run that
+    /// resolves its own tier and would not be planning at all — a two-step
+    /// path whose composition equals the call this tier refuses.
+    #[test]
+    fn plan_refuses_every_delegation_that_starts_a_separate_run() {
+        for name in [
+            "session_send",
+            "task_manage",
+            "team_create",
+            "team_dispatch",
+            "node_invoke",
+            "a2a_send",
+        ] {
+            assert_eq!(
+                ExecTier::Plan.rule_for(unknown(name)),
+                Some(PermissionAction::Deny),
+                "`{name}` delegates to a run this gate cannot reach"
+            );
+        }
+    }
+
+    /// A `Deny` verdict survives composition: the tier only ever tightens, and
+    /// `restrictive_min` must not let a `default = "allow"` install soften it.
+    #[test]
+    fn the_plan_denial_survives_an_allow_default() {
+        let perms = ToolPermissionsConfig::default();
+        assert_eq!(perms.default, PermissionAction::Allow);
+        assert_eq!(
+            effective_permission(Some(&perms), Some(ExecTier::Plan), unknown("file_write")),
+            PermissionAction::Deny
+        );
+    }
+
+    /// …but an operator who NAMED the tool still wins, exactly as at every
+    /// other tier: an explicit entry is a decision a human wrote, and the tier
+    /// never gets a word in about a tool it names.
+    #[test]
+    fn an_explicit_entry_still_outranks_the_plan_tier() {
+        let mut perms = ToolPermissionsConfig::default();
+        perms
+            .overrides
+            .insert("file_write".to_string(), PermissionAction::Allow);
+        assert_eq!(
+            effective_permission(Some(&perms), Some(ExecTier::Plan), unknown("file_write")),
+            PermissionAction::Allow
+        );
+    }
+
+    /// The prompt line must describe the EXIT, not only the current state:
+    /// it is still on the wire, unchanged, for the rest of the turn in which
+    /// the gate lifts.
+    #[test]
+    fn the_plan_prompt_line_states_the_handoff() {
+        let line = ExecTier::Plan.approval_prompt_line();
+        assert!(line.contains("request_approval"));
+        assert!(line.contains("scratchpad"));
+        assert!(line.contains("same turn"));
+        // Distinct from every other tier's line.
+        for other in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+            assert_ne!(line, other.approval_prompt_line());
+        }
     }
 
     /// The composition this arm exists to break: `self_config` raises no card

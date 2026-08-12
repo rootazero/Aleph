@@ -35,9 +35,19 @@ pub type ModePreset = DialPreset;
 pub struct ToolPermissionsResponse {
     /// Active tier id (`ask` / `auto` / `full`).
     pub exec_tier: String,
-    /// Selectable tiers, ordered least → most permissive.
+    /// Selectable INSTALL tiers, ordered least → most permissive. What
+    /// Settings → Policies offers as the machine-wide default.
     #[serde(default)]
     pub tiers: Vec<TierPreset>,
+    /// Selectable tiers for a single CONVERSATION — `tiers` plus `plan`, the
+    /// read-only planning posture that ends when a human approves a plan. What
+    /// the composer's tier pill offers.
+    ///
+    /// Empty against a core that predates the split; [`Self::session_tier_presets`]
+    /// falls back to `tiers` there, so an older core keeps offering three
+    /// choices rather than none.
+    #[serde(default)]
+    pub session_tiers: Vec<TierPreset>,
     /// Global default usage mode id (`chat` / `work` / `code`). Defaulted so
     /// the decoder tolerates an older core that predates the mode dial.
     #[serde(default)]
@@ -82,6 +92,24 @@ pub struct ToolPermissionsResponse {
     pub default: String,
     #[serde(default)]
     pub overrides: HashMap<String, String>,
+}
+
+impl ToolPermissionsResponse {
+    /// The tiers a composer pill may offer for THIS conversation.
+    ///
+    /// Falls back to the install list against a core that predates the split.
+    /// A bare `session_tiers` read would have degraded that case to an empty
+    /// popover — the exact symptom `a_member_still_receives_both_dials…`
+    /// exists to prevent, arriving through a version skew instead of a
+    /// permission narrowing.
+    #[must_use]
+    pub fn session_tier_presets(&self) -> &[TierPreset] {
+        if self.session_tiers.is_empty() {
+            &self.tiers
+        } else {
+            &self.session_tiers
+        }
+    }
 }
 
 // -- API --
@@ -170,6 +198,33 @@ mod tests {
         assert_eq!(cfg.overrides.get("bash").map(String::as_str), Some("ask"));
     }
 
+    /// The composer pill reads the SESSION list; Settings → Policies reads the
+    /// install list. A core that predates the split ships only the latter, and
+    /// the pill must degrade to three choices rather than to an empty popover —
+    /// the same symptom `the_member_shape_from_the_shared_contract_decodes`
+    /// exists to prevent, arriving through a version skew instead.
+    #[test]
+    fn the_session_tier_list_falls_back_to_the_install_list() {
+        let old_core = json!({
+            "exec_tier": "auto",
+            "tiers": [{ "id": "ask" }, { "id": "auto" }, { "id": "full" }],
+        });
+        let cfg: ToolPermissionsResponse = serde_json::from_value(old_core).unwrap();
+        assert!(cfg.session_tiers.is_empty());
+        assert_eq!(cfg.session_tier_presets().len(), 3);
+
+        let new_core = json!({
+            "exec_tier": "auto",
+            "tiers": [{ "id": "ask" }, { "id": "auto" }, { "id": "full" }],
+            "session_tiers": [
+                { "id": "plan" }, { "id": "ask" }, { "id": "auto" }, { "id": "full" }
+            ],
+        });
+        let cfg: ToolPermissionsResponse = serde_json::from_value(new_core).unwrap();
+        assert_eq!(cfg.session_tier_presets().len(), 4);
+        assert_eq!(cfg.session_tier_presets()[0].id, "plan");
+    }
+
     #[test]
     fn response_decodes_the_mode_dial() {
         let v = json!({
@@ -212,7 +267,9 @@ mod tests {
             // arrays of `{id}`.
             let value = match *key {
                 // Enumerations: arrays of `{ id }`.
-                "tiers" | "modes" | "think_levels" | "memory_modes" => json!([{ "id": "ask" }]),
+                "tiers" | "session_tiers" | "modes" | "think_levels" | "memory_modes" => {
+                    json!([{ "id": "ask" }])
+                }
                 // Dial positions: a bare id.
                 "exec_tier" | "mode" | "memory" => json!("auto"),
                 // No catch-all on purpose. A new member-visible key has to be

@@ -66,6 +66,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let (agent_id, context) =
             TURN_CONTEXT.sync_scope(turn, || audit_identity("browser", "navigate", "https://x"));
@@ -83,6 +84,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let (agent_id, context) =
             TURN_CONTEXT.sync_scope(turn, || audit_identity("automation", "run_script", "sh"));

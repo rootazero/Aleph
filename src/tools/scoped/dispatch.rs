@@ -13,6 +13,7 @@ use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::ToolError;
 
+use super::gate_chain::GateRule;
 use super::ledger::ApprovalRecord;
 use super::ScopedToolService;
 
@@ -200,17 +201,38 @@ impl ScopedToolService {
         // The reason names the entry that denied it (`deny_rule`), so the model
         // relays something the user can act on instead of "the policy says no".
         if let Some(rule) = self.deny_rule(name) {
-            let explanation = rule.reason(name);
-            if let Some(ref l) = ledger {
-                l.commit_refusal(&input, &explanation).await;
+            // The per-CALL half of plan mode. `ExecTier::Plan::rule_for` only
+            // sees a tool's NAME-level facts, so a read/write multiplexer —
+            // `file_ops` above all, whose `list`/`search`/`stats` arms are the
+            // repo-exploration a plan is built out of — comes back denied
+            // wholesale. Here we hold the arguments, so we can ask the ONE
+            // per-call read classifier this repo already maintains:
+            // `LoopTool::concurrency_claim(input) == Shared`, which is
+            // `Exclusive { Global }` by default (fail-closed for anything that
+            // declares nothing) and is resolved per-argument by the same
+            // adapter that resolves it for parallel dispatch.
+            //
+            // Scoped strictly to plan-created denials: an operator's `deny`
+            // entry, a `default = "deny"` install and every other tier's
+            // verdict are untouched, because `denied_only_by_plan` is false
+            // for all of them.
+            if rule == GateRule::PlanMode
+                && self
+                    .inner
+                    .call_concurrency_claim(name, &input)
+                    .is_some_and(|c| c == crate::tools::concurrency::ConcurrencyClaim::Shared)
+            {
+                // Falls through to the rest of the pipeline — this call reads.
+            } else {
+                let explanation = rule.reason(name);
+                if let Some(ref l) = ledger {
+                    l.commit_refusal(&input, &explanation).await;
+                }
+                return Err(ToolError::PermissionDenied {
+                    name: name.to_string(),
+                    reason: format!("{explanation}{}", rule.deny_advice()),
+                });
             }
-            return Err(ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: format!(
-                    "{explanation} Do not retry; ask the user to adjust \
-                     `[policies.tool_permissions]` if this tool is needed."
-                ),
-            });
         }
 
         // Config-tier authorization gate — suspended for live operator approval.

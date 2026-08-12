@@ -42,6 +42,12 @@
 pub const MEMBER_VISIBLE_KEYS: &[&str] = &[
     "exec_tier",
     "tiers",
+    // The tiers a single CONVERSATION may take — `tiers` plus `plan`, the
+    // read-only planning posture that ends when a human approves a plan.
+    // Member-visible for the same reason `tiers` is: a member already writes
+    // this dial for their own session, and withholding the enumeration locks a
+    // menu the server would still honour.
+    "session_tiers",
     "mode",
     "modes",
     "think_levels",

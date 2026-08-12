@@ -51,6 +51,23 @@ pub struct TurnContext {
     /// wait-mode children too: without it a headless parent's child run hangs
     /// on the 120 s approval timeout instead of failing closed instantly.
     pub unattended: bool,
+    /// The plan → build handoff cell, when this turn resolved to
+    /// [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan);
+    /// `None` on every other turn (and then everything below is
+    /// byte-identical to a build with no plan mode at all).
+    ///
+    /// It rides HERE rather than as a fourteenth parameter of
+    /// `build_request_tool_service` because the run builds the tool service
+    /// **twice** — once for itself and once as the parent view handed to
+    /// spawned children — and both calls already pass this context. One
+    /// `Arc`, therefore one gate: a second construction site would have given
+    /// the children a gate that no approval ever opens.
+    ///
+    /// Read by `ScopedToolService::effective_exec_tier` (the enforcement
+    /// chokepoint holds this struct) and flipped by `scratchpad`'s
+    /// `request_approval` (which reaches it through the [`TURN_CONTEXT`]
+    /// task-local this same struct is scoped into around every dispatch).
+    pub plan_gate: Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>>,
 }
 
 /// Canonical operator-role predicate for a raw `caller_role` string. `None`
@@ -122,6 +139,21 @@ pub fn current_turn_context() -> Option<TurnContext> {
     TURN_CONTEXT.try_with(|t| t.clone()).ok()
 }
 
+/// The plan → build handoff cell of the turn currently executing a tool.
+///
+/// `None` outside a scoped turn and on every turn that is not planning — the
+/// two are indistinguishable here on purpose, because the one caller
+/// (`scratchpad`'s `request_approval`) treats both the same way: there is no
+/// read-only gate to lift, so approval stays the advisory checkpoint it has
+/// always been.
+#[must_use]
+pub fn current_plan_gate() -> Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>> {
+    TURN_CONTEXT
+        .try_with(|t| t.plan_gate.clone())
+        .ok()
+        .flatten()
+}
+
 /// Agent id of the turn currently executing a tool, or `None` outside a
 /// scoped turn (direct calls, non-gateway paths, tests).
 ///
@@ -166,6 +198,7 @@ mod caller_tier_tests {
             caller_role: role.map(String::from),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         }
     }
 

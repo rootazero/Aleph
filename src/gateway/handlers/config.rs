@@ -674,6 +674,14 @@ fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     Ok(json!({
         "exec_tier": cfg.policies.exec_tier.id(),
         "tiers": serde_json::to_value(crate::config::types::policies::builtin_tiers())?,
+        // The tiers a single CONVERSATION may sit at — the install list plus
+        // `plan`, which is a posture that ends when a human approves a plan and
+        // therefore has no meaning as a machine-wide default (an install at
+        // `plan` would have nothing to hand back to). Shipped as its own key
+        // rather than by widening `tiers`, so the composer's pill and Settings →
+        // Policies each read the list that answers THEIR question and neither
+        // has to filter the other's.
+        "session_tiers": serde_json::to_value(crate::config::types::policies::session_tiers())?,
         // The session-mode dial rides the same surface: the composer's mode
         // pill and the tier pill share one fetch + one decoder (Panel
         // ToolPermissionsApi). Core ships ids only; copy is the surface's.
@@ -814,13 +822,28 @@ pub async fn handle_update_tool_permissions(
     };
 
     let tier = match params.exec_tier.as_deref() {
-        Some(id) => match crate::config::types::policies::ExecTier::from_id(id) {
+        // `from_id` parses `plan` — it is a real tier, just not an INSTALL
+        // one. Validating against `builtin_tiers()` rather than against
+        // `from_id` alone is what keeps the two lists honest: a machine-wide
+        // `plan` would put every conversation in a planning mode that, on
+        // approval, hands back to… planning. Rejected here rather than
+        // normalized, because silently storing a different value than the
+        // caller sent is how a setting comes to "sometimes work".
+        Some(id) => match crate::config::types::policies::ExecTier::from_id(id).filter(|_| {
+            crate::config::types::policies::builtin_tiers()
+                .iter()
+                .any(|p| p.id == id)
+        }) {
             Some(t) => Some(t),
             None => {
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Unknown exec_tier '{id}' (expected ask / auto / full)"),
+                    format!(
+                        "Unknown exec_tier '{id}' (expected ask / auto / full). \
+                         `plan` is a per-conversation posture, not an install default — \
+                         set it on a session with sessions.patch or chat.send."
+                    ),
                 )
             }
         },
@@ -966,6 +989,38 @@ mod tests {
     /// would compile, pass every test in this file, and reproduce the exact
     /// symptom the carve-out was made to fix: a tier popover with one blank
     /// option and a mode pill that hides itself on an empty `modes`.
+    /// The two tier catalogues answer two different questions, and the pill
+    /// that reads the wrong one either loses `plan` or offers an install
+    /// setting that cannot be honoured. Every id in both must parse.
+    #[test]
+    fn the_response_carries_both_the_install_and_the_session_tier_lists() {
+        let cfg = Config::default();
+        let value = exec_permissions_value(&cfg).expect("serializes");
+        let ids = |key: &str| -> Vec<String> {
+            value[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("`{key}` is an array"))
+                .iter()
+                .map(|p| p["id"].as_str().expect("id is a string").to_string())
+                .collect()
+        };
+        let install = ids("tiers");
+        let session = ids("session_tiers");
+
+        assert!(
+            !install.contains(&"plan".to_string()),
+            "an install cannot sit at `plan` — it would have nothing to hand back to"
+        );
+        assert_eq!(session.first().map(String::as_str), Some("plan"));
+        assert_eq!(&session[1..], install.as_slice());
+        for id in install.iter().chain(session.iter()) {
+            assert!(
+                crate::config::types::policies::ExecTier::from_id(id).is_some(),
+                "`{id}` is shipped to a client but does not parse back"
+            );
+        }
+    }
+
     #[test]
     fn a_member_still_receives_both_dials_and_both_catalogues() {
         let cfg = Config::default();

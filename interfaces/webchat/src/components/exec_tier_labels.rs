@@ -22,6 +22,7 @@ pub const FULL_TIER: &str = "full";
 /// Panel) degrades to the raw id rather than rendering blank.
 pub fn tier_label(i18n: I18nContext<Locale>, id: &str) -> String {
     match id {
+        "plan" => t_string!(i18n, settings.policies.exec_tier_plan_label).to_string(),
         "ask" => t_string!(i18n, settings.policies.exec_tier_ask_label).to_string(),
         "auto" => t_string!(i18n, settings.policies.exec_tier_auto_label).to_string(),
         "full" => t_string!(i18n, settings.policies.exec_tier_full_label).to_string(),
@@ -33,6 +34,7 @@ pub fn tier_label(i18n: I18nContext<Locale>, id: &str) -> String {
 /// nothing truthful to say about a tier this client has never heard of.
 pub fn tier_desc(i18n: I18nContext<Locale>, id: &str) -> String {
     match id {
+        "plan" => t_string!(i18n, settings.policies.exec_tier_plan_desc).to_string(),
         "ask" => t_string!(i18n, settings.policies.exec_tier_ask_desc).to_string(),
         "auto" => t_string!(i18n, settings.policies.exec_tier_auto_desc).to_string(),
         "full" => t_string!(i18n, settings.policies.exec_tier_full_desc).to_string(),

@@ -129,6 +129,19 @@ pub(super) enum GateRule<'a> {
     /// was still hand-written at its call site. Same shape as
     /// [`Self::PolicyDeny`], which [`ScopedToolService::deny_rule`] answers.
     OperatorRequired,
+    /// The conversation is PLANNING ([`ExecTier::Plan`]) and this call is not
+    /// a declared read.
+    ///
+    /// The second rule in the chain that REFUSES rather than asks, and the
+    /// only one that is temporary: the exact same call runs the moment a human
+    /// approves the plan. That is why it needs its own name — reported as
+    /// [`Self::PolicyDeny`] it would send the reader to a
+    /// `[policies.tool_permissions]` entry that does not exist, and send the
+    /// MODEL to a dead end instead of to the two-call handoff that is sitting
+    /// right there.
+    ///
+    /// [`ExecTier::Plan`]: crate::config::types::policies::ExecTier::Plan
+    PlanMode,
     /// A `BeforeToolCall` interceptor answered `Ask` for this call.
     ///
     /// Also outside [`ScopedToolService::confirmation_rule`] — the decision
@@ -158,6 +171,7 @@ impl GateRule<'_> {
             Self::GateRemoval => crate::exec::allowed_decisions::GATE_REMOVAL_RULE,
             Self::PolicyAsk { .. } => "policy_ask",
             Self::TierRaised => "tier_raised",
+            Self::PlanMode => "plan_mode",
             Self::OperatorRequired => "operator_required",
             Self::HookRequested => "hook_requested",
         }
@@ -182,10 +196,15 @@ impl GateRule<'_> {
     pub(super) const fn is_floor(self) -> bool {
         match self {
             Self::ToolDeclared | Self::GateRemoval => true,
+            // `PlanMode` is emphatically NOT a floor: it is the one rule in the
+            // chain that a single human "approved" retires for the rest of the
+            // turn. (It also never reaches a card — it refuses — so the
+            // persistent-grant question it would otherwise answer is moot.)
             Self::PolicyDeny { .. }
             | Self::DestructiveArguments
             | Self::PolicyAsk { .. }
             | Self::TierRaised
+            | Self::PlanMode
             | Self::OperatorRequired
             | Self::HookRequested => false,
         }
@@ -242,6 +261,13 @@ impl GateRule<'_> {
                  itself read-only. Nothing in `[policies.tool_permissions]` names it, so \
                  the tier decides."
             ),
+            Self::PlanMode => format!(
+                "This conversation is PLANNING, so `{tool}` does not run yet — nothing \
+                 that mutates does. Finish the plan instead: write the objective and an \
+                 ordered checklist with `scratchpad` (`set_objective` + `set_plan`), then \
+                 call `scratchpad` with `action='request_approval'`. If the user approves, \
+                 planning ends immediately and `{tool}` runs on your next call."
+            ),
             Self::OperatorRequired => format!(
                 "A chat-tier device asked to run `{tool}`, which changes Aleph's own \
                  configuration. Approve to allow this change."
@@ -253,6 +279,40 @@ impl GateRule<'_> {
             // when the plugin wrote a bare phrase.
             Self::HookRequested => {
                 format!("A `BeforeToolCall` hook asked for confirmation before `{tool}` runs.")
+            }
+        }
+    }
+
+    /// What the model should DO about a refusal, appended to [`Self::reason`]
+    /// on the deny path.
+    ///
+    /// This sentence used to be a literal at the one call site, which was fine
+    /// while that path had exactly one rule to explain. It has two now, and
+    /// they want opposite advice: an operator's `deny` is permanent and the
+    /// only way through it is a human editing config, while plan mode is one
+    /// approval away and retrying is exactly right *after* that approval. A
+    /// blanket "do not retry" on the second one would tell the model to give
+    /// up on the work it just got permission to do.
+    /// Exhaustive on purpose, with no catch-all: only two variants reach the
+    /// deny path today, and the wrong half of this fork is a sentence that
+    /// tells the model to give up on work it just got permission to do. A new
+    /// refusing rule should be a compile error here, not a silent inheritance
+    /// of "go edit your config".
+    pub(super) const fn deny_advice(self) -> &'static str {
+        match self {
+            Self::PlanMode => {
+                " Do not retry this call before the plan is approved — request approval first."
+            }
+            Self::PolicyDeny { .. }
+            | Self::ToolDeclared
+            | Self::DestructiveArguments
+            | Self::GateRemoval
+            | Self::PolicyAsk { .. }
+            | Self::TierRaised
+            | Self::OperatorRequired
+            | Self::HookRequested => {
+                " Do not retry; ask the user to adjust `[policies.tool_permissions]` if this \
+                 tool is needed."
             }
         }
     }
@@ -318,6 +378,15 @@ impl ScopedToolService {
     pub(super) fn deny_rule<'a>(&'a self, name: &str) -> Option<GateRule<'a>> {
         if self.permission_for(name) != PermissionAction::Deny {
             return None;
+        }
+        // A denial the PLAN tier created is reported as itself. Checked before
+        // the policy arm because the policy arm is unconditionally true here
+        // and would otherwise quote `pattern: "default"` — a config entry the
+        // operator never wrote, pointing at a fix that cannot work. The
+        // predicate is derived by difference (`denied_only_by_plan`), so an
+        // operator's real `deny` on the same tool keeps reporting as one.
+        if self.denied_only_by_plan(name) {
+            return Some(GateRule::PlanMode);
         }
         Some(GateRule::PolicyDeny {
             // A `Deny` with no explicit entry came from `default = "deny"`;
@@ -569,7 +638,16 @@ mod tests {
     /// fire with no reason, or a reason would exist for a gate that never fires.
     #[test]
     fn the_chain_and_the_chokepoint_never_disagree() {
-        for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+        // Every variant, `Plan` included: it refuses rather than asks, so the
+        // interesting half of the equality there is that it produces NO
+        // confirmation rule while `permission_for` says `Deny` — a card for a
+        // call that will never run is exactly the disagreement this pins.
+        for tier in [
+            ExecTier::Plan,
+            ExecTier::Ask,
+            ExecTier::Auto,
+            ExecTier::Full,
+        ] {
             for confirm in [false, true] {
                 for idempotent in [false, true] {
                     let svc = service(

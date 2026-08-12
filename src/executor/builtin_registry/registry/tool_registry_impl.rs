@@ -1672,6 +1672,7 @@ mod recall_context_identity_tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         }
     }
 

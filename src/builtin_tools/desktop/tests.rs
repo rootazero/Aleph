@@ -473,6 +473,7 @@ async fn approval_request_carries_agent_id_from_turn_context() {
         caller_role: None,
         channel_tool_permissions: None,
         unattended: false,
+        plan_gate: None,
     };
 
     let mut args = make_args("click");

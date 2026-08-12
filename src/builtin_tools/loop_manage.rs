@@ -1612,6 +1612,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let bound = TURN_CONTEXT.scope(turn, tool.session()).await;
         assert_eq!(bound, run_key.to_key_string());
@@ -1928,6 +1929,7 @@ mod tests {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
 
         let out = TURN_CONTEXT
@@ -1966,6 +1968,7 @@ mod tests {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
 
         let remote_stop = LoopArgs {

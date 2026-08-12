@@ -1162,6 +1162,8 @@
       "exec_tier_title": "执行权限档位",
       "exec_tier_desc": "智能体在停下来征求你同意之前可以自己走多远。下一次工具调用即生效，无需重启。",
       "exec_tier_applied": "档位已应用，下一次工具调用即生效。",
+      "exec_tier_plan_label": "规划",
+      "exec_tier_plan_desc": "只读规划。任何会改动系统的工具都不执行——智能体只探索、提问、写方案。你批准方案后，这个对话会立刻切换进入执行。",
       "exec_tier_ask_label": "请求",
       "exec_tier_ask_desc": "每个会改动系统的工具调用（执行命令、写文件、删除、凭据、MCP、浏览器）都先征求同意；只读工具照常运行。",
       "exec_tier_auto_label": "自动",

@@ -565,6 +565,27 @@ impl Config {
             }
         }
 
+        // `plan` deserializes here — it is a real `ExecTier`, just not an
+        // INSTALL one: it is a per-conversation posture that ENDS when a human
+        // approves a plan, and ending it means falling back to this very
+        // setting. A machine-wide `plan` would put every conversation into
+        // planning and then hand each approved plan straight back to planning,
+        // with the approval spent getting there.
+        //
+        // Refused rather than normalized: the RPC that writes this key refuses
+        // it too (`config::update_tool_permissions`), and a file that quietly
+        // ran at a different tier than it names is how a setting comes to
+        // "sometimes work".
+        if self.policies.exec_tier == crate::config::types::policies::ExecTier::Plan {
+            error!("[policies] exec_tier = \"plan\" is not an install-wide default");
+            return Err(AlephError::invalid_config(
+                "[policies] exec_tier = \"plan\" is not an install-wide default: planning is a \
+                 per-conversation posture that ends when you approve a plan, and it would have \
+                 nothing to hand back to. Set the install to ask / auto / full, and put a single \
+                 conversation into planning from the composer's tier pill (or `/tier plan`).",
+            ));
+        }
+
         info!(
             providers_count = self.providers.len(),
             rules_count = self.rules.len(),
@@ -605,6 +626,27 @@ mod tests {
     use crate::config::Config;
 
     use super::normalize_default_provider;
+
+    /// `plan` parses as an `ExecTier`, so a hand-edited TOML reaches this
+    /// field. The three install tiers must still load.
+    #[test]
+    fn plan_is_refused_as_an_install_wide_tier() {
+        use crate::config::types::policies::ExecTier;
+
+        let mut cfg = Config::default();
+        cfg.policies.exec_tier = ExecTier::Plan;
+        let err = cfg
+            .validate()
+            .expect_err("a machine-wide plan tier has nothing to hand back to");
+        let msg = err.to_string();
+        assert!(msg.contains("per-conversation"), "{msg}");
+
+        for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+            let mut cfg = Config::default();
+            cfg.policies.exec_tier = tier;
+            assert!(cfg.validate().is_ok(), "{tier:?} must still load");
+        }
+    }
 
     fn test_provider() -> ProviderConfig {
         ProviderConfig {

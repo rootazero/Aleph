@@ -364,6 +364,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         }
     }
 
@@ -404,6 +405,7 @@ mod tests {
     async fn errors_on_a_routable_but_unattended_turn() {
         let turn = TurnContext {
             unattended: true,
+            plan_gate: None,
             ..routable_turn()
         };
         let err = ask_in(turn, ClarificationRequest::text("Which one?"))

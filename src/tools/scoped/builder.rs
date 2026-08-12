@@ -234,9 +234,80 @@ impl ScopedToolService {
     pub(super) fn permission_for(&self, name: &str) -> crate::extension::PermissionAction {
         crate::config::types::policies::effective_permission(
             self.tool_permissions.as_ref(),
-            self.exec_tier,
+            self.effective_exec_tier(),
             self.tool_facts(name),
         )
+    }
+
+    /// The tier to enforce **right now**.
+    ///
+    /// Identical to the resolved `exec_tier` on every turn but one: a planning
+    /// turn carries a [`PlanGate`](crate::tools::plan_gate::PlanGate), and the
+    /// moment a human approves the plan that gate starts reporting the tier the
+    /// conversation hands back to. Reading it here — at the one chokepoint —
+    /// is what makes the handoff take effect on the NEXT tool call instead of
+    /// the next message, with nothing in `src/harness/` learning that plan mode
+    /// exists (R10).
+    ///
+    /// The gate rides on the turn context rather than beside `exec_tier`
+    /// because that context is already the thing both of this run's tool
+    /// services are built from — see `TurnContext::plan_gate`.
+    pub(super) fn effective_exec_tier(&self) -> Option<crate::config::types::policies::ExecTier> {
+        match self
+            .turn_context
+            .as_ref()
+            .and_then(|t| t.plan_gate.as_ref())
+        {
+            Some(gate) => Some(gate.tier()),
+            None => self.exec_tier,
+        }
+    }
+
+    /// `true` when the ONLY thing denying `name` is that this conversation is
+    /// planning — i.e. the identical call resolves to something other than
+    /// `Deny` the instant the plan is approved.
+    ///
+    /// Two consumers, and they use it in opposite directions:
+    ///
+    /// * the LLM-facing listings keep such a tool VISIBLE (a plan that has to
+    ///   be implementable needs the vocabulary of what can be done; hiding
+    ///   half the toolbelt for the planning half of a turn would also churn
+    ///   the cached tools block at the handoff, twice per plan); and
+    /// * `deny_rule` names [`GateRule::PlanMode`](super::gate_chain::GateRule)
+    ///   instead of `PolicyDeny`, so the refusal the model reads points at the
+    ///   handoff rather than at a `[policies.tool_permissions]` entry that
+    ///   does not exist.
+    ///
+    /// Derived by DIFFERENCE — "would this be denied at the restore tier?" —
+    /// rather than by a table of plan-denied names, so it cannot drift from
+    /// whatever `ExecTier::Plan::rule_for` actually does.
+    pub(super) fn denied_only_by_plan(&self, name: &str) -> bool {
+        use crate::config::types::policies::{effective_permission, ExecTier};
+        use crate::extension::PermissionAction;
+
+        // Keyed on the EFFECTIVE tier, not on "is there a gate": a released
+        // gate already reports the restore tier here, and a `Plan` service
+        // with no gate at all (a unit test, a caller that skipped the turn
+        // context) must still refuse with the right sentence rather than
+        // quoting a config entry that was never written.
+        if self.effective_exec_tier() != Some(ExecTier::Plan) {
+            return false;
+        }
+        // The counterfactual tier: what this call would resolve to once the
+        // plan is approved. The gate knows; without one, the tier's own
+        // default is the honest stand-in — the answer only decides whether an
+        // operator's `deny` is being misattributed, and no tier makes that
+        // difference.
+        let restore = self
+            .turn_context
+            .as_ref()
+            .and_then(|t| t.plan_gate.as_ref())
+            .map_or_else(ExecTier::default, |g| g.restore_to());
+
+        let facts = self.tool_facts(name);
+        let perms = self.tool_permissions.as_ref();
+        effective_permission(perms, Some(ExecTier::Plan), facts) == PermissionAction::Deny
+            && effective_permission(perms, Some(restore), facts) != PermissionAction::Deny
     }
 
     /// The permission an override entry explicitly states for `name`, if any.
@@ -319,6 +390,25 @@ impl ScopedToolService {
     /// `true` when the permission policy denies `name` outright.
     pub(super) fn is_permission_denied(&self, name: &str) -> bool {
         self.permission_for(name) == crate::extension::PermissionAction::Deny
+    }
+
+    /// `true` when `name` must not appear in any LLM-facing listing.
+    ///
+    /// Denial and invisibility used to be the same predicate, and for an
+    /// operator's `deny` entry they still are: listing a tool the policy will
+    /// never run only invites calls `execute()` rejects.
+    ///
+    /// Plan mode is the one denial that is deliberately still listed. It is
+    /// **temporary by design** — the conversation is one human approval away
+    /// from being able to run the tool — and the model is being asked, right
+    /// now, to write a plan that another agent could implement. Handing it
+    /// half a toolbelt to plan with produces plans that under-reach, and
+    /// swapping the tools block twice per plan would re-pay the prefix cache
+    /// for the privilege. The refusal it gets if it jumps the gun says what
+    /// to do instead ([`GateRule::PlanMode`](super::gate_chain::GateRule)),
+    /// which is the A2 shape: let the model see the error and self-heal.
+    pub(super) fn is_hidden_from_model(&self, name: &str) -> bool {
+        self.is_permission_denied(name) && !self.denied_only_by_plan(name)
     }
 
     pub(super) fn is_allowed(&self, name: &str) -> bool {
