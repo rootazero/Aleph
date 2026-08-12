@@ -443,7 +443,7 @@ pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
-    render_session_topology_inner(store, session).ok()
+    render_session_topology_inner(store, session).ok()?
 }
 
 /// Strict variant of [`render_session_topology_in`] — propagates the store
