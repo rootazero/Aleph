@@ -121,14 +121,14 @@ fn transcribe_and_send(
                     chat.active_project_root.try_get_untracked().flatten()
                 };
                 let mo = chat.selected_model.try_get_untracked().flatten();
-                let tier = chat.session_exec_tier.try_get_untracked().flatten();
-                // First-send-only carriage (see composer/mod.rs typed path):
-                // an existing session's store value is authoritative.
-                let mode = if sk.is_some() {
-                    None
-                } else {
-                    chat.session_mode.try_get_untracked().flatten()
-                };
+                // One rule for all four send paths. This path used to
+                // re-implement the first-send-only carriage inline, which is
+                // how it ended up carrying two of the dials and not the other
+                // two once there were four.
+                let dials = shared_ui_logic::state::session_dials_for_send(
+                    sk.is_some(),
+                    &chat.session_knobs(),
+                );
                 // Bind to the conversation active at send time (I1), same as the
                 // typed-send path in `composer/mod.rs`.
                 let send_conv = sessions.active_conv();
@@ -141,8 +141,7 @@ fn transcribe_and_send(
                     pr.as_deref(),
                     room_project_id.as_deref(),
                     mo.as_ref(),
-                    tier.as_deref(),
-                    mode.as_deref(),
+                    &dials,
                     // Dictated speech: arm the voice-mode prompt layer + model pin.
                     true,
                 )

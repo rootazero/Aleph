@@ -1,6 +1,7 @@
 pub mod agent_identity;
 pub mod composer;
 pub mod context_gauge;
+pub mod dial_picker;
 pub mod events;
 pub mod exec_tier_picker;
 pub mod list_scroll;

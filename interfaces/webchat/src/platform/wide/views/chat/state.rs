@@ -1,6 +1,7 @@
 //! Chat reactive state — signals for chat messages, streaming, and UI mode.
 
 use super::plan::{PlanUpdate, PlanView};
+use crate::api::sessions::SessionKnobs;
 use crate::api::teams::CoordTaskDto;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -641,6 +642,26 @@ pub struct ChatState {
     /// composer's mode pill owns reads/writes. Session-scoped → rides along
     /// in [`SessionSnapshot`].
     pub session_mode: RwSignal<Option<String>>,
+    /// Per-session reasoning depth (`"off"` … `"xhigh"`). `None` = send no
+    /// thinking directive at all, which is NOT the same as `"off"`: core's
+    /// precedence is request > session > *nothing*, so clearing this leaves the
+    /// provider on its own default rather than disabling reasoning. Mirrors
+    /// `SessionIdentityMeta.custom["think_level"]`. Session-scoped → rides
+    /// along in [`SessionSnapshot`].
+    pub session_think_level: RwSignal<Option<String>>,
+    /// Per-session memory mode (`"on"` | `"off"`). `None` = follow the
+    /// install-wide `[memory] enabled`. Mirrors
+    /// `SessionIdentityMeta.custom["memory_mode"]`. Session-scoped → rides
+    /// along in [`SessionSnapshot`].
+    pub session_memory_mode: RwSignal<Option<String>>,
+    /// The model this conversation is PINNED to (`select_model`), if any.
+    ///
+    /// Read-only here — the tool is the authoritative writer. Distinct from
+    /// [`Self::selected_model`], which is this turn's override and outranks the
+    /// pin, and from the model that last *served*: a pin applies from the next
+    /// run, so a surface showing only the latter names the model the user just
+    /// switched away from. Session-scoped → rides along in [`SessionSnapshot`].
+    pub session_model_pin: RwSignal<Option<String>>,
     /// The global `[policies] mode` default, mirrored from
     /// `config.get_tool_permissions` by the mode pill's fetch. Lets the
     /// right-rail mode dispatch (`events.rs`) resolve the EFFECTIVE mode for
@@ -718,6 +739,9 @@ impl ChatState {
             run_costs: RwSignal::new(std::collections::HashMap::new()),
             session_exec_tier: RwSignal::new(None),
             session_mode: RwSignal::new(None),
+            session_think_level: RwSignal::new(None),
+            session_memory_mode: RwSignal::new(None),
+            session_model_pin: RwSignal::new(None),
             global_mode: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
@@ -1553,10 +1577,9 @@ impl ChatState {
         self.plan.set(None);
         self.context_usage.set(None);
         self.run_costs.set(std::collections::HashMap::new());
-        // A fresh conversation carries no session tier — it follows the global
-        // one until the user picks otherwise.
-        self.session_exec_tier.set(None);
-        self.session_mode.set(None);
+        // A fresh conversation carries no dials of its own — every one of them
+        // follows the install default until the user picks otherwise.
+        self.apply_session_knobs(SessionKnobs::default());
     }
 
     /// Reset only the per-session state that [`SessionSnapshot`] does *not*
@@ -1606,9 +1629,52 @@ impl ChatState {
         self.plan.set(None);
         self.context_usage.set(None);
         self.run_costs.set(std::collections::HashMap::new());
-        self.session_exec_tier.set(None);
-        self.session_mode.set(None);
+        self.apply_session_knobs(SessionKnobs::default());
         // agent_id is intentionally preserved
+    }
+
+    /// This conversation's dials, as one value.
+    ///
+    /// Built with an exhaustive struct literal on purpose — see
+    /// [`SessionKnobs`]. Never `..Default::default()`: that turns "I forgot the
+    /// sixth dial" from a compile error back into a silently-dropped setting.
+    ///
+    /// Reads are `try_get_untracked().flatten()` because one caller — the voice
+    /// send — deliberately runs after its composer may have been unmounted, and
+    /// swallowing a finished utterance because the user navigated away is worse
+    /// than sending it with the dials at their defaults. For a live state this
+    /// is byte-identical to `get_untracked`.
+    #[must_use]
+    pub fn session_knobs(&self) -> SessionKnobs {
+        SessionKnobs {
+            exec_tier: self.session_exec_tier.try_get_untracked().flatten(),
+            mode: self.session_mode.try_get_untracked().flatten(),
+            think_level: self.session_think_level.try_get_untracked().flatten(),
+            memory_mode: self.session_memory_mode.try_get_untracked().flatten(),
+            model_pin: self.session_model_pin.try_get_untracked().flatten(),
+        }
+    }
+
+    /// Adopt a conversation's dials wholesale — on select, on restore, and on
+    /// clear (with [`SessionKnobs::default`]).
+    ///
+    /// Every dial is written, including the ones that are `None`. Writing only
+    /// the present ones is how the outgoing conversation's tier leaks into the
+    /// incoming one, and the leak reads as a setting the user thought they had
+    /// made.
+    pub fn apply_session_knobs(&self, knobs: SessionKnobs) {
+        let SessionKnobs {
+            exec_tier,
+            mode,
+            think_level,
+            memory_mode,
+            model_pin,
+        } = knobs;
+        self.session_exec_tier.set(exec_tier);
+        self.session_mode.set(mode);
+        self.session_think_level.set(think_level);
+        self.session_memory_mode.set(memory_mode);
+        self.session_model_pin.set(model_pin);
     }
 
     /// Capture a serializable, owned copy of all per-session signals.
@@ -1641,8 +1707,7 @@ impl ChatState {
             next_msg_id: self.next_msg_id.get_untracked(),
             context_usage: self.context_usage.get_untracked(),
             run_costs: self.run_costs.get_untracked(),
-            session_exec_tier: self.session_exec_tier.get_untracked(),
-            session_mode: self.session_mode.get_untracked(),
+            knobs: self.session_knobs(),
             plan: self.plan.get_untracked(),
         }
     }
@@ -1674,8 +1739,7 @@ impl ChatState {
             self.pending_model_override.set(None);
         }
         self.run_costs.set(snap.run_costs);
-        self.session_exec_tier.set(snap.session_exec_tier);
-        self.session_mode.set(snap.session_mode);
+        self.apply_session_knobs(snap.knobs);
         self.next_msg_id.set(snap.next_msg_id);
         // Carried in the snapshot so the occupancy gauge survives a tab swap
         // (None for a fresh/empty tab, which correctly hides the gauge).
@@ -1728,11 +1792,11 @@ pub struct SessionSnapshot {
     pub context_usage: Option<ContextUsage>,
     /// Per-run cost, so the meta line survives a tab swap.
     pub run_costs: std::collections::HashMap<String, RunCost>,
-    /// This session's execution-tier override (`None` = follow the global tier).
-    pub session_exec_tier: Option<String>,
-    /// Per-session usage-mode override (mode pill) — same carrier contract as
-    /// `session_exec_tier`.
-    pub session_mode: Option<String>,
+    /// This conversation's dials, so a tab swap restores the tier / mode /
+    /// depth / memory setting the server is actually enforcing rather than the
+    /// install defaults. One field, so a new dial cannot be captured on the way
+    /// out and dropped on the way back.
+    pub knobs: SessionKnobs,
     /// The session's live execution list, so the Todo strip survives a tab
     /// swap the same way the context gauge and per-run costs do.
     pub plan: Option<PlanView>,
@@ -1753,6 +1817,50 @@ mod step_tests {
     fn ids(chat: &ChatState) -> Vec<String> {
         chat.messages
             .with(|m| m.iter().map(|x| x.id.clone()).collect())
+    }
+
+    /// Every dial survives a tab swap, and none of them leaks into the next
+    /// conversation.
+    ///
+    /// The failure this pins is the one that already happened twice on other
+    /// surfaces: a dial captured on the way out and forgotten on the way back
+    /// reads as "this conversation follows the global default", which is
+    /// indistinguishable from the truth — while the run loop keeps resolving
+    /// the stored value every turn. Asserting on the whole [`SessionKnobs`]
+    /// rather than field by field is what makes a sixth dial join this test by
+    /// construction.
+    #[test]
+    fn every_dial_survives_a_snapshot_round_trip_and_none_leaks() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+
+        let armed = SessionKnobs {
+            exec_tier: Some("ask".into()),
+            mode: Some("code".into()),
+            think_level: Some("high".into()),
+            memory_mode: Some("off".into()),
+            model_pin: Some("claude-opus-5".into()),
+        };
+        chat.apply_session_knobs(armed.clone());
+        let snap = chat.capture_snapshot();
+        assert_eq!(snap.knobs, armed, "the outgoing tab must carry its dials");
+
+        // Switching to a conversation with no dials of its own must show the
+        // defaults, not the last tab's.
+        chat.clear_session();
+        assert_eq!(
+            chat.session_knobs(),
+            SessionKnobs::default(),
+            "a dial leaked across a conversation switch"
+        );
+
+        chat.restore_from(snap);
+        assert_eq!(
+            chat.session_knobs(),
+            armed,
+            "a dial was captured on the way out and dropped on the way back"
+        );
     }
 
     /// The production order for a room peer's turn: `run_accepted` opens the

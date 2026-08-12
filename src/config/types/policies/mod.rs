@@ -42,6 +42,27 @@ pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// One selectable position of a session dial, as offered to a user surface
+/// (Panel / CLI / bot).
+///
+/// Core owns the dial's IDENTITY — which ids exist and in what order — because
+/// every surface has to offer the same choices with the same meaning (R6). It
+/// does NOT own the COPY: a label is presentation and has to follow the
+/// reader's locale, so a surface that cannot author its own words is
+/// structurally unable to be localized (R4). Ship ids; let the surface write
+/// the sentence.
+///
+/// One type for all five dials rather than one struct per dial: the third and
+/// fourth copies (thinking depth, memory mode) are what made the duplication
+/// worth removing, and a shared shape means the Panel decodes every dial with
+/// the same `{ id }` reader.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DialPreset {
+    /// Canonical id — the value that goes on the wire and into session
+    /// metadata.
+    pub id: &'static str,
+}
+
 /// Root policies configuration
 ///
 /// Aggregates all policy types. All fields are optional with defaults,

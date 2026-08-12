@@ -26,38 +26,14 @@ use aleph_protocol::team_topic::{parse_team_topic, TeamTopicKind};
 
 use web_sys::HtmlInputElement;
 
-/// A session entry returned by the backend (sessions.list).
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-struct SessionEntry {
-    key: String,
-    #[serde(default)]
-    agent_id: String,
-    #[serde(default)]
-    topic: Option<String>,
-    #[serde(default)]
-    message_count: u32,
-    /// Backend sends `updated_at` as Unix epoch seconds (Option<i64>)
-    #[serde(default)]
-    updated_at: Option<i64>,
-    /// User-chosen project working directory persisted on the session. `None`
-    /// ⇒ the default `~/.aleph/workspaces/{agent_id}` workspace. Restored into
-    /// `chat.active_project_root` when the session is reselected after a reload.
-    #[serde(default)]
-    project_root: Option<String>,
-    /// Per-session execution-tier override persisted on the session. `None` ⇒
-    /// the session follows the global tier. Restored into
-    /// `chat.session_exec_tier` on reselect: the server keeps enforcing a stored
-    /// tier across reloads, so a pill that forgot it would under-report the gate
-    /// that is actually live.
-    #[serde(default)]
-    exec_tier: Option<String>,
-    /// Per-session usage-mode override persisted on the session. `None` ⇒
-    /// follow the global default. Restored into `chat.session_mode` on
-    /// reselect — same contract as `exec_tier`.
-    #[serde(default)]
-    mode: Option<String>,
-}
+/// A session entry returned by the backend (`sessions.list`).
+///
+/// One decoder for every Panel surface — the phone history reads the same rows
+/// (`api::sessions::SessionRow`). It used to be two hand-written copies, and
+/// they had diverged: the phone's carried no dials, so tapping a row there
+/// restored the folder and dropped the tier and the mode while the server kept
+/// enforcing them.
+use crate::api::sessions::SessionRow as SessionEntry;
 
 /// An agent entry returned by the backend (agents.list).
 #[allow(dead_code)]
@@ -651,11 +627,9 @@ pub fn ChatSidebar() -> impl IntoView {
         let Some(row) = list.iter().find(|s| s.key == key) else {
             return;
         };
-        if chat.session_mode.get_untracked() != row.mode {
-            chat.session_mode.set(row.mode.clone());
-        }
-        if chat.session_exec_tier.get_untracked() != row.exec_tier {
-            chat.session_exec_tier.set(row.exec_tier.clone());
+        let knobs = row.knobs();
+        if chat.session_knobs() != knobs {
+            chat.apply_session_knobs(knobs);
         }
     });
 
@@ -829,28 +803,24 @@ pub fn ChatSidebar() -> impl IntoView {
         chat.active_project_root.set(restored_root);
         chat.active_project_name.set(restored_name);
 
-        // Same treatment for the session's exec-tier override: the server's
-        // stored value is authoritative because the run loop resolves the
-        // STORED tier every turn, so a pill showing anything else — a stale
-        // snapshot value, or "follow global" after a blanket clear — would
-        // under-report the gate the server is enforcing. Set the signal
-        // directly from what the session list reports — going
-        // through the picker's `select` would re-issue a `sessions.patch` write
-        // on every selection.
-        chat.session_exec_tier.set(
+        // Same treatment for the session's dials: the server's stored values are
+        // authoritative because the run loop resolves the STORED ones every
+        // turn, so a pill showing anything else — a stale snapshot value, or
+        // "follow global" after a blanket clear — would under-report what is
+        // actually being enforced. Set the signals directly from what the
+        // session list reports; going through a picker's `select` would
+        // re-issue a `sessions.patch` write on every selection.
+        //
+        // A row we cannot find leaves the dials at their defaults, which is
+        // also what `clear_session` just set them to — the same answer the
+        // surface gave before any of them existed.
+        chat.apply_session_knobs(
             sessions
                 .get_untracked()
                 .iter()
                 .find(|s| s.key == key)
-                .and_then(|s| s.exec_tier.clone()),
-        );
-        // Third twin: restore the session's usage-mode override the same way.
-        chat.session_mode.set(
-            sessions
-                .get_untracked()
-                .iter()
-                .find(|s| s.key == key)
-                .and_then(|s| s.mode.clone()),
+                .map(SessionEntry::knobs)
+                .unwrap_or_default(),
         );
 
         // A conversation that is already open keeps a background `ChatState`

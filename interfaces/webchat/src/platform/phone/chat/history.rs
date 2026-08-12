@@ -2,8 +2,6 @@
 //! history button. Tapping a row loads that session into ChatState and returns
 //! to the chat surface (`/`).
 
-use serde::Deserialize;
-
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
@@ -15,24 +13,15 @@ use crate::platform::phone::shell::PhoneShell;
 use crate::state::layout::WorkspaceState;
 use crate::views::chat::ChatState;
 
-/// One row of `sessions.list`. Mirrors the server `SessionInfo` shape (only the
-/// fields the phone list needs). Team chats never appear here — the server
-/// filters out `task`/`ephemeral` session types.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct SessionRow {
-    pub key: String,
-    #[serde(default)]
-    pub agent_id: String,
-    #[serde(default)]
-    pub topic: Option<String>,
-    #[serde(default)]
-    pub message_count: u32,
-    /// Unix epoch seconds; `None` sorts last.
-    #[serde(default)]
-    pub updated_at: Option<i64>,
-    #[serde(default)]
-    pub project_root: Option<String>,
-}
+/// One row of `sessions.list` — the same decoder the wide sidebar uses.
+///
+/// It used to be a second, narrower copy of that shape, and the narrowing was
+/// the bug: it modelled `project_root` and none of the dials, so `on_select`
+/// below restored the folder and left the tier / mode pills claiming "follow
+/// global" for a session the server was governing with stored values. Team
+/// chats never appear here — the server filters out `task`/`ephemeral` session
+/// types.
+pub(crate) use crate::api::sessions::SessionRow;
 
 /// Sort newest-first by `updated_at`; rows with no timestamp sink to the bottom.
 pub(crate) fn sort_sessions_desc(mut rows: Vec<SessionRow>) -> Vec<SessionRow> {
@@ -114,6 +103,11 @@ pub fn PhoneChatHistory() -> impl IntoView {
         chat.agent_id.set(Some(row.agent_id.clone()));
         chat.session_key.set(Some(row.key.clone()));
         chat.active_project_root.set(row.project_root.clone());
+        // The dials this conversation is actually being run with. Without this
+        // the phone's pills reported the install defaults while the run loop
+        // kept resolving the stored values every turn — and the tier pill is
+        // the one that says which tool calls stop for approval.
+        chat.apply_session_knobs(row.knobs());
         // The phone shell mounts no `ChatSidebar`, so it registers no
         // conversations in `SessionMap` and has nothing to bind a live run to
         // — the returned run id is discarded rather than followed. Deliberate:
@@ -208,33 +202,24 @@ mod tests {
         assert_eq!(row.updated_at, None);
     }
 
+    /// The sort is about `updated_at` only, so the rows are built from the
+    /// default and given just that — a literal spelling out every dial would
+    /// have to be edited whenever a dial is added, for a test that never reads
+    /// one.
+    fn row_at(key: &str, updated_at: Option<i64>) -> SessionRow {
+        SessionRow {
+            key: key.into(),
+            updated_at,
+            ..SessionRow::default()
+        }
+    }
+
     #[test]
     fn sorts_newest_first_none_last() {
         let rows = vec![
-            SessionRow {
-                key: "old".into(),
-                agent_id: String::new(),
-                topic: None,
-                message_count: 0,
-                updated_at: Some(100),
-                project_root: None,
-            },
-            SessionRow {
-                key: "none".into(),
-                agent_id: String::new(),
-                topic: None,
-                message_count: 0,
-                updated_at: None,
-                project_root: None,
-            },
-            SessionRow {
-                key: "new".into(),
-                agent_id: String::new(),
-                topic: None,
-                message_count: 0,
-                updated_at: Some(200),
-                project_root: None,
-            },
+            row_at("old", Some(100)),
+            row_at("none", None),
+            row_at("new", Some(200)),
         ];
         let sorted = sort_sessions_desc(rows);
         let keys: Vec<&str> = sorted.iter().map(|r| r.key.as_str()).collect();

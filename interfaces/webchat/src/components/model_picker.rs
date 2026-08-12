@@ -63,14 +63,25 @@ pub fn ModelPicker() -> impl IntoView {
         });
     };
 
+    // What the pill names, in the same precedence core resolves
+    // (`effective_model_directive`): this turn's pick, else the conversation's
+    // `select_model` pin, else nothing chosen at all.
+    //
+    // The middle arm is the one that was missing. A pin is per-session state
+    // the model itself sets (R8) and the run loop honours from the next run on,
+    // so a pill that only knew about its own per-turn override answered
+    // "Default" for a conversation that was pinned — naming, of all the models
+    // available, the one that was not going to serve.
     let trigger_label = move || -> String {
-        match chat.selected_model.get() {
-            Some(mo) => match mo.provider() {
+        if let Some(mo) = chat.selected_model.get() {
+            return match mo.provider() {
                 Some(p) => format!("{}/{}", p, mo.model()),
                 None => mo.model().to_string(),
-            },
-            None => "Default".to_string(),
+            };
         }
+        chat.session_model_pin
+            .get()
+            .unwrap_or_else(|| "Default".to_string())
     };
 
     let select_entry = move |provider: String, model: String| {

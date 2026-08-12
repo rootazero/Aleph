@@ -31,6 +31,9 @@
 | 横切 | `select_model` 选的模型重启就丢 | Durable Model Pin (4th Twin) | `gateway/session_model_pin.rs` + `execution_engine/turn_model.rs` + `session_model_handle::MODEL_PIN_SESSION_KEY` | ✅ (§5.23, 2026-08-11) |
 | Context | 想让这个对话不注入记忆 / 干净房间对话 / `/memory-mode off` | Per-Session Memory Mode (5th Twin) | `memory/session_memory_mode.rs` + `execution_engine/turn_memory.rs` + `harness_bridge/prompt_build.rs`（唯一闸点） | ✅ (§5.23, 2026-08-11) |
 | CLI | 续上次对话 / `--continue` / 重开终端接着聊 | Continue Last Thread | `shared/client/src/session_resolve.rs`（`ask --last` 与 `chat --continue` 共用） | ✅ (§5.23, 2026-08-11) |
+| Panel | Panel 看不到推理档 / 记忆没有开关 / 模型 pin 了 pill 还写 Default / 手机点开会话档位变回默认 | Composer Session Dials (think / memory / pin) | `views/chat/dial_picker.rs` + `api/sessions.rs::SessionRow` + `shared/ui_logic/.../composer_dials.rs::SessionKnobs` | ✅ (§5.23b, 2026-08-12) |
+| 横切 | 会话突然 `session not found` 但转录还在 / 重启也找不回来 | Atomic Session Metadata Write | `gateway/session_store/file_backend/mod.rs::write_metadata`（`utils::atomic_write`） | ✅ (§5.23b, 2026-08-12) |
+| CLI | `aleph-tui` 一启动就 panic（`-c` 短参冲突） | TUI CLI Definition Guard | `interfaces/tui/src/main.rs::the_cli_definition_is_valid` | ✅ (§5.23b, 2026-08-12) |
 | Panel | 另一个标签页的回答跑到我这来了 / 定时任务的输出流进我正在看的对话 / 我下一句发错会话了 / 房间里看不见队友说话 | Frame-to-Conversation Routing | `platform/wide/views/chat/events.rs::resolve_target`（三步）+ `state/sessions.rs::set_session_key` | ✅ (§6.9, 2026-08-10) |
 | Panel | 打开一个正在跑的会话什么也不动 / 队友在跑我这边一片死寂 / 只能等它跑完 | Join A Live Turn | `handlers/chat.rs::handle_history`（`active_run`）+ `chat_sidebar.rs::hydrate_and_follow` | ✅ (§6.9, 2026-08-10) |
 | Panel | core 重启后红点不动了 / 重启后 Stop 键一直卡着 / 刷新页面才好 | Reconnect Baseline Rebase | `context.rs::connection_epoch` + `sessions.rs::{reset_running_baseline,settle_runs_absent_from}` | ✅ (§6.9, 2026-08-10) |
@@ -2095,9 +2098,48 @@
 
 - **不给会话行加 `TurnContext` 式的逐轮快照**：knob 变更是稀疏的，`identity_meta` 已是它们的家；逐轮写入换不到任何回答不了的问题。
 - **不做 `sessions.get`**：`chat.history` 就是那个按键 attach 的面，它已经过了可见性闸、已经解析了 metadata；第二个方法＝第二个存在性 oracle（该响应的 doc 为 `active_run` 写过同一段论证）。
-- **不给 Panel 加 think/memory pill**（本轮只到 wire 与 TUI）：Panel 的 pill 一族在 §6，独立一轮；`SessionInfo` 的三个新字段已就位，接线是纯客户端工作。
+- ~~**不给 Panel 加 think/memory pill**~~ **已于 round-2（2026-08-12）补齐**，见下。
 - **不做 TUI 的 `/model`**：见上。
-- **未做真机 QA**：本轮全部为编译 + 单测验证。
+- ~~**未做真机 QA**~~ **已于 round-2（2026-08-12）补做**，并因此抓到两条 P0，见下。
+
+---
+
+### 5.23b 线程持久化 round-2：真机 QA + Panel 接线 (2026-08-12)
+
+- **口语关键词**：Panel 看不到推理档 / 记忆开关没有开关 / 模型 pin 了但 pill 还写 Default / 手机上点开会话档位全变回默认 / 会话突然「session not found」但转录还在 / `aleph-tui` 一启动就 panic
+- **代码锚点**：`shared/ui_logic/src/state/composer_dials.rs`（`SessionKnobs` + `SendDials` + `session_dials_for_send`，五个 surface 共用）· `interfaces/webchat/src/platform/wide/views/chat/dial_picker.rs`（`Dial::{Think,Memory}` 一个组件两个 pill）· `interfaces/webchat/src/api/sessions.rs`（`SessionRow` 单一行解码器 + `set_think_level` / `set_memory_mode`）· `src/gateway/handlers/config.rs::exec_permissions_value`（档位词表）· `src/gateway/session_store/file_backend/mod.rs::write_metadata`
+- **状态**：✅ 已实现并**在活服务器上逐条实测**（隔离 `ALEPH_HOME` + mock provider + Playwright + pty）。
+
+#### 真机 QA 抓到的两条 P0（都只在「跑起来」时可见）
+
+- **① `metadata.json` 会被并发写撕裂，被撕裂的会话在每个面上都「不存在」（默认后端，最高优先级）。** `write_metadata` 用的是 `tokio::fs::write`＝`create+truncate+write_all`，而这份文件有**十六个**无锁的读-改-写调用点。两个写者重叠时，B 的 truncate 可以发生在 A 落笔**之前**、B 的 write 发生在 A **之后**，于是文件＝B 的完整文档 + A 的尾巴（实测 509 有效字节 + 58 字节旧尾）。代价与它的外观完全不成比例：`list_sessions` 对解析失败**静默 `continue`**、`read_metadata` 报错，于是**同一个会话在 `sessions.list` 消失、`chat.history` 答 "session not found"、`sessions.patch` 拒绝**，而 `transcript.jsonl` 完好地躺在旁边；因为是磁盘损坏不是内存状态，**重启不治**。手工把那 58 字节截掉，会话当场回来——这是本条的最终证据。修：改走既有单一源 `utils::atomic_write::atomic_write_file`（同目录临时文件 + fsync + rename），并让 `list_sessions` 的跳过**出声**（`warn!` 点名文件路径）。回归测试 `concurrent_metadata_writes_never_leave_an_unparseable_file`（交替长短 payload——等长写不可能拼出混合体，一个不变长度的 fixture 会对着 bug 全绿），**变异证过 RED**（第一轮即复现，报 `trailing characters at line 17 column 2`）。⚠️ **没修的那一半**：十六个读-改-写仍然无锁，所以并发更新仍可能**丢失**一次写入（原子性只保证「幸存的是一份完整的旧文档」而不是「没人丢」）；写在 `read_metadata` 的 doc 里。
+- **② `aleph-tui` 在 debug 构建下启动即 panic，任何参数都一样。** 上一轮加的 `-c/--continue` 与既有的 `-c/--config` 撞短参，clap 的 `debug_asserts` 在 `Args::parse()` 里 panic——**早于 main 的任何一行**。这不是编译错误、`cargo check` 不编译 `#[cfg(test)]`、而 CLAUDE.md §10 的最小验证集**根本不覆盖这个 crate**，所以「编译 + 单测全绿」与「这个二进制根本起不来」可以同时为真。release 不 assert，改为静默把字母判给其中一个。修：`--continue` 去掉短参（`--session` 在同一个 struct 里早有先例：`-s` 被 `--server` 占了就用 `-k`），字母留给**已发布**的 `--config`；新增 `main.rs::the_cli_definition_is_valid`＝`Args::command().debug_assert()`，clap 自己的校验器当测试跑，**变异证过 RED**。
+
+#### Panel 接线（三个 wire 字段的客户端那半）
+
+- **两个新 pill 用一个组件**：`DialPicker { dial: Dial }`，`Think` / `Memory` 只差读哪个信号、patch 哪个键、用哪几句话。`exec_tier_picker` / `mode_picker` 的第三、四份拷贝没有再写——它们当初的分歧（tier 的 `full` 二次确认）在这两个 dial 上不存在。
+- **档位词表从服务端来，不在客户端写死**：`config.get_tool_permissions` 新增 `think_levels` / `memory` / `memory_modes`（`aleph_protocol::tool_permissions::MEMBER_VISIBLE_KEYS` 同批扩，两侧对账测试各自按名字红）。**`think_levels` 旁边刻意没有 `think_level` 全局位**——`turn_thinking` 的优先级是 请求 > 会话 > **什么都不发**，所以清除覆盖那一行的文案必须是「厂商默认」而不是「跟随全局」，后者会命名一个不存在的设置。
+- **`SessionKnobs` 收敛五个 dial 的每一个触点**：`ChatState::{session_knobs, apply_session_knobs}` + `SessionSnapshot.knobs` + `SessionRow::knobs()`，结构体字面量是穷尽的，所以第六个 dial 是**编译错误**而不是「在一个面上生效、在另外三个面上被丢掉」。
+- **顺带修掉一条既有缺陷**：手机 `history.rs::on_select` 恢复了 `project_root` 而**一个 dial 都不恢复**（它自己那份 `SessionRow` 拷贝里压根没有那些字段），于是手机 pill 长期报的是装机默认、而服务端每轮仍在按存储值执行——tier 那一颗正是「哪些工具调用会停下来等人」。两份手写行解码器现已收敛成一个。
+- **`ModelPicker` 不再对 pin 撒谎**：无 per-turn override 时读 `session_model_pin` 而不是印 "Default"——pin 从下一轮生效，只看「上一轮谁服务的」会**报出用户刚刚换掉的那个模型**。
+- **一条规则管四个发送面**：`session_dials_for_send` 现返回 `SendDials`（tier 每次都带；mode/thinking/memory 只带第一条消息——会话行一旦存在就是权威，重发 pill 缓存值会静默回滚模型自己用 `session_set_mode`/`self_config` 做过的改动）。两条语音发送路径此前**各自内联了一份**这条规则、写于只有两个 dial 的年代，于是四个 dial 时代它们只带两个；现由 `api::chat::tests::every_send_path_resolves_the_dials_through_the_shared_rule`（crate 级源码扫描，变异证过 RED）钉住。
+- **手机工具行 `flex-wrap`**：390 px 放不下 attach + 四个 pill 时换行而不是横向滚动——`overflow-x: auto` 会让这一行变成滚动容器，**裁掉 picker 的 popover**（它们绝对定位在这一行上）。实测 390 px 下四个 pill 仍在一行、页面横向溢出 0 px；换行是标签变长（`Extended` / `Minimal`）时的安全网。
+
+#### 真机 QA 实测清单（活服务器，非单测）
+
+| 断言 | 结果 |
+|---|---|
+| `agent.run` 用共享 `AgentRunRequest` 形状（`input`）返回规范 session_key | ✅ |
+| `chat.history` 带回 `session` 快照（五个 dial + token + 工作目录） | ✅ |
+| `sessions.patch` 写 think/memory；`model_pin` 被 `NOT_PATCHABLE` 拒；非法档位被拒 | ✅ |
+| **进程重启后**四个 dial 原样回来 | ✅ |
+| `select_model` 经真实工具调用写 pin；**重启后**下一轮真的拨到 `mock-model-2` | ✅ |
+| `memory_mode=off` 真的抽掉三个信封，且 `MEMORY_MUTED_LINE` 逐字到达模型 | ✅ |
+| `aleph chat --continue` / `aleph-tui --continue` attach 到同一线程，状态栏显示 `tier:auto │ mode:code │ think:high │ memory-mode:off` + pin + token | ✅ |
+| TUI 打字发消息不再 `INVALID_PARAMS`（上一轮 P0 ①） | ✅（服务端日志零命中） |
+| Panel 四个 pill 渲染 / 选择 / **刷新后仍在**；手机点开会话恢复四个 dial | ✅ |
+| **未能实测**：`think_level` 到 provider 的那一段——`127.0.0.1` 归 `EndpointClass::Local`，其 `supports_reasoning_effort: false` **按设计**剥掉该字段，本 rig 结构性观测不到（该半仍只有 `reasoning_effort.rs` 的单测覆盖） | ⚠️ |
+| **未做**：TUI 斜杠命令（`/think` 等）经 pty 驱动——命令面板会吞掉喂进去的按键，需要另一套按键序列 | ⚠️ |
 
 
 ---

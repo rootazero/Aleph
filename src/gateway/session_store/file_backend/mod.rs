@@ -177,6 +177,19 @@ impl FileSessionStore {
             .join(format!("{checkpoint_id}.jsonl"))
     }
 
+    /// Read a session's metadata.
+    ///
+    /// # Known: this is half of an unguarded read-modify-write
+    ///
+    /// Sixteen call sites read here, mutate a field, and write back, with no
+    /// lock across the pair. Two overlapping updates therefore still lose one
+    /// of the two — a dial written at the same moment as a usage update can
+    /// silently revert. [`Self::write_metadata`]'s atomicity bounds the damage
+    /// to that (a whole older document survives, never a hybrid of two), which
+    /// is the difference between "one update was lost" and "this conversation
+    /// is now unreachable", but it does not close the race. Closing it wants a
+    /// per-session lock held across the pair, which is a change to all sixteen
+    /// call sites and is deliberately not made here.
     pub(crate) async fn read_metadata(
         &self,
         key: &str,
@@ -194,6 +207,37 @@ impl FileSessionStore {
         Ok(Some(meta))
     }
 
+    /// Persist a session's metadata.
+    ///
+    /// # Why this is an atomic write and not a `fs::write`
+    ///
+    /// It was a `tokio::fs::write`, and that lost a whole conversation on a
+    /// real machine within three turns.
+    ///
+    /// This file is read-modify-written from **sixteen** call sites, with no
+    /// lock between them, so two of them overlap routinely (a turn stamping
+    /// `last_active_at` while the projector records usage, for example).
+    /// `fs::write` is `create + truncate + write_all`, and both halves of that
+    /// are observable: writer B can truncate *after* writer A has opened but
+    /// *before* A writes, so A's bytes land, and then B's shorter document
+    /// overwrites only A's prefix. The file that survives is B's document
+    /// followed by the tail of A's — 509 valid bytes plus 58 bytes of an older
+    /// one, in the case that was actually caught.
+    ///
+    /// What that costs is out of all proportion to how it reads. Nothing
+    /// crashes and nothing is logged: `list_sessions` skips a `metadata.json`
+    /// it cannot parse, and `read_metadata` fails, so **the conversation
+    /// disappears from every surface at once** — absent from `sessions.list`,
+    /// `chat.history` answers "session not found", `sessions.patch` refuses it
+    /// — while `transcript.jsonl` sits intact beside the broken file. It
+    /// survives a restart, because it is on-disk damage rather than lost
+    /// in-memory state, so the one remedy a user would try does not work.
+    ///
+    /// `atomic_write_file` (temp file in the same directory, fsync, rename)
+    /// makes each write all-or-nothing: concurrent writers still race, and the
+    /// loser's update is still lost, but every reader sees one complete
+    /// document. The remaining lost-update race is real and is NOT fixed here —
+    /// see the note on [`Self::read_metadata`].
     pub(crate) async fn write_metadata(
         &self,
         key: &str,
@@ -207,9 +251,11 @@ impl FileSessionStore {
         let contents = serde_json::to_string_pretty(meta).map_err(|e| {
             SessionStoreError::DatabaseError(format!("Failed to serialize metadata: {e}"))
         })?;
-        tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to write metadata: {e}"))
-        })?;
+        crate::utils::atomic_write::atomic_write_file(&path, &contents)
+            .await
+            .map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Failed to write metadata: {e}"))
+            })?;
         Ok(())
     }
 
@@ -400,7 +446,21 @@ impl SessionStore for FileSessionStore {
             };
             let meta: SessionMetadata = match serde_json::from_str(&contents) {
                 Ok(m) => m,
-                Err(_) => continue,
+                // Skipping is right — one damaged session must not fail the
+                // whole listing — but doing it in silence is what made the
+                // torn-write bug above so expensive to find: every surface
+                // reported the conversation as simply not existing, and
+                // nothing anywhere said why. Say which file, at a level an
+                // operator sees.
+                Err(e) => {
+                    tracing::warn!(
+                        path = %meta_path.display(),
+                        error = %e,
+                        "Unreadable session metadata — this conversation will be \
+                         missing from every listing until the file is repaired or removed"
+                    );
+                    continue;
+                }
             };
             if let Some(ref agent_id) = filter.agent_id {
                 if &meta.agent_id != agent_id {
@@ -1604,6 +1664,71 @@ mod branch_checkpoint_attribution_tests {
         // return value.
         let reread = store.get_metadata(&new_key).await.unwrap().unwrap();
         assert_eq!(reread.owner_user_id.as_deref(), Some("u-alice"));
+    }
+
+    /// Concurrent metadata updates must never leave a file that cannot be
+    /// parsed.
+    ///
+    /// The regression: `write_metadata` used `tokio::fs::write`, whose
+    /// truncate and write are separately observable, so two overlapping
+    /// updates could leave a shorter document followed by the tail of a longer
+    /// one. A `metadata.json` in that state makes the conversation vanish from
+    /// `sessions.list` and answer "session not found" everywhere, permanently
+    /// and across restarts, with the transcript still sitting beside it.
+    ///
+    /// The payloads alternate length on purpose — equal-length writes cannot
+    /// produce the hybrid, so a fixture that varied nothing would have been
+    /// green against the bug.
+    ///
+    /// Honest about its own grip: this reproduces the old defect
+    /// *probabilistically* (it is a real race, and a test cannot schedule the
+    /// interleave), but it can never fail once writes are atomic. It caught
+    /// the bug on the first run.
+    #[tokio::test]
+    async fn concurrent_metadata_writes_never_leave_an_unparseable_file() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::from_key_string("agent:tornwrite:main").unwrap();
+        let key_str = key.to_key_string();
+        store.get_or_create(&key).await.unwrap();
+        let store = std::sync::Arc::new(store);
+
+        for round in 0..24 {
+            let mut writers = Vec::new();
+            for len in [400_usize, 8] {
+                let store = store.clone();
+                let key_str = key_str.clone();
+                writers.push(tokio::spawn(async move {
+                    let mut meta = store
+                        .read_metadata(&key_str)
+                        .await
+                        .expect("metadata must stay readable")
+                        .expect("the session exists");
+                    meta.derived_title = Some("x".repeat(len));
+                    store.write_metadata(&key_str, &meta).await.unwrap();
+                }));
+            }
+            for w in writers {
+                w.await.unwrap();
+            }
+            // Both halves of the damage, checked separately: the direct read
+            // (what `chat.history` / `sessions.patch` do) and the listing scan
+            // (which skips what it cannot parse, so a corrupt file shows up
+            // there as an absence rather than an error).
+            store
+                .read_metadata(&key_str)
+                .await
+                .unwrap_or_else(|e| panic!("round {round}: metadata unparseable after concurrent writes: {e}"))
+                .expect("round {round}: metadata vanished");
+            let listed = store
+                .list_sessions(SessionFilter::default())
+                .await
+                .unwrap();
+            assert!(
+                listed.iter().any(|m| m.key == key_str),
+                "round {round}: the session dropped out of list_sessions — \
+                 that is what an unparseable metadata.json looks like to a user"
+            );
+        }
     }
 
     /// Zero-change guarantee: branching with no ambient scope (cron,

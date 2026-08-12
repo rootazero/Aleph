@@ -183,6 +183,11 @@ impl ChatApi {
     /// `voice_input` — true when `message` is an ASR-transcribed spoken
     /// utterance (voice loop / dictation). Core then arms the session's
     /// voice-mode prompt layer and the `[voice]` low-TTFT model pin.
+    /// `dials` — the per-session knobs this send carries, already reduced by
+    /// `session_dials_for_send` to the ones that should ride *this* message.
+    /// One argument rather than four because a caller that forgets one does not
+    /// fail: the turn simply runs under the install default while the pill that
+    /// set it keeps showing the user's choice.
     #[allow(clippy::too_many_arguments)]
     pub async fn send(
         state: &DashboardState,
@@ -193,8 +198,7 @@ impl ChatApi {
         project_root: Option<&str>,
         project_id: Option<&str>,
         model_override: Option<&crate::api::providers::ModelOverride>,
-        exec_tier: Option<&str>,
-        mode: Option<&str>,
+        dials: &shared_ui_logic::state::SendDials,
         voice_input: bool,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
@@ -222,9 +226,13 @@ impl ChatApi {
             // has no session to write it to yet — and the first turn is exactly
             // the one the picker was armed for. The server stamps it onto the
             // session, so later turns need not resend it.
-            "exec_tier": exec_tier,
-            // Same first-message carriage for the usage mode (mode pill).
-            "mode": mode,
+            "exec_tier": dials.exec_tier,
+            // Same first-message carriage for the other three dials. Their wire
+            // names are the server's (`thinking`, `memory`), not the storage
+            // keys — see `AgentRunParams`.
+            "mode": dials.mode,
+            "thinking": dials.thinking,
+            "memory": dials.memory,
             "voice_input": voice_input,
         });
         let result = state.rpc_call("chat.send", params).await?;
@@ -491,6 +499,48 @@ mod tests {
                 .eq(["api", "chat.rs"]),
             "the one caller moved out of api/chat.rs: {}",
             callers[0]
+        );
+    }
+
+    /// Every send path resolves the session dials through the shared rule.
+    ///
+    /// The compiler already forces a caller to pass *something* for `dials`;
+    /// what it cannot see is a caller passing `SendDials::default()`, or
+    /// re-deriving the first-send-only rule inline. Both existed: the two voice
+    /// paths each carried their own copy of that rule, written when there were
+    /// two dials, and so kept carrying two of four once there were four. The
+    /// pills stayed on screen and kept showing the user's pick, which is
+    /// exactly what makes the failure invisible.
+    ///
+    /// Scans by file rather than by call site because the rule is resolved once
+    /// per send *path* and used by every `ChatApi::send` in it (a queue flush
+    /// sends in a loop).
+    #[test]
+    fn every_send_path_resolves_the_dials_through_the_shared_rule() {
+        let sources = crate::disposed_reads::rust_sources(&crate::disposed_reads::src_dir());
+        assert!(sources.len() > 50, "the walk is broken, not the code");
+
+        let mut senders = 0_usize;
+        let mut offenders = Vec::new();
+        for path in sources {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if !src.contains("ChatApi::send(") {
+                continue;
+            }
+            senders += 1;
+            if !src.contains("session_dials_for_send(") {
+                offenders.push(path.display().to_string());
+            }
+        }
+        assert!(
+            senders >= 4,
+            "found {senders} send paths — the scan stopped seeing them, which              would make this test pass by finding nothing"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these send paths build their dials some other way: {offenders:?}"
         );
     }
 }

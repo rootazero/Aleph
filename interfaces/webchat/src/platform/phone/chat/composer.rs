@@ -30,6 +30,7 @@ use leptos::task::spawn_local;
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::views::chat::composer::attachments::{read_file_list_into, AttachmentPreviewBar};
+use crate::views::chat::dial_picker::{Dial, DialPicker};
 use crate::views::chat::exec_tier_picker::ExecTierPicker;
 use crate::views::chat::mode_picker::ModePicker;
 use crate::views::chat::state::{ChatPhase, ChatSendError, QueuedPrompt};
@@ -124,12 +125,9 @@ pub fn PhoneComposer() -> impl IntoView {
         } else {
             chat.active_project_root.get_untracked()
         };
-        // Tier every send, mode only on the first — one rule, one place.
-        let (tier, mode) = session_dials_for_send(
-            session_key.is_some(),
-            chat.session_exec_tier.get_untracked(),
-            chat.session_mode.get_untracked(),
-        );
+        // Tier every send, the store-owned dials only on the first — one rule,
+        // one place.
+        let dials = session_dials_for_send(session_key.is_some(), &chat.session_knobs());
         let dash = dashboard;
         spawn_local(async move {
             let res = ChatApi::send(
@@ -142,8 +140,7 @@ pub fn PhoneComposer() -> impl IntoView {
                 room_project_id.as_deref(),
                 // No per-turn model pill on phone: the agent's model governs.
                 None,
-                tier.as_deref(),
-                mode.as_deref(),
+                &dials,
                 false,
             )
             .await;
@@ -288,13 +285,9 @@ pub fn PhoneComposer() -> impl IntoView {
             chat.active_project_root.get_untracked()
         };
         // Same rule as the typed send. A queue flush almost always has a live
-        // session, so `mode` is `None` in practice — but not when the very
-        // first thing a user does is queue two prompts.
-        let (tier, mode) = session_dials_for_send(
-            session_key.is_some(),
-            chat.session_exec_tier.get_untracked(),
-            chat.session_mode.get_untracked(),
-        );
+        // session, so everything but the tier is `None` in practice — but not
+        // when the very first thing a user does is queue two prompts.
+        let dials = session_dials_for_send(session_key.is_some(), &chat.session_knobs());
         let dash = dashboard;
         spawn_local(async move {
             let mut pending = batch.into_iter();
@@ -319,8 +312,7 @@ pub fn PhoneComposer() -> impl IntoView {
                     project_root.as_deref(),
                     room_project_id.as_deref(),
                     None,
-                    tier.as_deref(),
-                    mode.as_deref(),
+                    &dials,
                     false,
                 )
                 .await
@@ -497,6 +489,8 @@ pub fn PhoneComposer() -> impl IntoView {
                 <Show when=move || chat.team_id.get().is_none()>
                     <ModePicker />
                     <ExecTierPicker />
+                    <DialPicker dial=Dial::Think />
+                    <DialPicker dial=Dial::Memory />
                 </Show>
             </div>
 
@@ -720,17 +714,19 @@ mod tests {
     }
 
     /// Weak by construction — a host test cannot mount a Leptos view, so the
-    /// only available grip is that the component's source still names the three
+    /// only available grip is that the component's source still names the
     /// controls (same reason `landing_is_derived` reads its own source). It
     /// catches deletion, not misplacement; the load-bearing assertions are the
     /// two above, which pin what actually reaches the wire.
     #[test]
-    fn the_composer_still_renders_its_three_controls() {
+    fn the_composer_still_renders_every_dial() {
         let src = production_half(include_str!("composer.rs"));
         for control in [
             "<AttachmentPreviewBar",
             "<ModePicker",
             "<ExecTierPicker",
+            "<DialPicker dial=Dial::Think",
+            "<DialPicker dial=Dial::Memory",
             "type=\"file\"",
         ] {
             assert!(src.contains(control), "phone composer lost {control}");

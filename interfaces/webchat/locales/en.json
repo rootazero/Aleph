@@ -1225,7 +1225,30 @@
       "add_policy": "Add Policy",
       "tool_name": "Tool Name",
       "permission": "Permission",
-      "delete_policy": "Delete"
+      "delete_policy": "Delete",
+      "think_pill_title": "Reasoning depth",
+      "think_unset_label": "Think",
+      "think_follow_default": "Provider default",
+      "think_note": "Reasoning tokens bill at the output rate, so depth is the biggest per-turn cost lever. Not every model accepts every rung — core clamps to the nearest one the target model supports. Takes effect from the next turn.",
+      "think_off_label": "Off",
+      "think_off_desc": "No extended reasoning. Fastest and cheapest; sent as an explicit disable, because several model families think by default when the field is simply omitted.",
+      "think_minimal_label": "Minimal",
+      "think_minimal_desc": "A brief pass before answering. The shipped default where a level is set at all.",
+      "think_low_label": "Low",
+      "think_low_desc": "A little room to work through the question.",
+      "think_medium_label": "Medium",
+      "think_medium_desc": "Balanced — worth it for multi-step work with real branching.",
+      "think_high_label": "High",
+      "think_high_desc": "Detailed reasoning. Noticeably slower and more expensive; reserve it for genuinely hard turns.",
+      "think_xhigh_label": "Extended",
+      "think_xhigh_desc": "The deepest setting, and only some models offer it — elsewhere core clamps down to what the model supports.",
+      "memory_pill_title": "Memory",
+      "memory_follow_global": "Follow global",
+      "memory_note": "This governs what gets injected into the prompt, not what the conversation can do: the memory tools stay callable and anything learned here is still recorded. Takes effect from the next turn.",
+      "memory_on_label": "On",
+      "memory_on_desc": "Fold curated memory, the note index and per-query recall into this conversation's prompt.",
+      "memory_off_label": "Off",
+      "memory_off_desc": "Inject none of them — a clean room. The model is told memory was withheld rather than left to conclude it forgot; tools and writes are untouched."
     },
     "routing_rules": {
       "title": "Routing Rules",
@@ -1479,7 +1502,8 @@
       "read_setup_state": "Needs operator privileges — this connection cannot read this setting, so its status is unknown.",
       "read_tiers": "Needs operator privileges — this connection cannot read the selectable execution tiers.",
       "read_modes": "Needs operator privileges — this connection cannot read the selectable session modes.",
-      "manage_workspaces": "Needs operator privileges — the role this connection holds cannot create, rename, archive or restore workspaces."
+      "manage_workspaces": "Needs operator privileges — the role this connection holds cannot create, rename, archive or restore workspaces.",
+      "read_dials": "Needs operator privileges — this connection cannot read the selectable session dials."
     },
     "workspaces": {
       "title": "Workspaces",

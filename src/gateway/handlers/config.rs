@@ -648,10 +648,27 @@ pub fn broadcast_config_changed(
 // Tool Permissions Handlers
 // ============================================================================
 
-/// Serialize the whole execution-permission surface: the tier dial, the three
-/// selectable presets, and the advanced per-tool overrides layered on top.
+/// Serialize the whole execution-permission surface: the tier dial, its
+/// selectable presets, the other session dials a composer offers beside it, and
+/// the advanced per-tool overrides layered on top.
 /// One shape for both `config.get_tool_permissions` and the result of
 /// `config.update_tool_permissions`, so a UI renders the same state either way.
+///
+/// # Why four dials share a response named after permissions
+///
+/// Because a composer needs the whole vocabulary in one breath, and every extra
+/// method here is a second decoder that can drift from the first. The tier is
+/// the only one of the four that is a permission; `mode`, `think_levels` and
+/// `memory` joined it because they are rendered by the same pill row, fetched
+/// at the same moment, and decoded by the same Panel type
+/// (`api::tool_permissions::ToolPermissionsResponse`). Core ships **ids only**
+/// for all of them — the copy is the surface's, per locale (R4/R6).
+///
+/// Note the asymmetry in what a dial reports about its global position:
+/// `exec_tier`, `mode` and `memory` each have one, so they name it; the
+/// thinking ladder does not (`turn_thinking` resolves request > session >
+/// **no directive**), so it ships the rungs and nothing else. A client that
+/// invents a global for it would be labelling a setting that does not exist.
 fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     Ok(json!({
         "exec_tier": cfg.policies.exec_tier.id(),
@@ -661,29 +678,45 @@ fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
         // ToolPermissionsApi). Core ships ids only; copy is the surface's.
         "mode": cfg.policies.mode.id(),
         "modes": serde_json::to_value(crate::config::types::policies::builtin_modes())?,
+        // Reasoning depth — rungs only, no global (see the doc above).
+        "think_levels": serde_json::to_value(crate::agents::thinking::builtin_think_levels())?,
+        // Memory injection. The global here is `[memory] enabled`, reported as
+        // the dial's own id so a "follow global" row can name what it follows
+        // instead of rendering a bare boolean the user never typed.
+        "memory": if cfg.memory.enabled {
+            crate::memory::session_memory_mode::MemoryMode::On.id()
+        } else {
+            crate::memory::session_memory_mode::MemoryMode::Off.id()
+        },
+        "memory_modes": serde_json::to_value(
+            crate::memory::session_memory_mode::builtin_memory_modes(),
+        )?,
         "default": serde_json::to_value(cfg.policies.tool_permissions.default)?,
         "overrides": serde_json::to_value(&cfg.policies.tool_permissions.overrides)?,
     }))
 }
 
 /// The same surface with the two server-global policy axes removed: the
-/// per-tool `overrides` map and its `default`. What remains is four id
-/// enumerations — the positions of the two dials, and the ids each dial can
-/// take.
+/// per-tool `overrides` map and its `default`. What remains is the session
+/// dials — where each one currently sits, and which ids it can take.
 ///
 /// This is the shape a member receives. `config.` is otherwise an admin family,
 /// and this one read is carved out of it (`method_admin::MEMBER_CARVE_OUTS`)
-/// because a member ALREADY sets both dials for their own session, through
-/// `sessions.patch` and `chat.send`'s per-request `exec_tier` / `mode`. The
-/// enumeration is what makes those writes usable; the advanced axes are what
-/// Settings → Policies edits, and editing stays gated (`update_tool_permissions`
-/// is not carved out).
+/// because a member ALREADY sets these dials for their own session, through
+/// `sessions.patch` and `chat.send`'s per-request `exec_tier` / `mode` /
+/// `thinking` / `memory`. The enumeration is what makes those writes usable;
+/// the advanced axes are what Settings → Policies edits, and editing stays
+/// gated (`update_tool_permissions` is not carved out).
 ///
-/// Deliberately built by REMOVAL from [`exec_permissions_value`] rather than by
-/// listing the four keys again: a future field added to the full surface then
-/// has to be ruled on here — it arrives withheld, and a reviewer who wants it
-/// visible has to say so — instead of silently joining a member response nobody
-/// re-examined.
+/// Built by REMOVAL from [`exec_permissions_value`], with the withheld keys
+/// named once in [`MEMBER_WITHHELD_KEYS`]. The consequence is worth stating
+/// plainly, because an earlier version of this comment claimed the opposite:
+/// **a field added to the full surface joins the member response by default.**
+/// That is the right default for this response — everything in it but those two
+/// keys is dial vocabulary a member needs in order to use writes they are
+/// already allowed to make — but it does mean a genuinely operator-only field
+/// added here has to be added to the withheld list in the same change, and
+/// `member_response_withholds_the_admin_axes` is what asks.
 fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     let mut value = exec_permissions_value(cfg)?;
     if let Some(obj) = value.as_object_mut() {
@@ -1254,9 +1287,10 @@ model = "claude-opus-4-5"
         response.result.expect("permissions read always succeeds")
     }
 
-    /// The whole point of the carve-out: the composer's two pills need the id
-    /// enumerations, and a member could always WRITE both dials for their own
-    /// session (`sessions.patch`, `chat.send`'s per-request `exec_tier`/`mode`).
+    /// The whole point of the carve-out: the composer's pills need the id
+    /// enumerations, and a member could always WRITE every one of these dials
+    /// for their own session (`sessions.patch`, `chat.send`'s per-request
+    /// `exec_tier` / `mode` / `thinking` / `memory`).
     #[tokio::test]
     async fn a_member_receives_both_dials_and_their_selectable_ids() {
         let value = tool_permissions_as(Some("member")).await;
@@ -1359,9 +1393,10 @@ model = "claude-opus-4-5"
         }
     }
 
-    /// The narrowing is built by removal, so a field added to the full surface
-    /// arrives withheld until someone rules on it. This pins that direction:
-    /// every key a member sees must also be a key the operator sees.
+    /// The narrowing is built by removal, so the member response can only ever
+    /// be a subset. This pins that direction: every key a member sees must also
+    /// be a key the operator sees — a member shape that grew a key of its own
+    /// would be a second response, not a narrowing of one.
     #[tokio::test]
     async fn the_member_surface_is_a_subset_of_the_operator_surface() {
         let member = tool_permissions_as(Some("member")).await;

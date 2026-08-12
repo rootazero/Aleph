@@ -1019,14 +1019,9 @@ async fn send_utterance(
         chat.active_project_root.get_untracked()
     };
     let mo = chat.selected_model.get_untracked();
-    let tier = chat.session_exec_tier.get_untracked();
-    // First-send-only carriage (see composer/mod.rs typed path): an existing
-    // session's store value is authoritative.
-    let mode = if sk.is_some() {
-        None
-    } else {
-        chat.session_mode.get_untracked()
-    };
+    // One rule for all four send paths (`session_dials_for_send`) — this one
+    // used to re-implement the first-send-only carriage inline.
+    let dials = shared_ui_logic::state::session_dials_for_send(sk.is_some(), &chat.session_knobs());
     // Bind to the conversation active at send time (I1), same as the typed
     // path, so run events route to this conversation's bubble.
     let send_conv = sessions.active_conv();
@@ -1041,8 +1036,7 @@ async fn send_utterance(
         pr.as_deref(),
         room_project_id.as_deref(),
         mo.as_ref(),
-        tier.as_deref(),
-        mode.as_deref(),
+        &dials,
         true,
     )
     .await

@@ -1225,7 +1225,30 @@
       "add_policy": "添加策略",
       "tool_name": "工具名称",
       "permission": "权限",
-      "delete_policy": "删除"
+      "delete_policy": "删除",
+      "think_pill_title": "推理档",
+      "think_unset_label": "推理",
+      "think_follow_default": "厂商默认",
+      "think_note": "推理 token 按输出价计费，因此推理档是每轮成本最大的一根杠杆。并非所有模型支持所有档位——核心会向下钳到目标模型支持的最近一档。自下一轮生效。",
+      "think_off_label": "关闭",
+      "think_off_desc": "不做扩展推理，最快也最省。会显式发送禁用值——若只是省略该字段，好几个模型家族仍会默认思考并计费。",
+      "think_minimal_label": "极简",
+      "think_minimal_desc": "回答前简短过一遍。设置了档位时的出厂默认。",
+      "think_low_label": "低",
+      "think_low_desc": "给一点推演余地。",
+      "think_medium_label": "中",
+      "think_medium_desc": "均衡档——多步骤、有真实分支的工作值得用。",
+      "think_high_label": "高",
+      "think_high_desc": "详尽推理。明显更慢更贵，留给真正困难的回合。",
+      "think_xhigh_label": "扩展",
+      "think_xhigh_desc": "最深一档，只有部分模型提供——其余模型会被核心钳到其支持的档位。",
+      "memory_pill_title": "记忆",
+      "memory_follow_global": "跟随全局",
+      "memory_note": "这管的是往提示词里注入什么，不是这个对话能做什么：记忆工具照常可调，这里学到的东西照常记录。自下一轮生效。",
+      "memory_on_label": "开启",
+      "memory_on_desc": "把长期记忆、笔记索引与按需召回折进本对话的提示词。",
+      "memory_off_label": "关闭",
+      "memory_off_desc": "三者都不注入——干净房间。会明确告诉模型记忆是被扣下的，而不是让它自己推断成失忆；工具与写入不受影响。"
     },
     "routing_rules": {
       "title": "路由规则",
@@ -1479,7 +1502,8 @@
       "read_setup_state": "需要 operator 权限,当前连接无法读取该项配置,状态未知。",
       "read_tiers": "需要 operator 权限,当前连接无法读取可选的执行档位。",
       "read_modes": "需要 operator 权限,当前连接无法读取可选的会话模式。",
-      "manage_workspaces": "需要 operator 权限 —— 当前连接的角色无法创建、重命名、归档或恢复工作区。"
+      "manage_workspaces": "需要 operator 权限 —— 当前连接的角色无法创建、重命名、归档或恢复工作区。",
+      "read_dials": "需要 operator 权限,当前连接无法读取可选的会话旋钮档位。"
     },
     "workspaces": {
       "title": "工作区",

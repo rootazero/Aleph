@@ -434,10 +434,10 @@ fn is_destructive(facts: ToolFacts<'_>) -> bool {
 /// to follow the reader's locale, and a surface that cannot resolve it in its
 /// own locale files is structurally unable to be localized (R4: surfaces render,
 /// core decides). Ship ids; let the surface author the words for its user.
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct TierPreset {
-    pub id: &'static str,
-}
+///
+/// An alias since the fourth dial arrived: the shape is identical across the
+/// five session knobs, so it lives once in [`super::DialPreset`].
+pub type TierPreset = super::DialPreset;
 
 /// The three built-in tiers, ordered least → most permissive.
 #[must_use]

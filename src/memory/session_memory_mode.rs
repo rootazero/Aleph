@@ -85,6 +85,26 @@ impl MemoryMode {
     pub const fn injects(self) -> bool {
         matches!(self, Self::On)
     }
+
+    /// Both modes, in display order. Pinned against a new variant by
+    /// `all_covers_every_variant` (an exhaustive `match`).
+    pub const ALL: [Self; 2] = [Self::On, Self::Off];
+}
+
+/// The memory dial as offered to a user surface, in display order.
+///
+/// Twin of [`crate::config::types::policies::builtin_tiers`] /
+/// `builtin_modes` / [`crate::agents::thinking::builtin_think_levels`], and it
+/// rides the same response for the same reason: a surface that hard-codes the
+/// id set is a surface that drifts from the one the server accepts.
+///
+/// Unlike the thinking ladder, this dial DOES have a global — `[memory]
+/// enabled` — so the response carries its position too, and a "follow global"
+/// row can honestly name what it follows.
+#[must_use]
+pub const fn builtin_memory_modes() -> &'static [crate::config::types::policies::DialPreset] {
+    use crate::config::types::policies::DialPreset;
+    &[DialPreset { id: "on" }, DialPreset { id: "off" }]
 }
 
 /// Resolve the mode for one turn: requested > stored > global.
@@ -109,6 +129,23 @@ pub fn resolve_memory_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A third mode has to reach [`MemoryMode::ALL`] and the wire dial; the
+    /// exhaustive `match` is what makes the build say so.
+    #[test]
+    fn all_covers_every_variant() {
+        for mode in MemoryMode::ALL {
+            match mode {
+                MemoryMode::On | MemoryMode::Off => {}
+            }
+        }
+        let wire: Vec<&str> = builtin_memory_modes().iter().map(|p| p.id).collect();
+        let enumerated: Vec<&str> = MemoryMode::ALL.iter().map(|m| m.id()).collect();
+        assert_eq!(wire, enumerated);
+        assert!(builtin_memory_modes()
+            .iter()
+            .all(|p| MemoryMode::from_id(p.id).is_some()));
+    }
 
     #[test]
     fn ids_round_trip() {
