@@ -97,7 +97,11 @@ struct OAuthParams {
 }
 
 /// Supported OAuth provider aliases.
-fn is_supported_oauth_provider(name: &str) -> bool {
+///
+/// Also read by `providers.catalog` to stamp each row's `auth_kind`, so a
+/// client never has to keep its own list of which providers log in versus paste
+/// a key. The Panel kept one, and it drifted.
+pub(crate) fn is_supported_oauth_provider(name: &str) -> bool {
     matches!(name.to_lowercase().as_str(), "codex" | "chatgpt")
 }
 
@@ -365,15 +369,31 @@ pub async fn handle_oauth_login(
 
     info!(provider = provider_name, "OAuth login successful");
 
-    let mut result = json!({
-        "connected": true,
-        "provider": provider_name,
-    });
-    if let Some(secs) = expires_in {
-        result["expires_in_seconds"] = json!(secs);
-    }
+    JsonRpcResponse::success(
+        request.id,
+        oauth_status_value(true, provider_name, expires_in, None),
+    )
+}
 
-    JsonRpcResponse::success(request.id, result)
+/// Build a `providers.oauth{Login,Status}` response from the shared contract
+/// type.
+///
+/// Four call sites used to hand-write the same JSON object, which is four
+/// chances for a key to drift from the one the Panel reads. Serialising the
+/// contract type makes the key set the contract's rather than each site's.
+fn oauth_status_value(
+    connected: bool,
+    provider: &str,
+    expires_in_seconds: Option<u64>,
+    error: Option<&str>,
+) -> serde_json::Value {
+    serde_json::to_value(crate::gateway::handlers::providers::OAuthStatus {
+        connected,
+        provider: Some(provider.to_string()),
+        expires_in_seconds,
+        error: error.map(str::to_string),
+    })
+    .unwrap_or_else(|_| json!({ "connected": connected }))
 }
 
 /// `providers.oauthLogout` — Clear stored OAuth token.
@@ -441,10 +461,7 @@ pub async fn handle_oauth_status(
     if !has_token {
         return JsonRpcResponse::success(
             request.id,
-            json!({
-                "connected": false,
-                "provider": provider_name,
-            }),
+            oauth_status_value(false, provider_name, None, None),
         );
     }
 
@@ -462,11 +479,12 @@ pub async fn handle_oauth_status(
             *oauth_state.write().await = None;
             return JsonRpcResponse::success(
                 request.id,
-                json!({
-                    "connected": false,
-                    "provider": provider_name,
-                    "error": "Token expired and refresh failed. Please re-login.",
-                }),
+                oauth_status_value(
+                    false,
+                    provider_name,
+                    None,
+                    Some("Token expired and refresh failed. Please re-login."),
+                ),
             );
         }
     }
@@ -477,15 +495,10 @@ pub async fn handle_oauth_status(
         .as_ref()
         .and_then(|c| c.expires_in_seconds());
 
-    let mut result = json!({
-        "connected": true,
-        "provider": provider_name,
-    });
-    if let Some(secs) = expires_in {
-        result["expires_in_seconds"] = json!(secs);
-    }
-
-    JsonRpcResponse::success(request.id, result)
+    JsonRpcResponse::success(
+        request.id,
+        oauth_status_value(true, provider_name, expires_in, None),
+    )
 }
 
 #[cfg(test)]

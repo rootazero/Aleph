@@ -9,10 +9,13 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-// Re-export public types
+// Re-export public types. The shapes themselves are defined once in
+// `aleph_protocol::providers` — see `types.rs` for why.
 pub use types::{
-    CatalogEntryView, CatalogParams, CreateParams, DeleteParams, GetParams, ProviderConfigJson,
-    ProviderHealthRow, ProviderInfo, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams, DeleteParams,
+    DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult, ModelsRefreshRow,
+    OAuthStatus, ProviderConfigJson, ProviderGetResult, ProviderHealthRow, ProviderInfo,
+    ProviderListResult, RosterModel, SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
 
 // Re-export handler functions

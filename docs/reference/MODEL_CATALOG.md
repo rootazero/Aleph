@@ -45,6 +45,14 @@ ModelRecord {
 }
 ```
 
+### 契约住在协议 crate，不在 handler 旁边（2026-08-13）
+
+四张表的 **wire 投影**（`ModelCapabilities` / `RateCard`+`RateBasis` / `ModelLifecycle`+`ModelStatus` / `ModelSource` / `DiscoveredModel`）与整个 `providers.*` RPC 形状定义在 `shared/protocol/src/providers/`，`alephcore` `pub use` 回来。理由是**说这条 wire 的 crate 有四个，其中两个按设计不许依赖 `alephcore`**（`aleph-cli` / `aleph-tui`，它们的 `Cargo.toml` 用大写写着这句话）。各持一份手抄的代价已经付过：`aleph providers list` 读 `type`/`default` 而服务端只发过 `provider_type`/`is_default`（两列自写下之日起每行都是破折号）、`providers get` 读顶层而不是 `provider` 信封（**每一行**都是破折号）、`providers add`/`test` 发扁平 body 而 handler 要 `{name, config:{…}}`（**每一次调用都是 `INVALID_PARAMS`**，从来没成功过）。
+
+表的字面量仍在 `alephcore`（`ModelLifecycle` 的 `&'static str` 改 `Cow<'static, str>` 之后表照旧是 `const`），但**类型只有一个**，所以表与 wire 结构上不可能描述不同的东西。
+
+⚠️ **响应要用契约类型 build，不只是用它 parse**：解析只能证明响应是**超集**（serde 忽略未知键），超发在那个方向上结构性不可见。守卫 `the_catalog_response_speaks_only_the_contracts_vocabulary` 的期望键集**由契约类型序列化派生**——写一张字面量清单只是把同一个漂移挪高一层。
+
 ### 为什么必须是一个点
 
 重构前，`capabilities_for` + `rate_card` + `endpoint_kind_for_base_url` 这个三元 join 被**手抄了三处**：`builtin_tools/list_models.rs::enrich`、`gateway/handlers/providers/handlers.rs` 的 preset 行、同文件的 custom provider 行。加第四个维度（本轮的 lifecycle）会接上其中两处、漏掉第三处——而漏掉的那处不会报错，只会少一个字段。
@@ -52,6 +60,12 @@ ModelRecord {
 （`route_observe::price_milli_per_mtok` 与 `failover::price_hint` 只读 `pricing` 一张表，并且应当保持如此：它们要的是一个用来排序的标量，不是一条用来展示的记录。）
 
 这是 opencode 用**有序插件**（`modelsDev(0) → env(10) → account(20) → provider(30) → config(40) → discovery(50)`，每层 mutate 同一份 draft）买到的性质。Aleph 只取那个不变量（"只有一个函数知道记录怎么组装"），不引入插件总线——四张静态表不需要一条消息总线。
+
+### `roster` 是记录不是标量数组（2026-08-13）
+
+`CatalogEntry.roster` 从 `Vec<String>` 改为 `Vec<RosterModel { id, source, lifecycle }>`。把一列记录投影成一列标量的那一刻，`source` 与 `lifecycle` 对**每一个渲染器同时消失**，而丢弃发生在生产者里，所以每张脸单独看都是对的。picker 要的正是这两样：一个刚从 `/models` 抓回来的 id 没有策展窗口与价格（空的能力列此时是**诚实**而不是坏掉），一个已退役的 id 要能被标出来并报出 successor。
+
+仓内唯一读者与这次改动同批修改，所以**不留扁平旧字段**——为兼容而留的旧表述如果有第二个作者，它就会漂。
 
 ### `ModelSource`：来源不是从 id 推得出来的
 
@@ -246,12 +260,17 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 
 `models_url` 覆盖的守卫是必要的：那是一个**绝对 URL**，套到被搬走的端点上（Azure 资源 / 企业中继 / 本地代理）会把探测发到厂商而不是配置的主机。
 
-### 6.4 触发面（两个，共用同一个 leaf）
+### 6.4 触发面（共用同一个 leaf）
 
 | 入口 | 受众 | 行为 |
 |------|------|------|
 | `list_models { refresh: true }` | LLM（R8） | 先看缓存 TTL；仅对已过期的 provider 发起请求 |
-| `providers.modelsRefresh` RPC | operator / Panel | **强制**真拉；可选 `provider` 参数收窄到一个 |
+| `providers.modelsRefresh` RPC | operator | **强制**真拉；可选 `provider` 参数收窄到一个 |
+| `providers.catalog` 的 `roster` | 人（Panel / TUI / CLI） | **只读磁盘缓存**，绝不发网络（2026-08-13） |
+
+⚠️ **`providers.modelsRefresh` 从写下之日到 2026-08-13 一个客户端都没有**（全仓 grep 零命中），而它的 doc 自称是"picker 的按行刷新按钮想要的"——那个按钮不存在。CLAUDE.md §0：**没有客户端的能力不算已交付**。现在的三个客户端是 Panel 的按行刷新、Panel 保存成功后的 fire-and-forget 窄化刷新（**不阻塞保存响应**——一家挂掉的 vendor 不该让"保存我的 API key"变慢），以及 `aleph providers models --refresh`。
+
+⚠️ **第三行是读，不是第三个触发面**：`providers.catalog` 把缓存里的 discovered id 合进 `roster`，所以人看到的和 `list_models` 给模型看的是同一份。在此之前只有模型那半合了——**同一份缓存、同一个 TTL，模型看得见、人看不见**。读缓存**闸在 `has_api_key` 上**：`cached_models` 是同步文件读，而发现无凭据不跑，所以没凭据的 preset 结构上不可能有缓存条目；不闸就是每次开设置页 stat 全部 preset。
 
 `list_models` 走 TTL 是因为它对 chat-tier 开放：无条件拉取等于给了"反复调用即刷屏打厂商"的手柄。operator RPC 是显式授权的"现在就去看"，不受 TTL 约束。
 
@@ -263,7 +282,8 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 
 - **只贡献 id**。窗口 / 价格 / 生命周期仍归策展表——`/models` 响应基本不带这些。一个没有策展行的 discovered id 诚实地显示为"能力未知"，跟今天的自定义中继模型一样。
 - **无后台定时器**。悄悄按时给每个已配置厂商打电话是意外行为，不是功能。
-- **`supports_health_check = false` 的 preset 直接拒**（OAuth-only 端点 / 按部署的 Azure 资源 / 分区域云都会 404 或限流列表路由）。
+- **`supports_health_check = false` 的 preset 直接拒**（OAuth-only 端点 / 按部署的 Azure 资源 / 分区域云都会 404 或限流列表路由）。该位以 `CatalogEntry.discoverable` 上线，**让客户端在点之前就知道这 6 家不该有刷新按钮**——提供一个只可能失败的按钮比不提供更糟。
+- **失败是分类的，不是一句散文（2026-08-13）**。`DiscoveryError` 一直是分类器，只是在最后一步被 `e.to_string()` 抹平了：`ModelsRefreshRow.kind ∈ {unsupported, missing_credential, transport, status, shape, timeout}`。客户端要回答的第一个问题是"这值不值得重试"，而"这家不发布目录端点"和"请求超时"此前是同一句话。**没有凭据的 provider 现在得到一行而不是被静默跳过**——跳过一条坏记录通常对，沉默才是贵的那一半：问"刷新这一个"却拿回空数组，读起来和"什么都没发生"一样。
 - **缓存绑定端点指纹（2026-08 round-4）**。`DiscoveredModels.base_url` 记录清单取自哪个端点，`cached_models(provider, base_url)` 指纹不匹配即视为无缓存——operator 搬了 `base_url` 后旧清单是**另一台主机**的库存，绝不能复活（与 `models_url` override 的搬迁守卫同一条教条）。指纹字段引入前的旧缓存文件按"另一端点的库存"处理，代价是一次重拉。Bifrost 式 generation counter 评估为不需要（§9 round-4）。
 
 ---
@@ -361,6 +381,22 @@ pi 的目录是**生成期 hydrate**：`scripts/generate-models.ts`（2762 行�
 
 pi 侧独有但**本轮明确不收**的：`compat` 能力矩阵（30+ 字段的"同 API 不同方言"行为差异）——那是协议实现层的关注点，Aleph 的对应物是 `openai_common/provider_policy.rs` 的 `PayloadPolicy`，不进目录层。
 
+#### 8.3b pi 的选择面（2026-08-13 round-5 delta）
+
+round-3 比的是**目录数据**；这一轮比的是**人怎么挑**，因为用户报的正是那一半。锚点：`packages/coding-agent/src/modes/interactive/components/{model-selector,scoped-models-selector}.ts`、`model-search.ts`、`packages/tui/src/fuzzy.ts`、`interactive-mode.ts::completeProviderAuthentication`。
+
+| 维度 | pi | Aleph（本轮后） | 裁决 |
+|------|-----|----------------|------|
+| link 后取模型 | `completeProviderAuthentication` 成功即按 provider 网络刷新（15s abort） | 保存成功且 `discoverable && has_credential && enabled` ⇒ fire-and-forget 窄化刷新 | **映射**（此前 Aleph 三个写入终点都不引用 `model_catalog`） |
+| picker 打开时刷新 | 先画缓存快照，再后台刷新，三种状态各自成句 | catalog 直接带上缓存里的 discovered id；刷新是**显式按钮**，不在打开时自动发网 | **有意不同**：打开一个设置页不该是一次对外拨号 |
+| 选择器搜索 | `fuzzyFilter` 子序列打分（连跑/间隙/词边界/位置） | 顺序保留子串 + 分层排序 | **有意不移植**（见 §9 round-5；策展顺序有意义） |
+| 两份搜索文本 | picker 与 autocomplete 各一份，把裸 id 排到最后以抵消位置惩罚 | 不需要 | **不适用**（那是 fuzzy 的补丁） |
+| 多选 | `ScopedModelsSelectorComponent`，`EnabledIds = string[] \| null`（null = 全开）、**有序**、可重排、enable-all/clear-all 作用于当前过滤集，保存写全局 `settings.enabledModels`（glob pattern） | `[providers.<id>] models`（**已经是**有序 `Vec<String>`，同时是 failover 梯与"不指定时用哪个"），Panel 给它一个有序多选 UI | **形状映射，载体不同**：Aleph 不建平行的 pattern 层（§9 round-5） |
+| 未认证 provider 的模型 | 不进 `/model`（`getAvailable()` = 目录 ∩ 已配置凭据） | `providers.catalog{view}` 三档；发现出的 id 只在有凭据时才有缓存条目 | **对齐** |
+| provider 搜索 | `OAuthSelectorComponent` 对 `getProviders()` fuzzy 过滤（`/login <ref>` 精确优先） | Panel 设置页搜索框 + TUI `/providers`，共用同一个 `rank_entries` | **映射**（此前 Aleph 两个面都没有过滤） |
+| 失败降级措辞 | 一律"保留上次的列表并说出来"，且区分 404/501（无端点）与请求失败 | `stale: true` + `DiscoveryFailureKind` 六态 + `discoverable` 位 | **Aleph 超越**（pi 的区分只在内部，UI 仍是一句话） |
+| 生成期 vs 运行期 | 同 round-3 结论 | — | 不重复 |
+
 ### 8.4 RouteLLM / vLLM semantic-router / Bifrost（2026-08 round-4）
 
 三个参考项目讲的主要是**运行时路由**（§3.6 C 层），目录层可比维度比前三个项目少；逐项裁决如下。注意 `/Volumes/TBU4/Github/semantic-router` 的实际检出是 **vLLM Semantic Router**（Go + Rust candle bindings），不是 aurelio-labs 的 Python 库。
@@ -396,7 +432,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 改这一层之前请先读；这些都是评估过的决定，不是遗漏。
 
 - **拉 models.dev 全量目录** — R3：不让第三方服务成为核心子系统的 load-bearing 依赖。
-- **后台定时刷新** — 悄悄常驻的网络行为是意外，不是功能。触发面刻意保持两个显式入口。
+- **后台定时刷新** — 悄悄常驻的网络行为是意外，不是功能。**每一个触发面都必须由一次用户动作发起**（2026-08-13 新增的两个也是：按行刷新按钮、保存成功后的一次窄化刷新；`providers.catalog` 只读磁盘，不发网络）。
 - **给开放权重宿主编"Meta 价"** — Meta 不卖 Llama 推理，各宿主价差极大。保持 unpriced，并在测试里把这条限制钉死。
 - **外推 opus-4.6+/fable-5 的 1M tier** — 无可核实的公开倍率，外推属于编数据。
 - **按记忆重猜 `github-copilot` / `azure-*` / `siliconflow` 等的默认 id** — 聚合器/中继陈旧问题的正解是 discovery，不是往表里塞更多猜测。
@@ -432,6 +468,15 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **discovery 的 generation counter**（Bifrost `live.UpsertIfCurrent`）— 评估为不需要：per-provider 单飞锁已串行化同进程写者，多 aleph-server 进程本就被 doctor 的 duplicate-instance 检查禁止；跨写者竞态不存在，counter 无洞可补。端点搬迁的正确解法已用 base_url 指纹落地（§6）。
 - **`WeightedRandom` 式权重截断**（Bifrost `int(weight*100)`，0.005 静默变 0）— 若未来做加权选择，用别名法 O(1) 或前缀和，别抄截断。
 
+以下是 2026-08-13（契约收敛 + 链接后取模型 + 多选轮，对标 pi 的 `/model` 选择器）评估后**明确不做**的：
+
+- **给 `providers.catalog` 加 `query` / `limit` / `offset`** — 目录是几十行，两个客户端都过滤服务端已经发下来的行（`aleph_protocol::providers::search`）。服务端过滤会是一个零消费者的抽象（R10），而且会开出第二个"哪些行匹配"的答案。行数上到四位数再回来。
+- **移植 pi 的 `fuzzyFilter`**（`packages/tui/src/fuzzy.ts`）— `model_picker` 有一条记录在案的裁定：顺序保留的子串过滤，**刻意不 fuzzy 排序**，因为 catalog 的行序与每行的 roster 都是策展过的，按子序列质量打分会把它们洗成近似字母序。本轮只叠加分层排序（精确 id > id 前缀 > 别名 > display_name > 仅 model-id 命中），那是 TUI 命令面板已经付过学费的教训（输入 `mode` 选中 `/tools`）。**连带也不需要 pi 的"两份搜索文本"**（`model-search.ts` 把裸 id 排到最后）——那是给 fuzzy 位置惩罚打的补丁，不用 fuzzy 就没有这个问题。
+- **建 pi 式的全局 `enabledModels` glob 集**（`settings-manager.ts:122`，minimatch 模式 + 可选 `:thinkingLevel` 后缀）— 会成为 `[providers.*] models` 之外**第二个**"哪些模型可用"的真源。Aleph 的多选落在 operator 配置轴上，且那条轴同时是 failover 梯（顺序即语义），一个平行的 pattern 层会和它对同一个问题给两个答案。
+- **给会话加第五根 knob 承载多选** — pin 仍是单值、仍只有 `select_model` 一个写者，`sessions.patch` 的 `NOT_PATCHABLE` 一行未动。多选是 operator 配置，不是每对话设置。
+- **TUI 做多选配置编辑器 / 接 `providers.modelsRefresh`** — provider 配置写面属 R2（业务配置 UI 归 Panel）；而 TUI 没有承接 per-provider `kind` 行的地方，目录已经折入缓存里的 discovered id，够用。
+- **给 `CatalogEntry` 加 `is_preset` 位** — Panel 的新分区（订阅登录 / 已配置 / 其余）比旧的"预设 vs 自定义"更贴用户实际在问的问题；为了复原旧分区去加一个字段是倒着走。
+
 ---
 
 ## 10. 常见修改的落点
@@ -443,7 +488,9 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | 本地还是云端 | `model_catalog/endpoint.rs` |
 | 成本 | `pricing.rs`（`RateCard` = picker 的费率投影） |
 | 按成本路由 | `[route] load_balance = "cost_aware"`；连线点 `failover/provider.rs::price_hint`，sort 在 `route_policy::balance_group`。**候选的 tier 从 `with_tier_catalog` 来**（2026-07-27）——此前 live 派生的候选一律 `Unknown`，`unpriced_cost` 因此把**免费本地端点排最后**，与本表第二次修复的方向正好相反 |
-| 单 provider 内的 failover 游走梯 / picker roster | preset `fallback_models` 即游走梯；**唯一合并点 `presets::model_ladder`**（base 在前、未列档位在后；operator 改过 `base_url` 则不合并）——failover 以 operator `models` 为 base，`providers.catalog` 的 `roster` 字段以 operator `models`（空则 `default_model`）为 base，前端 picker 纯渲染不再自算 |
+| 单 provider 内的 failover 游走梯 / picker roster | preset `fallback_models` 即游走梯；**唯一合并点 `presets::model_roster`**（operator `models` → curated rungs → discovered ids，带 `source` 与 `lifecycle`；operator 改过 `base_url` 则不合 curated rungs，**但仍合 discovered**——那些 id 正是从那个端点拿回来的）。`model_ladder` 是它把出处投影掉的那个投影，failover 用它，传空 `discovered` 逐字节复现旧梯。前端 picker 纯渲染不再自算 |
+| 这条 wire 的形状 / 加一个响应字段 | **`shared/protocol/src/providers/`**，不在 handler 旁边——四个说它的 crate 里有两个不许依赖 `alephcore`。**用契约类型 build 响应，不只是 parse 它**（解析只证明超集，超发看不见） |
+| provider / 模型搜索的排序规则 | `shared/protocol/src/providers/search.rs`（Panel 与 TUI 共用；顺序保留子串 + 分层，**不是 fuzzy**） |
 | **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处** |
 | **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行，`provider: None`（带 successor）** |
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |

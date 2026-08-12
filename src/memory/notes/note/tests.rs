@@ -303,11 +303,17 @@ Related: [[Rust Learning]] [[Dev Environment]]
     }
 
     #[test]
-    fn sanitize_title_strips_path_traversal() {
-        assert_eq!(
-            helpers::sanitize_title("../../etc/passwd").unwrap(),
-            "etcpasswd"
-        );
+    fn sanitize_title_rejects_path_traversal() {
+        // '..' anywhere in the title is a path-traversal hint; the function
+        // rejects rather than lossy-stripping (which used to silently collapse
+        // `..foo` into `foo` and collide with an existing note).
+        for bad in ["../etc/passwd", "../../etc/passwd", "..foo", "foo..bar"] {
+            let err = helpers::sanitize_title(bad).unwrap_err();
+            assert!(
+                matches!(err, crate::error::AlephError::Validation(_)),
+                "expected Validation variant for {bad:?}, got {err:?}"
+            );
+        }
         assert_eq!(
             helpers::sanitize_title("normal title").unwrap(),
             "normal title"
@@ -335,10 +341,12 @@ Related: [[Rust Learning]] [[Dev Environment]]
             helpers::sanitize_title("rust learning").unwrap(),
             "rust learning"
         );
-        assert_eq!(
-            helpers::sanitize_title("../etc/passwd").unwrap(),
-            "etcpasswd"
-        );
+        // Path-traversal hints are rejected, not stripped — see
+        // `sanitize_title_rejects_path_traversal`. The paired `unwrap_err`
+        // makes that contract explicit on this happy-path test too, so a
+        // future re-revert to lossy stripping fails loudly here.
+        let err = helpers::sanitize_title("../etc/passwd").unwrap_err();
+        assert!(matches!(err, crate::error::AlephError::Validation(_)));
     }
 
     #[test]

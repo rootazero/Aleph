@@ -29,16 +29,31 @@ use super::helpers::{
 };
 
 macro_rules! lock_conn {
-    ($self:expr) => {
+    ($self:expr) => {{
         // Recover from a poisoned mutex instead of failing permanently: a panic
         // while some other note-store call held the lock must not brick every
         // subsequent note operation (the poison flag is sticky). The connection
         // is still usable — the panicking op simply didn't commit. Mirrors the
         // `.unwrap_or_else(|e| e.into_inner())` recovery used elsewhere (P7).
         // Wrapped in `Ok` so the existing `lock_conn!(self)?` call sites keep
-        // their fallible shape without a per-site change.
-        Ok::<_, AlephError>($self.conn.lock().unwrap_or_else(|e| e.into_inner()))
-    };
+        // their fallible shape without a per-site change. The recovery is
+        // logged so a poison event is visible to operators (a silent
+        // into_inner() is the exact failure mode that hid the half-committed
+        // statement bug for years). The explicit Ok::<_, AlephError> keeps
+        // the return type pinned through the match arms; the per-site `?`
+        // relies on the From<Mutex<...>> impl, which is non-unique here.
+        match $self.conn.lock() {
+            Ok(g) => Ok::<_, AlephError>(g),
+            Err(poisoned) => {
+                tracing::warn!(
+                    caller = stringify!($self),
+                    "notes store: SQLite mutex was poisoned by a prior panic; \
+                     recovering (this should be rare)"
+                );
+                Ok::<_, AlephError>(poisoned.into_inner())
+            }
+        }
+    }};
 }
 
 #[async_trait]
@@ -1151,17 +1166,35 @@ impl NoteStore for SqliteMemoryBackend {
                 .map_err(|e| AlephError::config(format!("prune_orphan_vectors rows: {e}")))?
         };
 
-        for rowid in &orphan_rowids {
+        // Bound each round-trip: 5 000 rowids × 6 statements (5 vec tables + 1
+        // map) per batch = 30 k round-trips in the worst case. The previous
+        // per-rowid loop made it N × 6, which on a 50 k-note vault held the
+        // connection mutex for many seconds and starved concurrent recall.
+        // SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32 766 by default; 5 000 leaves
+        // generous headroom for other bind usage in the same statement.
+        const BATCH_SIZE: usize = 5_000;
+        for chunk in orphan_rowids.chunks(BATCH_SIZE) {
             for table in vec::all_notes_vec_tables() {
-                // Table name comes from an internal static allowlist (`EMBEDDING_DIM_TABLES`).
+                // Table name comes from an internal static allowlist
+                // (`EMBEDDING_DIM_TABLES`), so the format! here is safe.
                 // rust-doctor-disable-next-line sql-injection-risk
-                tx.execute(
-                    &format!("DELETE FROM {table} WHERE rowid = ?1"),
-                    params![rowid],
-                )
-                .map_err(|e| AlephError::config(format!("prune_orphan_vectors {table}: {e}")))?;
+                let sql = format!("DELETE FROM {table} WHERE rowid IN (");
+                let placeholders = std::iter::repeat("?")
+                    .take(chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!("{sql}{placeholders})");
+                let binds = rusqlite::params_from_iter(chunk.iter().copied());
+                tx.execute(&sql, binds)
+                    .map_err(|e| AlephError::config(format!("prune_orphan_vectors {table}: {e}")))?;
             }
-            tx.execute("DELETE FROM notes_vec_map WHERE rowid = ?1", params![rowid])
+            let placeholders = std::iter::repeat("?")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!("DELETE FROM notes_vec_map WHERE rowid IN ({placeholders})");
+            let binds = rusqlite::params_from_iter(chunk.iter().copied());
+            tx.execute(&sql, binds)
                 .map_err(|e| AlephError::config(format!("prune_orphan_vectors map: {e}")))?;
         }
 

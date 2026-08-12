@@ -2,6 +2,7 @@ pub mod chat_area;
 pub mod command_palette;
 pub mod dialog;
 pub mod input_area;
+pub mod provider_picker;
 pub mod session_picker;
 pub mod status_bar;
 pub mod tool_block;

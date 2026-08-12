@@ -5,7 +5,42 @@ use crate::config::{Config, ProviderConfig};
 use crate::gateway::security::SharedTokenManager;
 use crate::providers::presets::get_merged_preset;
 
-use super::types::ProviderConfigJson;
+use super::types::{ProviderConfigJson, ProviderInfo};
+
+/// Build the wire row for one configured provider.
+///
+/// `providers.list` and `providers.get` return the same shape, and before this
+/// helper each built it with its own field-by-field literal — including its own
+/// copy of the `model = models[0]` projection. Two authors for one derived
+/// field is how a projection drifts from the thing it projects, so the ladder
+/// goes through [`ProviderInfo::with_models`] and the scalar is derived there.
+pub(super) fn provider_info_row(
+    name: &str,
+    cfg: &ProviderConfig,
+    default_provider: Option<&String>,
+    has_api_key: bool,
+) -> ProviderInfo {
+    ProviderInfo {
+        name: name.to_string(),
+        enabled: cfg.enabled,
+        models: Vec::new(),
+        model: String::new(),
+        provider_type: Some(cfg.protocol()),
+        has_api_key,
+        // Never serialised back to a client: the key lives in the vault and a
+        // response is the one place it must not appear.
+        api_key: None,
+        base_url: cfg.base_url.clone(),
+        color: cfg.color.clone(),
+        timeout_seconds: cfg.timeout_seconds,
+        max_tokens: cfg.max_tokens,
+        context_window: cfg.context_window,
+        temperature: cfg.temperature,
+        is_default: default_provider.is_some_and(|d| d == name),
+        verified: cfg.verified,
+    }
+    .with_models(cfg.models.clone())
+}
 
 /// Vault key for AI provider API keys (`ai:<name>`) — single definition
 /// shared with the diagnostics connectivity check.

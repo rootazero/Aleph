@@ -11,6 +11,7 @@ mod approval;
 mod command_tree;
 mod commands;
 mod event;
+mod gateway_error;
 mod keys;
 mod markdown;
 mod render;
@@ -31,31 +32,71 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tui_textarea::TextArea;
 
+use aleph_protocol::providers::ProviderListResult;
 use aleph_protocol::StreamEvent;
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 use app::{Action, AppState, Focus};
 use commands::{
-    attach_session, confirm_session_switch, execute_local_command, fetch_gateway_commands,
-    send_to_agent, shadowed_gateway_commands,
+    attach_session, confirm_provider_pick, confirm_session_switch, execute_local_command,
+    fetch_gateway_commands, send_to_agent, shadowed_gateway_commands,
 };
 use slash::ParsedInput;
 
-fn model_name_from_provider_list(result: &Value) -> String {
-    result
-        .get("providers")
-        .and_then(Value::as_array)
-        .and_then(|providers| {
-            providers
-                .iter()
-                .find(|provider| provider.get("is_default").and_then(Value::as_bool) == Some(true))
-                .or_else(|| providers.first())
-        })
-        .and_then(|provider| provider.get("model").and_then(Value::as_str))
+/// The status bar's launch model caption, plus what to say in the transcript
+/// when that caption is not a model name.
+struct ModelCaption {
+    caption: String,
+    note: Option<String>,
+}
+
+/// Resolve the launch caption from a `providers.list` reply.
+///
+/// Three outcomes, and they used to be one word. `Err(_) => "unknown"` folded
+/// "the gateway refused to tell me" into "the gateway has nothing to tell" —
+/// and `providers.*` is operator-only, so a member connection takes the refusal
+/// branch every single launch and reads a claim about their install that the
+/// server never made. Only the `Ok` arm may say anything about what is
+/// configured; the other two say what happened to us instead.
+fn model_caption(reply: Result<Value, CliError>) -> ModelCaption {
+    match reply {
+        Ok(result) => default_provider_model(&result).map_or_else(
+            || ModelCaption {
+                caption: "none".to_string(),
+                note: Some(
+                    "The gateway reports no default provider model; name one with /providers."
+                        .to_string(),
+                ),
+            },
+            |model| ModelCaption {
+                caption: model,
+                note: None,
+            },
+        ),
+        Err(e) => ModelCaption {
+            caption: gateway_error::classify(&e).caption().to_string(),
+            note: Some(gateway_error::explain(&e, "the gateway's default model")),
+        },
+    }
+}
+
+/// The default provider's model, read through the shared [`ProviderInfo`].
+///
+/// The keys used to be poked out of the JSON by hand here (`is_default`,
+/// `model`) — the same shape that shipped `aleph providers list` rendering two
+/// columns the server has never emitted. Deserialising the contract type makes
+/// a rename a compile error on both sides at once.
+fn default_provider_model(result: &Value) -> Option<String> {
+    let providers = serde_json::from_value::<ProviderListResult>(result.clone())
+        .ok()?
+        .providers;
+    providers
+        .iter()
+        .find(|p| p.is_default)
+        .or_else(|| providers.first())
+        .map(|p| p.model.clone())
         .filter(|model| !model.is_empty())
-        .unwrap_or("unknown")
-        .to_string()
 }
 
 /// Entry point: run the TUI application.
@@ -95,10 +136,10 @@ pub async fn run(
     }));
 
     // 3. Fetch model name from gateway, then create AppState and TextArea
-    let model_name = match client.call::<_, Value>("providers.list", None::<()>).await {
-        Ok(result) => model_name_from_provider_list(&result),
-        Err(_) => "unknown".to_string(),
-    };
+    let ModelCaption {
+        caption: model_name,
+        note: model_caption_note,
+    } = model_caption(client.call::<_, Value>("providers.list", None::<()>).await);
 
     // 3b. Fetch gateway commands for command palette
     let gateway_commands = fetch_gateway_commands(&client).await;
@@ -110,6 +151,11 @@ pub async fn run(
     let mut state = AppState::new(session_key.clone().unwrap_or_default(), model_name);
     // Honor the CLI `--verbose` flag from launch, not only the /verbose command.
     state.verbose = verbose;
+    // A one-word caption cannot explain itself. When it is not a model name,
+    // say once why — the status bar goes on showing the short form.
+    if let Some(note) = model_caption_note {
+        state.add_system_message(note);
+    }
     state.gateway_commands = gateway_commands;
     // A local command that matches a gateway one makes the gateway one
     // unreachable — this client resolves local first and never falls through.
@@ -383,6 +429,25 @@ async fn main_loop(
             Action::SessionPickerConfirm => {
                 confirm_session_switch(state, client).await;
             }
+
+            // -- Provider picker --
+            Action::ProviderPickerUp => {
+                if let Some(picker) = &mut state.provider_picker {
+                    if picker.selected > 0 {
+                        picker.selected -= 1;
+                    }
+                }
+            }
+            Action::ProviderPickerDown => {
+                if let Some(picker) = &mut state.provider_picker {
+                    if picker.selected + 1 < picker.rows.len() {
+                        picker.selected += 1;
+                    }
+                }
+            }
+            Action::ProviderPickerConfirm => {
+                confirm_provider_pick(state, client).await;
+            }
         }
 
         // Check quit flag
@@ -396,17 +461,64 @@ async fn main_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::model_name_from_provider_list;
+    use super::{model_caption, ModelCaption};
+    use aleph_client::CliError;
+    use aleph_protocol::jsonrpc::{ADMIN_REQUIRED_MESSAGE, AUTH_REQUIRED};
+    use aleph_protocol::providers::ProviderInfo;
+
+    /// Build a `providers.list` reply the way the server does — from
+    /// `ProviderInfo`, not from a JSON literal written here. A literal would
+    /// only prove serde round-trips its own bytes; serialising the contract
+    /// type is what makes a wire rename break this test.
+    fn reply(rows: Vec<ProviderInfo>) -> Result<serde_json::Value, CliError> {
+        Ok(serde_json::json!({ "providers": rows }))
+    }
+
+    fn provider(name: &str, models: &[&str], is_default: bool) -> ProviderInfo {
+        let info: ProviderInfo = serde_json::from_value(serde_json::json!({
+            "name": name,
+            "is_default": is_default,
+        }))
+        .expect("ProviderInfo defaults cover every unset field");
+        info.with_models(models.iter().map(|m| (*m).to_string()).collect())
+    }
 
     #[test]
-    fn model_name_uses_default_provider_from_list() {
-        let result = serde_json::json!({
-            "providers": [
-                {"model": "fallback-model", "is_default": false},
-                {"model": "default-model", "is_default": true}
-            ]
-        });
+    fn the_caption_is_the_default_provider_s_first_rung() {
+        let ModelCaption { caption, note } = model_caption(reply(vec![
+            provider("relay", &["fallback-model"], false),
+            provider("openai", &["default-model", "second-rung"], true),
+        ]));
+        assert_eq!(caption, "default-model");
+        assert!(note.is_none(), "a plain answer needs no explanation");
+    }
 
-        assert_eq!(model_name_from_provider_list(&result), "default-model");
+    /// "I was refused" and "there is nothing" must not share a caption. The
+    /// `providers.*` family is operator-only, so a member takes this branch on
+    /// every launch — captioning it like an empty install states something the
+    /// server never said.
+    #[test]
+    fn a_refusal_is_not_an_empty_install() {
+        let refused = model_caption(Err(CliError::Rpc {
+            code: AUTH_REQUIRED,
+            message: ADMIN_REQUIRED_MESSAGE.to_string(),
+        }));
+        let empty = model_caption(reply(Vec::new()));
+        let offline = model_caption(Err(CliError::Timeout("no response in 30s".into())));
+
+        assert_eq!(refused.caption, "restricted");
+        assert_eq!(empty.caption, "none");
+        assert_eq!(offline.caption, "unavailable");
+        // Each of the three non-answers explains itself once in the transcript;
+        // the caption alone cannot.
+        for outcome in [&refused, &empty, &offline] {
+            assert!(outcome.note.is_some(), "{} says nothing", outcome.caption);
+        }
+        assert!(refused.note.as_ref().unwrap().contains("not an operator"));
+        assert!(offline
+            .note
+            .as_ref()
+            .unwrap()
+            .contains("no response in 30s"));
     }
 }

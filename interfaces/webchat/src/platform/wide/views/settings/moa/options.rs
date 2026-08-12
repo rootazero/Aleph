@@ -59,6 +59,7 @@ mod tests {
     use super::*;
 
     fn entry(id: &str, models: &[&str]) -> CatalogEntry {
+        use aleph_protocol::providers::{ModelSource, RosterModel};
         CatalogEntry {
             id: id.into(),
             display_name: id.into(),
@@ -68,16 +69,27 @@ mod tests {
             color: String::new(),
             homepage: None,
             notes: None,
+            signup_url: None,
+            fallback_models: vec![],
+            default_aux_model: None,
+            aliases: vec![],
             modalities: vec![],
             models: models.iter().map(|m| (*m).into()).collect(),
-            fallback_models: vec![],
-            roster: models.iter().map(|m| (*m).into()).collect(),
             has_api_key: true,
             verified: true,
             enabled: true,
             is_default: false,
-            lifecycle: crate::api::providers::ModelLifecycle::default(),
+            auth_kind: crate::api::AuthKind::ApiKey,
+            capabilities: None,
+            cost: None,
+            endpoint: "cloud".into(),
+            lifecycle: crate::api::ModelLifecycle::default(),
             requires_explicit_model: false,
+            discoverable: true,
+            roster: models
+                .iter()
+                .map(|m| RosterModel::new(*m, ModelSource::Configured))
+                .collect(),
         }
     }
 

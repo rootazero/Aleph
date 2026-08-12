@@ -547,6 +547,7 @@ mod tests {
                 distinct_tools: failures.len(),
                 distinct_sessions: 1,
                 tools: Vec::new(),
+                truncated: false,
             },
             failures,
             newest_created_at: 999,

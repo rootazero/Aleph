@@ -50,6 +50,7 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         Focus::CommandPalette => handle_palette_key(state, key),
         Focus::Dialog => handle_dialog_key(state, key),
         Focus::SessionPicker => handle_session_picker_key(state, key),
+        Focus::ProviderPicker => handle_provider_picker_key(state, key),
         Focus::Approval => handle_approval_key(state, key),
     }
 }
@@ -102,7 +103,12 @@ fn handle_global_key(
     // silently closing it would orphan that run with no response. Keep the
     // dialog on screen and force the user to answer (or /stop / Ctrl+C to abort).
     if key.code == KeyCode::Esc {
-        if state.palette.is_some() || state.session_picker.is_some() {
+        // The session and provider pickers are local too: nothing on the server
+        // is parked on either, and neither has sent anything until Enter.
+        if state.palette.is_some()
+            || state.session_picker.is_some()
+            || state.provider_picker.is_some()
+        {
             return Some(Action::CloseOverlay);
         }
         if state.dialog.is_some() {
@@ -580,6 +586,45 @@ fn handle_session_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
     }
 }
 
+/// Handle key events when the provider/model picker is focused.
+///
+/// Same scheme as the session picker, with one addition the two levels need:
+/// Backspace on an already-empty filter climbs back to the provider level
+/// before it closes the overlay, so descending into the wrong provider costs
+/// one keystroke rather than a reopen and a re-type.
+fn handle_provider_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up => Action::ProviderPickerUp,
+        KeyCode::Down => Action::ProviderPickerDown,
+        KeyCode::Enter | KeyCode::Tab => Action::ProviderPickerConfirm,
+        KeyCode::Backspace => {
+            let is_empty = state
+                .provider_picker
+                .as_ref()
+                .is_none_or(|p| p.input.is_empty());
+            if !is_empty {
+                if let Some(picker) = &mut state.provider_picker {
+                    picker.input.pop();
+                }
+                state.recompute_provider_filter();
+                Action::None
+            } else if state.provider_picker_go_back() {
+                Action::None
+            } else {
+                Action::CloseOverlay
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(picker) = &mut state.provider_picker {
+                picker.input.push(c);
+            }
+            state.recompute_provider_filter();
+            Action::None
+        }
+        _ => Action::None,
+    }
+}
+
 #[cfg(test)]
 // Two complementary test modules live here:
 //
@@ -591,7 +636,11 @@ fn handle_session_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
 //   overlay was menu-only — a question with no choices had no answerable
 //   key at all, and `Esc` is deliberately swallowed for it.
 //
-// They are named (not both `mod tests`) so the file keeps two co-existing
+// * `provider_key_tests` covers `handle_provider_picker_key`: the one place
+//   its scheme departs from the session picker's, which is Backspace climbing
+//   a level before it closes.
+//
+// They are named (not all `mod tests`) so the file keeps several co-existing
 // `#[cfg(test)]` modules in one file without Rust complaining.
 mod palette_key_tests {
     use super::*;
@@ -639,6 +688,29 @@ mod palette_key_tests {
             palette.selected_command().as_deref(),
             Some("/think high"),
             "the value the user typed must ride along to the parser"
+        );
+    }
+
+    /// The whole chain for `/providers <query>`, end to end.
+    ///
+    /// The palette is the only route to a slash command from an empty composer,
+    /// so a picker that opens unfiltered no matter what was typed is the same
+    /// defect the knobs had. Asserting the parsed command — not the string —
+    /// is what makes this cover the split, the confirm path AND the parser
+    /// together; any one of the three dropping the tail turns it red.
+    #[test]
+    fn providers_opens_pre_filtered_from_the_palette() {
+        let state = palette_with("providers gpt-5.6");
+        let command = state
+            .palette
+            .as_ref()
+            .and_then(PaletteState::selected_command)
+            .expect("the exact command name ranks first");
+        assert_eq!(
+            slash::parse_input(&command),
+            ParsedInput::Local(LocalCommand::Providers {
+                query: "gpt-5.6".to_string()
+            })
         );
     }
 
@@ -857,5 +929,79 @@ mod dialog_key_tests {
             KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
         );
         assert!(state.dialog.as_ref().unwrap().input.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod provider_key_tests {
+    use super::*;
+    use crate::tui::app::sample_catalog_entry;
+
+    fn opened() -> AppState {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.open_provider_picker(
+            vec![sample_catalog_entry("openai", &["gpt-5.6", "gpt-5.6-luna"])],
+            String::new(),
+        );
+        state
+    }
+
+    fn press(state: &mut AppState, code: KeyCode) -> Action {
+        handle_provider_picker_key(state, KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Typing narrows, Backspace widens. The rows have to move with the filter
+    /// on every keystroke, because the row a bare Enter selects is whatever the
+    /// last keystroke left at the top.
+    #[test]
+    fn typing_and_deleting_both_recompute_the_rows() {
+        let mut state = opened();
+        for c in "luna".chars() {
+            press(&mut state, KeyCode::Char(c));
+        }
+        let picker = state.provider_picker.as_ref().unwrap();
+        assert_eq!(picker.input, "luna");
+        assert_eq!(picker.rows.len(), 1);
+
+        press(&mut state, KeyCode::Backspace);
+        assert_eq!(state.provider_picker.as_ref().unwrap().input, "lun");
+    }
+
+    /// Backspace on an already-empty filter climbs out of a provider before it
+    /// closes the overlay — descending into the wrong one costs a keystroke,
+    /// not a reopen. At the top level there is nothing above, so it closes.
+    #[test]
+    fn backspace_climbs_a_level_before_it_closes() {
+        let mut state = opened();
+        state.enter_provider(0);
+
+        assert!(matches!(
+            press(&mut state, KeyCode::Backspace),
+            Action::None
+        ));
+        assert!(
+            state.provider_picker.as_ref().unwrap().provider.is_none(),
+            "the first empty Backspace climbs"
+        );
+
+        assert!(matches!(
+            press(&mut state, KeyCode::Backspace),
+            Action::CloseOverlay
+        ));
+    }
+
+    /// Esc closes the picker outright. It is a purely local overlay — no server
+    /// run is parked on it and nothing has been sent until Enter — so unlike
+    /// the AskUser and approval overlays it must not swallow the key.
+    #[test]
+    fn esc_closes_the_picker() {
+        let mut state = opened();
+        let mut textarea = TextArea::default();
+        let action = handle_global_key(
+            &mut state,
+            &mut textarea,
+            &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(matches!(action, Some(Action::CloseOverlay)));
     }
 }

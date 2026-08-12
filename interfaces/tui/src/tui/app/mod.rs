@@ -13,6 +13,7 @@ mod tests;
 
 use std::time::{Duration, Instant};
 
+use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
@@ -90,6 +91,14 @@ pub enum Action {
     SessionPickerDown,
     /// Confirm the selected session and switch to it
     SessionPickerConfirm,
+
+    // -- Provider / model picker --
+    /// Move provider-picker selection up
+    ProviderPickerUp,
+    /// Move provider-picker selection down
+    ProviderPickerDown,
+    /// Confirm the highlighted row: descend into a provider, or pin a model
+    ProviderPickerConfirm,
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +113,7 @@ pub enum Focus {
     CommandPalette,
     Dialog,
     SessionPicker,
+    ProviderPicker,
     Approval,
 }
 
@@ -387,6 +397,136 @@ pub struct SessionPickerState {
     pub selected: usize,
 }
 
+/// One row on screen in the provider picker.
+///
+/// Two levels share one list, the way the palette's namespace stack does: the
+/// provider level offers rows to descend into, the model level offers ids to
+/// pin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PickerRow {
+    Provider {
+        /// Index into [`ProviderPickerState::entries`].
+        index: usize,
+        /// How many of that provider's models the current filter matched. Equal
+        /// to the roster length unless the row surfaced *because* a model id
+        /// matched — the shared ranker narrows the roster in that case, and a
+        /// provider found through one of its models should not then hide which.
+        matched: usize,
+    },
+    Model {
+        model: RosterModel,
+    },
+}
+
+/// What confirming the highlighted row means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderPick {
+    /// Descend into this provider's roster.
+    Provider(usize),
+    /// Pin this model id.
+    Model(String),
+}
+
+/// State for the provider/model picker overlay (`/providers`).
+///
+/// Holds the rows `providers.catalog` returned, verbatim. This client never
+/// re-derives a roster, re-ranks by cost or capability, or keeps a provider
+/// table of its own (R4) — the merge behind `roster` includes an "operator
+/// moved `base_url` ⇒ drop the curated rungs" rule a frontend has no way to
+/// evaluate. Filtering goes through `aleph_protocol::providers::search`, the
+/// same matcher the Panel's picker uses, so a bare Enter selects the same row
+/// in both.
+#[derive(Debug, Clone)]
+pub struct ProviderPickerState {
+    /// Filter text. Carried across a descent on purpose: the ranker searches
+    /// provider ids, aliases, display names **and** model ids at both levels,
+    /// so `gpt-5` → Enter lands on the gpt-5 rows rather than on a roster the
+    /// user then has to re-narrow.
+    pub input: String,
+    /// The catalogue as the server sent it.
+    pub entries: Vec<CatalogEntry>,
+    /// Which provider we have descended into (index into `entries`), or `None`
+    /// at the provider level.
+    pub provider: Option<usize>,
+    /// The rows on screen for `input` at the current level.
+    pub rows: Vec<PickerRow>,
+    pub selected: usize,
+}
+
+/// A catalogue row for tests, built from the contract type so a field rename
+/// on the wire breaks every picker test at once rather than none of them.
+///
+/// Shared by the state tests here and the widget tests in
+/// `widgets::provider_picker`; both need a whole `CatalogEntry` and neither
+/// should be hand-writing twenty fields to get one.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn sample_catalog_entry(id: &str, models: &[&str]) -> CatalogEntry {
+    use aleph_protocol::providers::{AuthKind, ModelLifecycle, ModelSource};
+
+    CatalogEntry {
+        id: id.to_string(),
+        display_name: id.to_uppercase(),
+        default_model: models.first().copied().unwrap_or_default().to_string(),
+        base_url: String::new(),
+        protocol: "openai".to_string(),
+        color: String::new(),
+        homepage: None,
+        notes: None,
+        signup_url: None,
+        fallback_models: Vec::new(),
+        default_aux_model: None,
+        aliases: Vec::new(),
+        modalities: Vec::new(),
+        models: Vec::new(),
+        has_api_key: false,
+        verified: false,
+        enabled: false,
+        is_default: false,
+        auth_kind: AuthKind::ApiKey,
+        capabilities: None,
+        cost: None,
+        endpoint: "cloud".to_string(),
+        lifecycle: ModelLifecycle::ACTIVE,
+        requires_explicit_model: false,
+        discoverable: true,
+        roster: models
+            .iter()
+            .map(|m| RosterModel::new(*m, ModelSource::PresetFallback))
+            .collect(),
+    }
+}
+
+/// Rank the catalogue for one level of the picker.
+///
+/// A free function so it is testable on its own, and so the two levels
+/// provably share one matcher: the model level ranks a one-element slice, which
+/// gives it the same rule the level above has — a query naming the provider
+/// keeps the whole roster, a query naming a model narrows to it.
+#[must_use]
+pub fn provider_picker_rows(
+    entries: &[CatalogEntry],
+    provider: Option<usize>,
+    query: &str,
+) -> Vec<PickerRow> {
+    match provider {
+        None => rank_entries(entries, query)
+            .into_iter()
+            .map(|m| PickerRow::Provider {
+                index: m.index,
+                matched: m.models.len(),
+            })
+            .collect(),
+        Some(index) => entries.get(index).map_or_else(Vec::new, |entry| {
+            rank_entries(std::slice::from_ref(entry), query)
+                .into_iter()
+                .flat_map(|m| m.models)
+                .map(|model| PickerRow::Model { model })
+                .collect()
+        }),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AppState
 // ---------------------------------------------------------------------------
@@ -511,6 +651,9 @@ pub struct AppState {
     pub dialog: Option<DialogState>,
     pub palette: Option<PaletteState>,
     pub session_picker: Option<SessionPickerState>,
+    /// Provider/model picker overlay (`/providers`), populated from
+    /// `providers.catalog`.
+    pub provider_picker: Option<ProviderPickerState>,
     /// Pending tool-approval overlay (Ask exec tier), if one is being shown.
     /// Surfaced by the `exec.approvals.pending` poll, resolved via
     /// `exec.approval.resolve`.
@@ -570,6 +713,7 @@ impl AppState {
             dialog: None,
             palette: None,
             session_picker: None,
+            provider_picker: None,
             approval: None,
 
             ctrl_c_count: 0,
@@ -792,12 +936,13 @@ impl AppState {
         true
     }
 
-    /// Close any open overlay (palette, dialog, or session picker) and return
-    /// focus to input.
+    /// Close any open overlay (palette, dialog, session picker, provider
+    /// picker) and return focus to input.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
         self.session_picker = None;
+        self.provider_picker = None;
         self.approval = None;
         self.focus = Focus::Input;
     }
@@ -840,6 +985,66 @@ impl AppState {
         let picker = self.session_picker.as_ref()?;
         let idx = *picker.filtered.get(picker.selected)?;
         picker.entries.get(idx).map(|e| e.key.clone())
+    }
+
+    // -- Provider / model picker ----------------------------------------
+
+    /// Open the provider picker over the rows `providers.catalog` returned,
+    /// pre-filtered by `query` (`/providers <query>`).
+    pub fn open_provider_picker(&mut self, entries: Vec<CatalogEntry>, query: String) {
+        self.provider_picker = Some(ProviderPickerState {
+            input: query,
+            entries,
+            provider: None,
+            rows: Vec::new(),
+            selected: 0,
+        });
+        self.recompute_provider_filter();
+        self.focus = Focus::ProviderPicker;
+    }
+
+    /// Recompute the rows on screen from the current filter and level.
+    pub fn recompute_provider_filter(&mut self) {
+        let Some(picker) = &mut self.provider_picker else {
+            return;
+        };
+        picker.rows = provider_picker_rows(&picker.entries, picker.provider, &picker.input);
+        picker.selected = 0;
+    }
+
+    /// Descend into a provider's roster.
+    pub fn enter_provider(&mut self, index: usize) {
+        if let Some(picker) = &mut self.provider_picker {
+            picker.provider = Some(index);
+        }
+        self.recompute_provider_filter();
+    }
+
+    /// Go back to the provider level. `false` when already there, so the caller
+    /// can fall through to closing the overlay.
+    pub fn provider_picker_go_back(&mut self) -> bool {
+        let Some(picker) = &mut self.provider_picker else {
+            return false;
+        };
+        if picker.provider.is_none() {
+            return false;
+        }
+        picker.provider = None;
+        self.recompute_provider_filter();
+        true
+    }
+
+    /// What confirming the highlighted row means, if anything.
+    ///
+    /// `None` when the filter matched nothing — confirming an empty list is a
+    /// no-op, not a guess about which provider was meant.
+    #[must_use]
+    pub fn selected_provider_pick(&self) -> Option<ProviderPick> {
+        let picker = self.provider_picker.as_ref()?;
+        match picker.rows.get(picker.selected)? {
+            PickerRow::Provider { index, .. } => Some(ProviderPick::Provider(*index)),
+            PickerRow::Model { model } => Some(ProviderPick::Model(model.id.clone())),
+        }
     }
 
     /// Show an `AskUser` dialog. `session_key` is the clarification key the
@@ -1010,6 +1215,9 @@ impl AppState {
         self.cache_root_agent = None;
         self.dialog = None;
         self.palette = None;
+        // The picker's rows describe the install, not the conversation, but the
+        // pick it is mid-way through would land on the session we just left.
+        self.provider_picker = None;
         // Any approval prompt belonged to the old session's run; drop it.
         self.approval = None;
         self.focus = Focus::Input;

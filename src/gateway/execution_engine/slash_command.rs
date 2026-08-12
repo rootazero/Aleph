@@ -469,6 +469,24 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
                 serde_json::json!({ "instructions": args_str })
             }
         }
+        // `/model <id>` — `SelectModelArgs.model` is a required `String`, and
+        // the generic `{input, query, args, input_text}` fallback below carries
+        // none of those names, so without this arm every `/model` on every
+        // surface (TUI typed, TUI palette, Panel composer, every channel) died
+        // with a `Validation` error before reaching the tool. `call_json`'s
+        // retry only coerces scalars — it cannot invent a missing field.
+        //
+        // The provider half is deliberately NOT parsed here: qualified
+        // `provider/model` names are resolved downstream by
+        // `thinker::resolve_model_to_provider_and_model`, which knows which
+        // prefixes are configured providers. A second parser here would be a
+        // second answer to the same question.
+        //
+        // Empty args pass through as `""` so `select_model` can emit its own
+        // "model id required" refusal — a message, not a schema error.
+        "select_model" => serde_json::json!({
+            "model": args_str,
+        }),
         // URL-based tools
         "browser_open" | "web_fetch" => serde_json::json!({
             "url": args_str,
@@ -639,5 +657,104 @@ fn extract_tool_response(result: &serde_json::Value) -> String {
         s.to_string()
     } else {
         serde_json::to_string_pretty(result).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod arg_mapping_tests {
+    use super::build_tool_arguments;
+    use crate::executor::create_tool_boxed;
+    use crate::tool_metadata::aliases::SHORTHAND_ALIASES;
+
+    /// Required-field names declared by a tool's own JSON schema.
+    fn required_fields(schema: &serde_json::Value) -> Vec<String> {
+        schema
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Every shorthand must produce a payload the target tool can actually
+    /// deserialize.
+    ///
+    /// The pre-existing guard (`aliases::every_shorthand_target_is_executable`)
+    /// only proved the *target exists*. `/model` passed it while being broken on
+    /// every surface: `build_tool_arguments` had no `select_model` arm, the
+    /// generic fallback emitted `{input, query, args, input_text}`, and
+    /// `SelectModelArgs.model` is a required `String` — so `call_json` failed
+    /// validation every single time.
+    ///
+    /// This guard is **derived, not enumerated**: the required-field set comes
+    /// from each tool's own schema, so a tool that grows a new required field
+    /// turns this red without anyone remembering to update a list. Targets
+    /// without a boxed constructor are skipped, but the skip is re-derived every
+    /// run (`create_tool_boxed(..).is_none()`) rather than read off an allowlist
+    /// that would rot into a permission slip.
+    #[test]
+    fn every_shorthand_payload_satisfies_its_targets_required_fields() {
+        const SAMPLE: &str = "sample-value";
+        let mut checked = 0usize;
+
+        for (alias, target) in SHORTHAND_ALIASES {
+            // Runtime-gated tools (registered by the live registry, not
+            // constructible standalone) expose no schema here.
+            let Some(tool) = create_tool_boxed(target, None) else {
+                continue;
+            };
+            checked += 1;
+
+            let schema = tool.definition().parameters;
+            let required = required_fields(&schema);
+            if required.is_empty() {
+                continue;
+            }
+
+            let raw_input = format!("/{alias} {SAMPLE}");
+            let args = build_tool_arguments(target, SAMPLE, &raw_input);
+            let obj = args.as_object().unwrap_or_else(|| {
+                panic!("/{alias} -> `{target}`: build_tool_arguments produced a non-object payload")
+            });
+
+            for field in &required {
+                assert!(
+                    obj.contains_key(field),
+                    "/{alias} -> `{target}`: payload {args} is missing required field `{field}`. \
+                     Add an arm to `build_tool_arguments` mapping the slash argument onto it — \
+                     do NOT give the field `#[serde(default)]`, which swaps a loud validation \
+                     error for a silent no-op."
+                );
+            }
+        }
+
+        assert!(
+            checked > 0,
+            "no shorthand target was constructible — this guard went blind"
+        );
+    }
+
+    /// The specific regression: `/model claude-sonnet-5` must reach
+    /// `select_model` with the id in `model`, not smeared across the generic
+    /// `{input, query, args}` fallback.
+    #[test]
+    fn model_shorthand_maps_the_argument_onto_the_model_field() {
+        let args = build_tool_arguments("select_model", "claude-sonnet-5", "/model claude-sonnet-5");
+        assert_eq!(args["model"], "claude-sonnet-5");
+        assert!(
+            args.get("input").is_none(),
+            "select_model must not fall through to the generic arm: {args}"
+        );
+    }
+
+    /// A bare `/model` still reaches the tool (which answers with its own
+    /// refusal); it must not fail schema validation before getting there.
+    #[test]
+    fn bare_model_shorthand_still_carries_the_required_field() {
+        let args = build_tool_arguments("select_model", "", "/model");
+        assert_eq!(args["model"], "");
     }
 }

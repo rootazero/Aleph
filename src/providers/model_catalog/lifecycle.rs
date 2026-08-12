@@ -48,64 +48,16 @@
 //! current tier, and a global row would have made `select_model` refuse the
 //! `minimax` preset's own aux model.
 
-use serde::Serialize;
+use std::borrow::Cow;
 
 use super::alias::{canonicalize_model_id, prefix_matches};
 
-/// Vendor lifecycle state of a model family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelStatus {
-    /// Generally available. The default for every id absent from
-    /// [`LIFECYCLE_TABLE`] that does not look like a preview id.
-    Active,
-    /// Vendor-labelled preview / experimental / beta. Usable, but the id and
-    /// its behaviour can change or disappear without a deprecation window.
-    Preview,
-    /// Retired, or announced for retirement. Requests may already be failing.
-    Deprecated,
-}
-
-impl ModelStatus {
-    /// Stable wire string for RPC / tool JSON.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Preview => "preview",
-            Self::Deprecated => "deprecated",
-        }
-    }
-}
-
-/// Lifecycle facts for one model family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ModelLifecycle {
-    pub status: ModelStatus,
-    /// Model id the vendor points at instead. Only ever set for
-    /// [`ModelStatus::Deprecated`]; it is what `select_model` quotes back and
-    /// what an operator should put in their config.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub successor: Option<&'static str>,
-    /// One-line human note (retirement date, preview caveat).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<&'static str>,
-}
-
-impl ModelLifecycle {
-    /// The default state: generally available, nothing to say about it.
-    pub const ACTIVE: Self = Self {
-        status: ModelStatus::Active,
-        successor: None,
-        note: None,
-    };
-
-    /// True when the id should not be handed to a provider any more.
-    #[must_use]
-    pub const fn is_deprecated(&self) -> bool {
-        matches!(self.status, ModelStatus::Deprecated)
-    }
-}
+// The shapes live in `aleph_protocol::providers::catalog`: this table and the
+// `providers.catalog` wire row must describe the same struct, and a hand copy
+// on the client side is exactly how the Panel ended up carrying a second
+// `ModelLifecycle` that could drift from this one. The table literals below are
+// unchanged — `Cow::Borrowed` is const-constructible, so the rows stay `const`.
+pub use aleph_protocol::providers::{ModelLifecycle, ModelStatus};
 
 /// Suffixes that vendors use to mark an id as not-yet-stable. Matched on the
 /// canonicalised id, so `gemini-3.1-pro-preview` and `…-preview-11-2025`
@@ -122,7 +74,11 @@ const PREVIEW_MARKERS: &[&str] = &[
 ];
 
 /// One row of [`LIFECYCLE_TABLE`].
-#[derive(Debug, Clone, Copy)]
+///
+/// `Clone` rather than `Copy`: `ModelLifecycle` now carries `Cow` strings so
+/// the same struct can be built `const` here and deserialised owned by a
+/// client. The table stays `const`; only the read path clones.
+#[derive(Debug, Clone)]
 struct LifecycleRow {
     /// Preset id this row speaks for, or `None` when it is the vendor's own
     /// word and therefore true wherever the model is served.
@@ -151,8 +107,8 @@ const fn retired(
         prefix,
         life: ModelLifecycle {
             status: ModelStatus::Deprecated,
-            successor: Some(successor),
-            note: Some(note),
+            successor: Some(Cow::Borrowed(successor)),
+            note: Some(Cow::Borrowed(note)),
         },
     }
 }
@@ -342,19 +298,21 @@ pub fn lifecycle_for(provider: Option<&str>, model: &str) -> ModelLifecycle {
             })
         });
     if let Some(row) = scoped {
-        return row.life;
+        return row.life.clone();
     }
     if let Some(row) = LIFECYCLE_TABLE
         .iter()
         .find(|row| row.provider.is_none() && prefix_matches(&canon, row.prefix))
     {
-        return row.life;
+        return row.life.clone();
     }
     if PREVIEW_MARKERS.iter().any(|m| canon.ends_with(m)) {
         return ModelLifecycle {
             status: ModelStatus::Preview,
             successor: None,
-            note: Some("vendor-labelled preview: id and behaviour may change without notice"),
+            note: Some(Cow::Borrowed(
+                "vendor-labelled preview: id and behaviour may change without notice",
+            )),
         };
     }
     ModelLifecycle::ACTIVE
@@ -392,11 +350,11 @@ mod tests {
     fn retired_deepseek_aliases_name_their_successor() {
         let chat = lifecycle_for(None, "deepseek-chat");
         assert!(chat.is_deprecated());
-        assert_eq!(chat.successor, Some("deepseek-v4-flash"));
+        assert_eq!(chat.successor.as_deref(), Some("deepseek-v4-flash"));
 
         let reasoner = lifecycle_for(None, "deepseek-reasoner");
         assert!(reasoner.is_deprecated());
-        assert_eq!(reasoner.successor, Some("deepseek-v4-pro"));
+        assert_eq!(reasoner.successor.as_deref(), Some("deepseek-v4-pro"));
 
         // The V4 ids that replaced them are not caught by the `deepseek-chat`
         // prefix — the successors must stay usable.
@@ -437,7 +395,7 @@ mod tests {
         // Together / Cerebras / DeepInfra still serve them.
         let on_groq = lifecycle_for(Some("groq"), "llama-3.3-70b-versatile");
         assert!(on_groq.is_deprecated());
-        assert_eq!(on_groq.successor, Some("openai/gpt-oss-120b"));
+        assert_eq!(on_groq.successor.as_deref(), Some("openai/gpt-oss-120b"));
 
         assert!(!lifecycle_for(Some("together"), "llama-3.3-70b-versatile").is_deprecated());
         assert!(!lifecycle_for(Some("cerebras"), "llama-3.3-70b").is_deprecated());
@@ -541,11 +499,11 @@ mod tests {
     fn specialised_command_a_rows_precede_the_dated_flagship_row() {
         // `command-a-` is a prefix of all three; declaration order decides.
         assert_eq!(
-            lifecycle_for(None, "command-a-reasoning-08-2025").successor,
+            lifecycle_for(None, "command-a-reasoning-08-2025").successor.as_deref(),
             Some("command-a-plus-05-2026")
         );
         assert_eq!(
-            lifecycle_for(None, "command-a-03-2025").successor,
+            lifecycle_for(None, "command-a-03-2025").successor.as_deref(),
             Some("command-a-plus-05-2026")
         );
         // The successor itself must not be caught by any of them.

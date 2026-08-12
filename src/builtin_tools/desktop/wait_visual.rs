@@ -65,6 +65,19 @@ pub async fn run_wait_visual(
     let mut consecutive_hits: u32 = 0;
     let mut last_b64: Option<String> = None;
 
+    // A park owes an arm to a mid-loop steer as well as to the cancel token:
+    // the user's message is written to the session log and answered at the
+    // running loop's next turn boundary, and for up to `MAX_TIMEOUT_MS` this
+    // loop IS that turn. See `crate::session::steer_signal`.
+    //
+    // Hooked to the inter-poll sleep rather than wrapped around the whole
+    // function: we own this loop, so there is no need to abandon an in-flight
+    // capture to get out of it. Worst-case latency is therefore one screenshot
+    // round-trip, not the remaining window. (`browser_wait_for` hands its wait
+    // to a backend as one opaque call and has no loop to hook, so it races and
+    // drops instead — different seam, same rule.)
+    let mut steer = crate::session::steer_signal::watch_current_turn();
+
     loop {
         polls += 1;
         let shot = match screen.screenshot(desktop_region).await {
@@ -149,7 +162,41 @@ pub async fn run_wait_visual(
             };
         }
 
-        tokio::time::sleep(poll_interval).await;
+        tokio::select! {
+            biased;
+            // Polled first, so a steer that landed during the capture above is
+            // acted on before we sleep another interval on top of it. Note this
+            // is the opposite order from `SteerWatch::race`, and deliberately:
+            // there the other arm is the WAIT ITSELF, and a result that already
+            // landed must not be thrown away for an interruption. Here the other
+            // arm is an idle delay that produces nothing, so there is no result
+            // to lose. The rule is "a finished result beats the interruption",
+            // not "the other arm always goes first".
+            () = steer.steered() => {
+                return DesktopOutput {
+                    success: true,
+                    data: Some(serde_json::json!({
+                        // NOT a verdict on the screen — we stopped looking. The
+                        // `reason` is what separates this from the timeout arm,
+                        // which reports the same `stable: false` having actually
+                        // watched for the whole window.
+                        "stable": false,
+                        "polls": polls,
+                        "elapsed_ms": start.elapsed().as_millis() as u64,
+                        "reason": "user_input",
+                    })),
+                    message: Some(
+                        "wait_visual: the user sent new input, so this wait returned early \
+                         instead of watching for the full window — their message is in your \
+                         context, read it before deciding what to do next. The screen was \
+                         NOT confirmed stable and NOT confirmed still changing; nothing was \
+                         observed after this point."
+                            .into(),
+                    ),
+                };
+            }
+            () = tokio::time::sleep(poll_interval) => {}
+        }
     }
 }
 
@@ -290,6 +337,104 @@ mod tests {
         let out = run_wait_visual(&screen, Some(u64::MAX), None).await;
         assert!(out.success);
         assert_eq!(out.data.unwrap()["stable"], serde_json::Value::Bool(true));
+    }
+
+    /// Round-10 — a mid-loop steer must cut the watch short.
+    ///
+    /// Without the arm this call watches a never-settling screen for the full
+    /// `MAX_TIMEOUT_MS` (60 s) while the user's correction — already durably in
+    /// the session log, already reported to the client as delivered — goes
+    /// unread, because for that whole window this loop *is* the running turn.
+    ///
+    /// Bounded rather than merely measured: with the arm removed this would
+    /// wedge for a minute, and a test that hangs costs the suite its signal.
+    ///
+    /// The **inert** half of the same arm needs no test of its own here:
+    /// `returns_not_stable_on_timeout_when_screen_keeps_changing` runs the very
+    /// same `select!` with no `TURN_CONTEXT` and asserts `reason == "timeout"`,
+    /// so an inert arm that resolved immediately would turn it red.
+    #[tokio::test]
+    async fn a_steer_cuts_the_watch_short() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        // Cycles forever, so only the timeout or the steer can end this.
+        let screen = ScriptedScreen::new(vec![FRAME_A, FRAME_B, FRAME_A, FRAME_B]);
+        let session = SessionKey::peer("main", "wait-visual-steer");
+        let turn = TurnContext {
+            session_key: session.clone(),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+        };
+
+        let steered = session.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            crate::session::steer_signal::note_steer(&steered);
+        });
+
+        let out = tokio::time::timeout(
+            Duration::from_secs(10),
+            TURN_CONTEXT.scope(turn, run_wait_visual(&screen, Some(60_000), None)),
+        )
+        .await
+        .expect("a steered watch must not run out its window");
+
+        assert!(out.success, "nothing failed; we stopped looking");
+        let data = out.data.expect("data present");
+        assert_eq!(
+            data["reason"], "user_input",
+            "a steer and a timeout are different answers and must not share a reason"
+        );
+        assert_eq!(data["stable"], serde_json::Value::Bool(false));
+        let message = out.message.expect("message present");
+        assert!(
+            message.contains("NOT confirmed stable"),
+            "the report must refuse to pass `stable: false` off as a verdict: {message}"
+        );
+    }
+
+    /// A steer on somebody else's session must leave this watch alone — the
+    /// station registry is process-global, which is exactly where per-session
+    /// keying quietly degrades into "wake everyone".
+    #[tokio::test]
+    async fn a_steer_on_another_session_does_not_cut_the_watch_short() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        let screen = ScriptedScreen::new(vec![FRAME_A, FRAME_B, FRAME_A, FRAME_B]);
+        let mine = SessionKey::peer("main", "wait-visual-scope-mine");
+        let theirs = SessionKey::peer("main", "wait-visual-scope-theirs");
+        let turn = TurnContext {
+            session_key: mine,
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+        };
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            crate::session::steer_signal::note_steer(&theirs);
+        });
+
+        // Short window so the assertion is "we reached the TIMEOUT arm".
+        let out = TURN_CONTEXT
+            .scope(turn, run_wait_visual(&screen, Some(300), None))
+            .await;
+        assert_eq!(
+            out.data.expect("data present")["reason"],
+            "timeout",
+            "another session's steer must not end this watch"
+        );
     }
 
     #[tokio::test]

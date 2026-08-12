@@ -439,11 +439,13 @@ pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
-    // `.flatten()`, not `?`: BOTH the store error and a genuine "not a
+// `.flatten()`, not `?`: BOTH the store error and a genuine "not a
     // registered node" collapse to `None` here, deliberately. This is the
     // prompt-rendering path — an unreadable store must render nothing rather
     // than break the turn — and `render_session_topology_strict` above is the
-    // variant for callers that need to tell the two apart.
+    // variant for callers that need to tell the two apart. (Behaviourally
+    // identical to `.ok()?` — both fold the same two `None`s — but written
+    // as `.flatten()` so the intent is named.)
     render_session_topology_inner(store, session).ok().flatten()
 }
 
@@ -457,6 +459,7 @@ pub(crate) fn render_session_topology_in(
 /// `Result<None, Err>` shape below lets a caller that cares (doctor, lint,
 /// tests) tell "no governance row" (genuine ungoverned → None) from "could
 /// not read" (transient store failure → Err).
+#[allow(dead_code)] // retained for doctor/lint consumers per doc above; not yet wired
 pub(crate) fn render_session_topology_strict(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,

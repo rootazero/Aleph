@@ -310,6 +310,22 @@ fn items_array(response: &crate::gateway::protocol::JsonRpcResponse) -> Vec<serd
         .unwrap_or_default()
 }
 
+/// The roster's ids, in order.
+///
+/// A roster row carries provenance and lifecycle beside the id — projecting it
+/// back down to a `Vec<String>` here is fine because these tests are about
+/// *order and membership*; the row shape has its own assertions.
+fn roster_ids(entry: &serde_json::Value) -> Vec<String> {
+    entry["roster"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[tokio::test]
 async fn catalog_all_view_lists_every_chat_preset() {
     let config = Arc::new(RwLock::new(Config::default()));
@@ -410,12 +426,7 @@ async fn catalog_roster_merges_curated_rungs_behind_operator_models() {
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     let items = items_array(&response);
     let entry = items.iter().find(|e| e["id"] == "openai").unwrap();
-    let roster: Vec<&str> = entry["roster"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|m| m.as_str())
-        .collect();
+    let roster = roster_ids(entry);
     assert_eq!(roster[0], "gpt-4o", "operator's first model stays first");
     let preset = crate::providers::presets::get_preset("openai").unwrap();
     for rung in preset.fallback_models {
@@ -444,7 +455,7 @@ async fn catalog_roster_skips_curated_rungs_when_base_url_moved() {
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     let items = items_array(&response);
     let entry = items.iter().find(|e| e["id"] == "openai").unwrap();
-    assert_eq!(entry["roster"], json!(["gpt-4o"]));
+    assert_eq!(roster_ids(entry), vec!["gpt-4o"]);
 }
 
 #[tokio::test]
@@ -456,18 +467,13 @@ async fn catalog_roster_defaults_to_preset_chain_when_unconfigured() {
 
     // Unconfigured preset: roster is the curated chain, default first.
     let entry = items.iter().find(|e| e["id"] == "openai").unwrap();
-    let roster: Vec<&str> = entry["roster"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|m| m.as_str())
-        .collect();
+    let roster = roster_ids(entry);
     assert_eq!(roster[0], entry["default_model"].as_str().unwrap());
     assert!(roster.len() > 1, "curated rungs must ride the roster");
 
     // BYO-model relay: no default, no rungs → empty roster, never [""].
     let byo = items.iter().find(|e| e["id"] == "t8star").unwrap();
-    assert_eq!(byo["roster"], json!([]));
+    assert!(roster_ids(byo).is_empty());
 }
 
 #[tokio::test]
@@ -696,4 +702,232 @@ async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
         None => std::env::remove_var("ALEPH_HOME"),
     }
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ============================================================================
+// Cross-crate contract reconciliation
+// ============================================================================
+//
+// `aleph-cli` and `aleph-tui` cannot depend on `alephcore`, so `alephcore` is
+// the only crate that sees both halves of this wire. These tests live here for
+// that reason and no other.
+//
+// They check the direction a parse test structurally cannot: deserialising a
+// real response into a contract type proves the response is a **superset** —
+// serde ignores unknown keys — so an over-sending handler stays invisible. The
+// expected key set is therefore *derived from the contract type itself*, never
+// written out as a literal, because a literal list is the same drift moved one
+// level up.
+
+/// Every key a fully-populated contract instance can emit.
+///
+/// Serialising a value with every `Option` set and every `Vec` non-empty
+/// defeats `skip_serializing_if`, so this is the complete vocabulary the type
+/// is allowed to speak.
+fn contract_keys<T: serde::Serialize>(fully_populated: &T) -> std::collections::BTreeSet<String> {
+    serde_json::to_value(fully_populated)
+        .expect("contract type must serialise")
+        .as_object()
+        .expect("contract row must be a JSON object")
+        .keys()
+        .cloned()
+        .collect()
+}
+
+fn object_keys(v: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    v.as_object()
+        .expect("row must be a JSON object")
+        .keys()
+        .cloned()
+        .collect()
+}
+
+fn fully_populated_catalog_entry() -> CatalogEntry {
+    CatalogEntry {
+        id: "openai".into(),
+        display_name: "OpenAI".into(),
+        default_model: "gpt-5.6".into(),
+        base_url: "https://api.openai.com/v1".into(),
+        protocol: "openai".into(),
+        color: "#10A37F".into(),
+        homepage: Some("https://openai.com".into()),
+        notes: Some("note".into()),
+        signup_url: Some("https://platform.openai.com".into()),
+        fallback_models: vec!["gpt-5.6-luna".into()],
+        default_aux_model: Some("gpt-5.6-luna".into()),
+        aliases: vec!["oai".into()],
+        modalities: vec!["chat".into()],
+        models: vec!["gpt-5.6".into()],
+        has_api_key: true,
+        verified: true,
+        enabled: true,
+        is_default: true,
+        auth_kind: AuthKind::ApiKey,
+        capabilities: Some(crate::providers::ModelCapabilities {
+            context_window: 1,
+            max_output_tokens: 1,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        }),
+        cost: Some(crate::pricing::RateCard {
+            input_per_mtok: Some(1.0),
+            output_per_mtok: Some(1.0),
+            cache_read_per_mtok: Some(1.0),
+            cache_creation_per_mtok: Some(1.0),
+            reasoning_per_mtok: Some(1.0),
+            basis: crate::pricing::RateBasis::Direct,
+        }),
+        endpoint: "cloud".into(),
+        lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
+        requires_explicit_model: true,
+        discoverable: true,
+        roster: vec![RosterModel::new(
+            "gpt-5.6",
+            crate::providers::model_catalog::ModelSource::PresetDefault,
+        )],
+    }
+}
+
+#[tokio::test]
+async fn the_catalog_response_speaks_only_the_contracts_vocabulary() {
+    // Over-sending is what the `workspace.get` round found: an entire internal
+    // struct reached the wire, four fields of which had no writer and no
+    // reader anywhere, and the parse-shaped test could not see it.
+    let config = Arc::new(RwLock::new(Config::default()));
+    let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;
+    let items = items_array(&response);
+    assert!(!items.is_empty(), "fixture must produce rows to inspect");
+
+    let allowed = contract_keys(&fully_populated_catalog_entry());
+    for item in &items {
+        let extra: Vec<String> = object_keys(item).difference(&allowed).cloned().collect();
+        assert!(
+            extra.is_empty(),
+            "providers.catalog emitted {extra:?}, which `aleph_protocol::providers::CatalogEntry` \
+             does not declare. Either add the field to the contract (so every client can read it) \
+             or stop sending it — a key no client can name is bytes paid for on every call."
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_catalog_row_deserialises_into_the_contract_type() {
+    // The other direction: a client holding only `aleph-protocol` must be able
+    // to read what the server sends, including the rows built by the custom
+    // and MoA arms rather than the preset arm.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("some-relay-model");
+    cfg.enabled = true;
+    cfg.verified = true;
+    config
+        .providers
+        .insert("my-relay".to_string(), cfg);
+    let config = Arc::new(RwLock::new(config));
+
+    let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;
+    for item in items_array(&response) {
+        let parsed: Result<CatalogEntry, _> = serde_json::from_value(item.clone());
+        assert!(
+            parsed.is_ok(),
+            "a client cannot decode this row: {}\n{item}",
+            parsed.unwrap_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_roster_row_carries_its_provenance_and_lifecycle() {
+    // The roster used to be `Vec<String>`. Projecting records down to scalars
+    // deletes every other field for every renderer at once, and it happens in
+    // the producer, so each renderer still looks correct. This pins the shape.
+    let config = Arc::new(RwLock::new(Config::default()));
+    let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;
+    let items = items_array(&response);
+    let entry = items
+        .iter()
+        .find(|e| e["id"] == "openai")
+        .expect("openai preset must be listed");
+
+    let first = &entry["roster"][0];
+    assert!(
+        first.get("id").and_then(|v| v.as_str()).is_some(),
+        "roster row must carry an id: {first}"
+    );
+    assert!(
+        first.get("source").and_then(|v| v.as_str()).is_some(),
+        "roster row must say where the id came from: {first}"
+    );
+    assert!(
+        first.get("lifecycle").is_some(),
+        "roster row must carry lifecycle so a picker can mark a retired id: {first}"
+    );
+}
+
+#[tokio::test]
+async fn a_create_request_built_from_the_contract_type_is_accepted() {
+    // The CLI used to send a flat `{name, type, api_key, base_url}` body and
+    // got INVALID_PARAMS on every invocation it ever made. Building the request
+    // by serialising `CreateParams` is what makes the wrong shape a compile
+    // error; this checks the handler's deserialiser agrees with the encoder —
+    // `alias`, `deserialize_with` and missing-default all live in that gap.
+    let params = CreateParams {
+        name: "my-relay".to_string(),
+        config: ProviderConfigJson::new(vec!["model-a".into(), "model-b".into()]),
+    };
+    let wire = serde_json::to_value(&params).expect("contract type must serialise");
+
+    let decoded: CreateParams =
+        serde_json::from_value(wire).expect("the handler must accept what the contract encodes");
+    assert_eq!(decoded.name, "my-relay");
+    assert_eq!(decoded.config.models, vec!["model-a", "model-b"]);
+}
+
+#[tokio::test]
+async fn a_models_refresh_sweep_speaks_only_the_contracts_vocabulary() {
+    // No provider is configured, so this exercises the empty sweep and the
+    // response envelope rather than the network.
+    let config = Arc::new(RwLock::new(Config::default()));
+    let request = JsonRpcRequest::with_id("providers.modelsRefresh", None, json!(1));
+    let response = handle_models_refresh(request, config, test_vault()).await;
+
+    let result = response.result.expect("sweep must answer");
+    let parsed: ModelsRefreshResult =
+        serde_json::from_value(result.clone()).expect("client must decode the sweep");
+    assert!(parsed.providers.is_empty());
+    assert_eq!(
+        object_keys(&result),
+        contract_keys(&ModelsRefreshResult::default()),
+        "the sweep envelope must be exactly what the contract declares"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_without_a_credential_gets_a_row_rather_than_silence() {
+    // Skipping a bad record is usually right; doing it silently is what costs.
+    // Asking to refresh one provider and getting an empty array back reads as
+    // "nothing happened", which is indistinguishable from success.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.enabled = true;
+    cfg.api_key = None;
+    config.providers.insert("openai".to_string(), cfg);
+    let config = Arc::new(RwLock::new(config));
+
+    let request = JsonRpcRequest::with_id(
+        "providers.modelsRefresh",
+        Some(json!({ "provider": "openai" })),
+        json!(1),
+    );
+    let response = handle_models_refresh(request, config, test_vault()).await;
+    let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
+        .expect("client must decode the sweep");
+
+    let row = parsed
+        .providers
+        .iter()
+        .find(|r| r.provider == "openai")
+        .expect("the provider we asked about must appear in the answer");
+    assert!(!row.ok);
+    assert_eq!(row.kind, Some(DiscoveryFailureKind::MissingCredential));
 }

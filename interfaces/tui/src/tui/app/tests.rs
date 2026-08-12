@@ -1383,3 +1383,136 @@ fn a_clarification_ending_in_another_session_leaves_this_card_alone() {
     );
     assert_eq!(state.focus, Focus::Dialog);
 }
+
+// ---------------------------------------------------------------------------
+// Provider / model picker
+// ---------------------------------------------------------------------------
+
+/// A catalogue in a deliberately non-alphabetical, curated order — the order
+/// the server sends and the ranker must not shuffle within a tier.
+fn catalog() -> Vec<CatalogEntry> {
+    vec![
+        sample_catalog_entry("openrouter", &["openai/gpt-5.6"]),
+        sample_catalog_entry("openai", &["gpt-5.6", "gpt-5.6-luna"]),
+    ]
+}
+
+/// The two levels share one matcher, so the ranker's rules hold at both.
+///
+/// A provider named by the query keeps its whole roster; a provider surfaced
+/// only because one of its models matched shows that model and says so. A
+/// second matcher for the model level is what would let the row a bare Enter
+/// selects disagree with the level above it.
+#[test]
+fn both_picker_levels_rank_through_the_shared_matcher() {
+    let c = catalog();
+
+    // Provider level: an exact id outranks a provider that merely resells it,
+    // even though the reseller is listed first.
+    let rows = provider_picker_rows(&c, None, "openai");
+    assert_eq!(
+        rows[0],
+        PickerRow::Provider {
+            index: 1,
+            matched: 2
+        },
+        "the exact id must be the row a bare Enter selects"
+    );
+    assert_eq!(
+        rows[1],
+        PickerRow::Provider {
+            index: 0,
+            matched: 1
+        },
+        "the reseller surfaced through one model, and reports one match"
+    );
+
+    // Model level, same query: it names the provider, so every model stays.
+    let ids = model_ids(provider_picker_rows(&c, Some(1), "openai"));
+    assert_eq!(ids, vec!["gpt-5.6", "gpt-5.6-luna"]);
+
+    // Model level, a query naming one model: narrowed to it.
+    assert_eq!(
+        model_ids(provider_picker_rows(&c, Some(1), "luna")),
+        vec!["gpt-5.6-luna"]
+    );
+}
+
+fn model_ids(rows: Vec<PickerRow>) -> Vec<String> {
+    rows.into_iter()
+        .map(|r| match r {
+            PickerRow::Model { model } => model.id,
+            other => panic!("expected a model row, got {other:?}"),
+        })
+        .collect()
+}
+
+/// The filter survives a descent.
+///
+/// Typing a model id and pressing Enter twice has to land on that model. Were
+/// the descent to clear the filter, the query that found the provider would
+/// have to be typed again against its full roster — and a user has no reason to
+/// expect their own keystrokes to be dropped halfway through one act.
+#[test]
+fn a_descent_keeps_the_query_that_found_the_provider() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.open_provider_picker(catalog(), "luna".into());
+    assert_eq!(state.focus, Focus::ProviderPicker);
+
+    // One provider matched, and through one of its models.
+    assert_eq!(state.provider_picker.as_ref().unwrap().rows.len(), 1);
+    let Some(ProviderPick::Provider(index)) = state.selected_provider_pick() else {
+        panic!("the top level offers providers");
+    };
+    state.enter_provider(index);
+
+    assert_eq!(
+        state.selected_provider_pick(),
+        Some(ProviderPick::Model("gpt-5.6-luna".into())),
+        "the query has to still be narrowing after the descent"
+    );
+}
+
+/// Backspace climbs before it closes, and only from a level that has one above.
+#[test]
+fn going_back_is_only_possible_from_the_model_level() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.open_provider_picker(catalog(), String::new());
+
+    assert!(
+        !state.provider_picker_go_back(),
+        "the provider level has nowhere to climb to; the caller closes instead"
+    );
+
+    state.enter_provider(1);
+    assert!(state.provider_picker_go_back());
+    assert!(state.provider_picker.as_ref().unwrap().provider.is_none());
+    assert_eq!(
+        state.provider_picker.as_ref().unwrap().rows.len(),
+        2,
+        "climbing back restores the provider rows"
+    );
+}
+
+/// An empty match set confirms to nothing, rather than to row zero of a list
+/// that is not there.
+#[test]
+fn confirming_an_empty_filter_picks_nothing() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.open_provider_picker(catalog(), "no-such-vendor".into());
+    assert!(state.provider_picker.as_ref().unwrap().rows.is_empty());
+    assert_eq!(state.selected_provider_pick(), None);
+}
+
+/// Switching conversations drops the picker.
+///
+/// It is a singleton overlay in a client that holds one conversation at a time:
+/// a pick left mid-flight would be confirmed against the session just left.
+#[test]
+fn switching_session_retires_the_provider_picker() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.open_provider_picker(catalog(), String::new());
+    state.switch_session("other");
+    assert!(state.provider_picker.is_none());
+    assert_eq!(state.focus, Focus::Input);
+}
