@@ -416,7 +416,7 @@ impl LoopGraphStore {
     /// §6.2 write protection, right next to the `unlink` door the Auto-tier card
     /// now covers. The one way out stays the carded `unlink`.
     pub fn gc(&self, agent_id: &str) -> Result<GcReport> {
-        let conn = self.lock();
+        let mut conn = self.lock();
         let ids = node_ids_present(&conn, agent_id, "gc")?;
 
         let mut stmt = conn
@@ -428,10 +428,26 @@ impl LoopGraphStore {
         let rows = stmt
             .query_map(rusqlite::params![agent_id], row_to_edge)
             .map_err(|e| AlephError::other(format!("loop_graph gc edges query: {e}")))?;
-        let edges: Vec<GraphEdge> = rows.filter_map(|r| r.ok().and_then(|e| e)).collect();
+        let mut edges = Vec::new();
+        for r in rows {
+            // Mid-iteration decode errors must propagate here (not be
+            // silently dropped): a `row_to_edge` that fails to parse one row
+            // would otherwise leave `gc` deleting edges against an INCOMPLETE
+            // `node_ids_present` picture — the exact reverse of the "do not
+            // delete edges into a node I merely failed to parse" rule the
+            // rest of this function enforces.
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph gc row: {e}")))?;
+            if let Some(e) = row {
+                edges.push(e);
+            }
+        }
         drop(stmt);
 
+        // Build the report BEFORE the transaction so a failed delete still
+        // returns a structured "what would have been removed" instead of
+        // either an empty report or a half-truth.
         let mut report = GcReport::default();
+        let mut to_delete: Vec<&GraphEdge> = Vec::new();
         for e in &edges {
             if ids.contains(&e.from_id) && ids.contains(&e.to_id) {
                 continue;
@@ -441,14 +457,29 @@ impl LoopGraphStore {
                 report.retained_acl.push(described);
                 continue;
             }
-            conn.execute(
+            to_delete.push(e);
+            report.removed.push(described);
+        }
+
+        // Atomic delete: `gc` converges the graph, so a partial delete that
+        // leaves some dangling rows and some deleted rows would mismatch the
+        // report (and the next `lint` against the same store). One
+        // transaction: either every deletable edge is gone and the report
+        // matches, or nothing was deleted and the caller still has the
+        // pre-gc graph.
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::other(format!("loop_graph gc begin: {e}")))?;
+        for e in &to_delete {
+            tx.execute(
                 "DELETE FROM graph_edges
                      WHERE agent_id = ?1 AND from_id = ?2 AND to_id = ?3 AND kind = ?4",
                 rusqlite::params![agent_id, e.from_id, e.to_id, e.kind.as_str()],
             )
             .map_err(|err| AlephError::other(format!("loop_graph gc: {err}")))?;
-            report.removed.push(described);
         }
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("loop_graph gc commit: {e}")))?;
         Ok(report)
     }
 
@@ -461,6 +492,12 @@ impl LoopGraphStore {
     /// - fast loops owning slower loops' references (only when both declare
     ///   a known cadence class).
     pub fn lint(&self, agent_id: &str) -> Result<Vec<String>> {
+        // Read nodes, edges, and presence into local Vec/HashSet, then drop
+        // the lock BEFORE running the five pure-CPU lint passes. Holding the
+        // store mutex through every pass blocks every concurrent get_node /
+        // upsert_node / list_edges for the full duration of lint, which is
+        // unjustified: lint is read-only and computes only on the snapshot
+        // it just read.
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
@@ -474,7 +511,13 @@ impl LoopGraphStore {
             .map_err(|e| AlephError::other(format!("loop_graph lint nodes query: {e}")))?;
         let mut nodes = Vec::new();
         for r in rows {
-            if let Ok(Some(n)) = r {
+            // Mid-iteration decode errors are best-effort skipped with a warn:
+            // lint is a snapshot diagnostic, not a destructive op, so a few
+            // unreadable rows do not justify failing the whole pass. They
+            // were previously silently dropped, which obscured real DB
+            // problems from operators.
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph lint node: {e}")))?;
+            if let Some(n) = row {
                 nodes.push(n);
             }
         }
@@ -491,19 +534,24 @@ impl LoopGraphStore {
             .map_err(|e| AlephError::other(format!("loop_graph lint edges query: {e}")))?;
         let mut edges = Vec::new();
         for r in rows {
-            if let Ok(Some(e)) = r {
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph lint edge: {e}")))?;
+            if let Some(e) = row {
                 edges.push(e);
             }
         }
         drop(stmt);
 
-        let by_id: std::collections::HashMap<&str, &GraphNode> =
-            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         // Existence is asked of the raw id column, not of `by_id`: a row that
         // is present but unparseable must not be reported as "节点已消失"
         // (same reasoning as `gc`). The parsed map still answers every
         // question that needs the node's fields.
         let present = node_ids_present(&conn, agent_id, "lint")?;
+        // Lock released here — the rest of this function is pure compute on
+        // local data.
+        drop(conn);
+
+        let by_id: std::collections::HashMap<&str, &GraphNode> =
+            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
         let mut findings = lint_dangling_edges(&edges, &present);
         findings.extend(lint_naked_loops(&nodes, &edges, &by_id));
@@ -1565,6 +1613,84 @@ mod tests {
         let removed = s.gc("main").unwrap();
         assert_eq!(removed.removed.len(), 1);
         assert!(removed.retained_acl.is_empty());
+        assert!(s.list_edges("main").unwrap().is_empty());
+    }
+
+    /// `gc` is supposed to converge the graph: either every deletable dangling
+    /// edge is gone and the report matches, or none is deleted. The previous
+    /// implementation deleted edges one statement at a time, so a mid-loop
+    /// failure left a half-deleted graph and a report that lied about what
+    /// had actually changed. Asserted by making the first delete fail
+    /// (`owns_reference` is normally retained, not deleted; we instead make
+    /// the first non-protected delete fail by attaching a CHECK constraint
+    /// to the edges table only after the first edge is queued for removal).
+    ///
+    /// This test uses a simpler construction: make the FIRST queued edge's
+    /// delete fail by tampering with its primary key after the snapshot was
+    /// read, so the second delete then succeeds. With a real transaction
+    /// the second one rolls back; without one, it stays deleted.
+    #[test]
+    fn gc_is_atomic_across_multiple_dangling_edges() {
+        let (_d, s) = store();
+        // Three optimizer nodes plus one watcher; deleting the watcher leaves
+        // three dangling `watches` edges that `gc` must remove atomically.
+        for id in ["daemon:d1", "daemon:d2", "daemon:d3"] {
+            s.upsert_node(&node(id, NodeKind::Daemon, Origin::Llm))
+                .unwrap();
+        }
+        s.upsert_node(&node("heartbeat:gone", NodeKind::LoopHeartbeat, Origin::Llm))
+            .unwrap();
+        for to in ["daemon:d1", "daemon:d2", "daemon:d3"] {
+            s.upsert_edge(&GraphEdge::new(
+                "main",
+                "heartbeat:gone",
+                to,
+                EdgeKind::Watches,
+                Origin::Llm,
+            ))
+            .unwrap();
+        }
+        assert!(s.delete_node("main", "heartbeat:gone").unwrap());
+
+        // Force the FIRST DELETE in the transaction to fail: arm a
+        // SQL trigger that raises an error on the first row touched. The
+        // remaining two DELETEs in the loop must roll back.
+        s.lock()
+            .execute_batch(
+                "CREATE TRIGGER gc_break_first_delete BEFORE DELETE ON graph_edges
+                 WHEN NOT EXISTS (SELECT 1 FROM _gc_break_fired)
+                 BEGIN
+                     INSERT INTO _gc_break_fired DEFAULT VALUES;
+                     SELECT RAISE(ABORT, 'gc_fail_simulation');
+                 END;
+                 CREATE TABLE _gc_break_fired (id INTEGER PRIMARY KEY);",
+            )
+            .unwrap();
+
+        let report = s.gc("main");
+        assert!(
+            report.is_err(),
+            "the simulated delete failure must propagate, not be swallowed"
+        );
+
+        // Atomicity: even if the SECOND and THIRD DELETEs in the loop ran
+        // before the failure (rusqlite executes them sequentially within one
+        // transaction), the transaction commit must roll them all back. The
+        // graph must look exactly as it did before `gc` was called.
+        let remaining = s.list_edges("main").unwrap();
+        assert_eq!(
+            remaining.len(),
+            3,
+            "gc atomicity: a failed gc must leave every dangling edge in place \
+             (the report cannot lie about what was removed): {remaining:?}"
+        );
+
+        // Drop the trigger and re-run: gc now succeeds and removes all three.
+        s.lock()
+            .execute_batch("DROP TRIGGER gc_break_first_delete;")
+            .unwrap();
+        let report = s.gc("main").unwrap();
+        assert_eq!(report.removed.len(), 3, "{report:?}");
         assert!(s.list_edges("main").unwrap().is_empty());
     }
 

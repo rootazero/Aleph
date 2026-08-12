@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use futures::future::join_all;
 use once_cell::sync::OnceCell;
 use tracing::{info, warn};
 
@@ -256,41 +257,62 @@ async fn notify_node_settled(node_id: &str) -> bool {
         info!(node = %node_id, "loop_graph: watchers paired but no cron trigger handle");
         return false;
     };
-    let mut any_poked = false;
-    for job_id in watcher_jobs {
-        match debounce_pass(&job_id, node_id) {
-            // The run this was held off against was taken for this very node —
-            // that run IS the review this settle wanted.
-            Debounce::HeldForSameNode => {
-                any_poked = true;
-                continue;
-            }
-            // Held off against another node's review. Rate-limit the watcher
-            // (correct — one cron job), but do not credit this node's claim:
-            // that run started before this win existed and cannot have seen it.
-            Debounce::HeldForOtherNode => {
-                info!(node = %node_id, watcher = %job_id,
-                    "loop_graph: watcher debounced against another node's review — \
-                     settle claim released for retry");
-                continue;
-            }
-            Debounce::Pass => {}
+    // Run every paired watcher's poke concurrently — they hold separate cron
+    // mutex slots and a settle against a goal with N watchers should not pay
+    // N × (one-cron-run latency). The debounce map is already keyed by
+    // watcher_job_id, so concurrent jobs do not race each other there; what
+    // they share is the cron trigger handle, and `Mutex::lock().await`
+    // serialises access to it cleanly per-job.
+    let results: Vec<bool> = join_all(
+        watcher_jobs
+            .iter()
+            .map(|job_id| poke_one_watcher(cron.clone(), job_id, node_id)),
+    )
+    .await;
+    results.into_iter().any(|poked| poked)
+}
+
+/// Poke one paired watcher for a settle on `node_id`. Encapsulated so the
+/// parent function can `join_all` over a Vec of futures.
+///
+/// Returns `true` iff the caller can treat this poke as the review the
+/// settle was waiting on: either the run actually executed, or an earlier
+/// in-window run was already taken for THIS very node. Other debounce
+/// outcomes (held for another node, error) return `false`.
+async fn poke_one_watcher(
+    cron: SharedCronService,
+    job_id: &str,
+    node_id: &str,
+) -> bool {
+    match debounce_pass(job_id, node_id) {
+        // The run this was held off against was taken for this very node —
+        // that run IS the review this settle wanted.
+        Debounce::HeldForSameNode => return true,
+        // Held off against another node's review. Rate-limit the watcher
+        // (correct — one cron job), but do not credit this node's claim:
+        // that run started before this win existed and cannot have seen it.
+        Debounce::HeldForOtherNode => {
+            info!(node = %node_id, watcher = %job_id,
+                "loop_graph: watcher debounced against another node's review — \
+                 settle claim released for retry");
+            return false;
         }
-        let service = cron.lock().await;
-        match service.run_job(&job_id).await {
-            Ok(()) => {
-                any_poked = true;
-                info!(node = %node_id, watcher = %job_id,
-                    "loop_graph: victory claim — watcher cron poked");
-            }
-            Err(e) => {
-                debounce_rollback(&job_id);
-                warn!(node = %node_id, watcher = %job_id, error = %e,
-                    "loop_graph: failed to poke watcher cron (debounce rolled back)");
-            }
+        Debounce::Pass => {}
+    }
+    let service = cron.lock().await;
+    match service.run_job(job_id).await {
+        Ok(()) => {
+            info!(node = %node_id, watcher = %job_id,
+                "loop_graph: victory claim — watcher cron poked");
+            true
+        }
+        Err(e) => {
+            debounce_rollback(job_id);
+            warn!(node = %node_id, watcher = %job_id, error = %e,
+                "loop_graph: failed to poke watcher cron (debounce rolled back)");
+            false
         }
     }
-    any_poked
 }
 
 /// Goal victory-claim entry. Call sites (all guarded by the store's
@@ -303,14 +325,14 @@ async fn notify_node_settled(node_id: &str) -> bool {
 /// holding a one-shot claim must give it back (`release_settle_notify`), or
 /// this completion is never reviewed.
 pub async fn notify_goal_settled(session: &str) -> bool {
-    notify_node_settled(&format!("goal:{session}")).await
+    notify_node_settled(&goal_node_id(session)).await
 }
 
 /// Team victory-claim entry — a disband is the team's "we're done" moment.
 /// Call site: `team_disband` success path. No one-shot claim guards this one
 /// (a disband happens once), so the return is informational.
 pub async fn notify_team_settled(team_id: &str) -> bool {
-    notify_node_settled(&format!("team:{team_id}")).await
+    notify_node_settled(&team_node_id(team_id)).await
 }
 
 /// The id of the loop owning `goal:<session>`'s reference via an
@@ -336,7 +358,7 @@ fn governing_owner_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> crate::error::Result<Option<String>> {
-    let node_id = format!("goal:{session}");
+    let node_id = goal_node_id(session);
     // Raw-column read, not `list_edges`: that one is fail-soft and DROPS a row
     // it cannot decode, which for an ACL is indistinguishable from "no such
     // edge" — i.e. a grant. See `LoopGraphStore::owns_reference_sources`.
@@ -421,10 +443,55 @@ pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
-    let node_id = format!("goal:{session}");
-    let node = store.get_node(DEFAULT_AGENT, &node_id).ok()??;
-    let edges = store.list_edges(DEFAULT_AGENT).ok()?;
-    let nodes = store.list_nodes(DEFAULT_AGENT).ok()?;
+    render_session_topology_inner(store, session).ok()
+}
+
+/// Strict variant of [`render_session_topology_in`] — propagates the store
+/// error instead of folding it into "ungoverned".
+///
+/// `render_session_topology_in` collapses every Result into `Option`, so a
+/// busy store mid-write (or any other read error) silently renders a
+/// *governed* session as if ungoverned: no watchers, no `owns_reference`
+/// line, no root body — even though the rows are sitting in the table. The
+/// `Result<None, Err>` shape below lets a caller that cares (doctor, lint,
+/// tests) tell "no governance row" (genuine ungoverned → None) from "could
+/// not read" (transient store failure → Err).
+pub(crate) fn render_session_topology_strict(
+    store: &crate::loop_graph::LoopGraphStore,
+    session: &str,
+) -> crate::error::Result<Option<String>> {
+    render_session_topology_inner(store, session)
+}
+
+/// Pure compute — read the snapshot, render the bytes. Errors are the store's
+/// to surface; this function does not translate them into `Option`.
+///
+/// Returns:
+/// - `Ok(None)` when `goal:<session>` is not a registered node (legitimately
+///   ungoverned; the prompt cache holds for this session).
+/// - `Ok(Some(_))` with the rendered topology bytes.
+/// - `Err(_)` only when the store could not answer — see
+///   [`render_session_topology_strict`].
+fn render_session_topology_inner(
+    store: &crate::loop_graph::LoopGraphStore,
+    session: &str,
+) -> crate::error::Result<Option<String>> {
+    let node_id = goal_node_id(session);
+    let node = match store.get_node(DEFAULT_AGENT, &node_id) {
+        Ok(Some(n)) => n,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            return Err(crate::error::AlephError::other(format!(
+                "loop_graph topology read node: {e}"
+            )))
+        }
+    };
+    let edges = store
+        .list_edges(DEFAULT_AGENT)
+        .map_err(|e| crate::error::AlephError::other(format!("loop_graph topology read edges: {e}")))?;
+    let nodes = store
+        .list_nodes(DEFAULT_AGENT)
+        .map_err(|e| crate::error::AlephError::other(format!("loop_graph topology read nodes: {e}")))?;
     // Every interpolated value below is model-authored free text (`label`,
     // `cadence`, and the ids the model chose) and this format is line-oriented
     // with privileged lines — so each one is flattened at the seam. See
@@ -504,7 +571,21 @@ pub(crate) fn render_session_topology_in(
             ));
         }
     }
-    Some(out)
+    Ok(Some(out))
+}
+
+/// Build the canonical `goal:<session>` node id. Single source for the
+/// id shape used by [`notify_node_settled`], [`governing_owner_in`], and
+/// [`render_session_topology_inner`] — they used to build it independently
+/// with `format!`, and a third entry point with a typo would silently
+/// miss every existing pairing.
+fn goal_node_id(session: &str) -> String {
+    format!("goal:{session}")
+}
+
+/// Build the canonical `team:<team_id>` node id. See [`goal_node_id`].
+fn team_node_id(team_id: &str) -> String {
+    format!("team:{team_id}")
 }
 
 /// Will a victory claim on `target` actually reach `watcher`?
@@ -630,6 +711,28 @@ mod tests {
                 "{id} has no run-it-now handle, so it only ever runs on its own cadence"
             );
         }
+    }
+
+    /// `render_session_topology_strict` distinguishes "genuinely ungoverned"
+    /// from "could not read the store". The Option-returning wrapper would
+    /// silently fold the latter into the former and a transient busy store
+    /// would re-shape a governed session's prompt as if ungoverned. The
+    /// strict variant exists for callers (doctor, lint, tests) that need to
+    /// tell them apart.
+    #[test]
+    fn strict_render_distinguishes_ungoverned_from_unreadable() {
+        let (_dir, store) = seeded_store();
+        // Genuinely ungoverned: Ok(None), not an Err.
+        assert_eq!(
+            render_session_topology_strict(&store, "sess-missing").unwrap(),
+            None,
+            "session not in graph ⇒ Ok(None), not Ok(Some(\"...\"))"
+        );
+        // Governed session: Ok(Some(rendered)).
+        let rendered = render_session_topology_strict(&store, "sess-1")
+            .expect("store is healthy")
+            .expect("session is governed");
+        assert!(rendered.contains("根参照 root:aleph"));
     }
 
     #[test]
