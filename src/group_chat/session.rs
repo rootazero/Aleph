@@ -92,9 +92,24 @@ impl GroupChatSession {
 
     /// Record a new turn in the conversation history.
     ///
-    /// Updates `current_round` if the given round is higher than the current one.
+    /// Updates `current_round` if the given round is higher than the current
+    /// one. Rounds are forward-only: a `round` value lower than the highest
+    /// already-seen round is rejected with a debug log and the turn is NOT
+    /// appended, because replay orders by `(round, sequence)` and a stray
+    /// out-of-order row would float to the top of `get_group_chat_turns`.
+    /// No-op if the session is not Active.
     pub fn add_turn(&mut self, round: u32, speaker: Speaker, content: String) {
         if self.status != GroupChatStatus::Active {
+            return;
+        }
+        if round < self.current_round {
+            tracing::debug!(
+                subsystem = "group_chat",
+                session_id = %self.id,
+                attempt = round,
+                current = self.current_round,
+                "ignoring out-of-order turn: round regressed below current_round"
+            );
             return;
         }
         let turn = GroupChatTurn {

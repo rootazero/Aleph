@@ -79,18 +79,37 @@ impl GroupChatOrchestrator {
             });
         }
 
-        // 2. Resolve personas (validates that all presets exist)
-        let participants = self.persona_registry.resolve(&sources)?;
-
-        // 3. Validate all resolved personas
-        for persona in &participants {
-            persona.validate()?;
+        // 2. Validate inline personas BEFORE resolve() so an inline persona's
+        // validation error is surfaced even when a later source is a missing
+        // preset. Without this, `resolve()` short-circuits on the preset error
+        // and the operator never sees the inline error.
+        for source in &sources {
+            if let PersonaSource::Inline(p) = source {
+                p.validate()?;
+            }
         }
+
+        // 3. Resolve personas (validates that all presets exist)
+        let participants = self.persona_registry.resolve(&sources)?;
 
         if participants.is_empty() {
             return Err(GroupChatError::InvalidPersona(
                 "at least one persona is required".into(),
             ));
+        }
+
+        // 3b. Reject duplicate persona IDs in the same session. The
+        // coordinator's lookup by id resolves the FIRST match, so a duplicate
+        // id would silently route responses to the wrong persona.
+        let mut seen_ids: std::collections::HashSet<&str> =
+            std::collections::HashSet::with_capacity(participants.len());
+        for p in &participants {
+            if !seen_ids.insert(p.id.as_str()) {
+                return Err(GroupChatError::InvalidPersona(format!(
+                    "duplicate persona id '{}' in session",
+                    p.id
+                )));
+            }
         }
 
         let participant_count = participants.len();
@@ -106,6 +125,11 @@ impl GroupChatOrchestrator {
             source_channel.clone(),
             source_session_key.clone(),
         );
+        // Capture the ownership stamp BEFORE moving `session` into the Arc<Mutex>;
+        // `GroupChatSession::new` reads it from `crate::scope::current_scope()`
+        // and once the session is behind the mutex we'd have to lock+unlock just
+        // to read it back for persistence.
+        let owner_user_id = session.owner_user_id.clone();
         let handle = Arc::new(tokio::sync::Mutex::new(session));
         self.sessions
             .lock()
@@ -119,6 +143,7 @@ impl GroupChatOrchestrator {
                 topic.as_deref(),
                 &source_channel,
                 &source_session_key,
+                owner_user_id.as_deref(),
             ) {
                 tracing::warn!(
                     subsystem = "group_chat",

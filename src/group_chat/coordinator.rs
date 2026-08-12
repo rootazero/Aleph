@@ -39,13 +39,22 @@ pub fn build_coordinator_prompt(
         prompt.push_str(&format!("Discussion topic: {t}\n\n"));
     }
 
-    // Persona list
+    // Persona list. Persona id/name are operator-supplied (inline --role or
+    // preset config) and may contain `"`. We replace `"` with the Unicode
+    // right-double-quote (U+201D) so the JSON-shape sample the LLM is asked to
+    // mimic stays well-formed and a `"`-laden name cannot smuggle a second
+    // key=value pair past the parser.
+    fn quote_field(s: &str) -> String {
+        s.replace('"', "\u{201D}")
+    }
     prompt.push_str("Available personas:\n");
     for p in personas {
         let truncated = truncate_str(&p.system_prompt, SYSTEM_PROMPT_TRUNCATE_LEN);
         prompt.push_str(&format!(
             "- id=\"{}\" name=\"{}\" prompt=\"{}\"\n",
-            p.id, p.name, truncated
+            quote_field(&p.id),
+            quote_field(&p.name),
+            quote_field(truncated),
         ));
     }
     prompt.push('\n');
