@@ -7,7 +7,39 @@ use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
 use std::path::Path;
+use tokio::task::JoinSet;
 use tracing::{info, warn};
+
+/// Maximum in-flight pre-compress raw-memory writes per cycle. Each spawned
+/// task holds a writer handle and a captured-filter registry clone; without
+/// a cap, a long session can produce 50+ tasks and the unbounded fan-out
+/// holds the LLM context window open until they finish. The cap is per-call
+/// (the per-cycle totals are bounded by the semantic chunk count, which the
+/// chunker already caps at `leaf_chunk_tokens`).
+const MAX_INFLIGHT_PRECOMPRESS: usize = 8;
+
+/// Run one pre-compress raw-memory write. Extracted as a free function so the
+/// 'static future captures no `&self` reference — a future patch that adds
+/// one would break the spawn boundary, not silently hold a stale reference.
+async fn write_precompress_raw(
+    writer: Arc<dyn RawMemoryStore>,
+    registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    raw: RawMemory,
+) {
+    if let Some(registry) = registry {
+        let ctx = CaptureCtx {
+            agent_id: raw.agent_id.clone().unwrap_or_default(),
+            namespace: crate::memory::namespace::NamespaceScope::Owner,
+            session_id: raw.session_id.clone(),
+            source_hint: "pre_compress".into(),
+        };
+        if let Err(e) = insert_with_capture_filter(&writer, &registry, &ctx, raw).await {
+            tracing::warn!("pre_compress raw_memory write failed: {e}");
+        }
+    } else if let Err(e) = writer.insert_raw_memory(&raw).await {
+        tracing::warn!("pre_compress raw_memory write failed: {e}");
+    }
+}
 
 impl SessionCompactor {
     /// Run compression after an agent loop turn completes.
@@ -68,6 +100,12 @@ impl SessionCompactor {
             return Ok(CompressResult::default());
         }
 
+        // Bounded fan-out for the pre-compress writes. JoinSet::abort_all on
+        // drop (or on graceful shutdown via a future cancellation token)
+        // prevents the previously unbounded `tokio::spawn` list from leaking
+        // background tasks after a daemon cancel.
+        let mut precompress_set: JoinSet<()> = JoinSet::new();
+
         let compressible = &pairs[..split];
 
         let compressible_messages: Vec<crate::providers::message::UnifiedMessage> = compressible
@@ -125,27 +163,15 @@ impl SessionCompactor {
                     let writer = writer.clone();
                     // rust-doctor-disable-next-line excessive-clone
                     let registry_opt = self.capture_registry.clone();
-                    // rust-doctor-disable-next-line excessive-clone
-                    let cap_agent = agent_id.clone();
-                    // rust-doctor-disable-next-line excessive-clone
-                    let cap_session = session_id.clone();
-                    tokio::spawn(async move {
-                        if let Some(registry) = registry_opt {
-                            let ctx = CaptureCtx {
-                                agent_id: cap_agent,
-                                namespace: crate::memory::namespace::NamespaceScope::Owner,
-                                session_id: Some(cap_session),
-                                source_hint: "pre_compress".into(),
-                            };
-                            if let Err(e) =
-                                insert_with_capture_filter(&writer, &registry, &ctx, raw).await
-                            {
-                                tracing::warn!("pre_compress raw_memory write failed: {e}");
-                            }
-                        } else if let Err(e) = writer.insert_raw_memory(&raw).await {
-                            tracing::warn!("pre_compress raw_memory write failed: {e}");
+                    // Backpressure: if the JoinSet is full, await one slot
+                    // before adding the next. Keeps the in-flight count at
+                    // MAX_INFLIGHT_PRECOMPRESS regardless of session length.
+                    if precompress_set.len() >= MAX_INFLIGHT_PRECOMPRESS {
+                        if precompress_set.join_next().await.is_none() {
+                            // All tasks finished; the set is empty.
                         }
-                    });
+                    }
+                    precompress_set.spawn(write_precompress_raw(writer, registry_opt, raw));
                 }
             }
 
@@ -235,6 +261,15 @@ impl SessionCompactor {
             }
 
             next_seq += 1;
+        }
+
+        // Drain the pre-compress JoinSet before reporting d0_created: the
+        // chunks' `applied` count is already incremented synchronously, so
+        // this only affects any in-flight pre-compress writes that lag the
+        // summary loop. The `AbortHandle` is `None` on a fully-drained set,
+        // so the await returns immediately in the common case.
+        while precompress_set.join_next().await.is_some() {
+            // drain
         }
 
         info!(
