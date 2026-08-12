@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::builtin_tools::scratchpad_registry;
+use crate::clarification::ClarificationResult;
 use crate::error::Result;
 use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadManager, ScratchpadSnapshot};
 use crate::sync_primitives::Arc;
@@ -33,6 +34,8 @@ pub enum ScratchpadAction {
     CompleteItem,
     /// Append a note to the Notes section
     AppendNote,
+    /// Show the current plan to the human and wait for their verdict
+    RequestApproval,
     /// Clear and reset the scratchpad
     Clear,
 }
@@ -47,6 +50,7 @@ impl std::fmt::Display for ScratchpadAction {
             Self::StartItem => write!(f, "start_item"),
             Self::CompleteItem => write!(f, "complete_item"),
             Self::AppendNote => write!(f, "append_note"),
+            Self::RequestApproval => write!(f, "request_approval"),
             Self::Clear => write!(f, "clear"),
         }
     }
@@ -285,6 +289,101 @@ pub struct ScratchpadOutput {
     /// Structured plan snapshot for the Panel Todo widget (mutating actions only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<PlanSnapshotDto>,
+    /// `request_approval` only: what the human decided —
+    /// `approved` / `revise` / `rejected` / `timeout` / `cancelled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// `request_approval` only: what they said when they did not simply
+    /// approve. This is the revision to act on, not a courtesy note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
+}
+
+/// Verdicts offered on a plan-approval card.
+///
+/// Free text is a fourth outcome the menu deliberately does not list: anything
+/// that is not one of these three IS the revision, which is how pi's
+/// "Refine the plan" reads without making the human pick twice.
+const APPROVAL_CHOICES: [(&str, &str); 3] = [
+    ("approved", "Approve — start working the plan"),
+    ("revise", "Revise — tell me what to change"),
+    ("rejected", "Reject — do not do this"),
+];
+
+/// Decision reported when the human answered with something not on the menu.
+const DECISION_REVISE: &str = "revise";
+
+/// Map a resolved clarification onto `(decision, feedback)`.
+///
+/// Anything the human typed that is not one of the three listed verdicts IS the
+/// revision. Making them pick "Revise" and *then* type it would be two
+/// interactions for one thought — and the free-text answer is already the more
+/// informative of the two (pi's "Refine the plan" without the extra step).
+fn verdict_of(result: &ClarificationResult) -> (String, Option<String>) {
+    use crate::clarification::ClarificationResultType;
+    match result.result_type {
+        ClarificationResultType::Answered => match result.answers.first() {
+            Some(answer) if answer.is_custom() => (
+                DECISION_REVISE.to_string(),
+                Some(answer.value.clone()).filter(|v| !v.trim().is_empty()),
+            ),
+            Some(answer) => (answer.value.clone(), None),
+            // `Answered` with no answers cannot be built by
+            // `ClarificationResult::answered`, but reporting a verdict we did
+            // not receive is the one outcome worth refusing outright.
+            None => ("cancelled".to_string(), None),
+        },
+        ClarificationResultType::Timeout => ("timeout".to_string(), None),
+        ClarificationResultType::Cancelled => ("cancelled".to_string(), None),
+    }
+}
+
+/// The model-facing sentence for a verdict.
+///
+/// The timeout wording is the load-bearing one: silence is the outcome most
+/// easily misread as consent, and this is an advisory gate — nothing downstream
+/// stops the model — so the only thing standing between "nobody answered" and
+/// "nobody objected" is what this string says.
+fn approval_message(decision: &str, feedback: Option<&str>) -> String {
+    match decision {
+        "approved" => "Plan approved — start working the list.".to_string(),
+        DECISION_REVISE => feedback.map_or_else(
+            || "Plan needs revision (no detail given) — ask what to change.".to_string(),
+            |f| format!("Plan needs revision: {f}"),
+        ),
+        "rejected" => "Plan rejected — do not execute it.".to_string(),
+        "timeout" => "Nobody answered in time. The plan is UNREVIEWED — do not treat silence as \
+                      approval; do the reversible part, or stop and report."
+            .to_string(),
+        _ => "The approval request ended without a verdict; the plan is unreviewed.".to_string(),
+    }
+}
+
+/// Render the plan for a human to read before approving it.
+///
+/// Reads the **persisted** snapshot rather than taking prose from the caller:
+/// the whole value of a plan gate over a plain `ask_user` is that what the
+/// human approves is what is actually on disk and in the model's
+/// `<execution_plan>` — a paraphrase the model retypes into a question is a
+/// second representation of the plan, free to flatter it.
+fn render_plan_for_approval(snapshot: &ScratchpadSnapshot, note: Option<&str>) -> String {
+    let mut out = String::new();
+    if let Some(objective) = snapshot.objective.as_deref() {
+        out.push_str(&format!("**Objective:** {objective}\n\n"));
+    }
+    for (i, item) in snapshot.items.iter().enumerate() {
+        let mark = match item.status {
+            PlanItemStatus::Done => "x",
+            PlanItemStatus::InProgress => "~",
+            PlanItemStatus::Pending => " ",
+        };
+        out.push_str(&format!("{}. [{mark}] {}\n", i + 1, item.text));
+    }
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        out.push_str(&format!("\n{note}\n"));
+    }
+    out.push_str("\nApprove this plan?");
+    out
 }
 
 /// Tool that allows the AI to manage project scratchpads
@@ -297,12 +396,38 @@ pub struct ScratchpadTool {
     /// execution list at stop time. `None` → registry binding is skipped
     /// (scratchpad still works; the hook simply stays dormant).
     session_key: Option<Arc<RwLock<String>>>,
+    /// Handles for [`ScratchpadAction::RequestApproval`]. `None` → the action
+    /// reports that no human gate is wired rather than pretending to ask,
+    /// which is the same shape as the headless refusal one layer down.
+    clarification: Option<crate::clarification::ClarificationDeps>,
 }
 
 impl ScratchpadTool {
     #[must_use]
     pub const fn new() -> Self {
-        Self { session_key: None }
+        Self {
+            session_key: None,
+            clarification: None,
+        }
+    }
+
+    /// Attach the human-gate handles used by `request_approval`.
+    ///
+    /// Same pair `ask_user` holds, and deliberately the same
+    /// [`crate::clarification::ask`] path: a plan gate that grew its own
+    /// delivery ladder would be a second answer to "how do we reach the human",
+    /// and the second answer is always the one that misses the next transport.
+    #[must_use]
+    pub fn with_clarification(
+        mut self,
+        clarification: Arc<crate::clarification::ClarificationManager>,
+        channels: Arc<crate::gateway::channel_registry::ChannelRegistry>,
+    ) -> Self {
+        self.clarification = Some(crate::clarification::ClarificationDeps::new(
+            clarification,
+            channels,
+        ));
+        self
     }
 
     /// Attach the shared live session-key handle. Pass the same handle the
@@ -383,8 +508,10 @@ impl AlephTool for ScratchpadTool {
          step's wording send {text, status} to carry its status over. Exactly \
          one step may be in_progress. \
          action='start_item' / 'complete_item' (0-based item_index) move a \
-         single step and echo the updated list back to you. The scratchpad \
-         persists across sessions. While an objective is set and plan items \
+         single step and echo the updated list back to you. \
+         action='request_approval' shows the saved plan to the user and waits; \
+         verdict in `decision`/`feedback`. Use before expensive or \
+         irreversible work. The scratchpad persists across sessions. While an objective is set and plan items \
          remain unfinished, the goal-loop keeps this session running so you work \
          through them step by step — call action='clear' once the objective is \
          fully achieved.";
@@ -457,6 +584,8 @@ impl AlephTool for ScratchpadTool {
                     // attaching to an existing project — it used to stay hidden
                     // until the next mutating call.
                     snapshot: plan_snapshot(&manager).await,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -468,6 +597,8 @@ impl AlephTool for ScratchpadTool {
                         content: None,
                         progress: None,
                         snapshot: None,
+                        decision: None,
+                        feedback: None,
                     });
                 }
                 let content = manager.read().await?;
@@ -477,6 +608,8 @@ impl AlephTool for ScratchpadTool {
                     content: Some(content),
                     progress: None,
                     snapshot: plan_snapshot(&manager).await,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -490,6 +623,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -520,6 +655,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -533,6 +670,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -546,6 +685,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -558,7 +699,13 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress: None,
                     snapshot: None,
+                    decision: None,
+                    feedback: None,
                 })
+            }
+
+            ScratchpadAction::RequestApproval => {
+                self.request_approval(&manager, args.value.as_deref()).await
             }
 
             ScratchpadAction::Clear => {
@@ -569,9 +716,81 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress: None,
                     snapshot: None,
+                    decision: None,
+                    feedback: None,
                 })
             }
         }
+    }
+}
+
+impl ScratchpadTool {
+    /// Show the persisted plan to the human and wait for their verdict.
+    ///
+    /// The human gate the exec tier cannot be: `[exec] tier` asks about *this
+    /// call*, one tool invocation at a time, and by the time it fires the plan
+    /// is already being executed. This asks about the plan **as a whole**,
+    /// before the first step — the axis codex covers with plan mode and pi with
+    /// its post-plan `select("Execute / Stay / Refine")`.
+    ///
+    /// It is advisory by construction. Nothing in `src/harness/` learns about
+    /// the verdict and no tool is blocked by it: the model asked, the model was
+    /// answered, and the model decides what that means (R7/R10). A gate that
+    /// enforced itself would need a plan-state machine inside the loop — that
+    /// is cognition, and the loop does not hold cognition.
+    async fn request_approval(
+        &self,
+        manager: &ScratchpadManager,
+        note: Option<&str>,
+    ) -> Result<ScratchpadOutput> {
+        use crate::clarification::{
+            ClarificationOption, ClarificationQuestion, ClarificationRequest,
+        };
+
+        let Some(ref deps) = self.clarification else {
+            return Err(crate::error::AlephError::tool(
+                "scratchpad: no human-approval gate is wired on this server — proceed and say \
+                 that the plan was not reviewed",
+            ));
+        };
+
+        let snapshot = manager.snapshot().await?;
+        if snapshot.items.is_empty() {
+            return Err(crate::error::AlephError::tool(
+                "scratchpad: there is no plan to approve — call action='set_plan' first",
+            ));
+        }
+
+        let options: Vec<ClarificationOption> = APPROVAL_CHOICES
+            .iter()
+            .map(|(value, label)| ClarificationOption::new(value, label))
+            .collect();
+        let request = ClarificationRequest::new(vec![ClarificationQuestion::select(
+            "plan_approval",
+            &render_plan_for_approval(&snapshot, note),
+            options,
+        )
+        .with_header("Plan")])
+        .map_err(crate::error::AlephError::tool)?;
+
+        let result = crate::clarification::ask(deps, request)
+            .await
+            .map_err(|e| crate::error::AlephError::tool(format!("scratchpad: {e}")))?;
+
+        let (decision, feedback) = verdict_of(&result);
+        let message = approval_message(&decision, feedback.as_deref());
+
+        Ok(ScratchpadOutput {
+            success: true,
+            message,
+            content: None,
+            progress: None,
+            // The reviewed plan itself, so the Panel's todo widget shows
+            // exactly what the verdict was about.
+            snapshot: Some(plan_snapshot_dto(&snapshot)),
+            decision: Some(decision),
+            feedback,
+        })
     }
 }
 
@@ -633,6 +852,165 @@ fn derive_default_project_id(session_key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- plan approval (`action='request_approval'`) --------------------
+
+    fn snapshot() -> ScratchpadSnapshot {
+        ScratchpadSnapshot {
+            objective: Some("Ship auth".into()),
+            items: vec![
+                PlanItem {
+                    text: "Design".into(),
+                    status: PlanItemStatus::Done,
+                },
+                PlanItem {
+                    text: "Build".into(),
+                    status: PlanItemStatus::InProgress,
+                },
+                PlanItem {
+                    text: "Test".into(),
+                    status: PlanItemStatus::Pending,
+                },
+            ],
+        }
+    }
+
+    fn answer(value: &str, custom: bool) -> ClarificationResult {
+        ClarificationResult::answered(vec![crate::clarification::ClarificationAnswer {
+            question_id: "plan_approval".into(),
+            selected_indices: if custom { vec![] } else { vec![0] },
+            value: value.into(),
+        }])
+    }
+
+    /// What the human reads is the plan as PERSISTED — objective, every step,
+    /// and each step's real status. That is the whole reason this is an action
+    /// on `scratchpad` rather than an `ask_user` the model types a plan into:
+    /// a retyped plan is a second representation, free to flatter the first.
+    #[test]
+    fn the_card_shows_the_persisted_plan_with_its_real_statuses() {
+        let rendered = render_plan_for_approval(&snapshot(), Some("  heads up  "));
+        assert!(rendered.contains("**Objective:** Ship auth"), "{rendered}");
+        assert!(rendered.contains("1. [x] Design"), "{rendered}");
+        assert!(rendered.contains("2. [~] Build"), "{rendered}");
+        assert!(rendered.contains("3. [ ] Test"), "{rendered}");
+        assert!(rendered.contains("heads up"), "{rendered}");
+        assert!(
+            rendered.trim_end().ends_with("Approve this plan?"),
+            "{rendered}"
+        );
+    }
+
+    /// A blank note is not a blank line: an approval card is read at a glance,
+    /// and vertical noise is what makes the plan hard to scan.
+    #[test]
+    fn a_blank_note_renders_identically_to_no_note() {
+        assert_eq!(
+            render_plan_for_approval(&snapshot(), Some("   ")),
+            render_plan_for_approval(&snapshot(), None)
+        );
+        assert!(
+            !render_plan_for_approval(&snapshot(), None).contains("\n\n\n"),
+            "no run of blank lines"
+        );
+    }
+
+    #[test]
+    fn listed_verdicts_come_back_verbatim_with_no_feedback() {
+        for (value, _) in APPROVAL_CHOICES {
+            let (decision, feedback) = verdict_of(&answer(value, false));
+            assert_eq!(decision, value);
+            assert!(feedback.is_none(), "a picked verdict carries no revision");
+        }
+    }
+
+    /// Free text is the fourth outcome the menu does not list: it IS the
+    /// revision, so the human never has to pick "Revise" and then type it.
+    #[test]
+    fn free_text_becomes_a_revision_carrying_what_they_wrote() {
+        let (decision, feedback) = verdict_of(&answer("do step 3 first", true));
+        assert_eq!(decision, DECISION_REVISE);
+        assert_eq!(feedback.as_deref(), Some("do step 3 first"));
+        assert!(approval_message(&decision, feedback.as_deref()).contains("do step 3 first"));
+
+        // Whitespace-only free text is a revision with nothing to act on, not
+        // a revision whose detail is a blank string.
+        let (decision, feedback) = verdict_of(&answer("   ", true));
+        assert_eq!(decision, DECISION_REVISE);
+        assert!(feedback.is_none());
+        assert!(approval_message(&decision, None).contains("ask what to change"));
+    }
+
+    /// Silence is the outcome most easily misread as consent, and this gate is
+    /// advisory — nothing downstream blocks on it — so the wording is the only
+    /// thing between "nobody answered" and "nobody objected".
+    #[test]
+    fn a_timeout_says_unreviewed_not_approved() {
+        let (decision, feedback) = verdict_of(&ClarificationResult::timeout());
+        assert_eq!(decision, "timeout");
+        assert!(feedback.is_none());
+        let message = approval_message(&decision, None);
+        assert!(message.contains("UNREVIEWED"), "{message}");
+        assert!(
+            message.contains("do not treat silence as approval"),
+            "{message}"
+        );
+        assert!(!message.to_lowercase().contains("approved —"), "{message}");
+    }
+
+    #[test]
+    fn a_cancelled_request_reports_no_verdict() {
+        let (decision, _) = verdict_of(&ClarificationResult::cancelled());
+        assert_eq!(decision, "cancelled");
+        assert!(approval_message(&decision, None).contains("unreviewed"));
+    }
+
+    /// An `Answered` with no answers cannot be built by
+    /// `ClarificationResult::answered`, but inventing a verdict is the one
+    /// outcome worth refusing outright.
+    #[test]
+    fn an_answer_less_answered_result_is_not_read_as_approval() {
+        let empty = ClarificationResult::answered(vec![]);
+        assert_eq!(verdict_of(&empty).0, "cancelled");
+    }
+
+    /// Without the two handles there is no way to reach a human. Saying so is
+    /// the same shape as the headless refusal one layer down — never a silent
+    /// success, and never a pretend question.
+    #[tokio::test]
+    async fn request_approval_without_a_wired_gate_says_so() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let manager = ScratchpadManager::with_dir(tmp.path().to_path_buf(), "sess");
+        let err = ScratchpadTool::new()
+            .request_approval(&manager, None)
+            .await
+            .expect_err("no gate wired must be an error");
+        assert!(err.to_string().contains("no human-approval gate"), "{err}");
+    }
+
+    /// Nothing to approve is a caller error the model can fix in one step, not
+    /// an empty card for a human to stare at.
+    #[tokio::test]
+    async fn request_approval_refuses_when_there_is_no_plan() {
+        // `with_dir`, not `new`: `new` resolves `ALEPH_HOME`, and a test that
+        // sets a process-global env var is a test that fails only when the
+        // suite runs in parallel.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let tool = ScratchpadTool::new().with_clarification(
+            Arc::new(crate::clarification::ClarificationManager::new()),
+            Arc::new(crate::gateway::channel_registry::ChannelRegistry::new()),
+        );
+        let manager = ScratchpadManager::with_dir(tmp.path().to_path_buf(), "sess");
+        manager
+            .initialize(Some("objective only"))
+            .await
+            .expect("initialize");
+        let err = tool
+            .request_approval(&manager, None)
+            .await
+            .expect_err("an empty plan must be refused");
+        assert!(err.to_string().contains("no plan to approve"), "{err}");
+    }
 
     #[test]
     fn plan_snapshot_dto_maps_three_states_and_completion() {

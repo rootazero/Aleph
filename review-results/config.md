@@ -1,115 +1,138 @@
 # Module: src/config
 
-- Path: `src/config/`
-- Files scanned: 98
-- Total LOC: 27045
-- Confidence threshold: 80 (all reported findings considered actionable)
-
 ## Summary
-| Severity | Count |
-|----------|------:|
-| critical | 4 |
-| high     | 12 |
-| medium   | 18 |
-| low      | 20 |
-| **Total**| **54** |
+- Path: `src/config/` (~76 files, ~26,299 lines)
+- Total Rust public items: 144 (across `src/config/types/*.rs`)
+- Issues found: 4 high-confidence, 3 medium, 4 low — see "Findings"
 
-## High-Confidence Issues
+## Reviewers
+- Wiring severed-wire audit (PRODUCED − CONSUMED)
+- Static analysis (unwrap/expect/panic in non-test code)
+- Configuration R1-R10 cross-check
+- graphify-coupled entry/exit survey
 
-### Perspective 1 — Security & Robustness
-```
-ISSUE|src/config/load.rs:67-75|critical|load_from_file initialises DEFAULTS_OVERRIDE OnceLock AFTER toml::from_str, so any serde `default_*()` function (e.g. `default_timeout_seconds`, `default_similarity_threshold`, `default_generation_timeout_seconds`) reads the hard-coded fallback instead of the user’s `defaults.toml`; the comment on lines 200-202 describes the no-file path only and the file path silently loses the override layer.
-ISSUE|src/config/load.rs:70-75|critical|`init_defaults_override` returns silently when the OnceLock is already set, so a second load on a different config (or in a test running after a previous one) cannot refresh the override; combined with the previous issue, this masks the wrong-default bug for unit tests that exercise `load_from_file` more than once.
-ISSUE|src/config/types/tools.rs:271-297|high|`McpExternalServerConfig` and `McpServerConfig` accept an arbitrary `command: String` plus `args: Vec<String>` and `env: HashMap<String,String>` with no allowlist, no path validation, and no `deny_unknown_fields`; since `update_config`/`agents.update` is LLM-driven (R9), an attacker can swap `command = "bash"` for any executable on PATH with attacker-controlled args, breaking the “self-config” trust boundary.
-ISSUE|src/config/types/voice_local.rs:73-88|high|`StreamingConfig.api_key` is `String` (not `Option`) and serialised with `skip_serializing_if = "String::is_empty"`, so any non-empty value is written to config.toml in plaintext; `secret_migration::migrate_all_secrets_to_vault` only covers `channels.*` from the streaming family, so the streaming api_key is never migrated to the vault and the secret is persisted on disk whenever the user fills it in.
-ISSUE|src/config/validate.rs:83-99|high|Provider temperature/top_p/frequency_penalty/presence_penalty/repeat_penalty are accepted as raw `f32`; there is no `is_finite()` guard (only retry.rs:126 and metrics.rs:107 explicitly handle non-finite values); a TOML `NaN` or `inf` slips through, and downstream `*_to_string()` conversions in providers/adapter.rs turn it into an unbounded payload that bypasses the documented range.
-ISSUE|src/config/types/policies/metrics.rs:42-49|high|`MetricsPolicy::warning_threshold_ms` only guards against non-finite `warning_multiplier` at use site, not at validate time; a TOML `warning_multiplier = inf`/`nan` would be loaded successfully and trigger a `u64::from(f64::NaN)` (returns 0) which then makes every duration look “slow” and floods the operator log channel.
-ISSUE|src/config/types/policies/web_fetch.rs:163-170|high|`Crawl4aiConfig` has no validate method: a user setting `enabled = true` with empty `base_url` produces a backend whose `base_url` is `None`; `migrate_fetch` then constructs a `FetchBackendConfig` with `base_url: None`, and runtime fetch silently falls back to reqwest with a `None` URL, which is undefined behaviour for `WebFetchTool` instead of an actionable error.
-ISSUE|src/config/types/generation/provider.rs:163-185|high|Provider color is only checked as `starts_with('#') && (len==4 || len==7)`, but `dimensions: u32` accepts `0` and `batch_size: u32` accepts `0` or `u32::MAX`; a 0-batch embedding call hangs the executor thread in `memory/embedding_provider.rs:76` and never reports back, while `u32::MAX` triggers a single huge allocation downstream.
-ISSUE|src/config/structs.rs:208|high|`channels: HashMap<String, serde_json::Value>` is opaque; `Config::validate` does not inspect it, so malformed channel configs (e.g. telegram without `bot_token`, discord with negative `port`) are only rejected at channel startup, well after a self_config patch has been persisted to disk.
-ISSUE|src/config/types/policies/memory.rs:24-58|medium|`CompressionPolicy` has no `validate`; a `turn_threshold = 0` and `background_interval_seconds = 0` are both accepted, the latter producing a hot-loop background tick (`memory/compression/scheduler.rs` divides by these without a guard).
-ISSUE|src/config/save.rs:40-58|medium|The embedding-provider erasure guard uses `existing.contains("[[memory.embedding.providers]]")` substring match; a user whose config happens to embed the literal text in a comment or in any other field path with that prefix would have the guard fire spuriously, and conversely a config saved in a slightly different section name (e.g. produced by a future migration) would silently lose providers.
-ISSUE|src/config/patcher.rs:107-110|medium|Health check timeout is hard-coded to 10s; long-lived `SSE`-only providers that simply take longer than 10s to send their first event surface as `Failed` even when healthy, with no operator knob to extend it.
-ISSUE|src/config/types/policies/retry.rs:130-131|medium|`backoff_for_attempt` clamps `attempt` to 63 with a magic number and no `const` or comment; under `backoff_multiplier = 2.0` this is the largest safe exponent before `powi` returns a value > `f64::MAX`; future maintainers can easily regress the cap and silently produce infinite delays.
-ISSUE|src/config/agent_manager/crud.rs:521-553|medium|`unique_trash_path` caps its counter at 10_000 then re-reads `SystemTime::now()` without a sleep, so a tight loop on a fast filesystem can still produce identical timestamps; while the downstream `fs::rename` will surface the failure, the function returns the colliding path and the caller logs a misleading "moved" trace.
-ISSUE|src/config/agent_manager/agent_files.rs:11-33|medium|`validate_agent_id` uses `c.is_alphanumeric()` (Unicode-aware) but `validate_id` in crud.rs uses `is_ascii_alphanumeric()`; an agent_id like `id = "café"` passes `agent_files.rs` but is rejected by `crud.rs:478`, causing intermittent write failures that depend on which entry point is hit.
-ISSUE|src/config/types/generation/presets/registry.rs:443|medium|Volcengine TTS preset description documents `appid in base_url ?appid=<id>`; the factory builder has no validator enforcing the appid fragment, so an operator with a missing `?appid=` ships a request that 4xxs at runtime for every call.
-ISSUE|src/config/agent_manager/toml_ops.rs:80-90|medium|After `fs::rename`, the code attempts to `chmod 600` only on Unix and silently warns on failure; on multi-user systems a wider-umask temp file may be visible to other accounts for the lifetime of the rename, leaking any plaintext secret that was on the disk during a migration.
-ISSUE|src/config/types/policies/retry.rs:108-110|low|The `jitter_factor` default is `0.25` but the comment calls it "equal-jitter shape" (which would be ±25%, not 0-25%); the doc and the implementation semantics disagree and may mislead operators tuning retry storms.
-ISSUE|src/config/types/serde_helpers.rs:11-18|low|`split_csv_models` is documented "model names never contain commas"; the constraint is enforced nowhere else, so any future user-supplied model name that legitimately contains `,` (e.g. a custom OpenAI-compatible id) silently truncates.
-ISSUE|src/config/types/tools.rs:175-205|low|`default_core_tools` returns a hard-coded list of 25 strings; the only test (`default_core_contains_essentials`) covers 6 of them, leaving 19 names to drift unverified.
-ISSUE|src/config/policies/exec_tier.rs:288-303|low|`approval_prompt_line` is hard-coded English even though the module doc-comment claims model-facing copy is always English; if a future commit adds the same constant in another locale it can drift silently.
-```
-### Perspective 2 — Logic & Correctness
-```
-ISSUE|src/config/types/policies/tool_permissions.rs:121-141|high|`merge` silently tightens an operator’s explicit `Allow` entry when the two layers’ `default` fields differ (e.g. global `default = "deny"` + agent `default = "allow"` widens the merged default to `deny`; an agent-level `bash = "allow"` then becomes `restrictive_min(allow, deny) = deny`); the operator’s intent is lost without any warning.
-ISSUE|src/config/load.rs:68-75|high|As described in Perspective 1, the `DEFAULTS_OVERRIDE` `OnceLock` is set after `toml::from_str` in `load_from_file`, so a user’s `defaults.toml` is silently ignored whenever the config has any field that consults a serde default function; only the no-file `Config::load()` path actually honours the comment’s invariant.
-ISSUE|src/config/types/agents_def.rs:101-104|high|`AgentDefinition.workspace: Option<PathBuf>` is kept as a “deprecated, ignored” field but the resolver at `agent_resolver/mod.rs:202-218` still warns every time it is set; a config that’s been edited by an LLM to set `workspace = "/etc/passwd"` produces a noise log but otherwise is silently ignored, giving no operator signal that the field exists in the struct.
-ISSUE|src/config/types/voice_local.rs:217-235|high|`normalize_voice_local` populates a synthetic `GenerationProviderConfig` entry in `cfg.generation.speech_providers` / `transcription_providers` and `cfg.generation.default_speech_provider` / `default_transcription_provider` if unset, but the entry carries the real endpoint / API key and round-trips through `save_to_file` (because `or_insert_with` does not overwrite a user’s later edit, but a full `save_to_file` after `Config::default()` does serialise the synthetic entry). The synthetic state can therefore leak past a `voice.local.enabled = false` round-trip only if the operator goes through `save_incremental` instead of `save_to_file`; the two code paths are not symmetric and the docs do not warn about it.
-ISSUE|src/config/types/voice_local.rs:241-252|high|The same `normalize_voice_local` function overwrites `default_speech_provider` / `default_transcription_provider` only when `None`, but a user who set `default_speech_provider = "openai_tts"` before enabling `[voice.local]` will see the migration logic silently leave the cloud default in place and still inject the local entry — a confusing split-brain where the "default" provider isn’t the one the local endpoint is offering.
-ISSUE|src/config/patcher.rs:280-294|medium|The "no-op" guard returns `success: true` and skips the write, but a `health_check: true` request still runs the probe; if the probe fails the operator sees `health_check: Failed` alongside `success: true`, which is logically contradictory and may surface in monitoring as a green-write with a red-health-check.
-ISSUE|src/config/types/serde_helpers.rs:24-62|medium|`deserialize_models` rejects empty `model = ""` but `visit_seq` for the array form drops empty-string elements silently (it just doesn’t add them to the list) rather than erroring; an `[providers.x] models = ["", "gpt-4o"]` parses as `["gpt-4o"]` and the user has no signal that an entry was dropped.
-ISSUE|src/config/migration.rs:68-106|medium|`migrate_vector_db_in_toml` mutates `value` in place inside the `if let` arm and the early-return at line 95 returns the original `contents` only when `needs_migration = false`; the logic is correct today but the in-place mutation is fragile — any future refactor that introduces a path returning `Ok(contents.to_string())` after the in-place insert will silently drop the migration.
-ISSUE|src/config/types/dispatcher/core.rs:286-300|medium|`DispatcherConfig::validate` rejects `l3_timeout_ms = 0` and `confirmation_timeout_ms = 0` but accepts a 0 `max_rounds` and a 0 `no_progress_threshold` (delegated to `AgentConfigToml::validate`, which also accepts 0); the boot path then constructs an L3 agent with `max_steps = 0`, which loops forever.
-ISSUE|src/config/types/phase6_wiring.rs:100-120|medium|`ContextBudgetToml` has no `validate`; a `token_budget = 0` combined with the no-op `warning_threshold = None` and `critical_threshold = None` produces a `ContextBudget` whose `before_turn` always returns `CompactToFit` (see `context/budget/mod.rs:819-828`), so the agent enters a tight compact loop on every turn with no escape.
-ISSUE|src/config/types/policies/web_fetch.rs:159-169|medium|`WebFetchPolicy::is_content_acceptable` returns `true` when `min_content_length <= len <= max_content_length`, but a user can set `min_content_length > max_content_length`; the function then correctly returns false for every length but the user is given no validation error, and the field is silently useless.
-ISSUE|src/config/types/orchestrator.rs:13-36|medium|`OrchestratorGuards.max_rounds = 0` / `max_tool_calls = 0` are accepted; `is_rounds_exceeded(0)` returns true immediately and the orchestrator halts on its first turn.
-ISSUE|src/config/structs.rs:230-238|medium|`#[serde(default, skip_serializing_if = "is_default_session")]` uses reference equality against `SessionConfig::default()`; if a user sets `dm_scope` to a value that happens to be `DmScope::PerPeer` (the default) but tweaks an unrelated default field (e.g. a new `max_concurrent_sessions` in a future release), the block is silently dropped from output and the user’s actual config is lost on next save.
-ISSUE|src/config/load.rs:251-295|medium|`apply_security_ssrf_overrides` parses the raw TOML as a `toml::Table` purely to bridge a schema mismatch with the gateway layer; when the gate is fed the *already-migrated* `contents` (the function is called after `migrate_mcp_builtin_in_toml` and `migrate_vector_db_in_toml`), any of those migrations can rewrite a `[security.ssrf]` block into a different layout and the bridge silently fails to copy fields — the result is a `[security.ssrf]` panel setting that the WebFetch tool never honours.
-ISSUE|src/config/structs.rs:120-122|medium|`config.workspace` and `agent.workspace` (legacy alias) are both parsed but only `agent` is documented in the `#[serde(default, alias = "cowork")]` field; an old `config.toml` carrying `[config]` blocks (rather than `[config.default]`) is silently ignored.
-ISSUE|src/config/types/moa.rs:62-72|medium|`MoaToml::resolve_preset(None)` silently falls back to the sole preset when one exists; an operator who deletes `default_preset` and forgets they have two presets can be surprised by which one is armed.
-ISSUE|src/config/structs.rs:45-47|low|`is_default_session` is a free function rather than a method on `SessionConfig`; a future rename of the struct forces a touch in the only call site.
-ISSUE|src/config/types/routing.rs:172-209|low|`RoutingRuleConfig.should_strip_prefix` is checked only for keyword rules; a user who sets `strip_prefix = true` on a keyword rule (auto-detected by the absence of `^/`) silently has their setting ignored, with no warning in the validate path.
-ISSUE|src/config/agent_manager/crud.rs:130-145|low|`reconcile_orphan_workspaces` parses a `**Name:**` line out of IDENTITY.md but caps at a single lookup; a workspace whose IDENTITY.md uses the alternative `*Name*` markdown (no extra asterisks) is never recognized, silently defaulting the agent’s display name to its directory name.
-ISSUE|src/config/structs.rs:453-460|low|`PluginMarketplaceEntry.source` accepts any `String`; `source_type` defaults to `"github"` but is not constrained, so a user can declare `type = "github"` and `source = "owner/repo"` with the wrong case and the marketplace plugin silently fails to install.
-```
-### Perspective 3 — Architecture Compliance
-```
-ISSUE|src/config/structs.rs:208|high|`Config.channels: HashMap<String, serde_json::Value>` carries a payload schema per channel; this is interface-layer JSON-shape (R4) leaking into the core struct, and the channel-shape knowledge is duplicated across `gateway/handlers/channels/`, `gateway/inbound_router`, and `gateway/voice/`, all of which re-deserialise the same `Value`. A single typed enum (or one typed `ChannelConfig` per known platform) would consolidate validation in core.
-ISSUE|src/config/structs.rs:45-47|medium|Using reference-equality to detect "default session" in a serde `skip_serializing_if` is the kind of fragile introspection R10 warns against; a `#[serde(default)]` + explicit `Option<SessionConfig>` would let `None` carry the semantic, removing the need for `is_default_session`.
-ISSUE|src/config/load.rs:68-75|medium|`load_from_file` reaching outside the config layer to `crate::utils::paths::get_config_dir()` and into the OnceLock at module scope is the cross-module state hand-off R9 would prefer exposed as a tool; today the override can only be edited by editing `defaults.toml` on disk.
-ISSUE|src/config/load.rs:251-295|medium|`apply_security_ssrf_overrides` re-parses the raw TOML specifically because the strongly-typed `SecurityConfig` "lives in the gateway layer" (per the comment). This is the kind of two-way knowledge of the same data R7 (one core, many shells) warns against; the cleanest fix is to move the typed `[security.ssrf]` field onto `Config` and delete the bridge.
-ISSUE|src/config/load.rs:251-295|medium|R1 / R3 hygiene: the `config` layer reaches into `crate::metrics::init_metrics_runtime` and `crate::security::ssrf::SsrfPolicy` for "bridging" side effects; each bridge doubles the import surface the config layer needs to know about and risks duplicating defaults on every load.
-ISSUE|src/config/types/agents_def.rs:101-104|medium|The legacy `agent.workspace` field is silently ignored per the doc, but the struct does not carry a `#[deprecated]` attribute nor a runtime warn-once; a config author who relies on it has no way to find out it does nothing, violating R9 (no signal that the configuration is dead).
-ISSUE|src/config/structs.rs:165-175|medium|`#[deprecated]` on `smart_flow`, `smart_matching`, `dispatcher`, `subagent`, `evolution` is fine for the Rust API, but the UI hints and `[security.ssrf]` bridge still surface these fields in the panel; R9 says the surface should agree with reality — the panel currently advertises a knob the runtime ignores.
-ISSUE|src/config/types/policies/tool_permissions.rs:121-141|medium|Default-merge semantics silently tighten an operator’s explicit `Allow`; this is policy logic (R10) buried inside the type — it should be a per-section helper named in the agent prompt, not a side effect of `merge`.
-ISSUE|src/config/validate.rs:19-39|medium|`normalize_default_provider` silently rewrites a missing `default_provider` to the alphabetically-first available; that is a runtime decision the user did not make, and R9 would prefer the panel surface a “provider not found, pick one” wizard over a hidden default.
-ISSUE|src/config/types/policies/exec_tier.rs:218-240|medium|`Effective_permission` lives in `policies/exec_tier.rs` (a config type) and consults `ToolFacts` (a runtime-side struct). The function is business logic in the config layer; R10 suggests the gate computation belongs next to the enforcement chokepoint, not in the type module.
-ISSUE|src/config/structs.rs:135-137|medium|`#[serde(default, rename = "voice")]` rebinds `[voice]` to the `voice_local` field; the same TOML key is also read at the gateway layer as the `aleph.toml` gateway block, and the two parsers disagree on what `[voice]` means. R1/R4 ask for one canonical owner.
-ISSUE|src/config/types/dispatcher/core.rs:41-110|medium|`DispatcherConfigToml` is `#[deprecated]` but the struct still occupies a top-level `[dispatcher]` slot in the schema; an LLM building a self-config patcher request can still write into a dead section, with no schema-level guard.
-ISSUE|src/config/types/voice_local.rs:73-102|medium|The `[voice.streaming]` and `[voice.format]` sections are config-only types; runtime modules like `gateway/voice/inbound/provider.rs` re-construct their own `StreamingConfig`. The two `StreamingConfig` structs (one in `voice_local.rs`, one in `gateway/streaming.rs`) drift independently.
-ISSUE|src/config/agent_manager/agent_files.rs:122-134|low|`require_contained` uses `normalize_path_lexically` to reject traversal; the helper is the only one of its kind in the repo and the test only covers its negation case, so a future change to the algorithm has no regression net.
-ISSUE|src/config/types/agents_def.rs:204-208|low|`AgentDefinition.workspace` doc-claims the field is "Deprecated … Kept for backward compatibility" but the struct has no `#[deprecated]` attribute on the field, so the LLM-driven patcher schema (R9) keeps advertising a no-op field.
-```
-### Perspective 4 — Code Quality
-```
-ISSUE|src/config/patcher.rs:191-381|high|`ConfigPatcher::apply` is a 200-line method that mixes schema validation, deep-merge, re-validation, mtime conflict checks, backup creation, in-memory commit, in-place commit, rollback, and post-apply health probe; the duplicated `set_nested_value` + `re-validate` loop appears at lines 222-234 and 327-340, and the conflict-check is run twice (lines 297 and 319). Splitting into named helpers would shrink the surface for change.
-ISSUE|src/config/load.rs:37-172|high|`load_from_file` is a 130-line method that interleaves defaults-override priming, migration, parsing, post-parse bridges (`apply_security_ssrf_overrides`, `init_metrics_runtime`), preset/prompt/defaults loading, validation, and incremental persist; the OnceLock race noted in Perspective 1 is harder to spot precisely because the function is so long.
-ISSUE|src/config/structs.rs:55-320|medium|`Config` is a 280-line struct with ~55 fields; the inline doc comment per field is excellent but a side-by-side summary table (e.g. an appendix in `CLAUDE.md`) would be more discoverable for the LLM-driven patcher consumer.
-ISSUE|src/config/types/policies/exec_tier.rs:624|medium|624 lines combining the type definition, three invariants, the restriction lattice, and 13 tests; the `effective_permission` and the `restrictive_min` lattice are duplicated in `policies/tool_permissions.rs:160-167` and the call site at `tools/scoped/permission_for` (cross-crate).
-ISSUE|src/config/types/serde_helpers.rs:11-18|low|`split_csv_models` and the two Visitors are 90 lines of visitor boilerplate; a single helper that uses `#[serde(untagged)]` enum on a CSV helper would be much shorter.
-ISSUE|src/config/validate.rs:701|low|701 lines for a config-validate module is on the high side; the 600+ lines of tests are well-organised but the 100 lines of prod code could be split per-section helpers (`validate_providers`, `validate_search`, `validate_memory`, etc.) called from a 10-line `Config::validate`.
-ISSUE|src/config/structs.rs:525-570|medium|`Config::migrate_fetch` is `pub fn` but is only called from `config/load.rs:144`; it should be `pub(crate)` (or `fn`) to keep the migration surface tight.
-ISSUE|src/config/types/moa.rs:384|medium|`validation_errors` is called from three places (`activation.rs:28`, `preset_store.rs:81`, `provider.rs:91`) but the rules are all encoded inline; a documented table of “layer-1 / layer-2 / layer-3” guards is implied by the comments but not enforced by tests that lock the layer boundaries.
-ISSUE|src/config/types/route.rs:287|low|`LoadBalanceStrategy`’s six variants each have a 5-10 line doc comment; the file is 287 lines of which 180 are comments, which is great for understanding but a "summary" comment block at the top would speed up scan.
-ISSUE|src/config/types/generation/presets/registry.rs:542|low|542 lines, ~400 of which are the `PROFILES` const; a separate `profiles.rs` file that `mod`-injects the const would let the registry fit in <100 lines.
-ISSUE|src/config/types/acp.rs:253-431|low|The 18 `PresetSpec` literals are an 180-line table; a fixture-style data file (e.g. `acp_presets.json` included with `include_str!`) would shrink the file and make adding presets a one-line edit.
-ISSUE|src/config/types/policies/retry.rs:108-110|low|`default_jitter_factor` is a `const fn` returning a `f64` literal with no documentation explaining the algorithm; the comment on lines 51-58 is on the field, the implementation is at lines 130-137, and the magic-63 cap is at 130 — three places that should live in a single 30-line `impl RetryPolicy` block.
-ISSUE|src/config/ui_hints/definitions.rs:493|low|493 lines of declarative field hints; a `ui_hints.json` fixture would shrink the file but reduce the compile-time schema check.
-ISSUE|src/config/structs.rs:280-295|medium|`Config`’s `unified_tools`, `tool_service`, `sandbox`, `voice_local`, `orchestrator`, `cron`, `heartbeat`, `tasks_reaper`, `prompt`, `a2a`, `acp`, `execution`, `agents` fields all use `#[serde(default)]` with no `deny_unknown_fields` on the root; a typo in any nested key is silently ignored. The `[security.ssrf]` bridge (line 251 of load.rs) re-parses the TOML precisely because of this looseness.
-ISSUE|src/config/structs.rs:230-238|low|Field-level `is_default_session` reference equality is the only `skip_serializing_if` in the file that depends on a non-`Default` helper; every other gate is `Option::is_none` or `HashMap::is_empty`. Mixed style.
-ISSUE|src/config/structs.rs:230-238|low|Multiple deprecated fields (`smart_flow`, `smart_matching`, `dispatcher`, `subagent`, `evolution`) repeat the same long `#[deprecated(since = "2026.7.20", note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored")]` block; a single `#[deprecated = "…"]` helper attribute or a `deprecated_sections!` macro would shrink the file.
-ISSUE|src/config/types/generation/provider.rs:163-185|low|`validate` does a hand-coded `match protocol` for the temperature range; a `const TABLE: &[(&str, f32, f32)] = &[("anthropic", 0.0, 1.0), ...]` would let the same table drive both validation and the help text.
-ISSUE|src/config/types/tools.rs:151-205|low|`default_core_tools` and the `ToolsConfig::default()` constructor are 50+ lines of repeated `core: default_core_tools()`; if a new field is added to `ToolsConfig`, the default must be touched in two places.
-ISSUE|src/config/types/policies/memory.rs:96|low|File is 96 lines but a lot of the noise is `pub use` re-exports; the actual `MemoryPolicies` type and its `Default` impl together are ~30 lines, with the rest being `pub use` and imports.
-ISSUE|src/config/types/dispatcher/core.rs:429|low|File is 429 lines, with `DispatcherConfigToml` and `AgentConfigToml` plus three team-storm structs in one file; the team-storm types are independent of dispatcher and belong in `policies/teams.rs` or similar.
-ISSUE|src/config/structs.rs:104-122|low|Five `[deprecated]` attributes repeat the same long `note = "Section has no runtime consumer (see config::reload_impact::INERT_SECTIONS); values are persisted but ignored"` text — a `DEPRECATED_INERT_SECTION_NOTE` `const &str` would centralise the explanation.
-```
+## Severed-Wire Audit (Phase 1–3)
 
-## Notes
-- Severity is calibrated for an in-tree config system that already has many guards (GATs, OnceLock, type-state). The `critical` items are the load-time defaults race, the OnceLock `set` silent failure, the plaintext voice streaming key, and the unconstrained MCP command string.
-- Many of the `medium` items are documentation / wiring consistency issues that the R-arch review turns up: deprecation markers that the schema still surfaces, bridges that exist only because a typed field is missing, and silent defaulting that hides operator intent.
-- `Perspective 4` lists a small handful of "low" code-quality items that the LLM reviewer should fix in passing; the `patcher.rs` and `load.rs` "high" items are the only ones I would file as worth-rewriting before the next release.
-- The 54 findings collectively form a coherent narrative: the config layer is well-typed and well-validated *in the happy path*, but the seams where it meets runtime (security/ssrf bridge, defaults OnceLock, MCP command, voice streaming key) and the multiple `Option<…>` "soft-deprecated" fields accumulate a long tail of minor correctness gaps.
-</content>
-</invoke>
+### Items verified as WIRED (no-op)
+- `methods::add_rule_at_top` / `remove_rule` / `move_rule` — all called from `gateway/handlers/routing_rules.rs` (lines 157, 318, 384). Also referenced via webchat `routing_rules.rs` API.
+- `ReloadImpact::classify` + `live_apply::apply_live_sections` — both consumed by `gateway/handlers/config.rs:597` and `patcher.rs:381, 631`. Guarded by `every_live_section_has_an_apply_arm` test.
+- `ConfigPatcher` — wired into `gateway/handlers/config.rs:514`, `gateway/handlers/moa.rs`, `gateway/handlers/security_config.rs`, `self_config.rs` builtin tool.
+- `AcpConfig` / `AcpAdapterEntry` — used heavily by `gateway/handlers/acp_config.rs` (preset merging, list, get, deserialize_adapters_with_presets).
+- `presets_override::PresetsOverride` / `OwnedProviderPreset` / `OwnedGenerationPreset` — wired into `handlers/generation_providers`, `handlers/providers/helpers`, `providers/presets/mod.rs`, `types/generation/presets/mod.rs`.
+- `defaults_override::get_defaults_override().{provider,memory,generation}_timeout_seconds` — consumed by `types/provider.rs:247`, `types/memory/defaults.rs:10`, `types/generation/provider.rs:107`.
+- `ToolPermissionsConfig` (29 inbound consumers) — `channel_policy.rs`, `inbound_router/executor.rs`, `execution_engine/{tool_service_builder,turn_permissions}.rs`, `agent_instance.rs` all consume it.
+- `defaults_override::init_defaults_override` + `load_defaults_override` — wired in `load.rs:116/117`, `load.rs:243/244` (both `if exists` and `if not exists` code paths).
+- `deploy_guides` — `bin/aleph-server/commands/start/mod.rs:92`.
+- `build_ui_hints` / `generate_config_schema_json` — `gateway/handlers/config.rs:365/366`, `tests/schema_integration.rs`.
+- `AgentManager::create/update/delete/list/get` — wired via `bin/.../register_agents_handlers` (which overrides the `handlers/mod.rs` placeholder RPCs that error with "wire in Gateway startup"). `register_agents_handlers` is invoked at `start/mod.rs:1777`.
+- `register_agents_handlers` also overwrites the `runtimes.install` placeholder.
+- `register_cron_handlers` / `register_heartbeat_handlers` / `register_teams_handlers` / `register_graph_handlers` — all wired into `start/mod.rs`. Placeholder "service unavailable" RPCs in `handlers/mod.rs` are covered when the optional handle is registered.
+- `ContextCompactor` builders (`with_monitor_scope`, `with_cache_carryover`, `with_summary_reuse`, `with_cheap_provider`) — all consumed by `agents/subagent_spawner.rs:1157-1172`.
+- `manual::install_manual_compaction` / `manual_summarizer` / `manual_keep_tokens` — wired in `bin/.../orchestrator_init.rs:300` and `builtin_tools/sessions/compact_tool.rs:121`.
+- `CompactorConfig` — set in `subagent_spawner.rs:1159`, `compact_tool.rs:124`, `tests/gateway_chat_common`, `tests/common`.
+- `rescue::try_reactive_compact_and_retry` / `drain_context_overflow` / `RescueCx` / `RescueHost` / `MAX_REACTIVE_COMPACT_ATTEMPTS` — wired in `harness/agent/think.rs:590, 606, 649`, `tests/reactive_compaction.rs`, `tests/budget.rs`.
+- `context::compact::directive::DirectiveOutcome::SplitTo` — used in `harness/agent/think.rs:475`.
+- `RescueHost::note_rescue_attempt` / `account_discarded_tokens` / `mark_rescue_exhausted` / `reserve_rescue_slot` — implementations live in `harness/agent/think.rs` (search hits for `RescueCx` confirm).
+- `context::compact::session_split::perform_session_split` — wired in `context/compact/directive.rs:149`, `context/compact/compactor.rs:787`, `tests/...extras.rs`.
+- `retrieval::ContentIndex::open` — wired in `tools/result_store.rs:314`.
+- `LoopDirective` / `ContextPressure` — wired in `orchestrator/harness_bridge/runner_impl.rs`, `harness/tests/budget.rs`, `tests/preflight_cheap_passes_e2e.rs`.
+
+### Findings (high-confidence)
+
+#### H1. `is_default_session` is a free function, not a method, but used as a serde `skip_serializing_if`
+- Location: `src/config/structs.rs:43-46`
+- Code:
+  ```rust
+  fn is_default_session(s: &crate::routing::config::SessionConfig) -> bool {
+      s == &crate::routing::config::SessionConfig::default()
+  }
+  ```
+- Usage: `src/config/structs.rs:183` — `#[serde(default, skip_serializing_if = "is_default_session")]`
+- Risk: This is a free function bound to a serde attribute. It compiles fine. But: it captures a snapshot of `SessionConfig::default()` at field-emission time. If `SessionConfig::default()` ever picks up env-derived defaults (it currently does not), this becomes a derived-time-versus-serialize-time drift. **Not a bug today**; flagged for review when `SessionConfig` gains environment-derived defaults.
+
+#### H2. `Schema::generate_config_schema_json` deserialization fall-through to `serde_json::json!({"not": {}})`
+- Location: `src/config/patcher.rs:32-38`
+- Code:
+  ```rust
+  SCHEMA.get_or_init(|| {
+      let schema = generate_config_schema();
+      serde_json::to_value(&schema).unwrap_or_else(|e| {
+          tracing::error!("Config schema serialization failed: {}", e);
+          serde_json::json!({"not": {}})
+      })
+  })
+  ```
+- Risk: **`{"not": {}}` is a Schema that *accepts everything* (a no-schema accept-all)**. If `generate_config_schema()` ever fails to serialize, `cached_config_schema()` will silently pass all config edits through `jsonschema` validation. This is a **silent type-system bypass** — exactly the "false Live" failure mode the patcher guards against elsewhere.
+- Severity: **HIGH** — should return `Err`-side or panic instead. Replace with a panic + clear message, since the schema is generated from the same `Config` struct as the validator, and a serialization failure here means the type itself is unsound.
+
+#### H3. `ToolServiceConfig::parallel_tool_concurrency` docstring misleading
+- Location: `src/config/types/tools.rs:36-46`
+- Doc claims: "`0` or `1` disables the parallel fast path (every batch runs serially); `>= 2` enables it."
+- Code in `tools.rs:73`: `pub const fn parallel_tool_concurrency_opt(&self) -> Option<usize> { Some(self.parallel_tool_concurrency) }` — always Some.
+- The harness logic that interprets `Some(0..=1)` as disabled is downstream (`subagent_spawner/mod.rs:765` uses `unwrap_or_else(...)`).
+- Severity: **MEDIUM** — doc/code diverges from the actual consumer's behavior. Should either return `None` for `0..=1` or document the truncation at the source.
+
+#### H4. `AcpConfig::default_adapters()` depends on `AcpAdapterEntry::all_presets()` — runtime-time inconsistency
+- Location: `src/config/types/acp.rs:35-39`, `handlers/acp_config.rs:156-159`
+- `default_adapters()` builds the default map by iterating `AcpAdapterEntry::all_presets()` at every `Config::default()` invocation. `all_presets()` is a static list. If the preset list is mutated at runtime (not currently), `Config::default()` would not pick up the change without a process restart.
+- Severity: **LOW** — currently a static const, so no real risk. Flagged for awareness.
+
+### Findings (medium)
+
+#### M1. `already_serialized` (placeholder) RPCs in `gateway/handlers/mod.rs:851-925` for `agents.*` and `runtimes.install`
+- These are **explicit placeholders** that error out with "wire in Gateway startup" until the real handlers are registered during `register_agents_handlers`. The pattern is documented (`// placeholders — actual handlers wired with AgentManager`) and the real handlers **do** overwrite these at `commands/start/builder/handlers/agents.rs:18-32` and `:75-103`.
+- Risk: A `commands/start/` consumer that builds the server without going through `register_agents_handlers` will see INTERNAL_ERROR for `agents.*` RPCs. This is not a wiring bug — it is a documented surface.
+- **Action**: None today. The pattern is by design.
+
+#### M2. `validate.rs:705` — file size 705 lines
+- Combined `validate` + `migrate_fetch` logic. Consider splitting JSON Schema validation into its own module. Severity: **LOW** (stylistic).
+
+#### M3. `patcher.rs:1498` — file size 1498 lines
+- The largest single file in `src/config`. Holds: `ConfigPatcher`, `PatchRequest`, `PatchResult`, `FieldDiff`, `HealthCheckResult`, `RollbackResult`, `SchemaCache`, `apply`/`rollback`/`dry_run` pipeline. Splitting would help readability but risks interface churn. **No action**.
+
+### Findings (low)
+
+#### L1. `defaults_override::get_defaults_override()` is a `&'static OnceLock`-backed singleton
+- The `OnceLock` is initialized once per process. The `Config::load()` flow writes it **before** `Config::default()`. This is correct (validated by `tests/config_effective_path.rs:62`). The singleton survives across `Config::load()` calls until process exit. Multiple `Config::load()` calls will re-read the file **and re-initialize** the singleton (line 117). The clone at line 172 is necessary because the static is moved into `Config.defaults_override` for serialization.
+- **Action**: Comments could be clearer; currently the precedence is implicit.
+
+#### L2. `ChannelInstanceConfig::resolved_channels` consumes unknown channel keys with a warn-and-skip
+- `src/config/structs.rs:332-334`: `tracing::warn!("Channel '{}' has no 'type' field and is not a known platform name, skipping")`. This is a soft-fail. The risk is that a user adds a channel and silently nothing happens.
+- **Action**: Consider collecting the warnings and exposing them via `Config::validation_warnings()`. **LOW**.
+
+#### L3. `structs.rs` mixes `Config` struct + `PluginMarketplaceEntry` + `ChannelInstanceConfig` + `is_default_session` helper
+- The mixed contents could be split. Severity: **LOW** (stylistic).
+
+#### L4. `Config::migrate_fetch` is callable but not invoked from `load.rs`
+- `src/config/structs.rs:438-462` defines `migrate_fetch`. It is **not called by `load.rs`**. Search for `migrate_fetch` is restricted to the struct definition itself (`grep -rn "migrate_fetch" src/config/` returns only the implicit definition occurrence).
+- Severity: **MEDIUM** — this is **dead wiring**. Either the migration is expected to be invoked by `Config::load()` (in which case it should be called there) or by an upgrade path (in which case it should be documented).
+- **Action**: Wire `config.migrate_fetch();` into `Config::load_from_file` (`src/config/load.rs:79`) after `toml::from_str(...)` succeeds, or document the migration path explicitly.
+
+## Architecture (R1-R10) check
+
+- **R1 (Core no platform APIs)**: ✅ No platform API calls in `src/config/`. The `sandbox::SandboxConfig` is a pure data struct.
+- **R2 (Complex UI in Leptos only)**: N/A (this is core).
+- **R3 (Core minimalism)**: ✅ No heavy deps; only `serde`, `toml`, `schemars`, `tokio`, `tracing`.
+- **R4 (Pure I/O shell)**: ✅ No business logic. `live_apply.rs` is the only place that touches runtime state, and it is a narrow, table-driven hot-apply that the module-level docstring explicitly defends.
+- **R5-R10**: N/A / ✅.
+
+## Production-grade patterns observed
+
+- `live_apply.rs` enforces "the table that says live and the code that makes it live are the same table" via `every_live_section_has_an_apply_arm` test. Excellent guard against drift.
+- `ReloadImpact::classify` is conservative: anything not known to be `Live` or `Inert` is `Restart`. This is the right default for an LLM-self-edit system.
+- `ConfigBackup` uses atomic temp+rename writes (verified by `tests/backup_atomic`).
+- `defaults_override` is read **before** `Config::default()` so serde defaults can pull from `OnceLock` — a subtle ordering bug avoided with a deliberate comment.
+- `migrate_fetch` migration is conservative (no-op when both new and old are present).
+
+## Conclusion
+
+- **H1–H4**: All flagged but **H2 is the only actionable HIGH-severity bug** (`{"not": {}}` is a jsonschema accept-all sentinel; if the schema ever fails to serialize, every config edit bypasses validation silently).
+- **L4 / M3-class issue**: `Config::migrate_fetch` is not wired into `Config::load()`. Either wire it or document the alternate path.
+- The module is **otherwise cleanly wired**: every `pub fn`/`pub struct` I sampled has a consumer (RPC handler, builtin tool, or harness entry point). The `placeholder` RPCs in `gateway/handlers/mod.rs` are an explicit, documented boot-phase-2 pattern, not a severed wire — they are **overwritten** by `register_agents_handlers` before they are reachable in production.
+
+### Recommended fixes
+
+1. **H2**: Replace `serde_json::json!({"not": {}})` with a hard panic in `cached_config_schema()`. The schema is generated from the same `Config` definition; a serialization failure means the type itself is broken — proceeding with an accept-all sentinel would silently disable validation.
+2. **L4 / M3**: Wire `config.migrate_fetch();` into `Config::load_from_file` after `toml::from_str` succeeds, or document the alternate invocation path.
+3. **H3**: Clarify `parallel_tool_concurrency` docstring or move the `Option` clamp into the source.
+4. **H1**: Add a test asserting `SessionConfig::default()` doesn't depend on env. (Defensive — already true today.)

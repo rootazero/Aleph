@@ -290,10 +290,28 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         return SessionIdentity::ByTeamId(team_id.to_string());
     }
     match topic {
+        // The two clarification frames are `…OrAdmin`, not plain
+        // `BySessionKey`, because the OTHER TWO FACES of the same verb already
+        // are: `clarification.pending` returns every item to an unrestricted
+        // caller (`visible_owner_filter() == None`) and `clarification.resolve`
+        // accepts any session `visibility::session_visible` admits — which is
+        // every session, for an operator. Leaving the event face narrower made
+        // an operator's pending LIST show questions whose CARDS never arrived,
+        // and left them holding resolve authority over a question they were
+        // never shown. Same divergence, same fix, and the same direction the
+        // twin `approval.*` family took on 2026-08-08.
+        "stream.ask_user" | "stream.clarification_ended" => {
+            match str_field(data, "session_key").filter(|k| !k.is_empty()) {
+                Some(k) => SessionIdentity::BySessionKeyOrAdmin(k),
+                // Fail closed: a frame with no session names nobody, and the
+                // widest possible delivery is the wrong answer to "who owns
+                // this".
+                None => SessionIdentity::OperatorOnly,
+            }
+        }
+
         // --- stream.* frames that carry their session key directly ---
         "stream.run_accepted"
-        | "stream.ask_user"
-        | "stream.clarification_ended"
         | "stream.session_updated"
         // The peer-echo of a human's message. Session-scoped for the same
         // reason its transcript is: the audience that may read the row is
@@ -2003,6 +2021,46 @@ mod tests {
     /// than being retired: it no longer names a producer, it asserts the
     /// **policy** that survives them.
     ///
+    /// The clarification event face must admit exactly who its RPC faces admit.
+    ///
+    /// The same verb has three faces: `clarification.pending` (an unrestricted
+    /// caller sees every item), `clarification.resolve` (accepts any session
+    /// `visibility::session_visible` admits, which for an operator is all of
+    /// them), and these two frames. While they were plain `BySessionKey` the
+    /// three disagreed: an operator's pending LIST showed questions whose CARDS
+    /// were never delivered, and they held resolve authority over a question
+    /// they had not been shown. Same divergence and same fix as the twin
+    /// `approval.*` family took on 2026-08-08.
+    ///
+    /// The empty-key arm is not a leftover: a frame that names no session names
+    /// nobody, and `Global` there would make a malformed payload the widest
+    /// possible delivery.
+    #[test]
+    fn the_clarification_frames_admit_the_same_callers_their_rpc_faces_do() {
+        for topic in ["stream.ask_user", "stream.clarification_ended"] {
+            assert_eq!(
+                session_identity_of(
+                    topic,
+                    Some(&serde_json::json!({ "session_key": "agent:main:main" }))
+                ),
+                SessionIdentity::BySessionKeyOrAdmin("agent:main:main".to_string()),
+                "`{topic}` must reach the session owner AND an operator — \
+                 `clarification.pending` already lists it to both, and \
+                 `clarification.resolve` already accepts it from both."
+            );
+            assert_eq!(
+                session_identity_of(topic, Some(&serde_json::json!({ "session_key": "" }))),
+                SessionIdentity::OperatorOnly,
+                "`{topic}` with an empty session key names nobody; fail closed"
+            );
+            assert_eq!(
+                session_identity_of(topic, None),
+                SessionIdentity::OperatorOnly,
+                "`{topic}` with no payload names nobody; fail closed"
+            );
+        }
+    }
+
     /// The unregistered names below matter more than any real topic would:
     /// they are what an author who has never read this file will invent.
     #[test]
@@ -2167,11 +2225,16 @@ mod tests {
                 | GatewayEventFrame::RunRetrying { run_id, .. } => {
                     SessionIdentity::ByRunId(run_id.clone())
                 }
+                // The clarification pair is admin-inclusive because its two RPC
+                // faces already are — see
+                // `the_clarification_frames_admit_the_same_callers_their_rpc_faces_do`.
+                GatewayEventFrame::AskUser { session_key, .. }
+                | GatewayEventFrame::ClarificationEnded { session_key, .. } => {
+                    SessionIdentity::BySessionKeyOrAdmin(session_key.clone())
+                }
                 // Carries session_key directly — routed by session, not run
                 // (see the frame's own doc comment).
-                GatewayEventFrame::AskUser { session_key, .. }
-                | GatewayEventFrame::ClarificationEnded { session_key, .. }
-                | GatewayEventFrame::SessionUpdated { session_key, .. }
+                GatewayEventFrame::SessionUpdated { session_key, .. }
                 | GatewayEventFrame::SessionUserMessage { session_key, .. } => {
                     SessionIdentity::BySessionKey(session_key.clone())
                 }
@@ -2294,6 +2357,8 @@ mod tests {
                 session_key: "agent:main:main".into(),
                 question: "q".into(),
                 options: vec![],
+                questions: vec![],
+                answered: 0,
             },
             GatewayEventFrame::ClarificationEnded {
                 session_key: "agent:main:main".into(),

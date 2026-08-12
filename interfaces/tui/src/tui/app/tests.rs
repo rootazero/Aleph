@@ -771,6 +771,10 @@ fn handle_ask_user_shows_dialog() {
         session_key: "telegram:bot:1:u1".into(),
         question: "Allow file write?".into(),
         options: vec!["Allow".into(), "Deny".into()],
+        // A core that predates the structured view sends neither; the overlay
+        // must still render from the flat pair.
+        questions: vec![],
+        answered: 0,
     };
     state.handle_gateway_event(event);
 
@@ -779,6 +783,91 @@ fn handle_ask_user_shows_dialog() {
     // The dialog keeps the clarification key so the answer can resolve it.
     assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Allow file write?");
+    assert_eq!(dialog.options, vec!["Allow", "Deny"]);
+}
+
+/// With the structured view the overlay must show what the flat pair
+/// structurally cannot: the per-option description, the short header, and the
+/// position within a multi-question request. Indices stay 1-based and
+/// unchanged, which is what lets the answer keep being a bare number.
+#[test]
+fn handle_ask_user_renders_the_structured_question() {
+    use aleph_protocol::{AskUserOption, AskUserQuestion};
+
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::AskUser {
+        run_id: "run-1".into(),
+        seq: 3,
+        session_key: "telegram:bot:1:u1".into(),
+        question: "Ticket id?".into(),
+        options: vec![],
+        questions: vec![
+            AskUserQuestion {
+                id: "env".into(),
+                header: Some("Env".into()),
+                prompt: "Deploy where?".into(),
+                options: vec![AskUserOption {
+                    label: "staging".into(),
+                    description: Some("shared QA".into()),
+                }],
+                multi_select: false,
+                secret: false,
+            },
+            AskUserQuestion {
+                id: "ticket".into(),
+                header: None,
+                prompt: "Ticket id?".into(),
+                options: vec![],
+                multi_select: false,
+                secret: false,
+            },
+        ],
+        answered: 1,
+    });
+
+    let dialog = state.dialog.as_ref().unwrap();
+    // Cursor at 1 ⇒ the SECOND question, not the first.
+    assert!(
+        dialog.question.contains("Ticket id?"),
+        "{}",
+        dialog.question
+    );
+    assert!(dialog.question.contains("(2/2)"), "{}", dialog.question);
+}
+
+/// The description reaches this surface at all — the defect the structured
+/// view exists to close (a channel rendered `label — description` while every
+/// other face rendered a bare label).
+#[test]
+fn handle_ask_user_shows_option_descriptions() {
+    use aleph_protocol::{AskUserOption, AskUserQuestion};
+
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::AskUser {
+        run_id: "run-1".into(),
+        seq: 1,
+        session_key: "telegram:bot:1:u1".into(),
+        question: "Deploy where?".into(),
+        options: vec!["staging".into()],
+        questions: vec![AskUserQuestion {
+            id: "env".into(),
+            header: Some("Env".into()),
+            prompt: "Deploy where?".into(),
+            options: vec![AskUserOption {
+                label: "staging".into(),
+                description: Some("shared QA".into()),
+            }],
+            multi_select: false,
+            secret: false,
+        }],
+        answered: 0,
+    });
+
+    let dialog = state.dialog.as_ref().unwrap();
+    assert_eq!(dialog.options, vec!["staging — shared QA"]);
+    assert!(dialog.question.starts_with("[Env] "), "{}", dialog.question);
+    // Single question ⇒ no position marker.
+    assert!(!dialog.question.contains("(1/"), "{}", dialog.question);
 }
 
 #[test]

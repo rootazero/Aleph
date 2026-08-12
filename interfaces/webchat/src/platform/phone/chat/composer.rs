@@ -232,13 +232,21 @@ pub fn PhoneComposer() -> impl IntoView {
         input_text.set(String::new());
         let dash = dashboard;
         spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
-                Ok(true) => {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply)
+                .await
+                .map(|o| (o.accepted, o.is_finished()))
+            {
+                Ok((true, finished)) => {
                     chat.push_user_message(&reply);
-                    dash.pending_clarifications
-                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    // Keep the card while questions remain — see the wide
+                    // composer's twin arm for why dropping it here strands the
+                    // rest of the walk.
+                    if finished {
+                        dash.pending_clarifications
+                            .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    }
                 }
-                Ok(false) => {
+                Ok((false, _)) => {
                     dash.pending_clarifications
                         .update(|l| l.retain(|p| p.session_key != ask.session_key));
                     input_text.set(reply);

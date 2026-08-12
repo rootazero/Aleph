@@ -1,14 +1,14 @@
-// Command Completion System
-//
-// This module provides a unified command registry for Aleph's command mode.
-// It aggregates commands from multiple sources:
-// - Builtin commands (from config.toml rules with ^/ prefix)
-// - MCP tools (dynamic, from connected MCP servers)
-// - User prompts (from config.toml rules)
-// - Skills (from ~/.aleph/skills/)
-//
-// The command tree is exposed to UI clients as a hierarchical JSON tree over
-// JSON-RPC (`commands.list`; see `gateway::handlers::commands`).
+//! Slash command parsing for Aleph.
+//!
+//! Resolves `/foo` inputs against the unified [`ToolCatalog`]
+//! (in `tool_metadata`). Holds **no registry of its own** — every
+//! source-specific field the parser produces (`Builtin` / `Native` /
+//! `Plugin` collapsing into `CommandContext::Builtin`, `Mcp`, `Skill`,
+//! `Custom`) is derived from a single `UnifiedTool` lookup, so the
+//! six [`ToolSource`] variants stay in lockstep with the catalog.
+//!
+//! Discovery (the hierarchical tree surfaced via `commands.list`)
+//! lives in `gateway::handlers::commands`.
 
 mod parser;
 

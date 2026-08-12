@@ -128,7 +128,8 @@ impl PreflightPipeline {
 
     /// Create an empty pipeline (no-op).
     #[must_use]
-    pub fn empty() -> Self {
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
         Self::new(Vec::new())
     }
 
@@ -136,8 +137,12 @@ impl PreflightPipeline {
     /// before history is rewritten again, how much a rewrite must free to be
     /// worth the invalidation, and the fill ratio at/above which both are
     /// waived. See the field docs and [`run`](Self::run).
+    ///
+    /// `pub(crate)` because the only real consumer is the production
+    /// [`default_pipeline`] builder; collapsing this from `pub` keeps the
+    /// shallow configuration surface visible to external callers narrow.
     #[must_use]
-    pub fn with_cache_stability(
+    pub(crate) fn with_cache_stability(
         mut self,
         cut_quantum: usize,
         min_savings_ratio: f64,
@@ -151,8 +156,12 @@ impl PreflightPipeline {
 
     /// Set the preventive-band floor: below this fill ratio
     /// [`run`](Self::run) skips every stage and frees nothing.
+    ///
+    /// `pub(crate)` for the same reason as [`with_cache_stability`]: only
+    /// [`default_pipeline`] builds a real pipeline; tests in this module
+    /// reach the same field directly through the closure.
     #[must_use]
-    pub fn with_min_pressure_ratio(mut self, ratio: f64) -> Self {
+    pub(crate) fn with_min_pressure_ratio(mut self, ratio: f64) -> Self {
         self.min_pressure_ratio = ratio;
         self
     }

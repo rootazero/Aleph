@@ -757,6 +757,32 @@ The secret pattern catalogs live in `src/secrets/leak_detector.rs` and
 `-----BEGIN[A-Z ]*PRIVATE KEY-----` in both, so bare PKCS#8 headers cannot slip
 one catalog but not the other).
 
+### Asking a human FOR a secret is a third path, and masking is not its answer
+
+`ask_user` questions carry a `secret` flag (codex `isSecret`). It is **not** a
+display property. A reply typed into Telegram / Slack / iMessage is a permanent
+message in a third party's datastore, and nothing Aleph does afterwards reaches
+it — masking our copy would protect the one place that was never the exposure.
+
+So the flag changes **transport**, not rendering
+(`src/clarification/ask.rs`):
+
+- when the turn's channel is a **registered** `ChannelRegistry` transport, a
+  secret question is **refused outright** with an actionable error telling the
+  model to have the user set the value another way (Panel, configuration) and
+  continue without it;
+- otherwise — the Panel's `gui:chat` pseudo-channel, which is never registered
+  — the question goes **only** onto the gateway event bus, where the Panel and
+  TUI render a masked input.
+
+Two consequences worth stating rather than discovering: the model still
+receives the answer (it asked for a value it needs, and withholding it would
+make the tool pointless), and the answer still lands in the session event log
+like any other tool result. The property bought here is precisely one — **a
+credential never travels over a third-party channel** — and it is structural:
+it follows from the shape of the delivery ladder, not from a caller remembering
+to check.
+
 ---
 
 ## Permission System

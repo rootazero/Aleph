@@ -328,19 +328,57 @@ pub fn render_fallback_notice(model: &str, provider: &str, original: Option<&str
 /// (`stream.ask_user`). Previously dropped on the CLI follow path, leaving an
 /// interactive run looking hung. Shows the question and any offered options so
 /// the user knows an answer is expected.
-pub fn render_ask_user(question: &str, options: &[String]) -> String {
+pub fn render_ask_user(
+    question: &str,
+    options: &[String],
+    questions: &[aleph_protocol::AskUserQuestion],
+    answered: usize,
+) -> String {
     let glyph = if use_unicode() { "❓" } else { "[?]" };
-    let head = paint(Style::Header, &format!("{glyph} {question}"));
-    if options.is_empty() {
-        format!("  {head}")
-    } else {
-        let opts = options
-            .iter()
-            .map(|o| format!("    • {}", paint(Style::Info, o)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!("  {head}\n{opts}")
+
+    // Structured view when core sent one — it is the only shape that carries
+    // the per-option description and the position in a multi-question request.
+    // Out-of-range cursor (a frame that raced a completion) falls back rather
+    // than printing nothing.
+    let (prompt, labels) = match questions.get(answered) {
+        Some(current) => {
+            let position = if questions.len() > 1 {
+                format!("({}/{}) ", answered + 1, questions.len())
+            } else {
+                String::new()
+            };
+            let header = current
+                .header
+                .as_deref()
+                .map(|h| format!("[{h}] "))
+                .unwrap_or_default();
+            let labels: Vec<String> = current
+                .options
+                .iter()
+                .map(|o| match o.description.as_deref() {
+                    Some(d) if !d.trim().is_empty() => format!("{} — {d}", o.label),
+                    _ => o.label.clone(),
+                })
+                .collect();
+            (format!("{position}{header}{}", current.prompt), labels)
+        }
+        None => (question.to_string(), options.to_vec()),
+    };
+
+    let head = paint(Style::Header, &format!("{glyph} {prompt}"));
+    if labels.is_empty() {
+        return format!("  {head}");
     }
+    // NUMBERED, not bulleted: the number IS the answer. This surface only
+    // watches the run — the reply is typed on whichever surface owns the
+    // session — so a bullet leaves the reader with no way to name a choice.
+    let opts = labels
+        .iter()
+        .enumerate()
+        .map(|(i, o)| format!("    {}. {}", i + 1, paint(Style::Info, o)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("  {head}\n{opts}")
 }
 
 /// Dimmed line when the model signals it is uncertain about how to proceed

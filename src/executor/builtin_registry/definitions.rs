@@ -1774,7 +1774,26 @@ mod tests {
     /// six MCP bridge tools). Not new spending either — see the paragraph
     /// above for why they were invisible and why they were closed in the same
     /// pass rather than logged as a gap.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 97_277;
+    ///
+    /// 2026-08-12, the human-gate round: 97,277 -> 97,533 B (+256 B, of which
+    /// `ask_user` +119 B and `scratchpad` +137 B). This one IS new spending,
+    /// and it buys five capabilities the model cannot discover from the schema
+    /// alone. Against the three questions: (1) every added clause is a runtime
+    /// fact — the four-question cap, that `question` and `questions` are two
+    /// shapes of one call, that free text is accepted so an "other" choice is
+    /// wasted, that `secret` REFUSES a messaging channel rather than merely
+    /// masking, and that `request_approval` returns a verdict in
+    /// `decision`/`feedback`; (2) a stronger model still cannot infer any of
+    /// them, and the "never add an other choice" clause is the one that pays
+    /// for itself immediately — without it a model spends an option slot per
+    /// call on something the interpreter already does; (3) nothing else says
+    /// them, and the plan-gate sentence lives on `scratchpad` rather than in
+    /// the system prompt precisely because a single tool owns it (R9's second
+    /// ruler). Paid for in part by cutting `ask_user`'s "use this when the task
+    /// is ambiguous…" sentence (-226 B against the first draft): telling a
+    /// strong model when a decision is the user's to make is question 1's
+    /// second half.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 97_533;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -1970,7 +1989,31 @@ mod tests {
     /// 3,553. Nothing is trimmed in this round; measuring and cutting are
     /// separate acts, and cutting an argument description is a judgement about
     /// what the model can still call correctly without it.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 90_215;
+    ///
+    /// 2026-08-12, the human-gate round: 90,215 -> 91,517 B (+1,302 B).
+    /// `ask_user` gained a `questions[]` list form and `scratchpad` a
+    /// `request_approval` action. Both tools are in `default_core_tools`, so
+    /// this is paid on every request, not on demand.
+    ///
+    /// **Most of it is structural, not prose.** `AskUserQuestionArg` is an
+    /// object nested inside an array, and its `choices` field re-inlines the
+    /// whole `AskUserChoice` untagged enum that the flat `choices` field
+    /// already inlines — a schema generator emits that shape twice whether or
+    /// not a single word of documentation is attached to it. Argument doc
+    /// comments were trimmed to what the schema cannot state on its own (a
+    /// default, or a relationship to another field, -282 B against the first
+    /// draft) and the semantics left to live once in `DESCRIPTION`; that is the
+    /// whole of the prose half. Against the three questions: (1) the remaining
+    /// argument descriptions are defaults and field relationships, which are
+    /// runtime facts; (2) a stronger model still cannot guess that omitted ids
+    /// become `q1`, `q2`, …; (3) the removed sentences said what `DESCRIPTION`
+    /// already says, which is precisely the near-repeat question 3 is about.
+    ///
+    /// The alternative — dropping the flat `question`/`choices` pair so only
+    /// one shape is emitted — was rejected: it is the shape every existing
+    /// prompt, skill and transcript produces, and paying ~1.3 kB to keep them
+    /// working is cheaper than a silent argument-shape break.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 91_517;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

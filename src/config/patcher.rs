@@ -21,13 +21,23 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 /// Cached JSON Schema for Config validation (generated once, reused).
+///
+/// The schema is derived from the same `Config` type that the validator
+/// consumes, so a serialization failure here means the type itself is
+/// unsound: panicking is the only honest response. A "silently accept
+/// everything" sentinel (`{"not": {}}`) was tried and immediately rejected
+/// — it would let every config edit bypass validation, which is exactly
+/// the silent-failure mode the rest of this module guards against.
 fn cached_config_schema() -> &'static serde_json::Value {
     static SCHEMA: OnceLock<serde_json::Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
         let schema = generate_config_schema();
         serde_json::to_value(&schema).unwrap_or_else(|e| {
-            tracing::error!("Config schema serialization failed: {}", e);
-            serde_json::json!({"not": {}})
+            panic!(
+                "Config schema serialization failed — the schema is generated from the \
+                 same `Config` struct the validator consumes, so this is a type-system \
+                 soundness failure, not a recoverable error: {e}"
+            );
         })
     })
 }
@@ -165,7 +175,13 @@ impl ConfigPatcher {
     }
 
     /// Read the config file's mtime and store it for later conflict detection.
-    pub async fn record_mtime(&self) {
+    ///
+    /// `pub(crate)` — only the `ConfigPatcher` itself reads `last_known_mtime`
+    /// (via [`check_conflict`](Self::check_conflict)); the public `apply` /
+    /// `rollback` / `dry_run` reach this through internal entry points. Keeping
+    /// it crate-local avoids advertising a state-mutation surface that no
+    /// external caller should ever invoke.
+    pub(crate) async fn record_mtime(&self) {
         match tokio::fs::metadata(&self.config_path).await {
             Ok(meta) => match meta.modified() {
                 Ok(mtime) => {

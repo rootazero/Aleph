@@ -6,11 +6,62 @@
 use std::time::{Duration, Instant};
 
 use aleph_protocol::{
-    summarize_tool_input, AgentTracePresentationPreset, AgentTraceToolResult, StreamEvent,
+    summarize_tool_input, AgentTracePresentationPreset, AgentTraceToolResult, AskUserQuestion,
+    StreamEvent,
 };
 
 use super::super::slash::ToolProgressMode;
 use super::{Action, AppState, ChatMessage};
+
+/// Flatten an `AskUser` frame into the `(prompt, option labels)` pair the
+/// dialog overlay renders.
+///
+/// Prefers the structured `questions` view: it carries the short header, the
+/// per-option `description`, and the position within a multi-question request —
+/// none of which the flat `question` / `options` pair can express, which is why
+/// this overlay showed a bare label where a messaging channel showed
+/// `label — description`.
+///
+/// Falls back to the flat pair whenever the structured view is absent or its
+/// cursor is out of range (a frame that raced a completion), so the overlay
+/// renders *something* rather than an empty box.
+fn render_ask_user(
+    question: &str,
+    options: &[String],
+    questions: &[AskUserQuestion],
+    answered: usize,
+) -> (String, Vec<String>) {
+    let Some(current) = questions.get(answered) else {
+        return (question.to_string(), options.to_vec());
+    };
+    let position = if questions.len() > 1 {
+        format!("({}/{}) ", answered + 1, questions.len())
+    } else {
+        String::new()
+    };
+    let header = current
+        .header
+        .as_deref()
+        .map(|h| format!("[{h}] "))
+        .unwrap_or_default();
+    let hint = if current.multi_select {
+        "\n(pick one or more — reply with comma-separated numbers)"
+    } else {
+        ""
+    };
+    let labels = current
+        .options
+        .iter()
+        .map(|o| match o.description.as_deref() {
+            Some(d) if !d.trim().is_empty() => format!("{} — {d}", o.label),
+            _ => o.label.clone(),
+        })
+        .collect();
+    (
+        format!("{position}{header}{}{hint}", current.prompt),
+        labels,
+    )
+}
 
 impl AppState {
     /// Request application quit. Sets `should_quit` flag.
@@ -200,8 +251,15 @@ impl AppState {
                 session_key,
                 question,
                 options,
+                questions,
+                answered,
                 ..
             } => {
+                // The structured view when core sends one, the flat projection
+                // otherwise. Indices are identical either way, which is what
+                // lets the overlay keep answering with a bare 1-based number.
+                let (question, options) =
+                    render_ask_user(&question, &options, &questions, answered);
                 self.show_dialog(session_key, question, options);
                 Action::None
             }

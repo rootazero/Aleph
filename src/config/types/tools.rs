@@ -77,6 +77,11 @@ impl ToolServiceConfig {
     }
 
     /// Resolve the per-tool overrides as `Duration` values.
+    ///
+    /// `pub(crate)` — the only consumer is the `ToolService` constructor that
+    /// builds the `TimeoutLayer` overrides; promoting this to the public API
+    /// would advertise a `Duration` surface that callers should reach via the
+    /// `per_tool_seconds` field directly.
     pub fn per_tool_durations(&self) -> HashMap<String, Duration> {
         self.per_tool_seconds
             .iter()
@@ -447,7 +452,11 @@ impl UnifiedToolsConfig {
         self.enabled && self.native.system_info.as_ref().is_none_or(|c| c.enabled)
     }
 
-    /// Get filesystem allowed roots
+    /// Get filesystem allowed roots.
+    ///
+    /// `pub(crate)` — no external caller; left at crate scope so the helper
+    /// stays useful to other `config` modules without advertising a public
+    /// accessor that drifts from the underlying `NativeToolsConfig` shape.
     pub fn fs_allowed_roots(&self) -> Vec<String> {
         self.native
             .fs
@@ -455,7 +464,9 @@ impl UnifiedToolsConfig {
             .map_or(Vec::new(), |c| c.allowed_roots.clone())
     }
 
-    /// Get git allowed repos
+    /// Get git allowed repos.
+    ///
+    /// `pub(crate)` for the same reason as [`fs_allowed_roots`](Self::fs_allowed_roots).
     pub fn git_allowed_repos(&self) -> Vec<String> {
         self.native
             .git
@@ -473,7 +484,13 @@ impl UnifiedToolsConfig {
         self.enabled && self.native.clipboard.as_ref().is_none_or(|c| c.enabled)
     }
 
-    /// Check if screen capture service is enabled
+    /// Check if screen capture service is enabled.
+    ///
+    /// `pub(crate)` — there is no production consumer of this accessor in the
+    /// current code base; the unified tools surface is consulted per-tool
+    /// through the `native.screen_capture` field directly. Kept crate-scoped
+    /// so the master-switch / per-tool enable ladder stays available to
+    /// sibling `config` modules without inflating the public API.
     pub fn is_screen_capture_enabled(&self) -> bool {
         self.enabled
             && self
@@ -483,22 +500,35 @@ impl UnifiedToolsConfig {
                 .is_none_or(|c| c.enabled)
     }
 
-    /// Get screen capture configuration
+    /// Get screen capture configuration.
+    ///
+    /// `pub(crate)` — same rationale as [`is_screen_capture_enabled`](Self::is_screen_capture_enabled).
     pub fn screen_capture_config(&self) -> ScreenCaptureToolConfig {
         self.native.screen_capture.clone().unwrap_or_default()
     }
 
-    /// Check if search tool service is enabled
+    /// Check if search tool service is enabled.
+    ///
+    /// `pub(crate)` — the search tool is enabled through
+    /// `native.search` directly; this accessor is a convenience for sibling
+    /// `config` modules and tests.
     pub fn is_search_tool_enabled(&self) -> bool {
         self.enabled && self.native.search.as_ref().is_none_or(|c| c.enabled)
     }
 
-    /// Get search tool configuration
+    /// Get search tool configuration.
+    ///
+    /// `pub(crate)` — same rationale as [`is_search_tool_enabled`](Self::is_search_tool_enabled).
     pub fn search_tool_config(&self) -> SearchToolConfig {
         self.native.search.clone().unwrap_or_default()
     }
 
-    /// Get all enabled MCP servers
+    /// Get all enabled MCP servers.
+    ///
+    /// `pub(crate)` — there is no external caller; the MCP server roster is
+    /// read through the `mcp` field directly by the MCP manager. Kept
+    /// crate-scoped so the master-switch / per-server enable ladder remains
+    /// available to sibling `config` modules.
     pub fn enabled_mcp_servers(&self) -> Vec<(&String, &McpServerConfig)> {
         self.mcp
             .iter()
