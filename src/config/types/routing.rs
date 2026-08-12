@@ -188,9 +188,13 @@ impl RoutingRuleConfig {
         self.get_rule_type() == "keyword"
     }
 
-    /// Get provider name (required for command rules)
+    /// Get provider name (required for command rules).
+    ///
+    /// `pub(crate)` — still consumed by the in-module tests and a follow-up
+    /// wiring pass for the (currently-unimplemented) command-rule dispatch
+    /// enum; kept crate-scoped so the public capture surface stays narrow.
     #[must_use]
-    pub fn get_provider(&self) -> Option<&str> {
+    pub(crate) fn get_provider(&self) -> Option<&str> {
         if self.is_command_rule() {
             self.provider.as_deref()
         } else {
@@ -198,9 +202,11 @@ impl RoutingRuleConfig {
         }
     }
 
-    /// Check if `strip_prefix` should be applied
+    /// Check if `strip_prefix` should be applied.
+    ///
+    /// `pub(crate)` — see [`get_provider`](Self::get_provider).
     #[must_use]
-    pub fn should_strip_prefix(&self) -> bool {
+    pub(crate) fn should_strip_prefix(&self) -> bool {
         if self.is_keyword_rule() {
             false
         } else {
@@ -208,15 +214,19 @@ impl RoutingRuleConfig {
         }
     }
 
-    /// Get intent type (with default value)
+    /// Get intent type (with default value).
+    ///
+    /// `pub(crate)` — see [`get_provider`](Self::get_provider).
     #[must_use]
-    pub fn get_intent_type(&self) -> &str {
+    pub(crate) fn get_intent_type(&self) -> &str {
         self.intent_type.as_deref().unwrap_or("general")
     }
 
-    /// Get preferred model ID
+    /// Get preferred model ID.
+    ///
+    /// `pub(crate)` — see [`get_provider`](Self::get_provider).
     #[must_use]
-    pub fn get_preferred_model(&self) -> Option<&str> {
+    pub(crate) fn get_preferred_model(&self) -> Option<&str> {
         self.preferred_model.as_deref()
     }
 }

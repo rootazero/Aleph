@@ -156,9 +156,13 @@ impl GenerationConfig {
         }
     }
 
-    /// Get a provider config by name (checks typed maps first, then legacy)
+    /// Get a provider config by name (checks typed maps first, then legacy).
+    ///
+    /// `pub(crate)` — superseded by [`merged_providers`](Self::merged_providers)
+    /// for routing/lookup; the typed-map-first shape is preserved for sibling
+    /// `config` modules and the in-module test.
     #[must_use]
-    pub fn get_provider(&self, name: &str) -> Option<&GenerationProviderConfig> {
+    pub(crate) fn get_provider(&self, name: &str) -> Option<&GenerationProviderConfig> {
         self.image_providers
             .get(name)
             .or_else(|| self.video_providers.get(name))
@@ -168,9 +172,11 @@ impl GenerationConfig {
             .or_else(|| self.providers.get(name))
     }
 
-    /// Get all enabled providers (typed maps + legacy, typed maps take priority)
+    /// Get all enabled providers (typed maps + legacy, typed maps take priority).
+    ///
+    /// `pub(crate)` — superseded by [`merged_providers`](Self::merged_providers).
     #[must_use]
-    pub fn get_enabled_providers(&self) -> Vec<(&str, &GenerationProviderConfig)> {
+    pub(crate) fn get_enabled_providers(&self) -> Vec<(&str, &GenerationProviderConfig)> {
         let mut seen = std::collections::HashSet::new();
         let mut result = Vec::new();
 
@@ -203,8 +209,12 @@ impl GenerationConfig {
     /// Get providers that support a specific generation type.
     ///
     /// Typed provider maps take priority over legacy `providers` section.
+    ///
+    /// `pub(crate)` — superseded by [`merged_providers`](Self::merged_providers) for
+    /// the runtime dispatch path; kept crate-scoped for the in-module typed-merge
+    /// test and any future sibling `config` consumer that needs the typed-map shape.
     #[must_use]
-    pub fn get_providers_for_type(
+    pub(crate) fn get_providers_for_type(
         &self,
         gen_type: GenerationType,
     ) -> Vec<(&str, &GenerationProviderConfig)> {

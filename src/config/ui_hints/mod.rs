@@ -1,13 +1,13 @@
-//! UI Hints system for configuration field metadata.
+//! UI Hints types for configuration field metadata.
 //!
-//! This module provides a system for attaching UI-related metadata to configuration fields,
-//! including labels, help text, grouping, ordering, and sensitivity flags. This metadata
-//! enables UI components to render configuration forms with proper context and organization.
-
-mod definitions;
-mod macros;
-
-pub use definitions::build_ui_hints;
+//! The producer half (the `build_ui_hints()` builder and all 686 lines of
+//! declarative field-path literals in `definitions.rs`/`macros.rs`) was found
+//! to have zero consumers in the 2026-08-12 static audit: the CLI is the only
+//! production caller of `config.schema` and discards the `ui_hints` field, and
+//! the Panel frontend never calls `config.schema` at all. The DTO is retained
+//! so the wire shape (`config.schema.ui_hints`) stays stable for any future
+//! schema-driven settings form, but every field is empty until such a consumer
+//! is actually wired.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,19 @@ impl ConfigUiHints {
     }
 }
 
+/// Build empty UI hints.
+///
+/// The 2026-08-12 audit confirmed the previous declarative producer had zero
+/// downstream consumers (CLI discarded the field, Panel never called
+/// `config.schema`). This stub is kept so the wire-shape contract is
+/// preserved while the producer is intentionally retired. Re-introduce a
+/// `definitions.rs` builder when a genuine schema-driven settings form is
+/// actually wired.
+#[must_use]
+pub fn build_ui_hints() -> ConfigUiHints {
+    ConfigUiHints::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +95,13 @@ mod tests {
     #[test]
     fn test_empty_hints() {
         let hints = ConfigUiHints::new();
+        assert!(hints.groups.is_empty());
+        assert!(hints.fields.is_empty());
+    }
+
+    #[test]
+    fn test_build_ui_hints_returns_empty() {
+        let hints = build_ui_hints();
         assert!(hints.groups.is_empty());
         assert!(hints.fields.is_empty());
     }
