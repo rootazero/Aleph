@@ -445,10 +445,54 @@ async fn handle_process_action(
             let secs = timeout
                 .unwrap_or(WAIT_DEFAULT_TIMEOUT_SECS)
                 .clamp(1, WAIT_MAX_TIMEOUT_SECS);
-            match registry
-                .wait(id, caller.as_deref(), Duration::from_secs(secs))
-                .await
-            {
+            // A mid-loop steer lands in the session log and the running loop
+            // reads it at its next turn boundary — but this park *is* the turn,
+            // for up to `WAIT_MAX_TIMEOUT_SECS`. Without this arm the user's
+            // "actually, skip the integration tests" is durably written, the
+            // send is reported successful, and the agent ignores it for the
+            // rest of the build. Same rule `subagent{action:"wait"}` follows;
+            // the registry's own `wait` stays untouched, because a second
+            // signal in its signature would be a second source for six other
+            // call sites that do not want one.
+            //
+            // Armed before the `select!` so a steer landing in the gap between
+            // here and the first poll is remembered rather than dropped.
+            let mut steer = crate::session::steer_signal::watch_current_turn();
+            let outcome = tokio::select! {
+                biased;
+                () = steer.steered() => {
+                    // Re-read rather than report from before the park: what the
+                    // model gets must be the frontier as of the moment we let
+                    // go — the same reason the registry's own timeout arm
+                    // re-polls instead of extrapolating.
+                    match registry.poll(id, caller.as_deref()) {
+                        PollOutcome::Running { elapsed_ms, partial } => {
+                            return info_output(running_payload(
+                                id,
+                                elapsed_ms,
+                                partial,
+                                Some(format!(
+                                    "The user sent new input, so this wait returned early \
+                                     instead of using its full {secs}s window — their \
+                                     message is in your context, read it before deciding \
+                                     what to do next. The process was NOT killed; it is \
+                                     still running and can be waited on again with \
+                                     {{\"process_action\":\"wait\",\"process_id\":{id}}}."
+                                )),
+                            ));
+                        }
+                        // Finished on the very instant we were woken: the result
+                        // beats the interruption. Reporting "still running" for
+                        // a job that is done would cost the model another whole
+                        // turn to discover otherwise.
+                        PollOutcome::Done(out) => return *out,
+                        PollOutcome::Killed => WaitOutcome::Killed,
+                        PollOutcome::NotFound => WaitOutcome::NotFound,
+                    }
+                }
+                outcome = registry.wait(id, caller.as_deref(), Duration::from_secs(secs)) => outcome,
+            };
+            match outcome {
                 // Finished within the window — surface the captured output.
                 WaitOutcome::Done(out) => *out,
                 WaitOutcome::Killed => info_output(serde_json::json!({
@@ -1288,6 +1332,149 @@ mod tests {
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 }
                 panic!("released job never completed");
+            })
+            .await;
+    }
+
+    /// Round-10 — a parked `wait` must come back when the user interjects.
+    ///
+    /// `wait` sleeps for up to `WAIT_MAX_TIMEOUT_SECS` (170 s). A mid-loop steer
+    /// is written to the session log and the running loop reads that log at its
+    /// next turn boundary — but this park *is* the turn, so without the steer
+    /// arm the user's correction sits unread for the rest of the build while
+    /// the client is told the send succeeded.
+    ///
+    /// Asserted on the consumer end and against a wall clock: the wait really
+    /// returned early, it says why, and it says the process is untouched.
+    /// Removing the `steer.steered()` arm makes this run the full 170 s and
+    /// blow the 15 s bound.
+    #[tokio::test]
+    async fn a_steer_cuts_a_parked_process_wait_short() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(TeeThenBlockSandbox {
+            release: release.clone(),
+        });
+        let tool = BashExecTool::new().with_sandbox(sandbox);
+        let session = SessionKey::ephemeral("bash-steer-wait");
+        let turn = TurnContext {
+            session_key: session.clone(),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+        };
+
+        SESSION_ID
+            .scope(session.clone(), async {
+                let spawn = tool
+                    .call(BashExecArgs {
+                        cmd: "cargo build".to_string(),
+                        working_dir: None,
+                        timeout_seconds: None,
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: Vec::new(),
+                        background: true,
+                        process_action: None,
+                        process_id: None,
+                        justification: None,
+                    })
+                    .await
+                    .unwrap();
+                let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+                let id = v["process_id"].as_u64().expect("process_id");
+
+                let steered = session.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    crate::session::steer_signal::note_steer(&steered);
+                });
+
+                // `TURN_CONTEXT` is what production scopes at the tool-dispatch
+                // chokepoint, and it is where the watch reads its session.
+                // Bounded, not merely measured: with the arm removed this parks
+                // for its full 170 s, and a test that wedges costs the suite its
+                // signal — a red test has to be red quickly.
+                let out = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    TURN_CONTEXT.scope(turn, handle_process_action("wait", Some(id), Some(170))),
+                )
+                .await
+                .expect("a steered wait must not run out its window");
+
+                let v: serde_json::Value = serde_json::from_str(&out.stdout)
+                    .unwrap_or_else(|_| panic!("wait did not answer with a payload: {out:?}"));
+                assert_eq!(
+                    v["status"], "running",
+                    "the job keeps running; only the wait ended"
+                );
+                let msg = v["message"].as_str().unwrap_or_default();
+                assert!(
+                    msg.contains("user sent new input"),
+                    "the report must say WHY it came back early, or a 3-second wait \
+                     reads as 'everything finished': {msg}"
+                );
+                assert!(
+                    msg.contains("NOT killed"),
+                    "the report must say the process survived: {msg}"
+                );
+                release.notify_one();
+            })
+            .await;
+    }
+
+    /// The other half of the same arm: with no `TURN_CONTEXT` (cron, internal
+    /// runs, every other test in this file) the watch is inert and the wait
+    /// must park normally. An inert arm that resolved immediately would turn
+    /// every headless `wait` into a hot loop.
+    #[tokio::test]
+    async fn an_unscoped_process_wait_still_parks_for_its_window() {
+        use crate::routing::session_key::SessionKey;
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(TeeThenBlockSandbox {
+            release: release.clone(),
+        });
+        let tool = BashExecTool::new().with_sandbox(sandbox);
+        let session = SessionKey::ephemeral("bash-steer-inert");
+
+        SESSION_ID
+            .scope(session, async {
+                let spawn = tool
+                    .call(BashExecArgs {
+                        cmd: "cargo build".to_string(),
+                        working_dir: None,
+                        timeout_seconds: None,
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: Vec::new(),
+                        background: true,
+                        process_action: None,
+                        process_id: None,
+                        justification: None,
+                    })
+                    .await
+                    .unwrap();
+                let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+                let id = v["process_id"].as_u64().expect("process_id");
+
+                let out = handle_process_action("wait", Some(id), Some(1)).await;
+                let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+                assert_eq!(v["status"], "running");
+                assert!(
+                    v["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("Still running after waiting"),
+                    "an unscoped wait must report its own timeout, not a steer: {}",
+                    out.stdout
+                );
+                release.notify_one();
             })
             .await;
     }
