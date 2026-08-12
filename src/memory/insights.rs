@@ -80,6 +80,14 @@ pub struct ToolUsageReport {
     /// Per-tool breakdown, sorted by `count` desc then `tool` asc, capped to
     /// the requested top-N.
     pub tools: Vec<ToolBreakdown>,
+    /// `true` when the underlying `get_raw_by_source` returned at least
+    /// `fetch_limit` rows, meaning *more invocations exist* than the report
+    /// counted. The backend's order is newest-first, so the dropped rows are
+    /// the OLDEST in the partition — the right end to lose for a "recent
+    /// behaviour" question, but the consumer (admin RPC, dream stage) needs
+    /// to know the report is partial so it does not declare "the daemon is
+    /// fine" while silently dropping a 200k-row history.
+    pub truncated: bool,
 }
 
 /// Aggregate `ToolInvocation` rows for `agent_id` whose `created_at` is at or
@@ -97,7 +105,20 @@ pub async fn aggregate_tool_usage(
     fetch_limit: usize,
 ) -> Result<ToolUsageReport, AlephError> {
     let rows = fetch_tool_invocation_rows(store, agent_id, fetch_limit).await?;
-    Ok(build_report(&rows, since_unix_secs, window_seconds, top_n))
+    // The backend's order is newest-first, so a truncation at fetch_limit drops
+    // the OLDEST rows in the partition — the right end to lose for a "recent
+    // behaviour" question. The report's `truncated` flag is the consumer's
+    // signal that the daemon saw more invocations than it counted, so an admin
+    // RPC can render "this report covers 50 000 of N (truncated)" instead of
+    // declaring "the daemon is fine" while silently dropping history.
+    let truncated = rows.len() >= fetch_limit;
+    Ok(build_report_with_truncation(
+        &rows,
+        since_unix_secs,
+        window_seconds,
+        top_n,
+        truncated,
+    ))
 }
 
 /// The one read of `ToolInvocation` rows. Both public aggregators go through
@@ -186,11 +207,13 @@ pub async fn aggregate_tool_failures(
     fetch_limit: usize,
 ) -> Result<ToolFailureDigest, AlephError> {
     let rows = fetch_tool_invocation_rows(store, agent_id, fetch_limit).await?;
+    let truncated = rows.len() >= fetch_limit;
     Ok(build_failure_digest(
         &rows,
         since_unix_secs,
         window_seconds,
         top_n,
+        truncated,
     ))
 }
 
@@ -201,8 +224,9 @@ fn build_failure_digest(
     since_unix_secs: i64,
     window_seconds: i64,
     top_n: usize,
+    truncated: bool,
 ) -> ToolFailureDigest {
-    let report = build_report(rows, since_unix_secs, window_seconds, top_n);
+    let report = build_report_with_truncation(rows, since_unix_secs, window_seconds, top_n, truncated);
 
     let mut newest_created_at = 0i64;
     let mut samples: HashMap<&str, Vec<String>> = HashMap::new();
@@ -280,6 +304,20 @@ fn build_report(
     window_seconds: i64,
     top_n: usize,
 ) -> ToolUsageReport {
+    build_report_with_truncation(rows, since_unix_secs, window_seconds, top_n, false)
+}
+
+/// Same as [`build_report`] but lets the caller flag whether the input was
+/// truncated by `fetch_limit`. The aggregator's caller already knows the
+/// truncation; the pure helper used to silently drop the signal. Today the
+/// pure callers (tests, `empty_tool_usage_report`) pass `false`.
+fn build_report_with_truncation(
+    rows: &[RawMemory],
+    since_unix_secs: i64,
+    window_seconds: i64,
+    top_n: usize,
+    truncated: bool,
+) -> ToolUsageReport {
     let mut per_tool: HashMap<String, Acc> = HashMap::new();
     let mut sessions: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut total: u64 = 0;
@@ -345,6 +383,7 @@ fn build_report(
         distinct_tools,
         distinct_sessions: sessions.len(),
         tools,
+        truncated,
     }
 }
 
