@@ -38,6 +38,7 @@ pub(crate) fn outcome_from_str(s: &str) -> ApprovalOutcome {
         "approved" => ApprovalOutcome::Approved,
         "approved_session" => ApprovalOutcome::ApprovedForSession,
         "timeout" => ApprovalOutcome::Timeout,
+        "unavailable" => ApprovalOutcome::Unavailable,
         "denied" => ApprovalOutcome::Denied,
         // (B5-01) Drift guard: if the center ever adds a new outcome string
         // (e.g. `ApprovedWithConstraints`) and forgets to update this consumer,

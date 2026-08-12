@@ -1,6 +1,6 @@
 //! Process-global registry of live PTY sessions.
 //!
-//! Modelled on `sandbox::exec_approval::session_memory`: the registry is a
+//! Modelled on `sandbox::exec_approval::grants`: the registry is a
 //! `LazyLock` singleton so the JSON-RPC handlers stay stateless and reach it
 //! through a free function (`pty::manager()`), exactly like the user-hooks
 //! admin handlers reach the extension manager. The gateway attaches its

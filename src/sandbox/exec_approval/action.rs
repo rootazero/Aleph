@@ -82,6 +82,20 @@ pub struct ApprovalAction {
     ///
     /// [`ApprovalDecisionType::clamped_for`]: crate::exec::socket::ApprovalDecisionType::clamped_for
     pub allowed_decisions: Vec<crate::exec::socket::ApprovalDecisionType>,
+    /// Stable id of the rule that stopped this call
+    /// (`tools::scoped::gate_chain::GateRule::id`), when a named rule did.
+    ///
+    /// The chain's own module doc has always described this token as the one
+    /// "the ledger and the tests key on" — and only the tests ever did. A
+    /// signed approval row that records *that* an approval happened but not
+    /// *which rule required it* cannot answer the question an auditor brings to
+    /// it: whether the gate that fired was one an operator could have removed.
+    /// The prose in [`Self::reason`] carries the same fact for a human, but it
+    /// is a sentence — it gets reworded, and it is not a key.
+    ///
+    /// `None` for actions raised outside the chain (sandbox capability
+    /// elevation, a bare route escalation).
+    pub rule_id: Option<&'static str>,
 }
 
 impl ApprovalAction {
@@ -98,6 +112,7 @@ impl ApprovalAction {
             reason: reason.into(),
             grant_key: Some(grant_fingerprint(name, input)),
             allowed_decisions: crate::exec::allowed_decisions::session_max(),
+            rule_id: None,
         }
     }
 
@@ -107,6 +122,14 @@ impl ApprovalAction {
     #[must_use]
     pub fn offering(mut self, decisions: Vec<crate::exec::socket::ApprovalDecisionType>) -> Self {
         self.allowed_decisions = decisions;
+        self
+    }
+
+    /// Name the chain rule that stopped this call. The value is always a
+    /// `GateRule::id`, never a literal — see [`Self::rule_id`].
+    #[must_use]
+    pub const fn gated_by(mut self, rule_id: &'static str) -> Self {
+        self.rule_id = Some(rule_id);
         self
     }
 
@@ -137,6 +160,7 @@ impl ApprovalAction {
             // `granted_elevations`; there is no persistent tier for it, so the
             // card must not offer one.
             allowed_decisions: crate::exec::allowed_decisions::session_max(),
+            rule_id: None,
         }
     }
 
@@ -154,6 +178,7 @@ impl ApprovalAction {
             // Nothing to remember: a route escalation has no action identity,
             // so neither grant tier can key on it.
             allowed_decisions: crate::exec::allowed_decisions::once_only(),
+            rule_id: None,
         }
     }
 

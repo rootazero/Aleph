@@ -1201,6 +1201,16 @@ impl FakeRequester {
             .map(|a| a.summary.clone())
             .collect()
     }
+
+    /// The chain rule each card named, in order.
+    fn rule_ids(&self) -> Vec<Option<&'static str>> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|a| a.rule_id)
+            .collect()
+    }
 }
 
 #[async_trait::async_trait]
@@ -2435,6 +2445,105 @@ async fn unattended_run_auto_denies_a_confirm_gated_tool_without_prompting() {
     // An ungated tool still runs — the marker is a confirm-gate policy, not a
     // blanket freeze on autonomous work.
     assert!(svc.execute("search", json!({})).await.is_ok());
+}
+
+/// Every card names the rule that raised it, in the token the trail keys on.
+///
+/// `gate_chain`'s module doc has always called `GateRule::id` "the stable token
+/// the ledger and the tests key on" — and only the tests did. A signed approval
+/// row that records THAT an approval happened but not WHICH rule required it
+/// cannot answer the question an auditor brings to it: whether the gate that
+/// fired was one an operator could have removed. The prose in `reason` carries
+/// the same fact for a human, but a sentence is not a key and gets reworded.
+///
+/// The two gates outside `confirmation_rule` are pinned here too: they were the
+/// last places where a card's sentence was still hand-written at its call site.
+#[tokio::test]
+async fn every_card_names_the_rule_that_raised_it() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    // Tier-raised: `agent_delete` is destructive, nothing names it.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-rule-id"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    svc.execute("agent_delete", json!({})).await.unwrap();
+    assert_eq!(requester.rule_ids(), vec![Some("tier_raised")]);
+
+    // The operator-escalation card, whose prose used to be a literal at its
+    // call site — the last gate in this file that did not go through the chain.
+    let operator = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(StubTool {
+        tool_name: "cron_manage",
+    }));
+    let guest = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main("rule-id-operator-gate"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+        })
+        .with_config_approval(StdArc::clone(&operator) as _);
+    guest.execute("cron_manage", json!({})).await.unwrap();
+    assert_eq!(operator.rule_ids(), vec![Some("operator_required")]);
+    assert!(
+        operator.seen.lock().unwrap()[0]
+            .reason
+            .contains("chat-tier device"),
+        "the escalation card keeps its sentence — it just comes from the chain now"
+    );
+}
+
+/// A refusal nobody made must not be reported as one, and must not stick.
+///
+/// The requester here stands in for the four production sites that answer
+/// without ever showing a card: an unwired requester, an unroutable turn, a
+/// Telegram delivery that failed, and a channel with no approval capability.
+/// All four returned `Denied`, so the confirm gate filed a `UserRejected`:
+///
+/// * the intent became sticky for the rest of the session — the SECOND call
+///   below never reaches the requester at all, and
+/// * the sentence handed to the model (which it relays to the person it is
+///   talking to) said the user had declined something they never saw.
+///
+/// Three of those in one conversation also crossed the brute-force threshold
+/// and paused every gate in it for five minutes.
+#[tokio::test]
+async fn a_refusal_nobody_made_is_not_reported_as_the_users() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Unavailable));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-unreachable"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    let err = svc.execute("agent_delete", json!({})).await.unwrap_err();
+    let text = err.to_string();
+    assert!(
+        !text.contains("The user did not approve"),
+        "no user decided this — {text}"
+    );
+    assert!(
+        text.contains("nobody was asked"),
+        "the model has to be told WHY it was refused — {text}"
+    );
+
+    // Not sticky: the identical call asks again rather than being auto-refused
+    // by the ledger on the strength of a decision that never happened.
+    let _ = svc.execute("agent_delete", json!({})).await;
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        2,
+        "a transport failure must leave the intent askable"
+    );
 }
 
 /// The other half of the pin: the SAME gated call on an ATTENDED run does

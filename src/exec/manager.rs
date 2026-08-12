@@ -72,11 +72,12 @@ pub struct ExecApprovalRecord {
     pub originator_user_id: Option<String>,
     /// Session-grant identity of the approved action
     /// ([`crate::sandbox::exec_approval::grant_fingerprint`]). When a
-    /// session-level grant lands on one record, the manager cascades it to
-    /// every OTHER live pending record in the same session carrying the same
-    /// key — the concurrent-subagent case, where identical calls each parked
-    /// their own card before the user answered the first. `None` (no action
-    /// identity: cluster node approvals, bare escalations) never cascades.
+    /// session-wide answer — a standing grant, or a refusal — lands on one
+    /// record, the manager cascades it to every OTHER live pending record in
+    /// the same session carrying the same key: the concurrent-subagent case,
+    /// where identical calls each parked their own card before the user
+    /// answered the first. `None` (no action identity: cluster node approvals,
+    /// bare escalations) never cascades.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_key: Option<String>,
     /// This card is an **operator-tier escalation**: it was raised BECAUSE the
@@ -227,8 +228,10 @@ pub struct PendingApproval {
 /// 2. Resolve with user decision
 ///
 /// Purely in-memory: a granted approval lives for one execution
-/// (`AllowOnce`) or for the session (`AllowSession`, remembered by
-/// [`crate::sandbox::exec_approval::session_memory`]). Nothing here persists.
+/// (`AllowOnce`), for the session (`AllowSession`) or until revoked
+/// (`AllowAlways`) — the last two remembered by
+/// [`crate::sandbox::exec_approval::grants`], which is also where the
+/// persistent tier is written. Nothing *here* persists.
 /// Outcome of a session-addressed (id-less) approval reply — see
 /// [`ExecApprovalManager::resolve_for_session`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,8 +410,8 @@ impl ExecApprovalManager {
     ///
     /// `true` if the request was found and resolved. A session-level grant
     /// additionally cascades to every other live pending record in the same
-    /// session carrying the same `grant_key` (see
-    /// [`Self::cascade_session_grant`]); the return value only reports the
+    /// session carrying the same `grant_key` — and so does a `Deny` (see
+    /// [`Self::cascade_to_identical_cards`]); the return value only reports the
     /// addressed record.
     pub fn resolve(
         &self,
@@ -455,20 +458,21 @@ impl ExecApprovalManager {
         // being the control (an `allow-always` posted straight at
         // `exec.approval.resolve` was always accepted on the wire).
         let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
-        Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason);
+        Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
         debug!(id = %id, ?decision, "Resolved approval");
 
         let cascade = pending
             .get(id)
             .map(|e| (e.record.session_key.clone(), e.record.grant_key.clone()));
         if let Some((session_key, grant_key)) = cascade {
-            Self::cascade_session_grant(
+            Self::cascade_to_identical_cards(
                 &mut pending,
                 id,
                 &session_key,
                 grant_key.as_deref(),
                 decision,
                 resolved_by,
+                deny_reason,
             );
         }
         true
@@ -505,40 +509,62 @@ impl ExecApprovalManager {
         }
     }
 
-    /// Cascade a **standing** grant to every OTHER live pending record in the
-    /// same session carrying the same `grant_key`.
+    /// Cascade a **session-wide answer** — a standing grant or a refusal — to
+    /// every OTHER live pending record in the same session carrying the same
+    /// `grant_key`.
     ///
-    /// The grant store only suppresses FUTURE prompts; without this, identical
-    /// calls that were already parked (concurrent subagents, a teams
+    /// The stores behind this gate only affect FUTURE prompts; without this,
+    /// identical calls that were already parked (concurrent subagents, a teams
     /// broadcast) would each still wait for their own click even though the
-    /// user just granted that exact action. Cascading resolves them through the
-    /// same [`Self::resolve_entry`] path a manual resolve takes.
+    /// user just answered that exact action. Cascading resolves them through
+    /// the same [`Self::resolve_entry`] path a manual resolve takes.
     ///
-    /// Both standing tiers cascade (post-clamp): `AllowSession`, and
-    /// `AllowAlways` **a fortiori** — a grant that outlives the process
-    /// certainly covers the identical call parked next to the one that was
-    /// answered. This condition was written as `!= AllowSession` when the
-    /// persistent tier could not exist; leaving it that way would have made the
-    /// widest possible answer the ONE that fails to release its siblings, which
-    /// is the enumeration-goes-stale shape (判据 §0). `AllowOnce` covers one
-    /// invocation by definition, and a `Deny` is about THIS call's timing or
-    /// wording, not a blanket refusal of the action (mirrors kimi-cli
-    /// `approval.py`'s session-approval fan-out). A `None` key (no action
-    /// identity) never cascades.
-    fn cascade_session_grant(
+    /// # Which decisions cascade
+    ///
+    /// * `AllowSession`, and `AllowAlways` **a fortiori** — a grant that
+    ///   outlives the process certainly covers the identical call parked next
+    ///   to the one that was answered. This condition was written as
+    ///   `!= AllowSession` when the persistent tier could not exist; leaving it
+    ///   that way would have made the widest possible answer the ONE that fails
+    ///   to release its siblings (判据 §0, enumeration goes stale).
+    /// * `Deny`, carrying the human's own words with it. This arm used to be
+    ///   excluded on the grounds that "a deny is about THIS call, not the
+    ///   action" — but the [`DenialLedger`] two files over answers the same
+    ///   question the other way: a refusal is sticky **for the action** for the
+    ///   rest of the session, and the very next identical call is auto-refused
+    ///   without a card. So whether one "no" covered the identical call parked
+    ///   beside it came down to a **race** — the ledger caught the sibling that
+    ///   arrived a moment later and missed the one already waiting, which is
+    ///   precisely the concurrent case this cascade exists for. The cost of the
+    ///   old behaviour was not only clicks: each extra card the user dismissed
+    ///   was another refusal on the brute-force breaker (see
+    ///   `DenialLedger::record_denial`, which now counts intents, not cards).
+    ///   opencode cascades a rejection across the whole session; this narrows
+    ///   it to the identical action, which is the strongest form that cannot
+    ///   refuse something the user never read.
+    ///
+    /// `AllowOnce` covers one invocation by definition and never cascades. A
+    /// `None` key (no action identity: bare route escalations, cluster node
+    /// approvals) never cascades.
+    ///
+    /// [`DenialLedger`]: crate::sandbox::exec_approval::denial_ledger::DenialLedger
+    fn cascade_to_identical_cards(
         pending: &mut HashMap<String, PendingEntry>,
         resolved_id: &str,
         session_key: &str,
         grant_key: Option<&str>,
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
+        deny_reason: Option<String>,
     ) {
         let Some(key) = grant_key else {
             return;
         };
         if !matches!(
             decision,
-            ApprovalDecisionType::AllowSession | ApprovalDecisionType::AllowAlways
+            ApprovalDecisionType::AllowSession
+                | ApprovalDecisionType::AllowAlways
+                | ApprovalDecisionType::Deny
         ) {
             return;
         }
@@ -554,11 +580,15 @@ impl ExecApprovalManager {
             .collect();
         for cascade_id in ids {
             if let Some(entry) = pending.get_mut(&cascade_id) {
-                Self::resolve_entry(entry, decision, resolved_by.clone(), None);
+                // The reason rides along: a sibling refused by cascade must
+                // reach the model with the same instruction the answered card
+                // produced, or two identical calls get two different stories.
+                Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
                 debug!(
                     id = %cascade_id,
                     cascaded_from = %resolved_id,
-                    "Session grant cascaded to pending approval"
+                    ?decision,
+                    "Cascaded to an identical pending approval"
                 );
             }
         }
@@ -713,16 +743,17 @@ impl ExecApprovalManager {
         if let Some(entry) = pending.get_mut(&id) {
             let decision = Self::clamp_decision(decision, &entry.record.allowed_decisions);
             let summary = Self::display_line(&entry.record);
-            Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason);
+            Self::resolve_entry(entry, decision, resolved_by.clone(), deny_reason.clone());
             debug!(id = %id, ?decision, "Resolved approval by session");
             let grant_key = pending.get(&id).and_then(|e| e.record.grant_key.clone());
-            Self::cascade_session_grant(
+            Self::cascade_to_identical_cards(
                 &mut pending,
                 &id,
                 session_key,
                 grant_key.as_deref(),
                 decision,
                 resolved_by,
+                deny_reason,
             );
             SessionResolveOutcome::Resolved { decision, summary }
         } else {
@@ -1505,26 +1536,69 @@ mod tests {
         );
     }
 
-    /// ⑤ Only session-level grants cascade: an `AllowOnce` covers one
-    /// invocation by definition, and a `Deny` speaks to THIS call, not to the
-    /// action — neither may resolve a sibling card.
+    /// ⑤ `AllowOnce` covers one invocation by definition and may not resolve a
+    /// sibling card.
     #[tokio::test]
-    async fn allow_once_and_deny_do_not_cascade() {
-        for decision in [ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny] {
-            let manager = ExecApprovalManager::new();
-            let rec_a = manager.create(&keyed_request("d-a", "s1", Some("k1")), 60_000);
-            let rec_b = manager.create(&keyed_request("d-b", "s1", Some("k1")), 60_000);
-            let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
-            let (id_b, _rx_b, _t_b) = manager.register_pending(rec_b);
+    async fn allow_once_does_not_cascade() {
+        let manager = ExecApprovalManager::new();
+        let rec_a = manager.create(&keyed_request("d-a", "s1", Some("k1")), 60_000);
+        let rec_b = manager.create(&keyed_request("d-b", "s1", Some("k1")), 60_000);
+        let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+        let (id_b, _rx_b, _t_b) = manager.register_pending(rec_b);
 
-            assert!(manager.resolve(&id_a, decision, None));
+        assert!(manager.resolve(&id_a, ApprovalDecisionType::AllowOnce, None));
 
-            let record = &manager.get_pending(&id_b).expect("still pending").record;
-            assert!(
-                record.decision.is_none(),
-                "{decision:?} must not cascade to a sibling pending card"
-            );
-        }
+        let record = &manager.get_pending(&id_b).expect("still pending").record;
+        assert!(
+            record.decision.is_none(),
+            "AllowOnce must not cascade to a sibling pending card"
+        );
+    }
+
+    /// ⑥ A refusal reaches the identical cards parked beside it, carrying the
+    /// human's own words.
+    ///
+    /// The mirror of `session_grant_cascades_to_same_action_pending_cards`, and
+    /// it used to be asserted the other way round. What settled it is that the
+    /// denial ledger already treats a refusal as being about the ACTION — the
+    /// next identical call is auto-refused with no card — so leaving the
+    /// already-parked twin out made the coverage of one "no" depend on a race
+    /// between the sibling's ledger check and the human's click. It also cost
+    /// the user real damage: every extra card they dismissed was another
+    /// refusal counted by the brute-force breaker.
+    #[tokio::test]
+    async fn a_refusal_reaches_the_identical_cards_parked_beside_it() {
+        let manager = ExecApprovalManager::new();
+        let rec_a = manager.create(&keyed_request("r-a", "s1", Some("k1")), 60_000);
+        let rec_b = manager.create(&keyed_request("r-b", "s1", Some("k1")), 60_000);
+        let rec_c = manager.create(&keyed_request("r-c", "s1", Some("k2")), 60_000);
+        let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+        let (id_b, rx_b, t_b) = manager.register_pending(rec_b);
+        let (id_c, _rx_c, _t_c) = manager.register_pending(rec_c);
+
+        assert!(manager.resolve_with_reason(
+            &id_a,
+            ApprovalDecisionType::Deny,
+            None,
+            Some("not on production".to_string()),
+        ));
+
+        let cascaded = manager.await_registered(id_b, rx_b, t_b).await;
+        assert_eq!(cascaded.decision, Some(ApprovalDecisionType::Deny));
+        assert_eq!(
+            cascaded.deny_reason.as_deref(),
+            Some("not on production"),
+            "a sibling refused by cascade must reach the model with the same instruction"
+        );
+
+        // A different action in the same session is untouched — the cascade is
+        // keyed on the action, never on the session alone.
+        assert!(manager
+            .get_pending(&id_c)
+            .expect("still pending")
+            .record
+            .decision
+            .is_none());
     }
 
     /// The cascade also fires on the session-addressed path (`/approve
