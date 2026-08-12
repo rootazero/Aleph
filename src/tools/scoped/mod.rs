@@ -222,8 +222,10 @@ impl ToolService for ScopedToolService {
         }
 
         // Permission-policy gate: a `Deny` tool is invisible to the LLM —
-        // listing it would only invite calls that `execute()` rejects.
-        defs.retain(|d| !self.is_permission_denied(&d.name));
+        // listing it would only invite calls that `execute()` rejects. The one
+        // exception is a denial plan mode itself created; see
+        // `is_hidden_from_model`.
+        defs.retain(|d| !self.is_hidden_from_model(&d.name));
 
         // Health gate: strip any tool whose probe reports a non-expired
         // Unhealthy. Tools without a registered probe pass through (the
@@ -269,7 +271,7 @@ impl ToolService for ScopedToolService {
             if visible.contains(name) {
                 continue;
             }
-            if !self.is_allowed(name) || self.is_permission_denied(name) {
+            if !self.is_allowed(name) || self.is_hidden_from_model(name) {
                 continue;
             }
             if health_snap.as_ref().is_some_and(|s| !s.is_healthy(name)) {
@@ -289,7 +291,7 @@ impl ToolService for ScopedToolService {
         }
         // Permission-policy gate mirrors list(): Deny tools don't exist
         // from the consumer's point of view.
-        if self.is_permission_denied(name) {
+        if self.is_hidden_from_model(name) {
             return None;
         }
 
@@ -488,7 +490,7 @@ impl ToolService for ScopedToolService {
             defs.retain(|d| self.is_allowed(&d.name));
         }
         // Mirror list() — Deny tools never reach the LLM-visible schema.
-        defs.retain(|d| !self.is_permission_denied(&d.name));
+        defs.retain(|d| !self.is_hidden_from_model(&d.name));
         if let Some(snap) = &health_snap {
             defs.retain(|d| snap.is_healthy(&d.name));
         }

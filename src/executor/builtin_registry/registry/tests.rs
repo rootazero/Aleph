@@ -108,6 +108,7 @@ async fn flag_user_correction_files_under_the_turns_agent_not_the_boot_agent() {
         caller_role: None,
         channel_tool_permissions: None,
         unattended: false,
+        plan_gate: None,
     };
     let out = TURN_CONTEXT
         .scope(ctx, async {

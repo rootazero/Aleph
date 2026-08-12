@@ -45,6 +45,7 @@ pub mod info;
 pub mod name_repair;
 pub mod no_progress;
 pub mod path_locks;
+pub mod plan_gate;
 pub mod redundant_calls;
 pub mod result_processing;
 pub mod result_store;

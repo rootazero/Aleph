@@ -145,7 +145,7 @@ impl SessionKnob {
     /// drifted would refuse a value the server accepts.
     pub const fn choices(self) -> &'static str {
         match self {
-            Self::ExecTier => "ask|auto|full",
+            Self::ExecTier => "plan|ask|auto|full",
             Self::Mode => "chat|work|code",
             Self::Think => "off|minimal|low|medium|high|xhigh",
             Self::Memory => "on|off",
@@ -184,7 +184,7 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/tools", "Tool progress mode: off|new|all|verbose"),
     (
         "/tier",
-        "Set exec tier (tool-approval prompts): ask|auto|full|default",
+        "Set exec tier (tool-approval prompts): plan|ask|auto|full|default",
     ),
     (
         "/mode",

@@ -321,6 +321,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -360,6 +361,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -399,6 +401,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -523,6 +526,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -563,6 +567,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -601,6 +606,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -644,6 +650,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -681,6 +688,7 @@ mod tests {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -708,6 +716,7 @@ mod tests {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out2 = TURN_CONTEXT
             .scope(ctx2, async {

@@ -1162,6 +1162,8 @@
       "exec_tier_title": "Execution Permission",
       "exec_tier_desc": "How far the agent may go on its own before it stops to ask you. Applies to the next tool call — no restart needed.",
       "exec_tier_applied": "Tier applied. It takes effect on the next tool call.",
+      "exec_tier_plan_label": "Plan",
+      "exec_tier_plan_desc": "Read-only planning. Nothing that changes anything runs — the agent explores, asks, and writes a plan. When you approve the plan, this conversation switches straight into building.",
       "exec_tier_ask_label": "Ask",
       "exec_tier_ask_desc": "Every mutating tool call — commands, file writes, deletions, credentials, MCP, browser — asks first; read-only tools still run freely.",
       "exec_tier_auto_label": "Auto",

@@ -83,8 +83,12 @@ pub fn ExecTierPicker() -> impl IntoView {
             match ToolPermissionsApi::get_global(&dashboard).await {
                 Ok(cfg) => {
                     refused.set(false);
+                    // The SESSION list (install tiers + `plan`): this pill sets
+                    // a per-conversation posture, and `plan` only exists as
+                    // one. Settings → Policies keeps reading `tiers`, the list
+                    // an install may sit at.
+                    tiers.set(cfg.session_tier_presets().to_vec());
                     global_tier.set(cfg.exec_tier);
-                    tiers.set(cfg.tiers);
                 }
                 Err(e) => {
                     refused.set(crate::components::admin_refusal::is_admin_refusal(&e));

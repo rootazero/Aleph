@@ -280,6 +280,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended,
+            plan_gate: None,
         };
 
         // Attended (and outside any turn) still reaches the requester.

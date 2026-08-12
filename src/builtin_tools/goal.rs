@@ -2969,6 +2969,7 @@ mod tests {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
 
         let remote_clear = GoalArgs {

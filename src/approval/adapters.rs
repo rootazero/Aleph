@@ -224,6 +224,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         }
     }
 
@@ -298,6 +299,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
         let out = TURN_CONTEXT
             .scope(non_channel_turn, async {
@@ -322,6 +324,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         }
     }
 

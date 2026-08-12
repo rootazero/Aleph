@@ -173,7 +173,7 @@ output masking) is a separate subsystem — see **Exec Kernel** below.
 
 ---
 
-## Exec Tier (Ask / Auto / Full)
+## Exec Tier (Plan / Ask / Auto / Full)
 
 **Location**: `src/config/types/policies/exec_tier.rs` (rules + the single
 precedence composition point), `src/tools/scoped/` (enforcement),
@@ -186,9 +186,17 @@ explicit `[policies.tool_permissions]` entry names the tool.
 
 | Tier | What it asks about | Notes |
 |------|--------------------|-------|
+| `Plan` *(session only)* | nothing — it **refuses** | read-only planning. Every non-idempotent tool is denied outright, not carded: an approval per mutating call turns "hold everything until the plan is reviewed" into "review the plan one edit at a time". Three carve-outs, each circular without it: `ask_user`, `scratchpad` (the plan file **and** the handoff), `subagent` (a child runs on the parent's own gated service). See **Plan → build handoff** below |
 | `Ask` | every mutating / side-effecting tool | read-only tools stay allowed, so the model can still investigate |
 | `Auto` *(default)* | the irreversible tail only | `*_delete`, `vault_*`, `team_disband`, an MCP server's `destructiveHint`, and `file_ops` `delete` / `move` (argument-level) |
 | `Full` | nothing *(the tier asks nothing — see the two floors below)* | the command-policy floor and each tool's own `requires_confirmation` declaration both survive |
+
+`Plan` is strictest, so it composes through `most_restrictive` as the floor of
+the lattice: the channel clamp and the non-operator ceiling both leave it alone.
+It is **not** offerable as the install-wide `[policies] exec_tier` — an install
+sitting at `plan` would have nothing to hand an approved plan back to, so
+`config.update_tool_permissions` validates against `builtin_tiers()` (three) and
+the composer pill offers `session_tiers()` (four).
 
 ### The lattice (who wins)
 
@@ -221,6 +229,56 @@ loop) and the gateway slash-command fast path — call it, so the two surfaces
 cannot drift apart. Consulting the tier *before* the default (the pre-2026-07-14
 shape) inverted a `default = "deny"` install into ask-by-default for exactly the
 tools the tier meant to guard.
+
+### Plan → build handoff
+
+A conversation at `Plan` is read-only until a **human** approves its plan, and
+then it starts building **in the same turn** — the next tool call, not the next
+message. Nothing in `src/harness/` learns that plan mode exists.
+
+```
+tier resolves to Plan          turn_permissions mints a PlanGate
+        ↓                      (AtomicBool + the tier to restore to)
+model explores, writes the     file_read / file_ops list|search / ctx_search /
+plan to `scratchpad`           search / web_fetch / memory_* / ask_user / subagent
+        ↓                      everything else: PermissionDenied(GateRule::PlanMode)
+scratchpad(request_approval)   the persisted plan → clarification::ask → a person
+        ↓  "approved"
+PlanGate::release()            the ONE chokepoint now reads the restore tier
+        ↓                      + the session's `exec_tier` override is cleared
+next tool call builds
+```
+
+Four properties are load-bearing:
+
+- **The model cannot let itself out.** Everything under `request_approval`
+  refuses without a person: the action errors when no approval transport is
+  wired, and `clarification::ask` errors on an unattended run and on any turn
+  with no channel to deliver to. There is no branch that reaches `approved`
+  without one having been picked off a menu.
+- **One gate per turn, shared by children.** The `Arc<PlanGate>` rides on
+  `TurnContext`, and a run builds its tool service twice — for itself and as
+  the parent view handed to spawned sub-agents. Both hold the same gate, which
+  is precisely why `subagent` is admissible while planning: a child runs on the
+  parent's gated service, so one approval releases both, and a child spawned
+  before the approval can never outrun it.
+- **The restore tier is derived, not remembered.** `plan_restore_tier` re-runs
+  the same resolution with the plan picks dropped, so both clamps still apply —
+  a member cannot come out of a plan above the install's posture. The cost,
+  stated plainly: entering plan mode *replaces* a per-conversation tier rather
+  than suspending it.
+- **Plan-created denials are named and still listed.** `GateRule::PlanMode`
+  points the model at the two-call exit rather than at a
+  `[policies.tool_permissions]` entry nobody wrote, and the tools stay in the
+  model's list (a plan another agent could implement needs the vocabulary of
+  what can be done). An operator's real `deny` is unaffected on both counts —
+  `denied_only_by_plan` is a difference, not a name table.
+
+An unattended run whose session sits at `Plan` **stalls read-only**: there is
+nobody to approve, so it cannot build. That is the correct direction — the user
+put this conversation into read-only planning and an autonomous continuation
+must not act for them — but it is a dead end whose only exit is a person moving
+the tier back.
 
 ### The rules read declared metadata, never the tool's name
 
@@ -2653,7 +2711,7 @@ from the pre-revert build:
 
 | Dimension | codex | hermes / pi | Aleph | Verdict |
 |---|---|---|---|---|
-| Policy axes | 2 live axes: `AskForApproval` × `PermissionProfile` | hermes: `approvals.mode {manual\|smart\|off}` × gate stack. pi: declined a sandbox entirely | 1 axis: `ExecTier {Ask,Auto,Full}`, orthogonal to `[sandbox.command_policy]` (an undisableable floor) | **aligned** |
+| Policy axes | 2 live axes: `AskForApproval` × `PermissionProfile` | hermes: `approvals.mode {manual\|smart\|off}` × gate stack. pi: declined a sandbox entirely | 1 axis: `ExecTier {Plan,Ask,Auto,Full}`, orthogonal to `[sandbox.command_policy]` (an undisableable floor). codex models its plan phase as a separate `ModeKind` axis; here it is the strictest rung of the one axis, so both existing ceilings compose with it unchanged | **aligned** |
 | Tier semantics | 4 approval values, but 2 of the 3 shipped presets share one — the axis that really moves is the sandbox profile | hermes: 3 modes + a HARDLINE floor under the top one. pi: 3-valued project TRUST, gating config *loading* | 3 tiers with honest semantics; the floor holds under all three | **aligned** |
 | Gate input | name-based argv allowlist + a Starlark rules engine over the command string | hermes: 47 regex `DANGEROUS_PATTERNS` over argument content. pi: tools declare *no* risk metadata; every gate re-derives danger from regex | **metadata-driven**: `ToolFacts` read off the declared `ToolDefinition`, never the name; one argument-level filter (`file_ops`) | **aleph-superior** — do not regress toward regex-on-shell-strings |
 | Safe-read bypass | `is_known_safe_command` argv allowlist, compositional over `&& \|\| ; \|` | hermes: permanent glob `command_allowlist`. pi: patterns exist only in an example | `READ_ONLY_TOOLS` (pure-read builtins, single source for claim + retry + tier) + MCP `readOnlyHint`; default-deny for anything unlisted | **aligned** |
@@ -2794,7 +2852,8 @@ from the pre-revert build:
 | Browser Guard | `src/browser/network_policy.rs` | Browser navigation SSRF |
 | Crypto + Vault | `src/gateway/security/` | Secrets vault, shared-token crypto |
 | Tool Permissions | `src/tools/scoped/` | Per-channel tool permission merge + the enforcement chokepoint |
-| Exec Tier | `src/config/types/policies/exec_tier.rs` | Ask / Auto / Full — the rules and the one precedence composition point |
+| Exec Tier | `src/config/types/policies/exec_tier.rs` | Plan / Ask / Auto / Full — the rules and the one precedence composition point |
+| Plan gate | `src/tools/plan_gate.rs` | The plan → build handoff: a human `approved` lifts the read-only planning tier mid-turn |
 | Approval Gate | `src/sandbox/exec_approval/` | Action-aware confirmation, grant fingerprint, denial ledger |
 | Gateway-surface denylist | `src/security/dangerous_tools.rs` | What `tools.invoke` refuses outright |
 | Exec primitives | `src/exec/` | Command parse for approval summaries (`analyze_shell_command`), `SecretMasker`, advisory custom-pattern `SecurityKernel` — support code, not a standalone enforcement kernel |

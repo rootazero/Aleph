@@ -31,7 +31,7 @@ pub mod tool_permissions;
 pub mod web_fetch;
 
 pub use exec_tier::{
-    builtin_tiers, effective_permission, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
+    builtin_tiers, effective_permission, session_tiers, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
 };
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;

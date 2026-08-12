@@ -19,6 +19,25 @@ use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 use super::engine::ExecutionEngine;
 use super::RunRequest;
 
+/// Everything one turn's permission resolution produces.
+///
+/// A struct rather than the tuple it grew out of: the third member arrived
+/// with plan mode, and a bare `(ExecTier, Option<_>, Option<_>)` is exactly
+/// the shape where the next caller destructures the wrong slot and nothing
+/// says so.
+pub(super) struct TurnPermissions {
+    /// The tier this turn is dispatched under.
+    pub(super) tier: ExecTier,
+    /// The merged EXPLICIT policy, or `None` when everything is all-default
+    /// (so the `ScopedToolService` hot path stays a no-op).
+    pub(super) explicit: Option<ToolPermissionsConfig>,
+    /// The plan → build handoff cell — `Some` exactly when `tier` is
+    /// [`ExecTier::Plan`]. Rides the turn context into both tool services the
+    /// run builds, so one human approval lifts the gate for the run and for
+    /// anything it spawns.
+    pub(super) plan_gate: Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>>,
+}
+
 /// Resolve this turn's execution tier.
 ///
 /// Precedence: the tier the REQUEST carries (the composer's pick, possibly made
@@ -103,6 +122,35 @@ pub(super) fn resolve_exec_tier(
     }
 }
 
+/// The tier a planning conversation hands back to once a human approves.
+///
+/// The SAME resolution the turn just ran, with the plan picks taken out of the
+/// running — "what would this turn have resolved to if the conversation had
+/// never said `plan`". Both clamps therefore still apply: a member cannot come
+/// out of a plan above the install's posture, and a chat-tier channel cannot
+/// come out at `Full`.
+///
+/// Deliberately a derivation rather than a remembered pre-plan tier. A second
+/// per-session key would need writing by BOTH tier writers (`sessions.patch`
+/// from the composer pill and the request-carried stamp), and 判据 §0 has
+/// already collected the bill for convergences that forgot to count their
+/// writers. What it costs, stated plainly: entering plan mode REPLACES a
+/// per-conversation tier rather than suspending it, so a conversation that was
+/// explicitly at `ask` returns to the install's posture rather than to `ask`.
+pub(super) fn plan_restore_tier(
+    global: ExecTier,
+    requested: Option<ExecTier>,
+    stored: Option<ExecTier>,
+    caller_role: Option<&str>,
+) -> ExecTier {
+    resolve_exec_tier(
+        global,
+        requested.filter(|t| *t != ExecTier::Plan),
+        stored.filter(|t| *t != ExecTier::Plan),
+        caller_role,
+    )
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Effective execution tier + explicit tool permission policy for this turn.
     /// Two inputs to one enforcement chokepoint
@@ -126,7 +174,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         &self,
         request: &RunRequest,
         agent: &AgentInstance,
-    ) -> (ExecTier, Option<ToolPermissionsConfig>) {
+    ) -> TurnPermissions {
         let (global_tier, explicit) = match self.app_config.as_ref() {
             Some(cfg) => {
                 let guard = cfg.read().await;
@@ -168,14 +216,46 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
         let is_all_default = merged.default == crate::extension::PermissionAction::Allow
             && merged.overrides.is_empty();
+
+        // The plan → build handoff cell, minted only for a turn that actually
+        // resolved to `Plan`.
+        //
+        // Its restore target is "what would this turn have resolved to if the
+        // conversation had never said `plan`" — the SAME three rungs and the
+        // SAME two clamps, re-run with the plan picks dropped out of the
+        // running. Deliberately not a remembered pre-plan tier: that would be
+        // a second per-session key, and it would need writing by BOTH tier
+        // writers (`sessions.patch` from the pill and the request-carried
+        // stamp below), which is the shape 判据 §0 collects bills for. A
+        // derivation has one author by construction.
+        //
+        // What this makes harder, stated out loud: entering plan mode
+        // REPLACES a per-conversation tier rather than suspending it, so a
+        // conversation that was explicitly at `ask` returns to the install's
+        // posture, not to `ask`. That is the trade — one write, one writer,
+        // no key that can go stale — and the tier is one pill click away.
+        let plan_gate = (tier == ExecTier::Plan).then(|| {
+            std::sync::Arc::new(crate::tools::plan_gate::PlanGate::new(plan_restore_tier(
+                global_tier,
+                requested,
+                stored,
+                request.metadata.get("caller_role").map(String::as_str),
+            )))
+        });
+
         info!(
             run_id = %request.run_id,
             exec_tier = tier.id(),
             default = ?merged.default,
             overrides = merged.overrides.len(),
+            plan_restores_to = plan_gate.as_ref().map(|g| g.restore_to().id()),
             "Execution permissions resolved for this turn"
         );
-        (tier, (!is_all_default).then_some(merged))
+        TurnPermissions {
+            tier,
+            explicit: (!is_all_default).then_some(merged),
+            plan_gate,
+        }
     }
 
     /// Per-session execution tier, carried in the session's identity metadata
@@ -243,8 +323,72 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_exec_tier;
+    use super::{plan_restore_tier, resolve_exec_tier};
     use crate::config::types::policies::ExecTier;
+
+    // -------------------------------------------------------------------
+    // Plan mode: what a conversation hands back to.
+    // -------------------------------------------------------------------
+
+    /// The plan pick is taken out of the running on BOTH rungs it can arrive
+    /// on. Reading only one of them is how the restore tier would come back
+    /// `Plan` — a conversation that approves its plan and starts planning
+    /// again, with the approval spent getting there.
+    #[test]
+    fn the_restore_tier_ignores_the_plan_pick_on_every_rung() {
+        for (requested, stored) in [
+            (Some(ExecTier::Plan), None),
+            (None, Some(ExecTier::Plan)),
+            (Some(ExecTier::Plan), Some(ExecTier::Plan)),
+        ] {
+            assert_eq!(
+                plan_restore_tier(ExecTier::Auto, requested, stored, None),
+                ExecTier::Auto,
+                "requested={requested:?} stored={stored:?}"
+            );
+        }
+    }
+
+    /// It is the same resolution, so both clamps still apply. A member cannot
+    /// come out of a plan above the install's posture…
+    #[test]
+    fn the_restore_tier_still_ceilings_a_member() {
+        assert_eq!(
+            plan_restore_tier(ExecTier::Ask, Some(ExecTier::Plan), None, Some("member")),
+            ExecTier::Ask
+        );
+    }
+
+    /// …and a chat-tier channel cannot come out at `Full` either. It lands on
+    /// `Ask`, not on the `Auto` the channel clamp alone would give: taking the
+    /// plan pick out of the running leaves a guest with NO explicit tier on
+    /// any rung, and a non-operator with no explicit tier defaults to `Ask`
+    /// before the clamp is even consulted. Written out because "the clamp
+    /// still applies" and "the clamp is what decides" are different claims,
+    /// and only the first one is true here.
+    #[test]
+    fn a_guest_comes_out_of_a_plan_at_the_non_operator_default() {
+        for global in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+            assert_eq!(
+                plan_restore_tier(global, Some(ExecTier::Plan), None, Some("guest")),
+                ExecTier::Ask,
+                "global {global:?}"
+            );
+        }
+    }
+
+    /// A conversation that reaches `plan` never resolves out of it by
+    /// accident: `plan` is the strictest rung, so both clamps leave it alone.
+    #[test]
+    fn plan_survives_both_clamps() {
+        for role in [Some("member"), Some("guest"), Some("operator"), None] {
+            assert_eq!(
+                resolve_exec_tier(ExecTier::Auto, Some(ExecTier::Plan), None, role),
+                ExecTier::Plan,
+                "role {role:?} must be able to put its own conversation in plan mode"
+            );
+        }
+    }
 
     #[test]
     fn request_tier_outranks_session_and_global() {
