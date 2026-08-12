@@ -45,70 +45,25 @@ fn test_schema_json_structure() {
 
 #[test]
 fn test_ui_hints_coverage() {
+    // The 2026-08-12 audit confirmed the previous declarative producer had
+    // zero downstream consumers (CLI discarded the field, Panel never called
+    // `config.schema`). build_ui_hints() now returns an empty stub so the
+    // wire shape (`config.schema.ui_hints`) stays stable for any future
+    // schema-driven settings form. Re-introduce the population lists when
+    // a genuine consumer is wired.
     let hints = build_ui_hints();
-
-    // Check all expected groups are defined (at least 6)
-    assert!(
-        hints.groups.len() >= 6,
-        "Should have at least 6 groups, got {}",
-        hints.groups.len()
-    );
-
-    // Check critical groups exist
-    assert!(
-        hints.groups.contains_key("general"),
-        "Should have 'general' group"
-    );
-    assert!(
-        hints.groups.contains_key("providers"),
-        "Should have 'providers' group"
-    );
-    assert!(
-        hints.groups.contains_key("memory"),
-        "Should have 'memory' group"
-    );
-    assert!(
-        hints.groups.contains_key("tools"),
-        "Should have 'tools' group"
-    );
-    assert!(
-        hints.groups.contains_key("channels"),
-        "Should have 'channels' group"
-    );
-    assert!(
-        hints.groups.contains_key("advanced"),
-        "Should have 'advanced' group"
-    );
-
-    // Check critical fields have hints. Keys are literal, including the
-    // wildcard form — the `get_hint` resolver these used to go through was cut
-    // as test-only (`6e63cabe2`); the hints themselves are still the contract.
-    for key in [
-        "general.default_provider",
-        "providers.*.api_key",
-        "memory.enabled",
-    ] {
-        assert!(hints.fields.contains_key(key), "Should have hint for {key}");
-    }
+    assert!(hints.groups.is_empty(), "groups is empty until re-introduced");
+    assert!(hints.fields.is_empty(), "fields is empty until re-introduced");
 }
 
 #[test]
 fn test_sensitive_fields_marked() {
+    // Sentinel: the old test asserted that providers.*.api_key, channels.*.token,
+    // etc. were marked sensitive. When the producer is reintroduced, the
+    // assertions move back here verbatim. For now the empty stub has no
+    // fields to be sensitive about.
     let hints = build_ui_hints();
-
-    // Credentials must never render as plain text. Asserted against the hint
-    // map directly (the `get_hint` wildcard resolver was cut as test-only).
-    for key in [
-        "providers.*.api_key",
-        "channels.telegram.token",
-        "channels.discord.token",
-    ] {
-        let hint = hints
-            .fields
-            .get(key)
-            .unwrap_or_else(|| panic!("Should have hint for {key}"));
-        assert!(hint.sensitive, "{key} should be sensitive");
-    }
+    assert!(hints.fields.is_empty());
 }
 
 #[test]
@@ -119,76 +74,25 @@ fn test_schema_and_hints_consistency() {
     // Schema should be valid JSON object
     assert!(schema.is_object(), "Schema should be a JSON object");
 
-    // For each field hint, verify path is structurally valid
+    // The stub has no field-hint paths to validate. When the producer is
+    // reintroduced, the path-segment validation moves back here.
     for path in hints.fields.keys() {
-        if path.contains('*') {
-            // Skip wildcard paths - they're templates
-            continue;
-        }
         assert!(!path.is_empty(), "Path should not be empty");
-        assert!(
-            !path.starts_with('.'),
-            "Path '{}' should not start with '.'",
-            path
-        );
-        assert!(
-            !path.ends_with('.'),
-            "Path '{}' should not end with '.'",
-            path
-        );
-
-        // Verify path has valid segments
-        let segments: Vec<&str> = path.split('.').collect();
-        assert!(
-            !segments.is_empty(),
-            "Path '{}' should have at least one segment",
-            path
-        );
-        for segment in &segments {
-            assert!(!segment.is_empty(), "Path '{}' has empty segment", path);
-        }
+        assert!(!path.starts_with('.'), "Path should not start with '.'");
+        assert!(!path.ends_with('.'), "Path should not end with '.'");
     }
 }
 
 #[test]
 fn test_groups_have_valid_metadata() {
     let hints = build_ui_hints();
-
-    for (group_id, meta) in &hints.groups {
-        // Group ID should be non-empty
-        assert!(!group_id.is_empty(), "Group ID should not be empty");
-
-        // Label should be non-empty
-        assert!(
-            !meta.label.is_empty(),
-            "Group '{}' should have a non-empty label",
-            group_id
-        );
-
-        // Order should be positive
-        assert!(
-            meta.order > 0,
-            "Group '{}' should have a positive order, got {}",
-            group_id,
-            meta.order
-        );
-    }
+    assert!(hints.groups.is_empty());
 }
 
 #[test]
 fn test_field_hints_have_valid_groups() {
     let hints = build_ui_hints();
-
-    for (path, field_hint) in &hints.fields {
-        if let Some(group) = &field_hint.group {
-            assert!(
-                hints.groups.contains_key(group),
-                "Field '{}' references non-existent group '{}'",
-                path,
-                group
-            );
-        }
-    }
+    assert!(hints.fields.is_empty());
 }
 
 #[test]

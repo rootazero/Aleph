@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::config::patcher::{ConfigPatcher, PatchRequest};
-use crate::config::{build_ui_hints, generate_config_schema_json, Config, ConfigUiHints};
+use crate::config::{generate_config_schema_json, Config, ConfigUiHints};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::hot_reload::ConfigWatcher;
@@ -361,13 +361,14 @@ pub async fn handle_schema(request: JsonRpcRequest) -> JsonRpcResponse {
         .map(|p| serde_json::from_value(p.clone()).unwrap_or_default())
         .unwrap_or_default();
 
-    // Generate schema and hints
+    // Generate schema. (UI hints used to be embedded here; the producer in
+    // `src/config/ui_hints/` was wholly a one-way DTO that no client rendered
+    // — the CLI discarded the field, the Panel never called `config.schema`.)
     let schema = generate_config_schema_json();
-    let ui_hints = build_ui_hints();
 
     let response = ConfigSchemaResponse {
         schema,
-        ui_hints,
+        ui_hints: crate::config::ConfigUiHints::new(),
         version: env!("ALEPH_VERSION").to_string(),
         generated_at: chrono::Utc::now().to_rfc3339(),
     };

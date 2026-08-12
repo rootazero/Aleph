@@ -128,7 +128,7 @@ const CODE_RATIO: f64 = 2.5;
 /// remains. Keeping the caller's `prose_ratio` as the Latin/prose anchor means a
 /// configured estimate ratio still governs ordinary text.
 #[must_use]
-pub fn content_ratio_with_baseline(text: &str, prose_ratio: f64) -> f64 {
+pub(crate) fn content_ratio_with_baseline(text: &str, prose_ratio: f64) -> f64 {
     if text.is_empty() {
         return prose_ratio;
     }
@@ -182,7 +182,7 @@ pub fn content_ratio_with_baseline(text: &str, prose_ratio: f64) -> f64 {
 ///
 /// This is [`content_ratio_with_baseline`] anchored at [`DEFAULT_PROSE_RATIO`].
 #[must_use]
-pub fn detect_content_ratio(text: &str) -> f64 {
+pub(crate) fn detect_content_ratio(text: &str) -> f64 {
     content_ratio_with_baseline(text, DEFAULT_PROSE_RATIO)
 }
 
@@ -251,7 +251,7 @@ pub fn estimate_tokens_aware(content: &str, prose_ratio: f64) -> usize {
 /// images toward pressure) and the historical-image-stripping preflight stage
 /// (which frees exactly this many tokens per image it drops) — so the sensor
 /// and the stripper agree on what an image costs.
-pub const IMAGE_TOKENS_ESTIMATE: usize = 1500;
+pub(crate) const IMAGE_TOKENS_ESTIMATE: usize = 1500;
 
 /// Append `part` to `buf`, space-separating from any prior content. Mirrors
 /// `UnifiedMessage::text_content`'s `parts.join(" ")` for non-empty parts, so a

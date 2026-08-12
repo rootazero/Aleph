@@ -61,8 +61,8 @@ const DEFAULT_MIN_PRESSURE_RATIO: f64 = 0.60;
 
 /// File-op last-write-wins preflight stage.
 ///
-/// Tunable via [`FileOpSupersedeStage::new`]; sensible production defaults
-/// via [`FileOpSupersedeStage::default`].
+/// Sensible production defaults via [`FileOpSupersedeStage::default`]; tune
+/// the pressure gate via [`FileOpSupersedeStage::with_min_pressure_ratio`].
 pub struct FileOpSupersedeStage {
     /// Tool names treated as "read" file ops (input: path → output: bytes).
     /// Default covers Aleph (`file_read`) plus upstream / MCP-bridged
@@ -136,25 +136,6 @@ struct FileOpRef {
 }
 
 impl FileOpSupersedeStage {
-    /// Construct with the full configuration surface explicitly set.
-    /// Use [`FileOpSupersedeStage::default`] for production defaults.
-    #[must_use]
-    pub const fn new(
-        read_tools: Vec<String>,
-        write_tools: Vec<String>,
-        edit_tools: Vec<String>,
-        min_pressure_ratio: f64,
-        min_ops_per_path: usize,
-    ) -> Self {
-        Self {
-            read_tools,
-            write_tools,
-            edit_tools,
-            min_pressure_ratio,
-            min_ops_per_path,
-        }
-    }
-
     /// Override just the pressure gate, keeping the default tool-name allowlist
     /// and `min_ops_per_path`. Production wires this from
     /// [`ContextBudgetConfig::preventive_floor`](crate::context::budget::ContextBudgetConfig::preventive_floor)

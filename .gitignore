@@ -137,3 +137,6 @@ examples/*
 !examples/plugins/
 !examples/protocols/
 !examples/protocols/**
+
+# Audit prompts (used for parallel subagent reviews)
+.audit-prompt-batch*.md

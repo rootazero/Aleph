@@ -201,7 +201,7 @@ impl ContextBudgetConfig {
     /// custom warning line. Clamped at `0.0`, so a tiny warning threshold
     /// simply keeps the cheap passes always-on (their previous behaviour).
     #[must_use]
-    pub fn preventive_floor(&self) -> f64 {
+    pub(crate) fn preventive_floor(&self) -> f64 {
         (self.warning_threshold - PREVENTIVE_BAND_WIDTH).max(0.0)
     }
 }
