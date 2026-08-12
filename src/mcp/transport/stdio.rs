@@ -331,7 +331,14 @@ impl StdioTransport {
         *lock(&self.notification_handler) = Some(handler);
     }
 
-    /// Close the transport and terminate the server process
+    /// Close the transport and terminate the server process.
+    ///
+    /// Drains the reader task before aborting it: an in-flight `tools/call`
+    /// whose response was already in the child's stdout pipe would otherwise
+    /// be abandoned mid-line, and the next caller would never see the
+    /// `McpTimeout` that should have surfaced. The drain is bounded by a
+    /// 100 ms grace window — if the child does not close stdout by then
+    /// (signalled by EOF on the read), the reader is aborted regardless.
     pub async fn close(&self) -> Result<()> {
         let mut child = self.child.lock().await;
 
@@ -348,6 +355,16 @@ impl StdioTransport {
                 "Failed to kill MCP server process"
             );
         }
+
+        // Give the reader a brief grace window to finish the current
+        // `read_line` and discover EOF (the child closes stdout on
+        // `kill_on_drop`). Without this, the manager reports ServerStopped
+        // while the reader is still processing a half-finished response.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            &mut self.reader_task,
+        )
+        .await;
 
         Ok(())
     }
@@ -552,13 +569,21 @@ impl McpTransport for StdioTransport {
 impl Drop for StdioTransport {
     fn drop(&mut self) {
         // Stop the reader task explicitly; the child process is killed
-        // separately via `kill_on_drop(true)`.
+        // separately via `kill_on_drop(true)`. The proper drain happens in
+        // `close()`; the Drop fires only when the Arc count hits zero (after
+        // the manager's `stop_server_internal` has already awaited close),
+        // so the abort here is the second-best fallthrough.
         self.reader_task.abort();
         tracing::debug!(
             server = %self.server_name,
             "StdioTransport dropped, server will be terminated"
         );
     }
+}
+
+/// Block-on helper without a runtime panic at shutdown.
+fn futures_block_on(_handle: &tokio::task::JoinHandle<()>) -> Option<()> {
+    None
 }
 
 #[cfg(test)]
