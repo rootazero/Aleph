@@ -120,10 +120,20 @@ impl OAuthProvider {
             )));
         }
 
-        response
-            .json::<OAuthServerMetadata>()
+        let metadata: OAuthServerMetadata = response
+            .json()
             .await
-            .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth metadata: {e}")))
+            .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth metadata: {e}")))?;
+
+        // RFC 8414 §3.3: every endpoint must be on the same origin as
+        // `issuer`. A server that returns an `issuer` pointing at one host
+        // but an `authorization_endpoint` pointing at another is hosting a
+        // confused-deputy scenario: the user is sent to the attacker's
+        // authorization page while the client_id is bound to the legit
+        // authorization server. Refuse to proceed.
+        validate_metadata_origins(&self.server_name, &metadata)?;
+
+        Ok(metadata)
     }
 
     /// Register client dynamically (if server supports it)
@@ -516,6 +526,80 @@ fn validate_response_issuer(
     }
 }
 
+/// Validate that every endpoint advertised in the metadata is on the same
+/// origin as `issuer` (RFC 8414 §3.3).
+///
+/// Each endpoint is parsed as a URL and compared against the issuer's
+/// scheme + host + port. A mismatch is a confused-deputy scenario: the
+/// user is sent to one host for authorization while the client_id is
+/// bound to another. Refusing the metadata pre-empts the attack before
+/// any redirect happens. A missing `issuer` means we have nothing to
+/// compare against — refusing the metadata is the safe default.
+fn validate_metadata_origins(
+    server_name: &str,
+    metadata: &OAuthServerMetadata,
+) -> Result<()> {
+    let issuer = metadata
+        .issuer
+        .as_deref()
+        .ok_or_else(|| {
+            AlephError::IoError(format!(
+                "OAuth metadata for '{server_name}' omitted the 'issuer' field; \
+                 refusing to register against an unverified authorization server"
+            ))
+        })?;
+
+    let issuer_origin = url_origin_str(issuer).ok_or_else(|| {
+        AlephError::IoError(format!(
+            "OAuth metadata for '{server_name}' declared an unparseable issuer \
+             '{issuer}'; refusing to proceed"
+        ))
+    })?;
+
+    for endpoint in [
+        ("authorization_endpoint", &metadata.authorization_endpoint),
+        ("token_endpoint", &metadata.token_endpoint),
+    ] {
+        let (name, value) = endpoint;
+        let origin = url_origin_str(value).ok_or_else(|| {
+            AlephError::IoError(format!(
+                "OAuth metadata for '{server_name}' declared {name} '{value}' \
+                 which is not a valid URL; refusing to proceed"
+            ))
+        })?;
+        if origin != issuer_origin {
+            return Err(AlephError::IoError(format!(
+                "OAuth metadata for '{server_name}' has {name} '{value}' on a \
+                 different origin than issuer '{issuer}'; refusing to proceed"
+            )));
+        }
+    }
+
+    if let Some(reg) = &metadata.registration_endpoint {
+        let origin = url_origin_str(reg).ok_or_else(|| {
+            AlephError::IoError(format!(
+                "OAuth metadata for '{server_name}' declared registration_endpoint \
+                 '{reg}' which is not a valid URL; refusing to proceed"
+            ))
+        })?;
+        if origin != issuer_origin {
+            return Err(AlephError::IoError(format!(
+                "OAuth metadata for '{server_name}' has registration_endpoint '{reg}' \
+                 on a different origin than issuer '{issuer}'; refusing to proceed"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract the scheme + host + port (`origin`) of a URL string, or `None`
+/// when the URL does not parse.
+fn url_origin_str(s: &str) -> Option<String> {
+    let url = url::Url::parse(s).ok()?;
+    Some(url.origin().ascii_serialization())
+}
+
 /// Generate a cryptographically random code verifier for PKCE
 fn generate_code_verifier() -> String {
     let mut rng = rand::rng();
@@ -631,6 +715,50 @@ mod tests {
             Some("https://Issuer.Example.com")
         )
         .is_err());
+    }
+
+    #[test]
+    fn metadata_origins_must_match_issuer() {
+        // RFC 8414 §3.3: every endpoint must be on the same origin as the
+        // issuer. A server that hands out an issuer pointing at one host
+        // and an authorization_endpoint pointing at another is hosting a
+        // confused-deputy scenario; the metadata is rejected outright.
+        let cross = OAuthServerMetadata {
+            issuer: Some("https://api.example.com".to_string()),
+            authorization_endpoint: "https://evil.example.com/auth".to_string(),
+            token_endpoint: "https://api.example.com/token".to_string(),
+            registration_endpoint: None,
+            response_types_supported: vec![],
+            grant_types_supported: vec![],
+            code_challenge_methods_supported: vec![],
+        };
+        let err = validate_metadata_origins("srv", &cross).unwrap_err().to_string();
+        assert!(err.contains("evil.example.com"), "{err}");
+        assert!(err.contains("authorization_endpoint"), "{err}");
+
+        // An absent issuer is also refused: nothing to compare against.
+        let no_issuer = OAuthServerMetadata {
+            issuer: None,
+            authorization_endpoint: "https://api.example.com/auth".to_string(),
+            token_endpoint: "https://api.example.com/token".to_string(),
+            registration_endpoint: None,
+            response_types_supported: vec![],
+            grant_types_supported: vec![],
+            code_challenge_methods_supported: vec![],
+        };
+        assert!(validate_metadata_origins("srv", &no_issuer).is_err());
+
+        // A well-formed metadata with same-origin endpoints passes.
+        let ok = OAuthServerMetadata {
+            issuer: Some("https://api.example.com".to_string()),
+            authorization_endpoint: "https://api.example.com/auth".to_string(),
+            token_endpoint: "https://api.example.com/token".to_string(),
+            registration_endpoint: Some("https://api.example.com/register".to_string()),
+            response_types_supported: vec![],
+            grant_types_supported: vec![],
+            code_challenge_methods_supported: vec![],
+        };
+        assert!(validate_metadata_origins("srv", &ok).is_ok());
     }
 
     #[tokio::test]
