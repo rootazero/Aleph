@@ -117,6 +117,7 @@ pub(crate) async fn poll_wait_for<B: BrowserBackend + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::testkit::FakeBackend;
 
     #[test]
     fn text_probe_is_arrow_function_with_escaped_needle() {
@@ -153,5 +154,68 @@ mod tests {
         assert!(f.starts_with("() => "));
         assert!(f.contains("location.href.includes(\"/dashboard?u=1\")"));
         assert!(f.contains("\"ALEPH_WAIT_FOUND\""));
+    }
+
+    // --- the three exits of the polling loop, plus the Time short-circuit ---
+
+    #[tokio::test]
+    async fn found_sentinel_resolves_true_on_the_first_probe() {
+        let backend = FakeBackend::new(None);
+        let found = poll_wait_for(&backend, "1", &WaitCondition::Text("hi".into()), 5_000)
+            .await
+            .expect("a probe that answers must not error");
+        assert!(found);
+        assert_eq!(backend.calls().len(), 1, "one probe, no spinning");
+    }
+
+    #[tokio::test]
+    async fn error_sentinel_is_an_error_not_a_timeout() {
+        // A malformed selector is a caller error: it must surface as Err even
+        // though the budget has not elapsed — otherwise the model reads
+        // "element never appeared" and waits again with the same bad selector.
+        let backend = FakeBackend::new(None).with_evaluate_responses([WAIT_PROBE_ERROR]);
+        let err = poll_wait_for(
+            &backend,
+            "1",
+            &WaitCondition::Selector("div[".into()),
+            60_000,
+        )
+        .await
+        .expect_err("a rejected selector must be an error");
+        assert!(
+            err.to_string().contains("invalid CSS selector"),
+            "got: {err}"
+        );
+        assert_eq!(
+            backend.calls().len(),
+            1,
+            "must not keep polling a bad probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_until_the_budget_elapses_is_ok_false() {
+        // Absence is an answer, not an error. A zero budget still probes once.
+        let backend = FakeBackend::new(None).with_evaluate_responses(["absent"]);
+        let found = poll_wait_for(&backend, "1", &WaitCondition::Text("nope".into()), 0)
+            .await
+            .expect("a timeout is not an error");
+        assert!(!found);
+        assert_eq!(backend.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn time_condition_never_touches_the_page() {
+        // A plain delay IS the condition: it must sleep, not probe.
+        let backend = FakeBackend::new(None);
+        let found = poll_wait_for(&backend, "1", &WaitCondition::Time(1), 60_000)
+            .await
+            .expect("a delay always resolves");
+        assert!(found);
+        assert!(
+            backend.calls().is_empty(),
+            "Time must short-circuit before any evaluate — got {:?}",
+            backend.calls()
+        );
     }
 }

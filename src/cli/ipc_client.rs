@@ -114,8 +114,8 @@ fn call_once(
 /// non-loopback host is a clear signal of operator error or a MITM attempt
 /// and is refused outright rather than silently trusted.
 fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
-    let mut builder = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10));
+    let mut builder =
+        reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(10));
     if url.starts_with("https://") {
         let host = url
             .trim_start_matches("https://")
@@ -142,7 +142,8 @@ fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
 
 fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "::1" | "localhost")
-        || host.parse::<std::net::IpAddr>()
+        || host
+            .parse::<std::net::IpAddr>()
             .map(|ip| ip.is_loopback())
             .unwrap_or(false)
 }
@@ -212,8 +213,8 @@ mod tests {
         // the `danger_accept_invalid_certs` flag from a public handle, but
         // the absence of an error here is the observable contract: the
         // client builds, so loopback is allowed.
-        let client = build_client("https://127.0.0.1:9000/admin")
-            .expect("loopback https should be allowed");
+        let client =
+            build_client("https://127.0.0.1:9000/admin").expect("loopback https should be allowed");
         drop(client);
     }
 

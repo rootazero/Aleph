@@ -84,12 +84,12 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
 
     // Split inner area into question + options + answer line + hint
     let chunks = Layout::vertical([
-        Constraint::Length(1),             // blank line
-        Constraint::Min(2),                // question
-        Constraint::Length(1),             // blank line
-        Constraint::Length(option_count),  // options (absent for free text)
-        Constraint::Length(1),             // typed answer
-        Constraint::Length(1),             // hint line
+        Constraint::Length(1),            // blank line
+        Constraint::Min(2),               // question
+        Constraint::Length(1),            // blank line
+        Constraint::Length(option_count), // options (absent for free text)
+        Constraint::Length(1),            // typed answer
+        Constraint::Length(1),            // hint line
     ])
     .split(inner);
 

@@ -215,14 +215,18 @@ impl ScopedToolService {
     /// Effective permission for `name` — the loop's enforcement chokepoint,
     /// which every permission gate here funnels through.
     ///
-    /// Precedence, most specific first:
+    /// Precedence, most binding first:
+    /// 0. a tier verdict of **`Deny`** — a floor no entry below may outrank.
+    ///    Today that is [`ExecTier::Plan`] and only [`ExecTier::Plan`]: it is
+    ///    the one tier that refuses instead of asking, so an entry naming the
+    ///    tool cannot answer a question it never posed;
     /// 1. **explicit exact-name** entry in the merged [`ToolPermissionsConfig`]
     ///    — an operator who names a tool has made a deliberate decision;
     /// 2. **explicit glob** entry (same call: [`ToolPermissionsConfig::resolve_explicit`]);
     /// 3. the configured `default` (`Allow` when no policy is attached),
     ///    TIGHTENED by the exec tier's rule ([`ExecTier::rule_for`], read off the
-    ///    tool's declared metadata, never off its name). The tier can raise a
-    ///    tool to `Ask`; it can never lower a `Deny`.
+    ///    tool's declared metadata, never off its name). Every tier but `Plan`
+    ///    can only raise a tool to `Ask`; none can lower a `Deny`.
     ///
     /// The precedence itself lives in
     /// [`crate::config::types::policies::effective_permission`] — shared with the

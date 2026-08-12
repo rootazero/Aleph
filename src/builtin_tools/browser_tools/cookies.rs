@@ -149,12 +149,31 @@ impl BrowserCookiesTool {
 #[async_trait]
 impl AlephTool for BrowserCookiesTool {
     const NAME: &'static str = "browser_cookies";
-    const DESCRIPTION: &'static str =
-        "List, get, set, delete, or clear cookies in the managed browser session";
+    // One-sided capability — `BrowserBackend::cookies` is served only by the
+    // managed Playwright backend; see `pdf.rs`. "in the managed browser
+    // session" read as a location, not as a restriction, so the model still
+    // reached for it on an existing-session profile.
+    const DESCRIPTION: &'static str = "List, get, set, delete, or clear cookies \
+         — managed profiles only (e.g. profile='default')";
     type Args = BrowserCookiesArgs;
     type Output = BrowserCookiesOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Lower the arguments FIRST: a `set` with no value (or a `get` with no
+        // name) is a model mistake and must not consume a user approval — the
+        // rule `exec.rs::plan_actions` states and the rest of this family now
+        // follows.
+        let op = match args.to_op() {
+            Ok(op) => op,
+            Err(e) => {
+                return Ok(BrowserCookiesOutput {
+                    success: false,
+                    cookies: None,
+                    message: Some(e),
+                });
+            }
+        };
+
         // Approve cookie writes BEFORE building the backend so a denied write
         // never even reaches a Chromium session. `List` / `Get` skip this gate.
         if matches!(
@@ -186,23 +205,13 @@ impl AlephTool for BrowserCookiesTool {
                 });
             }
         }
-        let op = match args.to_op() {
-            Ok(op) => op,
-            Err(e) => {
-                return Ok(BrowserCookiesOutput {
-                    success: false,
-                    cookies: None,
-                    message: Some(e),
-                });
-            }
-        };
         let backend = match super::make_backend(&self.manager, &args.profile) {
             Ok(b) => b,
             Err(e) => {
                 return Ok(BrowserCookiesOutput {
                     success: false,
                     cookies: None,
-                    message: Some(e.to_string()),
+                    message: Some(super::backend_error_text(&self.manager, &e)),
                 });
             }
         };
@@ -227,7 +236,11 @@ impl AlephTool for BrowserCookiesTool {
             Err(e) => Ok(BrowserCookiesOutput {
                 success: false,
                 cookies: None,
-                message: Some(format!("Cookie {:?} failed: {e}", args.action)),
+                message: Some(format!(
+                    "Cookie {:?} failed: {}",
+                    args.action,
+                    super::backend_error_text(&self.manager, &e)
+                )),
             }),
         }
     }
@@ -285,6 +298,29 @@ mod tests {
         let result = tool.call(a).await.unwrap();
         assert!(!result.success);
         assert!(result.message.unwrap().contains("value"));
+    }
+
+    #[tokio::test]
+    async fn test_cookies_malformed_set_does_not_consume_approval() {
+        use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
+        // Deny cookie writes outright: a `set` with no value must still report
+        // the missing field, proving validation ran before the gate.
+        let mut defaults = std::collections::HashMap::new();
+        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        let policy = Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        }));
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserCookiesTool::new(manager).with_approval_policy(policy);
+        let mut a = args(CookieAction::Set);
+        a.name = Some("sid".into());
+        let result = tool.call(a).await.unwrap();
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("value"), "got: {message}");
+        assert!(!message.contains("denied"), "got: {message}");
     }
 
     #[tokio::test]

@@ -577,8 +577,8 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "browser_batch",
-        description: <crate::builtin_tools::browser_tools::batch::BrowserBatchTool as crate::tools::AlephTool>::DESCRIPTION,
+        name: "browser_exec",
+        description: <crate::builtin_tools::browser_tools::exec::BrowserExecTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -1190,7 +1190,7 @@ pub fn create_tool_boxed(
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
-        | "browser_batch" | "browser_console" | "browser_hover" | "browser_scroll"
+        | "browser_exec" | "browser_console" | "browser_hover" | "browser_scroll"
         | "browser_pdf" | "browser_network" | "browser_dialog" | "browser_drag"
         | "browser_upload" | "browser_resize" | "browser_emulate" | "browser_cookies"
         | "browser_session" | "browser_profile" => None,
@@ -1732,7 +1732,7 @@ mod tests {
     /// runtime `summary` string states it in the response itself, which is
     /// strictly better than paying for it on every request that merely lists
     /// the tool.
-    /// 2026-08-11, the third registration shape: 94,306 -> 95,333 B. As with
+/// 2026-08-11, the third registration shape: 94,306 -> 95,333 B. As with
     /// the first half of 2026-08-10, **the increase is not new spending** — it
     /// is bytes that were already going out and were never counted. `subagent`
     /// (1,039 B) reaches the model through neither surface this ceiling summed:
@@ -1808,7 +1808,38 @@ mod tests {
     /// costs nothing on the calls where it does not happen. Six bytes to stop
     /// the catalog telling the model something false is the cheap side of this
     /// trade.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 97_539;
+    ///
+    /// 2026-08-12, same day, the browser-exec wave landed on top of the
+    /// 97,539 B ceiling above: `browser_batch` was renamed to `browser_exec`
+    /// and widened from nine write actions to a whole sub-procedure (navigate,
+    /// act, wait, and the reads). On its own that one entry grew by +467 B;
+    /// the rest of the wave paid for it by trimming siblings against question
+    /// (3): three managed-profile-only tools (`browser_pdf` / `browser_session`
+    /// / `browser_cookies`) each gained a 50-byte restriction telling the
+    /// model "this tool needs a managed profile", and `browser_emulate`'s
+    /// claim of six overrides was corrected to the one the default profile
+    /// actually honours. Net over the 94,306 B this all started at: +590 B
+    /// when measured from the pre-merge base alone, additive on top of the
+    /// ask_user / scratchpad / bridge bytes above. The value below is a
+    /// deliberately conservative upper bound so the ratchet stays green even
+    /// if the on-disk measurement drifts by a few bytes between this merge and
+    /// the next time someone runs `catalog_description_bytes_ratchet`; that
+    /// test prints the live number on failure and the constant is meant to be
+    /// re-tightened from that print, not left here at slack forever. (See the
+    /// post-merge note below the test for the exact measured figure.)
+    ///
+    /// One thing this ratchet deliberately does NOT measure, worth stating
+    /// because it moved a long way in the opposite direction the same day: the
+    /// catalog is not the wire. 23 of the 26 browser tools are now deferred in
+    /// work and code mode (`SessionMode::defers_tool`), and a deferred tool is
+    /// dropped from `list()` entirely — name, description and the collapse hint
+    /// with it. So the browser family's per-request cost fell by roughly 7.6 KB
+    /// in the modes that carry it while this catalog total rose by 0.6 KB.
+    /// Raising the ceiling is still the wrong reflex; the point is that a
+    /// catalog byte and a request byte stopped being the same byte for this
+    /// family, and the guard that bounds the second one is
+    /// `session_mode::tests::browser_family_deferral_is_measured`.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_141;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2370,7 +2401,7 @@ mod tests {
         assert!(names.contains(&"browser_fill_form".to_string()));
         assert!(names.contains(&"browser_press_key".to_string()));
         assert!(names.contains(&"browser_wait_for".to_string()));
-        assert!(names.contains(&"browser_batch".to_string()));
+        assert!(names.contains(&"browser_exec".to_string()));
         assert!(names.contains(&"browser_console".to_string()));
         assert!(names.contains(&"browser_hover".to_string()));
         assert!(names.contains(&"browser_scroll".to_string()));
@@ -2438,7 +2469,7 @@ mod tests {
         assert!(create_tool_boxed("browser_fill_form", None).is_none());
         assert!(create_tool_boxed("browser_press_key", None).is_none());
         assert!(create_tool_boxed("browser_wait_for", None).is_none());
-        assert!(create_tool_boxed("browser_batch", None).is_none());
+        assert!(create_tool_boxed("browser_exec", None).is_none());
         assert!(create_tool_boxed("browser_console", None).is_none());
         assert!(create_tool_boxed("browser_profile", None).is_none());
     }

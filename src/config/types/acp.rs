@@ -509,7 +509,9 @@ mod tests {
     #[test]
     fn test_preset_trust_levels() {
         assert_eq!(
-            AcpAdapterEntry::preset_by_id("claude-code").unwrap().trust_level,
+            AcpAdapterEntry::preset_by_id("claude-code")
+                .unwrap()
+                .trust_level,
             TrustLevel::Full
         );
         assert_eq!(

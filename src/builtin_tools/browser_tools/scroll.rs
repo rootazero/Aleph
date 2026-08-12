@@ -111,13 +111,16 @@ impl AlephTool for BrowserScrollTool {
                     }),
                     Err(e) => Ok(BrowserScrollOutput {
                         success: false,
-                        message: Some(format!("Scroll failed: {e}")),
+                        message: Some(format!(
+                            "Scroll failed: {}",
+                            super::backend_error_text(&self.manager, &e)
+                        )),
                     }),
                 }
             }
             Err(e) => Ok(BrowserScrollOutput {
                 success: false,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }

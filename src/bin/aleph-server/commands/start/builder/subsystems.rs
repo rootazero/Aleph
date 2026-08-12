@@ -743,8 +743,22 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // `channel_configs.get(channel_id) == None` → gating skipped → any group
     // member could invoke any slash command. This reads the same flat
     // `allow_admin_from` / `user_allowed_commands` / group-scoped keys from each
-    // channel instance config and registers them under the channel's runtime
-    // id (== instance id for non-iMessage channels).
+    // channel instance config and registers them under the channel's *instance*
+    // id.
+    //
+    // ⚠️ That is NOT always the channel's runtime id, though this comment
+    // claimed it was until 2026-08-11. `register_plain_channel!`'s generated
+    // creator takes `_config: ChannelConfig` and discards it, and each factory
+    // then hardcodes its runtime id to the channel TYPE
+    // (`WebhookChannel::new("webhook", ..)`, `DiscordChannel::new("discord", ..)`,
+    // ...). The executor looks the config up by the runtime id
+    // (`channel_run_identity(.., ctx.message.channel_id)`), so an instance named
+    // anything other than its type registers a policy nothing will ever read:
+    // tier, workspace, busy-input mode and tool-permission overrides all
+    // silently revert to defaults. Verified end to end 2026-08-11 (qa/README.md).
+    // Fixing it means threading the instance id through `ChannelFactory::create`,
+    // which changes a trait every channel implements — deliberately left as a
+    // decision rather than done in passing.
     //
     // Backward-compat: a channel that configures no admins yields an empty
     // `SlashAccessConfig`; we skip registration entirely so `channel_configs`

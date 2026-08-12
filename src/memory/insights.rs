@@ -595,7 +595,7 @@ mod tests {
             tool_row("3", "bash", true, 5, 102),
             tool_row("4", "read", true, 5, 103),
         ];
-        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        let digest = build_failure_digest(&rows, 0, 3600, 10, false);
         let report = build_report(&rows, 0, 3600, 10);
         assert_eq!(digest.report, report, "one aggregator, not two");
         assert_eq!(digest.failures.len(), 1, "only bash failed");
@@ -620,7 +620,7 @@ mod tests {
                 200 + i,
             ));
         }
-        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        let digest = build_failure_digest(&rows, 0, 3600, 10, false);
         let samples = &digest.failures[0].samples;
         assert!(
             samples.len() <= FAILURE_SAMPLES_PER_TOOL,
@@ -641,7 +641,7 @@ mod tests {
     fn failure_sample_truncation_is_utf8_safe() {
         let body = "错".repeat(FAILURE_SAMPLE_MAX_CHARS + 50);
         let rows = vec![failing_row("1", "bash", &body, 100)];
-        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        let digest = build_failure_digest(&rows, 0, 3600, 10, false);
         let s = &digest.failures[0].samples[0];
         assert_eq!(s.chars().count(), FAILURE_SAMPLE_MAX_CHARS);
     }
@@ -656,17 +656,17 @@ mod tests {
             failing_row("1", "bash", "boom", 100),
             tool_row("2", "bash", true, 5, 500),
         ];
-        let digest = build_failure_digest(&rows, 0, 3600, 10);
+        let digest = build_failure_digest(&rows, 0, 3600, 10, false);
         assert_eq!(digest.newest_created_at, 500);
         // Rows below the cutoff are neither counted nor allowed to move it.
-        let digest = build_failure_digest(&rows, 200, 3600, 10);
+        let digest = build_failure_digest(&rows, 200, 3600, 10, false);
         assert_eq!(digest.newest_created_at, 500);
         assert!(digest.failures.is_empty(), "the failure is out of window");
     }
 
     #[test]
     fn no_failures_yields_an_empty_evidence_list_and_zero_watermark() {
-        let digest = build_failure_digest(&[], 0, 3600, 10);
+        let digest = build_failure_digest(&[], 0, 3600, 10, false);
         assert!(digest.failures.is_empty());
         assert_eq!(digest.newest_created_at, 0);
         assert_eq!(digest.report.total, 0);

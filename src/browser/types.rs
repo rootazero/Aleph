@@ -106,9 +106,13 @@ impl Default for ScreenshotOpts {
 pub struct SnapshotOutput {
     /// Raw snapshot text — YAML from playwright-cli, indented-tree from chrome-devtools-mcp.
     pub snapshot_text: String,
-    /// Page URL at snapshot time.
+    /// Page URL at snapshot time. Both backends populate it (from the CLI page
+    /// header / the MCP snapshot header); no caller renders it yet — the
+    /// `browser_snapshot` tool returns `snapshot_text` alone, so the model
+    /// cannot see which page it is looking at.
     pub page_url: String,
-    /// Page title at snapshot time.
+    /// Page title at snapshot time. Same provenance and same gap as
+    /// [`Self::page_url`].
     pub page_title: String,
 }
 

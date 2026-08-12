@@ -4,10 +4,39 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::current_tool_call_id;
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
+use crate::tools::result_processing::recovery_footer;
+use crate::tools::result_store::{global_tool_result_store, ToolResultStore};
+use crate::tools::turn_context::current_session_key;
 use crate::tools::AlephTool;
+
+/// Clamp bounds for the model-supplied `max_chars`.
+///
+/// `max_chars` is the one knob in the browser tools that opts *out* of
+/// [`DEFAULT_CONTENT_MAX_CHARS`](super::DEFAULT_CONTENT_MAX_CHARS) — without a
+/// ceiling it opts out entirely, and a single `max_chars: usize::MAX` snapshot
+/// of a heavy page can be the whole request. Above the ceiling the offload
+/// below is strictly the better deal anyway: the full tree lands on disk and
+/// `ctx_search` retrieves only the relevant subtree. The floor keeps
+/// `max_chars: 0` from producing an empty "successful" snapshot.
+///
+/// Clamped at the system boundary, the same way
+/// [`wait_for::clamp_timeout`](super::wait_for::clamp_timeout) clamps a
+/// model-supplied timeout.
+pub(crate) const MIN_SNAPSHOT_CHARS: usize = 1_000;
+pub(crate) const MAX_SNAPSHOT_CHARS: usize = 120_000;
+
+/// Resolve the model-supplied `max_chars` into the safe
+/// `[MIN_SNAPSHOT_CHARS, MAX_SNAPSHOT_CHARS]` window, defaulting to the shared
+/// content budget when unset.
+pub(crate) fn resolve_max_chars(requested: Option<usize>) -> usize {
+    requested
+        .unwrap_or(super::DEFAULT_CONTENT_MAX_CHARS)
+        .clamp(MIN_SNAPSHOT_CHARS, MAX_SNAPSHOT_CHARS)
+}
 
 /// Arguments for the `browser_snapshot` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -15,7 +44,9 @@ pub struct BrowserSnapshotArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
-    /// Maximum output characters (default: 30000). Set higher for complex pages.
+    /// Maximum output characters (default: 30000, clamped to 1000..=120000).
+    /// A snapshot cut by this budget is offloaded whole — recover the dropped
+    /// tail with `ctx_search` rather than by raising this.
     pub max_chars: Option<usize>,
 }
 
@@ -39,6 +70,57 @@ impl BrowserSnapshotTool {
     pub const fn new(manager: Arc<ProfileManager>) -> Self {
         Self { manager }
     }
+
+    /// Offload the FULL snapshot to the tool-result store and return the
+    /// standard recovery footer (persist marker + `ctx_search` hint).
+    ///
+    /// Truncating inside the tool is otherwise irreversible: the tail is
+    /// dropped *before* `tool_output` ingress ever sees the value, so the
+    /// pipeline's own "persist the pre-reduction original" contract
+    /// (`tool_output::ingress`) cannot apply — it only ever sees the already-cut
+    /// text. Reusing the harness's own spill pair (`ToolResultStore` +
+    /// [`recovery_footer`]) rather than inventing a second mechanism means the
+    /// blob is indexed, so the model gets `ctx_search` and not just a file path.
+    ///
+    /// Redacted before it hits disk: everything persisted here is read back
+    /// into model context by `ctx_search` / `read_file`, so it must clear the
+    /// same secret-egress boundary the in-context copy clears. The injection
+    /// fence is deliberately NOT applied to the blob — `ctx_search` returns
+    /// *excerpts*, and an excerpt of a fenced blob carries at most one of the
+    /// two marker lines; an unbalanced fence is worse than none.
+    ///
+    /// `None` when the store or the call id is unavailable (direct `tools.invoke`,
+    /// tests, non-gateway paths) — the caller then says so instead of pointing
+    /// the model at a file that does not exist.
+    fn offload_full(&self, full: &str) -> Option<String> {
+        let call_id = current_tool_call_id()?;
+        let store = global_tool_result_store()?;
+        // Narrow to the session running this tool, because that is the scope
+        // `ctx_search` resolves its own reads under; searching the unscoped
+        // handle finds nothing. Same reasoning as `builtin_tools::ctx_search`.
+        let store = match current_session_key() {
+            Some(session) => ToolResultStore::for_session(&store, session),
+            None => store,
+        };
+        Self::offload_to(&store, &call_id, &self.manager, full)
+    }
+
+    /// The store-facing half of [`Self::offload_full`], split out so it can be
+    /// exercised against a temp-dir store — the process-wide store singleton is
+    /// a `OnceLock` and installing one from a test would leak into every other
+    /// test in the binary.
+    fn offload_to(
+        store: &ToolResultStore,
+        call_id: &str,
+        manager: &ProfileManager,
+        full: &str,
+    ) -> Option<String> {
+        let redacted = manager.redact_content(full);
+        // Threshold 0: we already know the text overflowed the tool's own
+        // budget, so persist unconditionally — same call shape the harness
+        // turn-spill uses.
+        recovery_footer(Some(store), call_id, Self::NAME, &redacted, 0).map(|(footer, _)| footer)
+    }
 }
 
 #[async_trait]
@@ -51,7 +133,7 @@ impl AlephTool for BrowserSnapshotTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Text-first: backend.snapshot() returns raw YAML/indented-tree text already.
-        let max_chars = args.max_chars.unwrap_or(super::DEFAULT_CONTENT_MAX_CHARS);
+        let max_chars = resolve_max_chars(args.max_chars);
 
         match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.snapshot(&tab_id).await {
@@ -66,9 +148,22 @@ impl AlephTool for BrowserSnapshotTool {
                     // so chat-template markers injected by a hostile page cannot
                     // escape (see `redact_wrap`).
                     let wrapped = super::redact_wrap(&self.manager, &text);
+                    let snapshot = if truncated {
+                        match self.offload_full(&snap.snapshot_text) {
+                            Some(footer) => format!("{wrapped}\n{footer}"),
+                            None => format!(
+                                "{wrapped}\n[snapshot truncated to {max_chars} chars and the \
+                                 full tree could not be offloaded here; the dropped tail is not \
+                                 recoverable — act on the refs above, or use browser_evaluate \
+                                 with a targeted DOM query]"
+                            ),
+                        }
+                    } else {
+                        wrapped
+                    };
                     Ok(BrowserSnapshotOutput {
                         success: true,
-                        snapshot: Some(wrapped),
+                        snapshot: Some(snapshot),
                         truncated,
                         ref_count,
                         message: Some(format!("Snapshot captured in profile '{}'", args.profile)),
@@ -79,7 +174,10 @@ impl AlephTool for BrowserSnapshotTool {
                     snapshot: None,
                     truncated: false,
                     ref_count: 0,
-                    message: Some(format!("Snapshot failed: {e}")),
+                    message: Some(format!(
+                        "Snapshot failed: {}",
+                        super::backend_error_text(&self.manager, &e)
+                    )),
                 }),
             },
             Err(e) => Ok(BrowserSnapshotOutput {
@@ -87,7 +185,7 @@ impl AlephTool for BrowserSnapshotTool {
                 snapshot: None,
                 truncated: false,
                 ref_count: 0,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }
@@ -115,5 +213,70 @@ mod tests {
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
         assert!(result.message.is_some());
+    }
+
+    /// `max_chars` is the one lever that opts out of the shared content budget;
+    /// without a ceiling it opts out entirely.
+    #[test]
+    fn max_chars_is_clamped_at_both_ends() {
+        assert_eq!(resolve_max_chars(Some(usize::MAX)), MAX_SNAPSHOT_CHARS);
+        assert_eq!(resolve_max_chars(Some(0)), MIN_SNAPSHOT_CHARS);
+        assert_eq!(resolve_max_chars(Some(50_000)), 50_000);
+        assert_eq!(
+            resolve_max_chars(None),
+            super::super::DEFAULT_CONTENT_MAX_CHARS,
+            "the default must sit inside the clamp window"
+        );
+    }
+
+    /// Truncating inside the tool used to be irreversible: the tail never
+    /// reached `tool_output` ingress, so nothing downstream could persist it.
+    /// The offload must put the WHOLE tree on disk — redacted, because the blob
+    /// is read back into model context — and hand back a footer the model can
+    /// act on.
+    #[test]
+    fn offload_persists_the_whole_tree_redacted() {
+        let base = std::env::temp_dir()
+            .join("aleph_test_browser_snapshot")
+            .join("offload");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let store = ToolResultStore::with_dir_for_tests(base.clone());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+
+        // A tree whose tail — the part `bound_content` would drop — carries both
+        // an actionable ref and a credential the page leaked into its DOM.
+        let mut tree: String = (0..4_000)
+            .map(|i| format!("- generic \"filler {i}\" [ref=e{i}]\n"))
+            .collect();
+        tree.push_str("- text \"token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789\"\n");
+        tree.push_str("- button \"Submit order\" [ref=eLAST]\n");
+
+        let footer = BrowserSnapshotTool::offload_to(&store, "call-1", &manager, &tree)
+            .expect("an over-budget tree must be offloaded");
+        assert!(
+            footer.contains("[Full output persisted: "),
+            "the model needs a recovery handle: {footer}"
+        );
+        assert!(
+            footer.contains("ctx_search"),
+            "the blob must be indexed, not merely written: {footer}"
+        );
+
+        let path = footer
+            .split("[Full output persisted: ")
+            .nth(1)
+            .and_then(|rest| rest.split(" (").next())
+            .expect("marker names a path");
+        let blob = std::fs::read_to_string(path).expect("blob exists on disk");
+        assert!(
+            blob.contains("[ref=eLAST]"),
+            "the dropped tail must be recoverable"
+        );
+        assert!(
+            !blob.contains("sk-ant-api03"),
+            "the persisted copy is read back into context, so it must be redacted"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

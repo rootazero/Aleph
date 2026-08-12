@@ -112,7 +112,10 @@ impl PendingInvokes {
     /// review batch); once that wiring lands the `#[allow]` can be removed.
     #[allow(dead_code)]
     pub(crate) fn remembered(&self, id: &str) -> bool {
-        self.seen_ids.lock().unwrap_or_else(|e| e.into_inner()).contains(id)
+        self.seen_ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(id)
     }
 
     /// Drop **all** waiters (used for connection disconnect cleanup). Returns the
@@ -305,9 +308,7 @@ impl ReverseRpcChannel {
         //
         // `OUTBOUND_PUSH_BUDGET_MS` caps the enqueue half regardless of the
         // caller's `timeout_ms`; the response window gets whatever remains.
-        let outbound_budget = Duration::from_millis(
-            timeout_ms.min(OUTBOUND_PUSH_BUDGET_MS),
-        );
+        let outbound_budget = Duration::from_millis(timeout_ms.min(OUTBOUND_PUSH_BUDGET_MS));
         let outbound_deadline = tokio::time::Instant::now() + outbound_budget;
         let response_deadline = tokio::time::Instant::now() + budget;
 

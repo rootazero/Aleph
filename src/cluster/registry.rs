@@ -215,7 +215,8 @@ impl NodeRegistry {
         let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
             return false;
         };
-        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id.clone())
+        if let std::collections::hash_map::Entry::Occupied(entry) =
+            inner.nodes_by_id.entry(node_id.clone())
         {
             if entry.get().conn_id == conn_id {
                 let removed_name = entry.get().device_name.clone();
@@ -1055,13 +1056,9 @@ mod tests {
         // (B1-07) Each variant's Display string is part of the operator-facing
         // contract for cluster.deregister and node_invoke — test the surface
         // directly so a refactor that drops the human-readable prefix is caught.
+        assert_eq!(ResolveError::NotFound.to_string(), "no online node matches");
         assert_eq!(
-            ResolveError::NotFound.to_string(),
-            "no online node matches"
-        );
-        assert_eq!(
-            ResolveError::Ambiguous(vec!["a (aaa)".into(), "b (bbb)".into()])
-                .to_string(),
+            ResolveError::Ambiguous(vec!["a (aaa)".into(), "b (bbb)".into()]).to_string(),
             "ambiguous — matches: a (aaa), b (bbb)"
         );
         assert_eq!(

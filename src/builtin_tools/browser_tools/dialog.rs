@@ -114,13 +114,16 @@ impl AlephTool for BrowserDialogTool {
                     }),
                     Err(e) => Ok(BrowserDialogOutput {
                         success: false,
-                        message: Some(format!("Dialog handling failed: {e}")),
+                        message: Some(format!(
+                            "Dialog handling failed: {}",
+                            super::backend_error_text(&self.manager, &e)
+                        )),
                     }),
                 }
             }
             Err(e) => Ok(BrowserDialogOutput {
                 success: false,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }

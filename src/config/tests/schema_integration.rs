@@ -52,8 +52,14 @@ fn test_ui_hints_coverage() {
     // schema-driven settings form. Re-introduce the population lists when
     // a genuine consumer is wired.
     let hints = build_ui_hints();
-    assert!(hints.groups.is_empty(), "groups is empty until re-introduced");
-    assert!(hints.fields.is_empty(), "fields is empty until re-introduced");
+    assert!(
+        hints.groups.is_empty(),
+        "groups is empty until re-introduced"
+    );
+    assert!(
+        hints.fields.is_empty(),
+        "fields is empty until re-introduced"
+    );
 }
 
 #[test]

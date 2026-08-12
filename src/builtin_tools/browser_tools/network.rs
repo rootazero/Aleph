@@ -63,13 +63,16 @@ impl AlephTool for BrowserNetworkTool {
                 Err(e) => Ok(BrowserNetworkOutput {
                     success: false,
                     requests: String::new(),
-                    message: Some(format!("Network log read failed: {e}")),
+                    message: Some(format!(
+                        "Network log read failed: {}",
+                        super::backend_error_text(&self.manager, &e)
+                    )),
                 }),
             },
             Err(e) => Ok(BrowserNetworkOutput {
                 success: false,
                 requests: String::new(),
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }

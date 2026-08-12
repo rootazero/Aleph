@@ -26,8 +26,18 @@ pub enum BrowserError {
     #[error("Failed to attach to browser: {0}")]
     AttachFailed(String),
 
+    /// The MCP server answered, and its answer was a failure — the tool's own
+    /// verdict about the page (element missing, wait elapsed, …).
     #[error("Chrome DevTools MCP error: {0}")]
     ChromeMcpError(String),
+
+    /// The MCP call never got an answer (broken pipe, dead server, client-side
+    /// request timeout). Distinct from [`Self::ChromeMcpError`] because "the
+    /// tool said no" and "nothing ever looked" are different facts, and a
+    /// caller that folds a negative verdict into a value (`wait_for` →
+    /// `Ok(false)`) must never fold this one.
+    #[error("Chrome DevTools MCP transport failure: {0}")]
+    ChromeMcpTransport(String),
 
     #[error("Playwright CLI error: {0}")]
     PlaywrightCliError(String),

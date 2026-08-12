@@ -1638,8 +1638,12 @@ mod tests {
             s.upsert_node(&node(id, NodeKind::Daemon, Origin::Llm))
                 .unwrap();
         }
-        s.upsert_node(&node("heartbeat:gone", NodeKind::LoopHeartbeat, Origin::Llm))
-            .unwrap();
+        s.upsert_node(&node(
+            "heartbeat:gone",
+            NodeKind::LoopHeartbeat,
+            Origin::Llm,
+        ))
+        .unwrap();
         for to in ["daemon:d1", "daemon:d2", "daemon:d3"] {
             s.upsert_edge(&GraphEdge::new(
                 "main",
@@ -1657,13 +1661,23 @@ mod tests {
         // remaining two DELETEs in the loop must roll back.
         s.lock()
             .execute_batch(
-                "CREATE TRIGGER gc_break_first_delete BEFORE DELETE ON graph_edges
+                // The latch table is created FIRST: the trigger's `WHEN` clause
+                // reads it, and a fixture that depends on SQLite deferring that
+                // resolution is a fixture that breaks on an engine upgrade.
+                //
+                // `VALUES (1)`, not `DEFAULT VALUES`: SQLite does not accept the
+                // `DEFAULT VALUES` form inside a TRIGGER body. rustc does not read
+                // this string, so the error surfaced only as a failing test —
+                // 判据 §10, "the language embedded in a string literal is one the
+                // compiler never looks at". The `WHEN NOT EXISTS` guard is what
+                // keeps the fixed constant from colliding on a second fire.
+                "CREATE TABLE _gc_break_fired (id INTEGER PRIMARY KEY);
+                 CREATE TRIGGER gc_break_first_delete BEFORE DELETE ON graph_edges
                  WHEN NOT EXISTS (SELECT 1 FROM _gc_break_fired)
                  BEGIN
-                     INSERT INTO _gc_break_fired DEFAULT VALUES;
+                     INSERT INTO _gc_break_fired (id) VALUES (1);
                      SELECT RAISE(ABORT, 'gc_fail_simulation');
-                 END;
-                 CREATE TABLE _gc_break_fired (id INTEGER PRIMARY KEY);",
+                 END;",
             )
             .unwrap();
 
