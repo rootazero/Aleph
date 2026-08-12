@@ -12,18 +12,30 @@
 //!
 //! # Usage
 //!
-//! ```toml
-//! [[channels]]
-//! id = "webhook"
-//! channel_type = "webhook"
-//! enabled = true
+//! `Config.channels` is a MAP keyed by instance id, so the table header carries
+//! the id and the keys are flat. The `[[channels]]` array-of-tables form this
+//! example used until 2026-08-11 does not parse at all — the server refuses to
+//! boot with `invalid type: sequence, expected a map`.
 //!
-//! [channels.config]
+//! ```toml
+//! [channels.webhook]
+//! type = "webhook"
+//! enabled = true
 //! secret = "my-hmac-secret"
 //! callback_url = "https://my-service.com/aleph/callback"
 //! path = "/webhook/generic" # must live under /webhook/, the shared route prefix
 //! allowed_senders = []
 //! ```
+//!
+//! ⚠️ Name the instance `webhook` (i.e. after its type) unless you know why not.
+//! [`WebhookChannelFactory::create`] hardcodes the runtime channel id to
+//! `"webhook"` and never sees the configured instance id, while `subsystems.rs`
+//! registers the per-channel policy block (`busy_input_mode`,
+//! `permission_level`, `tool_permissions`, `default_workspace`, slash access)
+//! under the *instance* id. Under any other name the two never meet and the
+//! whole policy block silently does nothing. This is not webhook-specific:
+//! `register_plain_channel!` discards the `ChannelConfig` it is handed, so every
+//! channel registered through it behaves the same way.
 
 pub mod config;
 pub mod message_ops;
