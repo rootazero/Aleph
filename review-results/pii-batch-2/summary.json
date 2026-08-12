@@ -1,0 +1,42 @@
+{
+  "batch": "pii-batch-2",
+  "title": "Identity & network detection rules",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-pii",
+  "branch": "review/pii",
+  "report": "review-results/pii-batch-2/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 3,
+    "medium": 4,
+    "low": 3,
+    "total": 10
+  },
+  "by_category": {
+    "security": 1,
+    "logic": 6,
+    "architecture": 2,
+    "quality": 1
+  },
+  "files_reviewed": [
+    { "path": "src/pii/rules/email.rs", "loc": 115, "findings": 1 },
+    { "path": "src/pii/rules/phone.rs", "loc": 270, "findings": 4 },
+    { "path": "src/pii/rules/id_card.rs", "loc": 256, "findings": 2 },
+    { "path": "src/pii/rules/bank_card.rs", "loc": 172, "findings": 2 },
+    { "path": "src/pii/rules/ip_address.rs", "loc": 88, "findings": 1 }
+  ],
+  "total_loc": 901,
+  "findings": [
+    { "id": 1, "severity": "High", "category": "Security", "file": "src/pii/rules/bank_card.rs", "line": 11, "title": "Card numbers with whitespace/hyphens slip past detection (false-negative)" },
+    { "id": 2, "severity": "High", "category": "Logic/Security", "file": "src/pii/rules/id_card.rs", "line": 14, "title": "ID-card regex is ASCII-only; spaced/hyphenated IDs are missed" },
+    { "id": 3, "severity": "High", "category": "Logic/Security", "file": "src/pii/rules/phone.rs", "line": 13, "title": "Phone regex is China-mobile-only; international/landline numbers silently pass" },
+    { "id": 4, "severity": "Medium", "category": "Logic", "file": "src/pii/rules/phone.rs", "line": 30, "title": "is_hex_bounded over-fires on single-letter hex prefix (e.g. 'a13812345678' slips past)" },
+    { "id": 5, "severity": "Medium", "category": "Logic", "file": "src/pii/rules/email.rs", "line": 18, "title": "Email allowlist case-folding works, but rule doc-comment does not mention the assumption (regression guard missing)" },
+    { "id": 6, "severity": "Medium", "category": "Logic/Architecture", "file": "src/pii/rules/bank_card.rs", "line": 39, "title": "No anti-hex guard — accepted design trade-off (Luhn false-positive rate ~10%)" },
+    { "id": 7, "severity": "Medium", "category": "Logic/Coverage", "file": "src/pii/rules/ip_address.rs", "line": 14, "title": "IPv4 only, no IPv6; gap should be documented in the rule doc comment" },
+    { "id": 8, "severity": "Low", "category": "Logic", "file": "src/pii/rules/phone.rs", "line": 69, "title": "is_timestamp_context window is 40/40 chars; a keyword 1 char past the window is missed" },
+    { "id": 9, "severity": "Low", "category": "Coverage/Security", "file": "src/pii/rules/bank_card.rs", "line": 11, "title": "12-digit Maestro cards missed (known limitation)" },
+    { "id": 10, "severity": "Low", "category": "Architecture/Quality", "file": "src/pii/rules/id_card.rs", "line": 144, "title": "is_valid_id_card's length-18 guard is defensive but unreachable given the regex" }
+  ]
+}
