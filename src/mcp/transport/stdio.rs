@@ -159,6 +159,21 @@ impl StdioTransport {
             }
         }
 
+        // A short breadcrumb so an operator can diagnose a server that fails
+        // to start because its runtime couldn't read a secret from the
+        // inherited environment. Per-key logging is too noisy; a single
+        // summary line is enough.
+        let stripped = std::env::vars()
+            .filter(|(k, _)| crate::security::secret_env::is_secret_env(k))
+            .count();
+        if stripped > 0 {
+            tracing::debug!(
+                server = %name,
+                stripped,
+                "stripped inherited secret env vars before spawning MCP server"
+            );
+        }
+
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
