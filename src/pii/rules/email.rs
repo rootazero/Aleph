@@ -112,4 +112,16 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].matched_text, "user@example.com");
     }
+
+    #[test]
+    fn test_match_mixed_case_email() {
+        // Regression: the email regex accepts mixed case local parts and
+        // domains; the allowlist in `allowlist.rs` uses `(?i)` patterns so
+        // suffix-based allow entries (e.g. `.com`, `.example`) still match
+        // `User@Example.COM`. This test guards against future case-fold
+        // regressions in either layer.
+        let matches = rule().detect("Contact User@Example.COM");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "User@Example.COM");
+    }
 }

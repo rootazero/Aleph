@@ -8,8 +8,17 @@ use std::sync::OnceLock;
 static BANK_CARD_RE: OnceLock<Regex> = OnceLock::new();
 
 fn bank_card_regex() -> &'static Regex {
-    // rust-doctor-disable-next-line unwrap-in-production
-    BANK_CARD_RE.get_or_init(|| Regex::new(r"\d{13,19}").expect("static bank card regex compiles"))
+    BANK_CARD_RE.get_or_init(|| {
+        // Card numbers pasted from real sources almost always include
+        // whitespace or hyphen separators ("4532 0151 1283 0366" or
+        // "4532-0151-1283-0366"). A bare-digit-only regex misses them
+        // and leaks the digits in plaintext. We accept a single optional
+        // space or hyphen between digits; the dot form is excluded by
+        // `is_decimal_context` below. Luhn still gates the match.
+        Regex::new(r"\d(?:[ \-]?\d){12,18}")
+            // rust-doctor-disable-next-line unwrap-in-production
+            .expect("static bank card regex compiles")
+    })
 }
 
 pub struct BankCardRule;
@@ -168,5 +177,29 @@ mod tests {
     fn test_no_match_short_number() {
         let matches = rule().detect("ID: 12345678");
         assert_eq!(matches.len(), 0);
+    }
+
+    // Spaced/hyphenated forms (regression: B2-H1)
+    #[test]
+    fn test_detect_spaced_card_number() {
+        // Real-world paste: 4532 0151 1283 0366 (4-4-4-4 grouping).
+        let matches = rule().detect("Use card 4532 0151 1283 0366 to upgrade");
+        assert_eq!(matches.len(), 1, "spaced card number must be detected");
+        assert!(matches[0].matched_text.contains("4532 0151 1283 0366"));
+    }
+
+    #[test]
+    fn test_detect_hyphenated_card_number() {
+        // 4-4-4-4 with hyphens is common in statements and form fills.
+        let matches = rule().detect("Card: 4532-0151-1283-0366");
+        assert_eq!(matches.len(), 1, "hyphenated card number must be detected");
+    }
+
+    #[test]
+    fn test_detect_mixed_separator_card_number() {
+        // The grouped form `4532 0151-1283 0366` (some POS systems) must
+        // still match because each separator is space-or-hyphen.
+        let matches = rule().detect("auth 4532 0151-1283 0366 ok");
+        assert_eq!(matches.len(), 1);
     }
 }

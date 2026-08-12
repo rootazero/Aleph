@@ -1,4 +1,14 @@
 //! Chinese mobile phone number detection with anti-false-positive checks
+//!
+//! Scope: this rule matches **Chinese-mainland mobile numbers only** —
+//! exactly 11 digits, prefix `1[3-9]`. International numbers, Chinese
+//! landlines (e.g. `010-12345678`), and formatted variants (`+86 138...`,
+//! `138-1234-5678`, `138 1234 5678`) are intentionally out of scope.
+//!
+//! Operators who need international coverage should add a `phone_intl`
+//! custom rule via `[[privacy.custom_rules]]` (see `CustomRegexRule`).
+//! The combination is safe — `dedup_overlapping` resolves overlap; if a
+//! number happens to match both rules the higher-severity one wins.
 
 use crate::pii::engine::{PiiMatch, PiiSeverity};
 use crate::pii::rules::PiiRule;
@@ -190,6 +200,25 @@ mod tests {
         let matches = rule().detect("a18612345678b");
         // Preceded by hex 'a' — should skip
         assert_eq!(matches.len(), 0, "Hex-bounded number should not match");
+    }
+
+    #[test]
+    fn test_no_match_isolated_hex_prefix_is_known_limitation() {
+        // Documented limitation: an isolated single hex letter before a
+        // phone (e.g. "a13812345678") is suppressed by `is_hex_bounded`.
+        // This is intentional — the alternative (allowing it) produces
+        // false positives on hex literals like `a13812345678` (e.g.
+        // serial numbers), and the over-fire rate of the current rule is
+        // bounded by the rarity of phones starting with `0` or any
+        // non-digit, non-hex char. If a real production hit is observed,
+        // tighten `is_hex_bounded` to require a *pair* of hex letters
+        // (UUID-like prefix shape) rather than a single one.
+        let matches = rule().detect("var a13812345678 = 1;");
+        assert_eq!(
+            matches.len(),
+            0,
+            "isolated hex letter before phone is treated as hex context (known limitation)"
+        );
     }
 
     #[test]
