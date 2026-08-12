@@ -196,12 +196,52 @@ pub fn list_note_corpora(memory_dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(memory_dir) else {
         return Vec::new();
     };
-    let mut ids: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| !name.is_empty() && !name.starts_with('.'))
-        .collect();
+    // Distinguish per-entry errors (a permissions error on a single sub-corpus)
+    // from a clean walk. The previous `flatten()` silently dropped both, so a
+    // vault with a partial permissions issue returned a partial list and the
+    // dream fan-out silently skipped the un-listed corpora.
+    let mut ids: Vec<String> = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    dir = %memory_dir.display(),
+                    "list_note_corpora: read_dir entry failed; skipping"
+                );
+                continue;
+            }
+        };
+        let is_dir = match entry.file_type() {
+            Ok(t) => t.is_dir(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    entry = %entry.path().display(),
+                    "list_note_corpora: file_type failed; skipping"
+                );
+                continue;
+            }
+        };
+        if !is_dir {
+            continue;
+        }
+        let name = match entry.file_name().into_string() {
+            Ok(s) => s,
+            Err(_) => {
+                tracing::warn!(
+                    entry = %entry.path().display(),
+                    "list_note_corpora: non-UTF8 entry name; skipping"
+                );
+                continue;
+            }
+        };
+        if name.is_empty() || name.starts_with('.') {
+            continue;
+        }
+        ids.push(name);
+    }
     ids.sort();
     ids.dedup();
     ids
