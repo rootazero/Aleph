@@ -369,6 +369,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
 
         let steered = session.clone();
@@ -417,6 +418,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
 
         tokio::spawn(async move {

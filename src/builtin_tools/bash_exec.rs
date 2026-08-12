@@ -1367,6 +1367,7 @@ mod tests {
             caller_role: None,
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         };
 
         SESSION_ID
