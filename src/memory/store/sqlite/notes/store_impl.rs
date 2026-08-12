@@ -39,16 +39,18 @@ macro_rules! lock_conn {
         // their fallible shape without a per-site change. The recovery is
         // logged so a poison event is visible to operators (a silent
         // into_inner() is the exact failure mode that hid the half-committed
-        // statement bug for years).
+        // statement bug for years). The explicit Ok::<_, AlephError> keeps
+        // the return type pinned through the match arms; the per-site `?`
+        // relies on the From<Mutex<...>> impl, which is non-unique here.
         match $self.conn.lock() {
-            Ok(g) => Ok(g),
+            Ok(g) => Ok::<_, AlephError>(g),
             Err(poisoned) => {
                 tracing::warn!(
                     caller = stringify!($self),
                     "notes store: SQLite mutex was poisoned by a prior panic; \
                      recovering (this should be rare)"
                 );
-                Ok(poisoned.into_inner())
+                Ok::<_, AlephError>(poisoned.into_inner())
             }
         }
     }};

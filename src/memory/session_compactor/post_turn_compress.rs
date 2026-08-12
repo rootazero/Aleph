@@ -28,7 +28,11 @@ async fn write_precompress_raw(
 ) {
     if let Some(registry) = registry {
         let ctx = CaptureCtx {
-            agent_id: raw.agent_id.clone().unwrap_or_default(),
+            // raw.agent_id and raw.session_id are plain String (not Option)
+            // on the per-compress write path. The orchestrator already
+            // populates both via .with_agent / .with_session above; the
+            // pre-compress raw is the same struct.
+            agent_id: raw.agent_id.clone(),
             namespace: crate::memory::namespace::NamespaceScope::Owner,
             session_id: raw.session_id.clone(),
             source_hint: "pre_compress".into(),
