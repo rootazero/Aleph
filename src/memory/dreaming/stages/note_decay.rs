@@ -150,7 +150,13 @@ impl DreamStage for NoteDecayStage {
             }
 
             // --- Protection rule 1: too new (< 7 days) ---
-            if now - note.created_at < 7 * 86400 {
+            // Calendar days via chrono::Duration, not 7*86400 raw seconds:
+            // 7*86400 is exactly 7.0 solar days and ignores leap seconds; a
+            // 1-hour NTP correction at the boundary can flip a borderline note
+            // in or out of protection.
+            let age_seconds = now - note.created_at;
+            const SEVEN_DAYS_SECS: i64 = 7 * 86_400;
+            if age_seconds < SEVEN_DAYS_SECS {
                 notes_protected += 1;
                 continue;
             }
@@ -393,7 +399,7 @@ impl DreamStage for NoteDecayStage {
             // stale note).
             if note.stale
                 && matches!(note.severity, Severity::Low | Severity::Med)
-                && (now_ts - note.created_at) >= 7 * 86400
+                && (now_ts - note.created_at) >= 7 * 86_400
             {
                 let incoming = ctx
                     .indexer
