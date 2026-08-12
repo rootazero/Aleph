@@ -174,9 +174,19 @@ impl HybridAssembler {
         // overshot the envelope (with headroom 300: 210 + 500 + 200 = 910).
         // Bound the pinned pair to the remaining 30% so the whole envelope
         // stays within budget.
+        //
+        // Tiny-budget short-circuit: a 0-token or sub-floor total would
+        // otherwise compute `pinned_cap = 0`, then `pinned_cap.max(1) = 1`,
+        // and the pin steals 1 token from an envelope that cannot afford it.
+        // Skip the pin entirely for budgets below MIN_PIN_BUDGET (4 tokens is
+        // the smallest useful pin: a single fact under our 4 chars/token
+        // heuristic). Mirrors the `candidates_considered < 3` short-circuit
+        // that already gates the LLM re-rank.
+        const MIN_PIN_BUDGET: u32 = 4;
+        let pin_enabled = total_budget >= MIN_PIN_BUDGET;
         let pinned_cap = u32::try_from((f64::from(total_budget) * 0.3) as u64).unwrap_or(u32::MAX);
         let clamp_pinned = |configured: u32| -> u32 {
-            if configured == 0 {
+            if configured == 0 || !pin_enabled {
                 0
             } else {
                 configured.min(pinned_cap.max(1))
@@ -449,11 +459,15 @@ fn hydrate(slots: &mut [EnvelopeSlot]) {
             item.tokens = estimate_tokens(&truncated);
             item.content = truncated;
             used = used.saturating_add(item.tokens);
-            // No early break: once the budget is exhausted, remaining_chars is
-            // 0, so later items truncate to empty and are dropped by the
-            // retain below. Breaking instead would leave them with their full
-            // untruncated content (tokens == 0), which the retain keeps —
-            // silently blowing the slot budget.
+            // Once the budget is exhausted, drop the rest of the slot's items
+            // in-place. The previous shape relied on the post-loop `retain`
+            // dropping zero-tokens empties, which is fragile: any future
+            // change to `truncate_chars` that returned non-empty for length-0
+            // input would silently blow the budget. Break here so the budget
+            // invariant is enforced at the loop, not at the post-loop filter.
+            if used >= slot.tokens_budget {
+                break;
+            }
         }
         slot.tokens_used = used;
         slot.items.retain(|i| i.tokens > 0 || !i.content.is_empty());
