@@ -1,6 +1,7 @@
 use super::*;
 use aleph_protocol::{
-    AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind, StreamEvent,
+    AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind,
+    SessionSnapshot, StreamEvent,
 };
 
 #[test]
@@ -166,20 +167,104 @@ fn close_overlay_resets_focus() {
     assert!(state.dialog.is_none());
 }
 
+/// A menu question, with the two labels this fixture reuses.
+fn menu_view(question: &str) -> AskDialogView {
+    AskDialogView {
+        question: question.to_string(),
+        options: vec!["Yes".into(), "No".into()],
+        multi_select: false,
+        secret: false,
+    }
+}
+
 #[test]
 fn show_dialog_sets_focus() {
     let mut state = AppState::new("s".into(), "m".into());
-    state.show_dialog(
-        "telegram:bot:1:u1".into(),
-        "Approve?".into(),
-        vec!["Yes".into(), "No".into()],
-    );
+    state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
     assert_eq!(state.focus, Focus::Dialog);
     let dialog = state.dialog.as_ref().unwrap();
     assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Approve?");
     assert_eq!(dialog.options.len(), 2);
     assert_eq!(dialog.selected, 0);
+    // A menu question opens on the menu.
+    assert!(!dialog.typing);
+    assert!(dialog.has_quick_pick());
+}
+
+/// The defect the answer buffer exists to close: a question with no choices had
+/// no answerable key at all, and `Esc` is swallowed for this overlay, so the
+/// TUI was held by a modal nothing could dismiss. Such a question must open
+/// straight into text mode.
+#[test]
+fn a_free_text_question_opens_ready_to_type() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog(
+        "telegram:bot:1:u1".into(),
+        AskDialogView {
+            question: "Which language?".into(),
+            options: vec![],
+            multi_select: false,
+            secret: false,
+        },
+    );
+    let dialog = state.dialog.as_ref().unwrap();
+    assert!(dialog.typing, "a question with no menu must accept typing");
+    assert!(!dialog.has_quick_pick());
+    // Nothing typed yet ⇒ Enter has nothing to send (rather than sending "").
+    assert_eq!(dialog.pending_reply(), None);
+}
+
+/// A single index cannot express a multi-select answer, so there is nothing to
+/// quick-pick — the same reason the server suppresses a channel's inline
+/// keyboard for these (`clarification::render::keyboard_for`).
+#[test]
+fn a_multi_select_question_opens_ready_to_type() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog(
+        "telegram:bot:1:u1".into(),
+        AskDialogView {
+            multi_select: true,
+            ..menu_view("Which ones?")
+        },
+    );
+    let dialog = state.dialog.as_ref().unwrap();
+    assert!(dialog.typing);
+    assert!(!dialog.has_quick_pick());
+}
+
+/// A pick sends the 1-BASED INDEX. Labels carry a `— description` suffix and
+/// core matches labels exactly, so replying with the label would arrive as free
+/// text with no selected index — right to a human, `custom` to the model.
+#[test]
+fn a_pick_replies_with_the_index_not_the_label() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog(
+        "k".into(),
+        AskDialogView {
+            options: vec!["staging — shared QA".into(), "prod — live".into()],
+            ..menu_view("Deploy where?")
+        },
+    );
+    let dialog = state.dialog.as_mut().unwrap();
+    assert_eq!(dialog.pending_reply().as_deref(), Some("1"));
+    dialog.selected = 1;
+    assert_eq!(dialog.pending_reply().as_deref(), Some("2"));
+}
+
+/// Free text always beats the menu in text mode — a menu never forbids it,
+/// which is why `ask_user` tells the model never to add an "other" choice.
+#[test]
+fn a_typed_answer_is_sent_verbatim() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog("k".into(), menu_view("Approve?"));
+    let dialog = state.dialog.as_mut().unwrap();
+    dialog.typing = true;
+    dialog.input = "  neither, wait for Ana  ".into();
+    assert_eq!(dialog.pending_reply().as_deref(), Some("neither, wait for Ana"));
+    // Tabbing back to the list means the list, buffer or no buffer.
+    dialog.typing = false;
+    assert_eq!(dialog.pending_reply().as_deref(), Some("1"));
 }
 
 #[test]
@@ -770,6 +855,10 @@ fn handle_ask_user_shows_dialog() {
         session_key: "telegram:bot:1:u1".into(),
         question: "Allow file write?".into(),
         options: vec!["Allow".into(), "Deny".into()],
+        // A core that predates the structured view sends neither; the overlay
+        // must still render from the flat pair.
+        questions: vec![],
+        answered: 0,
     };
     state.handle_gateway_event(event);
 
@@ -778,6 +867,91 @@ fn handle_ask_user_shows_dialog() {
     // The dialog keeps the clarification key so the answer can resolve it.
     assert_eq!(dialog.session_key, "telegram:bot:1:u1");
     assert_eq!(dialog.question, "Allow file write?");
+    assert_eq!(dialog.options, vec!["Allow", "Deny"]);
+}
+
+/// With the structured view the overlay must show what the flat pair
+/// structurally cannot: the per-option description, the short header, and the
+/// position within a multi-question request. Indices stay 1-based and
+/// unchanged, which is what lets the answer keep being a bare number.
+#[test]
+fn handle_ask_user_renders_the_structured_question() {
+    use aleph_protocol::{AskUserOption, AskUserQuestion};
+
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::AskUser {
+        run_id: "run-1".into(),
+        seq: 3,
+        session_key: "telegram:bot:1:u1".into(),
+        question: "Ticket id?".into(),
+        options: vec![],
+        questions: vec![
+            AskUserQuestion {
+                id: "env".into(),
+                header: Some("Env".into()),
+                prompt: "Deploy where?".into(),
+                options: vec![AskUserOption {
+                    label: "staging".into(),
+                    description: Some("shared QA".into()),
+                }],
+                multi_select: false,
+                secret: false,
+            },
+            AskUserQuestion {
+                id: "ticket".into(),
+                header: None,
+                prompt: "Ticket id?".into(),
+                options: vec![],
+                multi_select: false,
+                secret: false,
+            },
+        ],
+        answered: 1,
+    });
+
+    let dialog = state.dialog.as_ref().unwrap();
+    // Cursor at 1 ⇒ the SECOND question, not the first.
+    assert!(
+        dialog.question.contains("Ticket id?"),
+        "{}",
+        dialog.question
+    );
+    assert!(dialog.question.contains("(2/2)"), "{}", dialog.question);
+}
+
+/// The description reaches this surface at all — the defect the structured
+/// view exists to close (a channel rendered `label — description` while every
+/// other face rendered a bare label).
+#[test]
+fn handle_ask_user_shows_option_descriptions() {
+    use aleph_protocol::{AskUserOption, AskUserQuestion};
+
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::AskUser {
+        run_id: "run-1".into(),
+        seq: 1,
+        session_key: "telegram:bot:1:u1".into(),
+        question: "Deploy where?".into(),
+        options: vec!["staging".into()],
+        questions: vec![AskUserQuestion {
+            id: "env".into(),
+            header: Some("Env".into()),
+            prompt: "Deploy where?".into(),
+            options: vec![AskUserOption {
+                label: "staging".into(),
+                description: Some("shared QA".into()),
+            }],
+            multi_select: false,
+            secret: false,
+        }],
+        answered: 0,
+    });
+
+    let dialog = state.dialog.as_ref().unwrap();
+    assert_eq!(dialog.options, vec!["staging — shared QA"]);
+    assert!(dialog.question.starts_with("[Env] "), "{}", dialog.question);
+    // Single question ⇒ no position marker.
+    assert!(!dialog.question.contains("(1/"), "{}", dialog.question);
 }
 
 #[test]
@@ -1023,4 +1197,183 @@ fn a_row_absent_from_the_summary_settles_to_unknown() {
         state.find_tool_mut("ghost").unwrap().status,
         ToolStatus::Unknown
     );
+}
+
+// ---------------------------------------------------------------------------
+// Thread persistence: the settings a reopened terminal must come back with
+// ---------------------------------------------------------------------------
+
+fn snapshot(key: &str) -> SessionSnapshot {
+    SessionSnapshot {
+        session_key: key.to_string(),
+        agent_id: "main".into(),
+        mode: Some("code".into()),
+        exec_tier: Some("ask".into()),
+        think_level: Some("high".into()),
+        memory_mode: Some("off".into()),
+        model_pin: Some("claude-opus-5".into()),
+        model_pin_provider: Some("anthropic".into()),
+        model: Some("gpt-5".into()),
+        model_provider: Some("openai".into()),
+        input_tokens: 900,
+        output_tokens: 340,
+        total_tokens: 1_240,
+        estimated_cost_usd: 0.12,
+        message_count: 8,
+        compaction_count: 1,
+        project_root: Some("/tmp/proj".into()),
+        label: None,
+    }
+}
+
+/// The headline behaviour: reopening a conversation restores its own settings,
+/// not the install defaults the client happened to launch with.
+#[test]
+fn attaching_restores_the_conversations_settings_and_token_count() {
+    let mut state = AppState::new(String::new(), "install-default-model".into());
+    assert_eq!(state.total_tokens, 0);
+
+    state.apply_session_snapshot(snapshot("agent:main:main:s3"));
+
+    assert_eq!(state.session_key, "agent:main:main:s3");
+    assert_eq!(
+        state.total_tokens, 1_240,
+        "the counter must not restart at 0"
+    );
+    let knobs = state.session_knobs();
+    assert_eq!(knobs.mode, Some("code"));
+    assert_eq!(knobs.exec_tier, Some("ask"));
+    assert_eq!(knobs.think_level, Some("high"));
+    assert_eq!(knobs.memory_mode, Some("off"));
+}
+
+/// A pinned model wins over the model that last served: the pick applies from
+/// the next run, so showing `model` alone names the model the user just left.
+#[test]
+fn the_caption_shows_the_pin_not_the_model_it_replaced() {
+    let mut state = AppState::new(String::new(), "install-default-model".into());
+    state.apply_session_snapshot(snapshot("k"));
+    assert_eq!(state.model_name, "claude-opus-5");
+}
+
+/// A conversation that has never run names no model. The caption must fall back
+/// to the install default rather than keeping whatever the previous session had.
+#[test]
+fn a_conversation_with_no_model_falls_back_to_the_install_default() {
+    let mut state = AppState::new(String::new(), "install-default-model".into());
+    state.apply_session_snapshot(snapshot("first"));
+    assert_eq!(state.model_name, "claude-opus-5");
+
+    let fresh = SessionSnapshot {
+        session_key: "second".into(),
+        ..SessionSnapshot::default()
+    };
+    state.apply_session_snapshot(fresh);
+    assert_eq!(state.model_name, "install-default-model");
+}
+
+/// Per-conversation state in a singleton component: switching must not carry
+/// the previous conversation's spend or settings into the new one's status bar.
+#[test]
+fn switching_sessions_clears_the_previous_conversations_state() {
+    let mut state = AppState::new("old".into(), "install-default-model".into());
+    state.apply_session_snapshot(snapshot("old"));
+    assert_eq!(state.total_tokens, 1_240);
+
+    state.switch_session("agent:main:main:s9");
+
+    assert_eq!(state.session_key, "agent:main:main:s9");
+    assert_eq!(state.total_tokens, 0, "token count bled across the switch");
+    assert_eq!(state.session_knobs(), SessionKnobs::default());
+    assert_eq!(state.model_name, "install-default-model");
+}
+
+/// The gateway is the only authority on which key a run was routed to: an
+/// unparseable key does not fail the call, it makes the router mint a fresh
+/// epoch. A client that kept its own guess would address nothing.
+#[test]
+fn the_canonical_key_from_the_server_is_adopted() {
+    let mut state = AppState::new(String::new(), "m".into());
+    state.adopt_canonical_session_key("agent:main:main:s4");
+    assert_eq!(state.session_key, "agent:main:main:s4");
+}
+
+/// …but an empty or unchanged key is a no-op: a server that omits the field
+/// must not be able to blank the key the client is using.
+#[test]
+fn an_absent_canonical_key_does_not_blank_the_session() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    state.adopt_canonical_session_key("");
+    assert_eq!(state.session_key, "agent:main:main");
+}
+
+/// Adopting a *different* key drops the settings we hold: they describe the key
+/// we just replaced, and a status bar confidently describing someone else's
+/// conversation is worse than one that says nothing.
+#[test]
+fn adopting_a_different_key_drops_the_stale_settings() {
+    let mut state = AppState::new("old".into(), "m".into());
+    state.apply_session_snapshot(snapshot("old"));
+    state.adopt_canonical_session_key("agent:main:main:s7");
+    assert_eq!(state.session_knobs(), SessionKnobs::default());
+}
+
+/// A locally-set knob shows immediately, without waiting for the next attach —
+/// but only through `record_local_knob`, which callers reach only after the
+/// server has accepted the write.
+#[test]
+fn a_locally_recorded_knob_is_visible_before_the_next_attach() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    assert_eq!(state.session_knobs().exec_tier, None);
+
+    state.record_local_knob(SessionKnob::ExecTier, Some("full".into()));
+    assert_eq!(state.session_knobs().exec_tier, Some("full"));
+
+    // Clearing back to "follow global" is `None`, not a literal.
+    state.record_local_knob(SessionKnob::ExecTier, None);
+    assert_eq!(state.session_knobs().exec_tier, None);
+}
+
+/// A question that ends without this client answering it must take its card
+/// with it. Before the protocol carried the terminal frame, an expired or
+/// cancelled clarification left the overlay holding focus and claiming the
+/// agent was waiting — for up to the 600 s timeout.
+#[test]
+fn a_clarification_that_ends_elsewhere_retires_the_card() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
+    assert_eq!(state.focus, Focus::Dialog);
+
+    state.handle_gateway_event(StreamEvent::ClarificationEnded {
+        session_key: "telegram:bot:1:u1".into(),
+        outcome: "expired".into(),
+    });
+
+    assert!(state.dialog.is_none(), "the card must go with the question");
+    assert_eq!(state.focus, Focus::Input);
+    // The user is told WHICH ending it was: vanishing silently leaves them
+    // unable to tell "answered" from "timed out while I was reading".
+    match state.messages.last() {
+        Some(ChatMessage::System { content }) => {
+            assert!(content.contains("expired"), "{content}");
+        }
+        other => panic!("expected a system line naming the outcome, got {other:?}"),
+    }
+}
+
+/// …but only its own. Two sessions are live in one TUI whenever a background
+/// run answers elsewhere; closing on a foreign frame would yank a card the user
+/// is mid-answer on.
+#[test]
+fn a_clarification_ending_in_another_session_leaves_this_card_alone() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.show_dialog("telegram:bot:1:u1".into(), menu_view("Approve?"));
+
+    state.handle_gateway_event(StreamEvent::ClarificationEnded {
+        session_key: "telegram:bot:1:SOMEONE-ELSE".into(),
+        outcome: "cancelled".into(),
+    });
+
+    assert!(state.dialog.is_some(), "a foreign frame must not close this card");
+    assert_eq!(state.focus, Focus::Dialog);
 }

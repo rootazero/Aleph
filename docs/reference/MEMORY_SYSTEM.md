@@ -324,6 +324,66 @@ The live compression triggers are: turn threshold, hourly background interval, s
 
 Embedding provider, rerank, scoring pipeline, and noise filter live in dedicated subtables — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
+## 10b. Per-session memory mode (2026-08-11)
+
+`[memory] enabled` is install-wide. The question users actually have is
+per-conversation: *this* thread is a clean-room review, or a demo, or a
+transcript someone else will read — do not fold my curated memory, my note index
+and my recall hits into it. Turning the global switch off to get that costs
+every other conversation its memory, so nobody does; they open a second agent
+instead and split their memory partition permanently.
+
+`MemoryMode::{On,Off}` (`src/memory/session_memory_mode.rs`) is the fifth
+session knob, alongside the exec tier, the usage mode, the thinking level and
+the model pin — same carrier (`identity_meta.custom["memory_mode"]`), same
+**request > session > global** precedence, resolved in
+`gateway::execution_engine::turn_memory` (a line-for-line twin of `turn_mode`).
+
+**What it gates, and what it deliberately does not:**
+
+- **Gated**: the three *injected* envelopes — curated memory, the wiki
+  orientation index, and per-query hybrid recall — at the one point they
+  converge, `harness_bridge::prompt_build`. One condition covers the family;
+  none of the three builders knows the knob exists.
+- **Not gated — the memory tools.** `memory_search`, `remember`, `note_*` stay
+  callable. Silently removing a tool the model can see is how a model ends up
+  insisting it saved something it did not.
+- **Not gated — writes.** A muted conversation still records what it learns.
+  Muting the read side must not quietly mute the write side, or a user who
+  wanted a clean prompt finds a hole in their history months later.
+
+**The muted case is stated in the prompt** (`OperatingEnvelopeLayer`'s
+`MEMORY_MUTED_LINE`, rendered only when off, so every unmuted prompt stays
+byte-identical). Withheld memory is indistinguishable from absent memory from
+the inside: without the line the model concludes it never knew, and then either
+invents a reason for the gap or re-asks what the user already told it. The line
+also names what is still reachable, so "no memory" is not read as "the memory
+tools are gone".
+
+**codex parity, minus one state.** codex threads carry `memory_mode`
+(`enabled` / `disabled` / `polluted`) and its TUI settings page writes it per
+thread. Aleph does not port `polluted`: it marks a thread whose context came
+from an external MCP source and is therefore unsafe to *learn from* — a
+write-side concern Aleph answers elsewhere (`memory_trace`, the ingest
+governance gate). This knob is read-side only.
+
+⚠️ **`[memory] enabled` gets its first consumer here — a behaviour change for
+installs that set it to `false`.** The flag is documented above as the master
+switch, is surfaced by `config/ui_hints`, and is logged at startup by both
+`config::load` and `config::validate`; before 2026-08-11 **nothing read it to
+decide anything**. The gate in `assembler/hybrid.rs` reads
+`[memory.assembler] enabled`, a different flag with a narrower meaning (whether
+hybrid retrieval runs), so an install that turned the master switch off still
+had its curated memory and note index folded into every prompt. Those installs
+now get what they configured. The alternative — leaving the switch inert and
+making the per-session knob purely additive — would have preserved byte-identical
+behaviour at the price of keeping a documented switch that does nothing, which is
+the worse of the two lies.
+
+Surfaces: `chat.send{memory}` / `agent.run{memory}`, `sessions.patch`
+(`memory_mode`), TUI `/memory-mode on|off|default`, and the attach snapshot on
+`chat.history`. See [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md).
+
 ## 11. Knowledge Graph (Wikilinks)
 
 Notes form an Obsidian-compatible knowledge graph through `[[wikilink]]` syntax:

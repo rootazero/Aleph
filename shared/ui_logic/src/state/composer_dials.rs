@@ -1,64 +1,102 @@
-//! What a composer send carries for the two per-session dials.
+//! The per-session dials a conversation carries, and what a composer send
+//! carries of them.
 //!
-//! The exec tier (Ask / Auto / Full) and the session mode (chat / work / code)
-//! are both picked in the composer and both stored on the session — but they
-//! ride a send under *different* rules, and getting the difference wrong fails
-//! silently in opposite directions:
+//! Five knobs are stored on a session (`SessionIdentityMeta.custom`) and
+//! resolved by the run loop every turn: the execution tier, the usage mode,
+//! the reasoning depth, the memory mode, and the model pin. A client's job is
+//! to show what the server is actually enforcing and to let the user change it
+//! — and the two ways to get that wrong are both silent.
 //!
-//! * Drop the **tier** on a send and the very first turn of a new conversation
-//!   runs under the global tier, not the one the user just armed. There is no
-//!   session row yet to have been patched, so the pill's value can only reach
-//!   the run by riding the message.
-//! * Keep carrying the **mode** after a session exists and the pill's cached
-//!   value out-ranks the store — silently reverting a `session_set_mode` the
-//!   model made mid-conversation. Once a session row exists it is authoritative.
-//!
-//! * The **plan phase** follows the mode's rule and needs it more than the mode
-//!   does. An approved plan handoff writes `building` onto the session from the
-//!   *server* side, mid-conversation, with no request of the client's involved —
-//!   so a composer that re-asserted its cached `planning` on the next message
-//!   would undo the approval it had just watched the user give, and the read-only
-//!   floor would snap back on with the work half done. Live sessions therefore
-//!   carry nothing and read the phase back from the session row.
-//!
-//! Lives here because two composers (wide and phone) have to agree on it and
-//! neither can be host-tested through Leptos. The phone composer used to carry
-//! neither dial at all — it passed `None` for both — so a phone user could not
-//! arm a tier or a mode for the one turn the pickers exist for.
+//! Lives here because every surface has to agree: two composers (wide and
+//! phone) build sends from it, three session pickers restore it, and none of
+//! them can be host-tested through Leptos.
 
-/// What a send carries for the three per-session dials, given the pills'
-/// current values and whether the conversation already has a session row.
+/// The dials a conversation carries, as one value.
 ///
-/// A struct rather than a tuple from three onwards: `(Option<String>,
-/// Option<String>, Option<String>)` is three identical types in a row, and the
-/// call sites that destructure it are in two crates.
+/// # Why one struct and not five loose `Option<String>`s
+///
+/// Because every site that touches them has to touch *all* of them, and the
+/// ones that forgot are the bugs this type exists to prevent: the phone's
+/// session picker restored the project folder and silently dropped the tier and
+/// the mode, so its pills said "follow global" while the run loop kept
+/// enforcing what was stored — for the tier, that is the pill which says which
+/// tool calls stop for approval.
+///
+/// A struct literal is exhaustive, so a sixth dial fails to compile at every
+/// construction site instead of being applied on one surface and forgotten on
+/// the other three. Never build one with `..Default::default()`.
+///
+/// `None` on a dial means **follow the install default** — never "off". For
+/// `think_level` it means something slightly different and worth stating: core
+/// resolves depth as request > session > *no directive at all*, so `None`
+/// leaves the provider on its own default rather than following a configured
+/// global. There is no global reasoning depth for a surface to name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SendDials {
-    /// Re-armed on every send: a session row does not out-rank the pill.
+pub struct SessionKnobs {
+    /// `custom["exec_tier"]` — which tool calls stop for approval.
     pub exec_tier: Option<String>,
-    /// First send only — the store is authoritative once it exists.
-    pub session_mode: Option<String>,
-    /// First send only, for a stronger reason than the mode's. See the module
-    /// doc.
-    pub plan_phase: Option<String>,
+    /// `custom["session_mode"]` — which tools the turn is shown.
+    pub mode: Option<String>,
+    /// `custom["think_level"]` — how hard the model is asked to reason.
+    pub think_level: Option<String>,
+    /// `custom["memory_mode"]` — whether memory envelopes are injected.
+    pub memory_mode: Option<String>,
+    /// `custom["model_pin"]` — the model `select_model` pinned, if any.
+    ///
+    /// Read-only on a client: the authoritative writer is the tool, which
+    /// updates the process-local table the run loop reads *and* the session
+    /// row. A pill that patched only the row would take effect after a restart
+    /// and not before one, which is why `sessions.patch` refuses this key
+    /// outright (`NOT_PATCHABLE`). It rides in this struct anyway because it is
+    /// per-session state a surface must restore and must not leak across a
+    /// conversation switch — the same contract as its four siblings.
+    pub model_pin: Option<String>,
 }
 
-/// The dials a send should carry. `session_exists` is `session_key.is_some()`.
+/// What one send puts on the wire, per dial. Every field maps to a `chat.send`
+/// parameter of the same meaning (`thinking` and `memory` are the wire names).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SendDials {
+    pub exec_tier: Option<String>,
+    pub mode: Option<String>,
+    pub thinking: Option<String>,
+    pub memory: Option<String>,
+}
+
+/// The dials a send should carry, given the pills' current values and whether
+/// the conversation already has a session row (`session_key.is_some()`).
+///
+/// Two rules, and getting either wrong fails silently in opposite directions:
+///
+/// * The **tier** rides every send. Drop it and the very first turn of a new
+///   conversation runs under the global tier, not the one the user just armed —
+///   there is no session row yet to have been patched, so the pill's value can
+///   only reach that run by riding the message. It keeps riding afterwards
+///   because it is re-armed per send and a stored value does not out-rank a
+///   human arming it now.
+/// * **Mode, depth and memory** ride only the FIRST send. Once a session row
+///   exists it is authoritative, and re-sending a pill's cached value would
+///   silently revert a change the model made mid-conversation through its own
+///   tools (`session_set_mode`, `self_config`) — the user would see the pill it
+///   came from and never learn the setting had moved.
+///
+/// `model_pin` is deliberately not here: a pin is written by `select_model`,
+/// which updates the table the run loop reads directly, and a per-turn model
+/// choice rides `model_override` instead.
 #[must_use]
-pub fn session_dials_for_send(
-    session_exists: bool,
-    pill_tier: Option<String>,
-    pill_mode: Option<String>,
-    pill_plan_phase: Option<String>,
-) -> SendDials {
-    SendDials {
-        exec_tier: pill_tier,
-        session_mode: if session_exists { None } else { pill_mode },
-        plan_phase: if session_exists {
+pub fn session_dials_for_send(session_exists: bool, pills: &SessionKnobs) -> SendDials {
+    let once = |v: &Option<String>| {
+        if session_exists {
             None
         } else {
-            pill_plan_phase
-        },
+            v.clone()
+        }
+    };
+    SendDials {
+        exec_tier: pills.exec_tier.clone(),
+        mode: once(&pills.mode),
+        thinking: once(&pills.think_level),
+        memory: once(&pills.memory_mode),
     }
 }
 
@@ -66,56 +104,70 @@ pub fn session_dials_for_send(
 mod tests {
     use super::*;
 
-    fn s(v: &str) -> Option<String> {
-        Some(v.to_string())
+    fn pills(tier: &str, mode: &str, think: &str, memory: &str) -> SessionKnobs {
+        SessionKnobs {
+            exec_tier: Some(tier.to_string()),
+            mode: Some(mode.to_string()),
+            think_level: Some(think.to_string()),
+            memory_mode: Some(memory.to_string()),
+            model_pin: Some("claude-opus-5".to_string()),
+        }
     }
 
     #[test]
     fn first_send_carries_every_dial() {
-        // No session row yet: this is the only chance any pill has to govern
-        // the turn it was armed for.
-        let d = session_dials_for_send(false, s("full"), s("code"), s("planning"));
+        // No session row yet: this is the only chance the pills have to govern
+        // the turn they were armed for.
+        let d = session_dials_for_send(false, &pills("full", "code", "high", "off"));
         assert_eq!(d.exec_tier.as_deref(), Some("full"));
-        assert_eq!(d.session_mode.as_deref(), Some("code"));
-        assert_eq!(d.plan_phase.as_deref(), Some("planning"));
+        assert_eq!(d.mode.as_deref(), Some("code"));
+        assert_eq!(d.thinking.as_deref(), Some("high"));
+        assert_eq!(d.memory.as_deref(), Some("off"));
     }
 
     #[test]
     fn a_live_session_still_carries_the_tier() {
         // The tier is re-armed per send; a session row does not out-rank it.
-        let d = session_dials_for_send(true, s("ask"), None, None);
+        let d = session_dials_for_send(true, &pills("ask", "code", "high", "off"));
         assert_eq!(d.exec_tier.as_deref(), Some("ask"));
     }
 
     #[test]
-    fn a_live_session_drops_the_mode() {
-        // The store is authoritative once it exists — re-sending the pill's
-        // cached mode would revert a mid-conversation `session_set_mode`.
-        let d = session_dials_for_send(true, None, s("chat"), None);
-        assert_eq!(d.session_mode, None);
-    }
-
-    #[test]
-    fn a_live_session_drops_the_plan_phase() {
-        // The one that matters most: an approved handoff writes `building` on
-        // the server. A composer re-asserting its cached `planning` here would
-        // undo the approval the user just gave and re-engage the read-only
-        // floor with the work half done.
-        let d = session_dials_for_send(true, None, None, s("planning"));
-        assert_eq!(d.plan_phase, None);
+    fn a_live_session_drops_the_store_owned_dials() {
+        // The store is authoritative once it exists — re-sending the pills'
+        // cached values would revert a mid-conversation `session_set_mode` or
+        // `self_config`.
+        let d = session_dials_for_send(true, &pills("ask", "chat", "low", "on"));
+        assert_eq!(d.mode, None);
+        assert_eq!(d.thinking, None);
+        assert_eq!(d.memory, None);
     }
 
     #[test]
     fn follow_global_carries_nothing() {
         // Every pill on "follow global" = no override to carry, on either side
         // of the session boundary.
+        let empty = SessionKnobs::default();
+        assert_eq!(session_dials_for_send(false, &empty), SendDials::default());
+        assert_eq!(session_dials_for_send(true, &empty), SendDials::default());
+    }
+
+    /// The pin is session state, not send state. Carrying it would be a second
+    /// writer for a value whose only authoritative writer is `select_model`.
+    #[test]
+    fn the_model_pin_never_rides_a_send() {
+        let d = session_dials_for_send(false, &pills("ask", "chat", "low", "on"));
+        // `SendDials` structurally has nowhere to put it — this asserts the
+        // four fields it does have are the four that mean something on the
+        // wire, so a future field cannot be added here without a wire name.
         assert_eq!(
-            session_dials_for_send(false, None, None, None),
-            SendDials::default()
-        );
-        assert_eq!(
-            session_dials_for_send(true, None, None, None),
-            SendDials::default()
+            d,
+            SendDials {
+                exec_tier: Some("ask".into()),
+                mode: Some("chat".into()),
+                thinking: Some("low".into()),
+                memory: Some("on".into()),
+            }
         );
     }
 }

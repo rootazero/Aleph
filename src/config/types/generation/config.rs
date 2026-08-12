@@ -156,55 +156,16 @@ impl GenerationConfig {
         }
     }
 
-    /// Get a provider config by name (checks typed maps first, then legacy)
-    #[must_use]
-    pub fn get_provider(&self, name: &str) -> Option<&GenerationProviderConfig> {
-        self.image_providers
-            .get(name)
-            .or_else(|| self.video_providers.get(name))
-            .or_else(|| self.speech_providers.get(name))
-            .or_else(|| self.audio_providers.get(name))
-            .or_else(|| self.transcription_providers.get(name))
-            .or_else(|| self.providers.get(name))
-    }
-
-    /// Get all enabled providers (typed maps + legacy, typed maps take priority)
-    #[must_use]
-    pub fn get_enabled_providers(&self) -> Vec<(&str, &GenerationProviderConfig)> {
-        let mut seen = std::collections::HashSet::new();
-        let mut result = Vec::new();
-
-        let typed_maps: &[&HashMap<String, GenerationProviderConfig>] = &[
-            &self.image_providers,
-            &self.video_providers,
-            &self.speech_providers,
-            &self.audio_providers,
-            &self.transcription_providers,
-        ];
-
-        for map in typed_maps {
-            for (name, config) in *map {
-                if config.enabled {
-                    seen.insert(name.as_str());
-                    result.push((name.as_str(), config));
-                }
-            }
-        }
-
-        for (name, config) in &self.providers {
-            if config.enabled && !seen.contains(name.as_str()) {
-                result.push((name.as_str(), config));
-            }
-        }
-
-        result
-    }
-
     /// Get providers that support a specific generation type.
     ///
     /// Typed provider maps take priority over legacy `providers` section.
+    ///
+    /// `pub(crate)` — superseded by [`merged_providers`](Self::merged_providers) for
+    /// the runtime dispatch path; kept crate-scoped for the in-module typed-merge
+    /// test and any future sibling `config` consumer that needs the typed-map shape.
+    #[allow(dead_code)] // lib build doesn't compile `#[cfg(test)]`; the in-module test exercises this
     #[must_use]
-    pub fn get_providers_for_type(
+    pub(crate) fn get_providers_for_type(
         &self,
         gen_type: GenerationType,
     ) -> Vec<(&str, &GenerationProviderConfig)> {

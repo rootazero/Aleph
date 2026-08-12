@@ -390,12 +390,12 @@ impl From<CommandContext> for ResolvedCommandContext {
     fn from(ctx: CommandContext) -> Self {
         match ctx {
             CommandContext::Builtin { tool_name } => Self::Builtin { tool_name },
-            CommandContext::Mcp {
+            CommandContext::Mcp { server_name } => Self::Mcp {
                 server_name,
-                tool_name,
-            } => Self::Mcp {
-                server_name,
-                tool_name,
+                // `CommandContext::Mcp` no longer carries a per-tool name —
+                // the slash-command fast path resolved directly via the
+                // agent-loop MCP transport and never consumed it.
+                tool_name: None,
             },
             CommandContext::Skill {
                 skill_id,

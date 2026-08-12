@@ -119,19 +119,6 @@ impl Default for Crawl4aiConfig {
     }
 }
 
-impl WebFetchPolicy {
-    /// Get timeout as `std::time::Duration`
-    pub const fn timeout_duration(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.timeout_seconds)
-    }
-
-    /// Check if content length is within acceptable range
-    pub const fn is_content_acceptable(&self, length: usize) -> bool {
-        let len = length as u64;
-        len >= self.min_content_length && len <= self.max_content_length
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,15 +131,6 @@ mod tests {
         assert_eq!(policy.user_agent, "Aleph/1.0");
         assert_eq!(policy.timeout_seconds, 30);
         assert!(policy.enable_readability);
-    }
-
-    #[test]
-    fn test_content_acceptable() {
-        let policy = WebFetchPolicy::default();
-        assert!(!policy.is_content_acceptable(50)); // Too short
-        assert!(policy.is_content_acceptable(500)); // OK
-        assert!(policy.is_content_acceptable(10000)); // At max
-        assert!(!policy.is_content_acceptable(10001)); // Too long
     }
 
     #[test]

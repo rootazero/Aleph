@@ -29,18 +29,37 @@ pub struct ClarificationResolveParams {
     /// Session the question was asked in — the clarification registry key,
     /// shipped to the client on the `AskUser` frame.
     pub session_key: String,
-    /// The user's answer. Interpreted exactly as a channel reply is: a bare
-    /// 1-based number picks that option, an option label matches it, anything
-    /// else is free text.
+    /// The user's answer to the question at the cursor. Interpreted exactly as
+    /// a channel reply is: a bare 1-based number picks that option, an option
+    /// label matches it, anything else is free text.
+    #[serde(default)]
     pub reply: String,
+    /// Answers to consecutive questions, starting at the cursor — the
+    /// rich-client path for a multi-question request.
+    ///
+    /// Present and non-empty, this wins over `reply`: a client that rendered
+    /// every question posts every answer, and there is no reading under which
+    /// it also meant to answer the first one twice. Absent, `reply` alone
+    /// drives the same walk one question at a time, which is what keeps a
+    /// client that predates this field working unchanged.
+    #[serde(default)]
+    pub answers: Vec<String>,
 }
 
 /// Response for clarification.resolve
 #[derive(Debug, Serialize)]
 pub struct ClarificationResolveResponse {
-    /// Whether a pending clarification was actually unblocked. `false` for a
-    /// stale answer (already resolved, superseded, or timed out).
+    /// Whether the answer was taken. `false` for a stale answer (already
+    /// resolved, superseded, timed out, or its run was cancelled).
+    ///
+    /// ⚠️ True does NOT mean the parked tool resumed — see `pending_questions`.
+    /// A client that treats it that way drops its card while the request is
+    /// still mid-walk.
     pub resolved: bool,
+    /// How many questions of this request are still unanswered. `0` means the
+    /// parked tool was unblocked and the card is done; anything higher means
+    /// the client should re-render from `clarification.pending`.
+    pub pending_questions: usize,
 }
 
 /// Response for clarification.pending
@@ -116,13 +135,32 @@ async fn handle_resolve(
         _ => return visibility::not_found_response(request.id),
     }
 
-    // `resolve` is the single truth: it reports `false` unless a waiter was
-    // actually unblocked with this reply. The client MUST honour that — a
-    // `false` means its Enter-hijack was stale and the text is still an
-    // unsent message, not an answer.
-    let resolved = manager.resolve(&params.session_key, &params.reply).await;
+    // `resolve_many` is the single truth: `Stale` unless the answer was
+    // actually recorded. The client MUST honour that — a `resolved: false`
+    // means its Enter-hijack was stale and the text is still an unsent
+    // message, not an answer.
+    let replies: Vec<&str> = if params.answers.is_empty() {
+        vec![params.reply.as_str()]
+    } else {
+        params.answers.iter().map(String::as_str).collect()
+    };
+    let outcome = manager.resolve_many(&params.session_key, &replies).await;
+    let resolved = outcome.consumed();
+    // `More` also carries a rendered text menu — that is for a *channel*. A
+    // Panel re-renders from the structured `questions` view instead, so this
+    // face passes on only the count.
+    let pending_questions = match outcome {
+        crate::clarification::ResolveOutcome::More { remaining, .. } => remaining,
+        _ => 0,
+    };
 
-    JsonRpcResponse::success(request.id, json!(ClarificationResolveResponse { resolved }))
+    JsonRpcResponse::success(
+        request.id,
+        json!(ClarificationResolveResponse {
+            resolved,
+            pending_questions,
+        }),
+    )
 }
 
 /// Handle clarification.pending
@@ -238,6 +276,7 @@ mod tests {
                     ],
                 ),
                 DEFAULT_CLARIFY_TIMEOUT,
+                "",
             )
             .await;
 
@@ -248,8 +287,8 @@ mod tests {
         assert_eq!(response.result.unwrap()["resolved"], true);
 
         let result = rx.await.expect("the parked tool must be unblocked");
-        assert_eq!(result.selected_index, Some(1));
-        assert_eq!(result.get_value(), Some("production"));
+        assert_eq!(result.selected_index(), Some(1));
+        assert_eq!(result.value(), Some("production"));
     }
 
     #[tokio::test]
@@ -262,13 +301,14 @@ mod tests {
                 "agent:main:main",
                 ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
+                "",
             )
             .await;
 
         let response =
             handle_resolve(resolve_request("agent:main:main", "src/main.rs"), mgr, sess).await;
         assert_eq!(response.result.unwrap()["resolved"], true);
-        assert_eq!(rx.await.unwrap().get_value(), Some("src/main.rs"));
+        assert_eq!(rx.await.unwrap().value(), Some("src/main.rs"));
     }
 
     /// A stale answer (the question was already resolved elsewhere, superseded,
@@ -300,6 +340,7 @@ mod tests {
                 "agent:main:main",
                 ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
+                "",
             )
             .await;
         let first = handle_resolve(
@@ -340,6 +381,7 @@ mod tests {
                 "agent:main:main",
                 ClarificationRequest::text("Which file?"),
                 DEFAULT_CLARIFY_TIMEOUT,
+                "",
             )
             .await;
 
@@ -365,7 +407,7 @@ mod tests {
             })
             .await;
         assert_eq!(alice_resp.result.unwrap()["resolved"], true);
-        assert_eq!(rx.await.unwrap().get_value(), Some("src/main.rs"));
+        assert_eq!(rx.await.unwrap().value(), Some("src/main.rs"));
     }
 
     #[tokio::test]
@@ -381,6 +423,7 @@ mod tests {
                     vec![ClarificationOption::new("staging", "staging")],
                 ),
                 DEFAULT_CLARIFY_TIMEOUT,
+                "",
             )
             .await;
 
@@ -409,6 +452,7 @@ mod tests {
                 "agent:main:main",
                 ClarificationRequest::text("Alice's question?"),
                 DEFAULT_CLARIFY_TIMEOUT,
+                "",
             )
             .await;
         let _bob_rx = mgr
@@ -416,6 +460,7 @@ mod tests {
                 "agent:main:main:s1",
                 ClarificationRequest::text("Bob's question?"),
                 DEFAULT_CLARIFY_TIMEOUT,
+                "",
             )
             .await;
 

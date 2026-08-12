@@ -125,6 +125,7 @@ mod tests {
         // If filtered is empty, the function should return early.
         let palette = PaletteState {
             input: String::new(),
+            args: String::new(),
             filtered: vec![],
             selected: 0,
             namespace_stack: Vec::new(),
@@ -141,6 +142,7 @@ mod tests {
     fn namespace_stack_affects_title() {
         let palette = PaletteState {
             input: String::new(),
+            args: String::new(),
             filtered: vec![DisplayEntry {
                 label: "new [topic]".into(),
                 hint: "Start new session".into(),

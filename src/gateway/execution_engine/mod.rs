@@ -35,9 +35,10 @@ mod tool_refresh;
 mod tool_service_builder;
 pub(crate) mod topic;
 mod trace_sink_adapter;
+mod turn_memory;
 mod turn_mode;
+mod turn_model;
 mod turn_permissions;
-mod turn_plan_phase;
 mod turn_thinking;
 mod unattended_redacting_sink;
 

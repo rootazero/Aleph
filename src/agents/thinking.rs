@@ -89,6 +89,21 @@ impl ThinkLevel {
         }
     }
 
+    /// Every level, ordered shallow → deep.
+    ///
+    /// The order is the ladder itself, and it is what a picker renders top to
+    /// bottom. Pinned against a new variant by `all_covers_every_variant`,
+    /// which is an exhaustive `match` — adding a rung fails to compile there
+    /// rather than silently shipping a surface that cannot offer it.
+    pub const ALL: [Self; 6] = [
+        Self::Off,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::XHigh,
+    ];
+
     /// Human-facing label for UI surfaces.
     #[must_use]
     pub const fn display_name(&self) -> &'static str {
@@ -174,6 +189,33 @@ pub fn normalize_think_level(raw: &str) -> Option<ThinkLevel> {
     }
 }
 
+/// The reasoning-depth ladder as offered to a user surface, shallow → deep.
+///
+/// Same contract as [`crate::config::types::policies::builtin_tiers`] and
+/// `builtin_modes`: core ships ids, the surface writes the words. Rides
+/// `config.get_tool_permissions` next to those two, because a composer that
+/// needs three dials should not need three fetches — and because a client that
+/// hard-codes this ladder is a client that keeps offering a rung this build
+/// removed.
+///
+/// Note what is NOT here: a global default. `turn_thinking`'s precedence is
+/// request > session > **no directive at all**, so a surface's "follow" row
+/// means "send nothing and leave the provider on its own default", not "follow
+/// a configured global". A pill that labels it "follow global" is naming a
+/// setting that does not exist.
+#[must_use]
+pub const fn builtin_think_levels() -> &'static [crate::config::types::policies::DialPreset] {
+    use crate::config::types::policies::DialPreset;
+    &[
+        DialPreset { id: "off" },
+        DialPreset { id: "minimal" },
+        DialPreset { id: "low" },
+        DialPreset { id: "medium" },
+        DialPreset { id: "high" },
+        DialPreset { id: "xhigh" },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +249,39 @@ mod tests {
     fn unknown_input_is_rejected_not_defaulted() {
         assert_eq!(normalize_think_level("deeeep"), None);
         assert!("deeeep".parse::<ThinkLevel>().is_err());
+    }
+
+    /// A new rung has to reach [`ThinkLevel::ALL`] and the wire ladder, and
+    /// the compiler is the only thing that can insist.
+    ///
+    /// The `match` is what does the work: adding a variant makes it
+    /// non-exhaustive, which fails the build *here*, next to both lists. The
+    /// two assertions then catch the other half — a variant added to the enum
+    /// and to the match but forgotten in `ALL` or in the wire ladder, which is
+    /// how a surface ends up unable to offer a level the run loop enforces.
+    #[test]
+    fn all_covers_every_variant() {
+        for level in ThinkLevel::ALL {
+            match level {
+                ThinkLevel::Off
+                | ThinkLevel::Minimal
+                | ThinkLevel::Low
+                | ThinkLevel::Medium
+                | ThinkLevel::High
+                | ThinkLevel::XHigh => {}
+            }
+        }
+        assert_eq!(
+            ThinkLevel::ALL.len(),
+            6,
+            "a rung was added to the enum without joining ALL"
+        );
+        let wire: Vec<&str> = builtin_think_levels().iter().map(|p| p.id).collect();
+        let enumerated: Vec<&str> = ThinkLevel::ALL.iter().map(|l| l.id()).collect();
+        assert_eq!(
+            wire, enumerated,
+            "the ladder shipped to surfaces must be ALL, in ALL's order"
+        );
     }
 
     /// `id()` is the session-metadata storage form, so it MUST survive a

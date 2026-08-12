@@ -1,0 +1,82 @@
+{
+  "batch": "cluster-batch-3",
+  "title": "Reverse RPC: PendingInvokes + ReverseRpcChannel",
+  "date": "2026-08-11",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-cluster",
+  "report": "review-results/cluster-batch-3/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 2,
+    "medium": 2,
+    "low": 2,
+    "total": 6
+  },
+  "by_category": {
+    "logic": 3,
+    "race": 1,
+    "quality": 1,
+    "documentation": 1
+  },
+  "files_reviewed": [
+    { "path": "src/cluster/reverse_rpc.rs", "loc": 493, "findings": 6 }
+  ],
+  "total_loc": 493,
+  "findings": [
+    {
+      "id": "B3-01",
+      "severity": "high",
+      "category": "logic/race",
+      "file": "src/cluster/reverse_rpc.rs",
+      "line": 283,
+      "title": "call() may push the frame to the peer and then return Timeout (reused deadline) — peer executes but caller sees half-executed command"
+    },
+    {
+      "id": "B3-02",
+      "severity": "high",
+      "category": "logic/correctness",
+      "file": "src/cluster/reverse_rpc.rs",
+      "line": 96,
+      "title": "PendingInvokes::resolve() returns true for an already-resolved id (dropped receiver), masking double-resolve"
+    },
+    {
+      "id": "B3-03",
+      "severity": "medium",
+      "category": "quality/defensive",
+      "file": "src/cluster/reverse_rpc.rs",
+      "line": 285,
+      "title": "serde_json::to_string failure after register() leaks a waiter (until timeout or cancel_all)"
+    },
+    {
+      "id": "B3-04",
+      "severity": "medium",
+      "category": "logic/theoretical",
+      "file": "src/cluster/reverse_rpc.rs",
+      "line": 25,
+      "title": "PendingInvokes::counter AtomicU64 wrap (~584 million years at 1/ms) — document and move on"
+    },
+    {
+      "id": "B3-05",
+      "severity": "low",
+      "category": "quality",
+      "file": "src/cluster/reverse_rpc.rs",
+      "line": 248,
+      "title": "call()'s deadline counts register() cost — cosmetic, no fix"
+    },
+    {
+      "id": "B3-06",
+      "severity": "low",
+      "category": "documentation",
+      "file": "src/cluster/reverse_rpc.rs",
+      "line": 185,
+      "title": "with_close doc should reference the notify_one permit-storage guarantee"
+    }
+  ],
+  "clean_areas": [
+    "OutboundWedged vs Timeout type-level distinction",
+    "cancel_all drains + drops senders so waiters resolve at once",
+    "close_connection permit storage semantics",
+    "with_close vs new boundary between node-side and center-side",
+    "Existing tests cover happy path, timeout, cancel-all, wedge, slow-response, transport-closed, close-signal-fires-on-wedge"
+  ]
+}

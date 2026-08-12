@@ -74,11 +74,96 @@ pub enum LocalCommand {
     Retry,
     /// Switch tool-progress display mode (None prints the current mode)
     Tools { mode: Option<ToolProgressMode> },
-    /// Set the session execution tier (None prints usage).
-    /// Values: `ask` | `auto` | `full` | `default` (follow global policy).
-    Tier { level: Option<String> },
+    /// Set one of this conversation's persisted knobs (`None` value prints
+    /// usage). The value `default` clears the override back to "follow global".
+    ///
+    /// One variant for the family rather than one per knob: they share a write
+    /// path (`sessions.patch` into `identity_meta.custom`), a read-back path
+    /// (the attach snapshot) and a status-bar cell, and the three knobs that
+    /// existed before this were unequal only because two of them had no command
+    /// at all.
+    Knob {
+        knob: SessionKnob,
+        value: Option<String>,
+    },
     /// Browse and switch to another session (opens the session picker)
     Sessions,
+}
+
+/// A per-conversation knob reachable from a slash command.
+///
+/// Deliberately excludes the model pin. A pin's authoritative writer is
+/// `select_model` (the tool), which updates the process-global map the run
+/// builder reads *and* writes through to the session row; a slash command
+/// patching the row alone would be honored after a restart and silently
+/// ignored before one — a second writer that wins by accident. Changing the
+/// model stays conversational (R8), and the status bar shows the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKnob {
+    /// Tool-approval gate: `ask` | `auto` | `full`.
+    ExecTier,
+    /// Tool-presentation register: `chat` | `work` | `code`.
+    Mode,
+    /// Reasoning depth: `off` | `minimal` | `low` | `medium` | `high` | `xhigh`.
+    Think,
+    /// Memory injection: `on` | `off`.
+    ///
+    /// Spelled `/memory-mode`, not `/memory`: the gateway already owns a
+    /// `/memory <verb>` namespace (`memory_search`, `memory_browse`,
+    /// `memory_explore`, …), and a local command that claimed the bare word
+    /// would swallow every one of those — the TUI resolves local commands
+    /// first, so the shadowing is total and silent.
+    Memory,
+}
+
+impl SessionKnob {
+    /// The `identity_meta.custom` key this knob is stored under — the same
+    /// string the server's `sessions.patch` validator and the attach snapshot
+    /// use. Wire names, so a rename on the server is a single visible mismatch
+    /// rather than four scattered literals.
+    pub const fn metadata_key(self) -> &'static str {
+        match self {
+            Self::ExecTier => "exec_tier",
+            Self::Mode => "session_mode",
+            Self::Think => "think_level",
+            Self::Memory => "memory_mode",
+        }
+    }
+
+    /// The command word, without the leading slash.
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::ExecTier => "tier",
+            Self::Mode => "mode",
+            Self::Think => "think",
+            Self::Memory => "memory-mode",
+        }
+    }
+
+    /// Accepted values, for the usage line. Not a validator — the server
+    /// re-checks every value on `sessions.patch`, and a client-side list that
+    /// drifted would refuse a value the server accepts.
+    pub const fn choices(self) -> &'static str {
+        match self {
+            Self::ExecTier => "plan|ask|auto|full",
+            Self::Mode => "chat|work|code",
+            Self::Think => "off|minimal|low|medium|high|xhigh",
+            Self::Memory => "on|off",
+        }
+    }
+
+    /// One-line explanation for `/help` and the usage message.
+    pub const fn purpose(self) -> &'static str {
+        match self {
+            Self::ExecTier => "tool-approval prompts",
+            Self::Mode => "which tools this conversation gets",
+            Self::Think => "reasoning depth (bills at the output rate)",
+            Self::Memory => "inject curated memory + notes + recall",
+        }
+    }
+
+    /// Every knob, for the catalog and the status bar.
+    pub const ALL: [Self; 4] = [Self::ExecTier, Self::Mode, Self::Think, Self::Memory];
 }
 
 /// Local command catalog: (name, description) pairs.
@@ -99,7 +184,19 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/tools", "Tool progress mode: off|new|all|verbose"),
     (
         "/tier",
-        "Set exec tier (tool-approval prompts): ask|auto|full",
+        "Set exec tier (tool-approval prompts): plan|ask|auto|full|default",
+    ),
+    (
+        "/mode",
+        "Set session mode (tool surface): chat|work|code|default",
+    ),
+    (
+        "/think",
+        "Set reasoning depth: off|minimal|low|medium|high|xhigh|default",
+    ),
+    (
+        "/memory-mode",
+        "Inject curated memory + notes + recall: on|off|default",
     ),
     ("/sessions", "Browse & switch session (alias: /resume)"),
     ("/replays", "List recent persisted trace replays"),
@@ -161,15 +258,21 @@ pub fn parse_input(input: &str) -> ParsedInput {
             };
             ParsedInput::Local(LocalCommand::Tools { mode })
         }
-        "/tier" => {
-            // Recognised tier → Some(...); anything else → None (handler prints
-            // usage), mirroring the `/tools` convention. The server re-validates
-            // the value on `sessions.patch`.
-            let level = match args.to_lowercase().as_str() {
-                "ask" | "auto" | "full" | "default" => Some(args.to_lowercase()),
-                _ => None,
+        "/tier" | "/mode" | "/think" | "/memory-mode" => {
+            let knob = match cmd_lower.as_str() {
+                "/tier" => SessionKnob::ExecTier,
+                "/mode" => SessionKnob::Mode,
+                "/think" => SessionKnob::Think,
+                _ => SessionKnob::Memory,
             };
-            ParsedInput::Local(LocalCommand::Tier { level })
+            // A blank arg → `None` (the handler prints the current value plus
+            // usage), mirroring the `/tools` convention. Any non-blank value is
+            // forwarded verbatim and lowercased: the SERVER validates it, and a
+            // client-side allowlist would silently refuse ids the server has
+            // learned about since this binary was built — the same failure mode
+            // `select_model`'s catalog carve-out avoids.
+            let value = (!args.is_empty()).then(|| args.to_lowercase());
+            ParsedInput::Local(LocalCommand::Knob { knob, value })
         }
         "/sessions" | "/resume" => ParsedInput::Local(LocalCommand::Sessions),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
@@ -325,9 +428,14 @@ mod tests {
             parse_input("/model claude-3-opus"),
             ParsedInput::Gateway("/model claude-3-opus".to_string())
         );
+        // `/think` moved to the local knob family (2026-08-11) — it writes the
+        // session's `think_level`, which the server has persisted since that
+        // knob was added but no client could set or see. The fall-through case
+        // it used to illustrate is covered by the other lines here; a command
+        // the gateway genuinely owns is a better example anyway.
         assert_eq!(
-            parse_input("/think high"),
-            ParsedInput::Gateway("/think high".to_string())
+            parse_input("/agents"),
+            ParsedInput::Gateway("/agents".to_string())
         );
         assert_eq!(
             parse_input("/status"),
@@ -356,41 +464,94 @@ mod tests {
     }
 
     #[test]
-    fn parse_tier_command() {
-        assert_eq!(
-            parse_input("/tier"),
-            ParsedInput::Local(LocalCommand::Tier { level: None })
-        );
+    fn parse_knob_commands() {
+        // Bare command → no value: the handler prints the current setting plus
+        // usage, mirroring the `/tools` convention.
+        for (input, knob) in [
+            ("/tier", SessionKnob::ExecTier),
+            ("/mode", SessionKnob::Mode),
+            ("/think", SessionKnob::Think),
+            ("/memory-mode", SessionKnob::Memory),
+        ] {
+            assert_eq!(
+                parse_input(input),
+                ParsedInput::Local(LocalCommand::Knob { knob, value: None }),
+                "{input} with no argument must ask, not guess"
+            );
+        }
+
         assert_eq!(
             parse_input("/tier ask"),
-            ParsedInput::Local(LocalCommand::Tier {
-                level: Some("ask".to_string())
+            ParsedInput::Local(LocalCommand::Knob {
+                knob: SessionKnob::ExecTier,
+                value: Some("ask".to_string())
+            })
+        );
+        assert_eq!(
+            parse_input("/memory-mode off"),
+            ParsedInput::Local(LocalCommand::Knob {
+                knob: SessionKnob::Memory,
+                value: Some("off".to_string())
             })
         );
         // Case-insensitive, like the other arms.
         assert_eq!(
             parse_input("/tier FULL"),
-            ParsedInput::Local(LocalCommand::Tier {
-                level: Some("full".to_string())
+            ParsedInput::Local(LocalCommand::Knob {
+                knob: SessionKnob::ExecTier,
+                value: Some("full".to_string())
             })
         );
         assert_eq!(
-            parse_input("/tier default"),
-            ParsedInput::Local(LocalCommand::Tier {
-                level: Some("default".to_string())
+            parse_input("/mode default"),
+            ParsedInput::Local(LocalCommand::Knob {
+                knob: SessionKnob::Mode,
+                value: Some("default".to_string())
             })
         );
-        // Unrecognised arg → None (handler prints usage), mirroring /tools.
+    }
+
+    /// An unrecognised value is FORWARDED, not swallowed.
+    ///
+    /// `/tier` used to map anything it did not recognise to "no argument",
+    /// which printed usage — indistinguishable from typing `/tier` alone, and a
+    /// client-side allowlist that would refuse any id the server learned about
+    /// after this binary was built. The server validates; a typo now comes back
+    /// as the server's own refusal, naming the value.
+    #[test]
+    fn an_unknown_knob_value_is_forwarded_for_the_server_to_refuse() {
         assert_eq!(
             parse_input("/tier bogus"),
-            ParsedInput::Local(LocalCommand::Tier { level: None })
+            ParsedInput::Local(LocalCommand::Knob {
+                knob: SessionKnob::ExecTier,
+                value: Some("bogus".to_string())
+            })
         );
+    }
+
+    /// Every knob the parser accepts must be reachable by its own command word,
+    /// and the two must agree — a knob whose `command()` does not parse back to
+    /// it is a setting the help text advertises and the parser cannot reach.
+    #[test]
+    fn every_knob_round_trips_through_its_command_word() {
+        for knob in SessionKnob::ALL {
+            let typed = format!("/{}", knob.command());
+            assert_eq!(
+                parse_input(&typed),
+                ParsedInput::Local(LocalCommand::Knob { knob, value: None }),
+                "{typed} does not parse back to the knob that names it"
+            );
+            assert!(
+                local_commands().iter().any(|(name, _)| *name == typed),
+                "{typed} is parseable but missing from the catalog, so it is undiscoverable"
+            );
+        }
     }
 
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 14);
+        assert_eq!(cmds.len(), 17);
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
         assert!(cmds.iter().any(|(name, _)| *name == "/tier"));
         assert!(cmds.iter().any(|(name, _)| *name == "/sessions"));

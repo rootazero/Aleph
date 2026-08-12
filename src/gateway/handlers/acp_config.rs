@@ -163,8 +163,14 @@ pub async fn handle_list(
     let mut merged: std::collections::HashMap<String, AcpAdapterEntry> = all_presets;
     for (id, entry) in user_adapters {
         let mut entry = entry.clone();
-        if entry.preset.is_none() && AcpAdapterEntry::is_preset_id(id) {
-            entry.preset = Some(id.clone());
+        if AcpAdapterEntry::is_preset_id(id) {
+            // Backfill substantive fields from the preset when the user only
+            // partially overrode it (matches `deserialize_adapters_with_presets`
+            // so the runtime sees the same merged shape whether the config came
+            // from disk or from the live manager).
+            if let Some(preset_entry) = merged.get(id) {
+                entry.hydrate_from_preset(preset_entry);
+            }
         }
         merged.insert(id.clone(), entry);
     }

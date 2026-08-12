@@ -6,11 +6,71 @@
 use std::time::{Duration, Instant};
 
 use aleph_protocol::{
-    summarize_tool_input, AgentTracePresentationPreset, AgentTraceToolResult, StreamEvent,
+    summarize_tool_input, AgentTracePresentationPreset, AgentTraceToolResult, AskUserQuestion,
+    StreamEvent,
 };
 
 use super::super::slash::ToolProgressMode;
-use super::{Action, AppState, ChatMessage};
+use super::{Action, AppState, AskDialogView, ChatMessage};
+
+/// Flatten an `AskUser` frame into the view the dialog overlay renders.
+///
+/// Prefers the structured `questions` view: it carries the short header, the
+/// per-option `description`, and the position within a multi-question request —
+/// none of which the flat `question` / `options` pair can express, which is why
+/// this overlay showed a bare label where a messaging channel showed
+/// `label — description`.
+///
+/// Falls back to the flat pair whenever the structured view is absent or its
+/// cursor is out of range (a frame that raced a completion), so the overlay
+/// renders *something* rather than an empty box. The fallback reports
+/// `multi_select` / `secret` as false because the flat pair cannot express
+/// either — narrowing, never widening: the worst it costs is an unmasked
+/// buffer on a core too old to have had `secret` at all.
+fn render_ask_user(
+    question: &str,
+    options: &[String],
+    questions: &[AskUserQuestion],
+    answered: usize,
+) -> AskDialogView {
+    let Some(current) = questions.get(answered) else {
+        return AskDialogView {
+            question: question.to_string(),
+            options: options.to_vec(),
+            multi_select: false,
+            secret: false,
+        };
+    };
+    let position = if questions.len() > 1 {
+        format!("({}/{}) ", answered + 1, questions.len())
+    } else {
+        String::new()
+    };
+    let header = current
+        .header
+        .as_deref()
+        .map(|h| format!("[{h}] "))
+        .unwrap_or_default();
+    let hint = if current.multi_select {
+        "\n(pick one or more — reply with comma-separated numbers)"
+    } else {
+        ""
+    };
+    let labels = current
+        .options
+        .iter()
+        .map(|o| match o.description.as_deref() {
+            Some(d) if !d.trim().is_empty() => format!("{} — {d}", o.label),
+            _ => o.label.clone(),
+        })
+        .collect();
+    AskDialogView {
+        question: format!("{position}{header}{}{hint}", current.prompt),
+        options: labels,
+        multi_select: current.multi_select,
+        secret: current.secret,
+    }
+}
 
 impl AppState {
     /// Request application quit. Sets `should_quit` flag.
@@ -200,10 +260,50 @@ impl AppState {
                 session_key,
                 question,
                 options,
+                questions,
+                answered,
                 ..
             } => {
-                self.show_dialog(session_key, question, options);
+                // The structured view when core sends one, the flat projection
+                // otherwise. Indices are identical either way, which is what
+                // lets the overlay keep answering with a bare 1-based number.
+                let view = render_ask_user(&question, &options, &questions, answered);
+                self.show_dialog(session_key, view);
                 Action::None
+            }
+
+            // The question is over — retire the card. Without this the overlay
+            // holds focus and keeps claiming the agent is waiting for up to the
+            // 600 s clarification timeout, and an answer typed into it is
+            // silently discarded by a registry that has already forgotten the
+            // entry. Only the card for THIS session is retired: a frame for
+            // another session must not close the one the user is looking at.
+            //
+            // The ordinary path is silent without a special case for it:
+            // answering already ran `close_overlay`, so by the time the
+            // `resolved` frame lands there is no dialog and `mine` is false.
+            // What is left is exactly the set worth telling the user about —
+            // expired, cancelled with its run, superseded, or answered in
+            // another window.
+            StreamEvent::ClarificationEnded {
+                session_key,
+                outcome,
+            } => {
+                let mine = self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|d| d.session_key == session_key);
+                if !mine {
+                    return Action::None;
+                }
+                self.close_overlay();
+                // Say WHICH ending it was rather than letting the card vanish:
+                // "you answered" and "it expired while you were reading" leave
+                // the user in very different positions. The outcome word is
+                // core's, printed verbatim — this client does not own that
+                // vocabulary and must not paraphrase it.
+                self.add_system_message(format!("The agent's question ended ({outcome})."));
+                Action::ScrollToBottomIfAutoScroll
             }
 
             StreamEvent::ReasoningBlock { content, .. } => {

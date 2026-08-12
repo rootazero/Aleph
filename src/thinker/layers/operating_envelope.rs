@@ -43,6 +43,18 @@
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
 
+/// The muted-memory bullet, verbatim.
+///
+/// A constant beside the layer rather than an inline `format!`, matching
+/// `ExecTier::approval_prompt_line` / `SessionMode::prompt_line`: the sentence
+/// the model reads about a gate is one of the three copies of that gate's rule
+/// (code, doc, prompt), and it is the expensive one to get wrong.
+const MEMORY_MUTED_LINE: &str =
+    "- Memory: OFF for this conversation. Curated memory, the note index \
+and automatic recall are NOT in this prompt — you have not forgotten them, they were withheld. \
+The memory tools still work if you need something specific, and what you learn here is still \
+recorded.\n";
+
 pub struct OperatingEnvelopeLayer;
 
 impl PromptLayer for OperatingEnvelopeLayer {
@@ -102,19 +114,11 @@ impl PromptLayer for OperatingEnvelopeLayer {
             .and_then(crate::sandbox::SandboxSummary::permission_profile_prompt_line)
             .map(|line| format!("- {line}\n"));
 
-        // The read-only planning floor, when it is on. `Building` — which is
-        // what an ordinary session resolves to — renders `None`, so this line
-        // costs zero bytes for everyone who never asked to plan, and the gate
-        // below still asks the same question the body answers.
-        let plan_line = ctx
-            .plan_phase
-            .and_then(crate::config::types::policies::PlanPhase::prompt_line);
-
         // Nothing resolved (internal / sub-agent / estimate dispatch): emit
         // nothing rather than a guessed default.
         if ctx.approval_tier.is_none()
             && ctx.session_mode.is_none()
-            && plan_line.is_none()
+            && !ctx.memory_muted
             && writable_roots.is_none()
             && run_id_line.is_none()
             && network_line.is_none()
@@ -124,16 +128,6 @@ impl PromptLayer for OperatingEnvelopeLayer {
         }
 
         output.push_str("## Operating Envelope\n\n");
-
-        // The planning floor goes FIRST, ahead of the approval line, because it
-        // is the only one of the two that can make the other's promise
-        // inapplicable: "auto — routine calls run without interruption" is
-        // misleading read before "nothing that changes anything runs at all".
-        // Order in a bullet list is the only tool this layer has for saying
-        // which rule wins, and it costs nothing to use it correctly.
-        if let Some(line) = plan_line {
-            output.push_str(&format!("- {line}\n"));
-        }
 
         // Approval regime (codex `<approval_policy>` parity): the complement of
         // `SecurityLayer`'s sandbox posture — sandbox says what the agent may
@@ -147,6 +141,17 @@ impl PromptLayer for OperatingEnvelopeLayer {
         // behind `tool_search` instead of discovering absences by failed calls.
         if let Some(mode) = ctx.session_mode {
             output.push_str(&format!("- {}\n", mode.prompt_line()));
+        }
+
+        // Muted memory. Rendered ONLY when muted, so an unmuted prompt is
+        // byte-identical to every release before the knob existed — and stated
+        // at all because withheld memory is indistinguishable from absent
+        // memory from the inside: without this line the model concludes it
+        // never knew, and either invents a reason for the gap or re-asks what
+        // the user already told it. It also names what is still reachable, so
+        // the model does not read "no memory" as "the memory tools are gone".
+        if ctx.memory_muted {
+            output.push_str(MEMORY_MUTED_LINE);
         }
 
         // Where the agent may write. Tagged `(sandbox)` because its other half —
@@ -210,57 +215,48 @@ mod tests {
         out
     }
 
+    /// Muted memory renders — and says the two things a model would otherwise
+    /// get wrong: that it did not forget (the memory was withheld), and that
+    /// the memory tools still work.
     #[test]
-    fn a_building_session_spends_no_bytes_on_the_plan_phase() {
-        // The overwhelming majority of turns. `Some(Building)` must render
-        // byte-identically to `None`, or every install that never heard of this
-        // feature pays for it on every request.
-        let mut absent = ctx();
-        absent.approval_tier = Some(ExecTier::Auto);
-        absent.session_mode = Some(SessionMode::Work);
-        let baseline = render(&absent);
-
-        let mut building = absent.clone();
-        building.plan_phase = Some(crate::config::types::policies::PlanPhase::Building);
-        assert_eq!(render(&building), baseline);
-    }
-
-    #[test]
-    fn planning_renders_ahead_of_the_approval_line() {
-        use crate::config::types::policies::PlanPhase;
-
+    fn muted_memory_is_stated() {
         let mut c = ctx();
-        c.approval_tier = Some(ExecTier::Auto);
-        c.session_mode = Some(SessionMode::Work);
-        c.plan_phase = Some(PlanPhase::Planning);
+        c.memory_muted = true;
         let out = render(&c);
-
-        let plan_at = out
-            .find(PlanPhase::Planning.prompt_line().expect("planning speaks"))
-            .expect("the planning line must render");
-        let tier_at = out
-            .find(ExecTier::Auto.approval_prompt_line())
-            .expect("the approval line must still render");
-        // Order is the only tool a bullet list has for saying which rule wins,
-        // and "auto — routine calls run without interruption" read BEFORE
-        // "nothing that changes anything runs at all" is actively misleading.
+        assert!(out.contains("## Operating Envelope"));
+        assert!(out.contains("Memory: OFF"), "{out}");
         assert!(
-            plan_at < tier_at,
-            "the planning floor must precede the approval regime:\n{out}"
+            out.contains("withheld"),
+            "the model must be able to tell withheld memory from absent memory: {out}"
+        );
+        assert!(
+            out.contains("memory tools still work"),
+            "muting injection must not read as 'the tools are gone': {out}"
         );
     }
 
+    /// The default renders nothing — every prompt that does not mute memory is
+    /// byte-identical to the ones this knob's release replaced.
     #[test]
-    fn the_planning_line_is_the_one_the_floor_owns() {
-        use crate::config::types::policies::PlanPhase;
-
-        // Single-source pin, same shape as the sandbox test below: the layer
-        // must print the enum's own copy, not a paraphrase of it, so the rule
-        // and its description cannot drift.
+    fn unmuted_memory_renders_nothing() {
+        let unset = render(&ctx());
         let mut c = ctx();
-        c.plan_phase = Some(PlanPhase::Planning);
+        c.memory_muted = false;
+        assert_eq!(render(&c), unset);
+        assert!(!unset.contains("Memory:"));
+    }
+
+    /// Muted memory alone is enough to open the section: it is a fact about
+    /// this turn's regime, so an internal dispatch that resolved nothing else
+    /// must still state it rather than swallow it with the empty-section gate.
+    #[test]
+    fn muted_memory_alone_opens_the_section() {
+        let mut c = ctx();
+        c.approval_tier = None;
+        c.session_mode = None;
+        c.memory_muted = true;
         let out = render(&c);
-        assert!(out.contains(PlanPhase::Planning.prompt_line().unwrap()));
+        assert!(out.starts_with("## Operating Envelope"), "{out}");
     }
 
     // SandboxCapabilities::strict is used to construct a posture with

@@ -2,12 +2,13 @@
 //! each role receives.
 //!
 //! This method has two response shapes, and the difference is a role decision:
-//! a member gets the two DIALS and the ids each dial can take; an operator also
-//! gets the two server-global policy axes Settings → Policies edits. The server
-//! narrows by REMOVAL, which is the right direction (a new field arrives
-//! withheld and someone has to rule on it), but it means the member shape is
-//! defined by what is *absent* — and absence is exactly what a hand-written
-//! client DTO fails to decode.
+//! a member gets the session DIALS and the ids each dial can take; an operator
+//! also gets the two server-global policy axes Settings → Policies edits. The
+//! server narrows by REMOVAL — so a new field joins the member response unless
+//! it is named in [`OPERATOR_ONLY_KEYS`], which is the right default for a
+//! response that is otherwise entirely dial vocabulary — but it means the
+//! member shape is defined by what is *absent*, and absence is exactly what a
+//! hand-written client DTO fails to decode.
 //!
 //! It did. The narrowing shipped with a server-side test pinning `default` as
 //! absent, and a Panel DTO whose `default` field had no `#[serde(default)]`.
@@ -26,12 +27,33 @@
 //!
 //! Change a key on one side and the other side's test fails by name.
 
-/// Keys every caller receives, whatever their role: the two dial positions and
-/// the id enumeration behind each.
+/// Keys every caller receives, whatever their role: each dial's position and
+/// the id enumeration behind it.
 ///
 /// A member's entire response is exactly this set. Anything a client needs in
-/// order to render a control a MEMBER may use belongs here.
-pub const MEMBER_VISIBLE_KEYS: &[&str] = &["exec_tier", "tiers", "mode", "modes"];
+/// order to render a control a MEMBER may use belongs here — and all four dials
+/// qualify, because a member already writes every one of them for their own
+/// session (`sessions.patch`, and `chat.send`'s per-request `exec_tier` /
+/// `mode` / `thinking` / `memory`).
+///
+/// `think_levels` has no position key beside it on purpose: reasoning depth
+/// resolves request > session > **no directive**, so there is no global for a
+/// client to report. Every other dial names where its global sits.
+pub const MEMBER_VISIBLE_KEYS: &[&str] = &[
+    "exec_tier",
+    "tiers",
+    // The tiers a single CONVERSATION may take — `tiers` plus `plan`, the
+    // read-only planning posture that ends when a human approves a plan.
+    // Member-visible for the same reason `tiers` is: a member already writes
+    // this dial for their own session, and withholding the enumeration locks a
+    // menu the server would still honour.
+    "session_tiers",
+    "mode",
+    "modes",
+    "think_levels",
+    "memory",
+    "memory_modes",
+];
 
 /// Keys withheld from a member: the server-global policy axes.
 ///

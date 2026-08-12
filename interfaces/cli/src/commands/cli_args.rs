@@ -21,6 +21,15 @@ pub enum Commands {
         /// Agent name to bind this session to
         #[arg(short, long)]
         agent: Option<String>,
+
+        /// Reopen the most recently active session (by `last_active_at`)
+        ///
+        /// The interactive twin of `aleph ask --last`, and the same resolver
+        /// (`aleph_client::resolve_last_session`). Opt-in rather than the
+        /// default, matching codex `resume` and pi `--continue`: a bare
+        /// `aleph chat` must not silently append to yesterday's thread.
+        #[arg(short = 'c', long = "continue", conflicts_with = "session")]
+        continue_last: bool,
     },
 
     /// Send a single message and get response

@@ -152,9 +152,9 @@ pub fn install_git_skill(
     // gopher://) is a foothold into the sandbox and gets rejected at install
     // time rather than at clone time (where the failure mode is opaque).
     //
-    // Tests under #[cfg(test)] opt out via `ALEPH_TEST_ALLOW_LOCAL_GIT_URL=1`
-    // so the existing fixture-driven harness (which clones from a tempdir) keeps
-    // working without making `file://` a production-grade escape hatch.
+    // Tests opt out for the duration of one test with `AllowLocalGitUrl::set()`
+    // so the fixture-driven harness (which clones from a tempdir) keeps working
+    // without making `file://` a production-grade escape hatch.
     if !acceptable_git_url(git_url) {
         return Err(format!(
             "git_url must be https:// or git@<host>:..., got '{git_url}'"
@@ -230,16 +230,15 @@ pub fn install_git_skill(
 /// foothold into the sandbox; rejecting at install time gives a typed Err
 /// rather than an opaque libgit2 failure.
 ///
-/// `#[cfg(test)]`: also accept the env opt-out `ALEPH_TEST_ALLOW_LOCAL_GIT_URL=1`
-/// so the existing fixture-driven tests, which clone from a tempdir, keep
-/// working without making `file://` a production-grade escape hatch. Outside
-/// test builds the env var is ignored.
+/// `#[cfg(test)]`: a test that needs to clone from a tempdir opts out for its
+/// own duration with [`AllowLocalGitUrl::set`]. There is no such opt-out in a
+/// non-test build.
 fn acceptable_git_url(url: &str) -> bool {
     let production_ok =
         url.starts_with("https://") || (url.starts_with("git@") && url.contains(':'));
     #[cfg(test)]
     {
-        if std::env::var_os("ALEPH_TEST_ALLOW_LOCAL_GIT_URL").is_some() {
+        if AllowLocalGitUrl::is_set() {
             return production_ok
                 || url.starts_with("file://")
                 || url.starts_with('/')
@@ -247,6 +246,48 @@ fn acceptable_git_url(url: &str) -> bool {
         }
     }
     production_ok
+}
+
+/// Test-only permission to clone from a local path, scoped to one test.
+///
+/// # Why not an environment variable
+///
+/// It was one, and the three tests that needed it were red from the day the
+/// scheme check landed: none of them ever set it, so all three asked the
+/// production accept-set to take a tempdir path. Simply setting it would have
+/// traded a permanent failure for an intermittent one — `std::env` is
+/// process-global, the test binary runs its tests in parallel threads, and the
+/// test that asserts the production accept-set *removes* the variable while it
+/// runs. Whichever of the two ran second would lose, at random.
+///
+/// A thread-local cannot be reached by a sibling test, and the guard restores
+/// the previous value on drop so it is correct under `--test-threads=1` too.
+#[cfg(test)]
+pub(crate) struct AllowLocalGitUrl(bool);
+
+#[cfg(test)]
+thread_local! {
+    static ALLOW_LOCAL_GIT_URL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+impl AllowLocalGitUrl {
+    /// Allow local/`file://` git URLs until the returned guard is dropped.
+    #[must_use]
+    fn set() -> Self {
+        Self(ALLOW_LOCAL_GIT_URL.with(|c| c.replace(true)))
+    }
+
+    fn is_set() -> bool {
+        ALLOW_LOCAL_GIT_URL.with(std::cell::Cell::get)
+    }
+}
+
+#[cfg(test)]
+impl Drop for AllowLocalGitUrl {
+    fn drop(&mut self) {
+        ALLOW_LOCAL_GIT_URL.with(|c| c.set(self.0));
+    }
 }
 
 /// Resolve which marketplace an install entry's plugin lives in.
@@ -527,6 +568,7 @@ mod tests {
 
     #[test]
     fn install_git_skill_clones_subdir_and_stamps_source() {
+        let _allow = AllowLocalGitUrl::set();
         let tmp = tempfile::tempdir().unwrap();
         let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
         let path =
@@ -544,6 +586,7 @@ mod tests {
     /// first write, leaving nothing installed on mismatch.
     #[test]
     fn install_git_skill_rejects_a_sha256_mismatch_without_writing() {
+        let _allow = AllowLocalGitUrl::set();
         let tmp = tempfile::tempdir().unwrap();
         let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
         let bad = "0".repeat(64);
@@ -560,29 +603,34 @@ mod tests {
     /// but must remain allowed in tests so the existing fixture-driven
     /// harness keeps working. The bypass is opt-in via an env var that does
     /// nothing in non-test builds.
+    /// The production accept-set. No save/restore dance: the opt-out is a
+    /// thread-local that no other test can reach, so this test simply does not
+    /// take it.
     #[test]
     fn git_url_scheme_accepts_https_and_rejects_local() {
-        // The bypass env var may be set by the wider test runner; temporarily
-        // clear it so we exercise the production accept-set.
-        let saved = std::env::var_os("ALEPH_TEST_ALLOW_LOCAL_GIT_URL");
-        std::env::remove_var("ALEPH_TEST_ALLOW_LOCAL_GIT_URL");
-        let result = std::panic::catch_unwind(|| {
-            assert!(acceptable_git_url("https://github.com/x/y"));
-            assert!(acceptable_git_url("git@github.com:x/y.git"));
-            assert!(!acceptable_git_url("/tmp/local-path"));
-            assert!(!acceptable_git_url("file:///tmp/local"));
-            assert!(!acceptable_git_url("ssh://github.com/x/y"));
-        });
-        if let Some(v) = saved {
-            std::env::set_var("ALEPH_TEST_ALLOW_LOCAL_GIT_URL", v);
+        assert!(acceptable_git_url("https://github.com/x/y"));
+        assert!(acceptable_git_url("git@github.com:x/y.git"));
+        assert!(!acceptable_git_url("/tmp/local-path"));
+        assert!(!acceptable_git_url("file:///tmp/local"));
+        assert!(!acceptable_git_url("ssh://github.com/x/y"));
+    }
+
+    /// ...and the opt-out really is scoped: it is off again the moment the
+    /// guard drops, so a test that takes it cannot leave the accept-set
+    /// widened for whatever runs next on this thread.
+    #[test]
+    fn the_local_url_opt_out_is_scoped_to_its_guard() {
+        assert!(!acceptable_git_url("/tmp/local-path"));
+        {
+            let _allow = AllowLocalGitUrl::set();
+            assert!(acceptable_git_url("/tmp/local-path"));
         }
-        if let Err(e) = result {
-            std::panic::resume_unwind(e);
-        }
+        assert!(!acceptable_git_url("/tmp/local-path"));
     }
 
     #[test]
     fn install_git_skill_accepts_the_matching_sha256() {
+        let _allow = AllowLocalGitUrl::set();
         let tmp = tempfile::tempdir().unwrap();
         let (url, skills_dir, entry) = git_skill_fixture(tmp.path());
         // First install with no pin to materialize the checkout, then compute the

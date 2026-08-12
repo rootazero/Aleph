@@ -59,18 +59,35 @@ pub enum NodeAdmission {
 /// `cluster.enroll` used to mint a duplicate row per click.
 fn mint_node_device(store: &SecurityStore, node_name: &str) -> Result<String, String> {
     let device_id = uuid::Uuid::new_v4().to_string();
+    // (B2-02) `&device_id[..16]` was a tacit assumption that the id is an
+    // ASCII UUID. Today every minted id is, but the private helper could be
+    // called from elsewhere later. Use `truncate_on_char_boundary` so the
+    // mint path is consistent with `admit_node` path 4, which already uses
+    // it. (Both sites slice to 16 bytes to feed the device-table UNIQUE
+    // constraint on fingerprint.)
+    let fingerprint = truncate_on_char_boundary(&device_id, 16);
     store
         .upsert_device(&DeviceUpsertData {
             device_id: &device_id,
             device_name: node_name,
             device_type: None,
             public_key: &[0u8; 32],
-            fingerprint: &device_id[..16],
+            fingerprint,
             role: "node",
             scopes: &["node".to_string()],
             user_id: None,
         })
-        .map_err(|e| format!("failed to register node device: {e}"))?;
+        .map_err(|e| {
+            // (B2-03) The caller already warns, but the source of the failure
+            // is here — emit a warning at the source too so the log line and
+            // the error string refer to the same call frame.
+            warn!(
+                node_name,
+                error = %e,
+                "failed to register node device row in security store"
+            );
+            format!("failed to register node device: {e}")
+        })?;
     Ok(device_id)
 }
 

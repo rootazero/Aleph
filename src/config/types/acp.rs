@@ -45,13 +45,16 @@ where
     D: serde::Deserializer<'de>,
 {
     let mut map: HashMap<String, AcpAdapterEntry> = HashMap::deserialize(deserializer)?;
-    // Fill in any missing presets and fixup existing entries that lack the preset flag
+    // Fill in any missing presets and backfill substantive fields from the
+    // preset defaults when a user partially overrides a preset entry. Without
+    // this backfill, a TOML that only sets `[acp.adapters.claude-code]
+    // enabled = false` would silently reset executable/args/output_format/
+    // trust_level/default_mode to AcpAdapterEntry's bare defaults, breaking
+    // preset harnesses that the user only meant to flip a single flag on.
     for (id, entry) in AcpAdapterEntry::all_presets() {
         match map.entry(id) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
-                if e.get().preset.is_none() {
-                    e.get_mut().preset = entry.preset;
-                }
+                e.get_mut().hydrate_from_preset(&entry);
             }
             std::collections::hash_map::Entry::Vacant(e) => {
                 e.insert(entry);
@@ -428,33 +431,6 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
 ];
 
 impl AcpAdapterEntry {
-    /// Preset: Claude Code (Anthropic CLI)
-    #[must_use]
-    pub fn preset_claude_code() -> Self {
-        Self::preset_by_id("claude-code").unwrap_or_else(|| {
-            tracing::error!("claude-code preset missing from HARNESS_PRESETS");
-            Self::default()
-        })
-    }
-
-    /// Preset: Codex (`OpenAI` CLI)
-    #[must_use]
-    pub fn preset_codex() -> Self {
-        Self::preset_by_id("codex").unwrap_or_else(|| {
-            tracing::error!("codex preset missing from HARNESS_PRESETS");
-            Self::default()
-        })
-    }
-
-    /// Preset: Gemini (Google CLI)
-    #[must_use]
-    pub fn preset_gemini() -> Self {
-        Self::preset_by_id("gemini").unwrap_or_else(|| {
-            tracing::error!("gemini preset missing from HARNESS_PRESETS");
-            Self::default()
-        })
-    }
-
     /// Look up a preset by ID.
     pub fn preset_by_id(id: &str) -> Option<Self> {
         HARNESS_PRESETS.iter().find(|p| p.id == id).map(Self::from)
@@ -480,6 +456,39 @@ impl AcpAdapterEntry {
     pub fn is_preset_id(id: &str) -> bool {
         HARNESS_PRESETS.iter().any(|p| p.id == id)
     }
+
+    /// Backfill substantive fields from a preset entry when the user only
+    /// partially overrode a preset. Each field is filled only if it is still at
+    /// its [`AcpAdapterEntry::default`] value, so a user-set field (e.g. a
+    /// custom `executable`, `args`, or `trust_level`) is preserved verbatim.
+    /// `cwd`, `env`, `display_name`, and `enabled` are left untouched: those are
+    /// chosen by the user, not the preset.
+    pub fn hydrate_from_preset(&mut self, preset: &Self) {
+        // Marker field: a user explicitly typed `preset = ...` leaves as-is;
+        // an absent one becomes the preset's id so spawn-time lookups work.
+        if self.preset.is_none() {
+            self.preset = preset.preset.clone();
+        }
+        let base = Self::default();
+        if self.executable == base.executable {
+            self.executable = preset.executable.clone();
+        }
+        if self.args == base.args {
+            self.args = preset.args.clone();
+        }
+        if self.default_mode == base.default_mode {
+            self.default_mode = preset.default_mode.clone();
+        }
+        if self.output_format == base.output_format {
+            self.output_format = preset.output_format.clone();
+        }
+        if self.trust_level == base.trust_level {
+            self.trust_level = preset.trust_level.clone();
+        }
+        if self.timeout_seconds == base.timeout_seconds {
+            self.timeout_seconds = preset.timeout_seconds;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -500,15 +509,15 @@ mod tests {
     #[test]
     fn test_preset_trust_levels() {
         assert_eq!(
-            AcpAdapterEntry::preset_claude_code().trust_level,
+            AcpAdapterEntry::preset_by_id("claude-code").unwrap().trust_level,
             TrustLevel::Full
         );
         assert_eq!(
-            AcpAdapterEntry::preset_codex().trust_level,
+            AcpAdapterEntry::preset_by_id("codex").unwrap().trust_level,
             TrustLevel::Full
         );
         assert_eq!(
-            AcpAdapterEntry::preset_gemini().trust_level,
+            AcpAdapterEntry::preset_by_id("gemini").unwrap().trust_level,
             TrustLevel::Full
         );
     }
@@ -562,21 +571,21 @@ mod tests {
 
     #[test]
     fn test_preset_modes() {
-        let claude_code = AcpAdapterEntry::preset_claude_code();
+        let claude_code = AcpAdapterEntry::preset_by_id("claude-code").unwrap();
         assert_eq!(
             claude_code.default_mode,
             AdapterModeSerde::Oneshot,
             "Claude Code preset should have default_mode=Oneshot"
         );
 
-        let codex = AcpAdapterEntry::preset_codex();
+        let codex = AcpAdapterEntry::preset_by_id("codex").unwrap();
         assert_eq!(
             codex.default_mode,
             AdapterModeSerde::Oneshot,
             "Codex preset should have default_mode=Oneshot"
         );
 
-        let gemini = AcpAdapterEntry::preset_gemini();
+        let gemini = AcpAdapterEntry::preset_by_id("gemini").unwrap();
         assert_eq!(
             gemini.default_mode,
             AdapterModeSerde::NativeAcp,

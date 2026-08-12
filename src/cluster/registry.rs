@@ -102,7 +102,7 @@ pub struct Environment {
 /// reverse RPC and run the same per-node fail-fast check `node_invoke` uses.
 /// `tags` is carried so the caller can build a "available tags" hint on a
 /// zero-match. Cloneable; holds a `ReverseRpcChannel` clone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NodeMatch {
     pub node_id: String,
     pub name: String,
@@ -146,19 +146,64 @@ impl NodeRegistry {
     }
 
     /// Register a node session. Reconnect with the same `node_id` → overwrites
-    /// the old session and clears the old conn mapping.
+    /// the old session, clears the old conn mapping, **and asks the old session's
+    /// connection to close** (B1-01). Reusing the same `conn_id` under a
+    /// different `node_id` also evicts the colliding session for the same reason
+    /// (B1-03).
     pub fn register(&self, session: NodeSession) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let node_id = session.node_id.clone();
         let conn_id = session.conn_id.clone();
-        // Drop any stale conn→node mapping the previous session for this node_id held,
-        // so an old connection's later cleanup can't evict the new session.
-        if let Some(prev) = inner.nodes_by_id.get(&node_id) {
-            let prev_conn = prev.conn_id.clone();
-            inner.nodes_by_conn.remove(&prev_conn);
+        // (B1-03) If this `conn_id` is already mapped to a *different* node_id,
+        // that older session is orphaned by the new mapping; drop it the same
+        // way `forget` does — close its connection and remove both tables'
+        // entries. Same-eviction costs a no-op (we'd be removing the slot we
+        // are about to overwrite).
+        if let Some(prev_node_id) = inner.nodes_by_conn.get(&conn_id).cloned() {
+            if prev_node_id != node_id {
+                if let Some(prev) = inner.nodes_by_id.remove(&prev_node_id) {
+                    let prev_conn = prev.conn_id.clone();
+                    let prev_channel = prev.channel.clone();
+                    drop(prev);
+                    inner.nodes_by_conn.remove(&prev_conn);
+                    // Drop the write lock before signalling: the notified
+                    // connection task re-enters the registry via `deregister`.
+                    drop(inner);
+                    prev_channel.close_connection();
+                    tracing::info!(
+                        old_node_id = %prev_node_id,
+                        new_node_id = %node_id,
+                        conn_id = %conn_id,
+                        "cluster node connection reused under a different node_id; evicting old session"
+                    );
+                    inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+                }
+            }
         }
-        inner.nodes_by_conn.insert(conn_id, node_id.clone());
-        inner.nodes_by_id.insert(node_id, session);
+        // (B1-01) Reconnect with the same node_id: drop the old session's
+        // conn→node mapping AND signal its connection to close. Without the
+        // close signal, the dropped session's connection task keeps running,
+        // and any `channel.clone()` still alive in another part of the program
+        // can still `call()` a session the registry no longer knows about.
+        if let Some(prev) = inner.nodes_by_id.get(&node_id) {
+            if prev.conn_id != conn_id {
+                let prev_conn = prev.conn_id.clone();
+                let prev_channel = prev.channel.clone();
+                inner.nodes_by_conn.remove(&prev_conn);
+                drop(inner);
+                tracing::info!(
+                    node_id = %node_id,
+                    old_conn_id = %prev_conn,
+                    new_conn_id = %conn_id,
+                    "cluster node reconnected under a fresh connection; closing old"
+                );
+                prev_channel.close_connection();
+                inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            }
+        }
+        inner.nodes_by_conn.insert(conn_id.clone(), node_id.clone());
+        inner.nodes_by_id.insert(node_id.clone(), session);
+        tracing::debug!(node_id = %node_id, conn_id = %conn_id, "cluster node registered");
     }
 
     /// Deregister a connected node session. Only removes if the current session
@@ -170,10 +215,12 @@ impl NodeRegistry {
         let Some(node_id) = inner.nodes_by_conn.remove(conn_id) else {
             return false;
         };
-        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id)
+        if let std::collections::hash_map::Entry::Occupied(entry) = inner.nodes_by_id.entry(node_id.clone())
         {
             if entry.get().conn_id == conn_id {
+                let removed_name = entry.get().device_name.clone();
                 entry.remove();
+                tracing::debug!(node_id = %node_id, conn_id = %conn_id, name = %removed_name, "cluster node session deregistered");
                 return true;
             }
         }
@@ -299,9 +346,15 @@ impl NodeRegistry {
     /// `tags` slice matches every online node (the "broadcast" case). Used by
     /// `node_invoke_many` for tag-selected concurrent fan-out. Returns a clone
     /// snapshot so the caller dispatches without holding the registry lock.
+    ///
+    /// Results are sorted by `(node_id, name)` so the JoinSet spawn order is
+    /// deterministic across calls — `node_invoke_many` already sorts its
+    /// result envelope, but a future caller that observes spawn order, or a
+    /// test asserting on fan-out sequencing, would otherwise inherit
+    /// HashMap-iteration jitter.
     pub fn resolve_all_by_tags(&self, tags: &[String]) -> Vec<NodeMatch> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        inner
+        let mut out: Vec<NodeMatch> = inner
             .nodes_by_id
             .values()
             .filter(|s| tags.iter().all(|t| s.tags.contains(t)))
@@ -312,7 +365,9 @@ impl NodeRegistry {
                 declared_commands: s.declared_commands.clone(),
                 tags: s.tags.clone(),
             })
-            .collect()
+            .collect();
+        out.sort_by(|a, b| a.node_id.cmp(&b.node_id).then_with(|| a.name.cmp(&b.name)));
+        out
     }
 
     /// Actively evict a session by `node_id` (used by operator deregister).
@@ -345,6 +400,7 @@ impl NodeRegistry {
         };
         match removed {
             Some(s) => {
+                tracing::info!(node_id = %node_id, name = %s.device_name, "cluster node session evicted (operator forgot/forget)");
                 s.channel.close_connection();
                 true
             }
@@ -430,24 +486,76 @@ pub fn maybe_register_node(
     if role != Some("node") {
         return false;
     }
-    let device_name = params
+    // (B1-08) A connect frame from a node without `device_name` is
+    // suspicious: every shipped runtime sends the field. Surface the absence
+    // so an operator chasing an "anonymous" fleet entry has a breadcrumb.
+    let device_name = match params
         .and_then(|p| p.get("device_name"))
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let declared_commands = params
+    {
+        Some(s) => s.to_string(),
+        None => {
+            tracing::warn!(
+                device_id = %device_id,
+                conn_id = %conn_id,
+                "cluster node connect frame omitted device_name; falling back to \"unknown\""
+            );
+            "unknown".to_string()
+        }
+    };
+    // (B1-02) Parse failures used to silently downgrade to an empty list. A
+    // node with no declared commands is registered as "online but every
+    // command denied" — confusing for the operator, and lets a peer hold
+    // fleet slots with malformed frames. Log and downgrade; only `commands`
+    // is gating (every node ships `bash`), so an empty commands list keeps
+    // the registration but is loud about it.
+    let declared_commands: Vec<CommandDescriptor> = match params
         .and_then(|p| p.get("commands"))
-        .and_then(|v| serde_json::from_value::<Vec<CommandDescriptor>>(v.clone()).ok())
-        .unwrap_or_default();
-    let tags = params
+        .map(|v| serde_json::from_value::<Vec<CommandDescriptor>>(v.clone()))
+    {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            tracing::warn!(
+                device_id = %device_id,
+                node = %device_name,
+                error = %e,
+                "cluster node connect frame carried malformed commands; registering with empty catalog"
+            );
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    let tags: Vec<String> = match params
         .and_then(|p| p.get("tags"))
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
-        .unwrap_or_default();
-    let version = params
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from);
+        .map(|v| serde_json::from_value::<Vec<String>>(v.clone()))
+    {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            tracing::warn!(
+                device_id = %device_id,
+                node = %device_name,
+                error = %e,
+                "cluster node connect frame carried malformed tags; registering with empty tag list"
+            );
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    let version: Option<String> = match params.and_then(|p| p.get("version")) {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some(s) if !s.is_empty() => Some(s.to_string()),
+            Some(_) => None,
+            None => {
+                tracing::warn!(
+                    device_id = %device_id,
+                    node = %device_name,
+                    "cluster node connect frame version field is not a string; treating as absent"
+                );
+                None
+            }
+        },
+    };
     // Version skew is **surfaced, not enforced**. A center and its fleet live on
     // separate upgrade schedules, so refusing a skewed node (openclaw's
     // `server.node-version-mismatch` guard, which only governs its same-machine
@@ -926,6 +1034,43 @@ mod tests {
         // NodeMatch carries the node's tags (used for the zero-match hint).
         let gpu = reg.resolve_all_by_tags(&["gpu".into()]);
         assert!(gpu.iter().any(|m| m.tags.contains(&"us".to_string())));
+        // (B1-05) HashMap iteration is per-process-random; fan-out callers
+        // rely on this returning the same order across calls so JoinSet
+        // spawn order is deterministic.
+        let gpu_again = reg.resolve_all_by_tags(&["gpu".into()]);
+        assert_eq!(
+            gpu.iter().map(|m| &m.node_id).collect::<Vec<_>>(),
+            gpu_again.iter().map(|m| &m.node_id).collect::<Vec<_>>(),
+            "resolve_all_by_tags must be deterministic across calls"
+        );
+        assert_eq!(
+            gpu.iter().map(|m| &m.node_id).collect::<Vec<_>>(),
+            vec![&"a".to_string(), &"b".to_string()],
+            "ordered by node_id"
+        );
+    }
+
+    #[test]
+    fn resolve_error_display_covers_each_variant() {
+        // (B1-07) Each variant's Display string is part of the operator-facing
+        // contract for cluster.deregister and node_invoke — test the surface
+        // directly so a refactor that drops the human-readable prefix is caught.
+        assert_eq!(
+            ResolveError::NotFound.to_string(),
+            "no online node matches"
+        );
+        assert_eq!(
+            ResolveError::Ambiguous(vec!["a (aaa)".into(), "b (bbb)".into()])
+                .to_string(),
+            "ambiguous — matches: a (aaa), b (bbb)"
+        );
+        assert_eq!(
+            ResolveError::NodeNotFound {
+                name_or_id: "x".into()
+            }
+            .to_string(),
+            "internal node lookup failed for 'x'"
+        );
     }
 
     #[test]

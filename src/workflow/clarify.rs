@@ -125,22 +125,16 @@ impl ClarifyTaskMeta {
         }
     }
 
-    /// Render the channel-facing prompt — identical shape to `ask_user`'s so the
-    /// user sees a familiar numbered menu / free-text cue.
+    /// Render the channel-facing prompt.
+    ///
+    /// Delegates to [`crate::clarification::render`] rather than formatting its
+    /// own menu. There used to be three hand-rolled copies of the same numbered
+    /// list — here, in `ask_user`, and (labels only, silently dropping every
+    /// description) in the Panel — each claiming in a comment to match the
+    /// others. One renderer, one shape, nothing to keep in sync.
     #[must_use]
     pub fn rendered_prompt(&self) -> String {
-        if self.choices.is_empty() {
-            format!("❓ {}\n\nReply with your answer.", self.question)
-        } else {
-            let mut menu = String::new();
-            for (i, choice) in self.choices.iter().enumerate() {
-                menu.push_str(&format!("{}. {}\n", i + 1, choice));
-            }
-            format!(
-                "❓ {}\n\n{menu}\nReply with the number or your answer.",
-                self.question
-            )
-        }
+        crate::clarification::render::render(self.build_request().first(), 0, 1).text
     }
 }
 
@@ -155,7 +149,6 @@ pub fn is_clarify_task(task: &CoordTask) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clarification::ClarificationType;
 
     fn select_meta() -> ClarifyTaskMeta {
         ClarifyTaskMeta {
@@ -193,13 +186,10 @@ mod tests {
 
     #[test]
     fn build_request_text_vs_select() {
-        assert_eq!(
-            text_meta().build_request().clarification_type,
-            ClarificationType::Text
-        );
+        assert!(!text_meta().build_request().first().has_options());
         let req = select_meta().build_request();
-        assert_eq!(req.clarification_type, ClarificationType::Select);
-        assert_eq!(req.options.as_ref().map(|o| o.len()), Some(2));
+        assert!(req.first().has_options());
+        assert_eq!(req.first().options.len(), 2);
     }
 
     #[test]

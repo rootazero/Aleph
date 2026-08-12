@@ -140,13 +140,6 @@ fn resolve(paradigm: InteractionParadigm) -> ResolvedContext {
     ctx.approval_tier = Some(crate::config::types::policies::ExecTier::default());
     ctx.session_mode = Some(crate::config::types::policies::SessionMode::default());
     ctx.sandbox_summary = Some(fixed_sandbox_summary());
-    // Fifth field on the same rule, and the one that most looks like it could be
-    // skipped: `Building` renders nothing, so setting it here moves no ratchet.
-    // It is set anyway because the rule above is about what production DOES, not
-    // about what currently costs bytes — and because leaving it `None` would let
-    // a future edit start rendering something for the default phase with every
-    // guard in this file still green.
-    ctx.plan_phase = Some(crate::config::types::policies::PlanPhase::default());
     ctx
 }
 
@@ -583,6 +576,36 @@ fn no_sentence_is_stated_twice() {
         },
     ));
 
+    // ...and the per-request injected surface: the tool the ScopedToolService
+    // pushes onto the model's list without it ever passing through the
+    // registry. Third shape, same question — a scanner is only as wide as the
+    // registration forms it recognises, and this one reached the model for its
+    // whole life inside both scanners' blind spot. Shared table again, for the
+    // reason the note above gives.
+    surfaces.extend(crate::executor::INJECTED_TOOL_DESCRIPTIONS.iter().map(
+        |(name, description, _)| {
+            (
+                format!("tool `{name}` (injected)"),
+                (*description).to_string(),
+            )
+        },
+    ));
+
+    // ...and the MCP bridge surface, the fourth shape: registered straight into
+    // the ToolHandlerRegistry that run_loop snapshots, so it is text the model
+    // reads on every request whose capability gate is open. Six tools of one
+    // family is exactly where a near-repeat is cheapest to write and hardest to
+    // notice, which is the argument for scanning them here rather than only
+    // bounding their bytes.
+    surfaces.extend(crate::executor::BRIDGE_TOOL_DESCRIPTIONS.iter().map(
+        |(name, description, _)| {
+            (
+                format!("tool `{name}` (mcp bridge)"),
+                (*description).to_string(),
+            )
+        },
+    ));
+
     // Whitespace-normalized sentences long enough to be a claim rather than a
     // header, list marker or "Rules:" — short fragments collide by coincidence,
     // not by duplication. One definition, so the ingest check below counts
@@ -799,11 +822,6 @@ fn stable_prefix_ignores_per_run_facts() {
             )],
             ..fixed_sandbox_summary()
         });
-        // The plan phase varies *inside* a run, not merely between runs: an
-        // approved handoff lifts the read-only floor mid-conversation. That is
-        // strictly more volatile than everything above it here, so it is the
-        // last field that could be allowed anywhere near the cacheable prefix.
-        shifted.plan_phase = Some(crate::config::types::policies::PlanPhase::Planning);
 
         let input_a = production_shaped(&config, &baseline);
         let input_b = production_shaped(&config, &shifted);

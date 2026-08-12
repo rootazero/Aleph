@@ -72,12 +72,10 @@ pub struct SendParams {
     /// first-message carriage as `exec_tier` — see [`AgentRunParams::mode`].
     #[serde(default)]
     pub mode: Option<String>,
-    /// Plan phase (`"planning"` / `"building"`) picked in the composer. Same
-    /// first-message carriage as `exec_tier`, and one extra rule of its own —
-    /// see [`AgentRunParams::plan_phase`]: send it only when the user just
-    /// changed it, never as a cached value on every message.
+    /// Per-session memory mode (`"on"` / `"off"`). Same first-message carriage
+    /// as `exec_tier` / `mode` — see [`AgentRunParams::memory`].
     #[serde(default)]
-    pub plan_phase: Option<String>,
+    pub memory: Option<String>,
     /// True when this message is an ASR-transcribed spoken utterance (the
     /// Panel voice loop). Forwarded to [`AgentRunParams::voice_input`] so the
     /// session gets the voice-mode prompt layer and the `[voice]` model pin.
@@ -263,7 +261,7 @@ pub async fn handle_send(
         model_override: params.model_override,
         exec_tier: params.exec_tier,
         mode: params.mode,
-        plan_phase: params.plan_phase,
+        memory: params.memory,
         voice_input: params.voice_input,
         project_id: params.project_id,
     };
@@ -508,6 +506,22 @@ pub async fn handle_history(
             let canonical = session_key.to_key_string();
             let active_run = run_manager.and_then(|rm| rm.active_run_for_session(&canonical));
             let plan = crate::builtin_tools::scratchpad::session_plan_snapshot(&canonical).await;
+            // The conversation's own settings — usage mode, exec tier, thinking
+            // depth, memory mode, model pin, cumulative tokens, working folder.
+            // Same argument as `active_run` and `plan` above, applied to the
+            // facts a client's status bar and pills render: they are one
+            // snapshot with the transcript, they were already resolved (this is
+            // the very `meta` the visibility gate read), and a separate call
+            // would open a window in which a client shows a conversation while
+            // describing a different one's settings.
+            //
+            // Before this, no keyed surface reported them at all. A terminal
+            // reopened mid-task therefore painted the *install* defaults over a
+            // conversation the run loop was still governing by its own stored
+            // values — the tier pill under-reporting the gate that was live,
+            // the token counter restarting at zero, the model caption naming
+            // the default the session had overridden.
+            let session_snapshot = crate::gateway::session_snapshot::snapshot_from_metadata(&meta);
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -516,6 +530,7 @@ pub async fn handle_history(
                     "count": count,
                     "active_run": active_run,
                     "plan": plan,
+                    "session": session_snapshot,
                 }),
             )
         }
@@ -1135,6 +1150,105 @@ mod tests {
                  `active_run` is resolved after this gate, and a refusal that \
                  carried a result would be answering a question it just refused"
             );
+        }
+
+        /// The settings snapshot is part of this response's contract for the
+        /// same reason `active_run` and `plan` are: they are one snapshot with
+        /// the transcript, and a client that had to fetch them separately would
+        /// spend a window rendering a conversation while describing a different
+        /// one's mode, tier and token count.
+        ///
+        /// This is the wire that makes reopening a terminal mid-task land you
+        /// back where you were. Before it, no keyed surface reported a session's
+        /// own settings at all: `sessions.list` carried three of them (and not
+        /// `think_level`), and nothing carried them for a client attaching by
+        /// key — so a reopened client painted the install defaults over a
+        /// conversation the run loop was still governing by its stored values.
+        #[tokio::test]
+        async fn history_carries_the_sessions_own_settings() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+
+            // Arm every knob the way a real conversation would have.
+            let patch = crate::gateway::session_store::types::SessionPatch {
+                metadata: Some(json!({
+                    "exec_tier": "ask",
+                    "session_mode": "code",
+                    "think_level": "high",
+                    "memory_mode": "off",
+                })),
+                ..Default::default()
+            };
+            store.patch_session(&alice_key, &patch).await.unwrap();
+
+            let resp = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_history(
+                        request(
+                            "chat.history",
+                            json!({ "session_key": alice_key.to_key_string() }),
+                        ),
+                        store.clone(),
+                        None,
+                    ),
+                )
+                .await;
+            let result = resp.result.expect("alice may read her own history");
+            let session = result.get("session").expect(
+                "the settings snapshot must always be emitted — absent reads to a client \
+                         as an old core, and it then shows the install defaults",
+            );
+
+            // Parsed through the shared contract type, not poked at with string
+            // keys: this is the type the TUI deserializes, so a field renamed on
+            // one side has to fail here rather than in a terminal.
+            let snapshot: aleph_protocol::SessionSnapshot =
+                serde_json::from_value(session.clone()).expect("snapshot parses as the contract");
+
+            assert_eq!(snapshot.session_key, alice_key.to_key_string());
+            assert_eq!(snapshot.exec_tier.as_deref(), Some("ask"));
+            assert_eq!(snapshot.mode.as_deref(), Some("code"));
+            assert_eq!(
+                snapshot.think_level.as_deref(),
+                Some("high"),
+                "the twin that reached no client surface until now"
+            );
+            assert_eq!(snapshot.memory_mode.as_deref(), Some("off"));
+        }
+
+        /// An unset knob is reported as absent, never as a value. The client
+        /// renders absent as "follows the global default"; a concrete value
+        /// here would be the server inventing one, and the two are
+        /// indistinguishable downstream.
+        #[tokio::test]
+        async fn an_unconfigured_session_reports_no_overrides() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = store(&temp);
+            let alice_key = alice_session(&store).await;
+
+            let resp = CALLER_USER
+                .scope(
+                    Some("u-alice".to_string()),
+                    handle_history(
+                        request(
+                            "chat.history",
+                            json!({ "session_key": alice_key.to_key_string() }),
+                        ),
+                        store.clone(),
+                        None,
+                    ),
+                )
+                .await;
+            let result = resp.result.expect("alice may read her own history");
+            let snapshot: aleph_protocol::SessionSnapshot =
+                serde_json::from_value(result["session"].clone()).expect("snapshot parses");
+            assert_eq!(snapshot.exec_tier, None);
+            assert_eq!(snapshot.mode, None);
+            assert_eq!(snapshot.think_level, None);
+            assert_eq!(snapshot.memory_mode, None);
+            assert_eq!(snapshot.model_pin, None);
         }
 
         /// The live-turn pointer is part of this response's contract: the Panel

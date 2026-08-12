@@ -137,7 +137,7 @@ impl MessageId {
 }
 
 /// Inline keyboard button
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InlineButton {
     /// Button text
     pub text: String,
@@ -149,7 +149,7 @@ pub struct InlineButton {
 pub type InlineKeyboardRow = Vec<InlineButton>;
 
 /// Inline keyboard markup
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InlineKeyboard {
     /// Rows of buttons
     pub rows: Vec<InlineKeyboardRow>,
@@ -1252,5 +1252,127 @@ mod tests {
         let after_event = state.health().await;
         assert_eq!(after_event.failure_count, 0);
         assert_eq!(after_event.status, HealthStatus::Healthy);
+    }
+
+    /// Every `ChannelCapabilities` literal that claims `StreamProtocol::
+    /// EditBased` must also claim `editing: true`.
+    ///
+    /// The two say the same thing — "this channel can rewrite a message it has
+    /// already sent" — and until 2026-08-12 they contradicted each other on
+    /// `line` and `wechat`, whose `edit` returns `UnsupportedFeature`
+    /// unconditionally. The contradiction was not inert: the inbound router
+    /// read `stream_protocol` to *force streaming on*, the emitter then
+    /// discarded every `edit` error with no send fallback, and the reader got
+    /// the first flush and nothing more. Now the router floors on `editing`,
+    /// so a repeat of that exact lie is harmless — but the declarations would
+    /// still disagree, and the next reader of `stream_protocol` would inherit
+    /// the false one. Keep them in agreement.
+    ///
+    /// Runtime cannot check this (a `Channel` that overrides `edit` only to
+    /// return `Err` is indistinguishable from one that does not override it —
+    /// `feishu` is exactly that), so the check is over source text.
+    #[test]
+    fn an_edit_based_channel_declares_that_it_can_edit() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("gateway")
+            .join("interfaces");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(
+            files.len() > 15,
+            "walk found {} sources under interfaces/ — expected one per channel",
+            files.len()
+        );
+
+        let mut literals = 0usize;
+        let mut edit_based = 0usize;
+        let mut liars: Vec<String> = Vec::new();
+
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            // Normalise line endings first: this checkout is CRLF and any
+            // separator anchoring a bare `\n` matches nothing here
+            // (CLAUDE.md §10). Nothing below anchors one, but the next
+            // person to edit this scan should not have to notice.
+            let text = text.replace("\r\n", "\n");
+            let rel = file
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let label = file
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| format!("{}/{rel}", n.to_string_lossy()))
+                .unwrap_or(rel);
+
+            // Brace-match each literal rather than guessing where it ends:
+            // the field order is not uniform across channels and several
+            // literals carry multi-line comments between the two fields.
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find("ChannelCapabilities {") {
+                let after = &rest[at + "ChannelCapabilities {".len()..];
+                let mut depth = 1usize;
+                let mut end = after.len();
+                for (i, c) in after.char_indices() {
+                    match c {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let body = &after[..end];
+                literals += 1;
+                if body.contains("StreamProtocol::EditBased") {
+                    edit_based += 1;
+                    if !body.contains("editing: true") {
+                        liars.push(label.clone());
+                    }
+                }
+                rest = &after[end..];
+            }
+        }
+
+        // Floors, not counts: they catch a scan that matched nothing while still
+        // letting a channel legitimately come or go. There are exactly 3 EditBased
+        // channels today (discord/matrix/telegram), so a `>= 3` floor would report a
+        // legitimate removal as "the scan is broken" — pointing the next reader at
+        // the scanner instead of at their own edit.
+        assert!(
+            literals >= 15,
+            "found only {literals} ChannelCapabilities literals — the scan is broken, not the code"
+        );
+        assert!(
+            edit_based >= 2,
+            "found only {edit_based} EditBased declarations — the scan is broken, not the code"
+        );
+        assert!(
+            liars.is_empty(),
+            "these channels declare EditBased streaming but not `editing: true`, \
+             so their `edit` is the trait default (an Err the streaming emitter \
+             silently drops): {liars:?}"
+        );
     }
 }

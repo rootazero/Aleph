@@ -1,4 +1,35 @@
 #!/usr/bin/env bash
+# ⚠️ STALE — DOES NOT RUN AGAINST THE CURRENT TREE. Rewrite before trusting it.
+#
+# This harness drives the FIRST plan→build design (a separate `plan_phase`
+# session knob, `PlanPhase::Planning|Building`, `scratchpad{request_build}`).
+# That design was superseded during the 2026-08-12 merge by the `ExecTier::Plan`
+# shape, and every symbol it steers is gone. It is kept, not deleted, because
+# its `floor` scenario is the ONLY real-machine proof of `effective_permission`
+# rung 0 — and `add_overrides.py` is design-independent and still correct.
+#
+# The delta to revive it (all mechanical except the last item, which INVERTS):
+#   * `chat.send{plan_phase:"planning", exec_tier:"full"}` -> `{exec_tier:"plan"}`;
+#     the control arm keeps `{exec_tier:"full"}`. There is no `plan_phase` wire
+#     field any more — sending one must now be REJECTED, which is itself an
+#     assertion worth keeping.
+#   * `scratchpad{action:"request_build"}` -> `{action:"request_approval"}`, and
+#     the human gate is a `clarification::ask`, not an `exec.approval` card — so
+#     the "card is once_only / offers no standing grant" assertions no longer
+#     have a card to inspect and should be dropped, not ported.
+#   * the persisted read-back asserts `plan_phase == "building"`; it must now
+#     assert the session's `exec_tier` is back at the RESTORE tier (derived, not
+#     stored — see `PlanGate::restore_to`).
+#   * ⚠️ `assert_hidden()` INVERTS. The old design removed refused tools from the
+#     model's tool surface; the current one keeps them VISIBLE and names the
+#     refusal `GateRule::PlanMode` (`denied_only_by_plan`), so the assertion
+#     becomes "still listed, and calling it refuses with `plan_mode`".
+#
+# The `floor` scenario's premise survives the redesign unchanged and is now
+# stronger: `add_overrides.py ... bash=allow file_write=allow` must STILL lose to
+# `exec_tier:"plan"`. That is exactly what rung 0 was added to guarantee and what
+# the three `exec_tier.rs` unit tests pin in-process.
+#
 # Orchestrate one plan→build handoff real-machine QA scenario end to end.
 #
 #   ./qa/plan_handoff/run.sh handoff   # refuse -> card -> approve -> unlock, one run

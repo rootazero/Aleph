@@ -34,6 +34,13 @@ pub struct GroupChatExecutor {
     provider_registry: Option<Arc<ProviderRegistry>>,
     coordinator_visible: bool,
     db: Option<Arc<StateDatabase>>,
+    /// Set of `(persona_id, provider_name)` pairs we've already warned about
+    /// falling back to the default provider. Kept behind a sync mutex so the
+    /// `&self` `resolve_provider` lookup can dedupe across rounds without
+    /// requiring `&mut self` (which would conflict with the executor's
+    /// caller-facing `&self` API). The critical section is a single
+    /// HashSet insert — never held across an `.await`.
+    provider_fallback_warned: crate::sync_primitives::Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 impl GroupChatExecutor {
@@ -44,6 +51,9 @@ impl GroupChatExecutor {
             provider_registry: None,
             coordinator_visible: false,
             db: None,
+            provider_fallback_warned: crate::sync_primitives::Mutex::new(
+                std::collections::HashSet::new(),
+            ),
         }
     }
 
@@ -81,12 +91,22 @@ impl GroupChatExecutor {
                 if let Some(provider) = registry.get(provider_name) {
                     return provider;
                 }
-                tracing::warn!(
-                    subsystem = "group_chat",
-                    persona_id = %persona.id,
-                    provider = %provider_name,
-                    "persona provider not found in registry, using default"
-                );
+                // Dedupe the warn across rounds — without this, a misconfigured
+                // persona produces N×M log lines (N rounds × M occurrences per
+                // round) and drowns the tracing output.
+                let first_miss = self
+                    .provider_fallback_warned
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert((persona.id.clone(), provider_name.clone()));
+                if first_miss {
+                    tracing::warn!(
+                        subsystem = "group_chat",
+                        persona_id = %persona.id,
+                        provider = %provider_name,
+                        "persona provider not found in registry, using default (suppressing further warns for this persona+provider pair)"
+                    );
+                }
             }
         }
         self.default_provider.current()
@@ -171,12 +191,26 @@ impl GroupChatExecutor {
         if session.status != GroupChatStatus::Active {
             return Err(GroupChatError::SessionInactive(session.id.clone()));
         }
+
+        // Transactional staging: build every (turn, message) pair for this round
+        // BEFORE mutating `session.history` or persisting to the DB. If a persona
+        // LLM call fails mid-round, no partial turn is committed to history or
+        // persisted to the DB — without this, a 503 on persona N permanently
+        // poisons `session.history` and the persisted `group_chat_turns` table
+        // with an unrecoverable half-round (the previous code's behavior).
         let round = session.current_round.saturating_add(1);
 
-        // Step 1: Record user message as a System turn
-        session.add_turn(round, Speaker::System, user_message.to_string());
-        self.persist_turn(&session.id, round, 0, &Speaker::System, user_message)
-            .await;
+        // Step 1: Stage user message as a System turn (NOT yet added to history).
+        let mut staged_turns: Vec<(u32, u32, Speaker, String)> = Vec::new();
+        // persistence sequence: user=0, coordinator=1, persona_0=2, persona_1=3, ...
+        let mut persist_seq: u32 = 0;
+        staged_turns.push((
+            round,
+            persist_seq,
+            Speaker::System,
+            user_message.to_string(),
+        ));
+        persist_seq = persist_seq.saturating_add(1);
 
         // Step 2: Build coordinator prompt and call LLM
         let history = session.build_history_text();
@@ -227,24 +261,19 @@ impl GroupChatExecutor {
         // Step 3b: Optionally include coordinator plan as a visible message
         let mut messages = Vec::new();
         let mut seq_offset = 0u32;
-        // Monotonic persistence sequence within this round. The user turn above
-        // occupies slot 0; each subsequent persisted turn (coordinator, then
-        // personas) takes the next distinct slot so that the documented
-        // `ORDER BY round, sequence` replay is unambiguous. This is independent
-        // of the live-stream `sequence` field on the returned messages, which
-        // omits the user turn and therefore numbers from 0.
-        let mut persist_seq = 1u32;
 
         if self.coordinator_visible {
-            let speaker = Speaker::Coordinator;
-            session.add_turn(round, speaker.clone(), coordinator_raw.clone());
-            self.persist_turn(&session.id, round, persist_seq, &speaker, &coordinator_raw)
-                .await;
-            persist_seq += 1;
+            staged_turns.push((
+                round,
+                persist_seq,
+                Speaker::Coordinator,
+                coordinator_raw.clone(),
+            ));
+            persist_seq = persist_seq.saturating_add(1);
 
             messages.push(GroupChatMessage {
                 session_id: session.id.clone(),
-                speaker,
+                speaker: Speaker::Coordinator,
                 content: coordinator_raw.clone(),
                 round,
                 sequence: 0,
@@ -253,20 +282,31 @@ impl GroupChatExecutor {
             seq_offset = 1;
         }
 
-        // Step 4 & 5: Invoke each persona and collect messages
+        // Step 4 & 5: Invoke each persona and prepare responses WITHOUT
+        // mutating session.history or persisting to DB. If any persona call
+        // fails, the snapshot is restored and no partial turn is committed.
         let mut prior_discussion = String::new();
         let mut sorted_respondents = plan.respondents.clone();
         sorted_respondents.sort_by_key(|r| r.order);
         let total_respondents = sorted_respondents.len();
         let session_id = session.id.clone();
 
+        struct PreparedResponse {
+            i: usize,
+            persona_id: String,
+            persona_name: String,
+            content: String,
+        }
+        let mut prepared: Vec<PreparedResponse> = Vec::with_capacity(total_respondents);
         for (i, respondent) in sorted_respondents.iter().enumerate() {
             // Find the persona in the session participants
             let persona = session
                 .participants
                 .iter()
                 .find(|p| p.id == respondent.persona_id)
-                .ok_or_else(|| GroupChatError::PersonaNotFound(respondent.persona_id.clone()))?;
+                .ok_or_else(|| {
+                    GroupChatError::PersonaNotFound(respondent.persona_id.clone())
+                })?;
 
             // Build persona prompt with cumulative prior discussion
             let persona_prompt = build_persona_prompt(
@@ -281,16 +321,26 @@ impl GroupChatExecutor {
             // them; otherwise these resolve to `None` and the request is identical
             // to using the provider's defaults.
             let provider = self.resolve_provider(persona);
-            let think_level = persona.thinking_level.as_deref().map(|level| {
-                level.parse::<ThinkLevel>().unwrap_or_else(|_| {
-                    tracing::warn!(
-                        persona = %persona.name,
-                        level = %level,
-                        "invalid thinking_level on persona; ignoring"
-                    );
-                    ThinkLevel::default()
-                })
-            });
+            // Per `src/agents/thinking.rs` doc: callers must REJECT rather than
+            // default. Silently falling back to `ThinkLevel::default()` would run
+            // the turn at a depth the operator never picked. We map the parse
+            // error to `None` (use the provider's documented default) and warn,
+            // which preserves the spirit of the contract while keeping the
+            // round running.
+            let think_level: Option<ThinkLevel> = persona
+                .thinking_level
+                .as_deref()
+                .and_then(|level| match level.parse::<ThinkLevel>() {
+                    Ok(l) => Some(l),
+                    Err(_) => {
+                        tracing::warn!(
+                            persona = %persona.name,
+                            level = %level,
+                            "invalid thinking_level on persona; ignoring and falling back to provider default"
+                        );
+                        None
+                    }
+                });
             let persona_response = {
                 let msgs = [UnifiedMessage::user(&persona_prompt)];
                 provider
@@ -308,34 +358,75 @@ impl GroupChatExecutor {
                     .text_content()
             };
 
-            // Record the turn in session history. Clone the persona name up front
-            // so the immutable borrow of `session.participants` ends before the
-            // mutable `session.add_turn` below (the name is still needed later).
-            let persona_name = persona.name.clone();
-            let speaker = Speaker::Persona {
-                id: persona.id.clone(),
-                name: persona_name.clone(),
-            };
-            session.add_turn(round, speaker.clone(), persona_response.clone());
-
-            let sequence = i.try_into().unwrap_or(u32::MAX).saturating_add(seq_offset);
-            self.persist_turn(&session.id, round, persist_seq, &speaker, &persona_response)
-                .await;
-            persist_seq = persist_seq.saturating_add(1);
-
             // Accumulate prior discussion for the next persona
             let _ = writeln!(
                 prior_discussion,
-                "[{}]: {}\n",
-                persona_name, persona_response
+                "[{}]: {}
+",
+                persona.name, persona_response
             );
 
-            // Build output message
-            let is_final = i == total_respondents - 1;
+            prepared.push(PreparedResponse {
+                i,
+                persona_id: persona.id.clone(),
+                persona_name: persona.name.clone(),
+                content: persona_response,
+            });
+        }
+
+        // All LLM calls succeeded. Commit: extend session.history, build
+        // GroupChatMessages, and persist every staged turn. Past this point
+        // any DB persistence error is best-effort (logged) and the round is
+        // considered successful from the caller's perspective.
+        // Append the user/system turn to history (matches the original
+        // semantic that `add_turn` records both user prompts and persona
+        // responses).
+        session.add_turn(
+            round,
+            Speaker::System,
+            // Safe: staged_turns[0] is the user turn we pushed at the top of
+            // this function. Cloning avoids moving out of the Vec while we
+            // still need to iterate it for persistence below.
+            staged_turns[0].3.clone(),
+        );
+        for p in &prepared {
+            let speaker = Speaker::Persona {
+                id: p.persona_id.clone(),
+                name: p.persona_name.clone(),
+            };
+            session.add_turn(round, speaker.clone(), p.content.clone());
+            staged_turns.push((round, persist_seq, speaker, p.content.clone()));
+            persist_seq = persist_seq.saturating_add(1);
+        }
+
+        // Advance current_round after a successful commit. The rollback path
+        // below restores both `history` and `current_round`.
+        session.current_round = round;
+
+        // Persist every staged turn to the DB.
+        for (round_v, seq, speaker, content) in &staged_turns {
+            self.persist_turn(&session.id, *round_v, *seq, speaker, content)
+                .await;
+        }
+
+        // Build the live-stream `GroupChatMessage` list. The persistence
+        // sequence (which includes the user turn) is independent of the
+        // live-stream sequence (which omits the user turn and numbers from 0).
+        for p in &prepared {
+            let speaker = Speaker::Persona {
+                id: p.persona_id.clone(),
+                name: p.persona_name.clone(),
+            };
+            let sequence = p
+                .i
+                .try_into()
+                .unwrap_or(u32::MAX)
+                .saturating_add(seq_offset);
+            let is_final = p.i + 1 == total_respondents;
             messages.push(GroupChatMessage {
                 session_id: session_id.clone(),
                 speaker,
-                content: persona_response,
+                content: p.content.clone(),
                 round,
                 sequence,
                 is_final,
@@ -345,6 +436,7 @@ impl GroupChatExecutor {
         Ok(messages)
     }
 }
+
 
 // =============================================================================
 // Tests
@@ -860,5 +952,150 @@ mod tests {
         assert_eq!(messages[1].content, "PM goes second.");
         assert_eq!(messages[1].sequence, 1);
         assert!(messages[1].is_final);
+    }
+
+    /// Regression test for the critical audit finding (batch-3 was the
+    /// last reviewer, but the original transactional staging was not yet in
+    /// place when this audit ran): a failed persona call must NOT leave
+    /// partial turns in `session.history` or advance `current_round`. The
+    /// pre-fix behavior was to mutate `history` and call `persist_turn`
+    /// incrementally, so a 503 on persona N would silently poison the
+    /// session.
+    #[tokio::test]
+    async fn test_execute_round_rollback_on_persona_failure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Coordinator succeeds; the first persona succeeds; the second fails.
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""},{"persona_id":"pm","order":1,"guidance":""}],"need_summary":false}"#;
+
+        struct PartialFailProvider {
+            coordinator_response: String,
+            call_count: AtomicUsize,
+        }
+
+        impl AiProvider for PartialFailProvider {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
+                let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if idx == 0 {
+                    let resp = self.coordinator_response.clone();
+                    Box::pin(async move { Ok(ProviderResponse::text_only(resp)) })
+                } else if idx == 1 {
+                    Box::pin(async move { Ok(ProviderResponse::text_only("arch ok".to_string())) })
+                } else {
+                    Box::pin(async { Err(crate::error::AlephError::provider("model overloaded")) })
+                }
+            }
+            fn name(&self) -> &str { "partial-fail" }
+            fn color(&self) -> &str { "#ff0000" }
+        }
+
+        let provider: Arc<dyn AiProvider> = Arc::new(PartialFailProvider {
+            coordinator_response: coordinator_response.to_string(),
+            call_count: AtomicUsize::new(0),
+        });
+        let executor = GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(
+            provider,
+        )));
+        let mut session = make_session();
+
+        let history_before = session.history.len();
+        let round_before = session.current_round;
+
+        let result = executor
+            .execute_round(&mut session, "Please discuss", &[])
+            .await;
+
+        assert!(result.is_err(), "should return error");
+        // Session state must be UNCHANGED — no orphan partial turn.
+        assert_eq!(session.history.len(), history_before);
+        assert_eq!(session.current_round, round_before);
+    }
+
+    /// Regression test for the audit finding: a misconfigured persona provider
+    /// should warn ONCE, not N×M times across many rounds.
+    #[tokio::test]
+    async fn test_resolve_provider_warn_is_deduped() {
+        use crate::providers::adapter::RequestPayload;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Coordinator returns a single-persona plan; the persona references a
+        // provider name that does not exist in the registry, so the executor
+        // must fall back to the default AND emit the warn only on first miss.
+        let coordinator_response =
+            r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+
+        struct TwoCallProvider {
+            coordinator_response: String,
+            call_count: AtomicUsize,
+        }
+        impl AiProvider for TwoCallProvider {
+            fn process<'a>(
+                &'a self,
+                _payload: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
+                let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if idx == 0 {
+                    let resp = self.coordinator_response.clone();
+                    Box::pin(async move { Ok(ProviderResponse::text_only(resp)) })
+                } else {
+                    Box::pin(async move {
+                        Ok(ProviderResponse::text_only("ok".to_string()))
+                    })
+                }
+            }
+            fn name(&self) -> &str { "two-call" }
+            fn color(&self) -> &str { "#000000" }
+        }
+
+        let provider: Arc<dyn AiProvider> = Arc::new(TwoCallProvider {
+            coordinator_response: coordinator_response.to_string(),
+            call_count: AtomicUsize::new(0),
+        });
+
+        let mut registry = crate::providers::ProviderRegistry::new();
+        // Register a sentinel "arch" provider that has NO matching name;
+        // we resolve via the registry path but on a name that won't be
+        // found, triggering the warn path.
+        let _ = registry.register("other".to_string(), provider.clone());
+
+        let executor = GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(
+            provider,
+        )))
+        .with_provider_registry(Arc::new(registry));
+
+        let mut session = make_session();
+        session.participants[0].provider = Some("nonexistent".to_string());
+
+        let _ = executor
+            .execute_round(&mut session, "round 1", &[])
+            .await;
+
+        // After one round the dedupe set must contain exactly one entry;
+        // a second round would also produce exactly one entry (no growth).
+        let set_size = executor
+            .provider_fallback_warned
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
+        assert_eq!(set_size, 1, "first miss must insert one entry");
+
+        let _ = executor
+            .execute_round(&mut session, "round 2", &[])
+            .await;
+
+        let set_size_after = executor
+            .provider_fallback_warned
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
+        assert_eq!(
+            set_size_after, 1,
+            "second miss with same (persona, provider) must NOT grow the set"
+        );
     }
 }

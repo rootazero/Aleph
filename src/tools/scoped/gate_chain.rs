@@ -53,7 +53,6 @@
 
 use serde_json::Value;
 
-use crate::config::types::policies::PlanAdmission;
 use crate::extension::PermissionAction;
 
 use super::ScopedToolService;
@@ -90,10 +89,30 @@ pub(super) enum GateRule<'a> {
     /// arguments, not the tool: the same tool with different arguments runs
     /// without a card.
     DestructiveArguments,
+    /// This call can reach the configuration that decides whether the approval
+    /// gates fire at all — a `self_config` write intersecting
+    /// `policies.tool_permissions` / `policies.exec_tier`, or a config
+    /// rollback.
+    ///
+    /// The second **floor**: like [`Self::ToolDeclared`] it asks under every
+    /// tier including `full`, so its reason must not point the reader at a
+    /// setting, and its card must not offer to retire it
+    /// ([`crate::exec::allowed_decisions::for_confirm_gate`]). Reported before
+    /// [`Self::DestructiveArguments`] for that reason alone: the two are the
+    /// same predicate family, but only one of them is removable, and naming
+    /// the removable one would invite a repair that cannot work.
+    GateRemoval,
     /// An explicit `[policies.tool_permissions]` entry resolves the tool to
-    /// `ask`. The operator named it — by exact name or by glob — and the tier
-    /// never gets a word in (see
+    /// `ask`. The operator named it — by exact name or by glob — and no tier
+    /// that ASKS gets a word in (see
     /// [`effective_permission`](crate::config::types::policies::effective_permission)).
+    ///
+    /// One tier does: `Plan` refuses rather than asks, and its refusal is rung
+    /// 0 — above the entry, not beneath it. So a mutating tool carrying an
+    /// explicit `ask` arrives here as [`Self::PlanMode`] while planning and as
+    /// `PolicyAsk` at every other tier. That is the honest split: quoting the
+    /// entry during a planning turn would point the reader at a setting whose
+    /// edit changes nothing until the plan is approved.
     PolicyAsk {
         /// The override key that asked, as written in the config.
         pattern: &'a str,
@@ -105,38 +124,40 @@ pub(super) enum GateRule<'a> {
     /// Nobody named this tool, and the execution tier raised the configured
     /// default to `ask` from the tool's DECLARED metadata (not from its name).
     TierRaised,
-    /// This call is the plan → build handoff: the session is in the read-only
-    /// planning phase and the model is asking the person to approve the plan
-    /// and unlock execution.
+    /// The tool changes Aleph's own configuration and the requesting connection
+    /// is not operator-tier, so the call is escalated to whoever is
+    /// (`check_operator_gate`).
     ///
-    /// Reported FIRST, ahead of even the declared floor, for the reason the
-    /// module doc gives: a reason must never mislead the reader about what
-    /// would change the outcome. Every other rule in this chain describes a
-    /// setting; this one describes a decision, and no setting reaches it. It is
-    /// also the only rule in the chain whose approval does something besides
-    /// let the call run — see `dispatch`'s handoff arm.
-    PlanHandoff,
-    /// The read-only planning floor refused this call outright.
+    /// Never returned by [`ScopedToolService::confirmation_rule`] — it is
+    /// decided one gate earlier, from the caller's role rather than from the
+    /// tool's facts — but it lives in this enum for the reason the enum exists:
+    /// it is a reason a call can stop, its sentence reaches a human and a model,
+    /// and the trail has to be able to name it. It was the one gate whose prose
+    /// was still hand-written at its call site. Same shape as
+    /// [`Self::PolicyDeny`], which [`ScopedToolService::deny_rule`] answers.
+    OperatorRequired,
+    /// The conversation is PLANNING ([`ExecTier::Plan`]) and this call is not
+    /// a declared read.
     ///
-    /// **Deny-chain only** — [`ScopedToolService::deny_rule`] returns it and
-    /// [`ScopedToolService::confirmation_rule`] never does. It is not a card:
-    /// nobody is being asked anything, because the answer to "may this run"
-    /// while planning is no, and the way to change it is to get the plan
-    /// approved.
+    /// The second rule in the chain that REFUSES rather than asks, and the
+    /// only one that is temporary: the exact same call runs the moment a human
+    /// approves the plan. That is why it needs its own name — reported as
+    /// [`Self::PolicyDeny`] it would send the reader to a
+    /// `[policies.tool_permissions]` entry that does not exist, and send the
+    /// MODEL to a dead end instead of to the two-call handoff that is sitting
+    /// right there.
     ///
-    /// It exists because a real run proved the alternative wrong. The floor
-    /// resolves a hidden tool to `Deny` at the chokepoint, and a `Deny` is
-    /// *also* what an explicit `[policies.tool_permissions]` entry produces —
-    /// so a model that called `file_write` anyway (a hidden tool is absent
-    /// from the surface, which is not the same as unreachable: a name can be
-    /// remembered from earlier in the conversation, guessed, or rewritten in
-    /// by a hook) was told its call "is denied by `default` in the merged tool
-    /// permission policy". Every word of that is a fabrication: no policy
-    /// entry decided it, and the knob it names would not change the outcome —
-    /// while the one thing that WOULD (`scratchpad{action:"request_build"}`)
-    /// went unmentioned. One `Deny` value, two authors, and a downstream
-    /// consumer inventing the attribution.
-    PlanFloor,
+    /// [`ExecTier::Plan`]: crate::config::types::policies::ExecTier::Plan
+    PlanMode,
+    /// A `BeforeToolCall` interceptor answered `Ask` for this call.
+    ///
+    /// Also outside [`ScopedToolService::confirmation_rule`] — the decision
+    /// belongs to a plugin, not to the tool facts — and here for the same
+    /// reason as [`Self::OperatorRequired`]: the trail has to be able to say
+    /// that a *hook* stopped this call and not the tier, which is the first
+    /// thing an operator wants to know when a card appears for a tool their
+    /// configuration allows.
+    HookRequested,
 }
 
 impl GateRule<'_> {
@@ -152,15 +173,59 @@ impl GateRule<'_> {
             // compile error there, not a silently widened button set.
             Self::ToolDeclared => crate::exec::allowed_decisions::DECLARED_FLOOR_RULE,
             Self::DestructiveArguments => "destructive_arguments",
+            // Second spelling shared with the decision-set derivation, same as
+            // `ToolDeclared` above: a rename here is a compile error there.
+            Self::GateRemoval => crate::exec::allowed_decisions::GATE_REMOVAL_RULE,
             Self::PolicyAsk { .. } => "policy_ask",
             Self::TierRaised => "tier_raised",
-            // One spelling, shared with the decision-set derivation that must
-            // refuse a standing grant on this rule's card
-            // (`exec::allowed_decisions::for_confirm_gate`): a plan is approved
-            // once, and "always approve my plans" is not a thing anyone can
-            // mean. A rename here is a compile error there.
-            Self::PlanHandoff => crate::exec::allowed_decisions::PLAN_HANDOFF_RULE,
-            Self::PlanFloor => "plan_floor",
+            Self::PlanMode => "plan_mode",
+            Self::OperatorRequired => "operator_required",
+            Self::HookRequested => "hook_requested",
+        }
+    }
+
+    /// Whether this rule is a **floor**: a gate no execution tier and no
+    /// `allow` entry can lower. Read for exactly one thing — whether the card
+    /// may offer a persistent grant.
+    ///
+    /// Deliberately `#[cfg(test)]` and deliberately an exhaustive `match`.
+    /// Production asks
+    /// [`allowed_decisions::rule_is_a_floor`](crate::exec::allowed_decisions::rule_is_a_floor)
+    /// — the one derivation, which the gate reaches through
+    /// [`Self::id`] — so a second production predicate here would be the second
+    /// source that `FLOOR_RULES` exists to avoid. What this *is* for is the
+    /// forcing function: adding a variant is a compile error on this `match`,
+    /// and `every_floor_variant_is_declared_a_floor_on_both_sides` then makes
+    /// the two answers agree. A `matches!` would have quietly answered `false`
+    /// for the new one, which is the shape of every enumeration that goes
+    /// stale (判据 §0).
+    #[cfg(test)]
+    pub(super) const fn is_floor(self) -> bool {
+        match self {
+            Self::ToolDeclared | Self::GateRemoval => true,
+            // `PlanMode` is emphatically NOT a floor **in this sense**: it is
+            // the one rule in the chain that a single human "approved" retires
+            // for the rest of the turn. (It also never reaches a card — it
+            // refuses — so the persistent-grant question it would otherwise
+            // answer is moot.)
+            //
+            // ⚠️ "Floor" means two different things in this subsystem and they
+            // are not in conflict. HERE it means "no card this rule raises may
+            // offer a persistent grant" — `PlanMode` raises no card, and its
+            // exit is one human `approved`, so `false` is right. In
+            // `effective_permission` it means "rung 0: an explicit
+            // `[policies.tool_permissions]` entry may not outrank this" — and
+            // there the plan denial IS the floor, which is what lets
+            // `denied_only_by_plan` above resolve `true` for a tool carrying an
+            // explicit `allow` instead of never being asked at all. One rule,
+            // two axes: unrelaxable by config, retired by a person.
+            Self::PolicyDeny { .. }
+            | Self::DestructiveArguments
+            | Self::PolicyAsk { .. }
+            | Self::TierRaised
+            | Self::PlanMode
+            | Self::OperatorRequired
+            | Self::HookRequested => false,
         }
     }
 
@@ -193,6 +258,12 @@ impl GateRule<'_> {
                  `{tool}` explicitly in `[policies.tool_permissions.overrides]` stands this \
                  filter down."
             ),
+            Self::GateRemoval => format!(
+                "This `{tool}` call can change the settings that decide which tool calls \
+                 stop for you (`policies.tool_permissions` / `policies.exec_tier`), so it \
+                 asks under every execution tier — including `full`. Raising the tier does \
+                 not stand it down: the tier lasts one turn and this change would outlive it."
+            ),
             Self::PolicyAsk {
                 pattern,
                 exact: true,
@@ -209,41 +280,58 @@ impl GateRule<'_> {
                  itself read-only. Nothing in `[policies.tool_permissions]` names it, so \
                  the tier decides."
             ),
-            Self::PlanHandoff => {
-                // Deliberately does not mention `{tool}`: the reader is being
-                // asked about the PLAN, not about the scratchpad. Naming the
-                // mechanism here would invite "why is it asking me about a
-                // scratchpad", and the answer would be an implementation
-                // detail.
-                "The agent has finished planning and is asking to start work. \
-                 Approving lets it run the plan with the tools your current approval \
-                 mode allows; declining keeps the session read-only so you can keep \
-                 refining the plan together."
-                    .to_string()
+            Self::PlanMode => format!(
+                "This conversation is PLANNING, so `{tool}` does not run yet — nothing \
+                 that mutates does. Finish the plan instead: write the objective and an \
+                 ordered checklist with `scratchpad` (`set_objective` + `set_plan`), then \
+                 call `scratchpad` with `action='request_approval'`. If the user approves, \
+                 planning ends immediately and `{tool}` runs on your next call."
+            ),
+            Self::OperatorRequired => format!(
+                "A chat-tier device asked to run `{tool}`, which changes Aleph's own \
+                 configuration. Approve to allow this change."
+            ),
+            // The only rule whose sentence is not authored here: a hook's
+            // `Ask` carries the plugin author's own words, and replacing them
+            // with a generic line would throw away the only thing that says
+            // WHICH hook and why. The `{tool}` suffix keeps the card readable
+            // when the plugin wrote a bare phrase.
+            Self::HookRequested => {
+                format!("A `BeforeToolCall` hook asked for confirmation before `{tool}` runs.")
             }
-            // The floor's own words, from the floor's own module — the same
-            // sentence the argument-dependent refusal one gate down uses, so
-            // "why can't I run this while planning" has one answer however the
-            // call was stopped.
-            Self::PlanFloor => crate::config::types::policies::PlanPhase::refusal(tool),
         }
     }
 
-    /// What a hard refusal should add after [`Self::reason`], for the deny
-    /// chain only.
+    /// What the model should DO about a refusal, appended to [`Self::reason`]
+    /// on the deny path.
     ///
-    /// The policy suffix ("ask the user to adjust `[policies.tool_permissions]`")
-    /// is right for a policy deny and actively harmful for the floor: it points
-    /// at a knob that cannot lift the floor, in the one phase whose prompt line
-    /// tells the model in as many words not to look for a way around a refusal.
-    /// [`PlanPhase::refusal`](crate::config::types::policies::PlanPhase::refusal)
-    /// already ends with the correct advice, so the floor adds nothing.
-    pub(super) const fn deny_followup(self) -> &'static str {
+    /// This sentence used to be a literal at the one call site, which was fine
+    /// while that path had exactly one rule to explain. It has two now, and
+    /// they want opposite advice: an operator's `deny` is permanent and the
+    /// only way through it is a human editing config, while plan mode is one
+    /// approval away and retrying is exactly right *after* that approval. A
+    /// blanket "do not retry" on the second one would tell the model to give
+    /// up on the work it just got permission to do.
+    /// Exhaustive on purpose, with no catch-all: only two variants reach the
+    /// deny path today, and the wrong half of this fork is a sentence that
+    /// tells the model to give up on work it just got permission to do. A new
+    /// refusing rule should be a compile error here, not a silent inheritance
+    /// of "go edit your config".
+    pub(super) const fn deny_advice(self) -> &'static str {
         match self {
-            Self::PlanFloor => "",
-            _ => {
-                " Do not retry; ask the user to adjust \
-                  `[policies.tool_permissions]` if this tool is needed."
+            Self::PlanMode => {
+                " Do not retry this call before the plan is approved — request approval first."
+            }
+            Self::PolicyDeny { .. }
+            | Self::ToolDeclared
+            | Self::DestructiveArguments
+            | Self::GateRemoval
+            | Self::PolicyAsk { .. }
+            | Self::TierRaised
+            | Self::OperatorRequired
+            | Self::HookRequested => {
+                " Do not retry; ask the user to adjust `[policies.tool_permissions]` if this \
+                 tool is needed."
             }
         }
     }
@@ -260,26 +348,27 @@ impl ScopedToolService {
         name: &str,
         input: &Value,
     ) -> Option<GateRule<'a>> {
-        // 0. The handoff. Ahead of everything because it is the only rule no
-        //    configuration participates in, and because its approval has an
-        //    effect the others do not (it lifts the read-only floor for the
-        //    rest of the run). `admits` returns `Handoff` only while the phase
-        //    is engaged, so this arm is unreachable in an ordinary session.
-        if self.plan_admission(name, input) == PlanAdmission::Handoff {
-            return Some(GateRule::PlanHandoff);
-        }
         // 1. The floor. Read independently of the tier and of any explicit
         //    `allow`, exactly as `check_confirmation_gate` has always read it.
         if self.inner.requires_confirmation(name) {
             return Some(GateRule::ToolDeclared);
         }
-        // 2. This call's arguments. Already stands down for an exactly-named
-        //    tool (`tier_asks_for_arguments`), which is what keeps it and rule 3
+        // 2. The second floor: a write that can retire the gates themselves.
+        //    Read before rule 3 because `tier_asks_for_arguments` answers `true`
+        //    for it as well (the floor is folded into the tier predicate), and
+        //    the two must not be reported with the same sentence — one names a
+        //    tier setting that would change the outcome, the other names one
+        //    that would not.
+        if self.gate_removal_floor(name, input) {
+            return Some(GateRule::GateRemoval);
+        }
+        // 3. This call's arguments. Already stands down for an exactly-named
+        //    tool (`tier_asks_for_arguments`), which is what keeps it and rule 4
         //    mutually exclusive.
         if self.tier_asks_for_arguments(name, input) {
             return Some(GateRule::DestructiveArguments);
         }
-        // 3/4. `Ask` from the merged policy — either because an entry says so,
+        // 4/5. `Ask` from the merged policy — either because an entry says so,
         //      or because the tier tightened the default. `permission_for` is
         //      the chokepoint that composes them; `explain` says which one it
         //      was, without recomputing the composition.
@@ -309,15 +398,14 @@ impl ScopedToolService {
         if self.permission_for(name) != PermissionAction::Deny {
             return None;
         }
-        // Two rules can author that one `Deny`, and they differ in the only
-        // way the reader cares about: whether getting the plan approved
-        // changes the outcome. Ask the policy with the floor lifted. If it
-        // denies on its own, approval would NOT help and naming the policy is
-        // the honest answer — so the policy is checked first even though the
-        // floor *wins* first at the chokepoint. Winning order and explaining
-        // order answer different questions and are allowed to differ.
-        if self.permission_ignoring_plan_floor(name) != PermissionAction::Deny {
-            return Some(GateRule::PlanFloor);
+        // A denial the PLAN tier created is reported as itself. Checked before
+        // the policy arm because the policy arm is unconditionally true here
+        // and would otherwise quote `pattern: "default"` — a config entry the
+        // operator never wrote, pointing at a fix that cannot work. The
+        // predicate is derived by difference (`denied_only_by_plan`), so an
+        // operator's real `deny` on the same tool keeps reporting as one.
+        if self.denied_only_by_plan(name) {
+            return Some(GateRule::PlanMode);
         }
         Some(GateRule::PolicyDeny {
             // A `Deny` with no explicit entry came from `default = "deny"`;
@@ -328,14 +416,6 @@ impl ScopedToolService {
                 .filter(|m| m.action == PermissionAction::Deny)
                 .map_or("default", |m| m.pattern),
         })
-    }
-
-    /// The read-only planning floor's verdict on this call, from the tool's own
-    /// declared idempotency — the same fact the tier rules read, through the
-    /// same seam ([`Self::tool_facts`]), so "mutating" means one thing here.
-    pub(super) fn plan_admission(&self, name: &str, input: &Value) -> PlanAdmission {
-        self.plan_phase()
-            .admits(name, input, self.tool_facts(name).idempotent)
     }
 
     /// The merged policy's explicit entry for `name`, if any — the borrow the
@@ -577,7 +657,16 @@ mod tests {
     /// fire with no reason, or a reason would exist for a gate that never fires.
     #[test]
     fn the_chain_and_the_chokepoint_never_disagree() {
-        for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+        // Every variant, `Plan` included: it refuses rather than asks, so the
+        // interesting half of the equality there is that it produces NO
+        // confirmation rule while `permission_for` says `Deny` — a card for a
+        // call that will never run is exactly the disagreement this pins.
+        for tier in [
+            ExecTier::Plan,
+            ExecTier::Ask,
+            ExecTier::Auto,
+            ExecTier::Full,
+        ] {
             for confirm in [false, true] {
                 for idempotent in [false, true] {
                     let svc = service(
@@ -620,77 +709,6 @@ mod tests {
         assert_eq!(svc.confirmation_rule("t", &json!({})), None);
     }
 
-    /// A `Deny` authored by the planning floor must say so.
-    ///
-    /// Found on real hardware, not here: `qa/plan_handoff` watched a model call
-    /// a tool the floor had hidden and get back "`file_write` is denied by
-    /// `default` in the merged tool permission policy" — a config entry that
-    /// does not exist, describing a knob that would not have helped, while the
-    /// one action that WOULD (`request_build`) went unmentioned. The effect was
-    /// right and every word of the explanation was wrong.
-    #[test]
-    fn a_floor_deny_names_the_floor_and_not_the_policy() {
-        let svc = service(
-            vec![Declared {
-                name: "file_write",
-                idempotent: false,
-                confirm: false,
-            }],
-            // The WIDEST tier and a permissive policy: nothing here denies
-            // anything, so the floor is provably the only possible author.
-            ExecTier::Full,
-            Some(perms(PermissionAction::Allow, &[])),
-        )
-        .with_plan_gate(crate::sync_primitives::Arc::new(
-            super::super::PlanGate::planning(None),
-        ));
-
-        let rule = svc.deny_rule("file_write").expect("the floor denies it");
-        assert_eq!(rule.id(), "plan_floor");
-        let reason = rule.reason("file_write");
-        assert!(
-            reason.contains("request_build"),
-            "the refusal must name the exit: {reason}"
-        );
-        assert!(
-            !reason.contains("tool_permissions"),
-            "it must not point at a policy that decided nothing: {reason}"
-        );
-        assert_eq!(
-            rule.deny_followup(),
-            "",
-            "the policy follow-up would tell the model to go edit a knob that \
-             cannot lift the floor"
-        );
-    }
-
-    /// The other half of the same fork: while planning, a tool the OPERATOR
-    /// denied still reports the operator's entry. Getting the plan approved
-    /// would not make this call run, so naming the floor would mislead in the
-    /// opposite direction.
-    #[test]
-    fn a_policy_deny_still_names_the_policy_while_planning() {
-        let svc = service(
-            vec![Declared {
-                name: "file_write",
-                idempotent: false,
-                confirm: false,
-            }],
-            ExecTier::Full,
-            Some(perms(
-                PermissionAction::Allow,
-                &[("file_write", PermissionAction::Deny)],
-            )),
-        )
-        .with_plan_gate(crate::sync_primitives::Arc::new(
-            super::super::PlanGate::planning(None),
-        ));
-
-        let rule = svc.deny_rule("file_write").expect("denied");
-        assert_eq!(rule.id(), "policy_deny");
-        assert!(rule.reason("file_write").contains("`file_write`"));
-    }
-
     #[test]
     fn a_denying_glob_is_quoted_verbatim() {
         let svc = service(
@@ -721,6 +739,7 @@ mod tests {
         let rules = [
             GateRule::PolicyDeny { pattern: "*" },
             GateRule::ToolDeclared,
+            GateRule::GateRemoval,
             GateRule::DestructiveArguments,
             GateRule::PolicyAsk {
                 pattern: "bash",
@@ -731,6 +750,8 @@ mod tests {
                 exact: false,
             },
             GateRule::TierRaised,
+            GateRule::OperatorRequired,
+            GateRule::HookRequested,
         ];
         let mut ids = std::collections::HashSet::new();
         for rule in rules {
@@ -742,5 +763,48 @@ mod tests {
         // Both `PolicyAsk` shapes share one id — they are one rule with two
         // renderings, which is the point of separating `id` from `reason`.
         assert_eq!(ids.len(), rules.len() - 1);
+    }
+
+    /// The two halves of "is this a floor" live in two crates-worth of module
+    /// apart — the chain names the rule, `exec::allowed_decisions` decides what
+    /// the card may offer — and a floor that is only declared on one side ships
+    /// a card that offers to permanently retire a gate whose own sentence just
+    /// said nothing can. Pinned by id, over every variant, so adding one forces
+    /// the decision instead of inheriting a default.
+    #[test]
+    fn every_floor_variant_is_declared_a_floor_on_both_sides() {
+        for (rule, expected) in [
+            (GateRule::ToolDeclared, true),
+            (GateRule::GateRemoval, true),
+            (GateRule::DestructiveArguments, false),
+            (GateRule::TierRaised, false),
+            (GateRule::OperatorRequired, false),
+            (GateRule::HookRequested, false),
+            (
+                GateRule::PolicyAsk {
+                    pattern: "bash",
+                    exact: true,
+                },
+                false,
+            ),
+            (GateRule::PolicyDeny { pattern: "*" }, false),
+        ] {
+            assert_eq!(rule.is_floor(), expected, "{:?}", rule.id());
+            assert_eq!(
+                crate::exec::allowed_decisions::rule_is_a_floor(rule.id()),
+                expected,
+                "`{}` disagrees between the chain and the decision-set derivation",
+                rule.id()
+            );
+        }
+        // And nothing is on the floor list that the chain cannot produce.
+        for id in crate::exec::allowed_decisions::FLOOR_RULES {
+            assert!(
+                [GateRule::ToolDeclared, GateRule::GateRemoval]
+                    .iter()
+                    .any(|r| r.id() == *id),
+                "`{id}` is listed as a floor but no `GateRule` variant emits it"
+            );
+        }
     }
 }

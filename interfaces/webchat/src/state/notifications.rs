@@ -82,10 +82,60 @@ impl PendingApprovalView {
 pub struct PendingAskView {
     /// Clarification registry key the answer is posted back on.
     pub session_key: String,
-    /// The question as core rendered it.
+    /// The question at the cursor, as core rendered it. Legacy projection —
+    /// still what the composer's Enter-hijack answers.
     pub question: String,
-    /// Choice labels. Empty = open-ended, so the card offers a text field.
+    /// Choice labels for that question. Empty = open-ended.
     pub options: Vec<String>,
+    /// Every question of the request, in order. Empty when talking to a core
+    /// that predates the structured view — the card then falls back to
+    /// `question` / `options`.
+    pub questions: Vec<AskQuestionView>,
+    /// How many of `questions` already have answers: the card renders from
+    /// here.
+    pub answered: usize,
+}
+
+/// One option of an [`AskQuestionView`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskOptionView {
+    /// What the user reads.
+    pub label: String,
+    /// Why they might pick it. Rendered beside the label — a channel has shown
+    /// this since the option type gained the field; the panel showed a bare
+    /// label because it read the flat label array, which structurally cannot
+    /// carry it.
+    pub description: Option<String>,
+}
+
+/// One question of a pending `ask_user` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskQuestionView {
+    /// Stable id — not shown, sent nowhere; kept so a future face can address
+    /// an answer by name instead of by position.
+    pub id: String,
+    /// Short chip shown beside the prompt.
+    pub header: Option<String>,
+    /// The prompt.
+    pub prompt: String,
+    /// Offered choices; empty = free text.
+    pub options: Vec<AskOptionView>,
+    /// Several picks accepted.
+    pub multi_select: bool,
+    /// Credential: render a masked input and never echo it.
+    pub secret: bool,
+}
+
+impl PendingAskView {
+    /// The questions still to answer, from the cursor on.
+    ///
+    /// Empty `questions` (an older core) yields nothing, and every caller then
+    /// falls back to the flat `question`/`options` pair — the same degradation
+    /// a plain-text channel gets, for the same reason.
+    #[must_use]
+    pub fn remaining(&self) -> &[AskQuestionView] {
+        self.questions.get(self.answered..).unwrap_or(&[])
+    }
 }
 
 /// The question `session_key` is waiting on, if any. One question is pending
@@ -202,7 +252,44 @@ mod tests {
             session_key: session.to_string(),
             question: "Deploy where?".to_string(),
             options: vec!["staging".to_string()],
+            questions: vec![],
+            answered: 0,
         }
+    }
+
+    /// `remaining()` is what the card renders from, so its two degenerate
+    /// inputs must degrade rather than panic: an older core sends no
+    /// structured view at all, and a frame that raced a completion can carry a
+    /// cursor past the end.
+    #[test]
+    fn remaining_degrades_on_both_degenerate_inputs() {
+        assert!(ask("s").remaining().is_empty(), "no structured view");
+
+        let question = AskQuestionView {
+            id: "q1".into(),
+            header: None,
+            prompt: "Which?".into(),
+            options: vec![AskOptionView {
+                label: "a".into(),
+                description: Some("the first".into()),
+            }],
+            multi_select: false,
+            secret: false,
+        };
+        let mut view = ask("s");
+        view.questions = vec![question];
+
+        assert_eq!(view.remaining().len(), 1);
+        assert_eq!(
+            view.remaining()[0].options[0].description.as_deref(),
+            Some("the first"),
+            "the description must survive into the card's own view type"
+        );
+
+        view.answered = 1;
+        assert!(view.remaining().is_empty(), "cursor at the end");
+        view.answered = 9;
+        assert!(view.remaining().is_empty(), "cursor past the end");
     }
 
     #[test]

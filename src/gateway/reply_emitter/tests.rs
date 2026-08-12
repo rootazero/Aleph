@@ -9,8 +9,8 @@ use crate::sync_primitives::Arc;
 mod tests {
     use super::*;
     use crate::gateway::channel::{
-        Channel, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, MessageId,
-        OutboundMessage, SendResult,
+        Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
+        MessageId, OutboundMessage, SendResult, StreamProtocol,
     };
     use crate::gateway::media::PendingMedia;
 
@@ -138,6 +138,59 @@ mod tests {
         assert!(tw.stream_enabled);
         let instant = ReplyEmitterConfig::from_output_mode("instant");
         assert!(!instant.stream_enabled);
+    }
+
+    fn caps_of(editing: bool, protocol: StreamProtocol) -> ChannelCapabilities {
+        ChannelCapabilities {
+            editing,
+            stream_protocol: protocol,
+            max_message_length: 4096,
+            ..ChannelCapabilities::default()
+        }
+    }
+
+    /// The bug this floor exists for: a channel that cannot edit received the
+    /// first flush and nothing else, because `Channel::edit`'s default body is
+    /// an `Err` the streaming emitter drops with no send fallback.
+    #[test]
+    fn a_channel_that_cannot_edit_never_streams() {
+        for protocol in [
+            StreamProtocol::None,
+            StreamProtocol::EditBased,
+            StreamProtocol::Native,
+        ] {
+            let mut config = ReplyEmitterConfig::from_output_mode("typewriter");
+            config.apply_channel_capabilities(&caps_of(false, protocol));
+            assert!(
+                !config.stream_enabled,
+                "{protocol:?} + editing:false must not stream"
+            );
+        }
+    }
+
+    /// `line` and `wechat` declared `EditBased` while refusing to edit. A floor
+    /// written as the `else` of the widening arm would never have run for them.
+    #[test]
+    fn the_floor_outranks_the_edit_based_widening() {
+        let mut config = ReplyEmitterConfig::from_output_mode("instant");
+        config.apply_channel_capabilities(&caps_of(false, StreamProtocol::EditBased));
+        assert!(!config.stream_enabled);
+    }
+
+    /// Narrowing only: a channel that *can* edit keeps exactly the behaviour it
+    /// had before the floor existed — including `slack`/`mattermost`/`msteams`,
+    /// which stream while declaring `StreamProtocol::None`.
+    #[test]
+    fn a_channel_that_can_edit_keeps_the_global_preference() {
+        let mut typewriter = ReplyEmitterConfig::from_output_mode("typewriter");
+        typewriter.apply_channel_capabilities(&caps_of(true, StreamProtocol::None));
+        assert!(typewriter.stream_enabled);
+        assert_eq!(typewriter.max_message_length, 0, "None does not set a cap");
+
+        let mut instant = ReplyEmitterConfig::from_output_mode("instant");
+        instant.apply_channel_capabilities(&caps_of(true, StreamProtocol::EditBased));
+        assert!(instant.stream_enabled, "EditBased still widens");
+        assert_eq!(instant.max_message_length, 4096);
     }
     #[test]
     fn test_reply_route() {

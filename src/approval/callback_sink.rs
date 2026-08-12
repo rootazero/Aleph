@@ -79,7 +79,13 @@ mod tests {
             id: id.to_string(),
             command: "code_exec".to_string(),
             cwd: None,
-            analysis: CommandAnalysis::error("danger"),
+            // Not `error(..)`: this is a tool card, so there is no command
+            // line — `CommandAnalysis::error` would trip the `debug_assert!`
+            // in `ExecApprovalManager::create` (a card the human can only
+            // ever deny should not be raised). `not_a_command()` is the
+            // exact fixture: it carries `ok: true` so the assertion passes,
+            // and `Vec::new()` segments because there is no argv to parse.
+            analysis: CommandAnalysis::not_a_command(),
             agent_id: "main".to_string(),
             session_key: "telegram:123".to_string(),
             reason: None,

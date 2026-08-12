@@ -78,7 +78,11 @@ impl LineChannel {
             rich_text: true,
             max_message_length: 5000,
             max_attachment_size: 50 * 1024 * 1024,
-            stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
+            // NOT EditBased: `edit` below returns `UnsupportedFeature`
+            // unconditionally, so the two declarations contradicted each other
+            // and this one won — LINE was forced into edit-based streaming and
+            // every reply past the first flush was silently discarded.
+            stream_protocol: crate::gateway::channel::StreamProtocol::None,
         }
     }
 }

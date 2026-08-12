@@ -1,0 +1,74 @@
+{
+  "batch": "cluster-batch-5",
+  "title": "Node approval requester + module entry",
+  "date": "2026-08-11",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-cluster",
+  "report": "review-results/cluster-batch-5/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 3,
+    "total": 5
+  },
+  "by_category": {
+    "security": 1,
+    "quality": 2,
+    "documentation": 2
+  },
+  "files_reviewed": [
+    { "path": "src/cluster/node_approval.rs", "loc": 211, "findings": 4 },
+    { "path": "src/cluster/mod.rs", "loc": 41, "findings": 2 }
+  ],
+  "total_loc": 252,
+  "findings": [
+    {
+      "id": "B5-01",
+      "severity": "medium",
+      "category": "security/fail-closed",
+      "file": "src/cluster/node_approval.rs",
+      "line": 79,
+      "title": "outcome_from_str docs misleadingly say 'including denied'; add tracing::warn on the unknown arm so drift is visible"
+    },
+    {
+      "id": "B5-02",
+      "severity": "medium",
+      "category": "quality/log-noise",
+      "file": "src/cluster/node_approval.rs",
+      "line": 50,
+      "title": "Per-escalation warn when center channel is missing produces log spam; down-grade or rate-limit"
+    },
+    {
+      "id": "B5-03",
+      "severity": "low",
+      "category": "quality/defense-in-depth",
+      "file": "src/cluster/node_approval.rs",
+      "line": 91,
+      "title": "request_approval sends action.summary verbatim with no consumer-side size cap (producer enforces cap)"
+    },
+    {
+      "id": "B5-04",
+      "severity": "low",
+      "category": "documentation",
+      "file": "src/cluster/mod.rs",
+      "line": 14,
+      "title": "pub(crate) use node_file_cmd::sha256_hex has no consumer note"
+    },
+    {
+      "id": "B5-05",
+      "severity": "low",
+      "category": "documentation",
+      "file": "src/cluster/mod.rs",
+      "line": 38,
+      "title": "pub(crate) use registry::normalize_node_key visibility is correct but visibility block could be split for readability"
+    }
+  ],
+  "clean_areas": [
+    "Fail-closed semantics across all transport failure modes",
+    "NODE_APPROVAL_TIMEOUT_MS above center default",
+    "outcome_from_str is exhaustive over center's known outcomes",
+    "All four transport-failure paths tested",
+    "Module docstring correctly states redline compliance"
+  ]
+}

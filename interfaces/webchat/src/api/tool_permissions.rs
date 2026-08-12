@@ -11,29 +11,43 @@ use std::collections::HashMap;
 
 // -- Types --
 
-/// One selectable execution-permission tier. Core ships the id set and its
-/// order (`builtin_tiers()`) — that is the part every surface must agree on.
-/// The copy is this surface's own: resolved per locale by
-/// `components::exec_tier_labels`.
+/// One selectable position of a session dial.
+///
+/// Core ships the id set and its order (`builtin_tiers` / `builtin_modes` /
+/// `builtin_think_levels` / `builtin_memory_modes`) — that is the part every
+/// surface must agree on. The copy is this surface's own, resolved per locale
+/// by `components::*_labels` (R4/R6).
+///
+/// One type for all four dials: `{ id }` is the whole contract, and four
+/// identical structs would be four places for it to drift.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TierPreset {
+pub struct DialPreset {
     pub id: String,
 }
 
-/// One selectable session usage mode — same id-only contract as
-/// [`TierPreset`]; copy resolves per locale in `components::mode_labels`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModePreset {
-    pub id: String,
-}
+/// One selectable execution-permission tier.
+pub type TierPreset = DialPreset;
+
+/// One selectable session usage mode.
+pub type ModePreset = DialPreset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPermissionsResponse {
     /// Active tier id (`ask` / `auto` / `full`).
     pub exec_tier: String,
-    /// Selectable tiers, ordered least → most permissive.
+    /// Selectable INSTALL tiers, ordered least → most permissive. What
+    /// Settings → Policies offers as the machine-wide default.
     #[serde(default)]
     pub tiers: Vec<TierPreset>,
+    /// Selectable tiers for a single CONVERSATION — `tiers` plus `plan`, the
+    /// read-only planning posture that ends when a human approves a plan. What
+    /// the composer's tier pill offers.
+    ///
+    /// Empty against a core that predates the split; [`Self::session_tier_presets`]
+    /// falls back to `tiers` there, so an older core keeps offering three
+    /// choices rather than none.
+    #[serde(default)]
+    pub session_tiers: Vec<TierPreset>,
     /// Global default usage mode id (`chat` / `work` / `code`). Defaulted so
     /// the decoder tolerates an older core that predates the mode dial.
     #[serde(default)]
@@ -41,6 +55,23 @@ pub struct ToolPermissionsResponse {
     /// Selectable modes, in display order.
     #[serde(default)]
     pub modes: Vec<ModePreset>,
+    /// The reasoning-depth ladder, shallow → deep.
+    ///
+    /// There is deliberately **no** `think_level` beside it: core resolves
+    /// depth as request > session > *no directive at all*, so there is no
+    /// global position to report. A pill must render its clear-the-override row
+    /// as "provider default", never as "follow global" — the latter names a
+    /// setting that does not exist. Empty against a core that predates the
+    /// dial, which hides the pill.
+    #[serde(default)]
+    pub think_levels: Vec<DialPreset>,
+    /// Global memory-injection position (`on` / `off`), i.e. where
+    /// `[memory] enabled` sits. Empty against an older core.
+    #[serde(default)]
+    pub memory: String,
+    /// Selectable memory modes, in display order.
+    #[serde(default)]
+    pub memory_modes: Vec<DialPreset>,
     /// Server-global default tool permission — one of the two advanced axes
     /// Settings → Policies edits.
     ///
@@ -61,6 +92,24 @@ pub struct ToolPermissionsResponse {
     pub default: String,
     #[serde(default)]
     pub overrides: HashMap<String, String>,
+}
+
+impl ToolPermissionsResponse {
+    /// The tiers a composer pill may offer for THIS conversation.
+    ///
+    /// Falls back to the install list against a core that predates the split.
+    /// A bare `session_tiers` read would have degraded that case to an empty
+    /// popover — the exact symptom `a_member_still_receives_both_dials…`
+    /// exists to prevent, arriving through a version skew instead of a
+    /// permission narrowing.
+    #[must_use]
+    pub fn session_tier_presets(&self) -> &[TierPreset] {
+        if self.session_tiers.is_empty() {
+            &self.tiers
+        } else {
+            &self.session_tiers
+        }
+    }
 }
 
 // -- API --
@@ -138,10 +187,42 @@ mod tests {
         // An older core without the mode dial must still decode.
         assert_eq!(cfg.mode, "");
         assert!(cfg.modes.is_empty());
+        // …and likewise for the two dials added after it. Each pill hides
+        // itself on an empty enumeration rather than rendering a blank label.
+        assert!(cfg.think_levels.is_empty());
+        assert_eq!(cfg.memory, "");
+        assert!(cfg.memory_modes.is_empty());
         assert_eq!(cfg.tiers.len(), 1);
         assert_eq!(cfg.tiers[0].id, "ask");
         assert_eq!(cfg.default, "allow");
         assert_eq!(cfg.overrides.get("bash").map(String::as_str), Some("ask"));
+    }
+
+    /// The composer pill reads the SESSION list; Settings → Policies reads the
+    /// install list. A core that predates the split ships only the latter, and
+    /// the pill must degrade to three choices rather than to an empty popover —
+    /// the same symptom `the_member_shape_from_the_shared_contract_decodes`
+    /// exists to prevent, arriving through a version skew instead.
+    #[test]
+    fn the_session_tier_list_falls_back_to_the_install_list() {
+        let old_core = json!({
+            "exec_tier": "auto",
+            "tiers": [{ "id": "ask" }, { "id": "auto" }, { "id": "full" }],
+        });
+        let cfg: ToolPermissionsResponse = serde_json::from_value(old_core).unwrap();
+        assert!(cfg.session_tiers.is_empty());
+        assert_eq!(cfg.session_tier_presets().len(), 3);
+
+        let new_core = json!({
+            "exec_tier": "auto",
+            "tiers": [{ "id": "ask" }, { "id": "auto" }, { "id": "full" }],
+            "session_tiers": [
+                { "id": "plan" }, { "id": "ask" }, { "id": "auto" }, { "id": "full" }
+            ],
+        });
+        let cfg: ToolPermissionsResponse = serde_json::from_value(new_core).unwrap();
+        assert_eq!(cfg.session_tier_presets().len(), 4);
+        assert_eq!(cfg.session_tier_presets()[0].id, "plan");
     }
 
     #[test]
@@ -185,8 +266,20 @@ mod tests {
             // Shape per key: the two dials are ids, the two enumerations are
             // arrays of `{id}`.
             let value = match *key {
-                "tiers" | "modes" => json!([{ "id": "ask" }]),
-                _ => json!("auto"),
+                // Enumerations: arrays of `{ id }`.
+                "tiers" | "session_tiers" | "modes" | "think_levels" | "memory_modes" => {
+                    json!([{ "id": "ask" }])
+                }
+                // Dial positions: a bare id.
+                "exec_tier" | "mode" | "memory" => json!("auto"),
+                // No catch-all on purpose. A new member-visible key has to be
+                // given its shape here, because the wrong shape is what this
+                // whole test exists to catch — and a silent `json!("auto")`
+                // fallback would hand an array-typed field a string and then
+                // pass, which is the failure one level up.
+                other => panic!(
+                    "`{other}` joined MEMBER_VISIBLE_KEYS without a shape here — say whether                      it is a dial position or an enumeration"
+                ),
             };
             obj.insert((*key).to_string(), value);
         }
@@ -203,6 +296,8 @@ mod tests {
         assert_eq!(cfg.exec_tier, "auto");
         assert_eq!(cfg.tiers.len(), 1);
         assert_eq!(cfg.modes.len(), 1);
+        assert_eq!(cfg.think_levels.len(), 1);
+        assert_eq!(cfg.memory_modes.len(), 1);
         // The withheld axes land on their defaults rather than killing the decode.
         assert_eq!(cfg.default, "");
         assert!(cfg.overrides.is_empty());

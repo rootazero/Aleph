@@ -73,16 +73,29 @@ pub struct SessionInfo {
     /// session reselect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    /// Plan phase (`identity_meta.custom["plan_phase"]`). `None` ⇒ `building`,
-    /// which is where every session that never asked to plan already is — so
-    /// absent and `"building"` mean the same thing, and only the interesting
-    /// value is ever on the wire.
+    /// Per-session reasoning-depth override
+    /// (`identity_meta.custom["think_level"]`).
     ///
-    /// A client MUST read this back rather than remembering what it sent: an
-    /// approved handoff writes `building` onto the session from the server
-    /// side, mid-conversation, with no request of the client's involved.
+    /// The third twin, and the one that was missing: `turn_thinking` has
+    /// persisted this since it was written — a request-carried level is stamped
+    /// onto the session so later turns read it back — but no client surface
+    /// reported it, so no pill could show it and no terminal could restore it.
+    /// A knob that is enforced but unreadable looks exactly like a knob nobody
+    /// set.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan_phase: Option<String>,
+    pub think_level: Option<String>,
+    /// Per-session memory mode (`identity_meta.custom["memory_mode"]`,
+    /// `"on"` / `"off"`). `None` ⇒ follow `[memory] enabled`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mode: Option<String>,
+    /// Model this conversation is pinned to by `select_model`
+    /// (`identity_meta.custom["model_pin"]`), if any.
+    ///
+    /// Distinct from [`Self::model`], which records what last *served*: a pick
+    /// applies from the next run, so for one turn the two disagree and a
+    /// surface showing only `model` names the model the user just left.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_pin: Option<String>,
 }
 
 /// Session history message.

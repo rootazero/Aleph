@@ -1357,7 +1357,7 @@ async fn two_members_of_a_room_work_in_the_same_bound_folder() {
             model_override: None,
             exec_tier: None,
             mode: None,
-            plan_phase: None,
+            memory: None,
             voice_input: false,
             project_id: project_id.map(str::to_string),
         };

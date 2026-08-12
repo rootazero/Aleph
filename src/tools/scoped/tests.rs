@@ -1201,6 +1201,16 @@ impl FakeRequester {
             .map(|a| a.summary.clone())
             .collect()
     }
+
+    /// The chain rule each card named, in order.
+    fn rule_ids(&self) -> Vec<Option<&'static str>> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|a| a.rule_id)
+            .collect()
+    }
 }
 
 #[async_trait::async_trait]
@@ -1318,6 +1328,7 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
         caller_role: None,
         channel_tool_permissions: None,
         unattended: false,
+        plan_gate: None,
     }
 }
 
@@ -1586,6 +1597,7 @@ async fn execute_scopes_session_id_from_turn_context() {
         caller_role: None,
         channel_tool_permissions: None,
         unattended: false,
+        plan_gate: None,
     };
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(turn);
 
@@ -1648,6 +1660,7 @@ async fn chat_tier_blocked_from_config_tool() {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         },
     );
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -1670,6 +1683,7 @@ async fn operator_tier_allowed_config_tool() {
             caller_role: Some("operator".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         },
     );
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
@@ -1728,6 +1742,7 @@ async fn chat_tier_config_tool_approved_executes() {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
     assert!(
@@ -1753,6 +1768,7 @@ async fn chat_tier_config_tool_denied_rejected() {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -1850,6 +1866,7 @@ async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
             caller_role: Some("guest".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         })
         .with_config_approval(StdArc::clone(&operator) as _)
         .with_confirmation(StdArc::clone(&own_channel) as _);
@@ -1889,6 +1906,7 @@ async fn operator_tier_caller_still_hits_the_confirm_gate() {
             caller_role: Some("operator".to_string()),
             channel_tool_permissions: None,
             unattended: false,
+            plan_gate: None,
         })
         .with_confirmation(StdArc::clone(&own_channel) as _);
 
@@ -2361,6 +2379,7 @@ async fn approval_gates_no_longer_force_global_claims() {
         caller_role: role.map(String::from),
         channel_tool_permissions: None,
         unattended: false,
+        plan_gate: None,
     };
 
     for role in [Some("guest"), Some("operator")] {
@@ -2435,6 +2454,106 @@ async fn unattended_run_auto_denies_a_confirm_gated_tool_without_prompting() {
     // An ungated tool still runs — the marker is a confirm-gate policy, not a
     // blanket freeze on autonomous work.
     assert!(svc.execute("search", json!({})).await.is_ok());
+}
+
+/// Every card names the rule that raised it, in the token the trail keys on.
+///
+/// `gate_chain`'s module doc has always called `GateRule::id` "the stable token
+/// the ledger and the tests key on" — and only the tests did. A signed approval
+/// row that records THAT an approval happened but not WHICH rule required it
+/// cannot answer the question an auditor brings to it: whether the gate that
+/// fired was one an operator could have removed. The prose in `reason` carries
+/// the same fact for a human, but a sentence is not a key and gets reworded.
+///
+/// The two gates outside `confirmation_rule` are pinned here too: they were the
+/// last places where a card's sentence was still hand-written at its call site.
+#[tokio::test]
+async fn every_card_names_the_rule_that_raised_it() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    // Tier-raised: `agent_delete` is destructive, nothing names it.
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-rule-id"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+    svc.execute("agent_delete", json!({})).await.unwrap();
+    assert_eq!(requester.rule_ids(), vec![Some("tier_raised")]);
+
+    // The operator-escalation card, whose prose used to be a literal at its
+    // call site — the last gate in this file that did not go through the chain.
+    let operator = StdArc::new(FakeRequester::new(ApprovalOutcome::Approved));
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(StubTool {
+        tool_name: "cron_manage",
+    }));
+    let guest = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main("rule-id-operator-gate"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: None,
+        })
+        .with_config_approval(StdArc::clone(&operator) as _);
+    guest.execute("cron_manage", json!({})).await.unwrap();
+    assert_eq!(operator.rule_ids(), vec![Some("operator_required")]);
+    assert!(
+        operator.seen.lock().unwrap()[0]
+            .reason
+            .contains("chat-tier device"),
+        "the escalation card keeps its sentence — it just comes from the chain now"
+    );
+}
+
+/// A refusal nobody made must not be reported as one, and must not stick.
+///
+/// The requester here stands in for the four production sites that answer
+/// without ever showing a card: an unwired requester, an unroutable turn, a
+/// Telegram delivery that failed, and a channel with no approval capability.
+/// All four returned `Denied`, so the confirm gate filed a `UserRejected`:
+///
+/// * the intent became sticky for the rest of the session — the SECOND call
+///   below never reaches the requester at all, and
+/// * the sentence handed to the model (which it relays to the person it is
+///   talking to) said the user had declined something they never saw.
+///
+/// Three of those in one conversation also crossed the brute-force threshold
+/// and paused every gate in it for five minutes.
+#[tokio::test]
+async fn a_refusal_nobody_made_is_not_reported_as_the_users() {
+    use crate::config::types::policies::ExecTier;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Unavailable));
+    let svc = ScopedToolService::new(tier_registry(), BTreeSet::new())
+        .with_exec_tier(ExecTier::Auto)
+        .with_turn_context(turn_ctx("agent-unreachable"))
+        .with_confirmation(StdArc::clone(&requester) as _);
+
+    let err = svc.execute("agent_delete", json!({})).await.unwrap_err();
+    let text = err.to_string();
+    assert!(
+        !text.contains("The user did not approve"),
+        "no user decided this — {text}"
+    );
+    assert!(
+        text.contains("nobody was asked"),
+        "the model has to be told WHY it was refused — {text}"
+    );
+
+    // Not sticky: the identical call asks again rather than being auto-refused
+    // by the ledger on the strength of a decision that never happened.
+    let _ = svc.execute("agent_delete", json!({})).await;
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        2,
+        "a transport failure must leave the intent askable"
+    );
 }
 
 /// The other half of the pin: the SAME gated call on an ATTENDED run does
@@ -3254,4 +3373,278 @@ async fn a_hook_ask_still_prompts_when_no_gate_ran_first() {
     // `plain` declares no gate of its own, so the hook is the only thing asking.
     svc.execute("plain", json!({})).await.expect("approved");
     assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+}
+
+// =============================================================================
+// Plan mode — the read-only planning tier and the plan → build handoff.
+//
+// Two halves, and the split is the design: `ExecTier::Plan::rule_for` answers
+// at the NAME level (so every `permission_for` consumer inherits it, including
+// the slash fast path), and this service answers the per-CALL half, because it
+// is the only place that holds the arguments.
+// =============================================================================
+
+/// A tool that declares nothing — i.e. mutating, on both fail-closed defaults.
+///
+/// `NamedStub` cannot play this part: it declares itself parallel-safe so the
+/// tier tests can tell a GATE's forced `Global` from an inner claim, and under
+/// plan mode that same declaration reads as "this call is a pure read".
+struct MutatingStub(String);
+
+#[async_trait::async_trait]
+impl LoopTool for MutatingStub {
+    fn name(&self) -> &str {
+        &self.0
+    }
+    fn description(&self) -> &str {
+        "stub that mutates"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success { output: json!({}) }
+    }
+}
+
+/// A read/write multiplexer shaped like the real `file_ops`: one name, a
+/// `Shared` claim for its read arm and an exclusive one for everything else.
+/// The per-call half of plan mode exists for exactly this shape — repo
+/// exploration is what a plan is built out of, and it arrives under the same
+/// tool name as `delete`.
+struct MuxStub;
+
+#[async_trait::async_trait]
+impl LoopTool for MuxStub {
+    fn name(&self) -> &str {
+        "file_ops"
+    }
+    fn description(&self) -> &str {
+        "read/write multiplexer"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        match input.get("operation").and_then(Value::as_str) {
+            Some("list") => ConcurrencyClaim::Shared,
+            _ => ConcurrencyClaim::global(),
+        }
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success { output: json!({}) }
+    }
+}
+
+fn plan_registry() -> Arc<LoopToolRegistry> {
+    let mut r = LoopToolRegistry::new();
+    // Declared read-only: `NamedStub` reports parallel-safe, which is what the
+    // `READ_ONLY_TOOLS` allowlist means for a real builtin.
+    r.register(Box::new(NamedStub::new("file_read")));
+    // Mutating, declaring nothing.
+    r.register(Box::new(MutatingStub("file_write".to_string())));
+    r.register(Box::new(MutatingStub("bash".to_string())));
+    // The two carve-outs: the plan file and the human channel. Both mutate.
+    r.register(Box::new(MutatingStub("scratchpad".to_string())));
+    r.register(Box::new(MutatingStub("ask_user".to_string())));
+    // The multiplexer.
+    r.register(Box::new(MuxStub));
+    Arc::new(r)
+}
+
+/// A planning service plus the gate a human approval would flip.
+fn planning(
+    restore: crate::config::types::policies::ExecTier,
+) -> (ScopedToolService, StdArc<crate::tools::plan_gate::PlanGate>) {
+    let gate = StdArc::new(crate::tools::plan_gate::PlanGate::new(restore));
+    let mut ctx = turn_ctx("planner");
+    ctx.plan_gate = Some(StdArc::clone(&gate));
+    let svc = ScopedToolService::new(plan_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Plan)
+        .with_turn_context(ctx);
+    (svc, gate)
+}
+
+/// The tier's whole promise: nothing that mutates runs, and reads do.
+#[tokio::test]
+async fn planning_refuses_mutation_and_lets_reads_through() {
+    let (svc, _gate) = planning(crate::config::types::policies::ExecTier::Auto);
+
+    for name in ["file_write", "bash"] {
+        let err = svc.execute(name, json!({})).await.unwrap_err();
+        match err {
+            ToolError::PermissionDenied { reason, .. } => {
+                assert!(
+                    reason.contains("PLANNING"),
+                    "the refusal must name plan mode, not a config entry: {reason}"
+                );
+                assert!(
+                    reason.contains("request_approval"),
+                    "and it must name the way out: {reason}"
+                );
+            }
+            other => panic!("`{name}` must be refused while planning, got {other:?}"),
+        }
+    }
+    svc.execute("file_read", json!({}))
+        .await
+        .expect("a declared read runs while planning");
+}
+
+/// The two carve-outs. Without them the tier is circular: you would need
+/// approval to ask for approval, and could not write the plan the approval is
+/// about.
+#[tokio::test]
+async fn planning_keeps_the_plan_file_and_the_human_channel_open() {
+    let (svc, _gate) = planning(crate::config::types::policies::ExecTier::Auto);
+    for name in ["scratchpad", "ask_user"] {
+        svc.execute(name, json!({}))
+            .await
+            .unwrap_or_else(|e| panic!("`{name}` must stay reachable while planning: {e:?}"));
+    }
+}
+
+/// The per-call half. One tool name, two answers, decided by the arguments —
+/// which is why it cannot live in `rule_for`, and why `file_ops list` (the
+/// exploration a plan is built out of) is not collateral damage.
+#[tokio::test]
+async fn planning_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest() {
+    let (svc, _gate) = planning(crate::config::types::policies::ExecTier::Auto);
+    svc.execute("file_ops", json!({ "operation": "list" }))
+        .await
+        .expect("the read arm explores");
+    let err = svc
+        .execute("file_ops", json!({ "operation": "delete" }))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::PermissionDenied { .. }));
+    // A missing `operation` is not a read: the claim degrades to exclusive,
+    // which is the fail-closed direction.
+    assert!(svc.execute("file_ops", json!({})).await.is_err());
+}
+
+/// The handoff itself: the SAME service, the SAME call, before and after a
+/// human approval. This is what "the harness switches modes" means — no new
+/// turn, no re-resolution, and not one line inside `src/harness/`.
+#[tokio::test]
+async fn approving_the_plan_lets_the_next_call_build() {
+    let (svc, gate) = planning(crate::config::types::policies::ExecTier::Auto);
+    assert!(svc.execute("file_write", json!({})).await.is_err());
+
+    assert!(gate.release(), "first release wins");
+    svc.execute("file_write", json!({}))
+        .await
+        .expect("the very next call after approval runs — that is the handoff");
+    svc.execute("bash", json!({}))
+        .await
+        .expect("and so does everything else the restore tier allows");
+}
+
+/// A planning turn shows the model its whole toolbelt. A plan that another
+/// agent could implement needs the vocabulary of what can be done, and hiding
+/// half of it for the planning half of a turn would also swap the cached tools
+/// block twice per plan.
+#[tokio::test]
+async fn planning_still_lists_the_tools_it_refuses() {
+    let (svc, _gate) = planning(crate::config::types::policies::ExecTier::Auto);
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    for expected in ["file_write", "bash", "file_ops", "file_read", "scratchpad"] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "`{expected}` must stay listed while planning: {names:?}"
+        );
+    }
+    assert!(svc.describe("file_write").await.is_some());
+}
+
+/// An operator's own `deny` is not plan mode wearing a hat: it stays hidden,
+/// it keeps reporting itself, and approving a plan does not lift it.
+#[tokio::test]
+async fn an_operator_deny_survives_the_plan_and_still_reports_itself() {
+    use crate::extension::PermissionAction;
+
+    let gate = StdArc::new(crate::tools::plan_gate::PlanGate::new(
+        crate::config::types::policies::ExecTier::Auto,
+    ));
+    let mut ctx = turn_ctx("planner-denied");
+    ctx.plan_gate = Some(StdArc::clone(&gate));
+    let svc = ScopedToolService::new(plan_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Plan)
+        .with_turn_context(ctx)
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[("bash", PermissionAction::Deny)],
+        ));
+
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    assert!(
+        !names.iter().any(|n| n == "bash"),
+        "a real deny stays hidden"
+    );
+
+    let err = svc.execute("bash", json!({})).await.unwrap_err();
+    let ToolError::PermissionDenied { reason, .. } = err else {
+        panic!("expected a denial")
+    };
+    assert!(
+        reason.contains("tool permission policy"),
+        "an operator's deny must keep naming itself, not plan mode: {reason}"
+    );
+
+    gate.release();
+    assert!(
+        svc.execute("bash", json!({})).await.is_err(),
+        "approving a plan lifts the PLAN gate, not the operator's policy"
+    );
+}
+
+/// A run builds its tool service TWICE — once for itself, once as the parent
+/// view handed to spawned children (`parent_view_for_children`). Both are
+/// built from the same turn context, so both hold the same gate: one human
+/// approval lifts planning for the run AND for anything it spawned.
+///
+/// This is the property that makes `subagent` admissible while planning at all
+/// — a child with its own gate would be a child no approval could ever
+/// release, and a child with no gate would be the hole.
+#[tokio::test]
+async fn every_service_built_from_one_turn_shares_one_gate() {
+    let gate = StdArc::new(crate::tools::plan_gate::PlanGate::new(
+        crate::config::types::policies::ExecTier::Auto,
+    ));
+    let mut ctx = turn_ctx("planner-fanout");
+    ctx.plan_gate = Some(StdArc::clone(&gate));
+
+    let build = || {
+        ScopedToolService::new(plan_registry(), BTreeSet::new())
+            .with_exec_tier(crate::config::types::policies::ExecTier::Plan)
+            .with_turn_context(ctx.clone())
+    };
+    let own = build();
+    let child_view = build();
+
+    assert!(own.execute("file_write", json!({})).await.is_err());
+    assert!(child_view.execute("file_write", json!({})).await.is_err());
+
+    gate.release();
+
+    own.execute("file_write", json!({})).await.expect("parent");
+    child_view
+        .execute("file_write", json!({}))
+        .await
+        .expect("a child built from the same turn is released by the same approval");
+}
+
+/// A turn with no plan gate is byte-identical to a build with no plan mode:
+/// the same service at the same tier answers exactly as it always has.
+#[tokio::test]
+async fn a_turn_with_no_plan_gate_is_unchanged() {
+    let svc = ScopedToolService::new(plan_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Auto)
+        .with_turn_context(turn_ctx("builder"));
+    svc.execute("file_write", json!({}))
+        .await
+        .expect("Auto runs mutating tools");
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    assert!(names.iter().any(|n| n == "file_write"));
 }

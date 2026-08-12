@@ -173,7 +173,7 @@ output masking) is a separate subsystem — see **Exec Kernel** below.
 
 ---
 
-## Exec Tier (Ask / Auto / Full)
+## Exec Tier (Plan / Ask / Auto / Full)
 
 **Location**: `src/config/types/policies/exec_tier.rs` (rules + the single
 precedence composition point), `src/tools/scoped/` (enforcement),
@@ -182,19 +182,29 @@ precedence composition point), `src/tools/scoped/` (enforcement),
 The exec tier is the **one user-facing dial** over tool permissions. It is not a
 second policy engine and not a second enforcement mechanism: it is a rule
 consulted at the chokepoint every tool call already funnels through, whenever no
-explicit `[policies.tool_permissions]` entry names the tool.
+explicit `[policies.tool_permissions]` entry names the tool — with exactly one
+exception, `Plan`'s refusal, which is a **floor above** that entry rather than a
+rule beneath it (see the lattice below).
 
 | Tier | What it asks about | Notes |
 |------|--------------------|-------|
+| `Plan` *(session only)* | nothing — it **refuses** | read-only planning. Every non-idempotent tool is denied outright, not carded: an approval per mutating call turns "hold everything until the plan is reviewed" into "review the plan one edit at a time". Three carve-outs, each circular without it: `ask_user`, `scratchpad` (the plan file **and** the handoff), `subagent` (a child runs on the parent's own gated service). See **Plan → build handoff** below |
 | `Ask` | every mutating / side-effecting tool | read-only tools stay allowed, so the model can still investigate |
 | `Auto` *(default)* | the irreversible tail only | `*_delete`, `vault_*`, `team_disband`, an MCP server's `destructiveHint`, and `file_ops` `delete` / `move` (argument-level) |
 | `Full` | nothing *(the tier asks nothing — see the two floors below)* | the command-policy floor and each tool's own `requires_confirmation` declaration both survive |
 
+`Plan` is strictest, so it composes through `most_restrictive` as the floor of
+the lattice: the channel clamp and the non-operator ceiling both leave it alone.
+It is **not** offerable as the install-wide `[policies] exec_tier` — an install
+sitting at `plan` would have nothing to hand an approved plan back to, so
+`config.update_tool_permissions` validates against `builtin_tiers()` (three) and
+the composer pill offers `session_tiers()` (four).
+
 ### The lattice (who wins)
 
 ```
-read-only PLANNING FLOOR                     (PlanPhase::hides — above everything)
-        ↓  (the session is not planning, the overwhelming default)
+a tier verdict of Deny — today `Plan`     (rung 0: a floor, nothing outranks it)
+        ↓  (the tier said Ask, or had nothing to say)
 explicit [policies.tool_permissions] entry   (exact name > glob)
         ↓  (nothing named this tool)
 configured `default`   TIGHTENED BY   the tier's verdict
@@ -203,6 +213,25 @@ tool-declared confirmation gate              (CONFIRMATION_REQUIRED_TOOLS + MCP 
         ↓  (read by check_confirmation_gate independently of the tier)
 [sandbox.command_policy] hardline floor      (no tier can lower it — not even Full)
 ```
+
+⚠️ **Rung 0 exists because a floor an entry can outrank is a default.** `Ask` /
+`Auto` / `Full` only ever raise a tool to *ask*, so an operator who named the
+tool has answered the very question the tier was about to pose — for those three
+"more specific wins" is right, and they are byte-identical to before rung 0
+existed. `Plan` poses no question: its promise, restated to the model every turn,
+is that nothing runs. Under "more specific wins", one `"bash" = "allow"` written
+months earlier for an unrelated reason would retract that promise silently, and
+only on installs whose operator configured tool permissions at all — the ones
+with the most to lose. Rung 0 is keyed on the **verdict** (`rule_for` answering
+`Deny`), not on `ExecTier::Plan`: `rule_for`'s contract is that a tier yields at
+most `Ask`, so a future refusing tier inherits the floor without a name table.
+It fires only on the tier's *own* `Deny`, never on a composed one, so
+`default = "deny"` is still a baseline an explicit `allow` outranks, and the
+`Plan` carve-outs plus every idempotent tool fall straight through to rung 1 —
+an operator's explicit `deny` on `ctx_search` still denies while planning.
+This deliberately **inverts** the tier's shipped behaviour, whose test
+`an_explicit_entry_still_outranks_the_plan_tier` asserted the opposite; the
+three replacement tests in `exec_tier.rs` pin the scope of the inversion.
 
 ⚠️ **`Full` means "the tier gates nothing", not "nothing is gated."** The
 second-from-bottom row is easy to miss because it is not part of
@@ -217,29 +246,62 @@ permissive tier. The variant doc on `ExecTier::Full` and the model-facing
 `approval_prompt_line` both used to say "nothing pauses for confirmation", which
 was the same statement told three times and false in all three.
 
-⚠️ **The top row is a floor, not a default — and that is why it sits above the
-explicit entry.** Every other rule in this lattice answers "what did somebody
-configure"; the read-only planning phase answers "the user asked to read a plan
-before anything changes", and a promise a single `"bash" = "allow"` can hollow
-out is not one. It is the same kind of statement as the `[sandbox.command_policy]`
-hardline at the bottom, applied from the other end. Full contract, including why
-the phase is neither a fourth `SessionMode` nor a fourth `ExecTier`, in
-[PLAN_HANDOFF.md](PLAN_HANDOFF.md).
-
-The phase is also the only thing in this lattice that can move **inside** a run:
-an approved plan handoff (`GateRule::PlanHandoff` → an approval card that offers
-`once_only` to everyone, operator included) lifts the floor for the rest of that
-run. Nothing else here is live; the tier and the merged policy are resolved once
-at run start.
-
-`effective_permission(permissions, tier, phase, facts)` is the **only** place this
+`effective_permission(permissions, tier, facts)` is the **only** place this
 precedence exists. Both consumers — `ScopedToolService::permission_for` (the
 loop) and the gateway slash-command fast path — call it, so the two surfaces
-cannot drift apart. `phase` is a **required parameter**, not an `Option` with a
-benign default: of the two call sites one is a fast path, and the history of this
-function is the history of a fast path missing a gate the loop had. Consulting the
-tier *before* the default (the pre-2026-07-14 shape) inverted a `default = "deny"`
-install into ask-by-default for exactly the tools the tier meant to guard.
+cannot drift apart. Consulting the tier *before* the default (the pre-2026-07-14
+shape) inverted a `default = "deny"` install into ask-by-default for exactly the
+tools the tier meant to guard.
+
+### Plan → build handoff
+
+A conversation at `Plan` is read-only until a **human** approves its plan, and
+then it starts building **in the same turn** — the next tool call, not the next
+message. Nothing in `src/harness/` learns that plan mode exists.
+
+```
+tier resolves to Plan          turn_permissions mints a PlanGate
+        ↓                      (AtomicBool + the tier to restore to)
+model explores, writes the     file_read / file_ops list|search / ctx_search /
+plan to `scratchpad`           search / web_fetch / memory_* / ask_user / subagent
+        ↓                      everything else: PermissionDenied(GateRule::PlanMode)
+scratchpad(request_approval)   the persisted plan → clarification::ask → a person
+        ↓  "approved"
+PlanGate::release()            the ONE chokepoint now reads the restore tier
+        ↓                      + the session's `exec_tier` override is cleared
+next tool call builds
+```
+
+Four properties are load-bearing:
+
+- **The model cannot let itself out.** Everything under `request_approval`
+  refuses without a person: the action errors when no approval transport is
+  wired, and `clarification::ask` errors on an unattended run and on any turn
+  with no channel to deliver to. There is no branch that reaches `approved`
+  without one having been picked off a menu.
+- **One gate per turn, shared by children.** The `Arc<PlanGate>` rides on
+  `TurnContext`, and a run builds its tool service twice — for itself and as
+  the parent view handed to spawned sub-agents. Both hold the same gate, which
+  is precisely why `subagent` is admissible while planning: a child runs on the
+  parent's gated service, so one approval releases both, and a child spawned
+  before the approval can never outrun it.
+- **The restore tier is derived, not remembered.** `plan_restore_tier` re-runs
+  the same resolution with the plan picks dropped, so both clamps still apply —
+  a member cannot come out of a plan above the install's posture. The cost,
+  stated plainly: entering plan mode *replaces* a per-conversation tier rather
+  than suspending it.
+- **Plan-created denials are named and still listed.** `GateRule::PlanMode`
+  points the model at the two-call exit rather than at a
+  `[policies.tool_permissions]` entry nobody wrote, and the tools stay in the
+  model's list (a plan another agent could implement needs the vocabulary of
+  what can be done). An operator's real `deny` is unaffected on both counts —
+  `denied_only_by_plan` is a difference, not a name table.
+
+An unattended run whose session sits at `Plan` **stalls read-only**: there is
+nobody to approve, so it cannot build. That is the correct direction — the user
+put this conversation into read-only planning and an autonomous continuation
+must not act for them — but it is a dead end whose only exit is a person moving
+the tier back.
 
 ### The rules read declared metadata, never the tool's name
 
@@ -723,6 +785,120 @@ widen `exec_tier` — a gate that pushes people onto the least safe setting has
 inverted its own purpose. The bound on an actual attacker is unchanged: one
 prompt per cooldown, and their refusal re-opens it.
 
+### A refusal nobody made (2026-08-12)
+
+`ApprovalOutcome` had one word for two facts. **Four** production paths answered
+`Denied` without any card ever reaching a person:
+
+| path | when |
+|---|---|
+| `ApprovalGate` with no requester wired | boot ordering, headless installs |
+| `ChannelApprovalBridgeAdapter` with no route | cron / webhook / non-channel turns |
+| `ChannelApprovalBridge` delivery `Some(false)` | **a Telegram send that failed** |
+| `ChannelApprovalBridge` delivery `None` | a channel with no approval capability |
+
+Every one of them was filed by `DenialLedger::record_denial` as
+`DenialReason::UserRejected`, which means:
+
+1. the intent became **sticky for the rest of the session** — the identical call
+   was auto-refused from then on, never asked again;
+2. it advanced the **brute-force breaker**, so three transient delivery failures
+   paused every confirm gate in the conversation for five minutes (including the
+   operator gate a chat-tier device needs); and
+3. the model was told *"The user already declined this exact action this
+   session"* — a sentence it relays to the person it is talking to, about a
+   decision they never made.
+
+The ledger already drew this exact line for `DenialReason::Timeout` ("a timeout
+is not a decision"), and its doc says the rule lives at the ledger "so a third
+caller cannot reintroduce it by forgetting" — but the ledger can only apply a
+rule to reasons it can tell apart, and these arrived wearing a person's label.
+
+Now: `ApprovalOutcome::Unavailable` is the fourth refusal outcome, mapped by the
+one derivation `DenialReason::for_refusal` (shared by the tool confirm gate and
+the sandbox elevation gate, which had each written the mapping out inline and
+each written it the same wrong way — `Timeout => Timeout, _ => UserRejected`).
+`record_denial` records **only** `DenialReason::is_a_human_decision`, and both
+gates' model-facing sentences are built from `ConfirmDenial::lead` /
+`reason_kind.is_a_human_decision()` instead of a hardcoded "the user did not
+approve". Security posture is unchanged — `is_approved()` is false, everything
+still fails closed. What changed is that a transport failure stops being
+recorded as a person's refusal.
+
+**The unattended tax now has both gates.** `ApprovalGate::request_approval_for_action`
+— the chokepoint serving sandbox capability elevation *and* the failover route
+escalation — refuses with `Unavailable` when `TurnContext.unattended`, instead of
+parking for the full approval timeout **per escalation** and being refused at the
+end of it anyway. The tool confirm gate has charged this since 2026-07-14; these
+two gates have now been found divergent three times (the ledger key, the
+approval that closes the breaker, and this), so the tax sits on the shared
+chokepoint rather than at a third call site.
+
+### One "no", one strike, and it reaches the cards beside it (2026-08-12)
+
+Two halves of the same defect, in the concurrent-card case the `AllowSession`
+cascade was built for (parallel subagents, a teams broadcast).
+
+- **`Deny` now cascades** to every *live* pending record in the same session
+  with the same `grant_key`, carrying the human's `/deny <reason>` with it. It
+  did not, on the stated grounds that "a deny is about THIS call, not the
+  action" — but `DenialLedger` two files over answers the same question the
+  other way, and auto-refuses the *next* identical call with no card. So whether
+  one "no" covered the identical call parked beside it was decided by a **race**
+  between the sibling's ledger check and the human's click. `AllowOnce` still
+  never cascades. Narrower than opencode, which rejects the whole session's
+  pending queue: keying on the action means a cascade can never refuse something
+  the user did not read.
+- **The breaker counts intents, not cards.** Each dismissed sibling was another
+  `record_denial` on the *same fingerprint*, so a three-way fan-out tripped the
+  three-strike pause on a single refusal — the countermeasure for an agent
+  *guessing* firing on a user answering a fan-out the system raised itself.
+  `consecutive` now advances only on a fingerprint not already refused this
+  session; `counts` still sees every card, and three **distinct** refusals still
+  trip it. A blind retry never reaches that line at all (`is_blocked`
+  short-circuits it), so nothing but double-counting is given up.
+
+### The third floor: the write that retires the gates (2026-08-12)
+
+`ExecTier::floor_asks_for_arguments` — a `self_config` write whose path
+intersects `policies.tool_permissions` / `policies.exec_tier`, or a
+`rollback_config` — now raises a card under **every** tier, `full` included.
+
+`self_config_touches_the_gate` was added (round 11, §4.12) precisely because
+"write the override, then act freely" is two legal steps whose composition
+equals the gated one-step write. It was written as an `Auto`-only rule, and
+`asks_for_arguments` opened with `if self != Auto { return false }` — leaving the
+composition open on the tier where it costs least. The asymmetry that makes this
+worse than it looks: **the tier is a per-request knob** (`chat.send{exec_tier}`,
+one message) and **the config change is install-wide and permanent**. One
+message at `full` bought a gate removal that outlived it, in every later session
+at every later tier.
+
+The rule is narrow (ordinary `self_config` work is untouched) and still stands
+down for an explicitly-named `[policies.tool_permissions]` entry — that entry is
+a decision a person wrote, and the write that creates one cards through this
+very rule. Three copies of the sentence were updated in the same change: the
+`ExecTier::Full` variant doc, `approval_prompt_line(Full)` (**the one the model
+reads**, now "Three floors"), and the card's own `GateRule::GateRemoval::reason`.
+Its card may not offer a persistent grant — `allowed_decisions::FLOOR_RULES`
+replaced the single `rule_id != DECLARED_FLOOR_RULE` equality, pinned to
+`GateRule::is_floor` from both ends by
+`every_floor_variant_is_declared_a_floor_on_both_sides`.
+
+### The chain names every gate, and the trail hears it (2026-08-12)
+
+`GateRule` gained `OperatorRequired` and `HookRequested`: the two gates that
+raise a card outside `confirmation_rule` and had their prose hand-written at
+their call sites. And `GateRule::id` — which the chain's own module doc has
+always described as "the stable token the ledger and the tests key on" — now
+actually reaches the ledger: `ApprovalAction::gated_by` carries it to
+`record_approval_decision`, which appends `[gate: <rule_id>]` to the signed
+`detail`. (Appended to `detail` rather than given a field of its own: the
+identity ledger's signed preimage is append-ordered, so a new optional field
+would invalidate every existing chain — see AGENT_IDENTITY.md.) An auditor
+reading an `ApprovalGranted` row can now tell a tier-raised card from a floor
+the operator could not have removed.
+
 ---
 
 ## Command allowlist
@@ -775,6 +951,54 @@ The secret pattern catalogs live in `src/secrets/leak_detector.rs` and
 `src/exec/secret_patterns.rs`; they are kept in sync (the private-key regex is
 `-----BEGIN[A-Z ]*PRIVATE KEY-----` in both, so bare PKCS#8 headers cannot slip
 one catalog but not the other).
+
+### Asking a human FOR a secret is a third path, and masking is not its answer
+
+`ask_user` questions carry a `secret` flag (codex `isSecret`). It is **not** a
+display property. A reply typed into Telegram / Slack / iMessage is a permanent
+message in a third party's datastore, and nothing Aleph does afterwards reaches
+it — masking our copy would protect the one place that was never the exposure.
+
+So the flag changes **transport**, not rendering
+(`src/clarification/ask.rs`):
+
+- when the turn's channel is a **registered** `ChannelRegistry` transport, the
+  secret questions are **withheld** — dropped from the request before it is
+  registered, so they never reach the renderer, the channel, or the pending
+  registry. Their ids come back on `AskUserOutput.withheld` with an actionable
+  reason (have the user set the value through the Panel or configuration, and
+  do not re-ask here);
+- otherwise — the Panel's `gui:chat` pseudo-channel, which is never registered
+  — the question goes **only** onto the gateway event bus, where the Panel and
+  TUI render a masked input.
+
+The rule is per **question**, not per call. It began as a per-call refusal,
+which threw away the three ordinary questions that happened to travel with a
+fourth asking for a token: the human never saw them, and the model got an error
+instead of three answers. A call whose questions are *all* secret still fails
+outright — withholding every question would park the tool on a request no reply
+can complete.
+
+Two consequences worth stating rather than discovering: the model still
+receives the answer (it asked for a value it needs, and withholding it would
+make the tool pointless), and the answer still lands in the session event log
+like any other tool result. The property bought here is precisely one — **a
+credential never travels over a third-party channel** — and it is structural:
+it follows from the shape of the delivery ladder, not from a caller remembering
+to check.
+
+**That covers the return leg too**, which is the half worth checking rather
+than assuming — this codebase has been bitten before by a value that was masked
+on one leg and shipped in clear on another (`RedactingEmitter` wrapped the
+trace sink while the same run's text still went out through
+`OriginFanoutEmitter`). Here the two directions are governed by the *same*
+predicate: a secret question is only ever registered when
+`ChannelRegistry::get(turn.channel_id)` is `None`, so on any turn that could
+carry the answer outward there is no answer to carry. And the fanout mirrors
+only `RunComplete.final_response` — model-authored prose — never tool results.
+Pinned by `clarification::ask::tests::a_secret_among_others_withholds_only_itself`,
+which asserts that nothing marked `secret` reaches the pending registry on a
+turn with a registered channel.
 
 ---
 
@@ -2510,7 +2734,7 @@ from the pre-revert build:
 
 | Dimension | codex | hermes / pi | Aleph | Verdict |
 |---|---|---|---|---|
-| Policy axes | 2 live axes: `AskForApproval` × `PermissionProfile` | hermes: `approvals.mode {manual\|smart\|off}` × gate stack. pi: declined a sandbox entirely | 1 axis: `ExecTier {Ask,Auto,Full}`, orthogonal to `[sandbox.command_policy]` (an undisableable floor) | **aligned** |
+| Policy axes | 2 live axes: `AskForApproval` × `PermissionProfile` | hermes: `approvals.mode {manual\|smart\|off}` × gate stack. pi: declined a sandbox entirely | 1 axis: `ExecTier {Plan,Ask,Auto,Full}`, orthogonal to `[sandbox.command_policy]` (an undisableable floor). codex models its plan phase as a separate `ModeKind` axis; here it is the strictest rung of the one axis, so both existing ceilings compose with it unchanged | **aligned** |
 | Tier semantics | 4 approval values, but 2 of the 3 shipped presets share one — the axis that really moves is the sandbox profile | hermes: 3 modes + a HARDLINE floor under the top one. pi: 3-valued project TRUST, gating config *loading* | 3 tiers with honest semantics; the floor holds under all three | **aligned** |
 | Gate input | name-based argv allowlist + a Starlark rules engine over the command string | hermes: 47 regex `DANGEROUS_PATTERNS` over argument content. pi: tools declare *no* risk metadata; every gate re-derives danger from regex | **metadata-driven**: `ToolFacts` read off the declared `ToolDefinition`, never the name; one argument-level filter (`file_ops`) | **aleph-superior** — do not regress toward regex-on-shell-strings |
 | Safe-read bypass | `is_known_safe_command` argv allowlist, compositional over `&& \|\| ; \|` | hermes: permanent glob `command_allowlist`. pi: patterns exist only in an example | `READ_ONLY_TOOLS` (pure-read builtins, single source for claim + retry + tier) + MCP `readOnlyHint`; default-deny for anything unlisted | **aligned** |
@@ -2651,7 +2875,8 @@ from the pre-revert build:
 | Browser Guard | `src/browser/network_policy.rs` | Browser navigation SSRF |
 | Crypto + Vault | `src/gateway/security/` | Secrets vault, shared-token crypto |
 | Tool Permissions | `src/tools/scoped/` | Per-channel tool permission merge + the enforcement chokepoint |
-| Exec Tier | `src/config/types/policies/exec_tier.rs` | Ask / Auto / Full — the rules and the one precedence composition point |
+| Exec Tier | `src/config/types/policies/exec_tier.rs` | Plan / Ask / Auto / Full — the rules and the one precedence composition point |
+| Plan gate | `src/tools/plan_gate.rs` | The plan → build handoff: a human `approved` lifts the read-only planning tier mid-turn |
 | Approval Gate | `src/sandbox/exec_approval/` | Action-aware confirmation, grant fingerprint, denial ledger |
 | Gateway-surface denylist | `src/security/dangerous_tools.rs` | What `tools.invoke` refuses outright |
 | Exec primitives | `src/exec/` | Command parse for approval summaries (`analyze_shell_command`), `SecretMasker`, advisory custom-pattern `SecurityKernel` — support code, not a standalone enforcement kernel |

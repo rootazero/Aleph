@@ -64,8 +64,6 @@ pub struct McpServerConfigJson {
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub enabled: Option<bool>,
-    #[serde(default)]
-    pub triggers: Option<Vec<String>>,
 }
 
 // ============================================================================
@@ -676,7 +674,6 @@ mod tests {
             requires_runtime: Some("node".to_string()),
             timeout_seconds: 30,
             enabled: false,
-            triggers: None,
         };
         let (cfg, writes) = super::unified_entry_to_manager_config("My Srv", &sc);
         assert_eq!(cfg.id, "My_Srv");

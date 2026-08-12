@@ -51,10 +51,15 @@ impl BuiltinToolRegistry {
             SearchTool::with_api_key(config.tavily_api_key.clone())
         };
         let web_fetch_tool = {
-            let mut tool = WebFetchTool::new();
+            let mut tool = if let Some(ref cfg) = config.config {
+                let cfg_guard = cfg.read().await;
+                WebFetchTool::with_policy(&cfg_guard.policies.web_fetch)
+                    .with_ssrf_policy(cfg_guard.ssrf.clone())
+            } else {
+                WebFetchTool::new()
+            };
             if let Some(ref cfg) = config.config {
                 let cfg_guard = cfg.read().await;
-                tool = tool.with_ssrf_policy(cfg_guard.ssrf.clone());
                 if let Some(ref fetch_cfg) = cfg_guard.fetch {
                     if fetch_cfg.enabled {
                         let vault = config.shared_token_manager.clone();
@@ -1115,7 +1120,19 @@ impl BuiltinToolRegistry {
             // bind its project to the session for the goal-loop hook. When
             // memory is unconfigured the handle is None → hook stays dormant.
             scratchpad_tool: scratchpad_tool
-                .with_session_key_handle(memory_session_key_handle.clone()),
+                .with_session_key_handle(memory_session_key_handle.clone())
+                // Plan → build handoff: `request_approval` clears the session's
+                // `exec_tier` override when a human approves. Same store the
+                // `session_*` tools write, resolved the same way, so the two
+                // cannot end up on different backends.
+                .with_session_store(
+                    config
+                        .gateway_context
+                        .as_ref()
+                        .map(|ctx| Arc::clone(ctx.session_store()))
+                        .or_else(|| config.session_manager.clone())
+                        .map(|s| s as Arc<dyn crate::gateway::session_store::SessionStore>),
+                ),
             goal_tool: goal_tool
                 .with_session_key_handle(memory_session_key_handle.clone())
                 .with_planner_provider(config.planner_provider.clone()),

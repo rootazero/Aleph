@@ -79,18 +79,37 @@ impl GroupChatOrchestrator {
             });
         }
 
-        // 2. Resolve personas (validates that all presets exist)
-        let participants = self.persona_registry.resolve(&sources)?;
-
-        // 3. Validate all resolved personas
-        for persona in &participants {
-            persona.validate()?;
+        // 2. Validate inline personas BEFORE resolve() so an inline persona's
+        // validation error is surfaced even when a later source is a missing
+        // preset. Without this, `resolve()` short-circuits on the preset error
+        // and the operator never sees the inline error.
+        for source in &sources {
+            if let PersonaSource::Inline(p) = source {
+                p.validate()?;
+            }
         }
+
+        // 3. Resolve personas (validates that all presets exist)
+        let participants = self.persona_registry.resolve(&sources)?;
 
         if participants.is_empty() {
             return Err(GroupChatError::InvalidPersona(
                 "at least one persona is required".into(),
             ));
+        }
+
+        // 3b. Reject duplicate persona IDs in the same session. The
+        // coordinator's lookup by id resolves the FIRST match, so a duplicate
+        // id would silently route responses to the wrong persona.
+        let mut seen_ids: std::collections::HashSet<&str> =
+            std::collections::HashSet::with_capacity(participants.len());
+        for p in &participants {
+            if !seen_ids.insert(p.id.as_str()) {
+                return Err(GroupChatError::InvalidPersona(format!(
+                    "duplicate persona id '{}' in session",
+                    p.id
+                )));
+            }
         }
 
         let participant_count = participants.len();
@@ -106,6 +125,11 @@ impl GroupChatOrchestrator {
             source_channel.clone(),
             source_session_key.clone(),
         );
+        // Capture the ownership stamp BEFORE moving `session` into the Arc<Mutex>;
+        // `GroupChatSession::new` reads it from `crate::scope::current_scope()`
+        // and once the session is behind the mutex we'd have to lock+unlock just
+        // to read it back for persistence.
+        let owner_user_id = session.owner_user_id.clone();
         let handle = Arc::new(tokio::sync::Mutex::new(session));
         self.sessions
             .lock()
@@ -119,6 +143,7 @@ impl GroupChatOrchestrator {
                 topic.as_deref(),
                 &source_channel,
                 &source_session_key,
+                owner_user_id.as_deref(),
             ) {
                 tracing::warn!(
                     subsystem = "group_chat",
@@ -420,5 +445,62 @@ mod tests {
         let remaining = orch.all_sessions();
         let session = remaining[0].1.lock().await;
         assert_eq!(session.topic, Some("Session B".to_string()));
+    }
+
+    /// Regression test: validate inline personas BEFORE resolve() so an
+    /// inline persona's validation error surfaces even when a later source
+    /// is a missing preset.
+    #[tokio::test]
+    async fn test_create_session_inline_validation_before_resolve() {
+        let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
+
+        // First source: invalid inline (empty id). Second source: missing preset.
+        // Pre-fix: resolve() short-circuits on the missing preset and the inline
+        // error is never surfaced. Post-fix: inline validation runs first.
+        let sources = vec![
+            PersonaSource::Inline(crate::group_chat::protocol::Persona {
+                id: String::new(), // empty id -> invalid
+                name: "Bad".into(),
+                system_prompt: "prompt".into(),
+                provider: None,
+                model: None,
+                thinking_level: None,
+            }),
+            PersonaSource::Preset("nonexistent".into()),
+        ];
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        assert!(matches!(result.unwrap_err(), GroupChatError::InvalidPersona(_)));
+    }
+
+    /// Regression test: duplicate persona IDs in the same session are
+    /// rejected. Without this, the coordinator's id-based lookup routes to
+    /// whichever persona appears first, silently misrouting responses.
+    #[tokio::test]
+    async fn test_create_session_rejects_duplicate_persona_ids() {
+        let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
+
+        let sources = vec![
+            PersonaSource::Preset("arch".into()),
+            PersonaSource::Inline(crate::group_chat::protocol::Persona {
+                id: "arch".into(), // duplicate of the preset
+                name: "Shadow Arch".into(),
+                system_prompt: "you are shadow arch".into(),
+                provider: None,
+                model: None,
+                thinking_level: None,
+            }),
+        ];
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        match result.unwrap_err() {
+            GroupChatError::InvalidPersona(msg) => {
+                assert!(
+                    msg.contains("duplicate"),
+                    "error should mention duplicate: {msg}"
+                );
+                assert!(msg.contains("arch"), "error should name the id: {msg}");
+            }
+            other => panic!("expected InvalidPersona, got: {other:?}"),
+        }
+        assert_eq!(orch.all_sessions().len(), 0);
     }
 }

@@ -242,7 +242,26 @@ impl AgentHarnessRunner {
         let session_key_str = session_id.to_key_string();
 
         let memory_phase_start = Instant::now();
-        let (curated_text, memory_text) = if let Some(mcp) = self.memory_context_provider.as_ref() {
+        // The per-session memory knob is enforced HERE and only here — this is
+        // the one point at which all three injected envelopes (curated memory,
+        // the wiki orientation index, per-query hybrid recall) converge, so a
+        // single condition covers the family without any of them needing to
+        // learn about the knob. `injects_memory()` owns the "unset means on"
+        // rule, so a dispatch path that never resolved a mode keeps the exact
+        // prompt it had before the knob existed.
+        //
+        // Deliberately NOT gated here: the memory tools and every write path. A
+        // conversation with injection muted can still search and still records
+        // what it learns — removing a tool the model can see is how a model
+        // ends up insisting it saved something it did not, and muting writes
+        // would leave a hole in the user's history that they asked for a quiet
+        // prompt, not amnesia.
+        let inject_memory = envelope.injects_memory();
+        let (curated_text, memory_text) = if let Some(mcp) = self
+            .memory_context_provider
+            .as_ref()
+            .filter(|_| inject_memory)
+        {
             let curated_text: Option<String> =
                 match mcp.build_curated_message(agent_id, &session_key_str).await {
                     Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
@@ -859,11 +878,12 @@ async fn resolve_prompt_context(
     // exact partition the tool surface was built with. `None` on internal /
     // subagent dispatch leaves the mode line absent.
     resolved_context.session_mode = envelope.session_mode;
-    // Read-only planning floor: same pass-through, same reason. The gateway
-    // resolved it from the run's live gate, so the line the model reads and the
-    // rule the chokepoint enforces are the same value, not two readings of one
-    // config.
-    resolved_context.plan_phase = envelope.plan_phase;
+    // Muted memory is a fact the model must be told, for the same reason the
+    // tier is: a turn whose curated memory and note index were withheld looks,
+    // from the inside, exactly like a turn that never had any — so the model
+    // explains its own amnesia rather than reporting it. Only the muted case
+    // renders, so every unmuted prompt is byte-identical.
+    resolved_context.memory_muted = !envelope.injects_memory();
     // Sub-agent binding: forwarded verbatim from the envelope so the
     // `<environment_context>` block can print `<parent kind="…">…</parent>` for
     // sub-agent / team / background dispatches that carry a parent session.

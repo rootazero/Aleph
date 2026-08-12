@@ -10,7 +10,12 @@ use crate::tool_metadata::{ToolCatalog, ToolSource, ToolSourceType, UnifiedTool}
 pub struct ParsedCommand {
     /// Command source type
     pub source_type: ToolSourceType,
-    /// Command name (without leading /)
+    /// Canonical [`UnifiedTool::name`] of the resolved tool — **not** the
+    /// literal word the user typed. Aliases (`/new` → `session_new`) and the
+    /// Telegram `@botname` suffix are resolved away by `ToolCatalog` before
+    /// this struct is built, so the value here is always the registry's
+    /// canonical name. Use a substring of the original input if you need to
+    /// echo back what the user typed.
     pub command_name: String,
     /// Canonical registry id of the resolved tool, verbatim from
     /// [`UnifiedTool::id`] (e.g. `builtin:session_new`, `mcp:fs:read_file`,
@@ -28,20 +33,27 @@ pub struct ParsedCommand {
     pub context: CommandContext,
 }
 
-/// Command-specific context based on source type
+/// Command-specific context based on source type.
+///
+/// `Builtin` is the **dispatch shape**, not the source: `Builtin` /
+/// `Native` / `Plugin` all land here. For `Builtin` and `Native` the
+/// `tool_name` field holds `UnifiedTool::name` (bare, e.g. `session_new`);
+/// for `Plugin` it holds the full `UnifiedTool::id` (namespaced, e.g.
+/// `plugin:diagnostics:ping`) — both are valid keys for the direct-tool
+/// fast path. Read `source_type` on the enclosing `ParsedCommand` for the
+/// actual source.
 #[derive(Debug, Clone)]
 pub enum CommandContext {
-    /// Builtin command context
+    /// Builtin / native / plugin command — direct-tool fast path.
     Builtin {
-        /// Tool name for agent mode
+        /// Direct-tool dispatch target. See the variant doc for what each
+        /// producer writes here.
         tool_name: String,
     },
     /// MCP tool context
     Mcp {
         /// Server name
         server_name: String,
-        /// Tool name within the server
-        tool_name: Option<String>,
     },
     /// Skill context
     Skill {
@@ -58,8 +70,6 @@ pub enum CommandContext {
     Custom {
         /// System prompt to inject
         system_prompt: Option<String>,
-        /// Provider override
-        provider: Option<String>,
         /// Rule regex pattern
         pattern: String,
     },
@@ -90,13 +100,16 @@ impl CommandParser {
 
         let resolved = self.tool_registry.resolve_command(trimmed).await?;
 
+        // `resolved.arguments` is the last field moved out of `resolved`;
+        // once it has moved the only borrow (`tool_to_command_context`) has
+        // ended and the partial moves from `resolved.tool` are sound.
         let source_type = ToolSourceType::from(&resolved.tool.source);
         let context = tool_to_command_context(&resolved.tool);
 
         Some(ParsedCommand {
             source_type,
-            command_name: resolved.tool.name.clone(),
-            tool_id: resolved.tool.id.clone(),
+            command_name: resolved.tool.name,
+            tool_id: resolved.tool.id,
             arguments: resolved.arguments,
             context,
         })
@@ -117,7 +130,6 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
         },
         ToolSource::Mcp { server } => CommandContext::Mcp {
             server_name: server.clone(),
-            tool_name: Some(tool.name.clone()),
         },
         ToolSource::Skill { id } => CommandContext::Skill {
             skill_id: id.clone(),
@@ -127,7 +139,10 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
         },
         ToolSource::Custom { .. } => CommandContext::Custom {
             system_prompt: tool.routing_system_prompt.clone(),
-            provider: None, // Provider is resolved at routing time
+            // Provider override for custom `[[rules]]` lives on the rule itself
+            // (`RoutingRuleConfig::provider`); the slash-command fast path
+            // reads no `provider` JSON key, so this struct does not carry it.
+            // Resolution happens in the agent-loop routing pass.
             pattern: tool.routing_regex.as_ref().unwrap_or(&tool.name).clone(),
         },
         ToolSource::Plugin { .. } => CommandContext::Builtin {
@@ -215,7 +230,7 @@ mod tests {
             CommandContext::Builtin { tool_name } => {
                 assert_eq!(tool_name, "plugin:diagnostics:ping");
             }
-            other => panic!("expected Builtin (direct-tool) context, got {:?}", other),
+            other => panic!("expected Builtin (direct-tool) context, got {other:?}"),
         }
     }
 }

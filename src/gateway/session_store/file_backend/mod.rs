@@ -13,6 +13,8 @@ use crate::gateway::session_store::types::{
 use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 
+pub(crate) mod meta;
+
 /// Sanitize a session key into a filesystem-safe directory name.
 ///
 /// Path separators and NUL are replaced on every platform. On Windows the
@@ -89,6 +91,9 @@ pub struct FileSessionStore {
     /// the file backend also drives session-end summarization / reflection /
     /// profile synthesis. `None` (the default) keeps the legacy behaviour.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    /// Per-session-key locks for `metadata.json`. Everything that writes goes
+    /// through these — see the [`meta`] module doc for why.
+    metadata_locks: meta::MetaLocks,
 }
 
 impl FileSessionStore {
@@ -107,6 +112,7 @@ impl FileSessionStore {
             config,
             event_bus: crate::sync_primitives::RwLock::new(None),
             raw_memory_writer: None,
+            metadata_locks: meta::MetaLocks::new(),
         })
     }
 
@@ -177,40 +183,37 @@ impl FileSessionStore {
             .join(format!("{checkpoint_id}.jsonl"))
     }
 
+    /// Read a session's metadata **without** taking its lock.
+    ///
+    /// For readers. Anything that reads in order to write back must go through
+    /// [`Self::lock_metadata`] instead — the read and the write have to be one
+    /// critical section or two overlapping updates silently revert one
+    /// another. That is not a convention you have to remember: there is no way
+    /// to turn what this returns into a write. `meta::MetaGuard` is the only
+    /// thing that can produce one, and `lock_metadata` is the only thing that
+    /// can produce a guard.
+    ///
+    /// An unparseable document is an error, never `Ok(None)`: "this session
+    /// does not exist" and "this session's file is damaged" must not collapse
+    /// into the same answer, which is precisely what made the torn-write bug
+    /// this module now guards against so expensive to find.
     pub(crate) async fn read_metadata(
         &self,
         key: &str,
     ) -> Result<Option<SessionMetadata>, SessionStoreError> {
-        let path = self.metadata_path(key);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let contents = tokio::fs::read_to_string(&path).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to read metadata: {e}"))
-        })?;
-        let meta: SessionMetadata = serde_json::from_str(&contents).map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to parse metadata: {e}"))
-        })?;
-        Ok(Some(meta))
+        meta::read(&self.metadata_path(key)).await
     }
 
-    pub(crate) async fn write_metadata(
+    /// Take a session's metadata lock and read the document under it.
+    ///
+    /// The only path to a write. Mutate through the guard and `commit()` it;
+    /// drop it without committing to write nothing. See the [`meta`] module
+    /// doc for what the lock is for and why its scope is one process.
+    pub(crate) async fn lock_metadata(
         &self,
         key: &str,
-        meta: &SessionMetadata,
-    ) -> Result<(), SessionStoreError> {
-        let dir = self.session_dir(key);
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to create session dir: {e}"))
-        })?;
-        let path = dir.join("metadata.json");
-        let contents = serde_json::to_string_pretty(meta).map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to serialize metadata: {e}"))
-        })?;
-        tokio::fs::write(&path, contents).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Failed to write metadata: {e}"))
-        })?;
-        Ok(())
+    ) -> Result<meta::MetaGuard, SessionStoreError> {
+        self.metadata_locks.lock(key, self.metadata_path(key)).await
     }
 
     // NOTE: `write_checkpoint` is gone with the destructive `compact` that was
@@ -312,7 +315,12 @@ impl FileSessionStore {
 impl SessionStore for FileSessionStore {
     async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError> {
         let key_str = key.to_key_string();
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        // The lock is held across the "does it exist? no — create it" pair as
+        // well, not just the update branch: two first turns arriving together
+        // on the same key would otherwise both read "absent", both create, and
+        // the loser's create would revert the winner's.
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             let now = chrono::Utc::now().timestamp();
             meta.last_active_at = now;
             if matches!(
@@ -321,8 +329,7 @@ impl SessionStore for FileSessionStore {
             ) {
                 meta.state = Some(SessionState::Active);
             }
-            self.write_metadata(&key_str, &meta).await?;
-            return Ok(meta);
+            return guard.commit().await;
         }
 
         let now = chrono::Utc::now().timestamp();
@@ -360,7 +367,8 @@ impl SessionStore for FileSessionStore {
         // scope before persisting. No-op (leaves both `None`) outside any
         // `scope::with_scope` context — cron/internal/A2A creators.
         meta.stamp_attribution();
-        self.write_metadata(&key_str, &meta).await?;
+        guard.insert(meta);
+        let meta = guard.commit().await?;
         self.emit_session_changed(&key_str, "create", Some(&meta));
         debug!("Created file-backed session: {}", key_str);
         Ok(meta)
@@ -400,7 +408,21 @@ impl SessionStore for FileSessionStore {
             };
             let meta: SessionMetadata = match serde_json::from_str(&contents) {
                 Ok(m) => m,
-                Err(_) => continue,
+                // Skipping is right — one damaged session must not fail the
+                // whole listing — but doing it in silence is what made the
+                // torn-write bug above so expensive to find: every surface
+                // reported the conversation as simply not existing, and
+                // nothing anywhere said why. Say which file, at a level an
+                // operator sees.
+                Err(e) => {
+                    tracing::warn!(
+                        path = %meta_path.display(),
+                        error = %e,
+                        "Unreadable session metadata — this conversation will be \
+                         missing from every listing until the file is repaired or removed"
+                    );
+                    continue;
+                }
             };
             if let Some(ref agent_id) = filter.agent_id {
                 if &meta.agent_id != agent_id {
@@ -462,11 +484,12 @@ impl SessionStore for FileSessionStore {
         if deleted {
             tokio::fs::remove_file(&transcript).await.ok();
         }
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             meta.message_count = 0;
             meta.last_active_at = chrono::Utc::now().timestamp();
             meta.state = Some(SessionState::Created);
-            self.write_metadata(&key_str, &meta).await?;
+            let meta = guard.commit().await?;
             self.emit_session_changed(&key_str, "reset", Some(&meta));
         }
         Ok(deleted)
@@ -479,7 +502,8 @@ impl SessionStore for FileSessionStore {
     ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
         self.append_transcript(&key_str, &msg).await?;
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             meta.message_count += 1;
             // SECONDS, via the boundary — never `msg.timestamp` raw. This field
             // is written in seconds by its five other writers and read as
@@ -528,7 +552,7 @@ impl SessionStore for FileSessionStore {
             ) {
                 meta.state = Some(SessionState::Running);
             }
-            self.write_metadata(&key_str, &meta).await?;
+            let meta = guard.commit().await?;
             self.emit_session_changed(&key_str, "send", Some(&meta));
         }
         Ok(())
@@ -599,9 +623,10 @@ impl SessionStore for FileSessionStore {
             SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
         })?;
 
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             meta.message_count = messages.len() as i64;
-            self.write_metadata(&key_str, &meta).await?;
+            guard.commit().await?;
         }
 
         Ok(TruncateResult {
@@ -643,9 +668,10 @@ impl SessionStore for FileSessionStore {
             SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
         })?;
 
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             meta.message_count = kept.len() as i64;
-            self.write_metadata(&key_str, &meta).await?;
+            guard.commit().await?;
         }
 
         Ok(removed)
@@ -728,7 +754,9 @@ impl SessionStore for FileSessionStore {
         // legacy/owner-owned under `visibility::session_visible`, invisible
         // to the member who just created it (see the trait doc on this fn).
         meta.stamp_attribution();
-        self.write_metadata(&new_key_str, &meta).await?;
+        let mut guard = self.lock_metadata(&new_key_str).await?;
+        guard.insert(meta);
+        let meta = guard.commit().await?;
         self.emit_session_changed(&new_key_str, "checkpoint-branch", Some(&meta));
         Ok(meta)
     }
@@ -756,13 +784,13 @@ impl SessionStore for FileSessionStore {
         tokio::fs::write(&path, contents).await.map_err(|e| {
             SessionStoreError::DatabaseError(format!("Write transcript failed: {e}"))
         })?;
-        let mut meta = self
-            .read_metadata(&key_str)
-            .await?
+        let mut guard = self.lock_metadata(&key_str).await?;
+        let meta = guard
+            .existing_mut()
             .ok_or_else(|| SessionStoreError::NotFound(format!("Session {key_str} not found")))?;
         meta.message_count = checkpoint_messages.len() as i64;
         meta.last_active_at = chrono::Utc::now().timestamp();
-        self.write_metadata(&key_str, &meta).await?;
+        let meta = guard.commit().await?;
         self.emit_session_changed(&key_str, "checkpoint-restore", Some(&meta));
         Ok(meta)
     }
@@ -773,7 +801,14 @@ impl SessionStore for FileSessionStore {
         topic: Option<&str>,
     ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        // Both of these drop the guard without committing: there is no session
+        // to close, or it is already closed. Dropping is the "write nothing"
+        // move — see `MetaGuard::commit`.
+        let Some(meta) = guard.existing_mut() else {
+            return Ok(());
+        };
+        {
             if matches!(meta.state, Some(SessionState::Stopped)) {
                 return Ok(());
             }
@@ -818,15 +853,16 @@ impl SessionStore for FileSessionStore {
                     .insert("topic".to_string(), serde_json::json!(t));
                 meta.identity_meta = Some(identity_meta);
             }
-            self.write_metadata(&key_str, &meta).await?;
-            self.emit_session_changed(&key_str, "close", Some(&meta));
         }
+        let meta = guard.commit().await?;
+        self.emit_session_changed(&key_str, "close", Some(&meta));
         Ok(())
     }
 
     async fn set_topic(&self, key: &SessionKey, topic: &str) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             let mut identity_meta = meta
                 .identity_meta
                 .take()
@@ -835,7 +871,7 @@ impl SessionStore for FileSessionStore {
                 .custom
                 .insert("topic".to_string(), serde_json::json!(topic));
             meta.identity_meta = Some(identity_meta);
-            self.write_metadata(&key_str, &meta).await?;
+            guard.commit().await?;
         }
         Ok(())
     }
@@ -851,7 +887,10 @@ impl SessionStore for FileSessionStore {
         scope_id: &str,
     ) -> Result<bool, SessionStoreError> {
         let key_str = key.to_key_string();
-        let Some(mut meta) = self.read_metadata(&key_str).await? else {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        // Both early returns drop the guard uncommitted — nothing to stamp, or
+        // already stamped.
+        let Some(meta) = guard.existing_mut() else {
             return Ok(false);
         };
         if meta.owner_user_id.is_some() || meta.scope_id.is_some() {
@@ -859,7 +898,7 @@ impl SessionStore for FileSessionStore {
         }
         meta.owner_user_id = Some(owner_user_id.to_string());
         meta.scope_id = Some(scope_id.to_string());
-        self.write_metadata(&key_str, &meta).await?;
+        guard.commit().await?;
         Ok(true)
     }
 
@@ -869,7 +908,8 @@ impl SessionStore for FileSessionStore {
         project_root: Option<&str>,
     ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             // Mutate identity_meta.custom["project_root"] on the persisted
             // SessionMetadata so `list_sessions` (which deserializes the full
             // on-disk meta) surfaces it for the Panel to restore. `None` clears
@@ -889,7 +929,7 @@ impl SessionStore for FileSessionStore {
                 }
             }
             meta.identity_meta = Some(identity_meta);
-            self.write_metadata(&key_str, &meta).await?;
+            guard.commit().await?;
         }
         Ok(())
     }
@@ -900,9 +940,10 @@ impl SessionStore for FileSessionStore {
         state: SessionState,
     ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             meta.state = Some(state);
-            self.write_metadata(&key_str, &meta).await?;
+            guard.commit().await?;
         }
         Ok(())
     }
@@ -1027,8 +1068,9 @@ impl SessionStore for FileSessionStore {
         patch: &SessionPatch,
     ) -> Result<bool, SessionStoreError> {
         let key_str = key.to_key_string();
-        match self.read_metadata(&key_str).await? {
-            Some(mut meta) => {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        match guard.existing_mut() {
+            Some(meta) => {
                 if let Some(label) = &patch.label {
                     meta.label = Some(label.clone());
                 }
@@ -1059,12 +1101,13 @@ impl SessionStore for FileSessionStore {
                     }
                     meta.identity_meta = Some(identity);
                 }
-                self.write_metadata(&key_str, &meta).await?;
-                self.emit_session_changed(&key_str, "patch", Some(&meta));
-                Ok(true)
             }
-            None => Ok(false),
+            // Nothing to patch: the guard drops uncommitted.
+            None => return Ok(false),
         }
+        let meta = guard.commit().await?;
+        self.emit_session_changed(&key_str, "patch", Some(&meta));
+        Ok(true)
     }
 
     async fn update_session_usage(
@@ -1077,7 +1120,8 @@ impl SessionStore for FileSessionStore {
         model_provider: Option<&str>,
     ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
-        if let Some(mut meta) = self.read_metadata(&key_str).await? {
+        let mut guard = self.lock_metadata(&key_str).await?;
+        if let Some(meta) = guard.existing_mut() {
             meta.input_tokens += input_tokens;
             meta.output_tokens += output_tokens;
             meta.total_tokens += input_tokens + output_tokens;
@@ -1090,7 +1134,7 @@ impl SessionStore for FileSessionStore {
             if let Some(mp) = model_provider {
                 meta.model_provider = Some(mp.to_string());
             }
-            self.write_metadata(&key_str, &meta).await?;
+            guard.commit().await?;
         }
         Ok(())
     }
@@ -1230,9 +1274,9 @@ mod reap_tests {
     async fn seed(store: &FileSessionStore, key: &SessionKey, age_secs: i64) {
         store.get_or_create(key).await.unwrap();
         let key_str = key.to_key_string();
-        let mut meta = store.read_metadata(&key_str).await.unwrap().unwrap();
-        meta.last_active_at = chrono::Utc::now().timestamp() - age_secs;
-        store.write_metadata(&key_str, &meta).await.unwrap();
+        let mut guard = store.lock_metadata(&key_str).await.unwrap();
+        guard.existing_mut().unwrap().last_active_at = chrono::Utc::now().timestamp() - age_secs;
+        guard.commit().await.unwrap();
     }
 
     #[tokio::test]
@@ -1604,6 +1648,106 @@ mod branch_checkpoint_attribution_tests {
         // return value.
         let reread = store.get_metadata(&new_key).await.unwrap().unwrap();
         assert_eq!(reread.owner_user_id.as_deref(), Some("u-alice"));
+    }
+
+    /// Concurrent metadata updates must neither corrupt the file nor lose
+    /// each other.
+    ///
+    /// Two defects, one fixture, because they are the two halves of one
+    /// mechanism — this document is rewritten whole from fifteen call sites:
+    ///
+    /// 1. The write was `tokio::fs::write`, whose truncate and write are
+    ///    separately observable, so two overlapping updates could leave a
+    ///    shorter document followed by the tail of a longer one. A
+    ///    `metadata.json` in that state makes the conversation vanish from
+    ///    `sessions.list` and answer "session not found" everywhere,
+    ///    permanently and across restarts, with the transcript still sitting
+    ///    intact beside it.
+    /// 2. Writing atomically fixes the file but not the update: both writers
+    ///    still read the same document and whoever renames last reverts the
+    ///    other's field. The survivor is a *complete* document that is simply
+    ///    missing a change somebody was told had been saved.
+    ///
+    /// The pair driven here is the production one — the projector recording a
+    /// run's usage while the user flips a dial on the same conversation — and
+    /// it goes through the store's own API, not the guard, so what is under
+    /// test is that the real call sites take the lock rather than that the
+    /// lock works.
+    ///
+    /// The label lengths alternate on purpose: equal-length writes cannot
+    /// produce the hybrid document of (1), so a fixture that varied nothing
+    /// would have been green against it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_metadata_updates_stay_readable_and_lose_nothing() {
+        let (store, _dir) = temp_store();
+        let key = SessionKey::from_key_string("agent:tornwrite:main").unwrap();
+        let key_str = key.to_key_string();
+        store.get_or_create(&key).await.unwrap();
+        let store = std::sync::Arc::new(store);
+
+        const ROUNDS: i64 = 24;
+        for round in 0..ROUNDS {
+            let usage = {
+                let store = store.clone();
+                let key = key.clone();
+                tokio::spawn(async move {
+                    store
+                        .update_session_usage(&key, 1, 1, 0.0, None, None)
+                        .await
+                        .unwrap();
+                })
+            };
+            let dial = {
+                let store = store.clone();
+                let key = key.clone();
+                let label = "x".repeat(if round % 2 == 0 { 400 } else { 8 });
+                tokio::spawn(async move {
+                    store
+                        .patch_session(
+                            &key,
+                            &SessionPatch {
+                                label: Some(label),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .unwrap();
+                })
+            };
+            usage.await.unwrap();
+            dial.await.unwrap();
+
+            // Both halves of (1), checked separately: the direct read (what
+            // `chat.history` / `sessions.patch` do) and the listing scan
+            // (which skips what it cannot parse, so a corrupt file shows up
+            // there as an absence rather than an error).
+            store
+                .read_metadata(&key_str)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("round {round}: metadata unparseable after concurrent writes: {e}")
+                })
+                .unwrap_or_else(|| panic!("round {round}: metadata vanished"));
+            let listed = store.list_sessions(SessionFilter::default()).await.unwrap();
+            assert!(
+                listed.iter().any(|m| m.key == key_str),
+                "round {round}: the session dropped out of list_sessions — \
+                 that is what an unparseable metadata.json looks like to a user"
+            );
+        }
+
+        // (2): every usage update landed. Without the lock this counter is
+        // short by however many times the dial writer's document won.
+        let meta = store.read_metadata(&key_str).await.unwrap().unwrap();
+        assert_eq!(
+            meta.total_tokens,
+            ROUNDS * 2,
+            "usage updates were lost to a concurrent dial write"
+        );
+        assert!(
+            meta.label.is_some(),
+            "the dial write was lost to a concurrent usage update"
+        );
     }
 
     /// Zero-change guarantee: branching with no ambient scope (cron,

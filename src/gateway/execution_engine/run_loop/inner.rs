@@ -262,7 +262,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // by the shared `turn_permissions` module: the slash-command fast path
         // consults the same resolution before it is allowed to dispatch, so the
         // two surfaces cannot enforce different rules.
-        let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, &agent).await;
+        let super::super::turn_permissions::TurnPermissions {
+            tier: exec_tier,
+            explicit: tool_permissions,
+            plan_gate,
+        } = self.resolve_turn_permissions(request, &agent).await;
         // This turn's reasoning depth (composer pill / RPC `thinking` param /
         // the model's own `self_config` call, else whatever the session was
         // last stamped with). `None` = send no thinking directive, which is the
@@ -274,23 +278,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // only — schema-resident core set + deferred families — never
         // permissions; `Work` is the identity partition.
         let session_mode = self.resolve_turn_mode(request).await;
-        // This turn's plan phase. Unlike the three knobs above it has no global
-        // rung: an unstamped session is `Building`, which is what every session
-        // that never asked to plan already is. `Planning` mints the run's live
-        // latch, which is shared by BOTH tool services below — the parent's and
-        // the one children inherit — so a subagent is not a second, unlatched
-        // way to write, and one approval lifts the floor for both.
-        let plan_phase = self.resolve_turn_plan_phase(request).await;
-        let plan_gate = plan_phase.is_planning().then(|| {
-            let sink: Option<Arc<dyn crate::tools::scoped::PlanPhaseSink>> =
-                self.session_manager.as_ref().map(|store| {
-                    Arc::new(super::super::turn_plan_phase::PlanPhaseWriter::new(
-                        Arc::clone(store),
-                        request.session_key.clone(),
-                    )) as Arc<dyn crate::tools::scoped::PlanPhaseSink>
-                });
-            Arc::new(crate::tools::scoped::PlanGate::planning(sink))
-        });
+        // This turn's memory mode (`/memory`, the RPC `memory` param, else the
+        // session's stamped value, else `[memory] enabled`). Gates the three
+        // INJECTED envelopes — curated memory, the wiki orientation index and
+        // per-query recall — at the one place they converge in
+        // `harness_bridge::prompt_build`. It gates neither the memory tools nor
+        // any write: "not injected" is a presentation choice, "not available"
+        // and "not recorded" are not, and conflating them is how a model comes
+        // to insist it saved something it did not.
+        let memory_mode = self.resolve_turn_memory_mode(request).await;
+        // Reinstate a `select_model` pin the session row remembers but this
+        // process does not (a restart). Must run BEFORE anything below reads
+        // `get_session_model` — the three readers are unchanged precisely
+        // because the map is correct by the time they look.
+        self.rehydrate_turn_model_pin(request).await;
         // Mode-effective schema-resident core set, fed to both
         // `build_request_tool_service` call sites and the SchemaLookupTool
         // registration gate below. Work returns the configured set unchanged.
@@ -651,6 +652,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
                 .cloned(),
             unattended,
+            // Cloned into BOTH tool services this run builds (its own and the
+            // parent view handed to spawned children), so the one human
+            // approval that lifts the gate lifts it everywhere this run can
+            // reach. `None` on every non-planning turn.
+            plan_gate: plan_gate.clone(),
         };
 
         loop {
@@ -951,13 +957,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     self.config.truncate_tool_descriptions,
                     deferred.clone(),
                     self.tool_health.clone(),
-                    // The SAME `Arc` the parent service gets below, on purpose:
-                    // a child that could write while the parent is planning
-                    // would be "two steps, each legal, together equivalent" —
-                    // the shape this repo's criteria list warns about — and a
-                    // child still locked after the parent's approval would
-                    // strand delegated work at the moment it becomes wanted.
-                    plan_gate.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -1231,11 +1230,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 self.config.truncate_tool_descriptions,
                 deferred.clone(),
                 self.tool_health.clone(),
-                // Cloned, not moved: this whole block is a retry loop, and the
-                // latch has to outlive an attempt. A gate rebuilt per attempt
-                // would silently re-engage the floor after an approval that
-                // already happened.
-                plan_gate.clone(),
             );
 
             // Legacy backfill: a session with `messages` rows but no
@@ -1369,13 +1363,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 envelope: crate::thinker::TurnEnvelope {
                     exec_tier: Some(exec_tier),
                     session_mode: Some(session_mode),
-                    //   - `plan_phase` is read back off the run's own gate, not
-                    //     off the `plan_phase` variable resolved at run start.
-                    //     They differ by exactly one event — an approved handoff
-                    //     earlier in this run — and on a retry attempt after one,
-                    //     the variable would re-assert a floor the gate has
-                    //     already lifted. `Building` renders nothing either way.
-                    plan_phase: Some(plan_gate.as_ref().map_or(plan_phase, |g| g.phase())),
+                    //   - `memory_mode` is the mode `prompt_build` gates the
+                    //     three injected memory envelopes on, so the prompt's
+                    //     statement about what this turn remembers matches what
+                    //     it was actually given.
+                    memory_mode: Some(memory_mode),
                     // rust-doctor-disable-next-line excessive-clone
                     cwd: Some(effective_workspace.clone()),
                     //   - `serving_model` is NOT resolvable here: which model

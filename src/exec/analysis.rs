@@ -34,6 +34,28 @@ impl CommandAnalysis {
         }
     }
 
+    /// The analysis of an approval that has no shell command to analyse.
+    ///
+    /// A tool-call card (`file_write`, `browser_navigate`, an MCP call) is
+    /// approved as an action, not as a command line; there is no argv to
+    /// parse. `ok` is `true` because **nothing failed** — "there was nothing
+    /// to parse" and "parsing failed" are different answers, and
+    /// [`crate::exec::manager::ExecApprovalManager::create`] asserts on the
+    /// second (a card the human can only deny is not worth a delivery slot).
+    ///
+    /// Named because the distinction is not obvious from the struct: three
+    /// separate test fixtures reached for [`Self::error`] here, and every one
+    /// of them tripped that assertion — eleven tests that had never passed.
+    #[must_use]
+    pub const fn not_a_command() -> Self {
+        Self {
+            ok: true,
+            reason: None,
+            segments: Vec::new(),
+            chains: None,
+        }
+    }
+
     /// Create a failed analysis with error reason
     pub fn error(reason: impl Into<String>) -> Self {
         Self {

@@ -336,6 +336,15 @@ impl AgentDef {
             && self.allowed_tools.first().is_some_and(|s| s == "*")
         {
             self.allowed_tools = vec![];
+            // The flat list is no longer "whatever the constructor left" — it
+            // is empty because this builder decided it should be, so the named
+            // sets govern. Leaving the flag false would leave the cleared list
+            // indistinguishable from an untouched one, and the next consumer
+            // to ask "has anyone determined this list?" would answer no and
+            // helpfully restore a default wildcard — reopening the exact hole
+            // (`explore` silently regaining every tool) this heuristic exists
+            // to close.
+            self.allowed_tools_explicit = true;
         }
         self
     }

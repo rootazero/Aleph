@@ -11,6 +11,7 @@
 //! - [`events`] - Streaming event types
 //! - [`thinking`] - Reasoning and confidence types
 //! - [`auth`] - Authentication and authorization types
+//! - [`session_thread`] - Thread-continuity contract (`agent.run` request, attach snapshot)
 
 pub mod artifact;
 pub mod auth;
@@ -22,6 +23,7 @@ mod ids;
 pub mod jsonrpc;
 pub mod paths;
 pub mod plan;
+pub mod session_thread;
 pub mod subagent_tree;
 pub mod team_topic;
 pub mod thinking;
@@ -36,11 +38,13 @@ pub use auth::{GuestScope, IdentityContext, Role};
 pub use events::{
     AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState, AgentTraceTextKind,
     AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult, AgentTraceTurnMetrics,
-    AgentTraceTurnOutcome, RunSummary, StreamEvent, TokenBreakdownView, ToolResult,
+    AgentTraceTurnOutcome, AskUserOption, AskUserQuestion, RunSummary, StreamEvent,
+    TokenBreakdownView, ToolResult,
 };
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
 };
+pub use session_thread::{AgentRunAccepted, AgentRunRequest, SessionSnapshot};
 pub use subagent_tree::{
     build_tree, NodeLifecycle, Rollup, SubagentNode, SubagentTreeEvent, TreeNode,
 };

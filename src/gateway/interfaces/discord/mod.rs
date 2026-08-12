@@ -156,6 +156,10 @@ impl DiscordChannel {
             // Reply streaming: the generic ReplyEmitter drives send→edit via our
             // `Channel::edit()` impl. The inbound executor flips `stream_enabled`
             // on when it sees EditBased. Mirrors Telegram's progressive editing.
+            // Paired with `editing: true` above, and that is the load-bearing
+            // half: `apply_channel_capabilities` floors on it, because a
+            // channel that declares EditBased while refusing to edit gets its
+            // first flush and silence (`line`/`wechat` did exactly that).
             stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
         }
     }
@@ -1046,12 +1050,15 @@ mod tests {
 
     #[test]
     fn test_stream_protocol_is_edit_based() {
-        // Reply streaming relies on this: the inbound executor only enables
-        // stream_enabled when the channel declares EditBased.
+        // Reply streaming relies on this pair: the inbound executor widens
+        // `stream_enabled` on EditBased and then floors it on `editing`.
+        // (EditBased is not *required* for streaming — slack/mattermost stream
+        // while declaring `None`. It buys the `max_message_length` cap.)
         assert_eq!(
             DiscordChannel::capabilities().stream_protocol,
             crate::gateway::channel::StreamProtocol::EditBased
         );
+        assert!(DiscordChannel::capabilities().editing);
     }
 
     #[test]

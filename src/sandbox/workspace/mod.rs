@@ -322,16 +322,19 @@ impl Sandbox for WorkspaceSandbox {
                         // cumulative behaviour that made "consecutive" a lie.
                         denial_ledger::global().record_approval(&led_key);
                     }
-                    ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
+                    ApprovalOutcome::Denied
+                    | ApprovalOutcome::Timeout
+                    | ApprovalOutcome::Unavailable => {
                         // Remember the refusal so the next blind retry of this
                         // exact elevation is short-circuited above. A `Timeout`
-                        // is passed but dropped by the ledger (an expired card
-                        // is not a decision) — see `DenialLedger::record_denial`.
-                        let reason_kind = if matches!(outcome, ApprovalOutcome::Timeout) {
-                            denial_ledger::DenialReason::Timeout
-                        } else {
-                            denial_ledger::DenialReason::UserRejected
-                        };
+                        // (an expired card) and an `Unavailable` (nobody was
+                        // ever asked) are passed but dropped by the ledger —
+                        // see `DenialLedger::record_denial`. The mapping is the
+                        // confirm gate's, not a second copy: spelling it inline
+                        // is how both gates ended up filing "the transport
+                        // failed" as "the user said no".
+                        let reason_kind = denial_ledger::DenialReason::for_refusal(outcome)
+                            .unwrap_or(denial_ledger::DenialReason::UserRejected);
                         // Capture the circuit-breaker trip edge and mirror the
                         // tool-confirm gate's anti-reference-bypass purge: when
                         // this refusal is the one that crosses the brute-force
@@ -372,11 +375,18 @@ impl Sandbox for WorkspaceSandbox {
                             .as_deref()
                             .map(|r| format!(" The user said: \"{r}\"."))
                             .unwrap_or_default();
+                        // Only say "user denied" when a user actually did. This
+                        // sentence reaches the model, which relays it to the
+                        // person it is talking to; on an unwired requester, a
+                        // failed delivery or an unattended run it named a
+                        // decision nobody had made.
+                        let lead = if reason_kind.is_a_human_decision() {
+                            "user denied elevated capability request."
+                        } else {
+                            "elevated capability request was not authorized — nobody was asked."
+                        };
                         return Err(SandboxError::CapabilityDenied {
-                            reason: format!(
-                                "user denied elevated capability request.{user_reason} {}",
-                                reason_kind.agent_hint()
-                            ),
+                            reason: format!("{lead}{user_reason} {}", reason_kind.agent_hint()),
                         });
                     }
                 }

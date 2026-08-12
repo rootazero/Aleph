@@ -37,7 +37,8 @@ use aleph_client::{AlephClient, CliConfig, CliResult};
 
 use app::{Action, AppState, Focus};
 use commands::{
-    confirm_session_switch, execute_local_command, fetch_gateway_commands, send_to_agent,
+    attach_session, confirm_session_switch, execute_local_command, fetch_gateway_commands,
+    send_to_agent, shadowed_gateway_commands,
 };
 use slash::ParsedInput;
 
@@ -69,7 +70,7 @@ pub async fn run(
     client: AlephClient,
     mut gateway_events: mpsc::Receiver<StreamEvent>,
     _config: &CliConfig,
-    session_key: String,
+    session_key: Option<String>,
     verbose: bool,
 ) -> CliResult<()> {
     // 1. Setup terminal
@@ -102,10 +103,39 @@ pub async fn run(
     // 3b. Fetch gateway commands for command palette
     let gateway_commands = fetch_gateway_commands(&client).await;
 
-    let mut state = AppState::new(session_key, model_name);
+    // An empty key means "not routed yet": the first `agent.run` omits
+    // `session_key` entirely and adopts whatever canonical key the gateway
+    // reports back. Inventing a key here is what used to strand every keyed RPC
+    // this client made.
+    let mut state = AppState::new(session_key.clone().unwrap_or_default(), model_name);
     // Honor the CLI `--verbose` flag from launch, not only the /verbose command.
     state.verbose = verbose;
     state.gateway_commands = gateway_commands;
+    // A local command that matches a gateway one makes the gateway one
+    // unreachable — this client resolves local first and never falls through.
+    // Say so once at startup rather than letting a whole namespace vanish
+    // quietly (see `shadowed_gateway_commands`).
+    let shadowed = shadowed_gateway_commands(&state.gateway_commands);
+    if !shadowed.is_empty() {
+        state.add_system_message(format!(
+            "Note: local commands shadow these gateway commands, which are now unreachable \
+             from this client: {}.",
+            shadowed
+                .iter()
+                .map(|c| format!("/{c}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    // 3c. Attach to the named conversation: transcript + the settings that
+    // govern it (mode / tier / thinking depth / model / cumulative tokens /
+    // memory mode). Reopening a terminal mid-task lands you back where you
+    // were; before this, `--session <key>` opened a blank screen and the status
+    // bar reported the install defaults over a conversation that had its own.
+    if let Some(key) = session_key.as_deref().filter(|k| !k.is_empty()) {
+        attach_session(&mut state, &client, key).await;
+    }
     let mut textarea = TextArea::default();
     textarea.set_placeholder_text("Type a message... (/ for commands)");
 
@@ -276,8 +306,12 @@ async fn main_loop(
             }
             Action::PaletteConfirm => {
                 if let Some(palette) = state.palette.take() {
-                    if let Some(entry) = palette.filtered.get(palette.selected) {
-                        let cmd_str = entry.full_command.trim().to_string();
+                    // The entry names the command; anything the user typed
+                    // after it is its argument (`PaletteState::selected_command`).
+                    // Without that, the palette could only ever run a command
+                    // bare — and it is the only route to one, `/` on an empty
+                    // composer opening the palette instead of typing a slash.
+                    if let Some(cmd_str) = palette.selected_command() {
                         state.close_overlay();
                         // Parse through our unified parser
                         match slash::parse_input(&cmd_str) {
@@ -300,13 +334,10 @@ async fn main_loop(
             }
 
             // -- Dialog --
-            Action::DialogSelect(idx) => {
-                if let Some(dialog) = &mut state.dialog {
-                    if idx < dialog.options.len() {
-                        dialog.selected = idx;
-                    }
-                }
-            }
+            // `DialogSelect` is gone: its only producer was the out-of-range
+            // branch of the digit key, and an out-of-range digit is now the
+            // first character of a typed answer. Moving the highlight is what
+            // the arrow keys do, and they mutate `DialogState` in place.
             Action::RespondToDialog { session_key, reply } => {
                 // The AskUser answer resolves the clarification the server's
                 // `ask_user` tool is parked on — keyed by session, not run

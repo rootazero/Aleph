@@ -10,7 +10,9 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::builtin_tools::scratchpad_registry;
+use crate::clarification::ClarificationResult;
 use crate::error::Result;
+use crate::gateway::i18n::{t_ui, Msg};
 use crate::memory::scratchpad::{PlanItem, PlanItemStatus, ScratchpadManager, ScratchpadSnapshot};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -33,25 +35,10 @@ pub enum ScratchpadAction {
     CompleteItem,
     /// Append a note to the Notes section
     AppendNote,
+    /// Show the current plan to the human and wait for their verdict
+    RequestApproval,
     /// Clear and reset the scratchpad
     Clear,
-    // The doc comment below is deliberately one line: `schemars` ships it in
-    // this tool's schema, and `scratchpad` is schema-resident in every mode, so
-    // prose here is prose on every request forever. The rest of the contract —
-    // when to call it, what happens on approval, what happens on refusal —
-    // reaches the model only while it is TRUE, through
-    // `PlanPhase::prompt_line`, which renders nothing in an ordinary session.
-    // (R9's first ruler: a runtime fact belongs where it is a fact.)
-    //
-    // Mechanically this is not an ordinary action: `ScopedToolService`
-    // intercepts it before dispatch (`GateRule::PlanHandoff`), raises the
-    // approval card, and lets this arm run only after the person says yes — by
-    // which point the read-only floor is already lifted. Outside the planning
-    // phase it is a no-op that says so rather than an error, because a model
-    // that reaches for it in an ordinary session made a harmless category
-    // mistake and an error would invite a retry loop.
-    /// Ask the user to approve the finished plan and unlock execution.
-    RequestBuild,
 }
 
 impl std::fmt::Display for ScratchpadAction {
@@ -64,18 +51,8 @@ impl std::fmt::Display for ScratchpadAction {
             Self::StartItem => write!(f, "start_item"),
             Self::CompleteItem => write!(f, "complete_item"),
             Self::AppendNote => write!(f, "append_note"),
+            Self::RequestApproval => write!(f, "request_approval"),
             Self::Clear => write!(f, "clear"),
-            // Spelled from the shared constant rather than a second literal:
-            // the permission floor matches on this exact string to recognise
-            // the handoff, and two spellings of one verb is the whole class of
-            // bug this repo keeps re-finding.
-            Self::RequestBuild => {
-                write!(
-                    f,
-                    "{}",
-                    crate::config::types::policies::plan_phase::HANDOFF_ACTION
-                )
-            }
         }
     }
 }
@@ -313,6 +290,122 @@ pub struct ScratchpadOutput {
     /// Structured plan snapshot for the Panel Todo widget (mutating actions only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<PlanSnapshotDto>,
+    /// `request_approval` only: what the human decided —
+    /// `approved` / `revise` / `rejected` / `timeout` / `cancelled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// `request_approval` only: what they said when they did not simply
+    /// approve. This is the revision to act on, not a courtesy note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<String>,
+}
+
+/// Verdicts offered on a plan-approval card, as `(wire value, label key)`.
+///
+/// Free text is a fourth outcome the menu deliberately does not list: anything
+/// that is not one of these three IS the revision, which is how pi's
+/// "Refine the plan" reads without making the human pick twice.
+///
+/// The **value** is an English key and stays one: `verdict_of` reads it and the
+/// model is told it received it, so a display setting must not be able to
+/// change what the verdict *is*. Only the label a person reads is translated.
+const APPROVAL_CHOICES: [(&str, Msg<'static>); 3] = [
+    (DECISION_APPROVED, Msg::PlanApproveLabel),
+    (DECISION_REVISE, Msg::PlanReviseLabel),
+    ("rejected", Msg::PlanRejectLabel),
+];
+
+/// The one verdict that ENDS plan mode.
+///
+/// A `const` rather than three `"approved"` literals because it is now the
+/// trigger for a real state change (the plan → build handoff), not just a word
+/// in a message: the menu that offers it, the branch that reads it, and the
+/// release that acts on it have to be the same string by construction.
+const DECISION_APPROVED: &str = "approved";
+
+/// Decision reported when the human answered with something not on the menu.
+const DECISION_REVISE: &str = "revise";
+
+/// Map a resolved clarification onto `(decision, feedback)`.
+///
+/// Anything the human typed that is not one of the three listed verdicts IS the
+/// revision. Making them pick "Revise" and *then* type it would be two
+/// interactions for one thought — and the free-text answer is already the more
+/// informative of the two (pi's "Refine the plan" without the extra step).
+fn verdict_of(result: &ClarificationResult) -> (String, Option<String>) {
+    use crate::clarification::ClarificationResultType;
+    match result.result_type {
+        ClarificationResultType::Answered => match result.answers.first() {
+            Some(answer) if answer.is_custom() => (
+                DECISION_REVISE.to_string(),
+                Some(answer.value.clone()).filter(|v| !v.trim().is_empty()),
+            ),
+            Some(answer) => (answer.value.clone(), None),
+            // `Answered` with no answers cannot be built by
+            // `ClarificationResult::answered`, but reporting a verdict we did
+            // not receive is the one outcome worth refusing outright.
+            None => ("cancelled".to_string(), None),
+        },
+        ClarificationResultType::Timeout => ("timeout".to_string(), None),
+        ClarificationResultType::Cancelled => ("cancelled".to_string(), None),
+    }
+}
+
+/// The model-facing sentence for a verdict.
+///
+/// The timeout wording is the load-bearing one: silence is the outcome most
+/// easily misread as consent, and this is an advisory gate — nothing downstream
+/// stops the model — so the only thing standing between "nobody answered" and
+/// "nobody objected" is what this string says.
+fn approval_message(decision: &str, feedback: Option<&str>, handoff: Option<&str>) -> String {
+    match decision {
+        // `handoff` is `Some` only when this call actually lifted a read-only
+        // planning gate. On a conversation that was never planning the
+        // sentence stays exactly what it has always been — approval remains
+        // the advisory checkpoint it was designed as.
+        DECISION_APPROVED => handoff.map_or_else(
+            || "Plan approved — start working the list.".to_string(),
+            |h| format!("Plan approved — start working the list. {h}"),
+        ),
+        DECISION_REVISE => feedback.map_or_else(
+            || "Plan needs revision (no detail given) — ask what to change.".to_string(),
+            |f| format!("Plan needs revision: {f}"),
+        ),
+        "rejected" => "Plan rejected — do not execute it.".to_string(),
+        "timeout" => "Nobody answered in time. The plan is UNREVIEWED — do not treat silence as \
+                      approval; do the reversible part, or stop and report."
+            .to_string(),
+        _ => "The approval request ended without a verdict; the plan is unreviewed.".to_string(),
+    }
+}
+
+/// Render the plan for a human to read before approving it.
+///
+/// Reads the **persisted** snapshot rather than taking prose from the caller:
+/// the whole value of a plan gate over a plain `ask_user` is that what the
+/// human approves is what is actually on disk and in the model's
+/// `<execution_plan>` — a paraphrase the model retypes into a question is a
+/// second representation of the plan, free to flatter it.
+fn render_plan_for_approval(snapshot: &ScratchpadSnapshot, note: Option<&str>) -> String {
+    let mut out = String::new();
+    if let Some(objective) = snapshot.objective.as_deref() {
+        let lead = t_ui(Msg::PlanObjectiveLead);
+        out.push_str(&format!("**{lead}:** {objective}\n\n"));
+    }
+    for (i, item) in snapshot.items.iter().enumerate() {
+        let mark = match item.status {
+            PlanItemStatus::Done => "x",
+            PlanItemStatus::InProgress => "~",
+            PlanItemStatus::Pending => " ",
+        };
+        out.push_str(&format!("{}. [{mark}] {}\n", i + 1, item.text));
+    }
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        out.push_str(&format!("\n{note}\n"));
+    }
+    out.push('\n');
+    out.push_str(&t_ui(Msg::PlanApprovePrompt));
+    out
 }
 
 /// Tool that allows the AI to manage project scratchpads
@@ -325,12 +418,60 @@ pub struct ScratchpadTool {
     /// execution list at stop time. `None` → registry binding is skipped
     /// (scratchpad still works; the hook simply stays dormant).
     session_key: Option<Arc<RwLock<String>>>,
+    /// Handles for [`ScratchpadAction::RequestApproval`]. `None` → the action
+    /// reports that no human gate is wired rather than pretending to ask,
+    /// which is the same shape as the headless refusal one layer down.
+    clarification: Option<crate::clarification::ClarificationDeps>,
+    /// Session store, for the ONE write this tool makes outside its own
+    /// markdown: clearing the `exec_tier` override when a human approves the
+    /// plan and the conversation stops planning. `None` → the handoff still
+    /// lifts the gate for the current turn and says that it could not be
+    /// persisted (see [`Self::release_plan_gate`]).
+    session_store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
 }
 
 impl ScratchpadTool {
     #[must_use]
     pub const fn new() -> Self {
-        Self { session_key: None }
+        Self {
+            session_key: None,
+            clarification: None,
+            session_store: None,
+        }
+    }
+
+    /// Attach the session store used by the plan → build handoff.
+    ///
+    /// Wired from the same source as `session_set_mode`'s store (gateway
+    /// context, else the session manager) — the two write the same carrier
+    /// (`identity_meta.custom`), so they must not end up reading different
+    /// backends.
+    #[must_use]
+    pub fn with_session_store(
+        mut self,
+        store: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
+    ) -> Self {
+        self.session_store = store;
+        self
+    }
+
+    /// Attach the human-gate handles used by `request_approval`.
+    ///
+    /// Same pair `ask_user` holds, and deliberately the same
+    /// [`crate::clarification::ask`] path: a plan gate that grew its own
+    /// delivery ladder would be a second answer to "how do we reach the human",
+    /// and the second answer is always the one that misses the next transport.
+    #[must_use]
+    pub fn with_clarification(
+        mut self,
+        clarification: Arc<crate::clarification::ClarificationManager>,
+        channels: Arc<crate::gateway::channel_registry::ChannelRegistry>,
+    ) -> Self {
+        self.clarification = Some(crate::clarification::ClarificationDeps::new(
+            clarification,
+            channels,
+        ));
+        self
     }
 
     /// Attach the shared live session-key handle. Pass the same handle the
@@ -411,8 +552,10 @@ impl AlephTool for ScratchpadTool {
          step's wording send {text, status} to carry its status over. Exactly \
          one step may be in_progress. \
          action='start_item' / 'complete_item' (0-based item_index) move a \
-         single step and echo the updated list back to you. The scratchpad \
-         persists across sessions. While an objective is set and plan items \
+         single step and echo the updated list back to you. \
+         action='request_approval' shows the saved plan to the user and waits; \
+         verdict in `decision`/`feedback`. Use before expensive or \
+         irreversible work. The scratchpad persists across sessions. While an objective is set and plan items \
          remain unfinished, the goal-loop keeps this session running so you work \
          through them step by step — call action='clear' once the objective is \
          fully achieved.";
@@ -485,6 +628,8 @@ impl AlephTool for ScratchpadTool {
                     // attaching to an existing project — it used to stay hidden
                     // until the next mutating call.
                     snapshot: plan_snapshot(&manager).await,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -496,6 +641,8 @@ impl AlephTool for ScratchpadTool {
                         content: None,
                         progress: None,
                         snapshot: None,
+                        decision: None,
+                        feedback: None,
                     });
                 }
                 let content = manager.read().await?;
@@ -505,6 +652,8 @@ impl AlephTool for ScratchpadTool {
                     content: Some(content),
                     progress: None,
                     snapshot: plan_snapshot(&manager).await,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -518,6 +667,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -548,6 +699,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -561,6 +714,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -574,6 +729,8 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress,
                     snapshot,
+                    decision: None,
+                    feedback: None,
                 })
             }
 
@@ -586,7 +743,13 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress: None,
                     snapshot: None,
+                    decision: None,
+                    feedback: None,
                 })
+            }
+
+            ScratchpadAction::RequestApproval => {
+                self.request_approval(&manager, args.value.as_deref()).await
             }
 
             ScratchpadAction::Clear => {
@@ -597,37 +760,217 @@ impl AlephTool for ScratchpadTool {
                     content: None,
                     progress: None,
                     snapshot: None,
+                    decision: None,
+                    feedback: None,
                 })
             }
+        }
+    }
+}
 
-            ScratchpadAction::RequestBuild => {
-                // Reaching this arm means one of two things, and they are told
-                // apart by the phase — not by anything this tool did. Either
-                // the person approved (the floor is already lifted; the
-                // dispatch layer appends the "execution is unlocked" line to
-                // this result), or the session was never planning and this call
-                // is a category mistake. The plan itself is echoed either way,
-                // because that is the thing the next turn has to work from.
-                let planning = crate::tools::turn_context::current_plan_phase().is_planning();
-                let snapshot = plan_snapshot(&manager).await;
-                let message = if planning {
-                    // Belt and braces: the floor should have lifted before this
-                    // arm ran. If it did not, say nothing that implies it did.
-                    "Plan submitted. The session is still in the read-only planning phase — \
-                     wait for the user."
-                        .to_string()
-                } else {
-                    "The session is not in the read-only planning phase, so there is nothing \
-                     to hand off; you may already act. Work the plan one step at a time."
-                        .to_string()
-                };
-                Ok(ScratchpadOutput {
-                    success: true,
-                    message,
-                    content: Some(manager.read().await.unwrap_or_default()),
-                    progress: None,
-                    snapshot,
-                })
+impl ScratchpadTool {
+    /// Show the persisted plan to the human and wait for their verdict.
+    ///
+    /// The human gate the exec tier cannot be: `[exec] tier` asks about *this
+    /// call*, one tool invocation at a time, and by the time it fires the plan
+    /// is already being executed. This asks about the plan **as a whole**,
+    /// before the first step — the axis codex covers with plan mode and pi with
+    /// its post-plan `select("Execute / Stay / Refine")`.
+    ///
+    /// On a conversation that is not planning it is advisory by construction:
+    /// nothing in `src/harness/` learns about the verdict and no tool is
+    /// blocked by it — the model asked, the model was answered, and the model
+    /// decides what that means (R7/R10).
+    ///
+    /// On a conversation at [`ExecTier::Plan`] it is also the HANDOFF: an
+    /// `approved` lifts the read-only planning gate for the rest of this turn
+    /// and clears the session's tier override for every turn after it (see
+    /// [`Self::release_plan_gate`]). That still needs no plan-state machine in
+    /// the loop — the loop dispatches exactly what it always did, and the one
+    /// enforcement chokepoint reads one `AtomicBool`. The doc here used to
+    /// argue the opposite ("a gate that enforced itself would need a
+    /// plan-state machine inside the loop — that is cognition"). What was
+    /// actually true is narrower: the DECISION is cognition and stays with the
+    /// human, while flipping a tier the resolver already computed is
+    /// bookkeeping.
+    ///
+    /// # Why the model cannot let itself out
+    ///
+    /// Everything below the `ask` call refuses without a person:
+    /// `request_approval` errors when no approval transport is wired, and
+    /// [`crate::clarification::ask`] errors on an unattended run and on any
+    /// turn with no channel to deliver to. There is no branch that reaches an
+    /// `approved` verdict without one having been chosen off a menu.
+    ///
+    /// [`ExecTier::Plan`]: crate::config::types::policies::ExecTier::Plan
+    async fn request_approval(
+        &self,
+        manager: &ScratchpadManager,
+        note: Option<&str>,
+    ) -> Result<ScratchpadOutput> {
+        use crate::clarification::{
+            ClarificationOption, ClarificationQuestion, ClarificationRequest,
+        };
+
+        let Some(ref deps) = self.clarification else {
+            return Err(crate::error::AlephError::tool(
+                "scratchpad: no human-approval gate is wired on this server — proceed and say \
+                 that the plan was not reviewed",
+            ));
+        };
+
+        let snapshot = manager.snapshot().await?;
+        if snapshot.items.is_empty() {
+            return Err(crate::error::AlephError::tool(
+                "scratchpad: there is no plan to approve — call action='set_plan' first",
+            ));
+        }
+
+        let options: Vec<ClarificationOption> = APPROVAL_CHOICES
+            .iter()
+            .map(|(value, label)| ClarificationOption::new(value, &t_ui(*label)))
+            .collect();
+        let request = ClarificationRequest::new(vec![ClarificationQuestion::select(
+            "plan_approval",
+            &render_plan_for_approval(&snapshot, note),
+            options,
+        )
+        .with_header("Plan")])
+        .map_err(crate::error::AlephError::tool)?;
+
+        // `withheld_secret` is structurally empty here: the plan gate asks one
+        // question and never marks it a secret, so there is nothing the
+        // transport rule can hold back. Written out in full rather than with
+        // `..` so that a new field on `AskOutcome` stops the compiler here and
+        // this site gets a decision, instead of inheriting a silent default.
+        let crate::clarification::AskOutcome {
+            result,
+            withheld_secret: _,
+        } = crate::clarification::ask(deps, request)
+            .await
+            .map_err(|e| crate::error::AlephError::tool(format!("scratchpad: {e}")))?;
+
+        let (decision, feedback) = verdict_of(&result);
+        // The plan → build handoff. Runs BEFORE the message is built so the
+        // model is told, in the same breath as the verdict, that it may now
+        // act — and runs only for a human `approved` on a turn that actually
+        // has a read-only gate to lift.
+        let handoff = self.release_plan_gate(&decision).await;
+        let message = approval_message(&decision, feedback.as_deref(), handoff.as_deref());
+
+        Ok(ScratchpadOutput {
+            success: true,
+            message,
+            content: None,
+            progress: None,
+            // The reviewed plan itself, so the Panel's todo widget shows
+            // exactly what the verdict was about.
+            snapshot: Some(plan_snapshot_dto(&snapshot)),
+            decision: Some(decision),
+            feedback,
+        })
+    }
+
+    /// Turn a human `approved` into the plan → build handoff.
+    ///
+    /// Returns the sentence to append to the verdict when this call actually
+    /// ended plan mode, `None` otherwise — including on a conversation that
+    /// was never planning, where approval keeps being the advisory checkpoint
+    /// it has always been.
+    ///
+    /// ## Why this is not "the model releasing its own gate"
+    ///
+    /// The only caller is the arm below a resolved
+    /// [`crate::clarification::ask`], which refuses outright on an unattended
+    /// run and on any turn with no channel to reach a person
+    /// (`ask.rs::HEADLESS_DENIAL`), and `request_approval` refuses earlier
+    /// still when no approval transport is wired at all. So reaching this
+    /// function means a human saw the persisted plan and picked "approve" off
+    /// a menu. Nothing the model can say to itself gets here.
+    ///
+    /// ## Two writes, one decision
+    ///
+    /// The in-memory gate governs the REST OF THIS TURN (the next tool call
+    /// runs at the restored tier — that is the whole point of a handoff), and
+    /// the session write governs every later turn and every attached client.
+    /// They are done here, together, because 判据 §0 has already collected the
+    /// bill for terminal side effects that live on only one of an action's
+    /// arms.
+    ///
+    /// Order is deliberate: the gate opens FIRST. A store that is down must
+    /// not veto a decision the human already made; it downgrades the handoff
+    /// to "this turn only", and the message says so rather than leaving the
+    /// model to discover it next turn.
+    async fn release_plan_gate(&self, decision: &str) -> Option<String> {
+        if decision != DECISION_APPROVED {
+            return None;
+        }
+        let gate = crate::tools::turn_context::current_plan_gate()?;
+        // `release` is one-shot: a model that asks for approval twice in one
+        // turn gets one handoff sentence and one session write.
+        if !gate.release() {
+            return None;
+        }
+        let restore = gate.restore_to();
+        let persisted = self.clear_session_exec_tier().await;
+        info!(
+            restore_tier = restore.id(),
+            persisted, "Plan approved — read-only planning gate released"
+        );
+        Some(if persisted {
+            format!(
+                "Planning is over: the read-only gate is lifted for this conversation \
+                 (execution tier `{}`), effective immediately — your next tool call \
+                 already runs under it. Work the checklist and keep it ticked off.",
+                restore.id()
+            )
+        } else {
+            format!(
+                "Planning is over for THIS TURN: the read-only gate is lifted (execution \
+                 tier `{}`) but the choice could not be written to the session, so a \
+                 later turn may start planning again. Get as far as you can now, and \
+                 tell the user they may need to leave plan mode from the composer.",
+                restore.id()
+            )
+        })
+    }
+
+    /// Clear this session's `exec_tier` override, returning `true` on success.
+    ///
+    /// Clearing rather than pinning the restored tier: the gate's
+    /// `restore_to` was itself derived with the session's `plan` taken out of
+    /// the running, so "no override" resolves to the same value on the next
+    /// turn — and keeps following `[policies] exec_tier` if the operator moves
+    /// it later, which a pin would silently stop doing. `null` is the
+    /// established clear-an-override convention on this carrier
+    /// (`sessions.patch`'s `first_invalid_knob` documents it).
+    ///
+    /// The write also emits `session.updated`, which is how the Panel's tier
+    /// pill learns that the conversation stopped planning: it re-reads the
+    /// session list on that frame and adopts the dials it reports. No
+    /// plan-specific client wiring — the knob-sync path that already exists
+    /// carries it.
+    async fn clear_session_exec_tier(&self) -> bool {
+        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+        use crate::gateway::router::SessionKey as LegacySessionKey;
+        use crate::gateway::session_store::types::SessionPatch;
+
+        let Some(store) = self.session_store.as_ref() else {
+            return false;
+        };
+        let key_str = self.current_session_key().await;
+        let Some(key) = LegacySessionKey::from_key_string(&key_str) else {
+            return false;
+        };
+        let patch = SessionPatch {
+            metadata: Some(serde_json::json!({ EXEC_TIER_SESSION_KEY: serde_json::Value::Null })),
+            ..Default::default()
+        };
+        match store.patch_session(&key, &patch).await {
+            Ok(updated) => updated,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to clear session exec tier after plan approval");
+                false
             }
         }
     }
@@ -691,6 +1034,262 @@ fn derive_default_project_id(session_key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- plan approval (`action='request_approval'`) --------------------
+
+    fn snapshot() -> ScratchpadSnapshot {
+        ScratchpadSnapshot {
+            objective: Some("Ship auth".into()),
+            items: vec![
+                PlanItem {
+                    text: "Design".into(),
+                    status: PlanItemStatus::Done,
+                },
+                PlanItem {
+                    text: "Build".into(),
+                    status: PlanItemStatus::InProgress,
+                },
+                PlanItem {
+                    text: "Test".into(),
+                    status: PlanItemStatus::Pending,
+                },
+            ],
+        }
+    }
+
+    fn answer(value: &str, custom: bool) -> ClarificationResult {
+        ClarificationResult::answered(vec![crate::clarification::ClarificationAnswer {
+            question_id: "plan_approval".into(),
+            selected_indices: if custom { vec![] } else { vec![0] },
+            value: value.into(),
+        }])
+    }
+
+    /// What the human reads is the plan as PERSISTED — objective, every step,
+    /// and each step's real status. That is the whole reason this is an action
+    /// on `scratchpad` rather than an `ask_user` the model types a plan into:
+    /// a retyped plan is a second representation, free to flatter the first.
+    #[test]
+    fn the_card_shows_the_persisted_plan_with_its_real_statuses() {
+        let rendered = render_plan_for_approval(&snapshot(), Some("  heads up  "));
+        assert!(rendered.contains("**Objective:** Ship auth"), "{rendered}");
+        assert!(rendered.contains("1. [x] Design"), "{rendered}");
+        assert!(rendered.contains("2. [~] Build"), "{rendered}");
+        assert!(rendered.contains("3. [ ] Test"), "{rendered}");
+        assert!(rendered.contains("heads up"), "{rendered}");
+        assert!(
+            rendered.trim_end().ends_with("Approve this plan?"),
+            "{rendered}"
+        );
+    }
+
+    /// A blank note is not a blank line: an approval card is read at a glance,
+    /// and vertical noise is what makes the plan hard to scan.
+    #[test]
+    fn a_blank_note_renders_identically_to_no_note() {
+        assert_eq!(
+            render_plan_for_approval(&snapshot(), Some("   ")),
+            render_plan_for_approval(&snapshot(), None)
+        );
+        assert!(
+            !render_plan_for_approval(&snapshot(), None).contains("\n\n\n"),
+            "no run of blank lines"
+        );
+    }
+
+    // ---- plan → build handoff (`release_plan_gate`) ----------------------
+
+    /// Run `f` with a plan gate installed on the turn, as a planning run has.
+    async fn with_gate<F, T>(
+        restore: crate::config::types::policies::ExecTier,
+        f: impl FnOnce(Arc<crate::tools::plan_gate::PlanGate>) -> F,
+    ) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        let gate = Arc::new(crate::tools::plan_gate::PlanGate::new(restore));
+        let ctx = crate::tools::turn_context::TurnContext {
+            session_key: crate::routing::session_key::SessionKey::main("planner"),
+            run_id: String::new(),
+            channel_id: "test".to_string(),
+            conversation_id: "conv".to_string(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: false,
+            plan_gate: Some(Arc::clone(&gate)),
+        };
+        crate::tools::turn_context::TURN_CONTEXT
+            .scope(ctx, f(gate))
+            .await
+    }
+
+    /// The handoff fires on exactly one verdict. `revise` and `rejected` are
+    /// the two answers a human gives when the work must NOT start, so a gate
+    /// that lifted on either of them would be worse than no gate at all.
+    #[tokio::test]
+    async fn only_an_approval_lifts_the_planning_gate() {
+        use crate::config::types::policies::ExecTier;
+
+        for verdict in [DECISION_REVISE, "rejected", "timeout", "cancelled"] {
+            with_gate(ExecTier::Auto, |gate| async move {
+                let tool = ScratchpadTool::new();
+                assert!(tool.release_plan_gate(verdict).await.is_none());
+                assert!(
+                    !gate.is_released(),
+                    "`{verdict}` must leave the conversation planning"
+                );
+            })
+            .await;
+        }
+
+        with_gate(ExecTier::Auto, |gate| async move {
+            let tool = ScratchpadTool::new();
+            let handoff = tool
+                .release_plan_gate(DECISION_APPROVED)
+                .await
+                .expect("an approval hands off");
+            assert!(gate.is_released());
+            assert!(handoff.contains("auto"), "{handoff}");
+            assert_eq!(gate.tier(), ExecTier::Auto);
+        })
+        .await;
+    }
+
+    /// Asking twice in one turn is one handoff. The sentence and the session
+    /// write ride on the first release, and a second "approved" must not
+    /// re-announce a transition that already happened.
+    #[tokio::test]
+    async fn the_handoff_happens_once_per_turn() {
+        with_gate(
+            crate::config::types::policies::ExecTier::Auto,
+            |_gate| async move {
+                let tool = ScratchpadTool::new();
+                assert!(tool.release_plan_gate(DECISION_APPROVED).await.is_some());
+                assert!(tool.release_plan_gate(DECISION_APPROVED).await.is_none());
+            },
+        )
+        .await;
+    }
+
+    /// On a conversation that was never planning there is nothing to hand off,
+    /// and approval stays the advisory checkpoint it was designed as — the
+    /// message is byte-identical to what it has always been.
+    #[tokio::test]
+    async fn approval_without_a_plan_gate_is_the_advisory_checkpoint_it_always_was() {
+        let tool = ScratchpadTool::new();
+        assert!(tool.release_plan_gate(DECISION_APPROVED).await.is_none());
+        assert_eq!(
+            approval_message(DECISION_APPROVED, None, None),
+            "Plan approved — start working the list."
+        );
+    }
+
+    /// …and when there IS a handoff, the model is told in the same breath as
+    /// the verdict. A transition it only finds out about by trying a tool is
+    /// a transition it will not try.
+    #[test]
+    fn the_approval_message_carries_the_handoff_when_one_happened() {
+        let msg = approval_message(DECISION_APPROVED, None, Some("Planning is over: go."));
+        assert!(msg.contains("start working the list"), "{msg}");
+        assert!(msg.contains("Planning is over"), "{msg}");
+    }
+
+    #[test]
+    fn listed_verdicts_come_back_verbatim_with_no_feedback() {
+        for (value, _) in APPROVAL_CHOICES {
+            let (decision, feedback) = verdict_of(&answer(value, false));
+            assert_eq!(decision, value);
+            assert!(feedback.is_none(), "a picked verdict carries no revision");
+        }
+    }
+
+    /// Free text is the fourth outcome the menu does not list: it IS the
+    /// revision, so the human never has to pick "Revise" and then type it.
+    #[test]
+    fn free_text_becomes_a_revision_carrying_what_they_wrote() {
+        let (decision, feedback) = verdict_of(&answer("do step 3 first", true));
+        assert_eq!(decision, DECISION_REVISE);
+        assert_eq!(feedback.as_deref(), Some("do step 3 first"));
+        assert!(approval_message(&decision, feedback.as_deref(), None).contains("do step 3 first"));
+
+        // Whitespace-only free text is a revision with nothing to act on, not
+        // a revision whose detail is a blank string.
+        let (decision, feedback) = verdict_of(&answer("   ", true));
+        assert_eq!(decision, DECISION_REVISE);
+        assert!(feedback.is_none());
+        assert!(approval_message(&decision, None, None).contains("ask what to change"));
+    }
+
+    /// Silence is the outcome most easily misread as consent, and this gate is
+    /// advisory — nothing downstream blocks on it — so the wording is the only
+    /// thing between "nobody answered" and "nobody objected".
+    #[test]
+    fn a_timeout_says_unreviewed_not_approved() {
+        let (decision, feedback) = verdict_of(&ClarificationResult::timeout());
+        assert_eq!(decision, "timeout");
+        assert!(feedback.is_none());
+        let message = approval_message(&decision, None, None);
+        assert!(message.contains("UNREVIEWED"), "{message}");
+        assert!(
+            message.contains("do not treat silence as approval"),
+            "{message}"
+        );
+        assert!(!message.to_lowercase().contains("approved —"), "{message}");
+    }
+
+    #[test]
+    fn a_cancelled_request_reports_no_verdict() {
+        let (decision, _) = verdict_of(&ClarificationResult::cancelled());
+        assert_eq!(decision, "cancelled");
+        assert!(approval_message(&decision, None, None).contains("unreviewed"));
+    }
+
+    /// An `Answered` with no answers cannot be built by
+    /// `ClarificationResult::answered`, but inventing a verdict is the one
+    /// outcome worth refusing outright.
+    #[test]
+    fn an_answer_less_answered_result_is_not_read_as_approval() {
+        let empty = ClarificationResult::answered(vec![]);
+        assert_eq!(verdict_of(&empty).0, "cancelled");
+    }
+
+    /// Without the two handles there is no way to reach a human. Saying so is
+    /// the same shape as the headless refusal one layer down — never a silent
+    /// success, and never a pretend question.
+    #[tokio::test]
+    async fn request_approval_without_a_wired_gate_says_so() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let manager = ScratchpadManager::with_dir(tmp.path().to_path_buf(), "sess");
+        let err = ScratchpadTool::new()
+            .request_approval(&manager, None)
+            .await
+            .expect_err("no gate wired must be an error");
+        assert!(err.to_string().contains("no human-approval gate"), "{err}");
+    }
+
+    /// Nothing to approve is a caller error the model can fix in one step, not
+    /// an empty card for a human to stare at.
+    #[tokio::test]
+    async fn request_approval_refuses_when_there_is_no_plan() {
+        // `with_dir`, not `new`: `new` resolves `ALEPH_HOME`, and a test that
+        // sets a process-global env var is a test that fails only when the
+        // suite runs in parallel.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let tool = ScratchpadTool::new().with_clarification(
+            Arc::new(crate::clarification::ClarificationManager::new()),
+            Arc::new(crate::gateway::channel_registry::ChannelRegistry::new()),
+        );
+        let manager = ScratchpadManager::with_dir(tmp.path().to_path_buf(), "sess");
+        manager
+            .initialize(Some("objective only"))
+            .await
+            .expect("initialize");
+        let err = tool
+            .request_approval(&manager, None)
+            .await
+            .expect_err("an empty plan must be refused");
+        assert!(err.to_string().contains("no plan to approve"), "{err}");
+    }
 
     #[test]
     fn plan_snapshot_dto_maps_three_states_and_completion() {

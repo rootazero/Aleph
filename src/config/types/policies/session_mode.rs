@@ -318,10 +318,7 @@ impl SessionMode {
 /// A mode as offered to a user surface (Panel / CLI / bot). Core owns the
 /// IDENTITY (id set + order + every partition rule behind it), never the
 /// copy — same contract as [`super::exec_tier::TierPreset`] (R4/R6).
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct ModePreset {
-    pub id: &'static str,
-}
+pub type ModePreset = super::DialPreset;
 
 /// The three built-in modes, in display order.
 #[must_use]

@@ -10,6 +10,7 @@ pub mod chat_sidebar;
 pub mod command_palette;
 pub mod connection_status;
 pub mod dashboard_sidebar;
+pub mod dial_labels;
 pub mod directory_browser;
 pub mod exec_tier_labels;
 pub mod extensions;

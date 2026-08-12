@@ -51,14 +51,6 @@ const fn default_background_interval_seconds() -> u32 {
     3600
 }
 
-impl CompressionPolicy {
-    /// Get background interval as `std::time::Duration`
-    #[must_use]
-    pub const fn background_interval_duration(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.background_interval_seconds as u64)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,11 +78,8 @@ mod tests {
     }
 
     #[test]
-    fn test_duration_helpers() {
+    fn test_background_interval_seconds_default() {
         let compression = CompressionPolicy::default();
-        assert_eq!(
-            compression.background_interval_duration(),
-            std::time::Duration::from_secs(3600)
-        );
+        assert_eq!(compression.background_interval_seconds, 3600);
     }
 }

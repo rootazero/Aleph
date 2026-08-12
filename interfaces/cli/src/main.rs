@@ -118,7 +118,13 @@ async fn run() -> CliResult<()> {
 
     match cli.command {
         Some(cmd) => dispatch(cmd, &server_url, &config, json, cli.verbose).await?,
-        None => commands::chat::run(&server_url, None, None, &config, cli.verbose).await?,
+        // A bare `aleph` opens a NEW conversation, never yesterday's. Continuing
+        // is opt-in (`aleph chat --continue`), matching codex `resume` and pi
+        // `--continue`: silently appending to whatever was last active is the
+        // one default that cannot be undone by the user noticing.
+        None => {
+            commands::chat::run(&server_url, None, None, false, &config, cli.verbose).await?;
+        }
     }
 
     Ok(())
@@ -175,11 +181,16 @@ async fn dispatch(
             )
             .await
         }
-        Commands::Chat { session, agent } => {
+        Commands::Chat {
+            session,
+            agent,
+            continue_last,
+        } => {
             commands::chat::run(
                 server_url,
                 agent.as_deref(),
                 session.as_deref(),
+                continue_last,
                 config,
                 verbose,
             )

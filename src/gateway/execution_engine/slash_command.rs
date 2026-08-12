@@ -369,7 +369,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         use crate::config::types::policies::{effective_permission, ToolFacts};
         use crate::extension::PermissionAction;
 
-        let (exec_tier, tool_permissions) = self.resolve_turn_permissions(request, agent).await;
+        // `plan_gate` is deliberately dropped: the fast path enforces nothing
+        // (it only DECLINES the shortcut), and a plan-mode slash call resolves
+        // to `Deny` on the very next line, which is a fallthrough reason. The
+        // full loop then re-evaluates it with the run's own gate — the one
+        // that a plan approval can actually lift.
+        let super::turn_permissions::TurnPermissions {
+            tier: exec_tier,
+            explicit: tool_permissions,
+            plan_gate: _,
+        } = self.resolve_turn_permissions(request, agent).await;
         // The permissions resolver above persists a request-carried tier onto
         // the session as a side effect (stamp-on-carry). The mode and
         // think-level twins carry the same contract, and a fast-path dispatch
@@ -378,11 +387,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // riding a slash message is not silently dropped.
         let _ = self.resolve_turn_mode(request).await;
         let _ = self.resolve_turn_think_level(request).await;
-        // The plan phase is NOT one of those "resolve for the side effect"
-        // calls: the fast path dispatches a real tool, so the read-only floor
-        // has to hold here or `/bash` is a documented way around it. It is fed
-        // into `effective_permission` below exactly like the tier.
-        let plan_phase = self.resolve_turn_plan_phase(request).await;
         let caller_role = request.metadata.get("caller_role").map(String::as_str);
         let caller_is_operator = crate::tools::turn_context::role_is_operator(caller_role);
 
@@ -397,12 +401,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
             requires_approval: crate::security::dangerous_tools::is_confirmation_gated(name),
         };
-        let permission = effective_permission(
-            tool_permissions.as_ref(),
-            Some(exec_tier),
-            plan_phase,
-            facts,
-        );
+        let permission = effective_permission(tool_permissions.as_ref(), Some(exec_tier), facts);
 
         if permission != PermissionAction::Allow {
             return Some(format!(
@@ -410,24 +409,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 exec_tier.id()
             ));
         }
-        // The argument-keyed half of the read-only planning floor, for the same
-        // reason the tier's destructive filter is re-asked below: the name-keyed
-        // pass above cannot tell `/file_ops delete` from `/file_ops list`, and
-        // the handoff must never take its approval on a path that raises no
-        // card. Both non-`Admitted` verdicts fall through to the agent loop,
-        // where `ScopedToolService` refuses with a reason or raises the card.
-        if plan_phase.admits(name, arguments, facts.idempotent)
-            != crate::config::types::policies::PlanAdmission::Admitted
-        {
-            return Some(format!(
-                "`/{name}` is not admissible while the session is planning"
-            ));
-        }
         // The argument-keyed filter: `file_ops` hides `delete` behind the same
-        // name as `list`, so no name-keyed rule can see it.
+        // name as `list`, so no name-keyed rule can see it. Includes the floor
+        // (`ExecTier::floor_asks_for_arguments`), which is why this clause
+        // fires at `full` too — `/self_config` writing the approval settings
+        // has to reach the gated path whatever the tier says.
         if exec_tier.asks_for_arguments(name, arguments) {
             return Some(format!(
-                "`/{name}` arguments trip the tier's destructive filter"
+                "`/{name}` arguments trip the tier's destructive filter or the \
+                 gate-removal floor"
             ));
         }
         // Declared `requires_confirmation` gates at EVERY tier, including Full.

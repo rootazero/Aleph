@@ -24,8 +24,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
-use shared_ui_logic::state::session_dials_for_send;
-
 use super::super::state::ChatState;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::context::DashboardState;
@@ -123,16 +121,13 @@ fn transcribe_and_send(
                     chat.active_project_root.try_get_untracked().flatten()
                 };
                 let mo = chat.selected_model.try_get_untracked().flatten();
-                // Through the shared rule, not a local copy of it — see the
-                // sibling voice path in `views/voice/mod.rs` for why. The
-                // `try_get_untracked().flatten()` shape is preserved: this runs
-                // after a possible dispose, and a panic here would swallow the
-                // utterance the user already finished speaking.
-                let dials = session_dials_for_send(
+                // One rule for all four send paths. This path used to
+                // re-implement the first-send-only carriage inline, which is
+                // how it ended up carrying two of the dials and not the other
+                // two once there were four.
+                let dials = shared_ui_logic::state::session_dials_for_send(
                     sk.is_some(),
-                    chat.session_exec_tier.try_get_untracked().flatten(),
-                    chat.session_mode.try_get_untracked().flatten(),
-                    chat.session_plan_phase.try_get_untracked().flatten(),
+                    &chat.session_knobs(),
                 );
                 // Bind to the conversation active at send time (I1), same as the
                 // typed-send path in `composer/mod.rs`.
@@ -146,9 +141,7 @@ fn transcribe_and_send(
                     pr.as_deref(),
                     room_project_id.as_deref(),
                     mo.as_ref(),
-                    dials.exec_tier.as_deref(),
-                    dials.session_mode.as_deref(),
-                    dials.plan_phase.as_deref(),
+                    &dials,
                     // Dictated speech: arm the voice-mode prompt layer + model pin.
                     true,
                 )

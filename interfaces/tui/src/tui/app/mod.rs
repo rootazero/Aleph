@@ -13,7 +13,7 @@ mod tests;
 
 use std::time::{Duration, Instant};
 
-use aleph_protocol::RunSummary;
+use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
 use super::command_tree::{CommandEntry, DisplayEntry};
@@ -72,10 +72,6 @@ pub enum Action {
     PaletteDown,
     /// Confirm current palette selection
     PaletteConfirm,
-
-    // -- Dialog --
-    /// Select a dialog option by index
-    DialogSelect(usize),
 
     // -- Dialog response --
     /// Answer an `AskUser` dialog. Routed to `clarification.resolve` keyed by
@@ -172,6 +168,19 @@ pub enum ChatMessage {
 // ---------------------------------------------------------------------------
 
 /// State for the `AskUser` confirmation dialog.
+///
+/// # Why there is a text buffer here
+///
+/// The overlay used to render a menu and nothing else. A question with no
+/// choices — `ask_user` accepts one, and free text is *always* a legal answer
+/// even when choices are offered — arrived as an options list of length zero,
+/// so `Enter` resolved `options.get(selected)` to `None` and did nothing, every
+/// digit key fell through, and `Esc` is deliberately swallowed for this overlay
+/// (the run is parked on a oneshot). The result was an unanswerable modal
+/// holding the whole TUI: the ways out were Ctrl+C (cancel the run) and
+/// Ctrl+C twice / Ctrl+D (quit) — abandoning the work was possible, answering
+/// the question was not. A parking tool's client must be able to produce every
+/// answer the server accepts.
 #[derive(Debug, Clone)]
 pub struct DialogState {
     /// Clarification registry key — the answer is posted back to
@@ -181,6 +190,79 @@ pub struct DialogState {
     pub question: String,
     pub options: Vec<String>,
     pub selected: usize,
+    /// Several picks are accepted, comma-separated.
+    pub multi_select: bool,
+    /// The answer is a credential: the buffer is rendered masked and never
+    /// echoed. Purely a display property here — the transport rule that makes
+    /// `secret` load-bearing is enforced server-side in `clarification::ask`,
+    /// which is why a secret question can only ever reach this overlay.
+    pub secret: bool,
+    /// The typed answer, sent verbatim. Core's `interpret_reply` is the only
+    /// interpreter, so a typed `2` and a pressed `2` are the same bytes.
+    pub input: String,
+    /// Keys go to [`Self::input`] rather than the menu.
+    ///
+    /// Structural at open time (see [`DialogState::has_quick_pick`]) and
+    /// toggled by Tab afterwards, so it cannot be derived from
+    /// `input.is_empty()`: clearing the buffer would silently drop a free-text
+    /// question back into a menu it does not have.
+    pub typing: bool,
+}
+
+impl DialogState {
+    /// Whether one keypress can answer the question outright.
+    ///
+    /// Mirrors the server's own rule for suppressing an inline keyboard
+    /// (`clarification::render::keyboard_for`): a single index cannot express a
+    /// multi-select answer, so offering one would render a control that
+    /// silently answers less than the question asks. Same predicate, so the
+    /// terminal and a messaging channel cannot disagree about it.
+    #[must_use]
+    pub const fn has_quick_pick(&self) -> bool {
+        !self.options.is_empty() && !self.multi_select
+    }
+
+    /// The reply `Enter` would send right now, if any.
+    ///
+    /// Driven by the mode, not by whether the buffer happens to be empty: a
+    /// user who typed something and then tabbed back to the menu means the
+    /// menu, and a blank buffer in text mode means "nothing to send yet"
+    /// rather than "send the highlight".
+    ///
+    /// A pick sends the **1-based index**, not the label. Labels carry their
+    /// `— description` suffix, and core's `interpret_reply` matches labels
+    /// exactly, so a described choice sent by label arrives as free text with
+    /// no selected index — the answer looks right to a human and is `custom`
+    /// to the model. The index is also byte-identical to what the Panel and a
+    /// channel's `clarify:<n>` button send, which keeps `interpret_reply` the
+    /// single interpreter for all three surfaces.
+    #[must_use]
+    pub fn pending_reply(&self) -> Option<String> {
+        if self.typing {
+            let typed = self.input.trim();
+            return (!typed.is_empty()).then(|| typed.to_string());
+        }
+        (self.selected < self.options.len()).then(|| (self.selected + 1).to_string())
+    }
+}
+
+/// The question an `AskUser` frame is asking, flattened for the overlay.
+///
+/// A struct rather than four positional arguments because two of them are
+/// adjacent bools: `show_dialog(key, q, opts, true, false)` reads identically
+/// whichever way round the last two go, and one of them decides whether the
+/// answer is masked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskDialogView {
+    /// Prompt as rendered — position marker, header chip, and hint included.
+    pub question: String,
+    /// Choice labels, already carrying their `— description` suffix. Empty for
+    /// a free-text question.
+    pub options: Vec<String>,
+    /// Several picks accepted.
+    pub multi_select: bool,
+    /// Mask the typed answer.
+    pub secret: bool,
 }
 
 /// Every decision the overlay knows how to render, in display order. Each is
@@ -253,10 +335,36 @@ pub struct ApprovalState {
 #[derive(Debug, Clone)]
 pub struct PaletteState {
     pub input: String,
+    /// The argument tail of `input` — everything after the first whitespace,
+    /// when the part before it was enough to narrow the list on its own (see
+    /// [`super::command_tree::split_palette_input`]).
+    ///
+    /// Resolved by `recompute_palette_filter` at the same moment as
+    /// `filtered`, and read by the confirm path, so the two cannot disagree
+    /// about whether a word was a search term or an argument.
+    pub args: String,
     pub filtered: Vec<DisplayEntry>,
     pub selected: usize,
     /// Stack of namespace names we have browsed into (e.g. `["session"]`)
     pub namespace_stack: Vec<String>,
+}
+
+impl PaletteState {
+    /// The command line to run for the current selection: the selected
+    /// entry's `full_command`, plus whatever arguments the input carried.
+    ///
+    /// `None` when the filter matched nothing — confirming an empty list is a
+    /// no-op, not a guess.
+    #[must_use]
+    pub fn selected_command(&self) -> Option<String> {
+        let entry = self.filtered.get(self.selected)?;
+        let command = entry.full_command.trim();
+        Some(if self.args.is_empty() {
+            command.to_string()
+        } else {
+            format!("{command} {}", self.args)
+        })
+    }
 }
 
 /// A single browsable session in the resume/switch picker.
@@ -285,6 +393,29 @@ pub struct SessionPickerState {
 
 /// Central application state. Owned by the main loop, mutated through
 /// methods that enforce invariants (e.g. `auto_scroll` toggling).
+/// Which per-session knob a local command just wrote.
+///
+/// One enum rather than five setters so the status bar and the write paths
+/// enumerate the same list — a knob added here without a renderer is a compile
+/// error in the `match`, not a silently invisible setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKnob {
+    Mode,
+    ExecTier,
+    ThinkLevel,
+    MemoryMode,
+}
+
+/// The four session knobs as the status bar reads them. Borrowed from the
+/// snapshot so the renderer cannot hold a stale copy across an attach.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionKnobs<'a> {
+    pub mode: Option<&'a str>,
+    pub exec_tier: Option<&'a str>,
+    pub think_level: Option<&'a str>,
+    pub memory_mode: Option<&'a str>,
+}
+
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
@@ -298,8 +429,26 @@ pub struct AppState {
 
     // -- Session / model --
     pub session_key: String,
+    /// The model name to display. Seeded from the gateway's default provider at
+    /// launch and replaced by the conversation's own model the moment a
+    /// [`SessionSnapshot`] arrives — a thread pinned with `select_model` must
+    /// not be captioned with the install-wide default it overrode.
     pub model_name: String,
+    /// Fallback model caption: the gateway's default-provider model, kept so a
+    /// snapshot that names no model (a conversation that has not run yet) can
+    /// restore the caption instead of leaving whatever the previous session had.
+    default_model_name: String,
     pub total_tokens: u64,
+    /// The conversation's durable settings as the server last reported them
+    /// (`chat.history`'s `session` object). `None` until the first attach — and
+    /// `None` is read as "the server has not told me", never as "nothing is
+    /// set": an unset knob and an unknown knob look identical to a user, but
+    /// only one of them is safe to render as a concrete value.
+    ///
+    /// Stored whole rather than fanned out into sibling fields: the snapshot is
+    /// one fact with one producer, and six copies of it are six chances for a
+    /// `switch_session` to reset five of them.
+    pub session_snapshot: Option<SessionSnapshot>,
     /// Live context-window occupancy `(used_tokens, window_tokens)` from the
     /// latest `ContextGauge` event. `None` until the session's first gauge
     /// arrives. The pair always travels together (one event), so a single
@@ -376,8 +525,16 @@ pub struct AppState {
 impl AppState {
     /// Create a new `AppState` with a welcome system message.
     pub fn new(session_key: String, model_name: String) -> Self {
+        // An empty key is not a key — it means "the gateway has not routed this
+        // conversation yet". Printing it verbatim renders `Session:  |`, which
+        // reads like a bug; naming the state reads like the truth.
+        let session_line = if session_key.is_empty() {
+            "Session: new (the gateway names it on your first message)".to_string()
+        } else {
+            format!("Session: {session_key}")
+        };
         let welcome = format!(
-            "Welcome to Aleph CLI. Session: {session_key} | Model: {model_name}. Type /help for commands.",
+            "Welcome to Aleph CLI. {session_line} | Model: {model_name}. Type /help for commands."
         );
         Self {
             messages: vec![ChatMessage::System { content: welcome }],
@@ -388,8 +545,10 @@ impl AppState {
             history_index: None,
 
             session_key,
+            default_model_name: model_name.clone(),
             model_name,
             total_tokens: 0,
+            session_snapshot: None,
             context_gauge: None,
             cache_stat: None,
             cache_stat_agent: None,
@@ -558,12 +717,17 @@ impl AppState {
             return all;
         }
         let filter_lower = filter.to_lowercase();
-        all.into_iter()
+        let mut matched: Vec<DisplayEntry> = all
+            .into_iter()
             .filter(|e| {
                 e.label.to_lowercase().contains(&filter_lower)
                     || e.hint.to_lowercase().contains(&filter_lower)
             })
-            .collect()
+            .collect();
+        // Stable sort, so catalog order survives inside each rank — see
+        // `command_tree::filter_rank` for why an exact name has to win.
+        matched.sort_by_key(|e| super::command_tree::filter_rank(&e.label, filter));
+        matched
     }
 
     /// Open the command palette, pre-populated with root-level commands.
@@ -571,6 +735,7 @@ impl AppState {
         let all = self.palette_display_entries(&[]);
         self.palette = Some(PaletteState {
             input: String::new(),
+            args: String::new(),
             filtered: all,
             selected: 0,
             namespace_stack: Vec::new(),
@@ -593,6 +758,10 @@ impl AppState {
         if let Some(palette) = &mut self.palette {
             palette.namespace_stack = new_stack;
             palette.input.clear();
+            // The args belong to the input that was just cleared; carrying
+            // them into the namespace would attach a word the user typed at
+            // one level to a command chosen at another.
+            palette.args.clear();
             palette.selected = 0;
             palette.filtered = entries;
         }
@@ -675,13 +844,23 @@ impl AppState {
 
     /// Show an `AskUser` dialog. `session_key` is the clarification key the
     /// answer resolves against (`clarification.resolve`).
-    pub fn show_dialog(&mut self, session_key: String, question: String, options: Vec<String>) {
-        self.dialog = Some(DialogState {
+    ///
+    /// The overlay opens in text mode whenever there is nothing to quick-pick,
+    /// so the first keystroke on a free-text (or multi-select) question already
+    /// goes where the user means it to.
+    pub fn show_dialog(&mut self, session_key: String, view: AskDialogView) {
+        let mut dialog = DialogState {
             session_key,
-            question,
-            options,
+            question: view.question,
+            options: view.options,
             selected: 0,
-        });
+            multi_select: view.multi_select,
+            secret: view.secret,
+            input: String::new(),
+            typing: false,
+        };
+        dialog.typing = !dialog.has_quick_pick();
+        self.dialog = Some(dialog);
         self.focus = Focus::Dialog;
     }
 
@@ -724,10 +903,96 @@ impl AppState {
         }
     }
 
+    /// Adopt the canonical session key the gateway reports on the `agent.run`
+    /// result.
+    ///
+    /// The gateway is the only authority on what key a run was routed to: an
+    /// explicit key that fails `SessionKey::parse` does not fail the call, it
+    /// makes `AgentRouter::route` mint a fresh epoch instead. A client that
+    /// keeps its own guess afterwards addresses a session that does not exist,
+    /// and every keyed RPC it makes (`chat.history`, `session.usage`,
+    /// `sessions.patch`, `session.compact`) answers about nothing.
+    ///
+    /// A no-op when the key is unchanged or empty, so the common path costs
+    /// nothing and a server that omits the field cannot blank the key.
+    pub fn adopt_canonical_session_key(&mut self, canonical: &str) {
+        if canonical.is_empty() || canonical == self.session_key {
+            return;
+        }
+        self.session_key = canonical.to_string();
+        // The settings we hold describe the key we just replaced. Dropping them
+        // makes the status bar say "unknown" until the next attach, which is
+        // true; keeping them would make it confidently describe someone else's
+        // conversation.
+        self.session_snapshot = None;
+    }
+
+    /// Restore this conversation's durable settings from the server's snapshot.
+    ///
+    /// Called on attach (`chat.history`) and after a session switch. Everything
+    /// here is read back, never invented: the cumulative token count comes from
+    /// the `sessions` row rather than from this process's own tally, which is
+    /// why reopening a terminal mid-task no longer restarts the counter at 0.
+    pub fn apply_session_snapshot(&mut self, snapshot: SessionSnapshot) {
+        self.session_key = snapshot.session_key.clone();
+        self.total_tokens = u64::try_from(snapshot.total_tokens).unwrap_or(0);
+        self.model_name = snapshot
+            .effective_model()
+            .map_or_else(|| self.default_model_name.clone(), str::to_string);
+        self.session_snapshot = Some(snapshot);
+    }
+
+    /// The conversation's usage mode, exec tier, thinking depth and memory mode
+    /// as the status bar renders them.
+    ///
+    /// `None` in the tuple means the session follows the global default — the
+    /// renderer prints nothing rather than guessing which default is live,
+    /// because the TUI does not read the server's config and a guess would be
+    /// indistinguishable from a fact.
+    #[must_use]
+    pub fn session_knobs(&self) -> SessionKnobs<'_> {
+        let snap = self.session_snapshot.as_ref();
+        SessionKnobs {
+            mode: snap.and_then(|s| s.mode.as_deref()),
+            exec_tier: snap.and_then(|s| s.exec_tier.as_deref()),
+            think_level: snap.and_then(|s| s.think_level.as_deref()),
+            memory_mode: snap.and_then(|s| s.memory_mode.as_deref()),
+        }
+    }
+
+    /// Locally record a knob the user just changed, so the status bar reflects
+    /// it before the next attach re-reads it from the server.
+    ///
+    /// Only ever called after the write RPC returned `Ok` — an optimistic
+    /// update on a refused write is exactly the "confident false answer" the
+    /// snapshot exists to prevent. `field` selects which knob; the value is
+    /// `None` for "follow global".
+    pub fn record_local_knob(&mut self, field: SessionKnob, value: Option<String>) {
+        let snap = self
+            .session_snapshot
+            .get_or_insert_with(|| SessionSnapshot {
+                session_key: self.session_key.clone(),
+                ..SessionSnapshot::default()
+            });
+        match field {
+            SessionKnob::Mode => snap.mode = value,
+            SessionKnob::ExecTier => snap.exec_tier = value,
+            SessionKnob::ThinkLevel => snap.think_level = value,
+            SessionKnob::MemoryMode => snap.memory_mode = value,
+        }
+    }
+
     /// Switch to a different session and reset transient chat/run UI state.
     /// The caller then appends the fetched `chat.history` transcript.
     pub fn switch_session(&mut self, session_key: &str) {
         self.session_key = session_key.to_string();
+        // Per-conversation facts, and this component is a singleton: a counter
+        // that survives the switch reports the previous conversation's spend
+        // under the new one's name. The caller restores the real figures from
+        // the incoming snapshot immediately after.
+        self.total_tokens = 0;
+        self.session_snapshot = None;
+        self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
         self.current_run = None;
         self.run_started_at = None;

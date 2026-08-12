@@ -149,6 +149,8 @@ mod tests {
             session_key: "sess-1".to_string(),
             question: "Delete it?".to_string(),
             options: vec![],
+            questions: vec![],
+            answered: 0,
         };
         let n = notification_for(&f).expect("ask_user notifies");
         assert_eq!(n.title, "Aleph has a question");
@@ -164,6 +166,8 @@ mod tests {
             session_key: "sess-1".to_string(),
             question: "   ".to_string(),
             options: vec![],
+            questions: vec![],
+            answered: 0,
         };
         assert_eq!(
             notification_for(&f).unwrap().body,
@@ -262,6 +266,8 @@ mod tests {
             session_key: "sess-1".to_string(),
             question: "Proceed?".to_string(),
             options: vec![],
+            questions: vec![],
+            answered: 0,
         };
         assert!(approval_for(&f).is_none());
     }

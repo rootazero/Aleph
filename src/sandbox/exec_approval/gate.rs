@@ -37,6 +37,30 @@ pub enum ApprovalOutcome {
     ApprovedAlways,
     Denied,
     Timeout,
+    /// Fail-closed because **nobody could be asked** — no approval transport is
+    /// wired, the channel refused or failed the delivery, no route resolves, or
+    /// the run is unattended.
+    ///
+    /// # Why this is not `Denied`
+    ///
+    /// A refusal and the absence of a decision are different facts, and every
+    /// consumer downstream of this enum was reading the first when it was handed
+    /// the second. [`DenialLedger`] makes a `Denied` **sticky for the action for
+    /// the rest of the session** and advances the brute-force breaker; the model
+    /// is told "the user already declined this exact action". None of that is
+    /// true when a Telegram delivery timed out. Three such hiccups paused the
+    /// session, and the sentence the model relayed to the user was a lie about
+    /// something the user never did.
+    ///
+    /// The ledger already draws exactly this line for [`DenialReason::Timeout`]
+    /// ("a timeout is not a decision") — this variant is what lets the same rule
+    /// reach the refusals that arrive labelled as a person's answer. Security
+    /// posture is unchanged: [`Self::is_approved`] is false, so every one of
+    /// these still fails closed.
+    ///
+    /// [`DenialLedger`]: super::denial_ledger::DenialLedger
+    /// [`DenialReason::Timeout`]: super::denial_ledger::DenialReason::Timeout
+    Unavailable,
 }
 
 impl ApprovalOutcome {
@@ -114,7 +138,42 @@ impl ApprovalGate {
         *self.requester.write().unwrap_or_else(|e| e.into_inner()) = Some(requester);
     }
 
+    /// Put `action` in front of a human and wait for their answer.
+    ///
+    /// # The unattended tax
+    ///
+    /// An unattended run — a goal / loop continuation, a heartbeat, an A2A
+    /// delegation, a cron job with no origin channel — has nobody on any
+    /// surface. Awaiting a card there buys nothing: the card expires and the
+    /// call fails anyway, having spent the full approval timeout doing it, once
+    /// **per escalation**.
+    ///
+    /// The tool confirm gate has charged this tax since 2026-07-14
+    /// (`ScopedToolService::confirm_with_memory`). This gate — the twin that
+    /// serves sandbox capability elevation and the failover route escalation —
+    /// never did, so a headless run that asked for `allow_network` parked for
+    /// the whole timeout and was refused at the end of it. The two gates have
+    /// already been found divergent twice (the ledger key, and the approval
+    /// that closes the breaker); this is the third, and the tax belongs on the
+    /// shared chokepoint rather than at a third call site, so anything wired
+    /// here later inherits it.
+    ///
+    /// Read from the ambient [`TurnContext`], which the tool-dispatch
+    /// chokepoint scopes around every tool call and which this gate's own
+    /// channel requester already reads for routing. Absent context is treated
+    /// as **attended** — a missing signal must widen nothing, and the pre-tax
+    /// behaviour (park and ask) is the conservative side here.
+    ///
+    /// [`TurnContext`]: crate::tools::turn_context::TurnContext
     pub async fn request_approval_for_action(&self, action: &ApprovalAction) -> ApprovalResponse {
+        if crate::tools::turn_context::current_turn_context().is_some_and(|t| t.unattended) {
+            tracing::warn!(
+                tool = %action.tool_name,
+                "unattended run: refusing an approval-gated action without asking \
+                 (no human is watching this run)"
+            );
+            return ApprovalOutcome::Unavailable.into();
+        }
         // Clone the Arc out of the lock and drop the guard before awaiting —
         // a std `RwLock` guard is not `Send` and must not be held across await.
         let requester = self
@@ -125,8 +184,11 @@ impl ApprovalGate {
         match requester {
             Some(requester) => requester.request_approval(action).await,
             None => {
-                tracing::warn!("No approval requester configured, defaulting to denied");
-                ApprovalOutcome::Denied.into()
+                tracing::warn!(
+                    tool = %action.tool_name,
+                    "no approval requester configured — failing closed (nobody to ask)"
+                );
+                ApprovalOutcome::Unavailable.into()
             }
         }
     }
@@ -173,16 +235,75 @@ mod tests {
 
         let action = ApprovalAction::bare("code_exec", "allow_network");
         let gate = ApprovalGate::new(None);
-        // No requester wired → denied (never a silent auto-approve).
+        // No requester wired → fails closed (never a silent auto-approve), and
+        // as `Unavailable` rather than `Denied`: there was nobody to refuse it.
         assert_eq!(
             gate.request_approval_for_action(&action).await.outcome,
-            ApprovalOutcome::Denied
+            ApprovalOutcome::Unavailable
         );
         // Once the requester is installed, escalations reach it.
         gate.set_requester(Arc::new(AlwaysApprove));
         assert_eq!(
             gate.request_approval_for_action(&action).await.outcome,
             ApprovalOutcome::Approved
+        );
+    }
+
+    /// An unattended run never parks on a card. The requester here would say
+    /// yes, and it is never consulted — which is the point: the alternative is
+    /// the full approval timeout, per escalation, ending in a refusal anyway.
+    ///
+    /// The tool confirm gate has charged this since 2026-07-14; this gate is
+    /// the twin that did not, and the twins have already been found divergent
+    /// twice before.
+    #[tokio::test]
+    async fn an_unattended_run_is_refused_without_asking() {
+        use crate::routing::session_key::SessionKey;
+        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+
+        struct WouldApprove;
+        #[async_trait::async_trait]
+        impl ApprovalRequester for WouldApprove {
+            async fn request_approval(&self, _action: &ApprovalAction) -> ApprovalResponse {
+                ApprovalOutcome::Approved.into()
+            }
+        }
+
+        let action = ApprovalAction::bare("code_exec", "allow_network");
+        let gate = ApprovalGate::new(Some(Arc::new(WouldApprove)));
+
+        let ctx = |unattended: bool| TurnContext {
+            session_key: SessionKey::main("main"),
+            run_id: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended,
+            plan_gate: None,
+        };
+
+        // Attended (and outside any turn) still reaches the requester.
+        assert_eq!(
+            gate.request_approval_for_action(&action).await.outcome,
+            ApprovalOutcome::Approved
+        );
+        assert_eq!(
+            TURN_CONTEXT
+                .scope(ctx(false), gate.request_approval_for_action(&action))
+                .await
+                .outcome,
+            ApprovalOutcome::Approved
+        );
+
+        // Unattended fails closed as `Unavailable`, not `Denied`: nobody
+        // refused it, so the denial ledger must not make it sticky.
+        assert_eq!(
+            TURN_CONTEXT
+                .scope(ctx(true), gate.request_approval_for_action(&action))
+                .await
+                .outcome,
+            ApprovalOutcome::Unavailable
         );
     }
 }

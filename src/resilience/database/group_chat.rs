@@ -34,12 +34,20 @@ impl StateDatabase {
     // =========================================================================
 
     /// Insert a new group chat session.
+    ///
+    /// `owner_user_id` is the P1 ownership stamp captured by
+    /// `GroupChatSession::new` from `crate::scope::current_scope()`. Pass `None`
+    /// for sessions created outside any dispatch scope — this matches the
+    /// in-memory `Option<String>` shape and preserves the documented
+    /// operator-default visibility behavior at the DB layer.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_group_chat_session(
         &self,
         id: &str,
         topic: Option<&str>,
         source_channel: &str,
         source_session_key: &str,
+        owner_user_id: Option<&str>,
     ) -> Result<(), AlephError> {
         let now = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
@@ -47,13 +55,40 @@ impl StateDatabase {
             r#"
             INSERT INTO group_chat_sessions (
                 id, topic, status, source_channel, source_session_key,
-                created_at, updated_at
-            ) VALUES (?1, ?2, 'active', ?3, ?4, ?5, ?6)
+                created_at, updated_at, owner_user_id
+            ) VALUES (?1, ?2, 'active', ?3, ?4, ?5, ?6, ?7)
             "#,
-            params![id, topic, source_channel, source_session_key, now, now],
+            params![id, topic, source_channel, source_session_key, now, now, owner_user_id],
         )
         .map_err(|e| AlephError::config(format!("Failed to insert group chat session: {e}")))?;
         Ok(())
+    }
+
+    /// Read the owner_user_id stamp for a given group chat session, if any.
+    ///
+    /// Returns `Ok(None)` if the session does not exist OR was created before
+    /// the `owner_user_id` column migration ran (legacy rows are NULL by
+    /// design — see `migrate_add_group_chat_owner`). Callers should treat
+    /// both cases identically: the session has no recorded ownership stamp.
+    pub fn get_group_chat_session_owner(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, AlephError> {
+        use rusqlite::OptionalExtension;
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let owner: Option<Option<String>> = conn
+            .query_row(
+                "SELECT owner_user_id FROM group_chat_sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to read group chat session owner: {e}"
+                ))
+            })?;
+        Ok(owner.flatten())
     }
 
     /// Update the status of a group chat session.

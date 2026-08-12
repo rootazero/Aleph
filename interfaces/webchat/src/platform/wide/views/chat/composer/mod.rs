@@ -280,15 +280,10 @@ pub(crate) fn InputArea() -> impl IntoView {
         // Per-turn model override stamped on ChatState → daemon's run
         // loop short-circuits its provider-fallback chain.
         let model_override = chat.selected_model.get();
-        // The two per-session dials. The rule (tier every send, mode only on
-        // the first) is `session_dials_for_send` — shared with the phone
-        // composer, which has to agree with this one exactly.
-        let dials = session_dials_for_send(
-            session_key.is_some(),
-            chat.session_exec_tier.get(),
-            chat.session_mode.get(),
-            chat.session_plan_phase.get(),
-        );
+        // The per-session dials. The rule (tier every send, the store-owned
+        // three only on the first) is `session_dials_for_send` — shared with
+        // the phone composer, which has to agree with this one exactly.
+        let dials = session_dials_for_send(session_key.is_some(), &chat.session_knobs());
         // Capture the conversation active at *send* time. Binding the run to
         // this (rather than to whichever tab is focused when `run_accepted`
         // arrives) is what lets the user send in A, switch to B, and still have
@@ -310,9 +305,7 @@ pub(crate) fn InputArea() -> impl IntoView {
                 pr,
                 pid,
                 mo,
-                dials.exec_tier.as_deref(),
-                dials.session_mode.as_deref(),
-                dials.plan_phase.as_deref(),
+                &dials,
                 false,
             )
             .await
@@ -415,13 +408,23 @@ pub(crate) fn InputArea() -> impl IntoView {
         input_text.set(String::new());
         let dash = dashboard;
         spawn_local(async move {
-            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply).await {
-                Ok(true) => {
+            match crate::api::ClarificationApi::resolve(&dash, &ask.session_key, &reply)
+                .await
+                .map(|o| (o.accepted, o.is_finished()))
+            {
+                Ok((true, finished)) => {
                     chat.push_user_message(&reply);
-                    dash.pending_clarifications
-                        .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    // Only drop the card when the whole request is over. A
+                    // multi-question request keeps the card (re-rendered at the
+                    // new cursor by the advance frame) so the next question can
+                    // still own Enter — dropping it here would strand the rest
+                    // of the walk behind a card the user can no longer see.
+                    if finished {
+                        dash.pending_clarifications
+                            .update(|l| l.retain(|p| p.session_key != ask.session_key));
+                    }
                 }
-                Ok(false) => {
+                Ok((false, _)) => {
                     // The question is dead: drop it so it stops owning Enter,
                     // put the draft back, and send it as the ordinary message it
                     // turned out to be.
@@ -502,13 +505,8 @@ pub(crate) fn InputArea() -> impl IntoView {
         };
         let model_override = chat.selected_model.get_untracked();
         // Same rule as the typed send above. A queue flush all but always has
-        // a live session, so `mode` is None in practice.
-        let dials = session_dials_for_send(
-            session_key.is_some(),
-            chat.session_exec_tier.get_untracked(),
-            chat.session_mode.get_untracked(),
-            chat.session_plan_phase.get_untracked(),
-        );
+        // a live session, so everything but the tier is None in practice.
+        let dials = session_dials_for_send(session_key.is_some(), &chat.session_knobs());
         // Bind the run to the conversation that is active *now*, exactly as the
         // typed path does: a flush on the busy->idle settle starts a fresh run,
         // and if the user has switched tabs by the time `run_accepted` arrives,
@@ -550,9 +548,7 @@ pub(crate) fn InputArea() -> impl IntoView {
                     project_root.as_deref(),
                     room_project_id.as_deref(),
                     model_override.as_ref(),
-                    dials.exec_tier.as_deref(),
-                    dials.session_mode.as_deref(),
-                    dials.plan_phase.as_deref(),
+                    &dials,
                     false,
                 )
                 .await
@@ -1221,15 +1217,6 @@ pub(crate) fn InputArea() -> impl IntoView {
                 // on top, a toolbar row below (attach + voice on the left,
                 // clear / queue / abort / send on the right). The textarea
                 // grows up to 140px then scrolls internally.
-                // Read-only planning banner. Above the card, not inside the
-                // toolbar row: while it is up, "why did that tool get refused"
-                // is the first question the user has, and the pill alone
-                // answers "it is on" without answering "and here is how it
-                // ends". Self-hides when the session is building — which is
-                // every session that never asked to plan.
-                <Show when=move || chat.team_id.get().is_none()>
-                    <crate::views::chat::plan_phase_pill::PlanPhaseBanner />
-                </Show>
                 <div class="aleph-composer flex flex-col gap-1.5 px-3 py-2">
                     // Hidden file input. `accept` is a *hint* — the OS
                     // picker defaults to images, common video, plain
@@ -1338,12 +1325,14 @@ pub(crate) fn InputArea() -> impl IntoView {
                         <Show when=move || chat.team_id.get().is_none()>
                             <crate::views::chat::mode_picker::ModePicker />
                             <crate::views::chat::exec_tier_picker::ExecTierPicker />
-                            // Read-only planning phase. Hidden in team chat for
-                            // the same reason as its two neighbours: the team
-                            // send path carries no dials and `session_key` is
-                            // cleared, so a toggle here could neither ride the
-                            // message nor persist.
-                            <crate::views::chat::plan_phase_pill::PlanPhasePill />
+                            // Reasoning depth and memory injection — the two
+                            // dials the server has always enforced and no
+                            // client reported. Both self-hide against a core
+                            // that does not enumerate them.
+                            <crate::views::chat::dial_picker::DialPicker
+                                dial=crate::views::chat::dial_picker::Dial::Think />
+                            <crate::views::chat::dial_picker::DialPicker
+                                dial=crate::views::chat::dial_picker::Dial::Memory />
                         </Show>
                         // Live context-window gauge (self-hides until first usage).
                         <super::context_gauge::ContextGauge />

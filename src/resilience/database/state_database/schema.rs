@@ -314,7 +314,11 @@ impl StateDatabase {
                 source_channel TEXT NOT NULL,
                 source_session_key TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                -- P1 ownership stamp (mirrors SessionMetadata::stamp_attribution).
+                -- NULL is the documented "operator-era fallback" sentinel —
+                -- `stamped_owner_visible` resolves it like a pre-P1 session row.
+                owner_user_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS group_chat_turns (

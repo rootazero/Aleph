@@ -8,11 +8,30 @@
 //!
 //! Mirrors [`route_handle`](super::route_handle): a single process-global,
 //! lock-guarded map read at run construction (`harness_bridge`) and written by
-//! the tool. In-memory by design — a per-conversation model preference is soft
-//! UX state, not durable config; it resets on restart, which is the intended
-//! "fresh session" behaviour. Keyed by the canonical `SessionKey` string so the
-//! writer (tool, from `TURN_CONTEXT`) and reader (bridge, from its run key)
-//! agree.
+//! the tool. Keyed by the canonical `SessionKey` string so the writer (tool,
+//! from `TURN_CONTEXT`) and reader (bridge, from its run key) agree.
+//!
+//! # The map is a cache; the session row is the record
+//!
+//! This map used to be the whole story, on the argument that a per-conversation
+//! model preference is soft UX state that may as well reset on restart. That
+//! argument does not survive contact with what the map is asked: a process-only
+//! table does not answer "nothing was pinned" after a restart, it answers a
+//! *different question* than the one asked, with the same shape — the user who
+//! switched this conversation to a wider model yesterday gets silently served
+//! by the agent default today, and the only symptom is the bill.
+//!
+//! So a pick is now also written to the session's `identity_meta.custom` under
+//! [`MODEL_PIN_SESSION_KEY`], through a boot-installed [`SessionPinSink`], and
+//! read back into this map by `execution_engine::turn_model` at the start of a
+//! run whose session has no live entry. Every existing reader still reads the
+//! map and is unchanged: rehydration happens before they run.
+//!
+//! The sink is a process-global rather than a constructor argument on purpose.
+//! `set_session_model` is the single write seam every writer already funnels
+//! through; wiring durability to one of the tool's three construction sites
+//! would have left the other two writing to memory only, each with its own
+//! green unit test.
 
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
@@ -28,18 +47,92 @@ pub struct SessionModelPref {
     pub model: String,
 }
 
+/// `identity_meta.custom` key under which a session's model pick is persisted.
+///
+/// Fourth twin of `EXEC_TIER_SESSION_KEY` / `MODE_SESSION_KEY` /
+/// `THINK_LEVEL_SESSION_KEY`: same carrier, same "absent means follow the
+/// agent's configured model" contract, a different axis.
+pub const MODEL_PIN_SESSION_KEY: &str = "model_pin";
+
+/// `identity_meta.custom` key for the provider a pick pinned alongside its
+/// model, when it named one.
+///
+/// A second key rather than a JSON object under [`MODEL_PIN_SESSION_KEY`]:
+/// every other knob in that bag is a flat string, and `sessions.patch` merges
+/// the bag key-by-key — a nested object would be replaced wholesale by any
+/// writer that only meant to change the model.
+pub const MODEL_PIN_PROVIDER_SESSION_KEY: &str = "model_pin_provider";
+
 static SESSION_MODELS: OnceLock<RwLock<HashMap<String, SessionModelPref>>> = OnceLock::new();
 
 fn map() -> &'static RwLock<HashMap<String, SessionModelPref>> {
     SESSION_MODELS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+/// Makes a pick outlive the process that recorded it.
+///
+/// Implemented in the gateway (the layer that owns the session store) and
+/// installed once at boot, because `providers` must not depend on it. `pref`
+/// is `None` for "the pin was cleared".
+pub trait SessionPinSink: Send + Sync {
+    /// Persist the pin for `session_key`, or clear it when `pref` is `None`.
+    ///
+    /// Best-effort and non-blocking: this is called from synchronous code on a
+    /// path where a store failure must not fail the turn. The in-memory map has
+    /// already been updated, so the pin governs *this* process either way; what
+    /// a failure costs is durability across a restart.
+    fn persist(&self, session_key: &str, pref: Option<&SessionModelPref>);
+}
+
+static PIN_SINK: OnceLock<std::sync::Arc<dyn SessionPinSink>> = OnceLock::new();
+
+/// Install the durability sink. First call wins (one boot, one sink).
+///
+/// Absent — tests, pre-boot, embedded uses with no session store — picks stay
+/// in-memory and behave exactly as they did before, which is the honest
+/// degradation: nothing claims to have been saved.
+pub fn install_pin_sink(sink: std::sync::Arc<dyn SessionPinSink>) {
+    let _ = PIN_SINK.set(sink);
+}
+
+fn sink() -> Option<&'static std::sync::Arc<dyn SessionPinSink>> {
+    PIN_SINK.get()
+}
+
 /// Record the model preference for `session_key`, overwriting any prior pick.
+///
+/// Writes through to the session row when a sink is installed, so the pick
+/// survives a restart. Both halves happen here because this is the one seam
+/// every writer uses — a caller cannot pick "memory only" by accident.
 pub fn set_session_model(session_key: &str, provider: Option<String>, model: String) {
-    map().write().unwrap_or_else(|e| e.into_inner()).insert(
-        session_key.to_string(),
-        SessionModelPref { provider, model },
-    );
+    let pref = SessionModelPref { provider, model };
+    map()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_key.to_string(), pref.clone());
+    if let Some(sink) = sink() {
+        sink.persist(session_key, Some(&pref));
+    }
+}
+
+/// Install a pin read back from durable storage, **without** disturbing a live
+/// one.
+///
+/// Called by `execution_engine::turn_model` at run start. The guard matters:
+/// after a restart the map is empty and the stored value is the only truth, but
+/// within a live process the map is at least as new as the row (every write
+/// goes to both, in that order), so a rehydrate that overwrote would resurrect
+/// a pick the user just replaced — for exactly the window between the write and
+/// the store's acknowledgement.
+///
+/// Returns `true` when the pin was installed.
+pub fn hydrate_session_model(session_key: &str, pref: SessionModelPref) -> bool {
+    let mut guard = map().write().unwrap_or_else(|e| e.into_inner());
+    if guard.contains_key(session_key) {
+        return false;
+    }
+    guard.insert(session_key.to_string(), pref);
+    true
 }
 
 /// Read the model preference for `session_key`, if one was set this run.
@@ -53,11 +146,18 @@ pub fn get_session_model(session_key: &str) -> Option<SessionModelPref> {
 }
 
 /// Drop a session's preference (revert to the agent/flow default).
+///
+/// Clears the durable record too. A clear that only emptied the map would be
+/// undone by the next run's rehydrate — the pin would come back from the row,
+/// which is worse than never having been clearable.
 pub fn clear_session_model(session_key: &str) {
     map()
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .remove(session_key);
+    if let Some(sink) = sink() {
+        sink.persist(session_key, None);
+    }
 }
 
 /// The provider keys a `select_model(provider=…)` pin can actually resolve to.
@@ -112,6 +212,46 @@ mod tests {
         assert_eq!(got.provider, None);
         clear_session_model(key);
         assert_eq!(get_session_model(key), None);
+    }
+
+    #[test]
+    fn hydrate_fills_an_empty_slot() {
+        // The restart case: the map is cold, the row is the only truth.
+        let key = "test:session:hydrate-cold";
+        clear_session_model(key);
+        assert!(hydrate_session_model(
+            key,
+            SessionModelPref {
+                provider: Some("anthropic".to_string()),
+                model: "claude-opus-5".to_string(),
+            }
+        ));
+        assert_eq!(
+            get_session_model(key).map(|p| p.model),
+            Some("claude-opus-5".to_string())
+        );
+        clear_session_model(key);
+    }
+
+    #[test]
+    fn hydrate_never_overwrites_a_live_pick() {
+        // Within a live process the map is at least as new as the row. A
+        // rehydrate that clobbered it would resurrect the model the user just
+        // switched away from, for the width of one store round-trip.
+        let key = "test:session:hydrate-live";
+        set_session_model(key, None, "picked-just-now".to_string());
+        assert!(!hydrate_session_model(
+            key,
+            SessionModelPref {
+                provider: None,
+                model: "stale-from-disk".to_string(),
+            }
+        ));
+        assert_eq!(
+            get_session_model(key).map(|p| p.model),
+            Some("picked-just-now".to_string())
+        );
+        clear_session_model(key);
     }
 
     #[test]

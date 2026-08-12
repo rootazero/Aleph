@@ -26,23 +26,42 @@
 pub mod exec_tier;
 pub mod memory;
 pub mod metrics;
-pub mod plan_phase;
 pub mod session_mode;
 pub mod tool_permissions;
 pub mod web_fetch;
 
 pub use exec_tier::{
-    builtin_tiers, effective_permission, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
+    builtin_tiers, effective_permission, session_tiers, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
 };
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
-pub use plan_phase::{PlanAdmission, PlanPhase, PLAN_PHASE_SESSION_KEY};
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
 pub use tool_permissions::{PermissionMatch, ToolPermissionsConfig};
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// One selectable position of a session dial, as offered to a user surface
+/// (Panel / CLI / bot).
+///
+/// Core owns the dial's IDENTITY — which ids exist and in what order — because
+/// every surface has to offer the same choices with the same meaning (R6). It
+/// does NOT own the COPY: a label is presentation and has to follow the
+/// reader's locale, so a surface that cannot author its own words is
+/// structurally unable to be localized (R4). Ship ids; let the surface write
+/// the sentence.
+///
+/// One type for all five dials rather than one struct per dial: the third and
+/// fourth copies (thinking depth, memory mode) are what made the duplication
+/// worth removing, and a shared shape means the Panel decodes every dial with
+/// the same `{ id }` reader.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DialPreset {
+    /// Canonical id — the value that goes on the wire and into session
+    /// metadata.
+    pub id: &'static str,
+}
 
 /// Root policies configuration
 ///

@@ -126,15 +126,12 @@ impl InboundMessageRouter {
         // Defaults to disabled when never installed (tests, host-only paths).
         reply_config.footer = crate::gateway::runtime_footer::global_config();
 
-        // Per-channel streaming override: if the channel declares EditBased,
-        // enable streaming and apply channel-specific debounce/threshold.
+        // Reconcile the global `output_mode` preference with what this channel
+        // can physically do: EditBased widens, `editing` floors. The floor is
+        // the half that was missing — see `apply_channel_capabilities`.
         if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
             let ch = handle.read().await;
-            let caps = ch.capabilities();
-            if caps.stream_protocol == crate::gateway::channel::StreamProtocol::EditBased {
-                reply_config.stream_enabled = true;
-                reply_config.max_message_length = caps.max_message_length;
-            }
+            reply_config.apply_channel_capabilities(ch.capabilities());
         }
 
         let pending_media: crate::gateway::media::PendingMedia =

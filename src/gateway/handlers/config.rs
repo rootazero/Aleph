@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::config::patcher::{ConfigPatcher, PatchRequest};
-use crate::config::{build_ui_hints, generate_config_schema_json, Config, ConfigUiHints};
+use crate::config::{generate_config_schema_json, Config, ConfigUiHints};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::hot_reload::ConfigWatcher;
@@ -361,13 +361,14 @@ pub async fn handle_schema(request: JsonRpcRequest) -> JsonRpcResponse {
         .map(|p| serde_json::from_value(p.clone()).unwrap_or_default())
         .unwrap_or_default();
 
-    // Generate schema and hints
+    // Generate schema. (UI hints used to be embedded here; the producer in
+    // `src/config/ui_hints/` was wholly a one-way DTO that no client rendered
+    // — the CLI discarded the field, the Panel never called `config.schema`.)
     let schema = generate_config_schema_json();
-    let ui_hints = build_ui_hints();
 
     let response = ConfigSchemaResponse {
         schema,
-        ui_hints,
+        ui_hints: crate::config::ConfigUiHints::new(),
         version: env!("ALEPH_VERSION").to_string(),
         generated_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -648,42 +649,83 @@ pub fn broadcast_config_changed(
 // Tool Permissions Handlers
 // ============================================================================
 
-/// Serialize the whole execution-permission surface: the tier dial, the three
-/// selectable presets, and the advanced per-tool overrides layered on top.
+/// Serialize the whole execution-permission surface: the tier dial, its
+/// selectable presets, the other session dials a composer offers beside it, and
+/// the advanced per-tool overrides layered on top.
 /// One shape for both `config.get_tool_permissions` and the result of
 /// `config.update_tool_permissions`, so a UI renders the same state either way.
+///
+/// # Why four dials share a response named after permissions
+///
+/// Because a composer needs the whole vocabulary in one breath, and every extra
+/// method here is a second decoder that can drift from the first. The tier is
+/// the only one of the four that is a permission; `mode`, `think_levels` and
+/// `memory` joined it because they are rendered by the same pill row, fetched
+/// at the same moment, and decoded by the same Panel type
+/// (`api::tool_permissions::ToolPermissionsResponse`). Core ships **ids only**
+/// for all of them — the copy is the surface's, per locale (R4/R6).
+///
+/// Note the asymmetry in what a dial reports about its global position:
+/// `exec_tier`, `mode` and `memory` each have one, so they name it; the
+/// thinking ladder does not (`turn_thinking` resolves request > session >
+/// **no directive**), so it ships the rungs and nothing else. A client that
+/// invents a global for it would be labelling a setting that does not exist.
 fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     Ok(json!({
         "exec_tier": cfg.policies.exec_tier.id(),
         "tiers": serde_json::to_value(crate::config::types::policies::builtin_tiers())?,
+        // The tiers a single CONVERSATION may sit at — the install list plus
+        // `plan`, which is a posture that ends when a human approves a plan and
+        // therefore has no meaning as a machine-wide default (an install at
+        // `plan` would have nothing to hand back to). Shipped as its own key
+        // rather than by widening `tiers`, so the composer's pill and Settings →
+        // Policies each read the list that answers THEIR question and neither
+        // has to filter the other's.
+        "session_tiers": serde_json::to_value(crate::config::types::policies::session_tiers())?,
         // The session-mode dial rides the same surface: the composer's mode
         // pill and the tier pill share one fetch + one decoder (Panel
         // ToolPermissionsApi). Core ships ids only; copy is the surface's.
         "mode": cfg.policies.mode.id(),
         "modes": serde_json::to_value(crate::config::types::policies::builtin_modes())?,
+        // Reasoning depth — rungs only, no global (see the doc above).
+        "think_levels": serde_json::to_value(crate::agents::thinking::builtin_think_levels())?,
+        // Memory injection. The global here is `[memory] enabled`, reported as
+        // the dial's own id so a "follow global" row can name what it follows
+        // instead of rendering a bare boolean the user never typed.
+        "memory": if cfg.memory.enabled {
+            crate::memory::session_memory_mode::MemoryMode::On.id()
+        } else {
+            crate::memory::session_memory_mode::MemoryMode::Off.id()
+        },
+        "memory_modes": serde_json::to_value(
+            crate::memory::session_memory_mode::builtin_memory_modes(),
+        )?,
         "default": serde_json::to_value(cfg.policies.tool_permissions.default)?,
         "overrides": serde_json::to_value(&cfg.policies.tool_permissions.overrides)?,
     }))
 }
 
 /// The same surface with the two server-global policy axes removed: the
-/// per-tool `overrides` map and its `default`. What remains is four id
-/// enumerations — the positions of the two dials, and the ids each dial can
-/// take.
+/// per-tool `overrides` map and its `default`. What remains is the session
+/// dials — where each one currently sits, and which ids it can take.
 ///
 /// This is the shape a member receives. `config.` is otherwise an admin family,
 /// and this one read is carved out of it (`method_admin::MEMBER_CARVE_OUTS`)
-/// because a member ALREADY sets both dials for their own session, through
-/// `sessions.patch` and `chat.send`'s per-request `exec_tier` / `mode`. The
-/// enumeration is what makes those writes usable; the advanced axes are what
-/// Settings → Policies edits, and editing stays gated (`update_tool_permissions`
-/// is not carved out).
+/// because a member ALREADY sets these dials for their own session, through
+/// `sessions.patch` and `chat.send`'s per-request `exec_tier` / `mode` /
+/// `thinking` / `memory`. The enumeration is what makes those writes usable;
+/// the advanced axes are what Settings → Policies edits, and editing stays
+/// gated (`update_tool_permissions` is not carved out).
 ///
-/// Deliberately built by REMOVAL from [`exec_permissions_value`] rather than by
-/// listing the four keys again: a future field added to the full surface then
-/// has to be ruled on here — it arrives withheld, and a reviewer who wants it
-/// visible has to say so — instead of silently joining a member response nobody
-/// re-examined.
+/// Built by REMOVAL from [`exec_permissions_value`], with the withheld keys
+/// named once in [`MEMBER_WITHHELD_KEYS`]. The consequence is worth stating
+/// plainly, because an earlier version of this comment claimed the opposite:
+/// **a field added to the full surface joins the member response by default.**
+/// That is the right default for this response — everything in it but those two
+/// keys is dial vocabulary a member needs in order to use writes they are
+/// already allowed to make — but it does mean a genuinely operator-only field
+/// added here has to be added to the withheld list in the same change, and
+/// `member_response_withholds_the_admin_axes` is what asks.
 fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
     let mut value = exec_permissions_value(cfg)?;
     if let Some(obj) = value.as_object_mut() {
@@ -780,13 +822,28 @@ pub async fn handle_update_tool_permissions(
     };
 
     let tier = match params.exec_tier.as_deref() {
-        Some(id) => match crate::config::types::policies::ExecTier::from_id(id) {
+        // `from_id` parses `plan` — it is a real tier, just not an INSTALL
+        // one. Validating against `builtin_tiers()` rather than against
+        // `from_id` alone is what keeps the two lists honest: a machine-wide
+        // `plan` would put every conversation in a planning mode that, on
+        // approval, hands back to… planning. Rejected here rather than
+        // normalized, because silently storing a different value than the
+        // caller sent is how a setting comes to "sometimes work".
+        Some(id) => match crate::config::types::policies::ExecTier::from_id(id).filter(|_| {
+            crate::config::types::policies::builtin_tiers()
+                .iter()
+                .any(|p| p.id == id)
+        }) {
             Some(t) => Some(t),
             None => {
                 return JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Unknown exec_tier '{id}' (expected ask / auto / full)"),
+                    format!(
+                        "Unknown exec_tier '{id}' (expected ask / auto / full). \
+                         `plan` is a per-conversation posture, not an install default — \
+                         set it on a session with sessions.patch or chat.send."
+                    ),
                 )
             }
         },
@@ -932,6 +989,38 @@ mod tests {
     /// would compile, pass every test in this file, and reproduce the exact
     /// symptom the carve-out was made to fix: a tier popover with one blank
     /// option and a mode pill that hides itself on an empty `modes`.
+    /// The two tier catalogues answer two different questions, and the pill
+    /// that reads the wrong one either loses `plan` or offers an install
+    /// setting that cannot be honoured. Every id in both must parse.
+    #[test]
+    fn the_response_carries_both_the_install_and_the_session_tier_lists() {
+        let cfg = Config::default();
+        let value = exec_permissions_value(&cfg).expect("serializes");
+        let ids = |key: &str| -> Vec<String> {
+            value[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("`{key}` is an array"))
+                .iter()
+                .map(|p| p["id"].as_str().expect("id is a string").to_string())
+                .collect()
+        };
+        let install = ids("tiers");
+        let session = ids("session_tiers");
+
+        assert!(
+            !install.contains(&"plan".to_string()),
+            "an install cannot sit at `plan` — it would have nothing to hand back to"
+        );
+        assert_eq!(session.first().map(String::as_str), Some("plan"));
+        assert_eq!(&session[1..], install.as_slice());
+        for id in install.iter().chain(session.iter()) {
+            assert!(
+                crate::config::types::policies::ExecTier::from_id(id).is_some(),
+                "`{id}` is shipped to a client but does not parse back"
+            );
+        }
+    }
+
     #[test]
     fn a_member_still_receives_both_dials_and_both_catalogues() {
         let cfg = Config::default();
@@ -1254,9 +1343,10 @@ model = "claude-opus-4-5"
         response.result.expect("permissions read always succeeds")
     }
 
-    /// The whole point of the carve-out: the composer's two pills need the id
-    /// enumerations, and a member could always WRITE both dials for their own
-    /// session (`sessions.patch`, `chat.send`'s per-request `exec_tier`/`mode`).
+    /// The whole point of the carve-out: the composer's pills need the id
+    /// enumerations, and a member could always WRITE every one of these dials
+    /// for their own session (`sessions.patch`, `chat.send`'s per-request
+    /// `exec_tier` / `mode` / `thinking` / `memory`).
     #[tokio::test]
     async fn a_member_receives_both_dials_and_their_selectable_ids() {
         let value = tool_permissions_as(Some("member")).await;
@@ -1359,9 +1449,10 @@ model = "claude-opus-4-5"
         }
     }
 
-    /// The narrowing is built by removal, so a field added to the full surface
-    /// arrives withheld until someone rules on it. This pins that direction:
-    /// every key a member sees must also be a key the operator sees.
+    /// The narrowing is built by removal, so the member response can only ever
+    /// be a subset. This pins that direction: every key a member sees must also
+    /// be a key the operator sees — a member shape that grew a key of its own
+    /// would be a second response, not a narrowing of one.
     #[tokio::test]
     async fn the_member_surface_is_a_subset_of_the_operator_surface() {
         let member = tool_permissions_as(Some("member")).await;

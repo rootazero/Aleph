@@ -1,6 +1,7 @@
 pub mod agent_identity;
 pub mod composer;
 pub mod context_gauge;
+pub mod dial_picker;
 pub mod events;
 pub mod exec_tier_picker;
 pub mod list_scroll;
@@ -9,7 +10,6 @@ pub mod messages;
 pub mod mode_picker;
 pub mod plan;
 mod plan_archive_cell;
-pub mod plan_phase_pill;
 pub mod project_menu;
 pub mod reasoning;
 pub mod state;

@@ -213,13 +213,21 @@ pub async fn export_legacy_messages_from(
             message: format!("Row error: {e}"),
             suggestion: None,
         })?;
-        let key_str = &meta.key;
-        store.write_metadata(key_str, &meta).await.map_err(|e| {
+        let key_str = meta.key.clone();
+        let mut guard = store.lock_metadata(&key_str).await.map_err(|e| {
             crate::error::AlephError::ConfigError {
-                message: format!("Write metadata failed for {key_str}: {e}"),
+                message: format!("Lock metadata failed for {key_str}: {e}"),
                 suggestion: None,
             }
         })?;
+        guard.insert(meta);
+        guard
+            .commit()
+            .await
+            .map_err(|e| crate::error::AlephError::ConfigError {
+                message: format!("Write metadata failed for {key_str}: {e}"),
+                suggestion: None,
+            })?;
         migrated_count += 1;
     }
     drop(stmt);
@@ -311,7 +319,10 @@ pub async fn export_legacy_messages_from(
         .collect();
 
     for key in keys {
-        if let Some(mut meta) = store.read_metadata(&key).await.ok().flatten() {
+        let Ok(mut guard) = store.lock_metadata(&key).await else {
+            continue;
+        };
+        if let Some(meta) = guard.existing_mut() {
             if let Ok(messages) = store.read_transcript(&key, None).await {
                 for msg in &messages {
                     if meta.derived_title.is_none() && msg.role == "user" {
@@ -335,7 +346,7 @@ pub async fn export_legacy_messages_from(
                     });
                 }
                 meta.message_count = messages.len() as i64;
-                let _ = store.write_metadata(&key, &meta).await;
+                let _ = guard.commit().await;
             }
         }
     }
