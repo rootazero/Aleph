@@ -278,6 +278,14 @@ mod tests {
 
     #[test]
     fn test_default_path() {
+        // `default_path` resolves off `ALEPH_HOME` via `get_config_dir`, and
+        // every writer of that variable holds `ALEPH_HOME_TEST_GUARD` — this
+        // reader must hold it too, or a concurrently-running handler test's
+        // tempdir override is observed mid-window and the `.aleph` assertion
+        // fails on a path that points at somebody else's scratch dir.
+        let _home_guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let path = McpPersistentConfig::default_path();
         assert!(path.ends_with("mcp_config.json"));
         assert!(path.to_string_lossy().contains(".aleph"));
