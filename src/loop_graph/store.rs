@@ -492,6 +492,12 @@ impl LoopGraphStore {
     /// - fast loops owning slower loops' references (only when both declare
     ///   a known cadence class).
     pub fn lint(&self, agent_id: &str) -> Result<Vec<String>> {
+        // Read nodes, edges, and presence into local Vec/HashSet, then drop
+        // the lock BEFORE running the five pure-CPU lint passes. Holding the
+        // store mutex through every pass blocks every concurrent get_node /
+        // upsert_node / list_edges for the full duration of lint, which is
+        // unjustified: lint is read-only and computes only on the snapshot
+        // it just read.
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
@@ -505,7 +511,13 @@ impl LoopGraphStore {
             .map_err(|e| AlephError::other(format!("loop_graph lint nodes query: {e}")))?;
         let mut nodes = Vec::new();
         for r in rows {
-            if let Ok(Some(n)) = r {
+            // Mid-iteration decode errors are best-effort skipped with a warn:
+            // lint is a snapshot diagnostic, not a destructive op, so a few
+            // unreadable rows do not justify failing the whole pass. They
+            // were previously silently dropped, which obscured real DB
+            // problems from operators.
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph lint node: {e}")))?;
+            if let Some(n) = row {
                 nodes.push(n);
             }
         }
@@ -522,19 +534,24 @@ impl LoopGraphStore {
             .map_err(|e| AlephError::other(format!("loop_graph lint edges query: {e}")))?;
         let mut edges = Vec::new();
         for r in rows {
-            if let Ok(Some(e)) = r {
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph lint edge: {e}")))?;
+            if let Some(e) = row {
                 edges.push(e);
             }
         }
         drop(stmt);
 
-        let by_id: std::collections::HashMap<&str, &GraphNode> =
-            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         // Existence is asked of the raw id column, not of `by_id`: a row that
         // is present but unparseable must not be reported as "节点已消失"
         // (same reasoning as `gc`). The parsed map still answers every
         // question that needs the node's fields.
         let present = node_ids_present(&conn, agent_id, "lint")?;
+        // Lock released here — the rest of this function is pure compute on
+        // local data.
+        drop(conn);
+
+        let by_id: std::collections::HashMap<&str, &GraphNode> =
+            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
         let mut findings = lint_dangling_edges(&edges, &present);
         findings.extend(lint_naked_loops(&nodes, &edges, &by_id));
