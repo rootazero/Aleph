@@ -35,6 +35,13 @@ struct PairedDevice {
     device_name: String,
     last_seen_at: Option<i64>,
     connected: bool,
+    /// Which principal this device speaks as — a resolved display name when
+    /// the directory has one, otherwise the raw `u-` id.
+    ///
+    /// The list is where an operator revokes a device, so it is also where
+    /// they have to be able to tell whose it is. Without this column five
+    /// members' phones render as five rows named "iPhone".
+    owner: Option<String>,
 }
 
 /// Render a URL into an inline SVG QR code, or `None` for an empty / unencodable
@@ -196,6 +203,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                                     .get("connected")
                                     .and_then(serde_json::Value::as_bool)
                                     .unwrap_or(false),
+                                owner: d
+                                    .get("display_name")
+                                    .and_then(|x| x.as_str())
+                                    .or_else(|| d.get("user_id").and_then(|x| x.as_str()))
+                                    .map(str::to_string),
                             })
                         })
                         .collect::<Vec<_>>();
@@ -437,6 +449,12 @@ pub fn GatewayTokenSection() -> impl IntoView {
                                                         <span class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
                                                     })}
                                                     {status}
+                                                    // Whose device this is. The row carries a
+                                                    // Revoke button, so it has to say who it
+                                                    // would be revoking.
+                                                    {d.owner.map(|o| view! {
+                                                        <span class="truncate">"· "{o}</span>
+                                                    })}
                                                 </div>
                                             </div>
                                             {move || if is_self && confirming_self_revoke.get() {
