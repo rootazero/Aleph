@@ -587,10 +587,27 @@ pub enum DaemonAction {
 
 #[derive(Subcommand)]
 pub enum ProvidersAction {
-    /// List all AI providers
-    List,
+    /// List AI providers, optionally narrowed to a search query
+    List {
+        /// Substring to match against provider names — omit to list everything
+        ///
+        /// Filtered client-side through the shared ranker, so the row a bare
+        /// query lands on is the same one the Panel and the TUI open.
+        query: Option<String>,
+    },
     /// Get provider details
     Get { name: String },
+    /// Replace a provider's model ladder
+    ///
+    /// The other half of `providers models --refresh`: that reports what a
+    /// vendor serves, this adopts it. Order is semantic — the first `--model`
+    /// is what a turn naming no model gets, the rest are the failover rungs.
+    SetModels {
+        name: String,
+        /// Model id to offer; repeat to declare failover rungs
+        #[arg(long = "model", value_name = "ID")]
+        models: Vec<String>,
+    },
     /// Add a new provider
     Add {
         name: String,

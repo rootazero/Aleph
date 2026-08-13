@@ -21,6 +21,7 @@
 
 mod detail_panel;
 mod list;
+mod model_ladder;
 
 use crate::api::{CatalogEntry, CatalogView, ProviderInfo, ProvidersApi};
 use crate::context::DashboardState;

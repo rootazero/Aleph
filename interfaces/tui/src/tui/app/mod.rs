@@ -99,6 +99,9 @@ pub enum Action {
     ProviderPickerDown,
     /// Confirm the highlighted row: descend into a provider, or pin a model
     ProviderPickerConfirm,
+    /// Ask the highlighted provider's vendor what it serves now, then re-read
+    /// the catalogue so the discovered ids appear in its roster.
+    ProviderPickerRefresh,
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,6 +1035,74 @@ impl AppState {
         picker.provider = None;
         self.recompute_provider_filter();
         true
+    }
+
+    /// The provider id a refresh would ask about, if any.
+    ///
+    /// At the model level that is the provider we descended into; at the
+    /// provider level it is the highlighted row. `None` when nothing is
+    /// highlighted — refreshing "whatever" is a guess, and this key dials a
+    /// vendor.
+    #[must_use]
+    pub fn provider_picker_refresh_target(&self) -> Option<String> {
+        let picker = self.provider_picker.as_ref()?;
+        let index = match picker.provider {
+            Some(index) => index,
+            None => match picker.rows.get(picker.selected)? {
+                PickerRow::Provider { index, .. } => *index,
+                // A model row at the provider level cannot happen (that level
+                // only emits provider rows), but answering `None` is the
+                // honest reading rather than an unwrap.
+                PickerRow::Model { .. } => return None,
+            },
+        };
+        Some(picker.entries.get(index)?.id.clone())
+    }
+
+    /// Replace the catalogue behind the picker after a refetch.
+    ///
+    /// Re-resolves the descended-into provider **by id**, not by index: the
+    /// server sorts and filters the catalogue, so a row's position is not a
+    /// stable handle across two calls. Keeping the index would silently move
+    /// the open roster to a different vendor. The filter text is preserved
+    /// because the user is mid-search.
+    pub fn replace_provider_catalog(&mut self, entries: Vec<CatalogEntry>) {
+        let Some(picker) = &mut self.provider_picker else {
+            return;
+        };
+        let open_id = picker
+            .provider
+            .and_then(|i| picker.entries.get(i))
+            .map(|e| e.id.clone());
+        // Also by id: the row under the cursor is the one the user just asked
+        // about, and `recompute_provider_filter` resets the cursor to the top.
+        // Refreshing a provider and then finding yourself looking at a
+        // different one is the same class of surprise as the open roster
+        // moving — just one level up.
+        let cursor_id = match picker.rows.get(picker.selected) {
+            Some(PickerRow::Provider { index, .. }) => {
+                picker.entries.get(*index).map(|e| e.id.clone())
+            }
+            _ => None,
+        };
+
+        picker.provider = open_id.and_then(|id| entries.iter().position(|e| e.id == id));
+        picker.entries = entries;
+        self.recompute_provider_filter();
+
+        let Some(picker) = &mut self.provider_picker else {
+            return;
+        };
+        if let Some(id) = cursor_id {
+            if let Some(row) = picker.rows.iter().position(|r| match r {
+                PickerRow::Provider { index, .. } => {
+                    picker.entries.get(*index).is_some_and(|e| e.id == id)
+                }
+                PickerRow::Model { .. } => false,
+            }) {
+                picker.selected = row;
+            }
+        }
     }
 
     /// What confirming the highlighted row means, if anything.

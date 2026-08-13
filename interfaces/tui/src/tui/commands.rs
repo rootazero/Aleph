@@ -9,7 +9,10 @@
 use serde_json::{json, Value};
 use tui_textarea::TextArea;
 
-use aleph_protocol::providers::{CatalogEntry, CatalogParams, CatalogResult, CatalogView};
+use aleph_protocol::providers::{
+    CatalogEntry, CatalogParams, CatalogResult, CatalogView, ModelsRefreshParams,
+    ModelsRefreshResult, ModelsRefreshRow,
+};
 use aleph_protocol::{
     AgentRunAccepted, AgentRunRequest, AgentTraceReplay, AgentTraceTaskSummary, SessionSnapshot,
 };
@@ -227,6 +230,95 @@ async fn execute_providers(state: &mut AppState, client: &AlephClient, query: St
 /// told about, not a column that quietly prints a placeholder forever.
 fn catalog_entries(result: &Value) -> Result<Vec<CatalogEntry>, serde_json::Error> {
     serde_json::from_value::<CatalogResult>(result.clone()).map(|r| r.items)
+}
+
+/// Ask the highlighted provider's vendor what it serves now.
+///
+/// The TUI could see a roster but never ask for a fresh one, so a provider
+/// linked outside the terminal showed whatever the last sweep had cached — or
+/// nothing at all, with no way to find out whether that was the vendor's answer
+/// or simply an absence of one. `providers.modelsRefresh` is the same RPC the
+/// Panel's per-row button and `aleph providers models --refresh` call.
+///
+/// Two round trips on purpose: the refresh writes the on-disk cache, and the
+/// catalogue is what folds that cache into `roster`. Reporting the sweep
+/// without re-reading would leave the list on screen contradicting the message
+/// underneath it.
+pub(super) async fn refresh_picker_provider(state: &mut AppState, client: &AlephClient) {
+    let Some(id) = state.provider_picker_refresh_target() else {
+        return;
+    };
+
+    let params = ModelsRefreshParams {
+        provider: Some(id.clone()),
+    };
+    let sweep: ModelsRefreshResult = match client
+        .call::<_, Value>("providers.modelsRefresh", Some(params))
+        .await
+    {
+        Ok(result) => match serde_json::from_value(result) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                state.add_system_message(format!(
+                    "Model refresh answered in a shape this client cannot read ({e})."
+                ));
+                return;
+            }
+        },
+        Err(e) => {
+            state.add_system_message(gateway_error::explain(&e, "the model refresh"));
+            return;
+        }
+    };
+
+    // The sweep answers with rows, never with an RPC error — so "it returned"
+    // is not "it worked", and the row is where the verdict is.
+    state.add_system_message(match sweep.providers.iter().find(|r| r.provider == id) {
+        Some(row) => refresh_summary(row),
+        // The server answers about every named target since the round that
+        // closed the silent skips, so this is a genuinely unexpected shape
+        // rather than a state with a story.
+        None => format!("The sweep ran and said nothing about '{id}'."),
+    });
+
+    match client
+        .call::<_, Value>(
+            "providers.catalog",
+            Some(CatalogParams::for_view(CatalogView::All)),
+        )
+        .await
+    {
+        Ok(result) => match catalog_entries(&result) {
+            Ok(entries) => state.replace_provider_catalog(entries),
+            Err(e) => state.add_system_message(format!(
+                "Refreshed, but the catalogue came back unreadable ({e}); \
+                 the list above is the one from before."
+            )),
+        },
+        Err(e) => state.add_system_message(gateway_error::explain(&e, "the provider catalogue")),
+    }
+}
+
+/// One sentence per sweep outcome.
+///
+/// The three states the server distinguishes are the three reported here. A
+/// stale listing is neither of its neighbours: it carries models *and* a
+/// failure, and collapsing it into "live" is what makes a dated answer look
+/// authoritative.
+fn refresh_summary(row: &ModelsRefreshRow) -> String {
+    let detail = row
+        .error
+        .as_deref()
+        .map_or_else(String::new, |e| format!(" ({e})"));
+    match (row.ok, row.stale) {
+        (true, false) => format!("{}: {} models, live.", row.provider, row.models.len()),
+        (true, true) => format!(
+            "{}: {} models from the last good snapshot — the live fetch failed{detail}.",
+            row.provider,
+            row.models.len()
+        ),
+        (false, _) => format!("{}: no listing{detail}.", row.provider),
+    }
 }
 
 /// Confirm the highlighted picker row.

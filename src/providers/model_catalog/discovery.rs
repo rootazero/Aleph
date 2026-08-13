@@ -57,6 +57,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Cap on the response body we will parse. A `/models` listing is a few KB;
 /// anything past this is a misconfigured endpoint (or a captive portal), and
 /// parsing it unbounded would be a memory footgun on the tool path.
+///
+/// Enforced by [`read_bounded`] **while** reading. Checking `body.len()` after
+/// `response.text()` describes what already fitted in memory; it does not stop
+/// anything from getting there.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// In-flight refresh locks, one per provider.
@@ -198,19 +202,14 @@ pub async fn refresh_models(
             status: status.as_u16(),
         });
     }
-    let body = match tokio::time::timeout(REQUEST_TIMEOUT, response.text()).await {
+    let body = match tokio::time::timeout(REQUEST_TIMEOUT, read_bounded(response)).await {
         Err(_) => return Err(DiscoveryError::Timeout { url }),
-        Ok(Err(e)) => {
-            return Err(DiscoveryError::Transport {
-                url,
-                message: e.to_string(),
-            })
+        Ok(Err(BodyError::TooLarge)) => return Err(DiscoveryError::Shape { url }),
+        Ok(Err(BodyError::Transport(message))) => {
+            return Err(DiscoveryError::Transport { url, message })
         }
         Ok(Ok(b)) => b,
     };
-    if body.len() > MAX_BODY_BYTES {
-        return Err(DiscoveryError::Shape { url });
-    }
 
     let models = parse_listing(&body).ok_or(DiscoveryError::Shape { url })?;
     let listing = DiscoveredModels {
@@ -221,6 +220,46 @@ pub async fn refresh_models(
     };
     write_cache(&listing);
     Ok(listing)
+}
+
+/// Why a bounded body read stopped.
+enum BodyError {
+    /// The response exceeded [`MAX_BODY_BYTES`] — reported as a shape failure,
+    /// which is what it is: a `/models` listing is a few KB.
+    TooLarge,
+    /// The stream broke mid-body.
+    Transport(String),
+}
+
+/// Read a response body, refusing to buffer more than [`MAX_BODY_BYTES`].
+///
+/// `response.text()` buffers the whole body first and only then can its length
+/// be compared — which makes the cap a description of what was already in
+/// memory rather than a limit on it. A hostile or merely misconfigured endpoint
+/// (a captive portal serving a video, a relay streaming an error loop) is
+/// reachable from the tool path, so the bound has to be enforced *while*
+/// reading.
+///
+/// Chunk boundaries do not matter here: the whole body must be under the cap,
+/// so a running total that trips mid-chunk is exact, not approximate.
+async fn read_bounded(response: reqwest::Response) -> Result<String, BodyError> {
+    let mut body: Vec<u8> = Vec::new();
+    let mut response = response;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len() + chunk.len() > MAX_BODY_BYTES {
+                    return Err(BodyError::TooLarge);
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => return Err(BodyError::Transport(e.to_string())),
+        }
+    }
+    // A listing that is not UTF-8 is not a listing. Reported as transport
+    // rather than shape only because the bytes never became a document.
+    String::from_utf8(body).map_err(|e| BodyError::Transport(e.to_string()))
 }
 
 /// Read a provider's cached listing, if one was ever written **for the same
