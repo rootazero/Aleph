@@ -299,28 +299,49 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // Security gate: scan all files in the installed directory before registering tools.
     // Markdown skills installed via this RPC are arbitrary third-party content → Community trust.
-    if load_path.is_dir() {
-        let verdict = scan_skill_directory(&load_path);
-        if !install_allowed(verdict.level, TrustLevel::Community) {
-            // Reject: clean up and return an error before any tool is registered.
-            let _ = std::fs::remove_dir_all(&load_path);
-            let ids: Vec<&str> = verdict.findings.iter().map(|f| f.pattern_id).collect();
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!(
-                    "skill bundle blocked by security scan ({:?}): {}",
-                    verdict.level,
-                    ids.join(", ")
-                ),
-            );
+    //
+    // The gate must run for *every* source type, not just directories: `detect_source_type`
+    // routes anything that isn't a zip / http(s) URL / git URL through `LocalPath`, which
+    // can be either a directory or a single `*.skill.md` file. Without the single-file
+    // arm, `skills.install /tmp/downloaded.skill.md` would skip the scan entirely and
+    // the loader would still pick the file up via `WalkDir`.
+    let verdict = if load_path.is_dir() {
+        scan_skill_directory(&load_path)
+    } else {
+        let file_name = load_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("skill.md");
+        match std::fs::read(&load_path) {
+            Ok(bytes) => scan_content(file_name, &bytes),
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("cannot read skill source for security scan: {e}"),
+                );
+            }
         }
-        if matches!(verdict.level, ThreatLevel::Caution) {
-            warn!(
-                path = %load_path.display(),
-                "markdown skill bundle has caution-level security findings; proceeding"
-            );
-        }
+    };
+    if !install_allowed(verdict.level, TrustLevel::Community) {
+        // Reject: clean up and return an error before any tool is registered.
+        let _ = std::fs::remove_dir_all(&load_path);
+        let ids: Vec<&str> = verdict.findings.iter().map(|f| f.pattern_id).collect();
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!(
+                "skill bundle blocked by security scan ({:?}): {}",
+                verdict.level,
+                ids.join(", ")
+            ),
+        );
+    }
+    if matches!(verdict.level, ThreatLevel::Caution) {
+        warn!(
+            path = %load_path.display(),
+            "markdown skill bundle has caution-level security findings; proceeding"
+        );
     }
 
     // Load skills from the directory

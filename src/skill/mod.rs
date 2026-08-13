@@ -491,7 +491,12 @@ impl SkillSystem {
     // --- Private helpers ---
 
     /// Scan all registered directories, atomically replace the registry, and rebuild the snapshot.
-    async fn rescan_dirs(&self) {
+    ///
+    /// `pub(crate)` so `super::shared::ensure_shared_skill_system_initialized`
+    /// can widen the dir set without going through `init` (which replaces the
+    /// whole dir set and would clobber the dirs the `ExtensionManager` already
+    /// pushed in).
+    pub(crate) async fn rescan_dirs(&self) {
         let dirs = self.inner.skill_dirs.read().await.clone();
 
         // Build a fresh registry so we can swap atomically — never expose an empty registry.
