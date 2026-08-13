@@ -118,7 +118,11 @@ impl PresetCatalog {
     /// match first. An empty query is a no-op, which is what makes this safe to
     /// call unconditionally instead of branching on "is the box empty".
     #[must_use]
-    pub fn by_category_matching(&self, category: GenerationType, query: &str) -> Vec<PresetProvider> {
+    pub fn by_category_matching(
+        &self,
+        category: GenerationType,
+        query: &str,
+    ) -> Vec<PresetProvider> {
         aleph_protocol::providers::filter_rows(&self.by_category(category), query)
     }
 
@@ -219,38 +223,47 @@ fn modality_icon(modality: Option<GenerationType>) -> &'static str {
 mod tests {
     use super::*;
 
-    fn dto(id: &str, ptype: &str, modalities: &[&str]) -> PresetProviderDto {
-        PresetProviderDto {
+    /// The wire row a `generation_providers.list_presets` response carries.
+    ///
+    /// This helper used to build a `PresetProviderDto` and call `.into_preset()`
+    /// on it — a type and a method that stopped existing when the shape moved to
+    /// `aleph_protocol::providers::GenerationPresetRow`. Nothing said so: the
+    /// panel's documented check is `cargo check -p aleph-panel`, which does not
+    /// compile `#[cfg(test)]`, so the crate's whole test binary quietly stopped
+    /// building and every test in it stopped running.
+    fn row(id: &str, ptype: &str, modalities: &[&str]) -> GenerationPresetRow {
+        GenerationPresetRow {
             id: id.to_string(),
             provider_type: ptype.to_string(),
             default_model: "m".to_string(),
             base_url: None,
             display_name: id.to_string(),
-            modalities: modalities.iter().map(|s| s.to_string()).collect(),
+            modalities: modalities.iter().map(|s| (*s).to_string()).collect(),
             homepage: None,
             notes: None,
+            signup_url: None,
         }
     }
 
     #[test]
     fn music_modality_maps_to_audio_category() {
-        let p = dto("suno", "suno", &["music"]).into_preset();
+        let p = into_preset(row("suno", "suno", &["music"]));
         assert_eq!(p.capabilities, vec![GenerationType::Audio]);
     }
 
     #[test]
     fn unknown_provider_type_falls_back_to_modality_color() {
-        let p = dto("custom", "weirdo", &["image"]).into_preset();
+        let p = into_preset(row("custom", "weirdo", &["image"]));
         assert_eq!(p.color, "#6366F1");
-        assert_eq!(p.icon, "🖼️");
+        assert_eq!(p.icon, "\u{1F5BC}\u{FE0F}");
     }
 
     #[test]
     fn catalog_by_category_filters() {
-        let cat = PresetCatalog::from_dtos(vec![
-            dto("a", "openai", &["image"]),
-            dto("b", "elevenlabs", &["speech"]),
-            dto("c", "suno", &["music"]),
+        let cat = PresetCatalog::from_rows(vec![
+            row("a", "openai", &["image"]),
+            row("b", "elevenlabs", &["speech"]),
+            row("c", "suno", &["music"]),
         ]);
         assert_eq!(cat.by_category(GenerationType::Image).len(), 1);
         assert_eq!(cat.by_category(GenerationType::Audio).len(), 1);
@@ -259,7 +272,7 @@ mod tests {
 
     #[test]
     fn catalog_find_and_is_preset() {
-        let cat = PresetCatalog::from_dtos(vec![dto("openai-dalle", "openai", &["image"])]);
+        let cat = PresetCatalog::from_rows(vec![row("openai-dalle", "openai", &["image"])]);
         assert!(cat.is_preset("openai-dalle"));
         assert!(!cat.is_preset("missing"));
         assert!(cat.find("openai-dalle").is_some());
@@ -267,15 +280,30 @@ mod tests {
 
     #[test]
     fn curated_color_for_known_provider() {
-        let p = dto("o", "openai", &["image"]).into_preset();
+        let p = into_preset(row("o", "openai", &["image"]));
         assert_eq!(p.color, "#10a37f");
     }
 
     #[test]
-    fn homepage_propagates_from_dto() {
-        let mut d = dto("openai-dalle", "openai", &["image"]);
-        d.homepage = Some("https://platform.openai.com".to_string());
-        let p = d.into_preset();
+    fn homepage_propagates_from_the_wire_row() {
+        let mut r = row("openai-dalle", "openai", &["image"]);
+        r.homepage = Some("https://platform.openai.com".to_string());
+        let p = into_preset(r);
         assert_eq!(p.homepage.as_deref(), Some("https://platform.openai.com"));
+    }
+
+    /// The field the shared row type was introduced to keep attached. The panel
+    /// declared its own DTO without it for a whole release, so serde dropped the
+    /// signup link on all 44 presets — the one actionable thing an unconfigured
+    /// card can offer. These tests could not have caught it, because they could
+    /// not run.
+    #[test]
+    fn the_signup_link_survives_the_conversion() {
+        let mut r = row("fal", "fal", &["image"]);
+        r.signup_url = Some("https://fal.ai/dashboard/keys".to_string());
+        assert_eq!(
+            into_preset(r).signup_url.as_deref(),
+            Some("https://fal.ai/dashboard/keys")
+        );
     }
 }
