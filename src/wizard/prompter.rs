@@ -106,10 +106,11 @@ impl RpcPrompter {
 
         // Wait for answer.  If the sender is dropped without sending,
         // treat it as an internal error (the flow task may have panicked
-        // or the channel was closed unexpectedly). The PendingAnswer entry
-        // is removed by `Session::answer` on success and intentionally
-        // left in place on cancellation/error so a duplicate answer()
-        // surfaces `StepNotFound` rather than silently swallowing.
+        // or the channel was closed unexpectedly). On every code path the
+        // entry leaves the answers map — either by `Session::answer` (the
+        // normal success and `sender.send` failure paths both remove it) or
+        // by the channel-closed branch above — so a duplicate `answer()` for
+        // the same step surfaces `StepNotFound` instead of silently resending.
         rx.await.map_err(|_| {
             WizardSessionError::Internal(
                 "Answer channel closed unexpectedly (flow may have panicked)".to_string(),

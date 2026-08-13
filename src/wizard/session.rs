@@ -305,8 +305,9 @@ mod tests {
 
         let session = WizardSession::new(Box::new(flow));
 
-        // Give flow time to complete
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Poll for terminal status instead of a fixed sleep — robust against
+        // any scheduler jitter between spawning the flow task and it settling.
+        wait_for_terminal(&session).await;
 
         // Next should return done
         let result = session.next().await;
@@ -322,7 +323,7 @@ mod tests {
         let flow = TestFlow { steps: vec![] };
         let session = WizardSession::new(Box::new(flow));
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        wait_for_terminal(&session).await;
         assert_eq!(session.status(), WizardStatus::Done);
 
         session.cancel();
@@ -331,5 +332,17 @@ mod tests {
             WizardStatus::Done,
             "cancel() must not clobber a completed flow"
         );
+    }
+
+    /// Yield until the spawned flow task has settled the session status. Bounded
+    /// so a hung task fails the test loudly rather than running forever.
+    async fn wait_for_terminal(session: &WizardSession) {
+        for _ in 0..200 {
+            if session.is_done() {
+                return;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+        }
+        panic!("flow task did not settle within 1s");
     }
 }
