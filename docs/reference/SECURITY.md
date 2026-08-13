@@ -1618,10 +1618,32 @@ sees byte-identical behavior before and after.
   default (fail-closed for privilege); a short allowlist re-opens member-safe
   reads inside an otherwise-admin family. The table below is a **summary**;
   the authoritative classification is `method_admin.rs`'s `ADMIN_PREFIXES` +
-  `MEMBER_CARVE_OUTS` themselves, whose module doc records the mechanical
-  sweep (**74 method families**) and the reasoning for every non-obvious open
-  ruling. That file is both the enforcement point and the audit trail — there
-  is no separate report artifact to consult.
+  `ADMIN_METHODS` + `MEMBER_CARVE_OUTS` themselves, whose module doc records
+  the mechanical sweep (**74 method families**) and the reasoning for every
+  non-obvious open ruling. That file is both the enforcement point and the
+  audit trail — there is no separate report artifact to consult.
+
+  ⚠️ **That "audit trail" is prose, not a test** — and FEATURE_LOCATOR §5.22
+  round-4 「刻意未做 ⑥」 records why that matters: the only enumerating test
+  covers `workspace.` alone, everything else is a curated literal tripwire, and
+  `HandlerRegistry::new()` holds only phase-1 registrations, so even a runtime
+  census over `methods()` would be blind to the families registered later via
+  `register_handler!(server, …)`. Four member-reachable server-global verbs
+  lived in that blind spot until 2026-08-13.
+
+  **`ADMIN_METHODS` (2026-08-13) is a floor, not a default.** A prefix gates a
+  family, which works when the family is uniformly one thing. `memory.` is not:
+  it is deliberately open because `memory.search` / `memory.stats` really are
+  per-caller reads, while `memory.compress` / `memory.reembed` /
+  `memory.reembed.cancel` sweep every corpus on disk. Those three are named
+  individually and checked **before** `MEMBER_CARVE_OUTS`, so a name here
+  cannot be re-opened from the other side of the file; the two tables naming
+  the same method fails `no_admin_method_is_also_a_carve_out` rather than
+  resolving to whichever `if` was written first. A per-caller *filter* cannot
+  express this — there is no caller-owned subset of "recompress the whole
+  install" — which is also why `method_visibility.rs` records `memory.reembed`
+  as having no filter to apply. That ruling is about visibility and is correct;
+  this table is the admission half it was silent on.
 
   | Family | Verdict | Why |
   |---|---|---|
@@ -1632,6 +1654,8 @@ sees byte-identical behavior before and after.
   | `agents.*` (carve-outs `agents.list`/`agents.get`), `identity.*`, `moa.*`, `acp.*` | **admin** | Server-global persona/shared config, not per-user |
   | `cron.*`, `heartbeat.*` (carve-outs `.list`/`.get`/`.runs`) | **admin** | Scheduled automation — mirrors `method_authz.rs`'s existing tool-tier ruling, so the RPC surface isn't a lower-privilege bypass of it |
   | `daemon.*`, `wizard.*`, `diagnostics.*`, `pty.*`, `exec.*` | **admin** | Fleet lifecycle, raw interactive shell, exec-approval gate resolution |
+  | `dreaming.*` (carve-out `dreaming.list_insights`) | **admin** | `dreaming.run_now` force-drives a full cycle of the global daemon over `maintenance_corpora` — every `main__u-*` and `main__p-*` partition on disk — an LLM-driven lint / consolidate / synthesize / **archive** pass over every other principal's notes, with no visibility predicate anywhere in `src/memory/dreaming/`. **This family had no prefix at all until 2026-08-13**, so it fell through to the default-open tail while three separate places in the tree called it "the admin RPC": a gate three documents asserted and no code performed. The read face stays open, narrowed by its own `partition_visible` |
+  | `memory.compress`, `memory.reembed`, `memory.reembed.cancel` | **admin** (`ADMIN_METHODS`) | Server-global maintenance inside a deliberately open family — see the `ADMIN_METHODS` note above |
   | `tools.*` | **admin** | `tools.invoke` dispatches straight off the raw `ToolRegistry`, so none of the loop's gates run there — including the per-tool operator gate (`method_authz.rs`'s `OPERATOR_TOOLS`: `cron_manage`, `hooks_manage`, `agent_identity`, …), which its own hard floor does not cover. An RPC surface must not be a lower-privilege bypass of an existing tool-tier decision, and via `cron_manage` a member could schedule a run that executes as trusted-internal. The family is gated whole (E2E-oriented surface by its own module doc); a member-safe read carve-out is a P1 call |
   | `workspace.*` | **admin** | The second face of the same `agent_envs` table `agents.*` writes. Gated whole on 2026-08-08 after a real-machine QA in which a member renamed and archived a workspace the operator had created; `partition_visible` cannot close that, because a workspace id encodes no owner. Both clients are operator surfaces — the CLI, and (since 2026-08-09) the Panel's `/settings/workspaces`, which reports this refusal rather than rendering an empty roster. **This row said "open" until 2026-08-09**: the family moved into `ADMIN_PREFIXES` a day earlier and the summary table was not moved with it, so this document described a member carve-out that the code had already withdrawn |
   | `connect`, `chat.*`, `sessions.*`, `memory.*`, `projects.*`, `artifacts.*`, `fs.*`, `teams.*`, `voice.*`, `graph.*` | **open** | Member daily / caller's-own-data surfaces; per-user *visibility* filtering is P1's job, not this gate's |
@@ -1652,13 +1676,38 @@ sees byte-identical behavior before and after.
   uses (demote the connection to guest, then close the socket) — not a second
   implementation. See `src/gateway/CLAUDE.md`'s revocation landmines for the
   ordering / single-source discipline that pipeline depends on.
-  **Scope, precisely:** this covers `devices.user_id` bindings, i.e. WS/Panel
-  connections. Approved **channel senders** linked to the same user
-  (`approved_senders.user_id`) are *not* revoked in P0 — inbound channel access
-  control is unchanged (`inbound_router::check_permission` + `pairing_store`
-  remain the sole authority there), and `sender_user()` has no consumer yet, so
-  the link is recorded but carries no authority to withdraw. Cutting a
-  deactivated user off a chat channel is still `channel.pairing.revoke`.
+  **Scope, precisely (corrected 2026-08-13):** deactivation withdraws BOTH
+  credentials a principal is bound through — `devices.user_id` (WS/Panel) and
+  `approved_senders.user_id` (channel senders), the latter via
+  `PairingStore::revoke_for_user`. Ad-hoc cutoff of a single sender is still
+  `channel.pairing.revoke`.
+
+  The paragraph that stood here until 2026-08-13 said channel senders were
+  *not* revoked, on the reasoning that "`sender_user()` has no consumer yet, so
+  the link is recorded but carries no authority to withdraw". That was
+  contradicted ~95 lines above in this same file, and by the code since round-3
+  connected the producer: `inbound_router::executor` stamps
+  `ScopeAttribution::personal` from `sender_user` on **every inbound turn**, so
+  the link decides which session rows a person gets, which memory partition
+  they read and write, and whose curated `MEMORY.md` / `USER.md` is injected
+  into their prompts. A deactivated member therefore kept messaging the bot
+  under their own identity — and could call
+  `goal(action='update', status='active')` / `loop(action='resume')` to undo the
+  freeze `users.update` had just applied.
+
+  ⚠️ **Removal, not a status check inside `sender_user`.** That resolver's
+  `None` does not mean "refused"; it means *unlinked*, and its consumer reads
+  unlinked as legacy owner semantics — it stamps no attribution and the run is
+  adopted by the operator. Answering a deactivated member with `None` would
+  have upgraded them to the OWNER's scope, memory and sessions: strictly more
+  authority than the leak it was meant to close. A refusal folded into a value
+  that already means something else inverts into a grant.
+
+  ⚠️ **Still unbound by design, unchanged:** `DmPolicy::Allowlist` / `allow_from`
+  senders never enter `approved_senders`, so they stay owner-scoped and this
+  sweep does not reach them. On an `Open`-policy channel, anyone at all is
+  owner-scoped — that is the pre-existing product property of an open channel,
+  not something deactivation can withdraw.
 - **Role changes take effect on live connections.** `users.update { role }`
   re-stamps `caller_role` on the user's already-open Panel connections
   (`restamp_live_connections`), because the wire role is latched into
@@ -1868,10 +1917,38 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   from `scope::current_scope()` (`with_owner_scope`) and preserved across
   updates (e.g. `GoalStore::commit_field_update`'s status CAS never
   clobbers it). **Deactivation freeze** (spec §10): `users.update { status:
-  "deactivated" }` freezes background work owned by that user (e.g.
-  `GoalStore::pause_all_owned_by`) — one-way, no auto-resume on
-  reactivation (spec silent on the reverse; recorded as a deliberate P1
-  scope boundary, not an oversight).
+  "deactivated" }` freezes background work owned by that user — **three legs,
+  one per subsystem that runs work on a principal's behalf**:
+  `GoalStore::pause_all_owned_by`, `LoopRegistry::pause_all_owned_by`, and
+  (since 2026-08-13) `CronService::pause_all_owned_by`. All three are reached
+  through process-global handles because the freeze is a free function with no
+  injected dependencies; cron was the one it could not reach.
+
+  One-way, no auto-resume on reactivation (spec silent on the reverse;
+  recorded as a deliberate P1 scope boundary, not an oversight).
+
+  ⚠️ **Cron was excluded until 2026-08-13 on a premise `handlers/users.rs`
+  itself falsifies**: "`cron.*` is admin-gated, so a deactivated MEMBER owns
+  none by construction". The owner guard in that file pins only
+  `OWNER_USER_ID`, and `users.create` accepts `role: "admin"` — so a SECOND
+  admin is fully deactivatable and certainly owns cron jobs, whose schedules
+  kept firing afterwards with their attribution rehydrated into every run
+  (`build_cron_metadata`). The escape hatch the comment watched for ("if cron
+  creation is ever opened to non-admin members") was not the one that fired.
+
+  ⚠️ **The sweep is set-to-disabled, never toggle.** A sweep must be idempotent
+  — a repeated `users.update{status:"deactivated"}` or a retry must not ENABLE
+  an already-disabled job, which is what a toggle does. It is also scoped to
+  the principal (another admin's schedules survive) and leaves pre-P1 jobs with
+  no owner alone.
+
+  ⚠️ **This is an enumerated sweep at WRITE time, and that is its weakness.**
+  It covers exactly the legs enumerated on the day it was written; a fourth
+  subsystem added later will be forgotten in the same way cron was. The
+  stronger shape — re-asking owner liveness at FIRE time, in the one chokepoint
+  each scheduler already has — is Aleph's own 「界限要在执行时刻成立」 criterion
+  applied to identity rather than to time, and is recorded as deliberately not
+  done in FEATURE_LOCATOR §5.22 round-4 「刻意未做 ④」 rather than half-built.
 - **Scope is immutable for a session's lifetime** (spec §10).
   `owner_user_id`/`scope_id` are stamped once, at session creation
   (`SessionMetadata::stamp_attribution`, the CREATE branch only — reading an

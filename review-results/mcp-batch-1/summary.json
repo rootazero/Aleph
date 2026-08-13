@@ -1,0 +1,99 @@
+{
+  "batch": "mcp-batch-1",
+  "title": "Core: types, protocol, jsonrpc, prompts, resources, preflight, error_class, redact, mod",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-mcp-audit",
+  "report": "review-results/mcp-batch-1/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 1,
+    "medium": 3,
+    "low": 4,
+    "total": 8
+  },
+  "by_category": {
+    "security": 2,
+    "logic": 4,
+    "architecture": 1,
+    "quality": 1
+  },
+  "files_reviewed": [
+    { "path": "src/mcp/mod.rs", "loc": 97, "findings": 0 },
+    { "path": "src/mcp/types.rs", "loc": 354, "findings": 0 },
+    { "path": "src/mcp/protocol.rs", "loc": 939, "findings": 3 },
+    { "path": "src/mcp/jsonrpc.rs", "loc": 309, "findings": 0 },
+    { "path": "src/mcp/prompts.rs", "loc": 91, "findings": 1 },
+    { "path": "src/mcp/resources.rs", "loc": 22, "findings": 0 },
+    { "path": "src/mcp/preflight.rs", "loc": 118, "findings": 1 },
+    { "path": "src/mcp/error_class.rs", "loc": 214, "findings": 2 },
+    { "path": "src/mcp/redact.rs", "loc": 39, "findings": 0 }
+  ],
+  "total_loc": 2183,
+  "findings": [
+    {
+      "id": "B1-01",
+      "severity": "High",
+      "category": "Logic",
+      "file": "src/mcp/error_class.rs",
+      "line": 61,
+      "title": "'broken pipe' / 'connection closed' classified as SessionExpired, not Transient"
+    },
+    {
+      "id": "B1-02",
+      "severity": "Medium",
+      "category": "Security",
+      "file": "src/mcp/preflight.rs",
+      "line": 88,
+      "title": "Preflight error string embeds the unvalidated URL, leaking userinfo"
+    },
+    {
+      "id": "B1-03",
+      "severity": "Medium",
+      "category": "Security",
+      "file": "src/mcp/protocol.rs",
+      "line": 73,
+      "title": "McpRemoteServerConfig::headers accepts any string at construction; HTTP token validation deferred to wire time"
+    },
+    {
+      "id": "B1-04",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/protocol.rs",
+      "line": 618,
+      "title": "SamplingContent lacks Audio variant; server audio sampling misroutes to Image"
+    },
+    {
+      "id": "B1-05",
+      "severity": "Low",
+      "category": "Architecture",
+      "file": "src/mcp/prompts.rs",
+      "line": 34,
+      "title": "PromptMessage::role is String while protocol.rs's PromptRole is an enum; new variants silently round-trip as ''"
+    },
+    {
+      "id": "B1-06",
+      "severity": "Low",
+      "category": "Logic",
+      "file": "src/mcp/error_class.rs",
+      "line": 84,
+      "title": "classify_mcp_error substring-matches 'temporarily' and 'try again' — broad false positives"
+    },
+    {
+      "id": "B1-07",
+      "severity": "Low",
+      "category": "Logic",
+      "file": "src/mcp/protocol.rs",
+      "line": 560,
+      "title": "PromptRole has no Tool variant; a server emitting 'tool' role fails to deserialise"
+    },
+    {
+      "id": "B1-08",
+      "severity": "Low",
+      "category": "Logic",
+      "file": "src/mcp/protocol.rs",
+      "line": 386,
+      "title": "ResourceContentItem is untagged and silently drops 'blob' when 'text' is also present"
+    }
+  ]
+}

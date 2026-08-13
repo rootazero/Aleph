@@ -20,7 +20,7 @@
 //! - `DreamDaemon` is not initialized (memory disabled or simulated mode)
 //! - A dream cycle is already running
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::memory::store::MemoryBackend;
@@ -78,15 +78,32 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
         .agent_id
         .as_deref()
         .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
-    // P1 partition isolation — see this fn's doc.
-    if !crate::gateway::visibility::partition_visible(agent_id) {
-        return JsonRpcResponse::success(
-            request.id,
-            json!({ "daily": [], "synthesis": [], "runs": [] }),
-        );
-    }
-
     let limit = params.limit.filter(|n| *n > 0).unwrap_or(30);
+
+    // P1 partition isolation — see this fn's doc.
+    //
+    // The refusal has to be key-identical to an empty success, or counting keys
+    // is an existence oracle: this branch used to send three keys where success
+    // sends five, so "refused" and "this corpus has never dreamed" were
+    // trivially distinguishable — while the doc four paragraphs above promises
+    // they are the same shape. `namespaces` is the caller's own visible index
+    // in BOTH branches (it is not scoped to the corpus they asked about), so
+    // withholding it here would leak the refusal just as loudly as omitting it.
+    if !crate::gateway::visibility::partition_visible(agent_id) {
+        return match visible_namespaces(&db, limit) {
+            Ok(namespaces) => JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "agent_id": agent_id,
+                    "daily": [],
+                    "synthesis": [],
+                    "runs": [],
+                    "namespaces": namespaces,
+                }),
+            ),
+            Err(err) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, err),
+        };
+    }
 
     // 1. Recent daily digests.
     let daily = match db.recent_daily_insights(limit).await {
@@ -141,15 +158,6 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
     // is dreaming always conserving?") answerable here — it carries the chosen
     // strategy's rationale, the churn gate's verdict, the stages that ran and
     // the validation result.
-    let parse_blob = |column: &'static str, raw: Option<String>| {
-        raw.and_then(|s| {
-            serde_json::from_str::<serde_json::Value>(&s)
-                .inspect_err(
-                    |e| tracing::warn!(%e, column, raw = %s, "corrupt JSON in dream report"),
-                )
-                .ok()
-        })
-    };
     let runs = match db.recent_dream_reports(Some(agent_id), limit) {
         Ok(reports) => reports
             .into_iter()
@@ -193,28 +201,12 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
     // as before. This is the index: which corpora exist, how much each has run,
     // and what its latest cycle decided. Picking one and re-issuing the call
     // with that `agent_id` is how the operator reads its history.
-    let namespaces = match db.dream_namespace_rollup(limit) {
-        Ok(stats) => stats
-            .into_iter()
-            .map(|s| {
-                json!({
-                    "namespace": s.namespace,
-                    "runs": s.runs,
-                    "last_started_at": s.last_started_at,
-                    "last_pipeline_type": s.last_pipeline_type,
-                    // Same parse as `runs[].decision` — one `CycleDecision`
-                    // shape, one place that reads it.
-                    "last_decision": parse_blob("decision_json", s.last_decision_json),
-                })
-            })
-            .collect::<Vec<_>>(),
-        Err(err) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("dreaming.list_insights namespaces failed: {err}"),
-            );
-        }
+    //
+    // Built by [`visible_namespaces`] so the refusal branch above and this one
+    // cannot describe the index differently.
+    let namespaces = match visible_namespaces(&db, limit) {
+        Ok(rows) => rows,
+        Err(err) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, err),
     };
 
     JsonRpcResponse::success(
@@ -227,6 +219,60 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
             "namespaces": namespaces,
         }),
     )
+}
+
+/// Re-emit a stored JSON blob as a parsed value, warning (not failing) on a
+/// corrupt one — one row's bad blob must not fail the whole listing.
+///
+/// A free function rather than a closure inside the handler because
+/// [`visible_namespaces`] renders `last_decision` with it too, and two
+/// renderings of one `CycleDecision` must not acquire separate authors.
+fn parse_blob(column: &'static str, raw: Option<String>) -> Option<Value> {
+    raw.and_then(|s| {
+        serde_json::from_str::<Value>(&s)
+            .inspect_err(|e| tracing::warn!(%e, column, raw = %s, "corrupt JSON in dream report"))
+            .ok()
+    })
+}
+
+/// The corpus index, narrowed to what this caller may see.
+///
+/// One row per corpus that has ever dreamed: which exist, how much each has
+/// run, and what its latest cycle decided. Picking one and re-issuing
+/// `dreaming.list_insights` with that `agent_id` is how an operator reads its
+/// history — which is exactly why the row for someone *else's* corpus is a
+/// leak and not merely noise.
+///
+/// The narrowing lives here, in the single builder both response branches call,
+/// rather than beside either of them: the refusal branch has to send the same
+/// keys as an empty success, and two authors for one projection is how those
+/// two branches drift apart again.
+///
+/// Uses the same [`crate::gateway::visibility::partition_visible`] predicate as
+/// the named-corpus gate. That gate could never cover this list: it guards the
+/// corpus the caller NAMED, and the natural no-params call names `main`, which
+/// every caller can see — so on the call this endpoint is actually made with,
+/// the gate is structurally unreachable while the index enumerated every
+/// `main__u-*` and `main__p-*` corpus on disk.
+fn visible_namespaces(db: &MemoryBackend, limit: usize) -> Result<Vec<Value>, String> {
+    let stats = db
+        .dream_namespace_rollup(limit)
+        .map_err(|err| format!("dreaming.list_insights namespaces failed: {err}"))?;
+    Ok(stats
+        .into_iter()
+        .filter(|s| crate::gateway::visibility::partition_visible(&s.namespace))
+        .map(|s| {
+            json!({
+                "namespace": s.namespace,
+                "runs": s.runs,
+                "last_started_at": s.last_started_at,
+                "last_pipeline_type": s.last_pipeline_type,
+                // Same parse as `runs[].decision` — one `CycleDecision` shape,
+                // one place that reads it.
+                "last_decision": parse_blob("decision_json", s.last_decision_json),
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -277,6 +323,132 @@ mod tests {
                 .await;
             assert!(ok.is_success(), "{agent}: {:?}", ok.error);
         }
+    }
+
+    /// A refusal that is a different SHAPE than an empty success is an
+    /// existence oracle: the caller learns which corpora exist by counting
+    /// keys. The deny branch sent three keys where success sends five, while
+    /// the function's own doc promised "the same shape a partition the dream
+    /// daemon has never run over produces".
+    ///
+    /// Asserted as **key-set equality** rather than "the keys I remembered":
+    /// a literal list is the same enumeration mistake one layer up, and it goes
+    /// stale the first time a sixth key is added to only one branch.
+    #[tokio::test]
+    async fn a_refusal_is_shaped_exactly_like_an_empty_success() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
+        let req = |agent: &str| {
+            JsonRpcRequest::with_id(
+                "dreaming.list_insights",
+                Some(json!({ "agent_id": agent })),
+                json!(1),
+            )
+        };
+        let keys = |resp: JsonRpcResponse| -> Vec<String> {
+            let mut k: Vec<String> = resp
+                .result
+                .expect("success, never an error")
+                .as_object()
+                .expect("object")
+                .keys()
+                .cloned()
+                .collect();
+            k.sort();
+            k
+        };
+
+        let refused = keys(
+            CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_list_insights(req("main__u-alice"), db.clone()),
+                )
+                .await,
+        );
+        // Bob's own corpus, on which the daemon has never run: a real empty
+        // result, and the one a refusal has to be indistinguishable from.
+        let empty = keys(
+            CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    handle_list_insights(req("main__u-bob"), db.clone()),
+                )
+                .await,
+        );
+        assert_eq!(
+            refused, empty,
+            "a refusal must not be distinguishable from an empty result by its key set"
+        );
+    }
+
+    /// The index enumerates every corpus that has ever dreamed, and it is NOT
+    /// scoped to the corpus the caller named — so the named-corpus gate above
+    /// never covered it, and on the natural no-params call (which names `main`,
+    /// visible to everyone) that gate is structurally unreachable.
+    #[tokio::test]
+    async fn the_corpus_index_only_names_partitions_the_caller_can_see() {
+        use crate::gateway::caller_identity::CALLER_USER;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+
+        use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
+        let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
+        for (i, ns) in ["main", "main__u-alice", "main__u-bob"]
+            .into_iter()
+            .enumerate()
+        {
+            backend
+                .insert_dream_report(&PersistedDreamReport {
+                    id: format!("dr-{i}"),
+                    pipeline_type: "consolidate".to_string(),
+                    started_at: 1_000 + i as i64,
+                    finished_at: 2_000 + i as i64,
+                    duration_ms: 1_000,
+                    synthesis_count: 0,
+                    notes_consolidated: 0,
+                    notes_woven: 0,
+                    notes_archived: 0,
+                    feedback_distilled: 0,
+                    errors: None,
+                    namespace: ns.to_string(),
+                    evolution_json: None,
+                    decision_json: None,
+                })
+                .expect("seed a dream run");
+        }
+        let db: MemoryBackend = Arc::new(backend);
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                // No `agent_id` — the call the Panel actually makes, and the
+                // one on which the named-corpus gate cannot fire.
+                handle_list_insights(
+                    JsonRpcRequest::with_id("dreaming.list_insights", Some(json!({})), json!(1)),
+                    db.clone(),
+                ),
+            )
+            .await;
+        let v = resp.result.expect("success");
+        let names: Vec<&str> = v["namespaces"]
+            .as_array()
+            .expect("namespaces array")
+            .iter()
+            .filter_map(|n| n["namespace"].as_str())
+            .collect();
+        assert!(
+            !names.contains(&"main__u-alice"),
+            "alice's corpus must not appear in bob's index: {names:?}"
+        );
+        assert!(
+            names.contains(&"main__u-bob") && names.contains(&"main"),
+            "bob must still see his own corpus and the shared one: {names:?}"
+        );
     }
 
     /// In a unit-test process the global DreamDaemon is never initialized

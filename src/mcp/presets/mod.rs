@@ -91,11 +91,22 @@ pub struct PresetEnvVar {
 const CATALOG_JSON: &str = include_str!("catalog.json");
 
 /// Parsed, in-binary preset catalog (single source of truth).
+///
+/// A malformed bundled catalog is logged at error level and degrades to an
+/// empty slice rather than panicking at startup. The Hub primer that
+/// projects this catalog into the `aleph-hub` cache slot will simply have
+/// nothing to project; the rest of the daemon is unaffected.
 pub fn catalog() -> &'static [McpPreset] {
     static CELL: OnceLock<Vec<McpPreset>> = OnceLock::new();
-    CELL.get_or_init(|| {
-        // rust-doctor-disable-next-line unwrap-in-production
-        serde_json::from_str(CATALOG_JSON).expect("bundled MCP preset catalog.json must be valid")
+    CELL.get_or_init(|| match serde_json::from_str(CATALOG_JSON) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "bundled MCP preset catalog.json is malformed; returning empty catalog"
+            );
+            Vec::new()
+        }
     })
 }
 

@@ -47,10 +47,18 @@ pub struct SseRequest {
 }
 
 impl SseEvent {
-    /// Parse SSE event from event type and data
+    /// Parse SSE event from event type and data.
+    ///
+    /// The HTTP/SSE spec treats event names as case-sensitive, but the MCP
+    /// `message` event is the SSE default and harmless to accept in any
+    /// case — accepting both avoids misrouting a server that emits
+    /// `event: Message` (the spec-compliant form) to the `Unknown` arm.
+    /// `endpoint` and `ping` keep case-sensitive matching because the
+    /// spec is strict about them.
     #[must_use]
     pub fn parse(event_type: &str, data: &str) -> Self {
-        match event_type {
+        let lower = event_type.to_ascii_lowercase();
+        match lower.as_str() {
             "endpoint" => Self::Endpoint {
                 url: data.trim().to_string(),
             },
@@ -136,6 +144,16 @@ mod tests {
         // Empty event type with JSON-RPC data should still parse
         let data = r#"{"jsonrpc":"2.0","method":"test"}"#;
         let event = SseEvent::parse("", data);
+        assert!(matches!(event, SseEvent::Notification(_)));
+    }
+
+    #[test]
+    fn test_parse_message_event_type_case_insensitive() {
+        // A server that emits "event: Message" (capital M) is the SSE default
+        // event; accepting case-insensitively avoids misrouting to the
+        // Unknown arm. endpoint / ping keep case-sensitive matching.
+        let data = r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#;
+        let event = SseEvent::parse("Message", data);
         assert!(matches!(event, SseEvent::Notification(_)));
     }
 }

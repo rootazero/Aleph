@@ -820,9 +820,7 @@ async fn every_catalog_row_deserialises_into_the_contract_type() {
     let mut cfg = ProviderConfig::test_config("some-relay-model");
     cfg.enabled = true;
     cfg.verified = true;
-    config
-        .providers
-        .insert("my-relay".to_string(), cfg);
+    config.providers.insert("my-relay".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
 
     let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;
@@ -930,4 +928,93 @@ async fn a_provider_without_a_credential_gets_a_row_rather_than_silence() {
         .expect("the provider we asked about must appear in the answer");
     assert!(!row.ok);
     assert_eq!(row.kind, Some(DiscoveryFailureKind::MissingCredential));
+}
+
+/// Ask a `models_refresh` about one provider and read its row.
+async fn refresh_one(config: Config, provider: &str) -> ModelsRefreshRow {
+    let request = JsonRpcRequest::with_id(
+        "providers.modelsRefresh",
+        Some(json!({ "provider": provider })),
+        json!(1),
+    );
+    let response =
+        handle_models_refresh(request, Arc::new(RwLock::new(config)), test_vault()).await;
+    let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
+        .expect("client must decode the sweep");
+    parsed
+        .providers
+        .into_iter()
+        .find(|r| r.provider == provider)
+        .unwrap_or_else(|| panic!("the sweep must answer about {provider}"))
+}
+
+#[tokio::test]
+async fn naming_a_disabled_provider_still_gets_an_answer() {
+    // The `enabled` filter is the blanket sweep's rule — it exists so a sweep
+    // does not dial vendors nobody uses. Applied to a named target it turned
+    // "go look at this one" into an empty array, which reads as "nothing
+    // happened" and is the one thing the whole per-row design is against.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.enabled = false;
+    cfg.api_key = None;
+    config.providers.insert("openai".to_string(), cfg);
+
+    let row = refresh_one(config, "openai").await;
+    assert!(!row.ok);
+    // No credential in this fixture, so that is the reason reported — the
+    // point of the test is that a row exists at all.
+    assert_eq!(row.kind, Some(DiscoveryFailureKind::MissingCredential));
+}
+
+#[tokio::test]
+async fn a_disabled_provider_stays_out_of_the_blanket_sweep() {
+    // The other half of the rule, so the fix above cannot quietly become "the
+    // sweep dials everything".
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("gpt-4o");
+    cfg.enabled = false;
+    config.providers.insert("openai".to_string(), cfg);
+
+    let request = JsonRpcRequest::with_id("providers.modelsRefresh", None, json!(1));
+    let response =
+        handle_models_refresh(request, Arc::new(RwLock::new(config)), test_vault()).await;
+    let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
+        .expect("client must decode the sweep");
+    assert!(
+        parsed.providers.is_empty(),
+        "an un-narrowed sweep must skip disabled providers"
+    );
+}
+
+#[tokio::test]
+async fn naming_an_unconfigured_provider_says_so_rather_than_nothing() {
+    // An unlinked preset falls out of the iteration before any of the
+    // per-target reasoning can apply. The caller cannot tell that from a sweep
+    // that ran and found nothing to say.
+    let row = refresh_one(Config::default(), "openai").await;
+    assert!(!row.ok);
+    assert_eq!(row.kind, Some(DiscoveryFailureKind::MissingCredential));
+    assert!(
+        row.error.is_some_and(|e| e.contains("not configured")),
+        "the reason must distinguish 'not linked' from 'no key'"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_with_no_address_is_unsupported_not_missing_credential() {
+    // Two different unprobeable states, and the difference is actionable:
+    // "link it first" is something the operator can do, "this has no address"
+    // is not. A custom provider with no base_url and no preset behind it is
+    // the second kind.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("some-model");
+    cfg.enabled = true;
+    cfg.base_url = None;
+    cfg.api_key = Some("sk-test".to_string());
+    config.providers.insert("my-relay".to_string(), cfg);
+
+    let row = refresh_one(config, "my-relay").await;
+    assert!(!row.ok);
+    assert_eq!(row.kind, Some(DiscoveryFailureKind::Unsupported));
 }

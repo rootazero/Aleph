@@ -2,6 +2,18 @@ use super::types::{DeviceRow, DeviceUpsertData};
 use super::{current_timestamp_ms, SecurityStore};
 use rusqlite::{params, Result as SqliteResult};
 
+/// The column list every `devices` read shares, in the order
+/// [`DeviceRow::from_row`] indexes them.
+///
+/// One constant because there are THREE `SELECT`s and ONE `from_row`: adding a
+/// column to the projection of one of them makes `row.get(n)` on the others a
+/// RUNTIME error, not a compile error, and the two that would break here are
+/// `get_device_by_fingerprint` (every remote connect) and `get_device` (node
+/// admission). Positional decoding across hand-copied column lists is a
+/// contract with no compiler behind it.
+const DEVICE_COLUMNS: &str = "device_id, device_name, device_type, public_key, fingerprint, role, \
+                              scopes, created_at, approved_at, last_seen_at, revoked_at, user_id";
+
 impl SecurityStore {
     /// Insert or update a device.
     ///
@@ -41,11 +53,9 @@ impl SecurityStore {
     /// Get device by fingerprint
     pub fn get_device_by_fingerprint(&self, fingerprint: &str) -> SqliteResult<Option<DeviceRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
-                    created_at, approved_at, last_seen_at, revoked_at
-             FROM devices WHERE fingerprint = ?1",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DEVICE_COLUMNS} FROM devices WHERE fingerprint = ?1"
+        ))?;
 
         let result = stmt.query_row(params![fingerprint], DeviceRow::from_row);
         match result {
@@ -63,11 +73,9 @@ impl SecurityStore {
     /// node has to be refused on reconnect, while an unknown one is adopted.
     pub fn get_device(&self, device_id: &str) -> SqliteResult<Option<DeviceRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
-                    created_at, approved_at, last_seen_at, revoked_at
-             FROM devices WHERE device_id = ?1",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DEVICE_COLUMNS} FROM devices WHERE device_id = ?1"
+        ))?;
         match stmt.query_row(params![device_id], DeviceRow::from_row) {
             Ok(device) => Ok(Some(device)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -88,9 +96,9 @@ impl SecurityStore {
     pub fn list_devices(&self) -> SqliteResult<Vec<DeviceRow>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
-            "SELECT device_id, device_name, device_type, public_key, fingerprint, role, scopes,
-                    created_at, approved_at, last_seen_at, revoked_at
-             FROM devices WHERE revoked_at IS NULL ORDER BY created_at DESC",
+            &format!(
+                "SELECT {DEVICE_COLUMNS} FROM devices WHERE revoked_at IS NULL ORDER BY created_at DESC"
+            ),
         )?;
 
         let rows = stmt.query_map([], DeviceRow::from_row)?;

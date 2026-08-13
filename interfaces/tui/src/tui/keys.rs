@@ -597,6 +597,12 @@ fn handle_provider_picker_key(state: &mut AppState, key: KeyEvent) -> Action {
         KeyCode::Up => Action::ProviderPickerUp,
         KeyCode::Down => Action::ProviderPickerDown,
         KeyCode::Enter | KeyCode::Tab => Action::ProviderPickerConfirm,
+        // Ctrl+R, not a bare letter: every unmodified character is filter text
+        // here, and stealing one would make a provider whose id contains it
+        // unreachable by typing.
+        KeyCode::Char('r' | 'R') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ProviderPickerRefresh
+        }
         KeyCode::Backspace => {
             let is_empty = state
                 .provider_picker
@@ -965,6 +971,144 @@ mod provider_key_tests {
 
         press(&mut state, KeyCode::Backspace);
         assert_eq!(state.provider_picker.as_ref().unwrap().input, "lun");
+    }
+
+    /// Ctrl+R asks the vendor; a bare `r` is filter text.
+    ///
+    /// Every unmodified character in this overlay is search input, so stealing
+    /// one would make a provider whose id contains it unreachable by typing —
+    /// and `openrouter`, `openrouter`'s roster and `cerebras` all contain `r`.
+    #[test]
+    fn only_the_modified_r_refreshes() {
+        let mut state = opened();
+
+        assert!(matches!(
+            handle_provider_picker_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
+            ),
+            Action::ProviderPickerRefresh
+        ));
+        assert!(
+            state.provider_picker.as_ref().unwrap().input.is_empty(),
+            "the refresh key must not also land in the filter"
+        );
+
+        assert!(matches!(
+            press(&mut state, KeyCode::Char('r')),
+            Action::None
+        ));
+        assert_eq!(state.provider_picker.as_ref().unwrap().input, "r");
+    }
+
+    /// The refresh target is the row under the cursor at the provider level,
+    /// and the descended-into provider at the model level — never "whatever",
+    /// because this key dials a vendor.
+    #[test]
+    fn the_refresh_target_follows_the_level() {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.open_provider_picker(
+            vec![
+                sample_catalog_entry("openai", &["gpt-5.6"]),
+                sample_catalog_entry("moonshot", &["kimi-k2.6"]),
+            ],
+            String::new(),
+        );
+
+        assert_eq!(
+            state.provider_picker_refresh_target().as_deref(),
+            Some("openai")
+        );
+
+        state.enter_provider(1);
+        assert_eq!(
+            state.provider_picker_refresh_target().as_deref(),
+            Some("moonshot"),
+            "inside a roster the target is the open provider, not a model row"
+        );
+    }
+
+    /// A refetch re-resolves the open provider by id, not by position.
+    ///
+    /// The server sorts and filters the catalogue, so an index is not a stable
+    /// handle across two calls — keeping it would silently move the open roster
+    /// to a different vendor while the user was looking at it.
+    #[test]
+    fn a_refetch_keeps_the_open_provider_even_when_the_rows_move() {
+        let mut state = opened();
+        state.replace_provider_catalog(vec![
+            sample_catalog_entry("openai", &["gpt-5.6"]),
+            sample_catalog_entry("moonshot", &["kimi-k2.6"]),
+        ]);
+        state.enter_provider(1);
+        assert_eq!(
+            state.provider_picker_refresh_target().as_deref(),
+            Some("moonshot")
+        );
+
+        // The same catalogue, in the other order.
+        state.replace_provider_catalog(vec![
+            sample_catalog_entry("moonshot", &["kimi-k2.6", "kimi-k2.6-turbo"]),
+            sample_catalog_entry("openai", &["gpt-5.6"]),
+        ]);
+        assert_eq!(
+            state.provider_picker_refresh_target().as_deref(),
+            Some("moonshot"),
+            "the open roster must follow the id, not the index"
+        );
+        assert_eq!(
+            state.provider_picker.as_ref().unwrap().rows.len(),
+            2,
+            "and it must show the newly discovered ids"
+        );
+    }
+
+    /// The cursor follows the row it was on, not the position it was at.
+    ///
+    /// `recompute_provider_filter` resets the cursor to the top, so a refetch
+    /// that reorders the catalogue would leave the user looking at a different
+    /// provider than the one they just refreshed.
+    #[test]
+    fn a_refetch_keeps_the_cursor_on_the_row_it_was_on() {
+        let mut state = AppState::new("s".into(), "m".into());
+        state.open_provider_picker(
+            vec![
+                sample_catalog_entry("openai", &["gpt-5.6"]),
+                sample_catalog_entry("moonshot", &["kimi-k2.6"]),
+            ],
+            String::new(),
+        );
+        // `handle_provider_picker_key` only *returns* the action; the main loop
+        // is what moves the cursor, so move it the way the loop does.
+        state.provider_picker.as_mut().unwrap().selected = 1;
+        assert_eq!(
+            state.provider_picker_refresh_target().as_deref(),
+            Some("moonshot")
+        );
+
+        // Same catalogue, other order.
+        state.replace_provider_catalog(vec![
+            sample_catalog_entry("moonshot", &["kimi-k2.6"]),
+            sample_catalog_entry("openai", &["gpt-5.6"]),
+        ]);
+        assert_eq!(
+            state.provider_picker_refresh_target().as_deref(),
+            Some("moonshot"),
+            "the cursor must follow the provider, not the index"
+        );
+    }
+
+    /// A provider that disappears from the catalogue between two reads leaves
+    /// the picker at the provider level rather than pointing at a stranger.
+    #[test]
+    fn a_refetch_that_drops_the_open_provider_climbs_out() {
+        let mut state = opened();
+        state.enter_provider(0);
+        state.replace_provider_catalog(vec![sample_catalog_entry("moonshot", &["kimi-k2.6"])]);
+        assert!(
+            state.provider_picker.as_ref().unwrap().provider.is_none(),
+            "an open provider the server no longer sends must not resolve to another row"
+        );
     }
 
     /// Backspace on an already-empty filter climbs out of a provider before it

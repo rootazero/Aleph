@@ -836,23 +836,23 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         Ok(all_results)
     }
 
-    /// Discover every note corpus on disk
-    /// ([`crate::memory::project_scope::list_note_corpora`]) and retrieve
-    /// across all of them.
-    ///
-    /// Returns empty if there are no corpora or the memory dir is unreadable.
-    pub async fn retrieve_all_agents(
-        &self,
-        query: &str,
-        memory_dir: &std::path::Path,
-        limit: usize,
-    ) -> Result<Vec<ScoredFact>, AlephError> {
-        let agent_ids = crate::memory::project_scope::list_note_corpora(memory_dir);
-        if agent_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.retrieve_multi_agent(query, &agent_ids, limit).await
-    }
+    // `retrieve_all_agents` used to live here: enumerate every corpus on disk
+    // and retrieve across all of them. It was removed on 2026-08-13 with zero
+    // production consumers left.
+    //
+    // Its shape was the problem, not its body. "Every corpus on disk" is a
+    // decision about who may be read, and taking no actor meant every caller
+    // made that decision by accident — `memory_search`'s Smart Recall phase 2
+    // called it on a sparse primary result and returned other principals'
+    // notes to the model, past a narrowing its own comment said was the single
+    // decision point. A helper that cannot be called without answering "who is
+    // asking" would be fine here; a helper that cannot be called WITH that
+    // answer is a hole with a convenient name.
+    //
+    // Callers now enumerate with `project_scope::list_note_corpora`, filter
+    // with `visibility::partition_visible_to`, and hand the result to
+    // [`Self::retrieve_multi_agent`] — which is exactly what this function did
+    // minus the filter.
 }
 
 /// Current Unix time in seconds (for retrieval-time recency scoring).
@@ -1331,15 +1331,11 @@ mod tests {
         assert!(results.is_empty(), "No notes indexed yet → no results");
     }
 
-    #[tokio::test]
-    async fn retrieve_all_agents_empty_dir_returns_empty() {
-        let (retrieval, dir) = create_retrieval().await;
-        let results = retrieval
-            .retrieve_all_agents("query", dir.path(), 10)
-            .await
-            .unwrap();
-        assert!(results.is_empty());
-    }
+    // `retrieve_all_agents_empty_dir_returns_empty` was here. Deleted with the
+    // function; the property it checked (an empty corpus list is not an error)
+    // is already `retrieve_multi_agent_empty_agents_returns_empty` above, and
+    // keeping a second copy of it under a dead name is how a suite grows tests
+    // nobody can attribute to a behaviour.
 
     // --- Cross-encoder rerank wiring ---------------------------------------
 

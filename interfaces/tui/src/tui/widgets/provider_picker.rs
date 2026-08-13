@@ -58,12 +58,21 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
         return;
     }
 
-    // Filter line at the top.
+    // Filter line at the top, with the one binding that is not guessable.
+    // Up/Down/Enter/Backspace are the picker conventions this overlay shares
+    // with the session picker; Ctrl+R is new here, so an unadvertised key
+    // would be an unusable one.
     let filter_area = Rect::new(inner.x, inner.y, inner.width, 1);
-    let filter_line = Paragraph::new(Line::from(Span::styled(
-        format!("filter: {}", picker.input),
-        Style::default().fg(DEFAULT_THEME.primary),
-    )));
+    let filter_line = Paragraph::new(Line::from(vec![
+        Span::styled(
+            format!("filter: {}", picker.input),
+            Style::default().fg(DEFAULT_THEME.primary),
+        ),
+        Span::styled(
+            "   ^R fetch models",
+            Style::default().fg(DEFAULT_THEME.muted),
+        ),
+    ]));
     frame.render_widget(filter_line, filter_area);
 
     let list_area = Rect::new(

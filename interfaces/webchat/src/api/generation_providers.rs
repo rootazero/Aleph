@@ -1,6 +1,6 @@
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
-use crate::preset_providers::PresetProviderDto;
+use aleph_protocol::providers::GenerationPresetRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -83,6 +83,23 @@ pub struct GenerationProviderEntry {
     pub generation_type: Option<String>,
     #[serde(default)]
     pub has_api_key: bool,
+}
+
+/// Custom generation providers rank through the same matcher as the presets.
+///
+/// Two lists on one page filtered by one box have to agree about what a query
+/// means, or the box quietly does two different things depending on which half
+/// of the page you are looking at.
+impl aleph_protocol::providers::Searchable for GenerationProviderEntry {
+    fn search_id(&self) -> &str {
+        &self.name
+    }
+    /// A custom provider has no separate display name — the operator's chosen
+    /// name is both. Returning it twice is honest; inventing a second label
+    /// would make the display-name tier fire on rows that have none.
+    fn search_display_name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl GenerationProviderEntry {
@@ -218,10 +235,13 @@ impl GenerationProvidersApi {
     }
 
     /// Fetch the authoritative preset catalogue from the backend. Returns one
-    /// DTO per `(GenerationPreset, ProviderMetadata)` pair sorted by id. The
-    /// panel converts these into `PresetProvider` via `into_preset()` for
-    /// rendering — no static panel-side registry is consulted.
-    pub async fn list_presets(state: &DashboardState) -> Result<Vec<PresetProviderDto>, String> {
+    /// contract row per `(GenerationPreset, ProviderMetadata)` pair sorted by
+    /// id. The panel converts these into `PresetProvider` via `into_preset()`
+    /// for rendering — no static panel-side registry is consulted.
+    ///
+    /// The row type is the shared contract, not a local DTO: the local one
+    /// omitted `signup_url` and serde discarded it without a word.
+    pub async fn list_presets(state: &DashboardState) -> Result<Vec<GenerationPresetRow>, String> {
         let result = state
             .rpc_call("generation_providers.list_presets", Value::Null)
             .await?;

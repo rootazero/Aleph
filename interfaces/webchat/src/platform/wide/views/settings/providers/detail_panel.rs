@@ -15,17 +15,13 @@
 //! to its first rung. The editor is therefore ordered and says so: `models[0]`
 //! is what a turn uses when it names no model, the rest are the failover rungs.
 //!
-//! The roster it offers comes from the catalogue row (`entry.roster`), which the
-//! backend merged through the same leaf the failover walk uses. It is an offer,
-//! not a whitelist: `select_model` accepts ids nobody has heard of, so a picker
-//! that refused them would be stricter than the tool, and the free-text row
-//! below the list is how you name one.
-
-use aleph_protocol::providers::{DiscoveryFailureKind, ModelSource, ModelStatus, ModelsRefreshRow};
+//! The editor itself lives in [`super::model_ladder`]; this file owns the form
+//! around it, and the [`RefreshState`] both it and the ladder write to.
 
 use crate::api::{
     AuthKind, CatalogEntry, OAuthStatus, ProviderConfigJson, ProviderInfo, ProvidersApi, TestResult,
 };
+use super::model_ladder::{ModelLadder, RefreshState};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
@@ -78,6 +74,11 @@ pub(super) fn ProviderDetailPanel(
     let test_result = RwSignal::new(Option::<TestResult>::None);
     let oauth_status = RwSignal::new(Option::<OAuthStatus>::None);
     let oauth_loading = RwSignal::new(false);
+    // Owned here, not inside `ModelLadder`: the post-save sweep started by
+    // `on_save` has to report through the same badge the ladder's own button
+    // writes. When this lived in the child, the save path had nowhere to put
+    // its answer and threw it away — while a comment claimed the opposite.
+    let refresh = RwSignal::new(RefreshState::Idle);
 
     // Equality-gated so the hydration Effect below re-runs exactly once when
     // the catalogue arrives — a plain `catalog.get()` would also re-run after
@@ -290,23 +291,36 @@ pub(super) fn ProviderDetailPanel(
                         providers.set(list);
                     }
                     selected.set(Some(name.clone()));
-                    // Fire-and-forget: a vendor that is down must not make
-                    // "save my API key" slow, so the sweep runs in its own task
-                    // and the save has already reported success by the time it
-                    // answers. Failures are visible on the row's own refresh
-                    // status, which is where the operator would look.
+                    // Fire-and-forget for *latency*, not for the answer: a
+                    // vendor that is down must not make "save my API key" slow,
+                    // so the sweep runs in its own task and the save has already
+                    // reported success by the time it answers — but the verdict
+                    // still lands on the ladder's refresh badge, through the
+                    // same `settle` the manual button uses.
+                    //
+                    // The previous shape tested `.is_ok()`, which is true even
+                    // when every row is a failure: per-provider failures are
+                    // rows and not RPC errors, by design. So linking a vendor
+                    // that was unreachable said nothing at all.
                     if sweep_worthwhile {
+                        refresh.set(RefreshState::Running);
                         spawn_local(async move {
-                            if ProvidersApi::models_refresh(&state, Some(name))
-                                .await
-                                .is_ok()
-                            {
-                                if let Ok(items) =
-                                    ProvidersApi::catalog(&state, crate::api::CatalogView::All)
-                                        .await
-                                {
-                                    catalog.set(items);
+                            match ProvidersApi::models_refresh(&state, Some(name.clone())).await {
+                                Ok(result) => {
+                                    refresh.set(RefreshState::settle(&result, &name));
+                                    if let Ok(items) =
+                                        ProvidersApi::catalog(&state, crate::api::CatalogView::All)
+                                            .await
+                                    {
+                                        catalog.set(items);
+                                    }
                                 }
+                                // A transport failure on the sweep is not a
+                                // failure of the save, which has already
+                                // succeeded — so it does not become the form's
+                                // error banner. Dropping back to `Idle` says
+                                // "no answer" rather than inventing one.
+                                Err(_) => refresh.set(RefreshState::Idle),
                             }
                         });
                     }
@@ -640,6 +654,7 @@ pub(super) fn ProviderDetailPanel(
                                             models=form_model
                                             catalog=catalog
                                             error=error
+                                            refresh=refresh
                                         />
 
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
@@ -807,6 +822,7 @@ pub(super) fn ProviderDetailPanel(
                                             models=form_model
                                             catalog=catalog
                                             error=error
+                                            refresh=refresh
                                         />
 
                                         // Advanced Settings card
@@ -968,356 +984,3 @@ pub(super) fn ProviderDetailPanel(
     }
 }
 
-/// What the last `providers.modelsRefresh` said about this provider.
-#[derive(Clone)]
-enum RefreshState {
-    Idle,
-    Running,
-    /// The sweep answered about this provider.
-    Row(Box<ModelsRefreshRow>),
-    /// The sweep succeeded and said nothing about this provider. It only visits
-    /// providers that are enabled **and** have a resolvable key, so an absent
-    /// row means "not swept" — which is a different thing from "no models", and
-    /// reporting it as success would be the more expensive lie.
-    NotSwept,
-}
-
-impl RefreshState {
-    /// A sweep is in flight.
-    const fn is_running(&self) -> bool {
-        matches!(self, Self::Running)
-    }
-}
-
-/// The ordered model ladder editor plus the roster it offers.
-#[component]
-fn ModelLadder(
-    /// Provider id this ladder belongs to; `None` while adding a brand-new
-    /// custom provider, which has no catalogue row (and so no roster and
-    /// nothing to refresh) until it is saved.
-    provider_id: Option<String>,
-    models: RwSignal<Vec<String>>,
-    catalog: RwSignal<Vec<CatalogEntry>>,
-    error: RwSignal<Option<String>>,
-) -> impl IntoView {
-    let i18n = use_i18n();
-    let state = expect_context::<DashboardState>();
-    let typed = RwSignal::new(String::new());
-    let refresh = RwSignal::new(RefreshState::Idle);
-
-    let pid = provider_id.clone();
-    let entry = Signal::derive(move || {
-        let id = pid.as_ref()?;
-        catalog
-            .get()
-            .into_iter()
-            .find(|e| &e.id == id || e.aliases.iter().any(|a| a == id))
-    });
-
-    let add = move |id: String| {
-        let id = id.trim().to_string();
-        if id.is_empty() {
-            return;
-        }
-        let mut current = models.get_untracked();
-        if !current.iter().any(|m| m == &id) {
-            current.push(id);
-            models.set(current);
-        }
-    };
-
-    // `StoredValue` keeps the handler `Copy`, which it has to be: it is
-    // installed from inside a reactive block that re-runs whenever the
-    // catalogue changes, and a handler owning a `String` could only be
-    // installed once.
-    let refresh_id = StoredValue::new(provider_id.clone());
-    let on_refresh = move |_| {
-        let Some(id) = refresh_id.get_value() else {
-            return;
-        };
-        refresh.set(RefreshState::Running);
-        spawn_local(async move {
-            match ProvidersApi::models_refresh(&state, Some(id.clone())).await {
-                Ok(result) => {
-                    let row = result.providers.into_iter().find(|r| r.provider == id);
-                    refresh.set(
-                        row.map_or(RefreshState::NotSwept, |r| RefreshState::Row(Box::new(r))),
-                    );
-                    // The discovered ids reach the picker through the catalogue
-                    // (the server folds the on-disk cache into `roster`), so a
-                    // refresh is only half done until the row is re-read.
-                    if let Ok(items) =
-                        ProvidersApi::catalog(&state, crate::api::CatalogView::All).await
-                    {
-                        catalog.set(items);
-                    }
-                }
-                Err(e) => {
-                    refresh.set(RefreshState::Idle);
-                    error.set(Some(crate::components::admin_refusal::settings_load_error(
-                        i18n,
-                        &e,
-                        |e| format!("Failed to fetch models: {e}"),
-                    )));
-                }
-            }
-        });
-    };
-
-    let can_refresh = provider_id.is_some();
-
-    view! {
-        <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">
-                {t!(i18n, settings.providers.models_label)}
-            </h3>
-            <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.models_order_hint)}</p>
-
-            // The selected ladder, in order.
-            {move || {
-                let list = models.get();
-                if list.is_empty() {
-                    return view! {
-                        <p class="text-xs text-text-tertiary italic">
-                            {t!(i18n, settings.providers.models_empty)}
-                        </p>
-                    }.into_any();
-                }
-                let last = list.len() - 1;
-                view! {
-                    <div class="space-y-1">
-                        {list.into_iter().enumerate().map(|(idx, id)| {
-                            let lifecycle = entry.get()
-                                .and_then(|e| e.roster.iter().find(|r| r.id == id).cloned())
-                                .map(|r| r.lifecycle);
-                            let retired = lifecycle.as_ref().is_some_and(|l| l.status == ModelStatus::Deprecated);
-                            let successor = lifecycle.and_then(|l| l.successor.map(|s| s.to_string()));
-                            view! {
-                                <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface-sunken border border-border">
-                                    <span class="text-[10px] uppercase tracking-wider text-text-tertiary w-14 shrink-0">
-                                        {if idx == 0 {
-                                            t_string!(i18n, settings.providers.models_first).to_string()
-                                        } else {
-                                            format!("#{}", idx + 1)
-                                        }}
-                                    </span>
-                                    <span class="flex-1 text-xs font-mono text-text-primary truncate">{id.clone()}</span>
-                                    {retired.then(|| view! {
-                                        <span class="text-[9px] uppercase tracking-wider text-warning shrink-0"
-                                              title=successor.clone().unwrap_or_default()>
-                                            {t!(i18n, settings.providers.models_retired)}
-                                        </span>
-                                    })}
-                                    <button
-                                        type="button"
-                                        title=move || t_string!(i18n, settings.providers.models_move_up).to_string()
-                                        prop:disabled=idx == 0
-                                        on:click=move |_| {
-                                            let mut cur = models.get_untracked();
-                                            if idx > 0 && idx < cur.len() {
-                                                cur.swap(idx - 1, idx);
-                                                models.set(cur);
-                                            }
-                                        }
-                                        class="px-1.5 text-text-tertiary hover:text-text-primary disabled:opacity-30"
-                                    >"↑"</button>
-                                    <button
-                                        type="button"
-                                        title=move || t_string!(i18n, settings.providers.models_move_down).to_string()
-                                        prop:disabled=idx == last
-                                        on:click=move |_| {
-                                            let mut cur = models.get_untracked();
-                                            if idx + 1 < cur.len() {
-                                                cur.swap(idx, idx + 1);
-                                                models.set(cur);
-                                            }
-                                        }
-                                        class="px-1.5 text-text-tertiary hover:text-text-primary disabled:opacity-30"
-                                    >"↓"</button>
-                                    <button
-                                        type="button"
-                                        title=move || t_string!(i18n, settings.providers.models_remove).to_string()
-                                        on:click=move |_| {
-                                            let mut cur = models.get_untracked();
-                                            if idx < cur.len() {
-                                                cur.remove(idx);
-                                                models.set(cur);
-                                            }
-                                        }
-                                        class="px-1.5 text-text-tertiary hover:text-danger"
-                                    >"✕"</button>
-                                </div>
-                            }
-                        }).collect_view()}
-                    </div>
-                }.into_any()
-            }}
-
-            // The roster this provider offers, minus what is already picked.
-            {move || {
-                let Some(e) = entry.get() else {
-                    return view! { <span></span> }.into_any();
-                };
-                let chosen = models.get();
-                let offer: Vec<_> = e.roster.into_iter()
-                    .filter(|r| !chosen.iter().any(|m| m == &r.id))
-                    .collect();
-                if offer.is_empty() {
-                    return view! { <span></span> }.into_any();
-                }
-                view! {
-                    <div class="space-y-1">
-                        <p class="text-[10px] uppercase tracking-wider text-text-tertiary">
-                            {t!(i18n, settings.providers.models_offered)}
-                        </p>
-                        <div class="flex flex-wrap gap-1.5">
-                            {offer.into_iter().map(|r| {
-                                let id = r.id.clone();
-                                let retired = r.lifecycle.status == ModelStatus::Deprecated;
-                                let hint = r.lifecycle.successor.map(|s| s.to_string()).unwrap_or_default();
-                                let source = match r.source {
-                                    ModelSource::Configured => t_string!(i18n, settings.providers.source_configured).to_string(),
-                                    ModelSource::Discovered => t_string!(i18n, settings.providers.source_discovered).to_string(),
-                                    ModelSource::PresetDefault
-                                    | ModelSource::PresetFallback
-                                    | ModelSource::PresetAux => t_string!(i18n, settings.providers.source_curated).to_string(),
-                                };
-                                view! {
-                                    <button
-                                        type="button"
-                                        title=hint
-                                        on:click=move |_| add(id.clone())
-                                        class="flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-surface-sunken hover:border-primary/40 transition-colors"
-                                    >
-                                        <span class="text-xs font-mono text-text-secondary">{r.id.clone()}</span>
-                                        <span class="text-[9px] uppercase tracking-wider text-text-tertiary">{source}</span>
-                                        {retired.then(|| view! {
-                                            <span class="text-[9px] uppercase tracking-wider text-warning">
-                                                {t!(i18n, settings.providers.models_retired)}
-                                            </span>
-                                        })}
-                                    </button>
-                                }
-                            }).collect_view()}
-                        </div>
-                    </div>
-                }.into_any()
-            }}
-
-            // Free-text escape hatch. `select_model` accepts ids that are in no
-            // roster, so this picker must too.
-            <div class="flex gap-2">
-                <input
-                    type="text"
-                    prop:value=move || typed.get()
-                    on:input=move |ev| typed.set(event_target_value(&ev))
-                    on:keydown=move |ev| {
-                        if ev.key() == "Enter" {
-                            ev.prevent_default();
-                            add(typed.get_untracked());
-                            typed.set(String::new());
-                        }
-                    }
-                    placeholder=move || t_string!(i18n, settings.providers.models_add_placeholder).to_string()
-                    class="flex-1 px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
-                />
-                <button
-                    type="button"
-                    on:click=move |_| { add(typed.get_untracked()); typed.set(String::new()); }
-                    class="px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-secondary hover:border-primary/40"
-                >
-                    {t!(i18n, settings.providers.models_add)}
-                </button>
-            </div>
-
-            // Live discovery: a button only where one can succeed.
-            {move || {
-                if !can_refresh {
-                    return view! { <span></span> }.into_any();
-                }
-                let discoverable = entry.get().is_some_and(|e| e.discoverable);
-                if !discoverable {
-                    return view! {
-                        <p class="text-xs text-text-tertiary">
-                            {t!(i18n, settings.providers.fetch_unsupported)}
-                        </p>
-                    }.into_any();
-                }
-                view! {
-                    <div class="space-y-2">
-                        <button
-                            type="button"
-                            on:click=on_refresh
-                            prop:disabled=move || refresh.get().is_running()
-                            class="px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-secondary hover:border-primary/40 disabled:opacity-50"
-                        >
-                            {move || if refresh.get().is_running() {
-                                t_string!(i18n, settings.providers.fetching).to_string()
-                            } else {
-                                t_string!(i18n, settings.providers.fetch_models).to_string()
-                            }}
-                        </button>
-                        {move || match refresh.get() {
-                            RefreshState::Idle | RefreshState::Running => view! { <span></span> }.into_any(),
-                            RefreshState::NotSwept => view! {
-                                <p class="text-xs text-warning">{t!(i18n, settings.providers.fetch_not_swept)}</p>
-                            }.into_any(),
-                            RefreshState::Row(row) => {
-                                let count = row.models.len();
-                                let kind = row.kind.map(|k| failure_kind_label(i18n, k));
-                                if row.ok && !row.stale {
-                                    view! {
-                                        <p class="text-xs text-success">
-                                            {t!(i18n, settings.providers.fetch_live)}
-                                            " · "
-                                            {count.to_string()}
-                                        </p>
-                                    }.into_any()
-                                } else if row.ok {
-                                    view! {
-                                        <div class="text-xs text-warning">
-                                            <p>{t!(i18n, settings.providers.fetch_stale)}" · "{count.to_string()}</p>
-                                            {kind.map(|k| view! { <p class="text-text-tertiary">{k}</p> })}
-                                        </div>
-                                    }.into_any()
-                                } else {
-                                    view! {
-                                        <div class="text-xs text-danger">
-                                            <p>{t!(i18n, settings.providers.fetch_failed)}</p>
-                                            {kind.map(|k| view! { <p class="text-text-tertiary">{k}</p> })}
-                                        </div>
-                                    }.into_any()
-                                }
-                            }
-                        }}
-                    </div>
-                }.into_any()
-            }}
-        </div>
-    }
-}
-
-/// One localized sentence per discovery failure, because "no listing endpoint"
-/// and "the request timed out" are the same prose but opposite advice: one is
-/// never worth retrying, the other is.
-fn failure_kind_label(
-    i18n: leptos_i18n::I18nContext<crate::i18n::Locale>,
-    kind: DiscoveryFailureKind,
-) -> String {
-    match kind {
-        DiscoveryFailureKind::Unsupported => {
-            t_string!(i18n, settings.providers.kind_unsupported).to_string()
-        }
-        DiscoveryFailureKind::MissingCredential => {
-            t_string!(i18n, settings.providers.kind_missing_credential).to_string()
-        }
-        DiscoveryFailureKind::Transport => {
-            t_string!(i18n, settings.providers.kind_transport).to_string()
-        }
-        DiscoveryFailureKind::Status => t_string!(i18n, settings.providers.kind_status).to_string(),
-        DiscoveryFailureKind::Shape => t_string!(i18n, settings.providers.kind_shape).to_string(),
-        DiscoveryFailureKind::Timeout => {
-            t_string!(i18n, settings.providers.kind_timeout).to_string()
-        }
-    }
-}

@@ -165,6 +165,24 @@ fn member_run_metadata(
     if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
         metadata.insert("caller_role".to_string(), role);
     }
+    // Third carrier, third failure direction: the room AUTHOR is what
+    // `visibility::ambient_actor()` answers "who is asking" with, and without
+    // it that resolver falls back to the scope's `owner_user_id` — which in a
+    // project room is the CREATOR, the same person for every member. So losing
+    // it here does not make the member run anonymous, it makes it *Alice*: her
+    // personal memory partition passes `partition_visible_to`, her personal
+    // sessions enumerate, and the signed ledger files the actions under her.
+    //
+    // The scope stamp above cannot cover this. `run_loop::with_request_scope`
+    // seeds the author from `AUTHOR_USER_KEY` specifically, and derives nothing
+    // about it from the scope — precisely because in a room those two are
+    // different people.
+    if let Some(author) = crate::scope::current_room_author() {
+        metadata.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            author,
+        );
+    }
     metadata
 }
 
@@ -647,6 +665,26 @@ impl GroupChatBroadcaster {
                 "group-chat: roster member not resolvable in the agent registry; skipped");
             return;
         };
+
+        // The third teams face of the agent axis (the other two are
+        // `team_delegate` and the dispatcher, both funnelling through
+        // `dispatcher::runner::execute_member_task`). Naming a restricted agent
+        // as a group-chat roster member ran it with its `tool_permissions`
+        // regardless of whether the speaker may select that agent — the same
+        // two-step bypass, on a face that is member-open by design.
+        //
+        // `ambient_actor()` because a fan-out member always executes inside a
+        // spawn (`CALLER_USER` is dead there) and, in a project room, the
+        // speaker is not the owner. `None` — the background dispatcher, cron,
+        // tests — is unrestricted, like every sibling predicate.
+        if let Some(allowed) = self.ctx.agent_registry().get_allowed_users(&agent_id).await {
+            let actor = crate::gateway::visibility::ambient_actor();
+            if !crate::config::types::agent_admits_user(allowed.as_deref(), actor.as_deref()) {
+                tracing::warn!(team_id = %team_id, agent_id = %agent_id, actor = ?actor,
+                    "group-chat: target agent's allowed_users denies this speaker; skipped");
+                return;
+            }
+        }
 
         // Pull latest transcript (including the just-arrived message) and format it
         let history = self

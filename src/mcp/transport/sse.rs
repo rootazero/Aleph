@@ -242,6 +242,13 @@ impl SseTransport {
                 "Starting SSE event listener"
             );
 
+            // Exponential backoff for SSE reconnects. A server that returns
+            // 503 on every reconnect would otherwise pin Aleph at one
+            // attempt every 5 s forever; the cap is what stops a server that
+            // is genuinely down from looking like a tight retry loop.
+            let mut backoff_secs: u64 = 1;
+            const BACKOFF_MAX_SECS: u64 = 60;
+
             loop {
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
@@ -252,11 +259,15 @@ impl SseTransport {
                         match result {
                             Ok(()) => {
                                 tracing::debug!(server = %server_name, "SSE stream ended normally");
+                                // A clean end is not a failure; reset the
+                                // backoff so the next blip starts from 1 s.
+                                backoff_secs = 1;
                             }
                             Err(e) => {
                                 tracing::warn!(
                                     server = %server_name,
                                     error = %e,
+                                    backoff_secs,
                                     "SSE stream error, will retry"
                                 );
                             }
@@ -267,11 +278,17 @@ impl SseTransport {
                             break;
                         }
 
-                        // Wait before reconnecting
+                        // Wait before reconnecting (exponential, capped, with
+                        // a tiny jitter so concurrent listeners do not all
+                        // land on the same instant).
+                        let jitter_ms: u64 = (rand::random::<u8>() as u64) * 50;
+                        let sleep = std::time::Duration::from_secs(backoff_secs)
+                            + std::time::Duration::from_millis(jitter_ms);
                         tokio::select! {
-                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                            _ = tokio::time::sleep(sleep) => {}
                             _ = shutdown_rx.recv() => break,
                         }
+                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
                     }
                 }
             }

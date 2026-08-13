@@ -21,6 +21,7 @@ use crate::components::ui::SecretInput;
 use crate::components::ui::TagListInput;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use aleph_protocol::channel_pairing::{ApprovedSenderList, ApprovedSenderRow};
 
 use super::definitions::{ChannelDefinition, FieldDef, FieldKind};
 
@@ -737,7 +738,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     dir.ensure_loaded(state);
 
     // Approved senders list
-    let approved_senders: RwSignal<Vec<ApprovedSenderInfo>> = RwSignal::new(Vec::new());
+    let approved_senders: RwSignal<Vec<ApprovedSenderRow>> = RwSignal::new(Vec::new());
     let approved_error = RwSignal::new(Option::<String>::None);
     let refresh_approved = RwSignal::new(0u32);
 
@@ -757,23 +758,35 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
             {
                 Ok(val) => {
                     approved_error.set(None);
-                    if let Some(arr) = val.get("senders").and_then(|v| v.as_array()) {
-                        let senders: Vec<ApprovedSenderInfo> = arr
-                            .iter()
-                            .map(|v| ApprovedSenderInfo {
-                                sender_id: v
-                                    .get("sender_id")
-                                    .and_then(|s| s.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                                approved_at: v
-                                    .get("approved_at")
-                                    .and_then(|s| s.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                            })
-                            .collect();
-                        approved_senders.set(senders);
+                    match serde_json::from_value::<ApprovedSenderList>(val) {
+                        Ok(list) => approved_senders.set(list.senders),
+                        // A response this client cannot parse is a server it
+                        // cannot describe. Saying so beats the previous `if
+                        // let`, which left the list at its last value and let
+                        // the empty state speak for the server.
+                        //
+                        // Routed through the same classifier as the RPC error
+                        // below, not `format!`: this arm is a decode failure so
+                        // the wrapper is a no-op here, and that is exactly why
+                        // the rule has no allowlist — an exception would be a
+                        // second answer to "is this a refusal", maintained by
+                        // hand, on the surface where getting it wrong shows a
+                        // member a raw protocol string.
+                        Err(e) => approved_error.set(Some(
+                            crate::components::admin_refusal::settings_load_error(
+                                i18n,
+                                &e.to_string(),
+                                |e| {
+                                    format!(
+                                        "{}{e}",
+                                        t_string!(
+                                            i18n,
+                                            channel_config.pairing_approved_load_failed
+                                        )
+                                    )
+                                },
+                            ),
+                        )),
                     }
                 }
                 // A refused read is not an empty list. This arm used to be
@@ -1073,11 +1086,20 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                                 let sender_id = s.sender_id;
                                 let ch_id_for_revoke = channel_id.get_value();
                                 let sid_for_revoke = sender_id.clone();
+                                // Which principal this sender speaks as. It is
+                                // the whole reason to render this list beside a
+                                // Revoke button: `channel.pairing.revoke` is
+                                // keyed on `sender_id`, so cutting a person off
+                                // a channel means knowing which id is theirs.
+                                let principal = s.display_name.or(s.user_id);
                                 view! {
                                     <div class="flex items-center justify-between px-3 py-2 bg-surface-raised border border-border rounded-lg">
-                                        <div class="flex items-center gap-2">
+                                        <div class="flex items-center gap-2 min-w-0">
                                             <span class="w-2 h-2 rounded-full bg-success flex-shrink-0" />
-                                            <span class="text-sm font-mono text-text-primary">{sender_id}</span>
+                                            <span class="text-sm font-mono text-text-primary truncate">{sender_id}</span>
+                                            {principal.map(|p| view! {
+                                                <span class="text-xs text-text-tertiary truncate">{p}</span>
+                                            })}
                                         </div>
                                         <button
                                             on:click=move |_| {
@@ -1106,12 +1128,13 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ApprovedSenderInfo {
-    sender_id: String,
-    #[allow(dead_code)]
-    approved_at: String,
-}
+// `ApprovedSenderInfo` used to be declared here, hand-rolled from
+// `val.get("sender_id")` walks against a response key (`senders`) the server
+// never emitted — so this list rendered "no approved senders" on every channel
+// that had some. The shape now comes from
+// `aleph_protocol::channel_pairing::ApprovedSenderRow`, which the handler
+// *builds its response from*, so a rename is a compile error on both sides
+// instead of a silently empty list.
 
 /// One row of `channel.pairing.list`.
 ///

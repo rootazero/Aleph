@@ -26,6 +26,7 @@ pub(super) fn PresetSetupPanel(
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
 
     let preset_id = preset.id.clone();
+    let signup_url = preset.signup_url.clone();
     let provider_type = preset.provider_type.clone();
     let color = preset.color.clone();
     let capabilities = preset.capabilities.clone();
@@ -195,6 +196,23 @@ pub(super) fn PresetSetupPanel(
                             value=api_key
                             has_api_key=Signal::derive(|| false)
                         />
+                        // The one actionable thing on an unconfigured row. The
+                        // server has curated these links for every preset that
+                        // has one since the registry was written; they reached
+                        // no client until the row became a contract type.
+                        {match signup_url.clone() {
+                            Some(url) => view! {
+                                <a
+                                    href=url
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="mt-1 inline-block text-xs text-primary hover:underline"
+                                >
+                                    {t!(i18n, settings.generation.get_a_key)}
+                                </a>
+                            }.into_any(),
+                            None => view! { <span></span> }.into_any(),
+                        }}
                     </div>
 
                     <div>

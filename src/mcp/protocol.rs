@@ -454,6 +454,25 @@ pub enum PromptRole {
     User,
     Assistant,
     System,
+    /// Tool/function role introduced in later revisions. Aleph round-trips
+    /// it but does not currently render it into a prompt — a server that
+    /// emits it gets a faithful `SamplingMessage` back, where the role can
+    /// be matched by downstream tooling.
+    Tool,
+}
+
+impl PromptRole {
+    /// The wire-form lowercase string used by `serde` and forwarded to
+    /// downstream renderers (provider messages, builtin tool output).
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Tool => "tool",
+        }
+    }
 }
 
 /// Content in a prompt message
@@ -520,6 +539,13 @@ pub enum SamplingContent {
     /// Image content (base64)
     #[serde(rename = "image")]
     Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// Audio content (base64), spec revision 2025-03-26
+    #[serde(rename = "audio")]
+    Audio {
         data: String,
         #[serde(rename = "mimeType")]
         mime_type: String,
@@ -873,6 +899,27 @@ mod tests {
             mime_type: "image/png".to_string(),
         };
         assert!(matches!(image, SamplingContent::Image { .. }));
+
+        // Audio (spec revision 2025-03-26) round-trips instead of failing
+        // the whole sampling/createMessage response.
+        let audio = SamplingContent::Audio {
+            data: "AAAA".to_string(),
+            mime_type: "audio/wav".to_string(),
+        };
+        let json = serde_json::to_string(&audio).unwrap();
+        assert!(json.contains("\"type\":\"audio\""));
+        assert!(json.contains("\"mimeType\":\"audio/wav\""));
+        let back: SamplingContent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, SamplingContent::Audio { .. }));
+    }
+
+    #[test]
+    fn prompt_role_includes_tool_for_forward_compat() {
+        // A server that emits "role": "tool" (later revisions) must
+        // deserialise rather than fail the whole prompts/get response.
+        let json = r#""tool""#;
+        let role: PromptRole = serde_json::from_str(json).unwrap();
+        assert!(matches!(role, PromptRole::Tool));
     }
 
     #[test]

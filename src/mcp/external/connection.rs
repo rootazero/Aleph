@@ -329,13 +329,29 @@ impl McpServerConnection {
             &aleph_client_capabilities(can_sample),
         );
 
-        match self.probe_era(&probe_meta).await {
-            EraProbe::Modern {
+        // Per-step bound inside the overall 300 s connect timeout. Without
+        // it, a server that answers `server/discover` in 100 ms but then
+        // hangs on `tools/list` would spend the rest of the 300 s
+        // blocking the handshake — and the manager's health probe, which
+        // calls `refresh_tools` again, would hit the same hang.
+        const HANDSHAKE_STEP_TIMEOUT: Duration = Duration::from_secs(60);
+
+        match tokio::time::timeout(
+            HANDSHAKE_STEP_TIMEOUT,
+            self.probe_era(&probe_meta),
+        )
+        .await
+        {
+            Ok(EraProbe::Modern {
                 version,
                 discovered,
-            } => self.adopt_modern(version, discovered, can_sample).await,
-            EraProbe::Legacy => self.initialize_legacy(can_sample).await,
-            EraProbe::Incompatible(supported) => {
+            }) => {
+                self.adopt_modern(version, discovered, can_sample).await?;
+            }
+            Ok(EraProbe::Legacy) => {
+                self.initialize_legacy(can_sample).await?;
+            }
+            Ok(EraProbe::Incompatible(supported)) => {
                 return Err(AlephError::IoError(format!(
                     "MCP server '{}' supports only protocol {:?}; Aleph speaks {} \
                      and the handshake-based revisions up to {}",
@@ -345,21 +361,42 @@ impl McpServerConnection {
                     mcp_types::MCP_LEGACY_PROTOCOL_VERSION
                 )))
             }
-        }?;
+            Err(_) => {
+                return Err(AlephError::Timeout {
+                    suggestion: Some(format!(
+                        "MCP server '{}' server/discover probe did not complete in {}s",
+                        self.name,
+                        HANDSHAKE_STEP_TIMEOUT.as_secs()
+                    )),
+                });
+            }
+        }
 
-        // Pre-fetch tools list
-        self.refresh_tools().await?;
-
-        // Pre-fetch resources and prompts (non-fatal if not supported)
-        if let Err(e) = self.refresh_resources().await {
-            tracing::debug!(server = %self.name, error = %e, "Resources refresh failed (may not be supported)");
-        }
-        if let Err(e) = self.refresh_resource_templates().await {
-            tracing::debug!(server = %self.name, error = %e, "Resource templates refresh failed (may not be supported)");
-        }
-        if let Err(e) = self.refresh_prompts().await {
-            tracing::debug!(server = %self.name, error = %e, "Prompts refresh failed (may not be supported)");
-        }
+        // Per-step timeout on the post-handshake list-method drains. A
+        // hung server should not consume the remainder of the global
+        // connect timeout silently.
+        let drain = async {
+            self.refresh_tools().await?;
+            if let Err(e) = self.refresh_resources().await {
+                tracing::debug!(server = %self.name, error = %e, "Resources refresh failed (may not be supported)");
+            }
+            if let Err(e) = self.refresh_resource_templates().await {
+                tracing::debug!(server = %self.name, error = %e, "Resource templates refresh failed (may not be supported)");
+            }
+            if let Err(e) = self.refresh_prompts().await {
+                tracing::debug!(server = %self.name, error = %e, "Prompts refresh failed (may not be supported)");
+            }
+            Ok::<(), AlephError>(())
+        };
+        tokio::time::timeout(HANDSHAKE_STEP_TIMEOUT, drain)
+            .await
+            .map_err(|_| AlephError::Timeout {
+                suggestion: Some(format!(
+                    "MCP server '{}' post-handshake list refresh did not complete in {}s",
+                    self.name,
+                    HANDSHAKE_STEP_TIMEOUT.as_secs()
+                )),
+            })??;
 
         Ok(())
     }
@@ -710,6 +747,7 @@ impl McpServerConnection {
                 }
 
                 let description = t.description.unwrap_or_default();
+                let description = crate::mcp::tool_sanitize::truncate_description(&description);
                 if let Some(marker) = crate::mcp::scan_description_for_injection(&description) {
                     tracing::warn!(
                         server = %self.name,
@@ -1370,11 +1408,6 @@ impl McpServerConnection {
             .messages
             .into_iter()
             .map(|m| {
-                let role = match m.role {
-                    mcp_types::PromptRole::User => "user",
-                    mcp_types::PromptRole::Assistant => "assistant",
-                    mcp_types::PromptRole::System => "system",
-                };
                 let content = match m.content {
                     mcp_types::PromptContentItem::Text { text } => {
                         crate::mcp::prompts::PromptContent::Text { text }
@@ -1402,7 +1435,7 @@ impl McpServerConnection {
                     }
                 };
                 crate::mcp::prompts::PromptMessage {
-                    role: role.to_string(),
+                    role: m.role,
                     content,
                 }
             })
@@ -1438,6 +1471,12 @@ impl McpServerConnection {
     /// `server/discover` instead — the cheapest method every modern server is
     /// required to implement, and one whose answer is genuinely informative
     /// rather than merely non-empty.
+    ///
+    /// If the modern probe is rejected with `Method not found` (a server that
+    /// returned `server/discover` once and then lost the method), fall back to
+    /// the transport's passive liveness check rather than reporting unreachable.
+    /// The bridge's health probe escalates consecutive failures to a restart;
+    /// a single false negative here can take a working server down.
     pub async fn ping(&self) -> bool {
         let method = if self.is_modern() {
             DISCOVER_METHOD
@@ -1445,7 +1484,30 @@ impl McpServerConnection {
             "ping"
         };
         let request = self.request(method, None);
-        self.transport.send_request(&request).await.is_ok()
+        match self.transport.send_request(&request).await {
+            Ok(_) => true,
+            Err(e) => {
+                let kind = crate::mcp::classify_mcp_error(&e.to_string());
+                if self.is_modern()
+                    && matches!(
+                        kind,
+                        crate::mcp::McpErrorKind::Unknown | crate::mcp::McpErrorKind::Transient
+                    )
+                {
+                    // Modern probe was rejected or timed out; the transport
+                    // is still alive, so report as such to avoid an
+                    // unnecessary restart.
+                    tracing::debug!(
+                        server = %self.name,
+                        error = %e,
+                        "modern ping probe inconclusive; falling back to transport liveness"
+                    );
+                    self.transport.is_alive().await
+                } else {
+                    false
+                }
+            }
+        }
     }
 
     /// Install a handler for server-initiated notifications on this

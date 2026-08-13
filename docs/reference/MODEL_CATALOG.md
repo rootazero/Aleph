@@ -470,12 +470,21 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 
 以下是 2026-08-13（契约收敛 + 链接后取模型 + 多选轮，对标 pi 的 `/model` 选择器）评估后**明确不做**的：
 
-- **给 `providers.catalog` 加 `query` / `limit` / `offset`** — 目录是几十行，两个客户端都过滤服务端已经发下来的行（`aleph_protocol::providers::search`）。服务端过滤会是一个零消费者的抽象（R10），而且会开出第二个"哪些行匹配"的答案。行数上到四位数再回来。
+- **给 `providers.catalog` 加 `query` / `limit` / `offset`** — 目录是几十行，**三个**客户端（Panel / TUI / CLI）都过滤服务端已经发下来的行（`aleph_protocol::providers::search`）。服务端过滤会是一个零消费者的抽象（R10），而且会开出第二个"哪些行匹配"的答案。行数上到四位数再回来。**同理 `providers.list` 也没有 `query` 参数**（round-2 给 CLI 加的 `aleph providers list [query]` 是客户端过滤）。
 - **移植 pi 的 `fuzzyFilter`**（`packages/tui/src/fuzzy.ts`）— `model_picker` 有一条记录在案的裁定：顺序保留的子串过滤，**刻意不 fuzzy 排序**，因为 catalog 的行序与每行的 roster 都是策展过的，按子序列质量打分会把它们洗成近似字母序。本轮只叠加分层排序（精确 id > id 前缀 > 别名 > display_name > 仅 model-id 命中），那是 TUI 命令面板已经付过学费的教训（输入 `mode` 选中 `/tools`）。**连带也不需要 pi 的"两份搜索文本"**（`model-search.ts` 把裸 id 排到最后）——那是给 fuzzy 位置惩罚打的补丁，不用 fuzzy 就没有这个问题。
 - **建 pi 式的全局 `enabledModels` glob 集**（`settings-manager.ts:122`，minimatch 模式 + 可选 `:thinkingLevel` 后缀）— 会成为 `[providers.*] models` 之外**第二个**"哪些模型可用"的真源。Aleph 的多选落在 operator 配置轴上，且那条轴同时是 failover 梯（顺序即语义），一个平行的 pattern 层会和它对同一个问题给两个答案。
 - **给会话加第五根 knob 承载多选** — pin 仍是单值、仍只有 `select_model` 一个写者，`sessions.patch` 的 `NOT_PATCHABLE` 一行未动。多选是 operator 配置，不是每对话设置。
-- **TUI 做多选配置编辑器 / 接 `providers.modelsRefresh`** — provider 配置写面属 R2（业务配置 UI 归 Panel）；而 TUI 没有承接 per-provider `kind` 行的地方，目录已经折入缓存里的 discovered id，够用。
+- **TUI 做多选配置编辑器** — provider 配置写面属 R2（业务配置 UI 归 Panel）。ladder 是 operator 装机配置，不是聊天客户端该有的写面。**仍然成立。**
+- ~~**TUI 接 `providers.modelsRefresh`**~~ — **2026-08-13 round-2 改判，实现了**。原裁定与上一条**捆在同一行**，而给出的理由只覆盖上一条：`modelsRefresh` **不写任何配置**（它刷的是读穿缓存），所以 R2 对它不成立。另两条理由也各自站不住：「TUI 没有承接 per-provider `kind` 行的地方」——有，就是 transcript 里的系统消息，TUI 报告其他每一个 RPC 结果都用它；「目录已经折入缓存里的 discovered id，够用」——**只有在别人刷过缓存的前提下才够用**，而无头 server + 终端这个部署形态里没有别人。现 `/providers` 里 **Ctrl+R**。⚠️ 记这一条是因为**它示范了一个形状**：一条把两件事捆在一起的裁定，理由通常只为其中一件写的，而另一件是搭车过去的——**拆开数一遍，比引用它便宜**。
 - **给 `CatalogEntry` 加 `is_preset` 位** — Panel 的新分区（订阅登录 / 已配置 / 其余）比旧的"预设 vs 自定义"更贴用户实际在问的问题；为了复原旧分区去加一个字段是倒着走。
+
+以下是 2026-08-13 **round-2**（一个匹配器管全部预设 + 兄弟族契约）评估后**明确不做**的：
+
+- **generation provider 的实时 `/models` 发现** — 44 个预设里绝大多数是 `fal` / `bfl` / `suno` / `cartesia` / `deepgram` / `azure_speech` / `google_veo` 这类**厂商私有 API**，没有 OpenAI 兼容的列表端点。要做就得写 ~44 个 vendor 专用客户端进 core（违 R3），而它们各自的"模型"语义还互不相同（一个 voice id 和一个 checkpoint 不是同一种东西）。这一族的答案是**搜索 + 策展 `default_model` + signup 链接**——本轮把后两者接通了。
+- **给 embedding（5 个预设）/ rerank 加搜索框** — 五行不需要过滤。加了是零收益的第二处 UI，且下一个读代码的人会以为那里有什么值得找的东西。判据是**列表长度**，不是"别处有所以这里也要有"。
+- **把 children 建进 `Searchable`** — 只有 `CatalogEntry` 有 roster。给一张没有子项的列表一个"有没有匹配的子项"的接口，就是让它必须回答一个它没有词汇的问题，而"没有子项"与"没有匹配的子项"会在那一刻永久合流。`MatchRank::ChildOnly` 对 `rank_rows` **结构性不可达**，并有守卫钉着。
+- **给 `DiscoveryFailureKind` 加 `Disabled` / `NotConfigured` 变体** — 它是普通外部标签枚举（无 `#[serde(other)]`，unit enum 也用不了），加一个变体会让旧客户端**整行**解析失败而不只是丢一个字段（`#[serde(default)]` 只管缺失、不管非法），而 "Panel-lite 连局域网内老 server" 是有记录的部署形态。两种新情形都折进既有词汇：不可行动的用 `Unsupported`，可行动的用 `MissingCredential`（"先链接它"）。
+- **给 generation 预设行加 `discoverable` 位** — 那一族里这个概念不存在（上一条已说明），发一个恒 `false` 的字段只会引来一个永远不该出现的刷新按钮。
 
 ---
 
@@ -491,6 +500,8 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | 单 provider 内的 failover 游走梯 / picker roster | preset `fallback_models` 即游走梯；**唯一合并点 `presets::model_roster`**（operator `models` → curated rungs → discovered ids，带 `source` 与 `lifecycle`；operator 改过 `base_url` 则不合 curated rungs，**但仍合 discovered**——那些 id 正是从那个端点拿回来的）。`model_ladder` 是它把出处投影掉的那个投影，failover 用它，传空 `discovered` 逐字节复现旧梯。前端 picker 纯渲染不再自算 |
 | 这条 wire 的形状 / 加一个响应字段 | **`shared/protocol/src/providers/`**，不在 handler 旁边——四个说它的 crate 里有两个不许依赖 `alephcore`。**用契约类型 build 响应，不只是 parse 它**（解析只证明超集，超发看不见） |
 | provider / 模型搜索的排序规则 | `shared/protocol/src/providers/search.rs`（Panel 与 TUI 共用；顺序保留子串 + 分层，**不是 fuzzy**） |
+| **给一张新的预设列表加搜索** | **实现 `search::Searchable`**（`search_id` / `search_display_name`；别名有默认实现），然后 `rank_rows` / `filter_rows` —— **不要写 `.contains()`**。有子项的列表只有 `CatalogEntry`，它走 `rank_entries`；`MatchRank::ChildOnly` 对无子项列表**结构性不可达**是有意的（把 children 建进 trait 会让"没有子项"与"没有匹配的子项"分不开）。守卫 `both_halves_agree_on_identity_ranking` 拿目录自己的行两边各排一次断言相等 |
+| generation 预设行的形状 | **`shared/protocol/src/providers/generation.rs::GenerationPresetRow`**，服务端**从它 build**。这一族只有一个客户端，所以 `signup_url` 被 serde 静默丢弃了一整程——**一个客户端不等于不需要契约** |
 | **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处** |
 | **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行，`provider: None`（带 successor）** |
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |

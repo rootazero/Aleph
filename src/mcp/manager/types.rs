@@ -376,7 +376,11 @@ impl ServerHealth {
     /// Reset restart window if expired
     fn maybe_reset_window(&mut self, window_seconds: u64) {
         if let Some(start) = self.restart_window_start {
-            if start.elapsed().as_secs() > window_seconds {
+            // `>=` (not `>`): a server that restarts exactly at the
+            // window boundary is past the soft cap and should reset. The
+            // strict `>` left the restart counter pinned at the boundary,
+            // which let a flaky server permanently exhaust its budget.
+            if start.elapsed().as_secs() >= window_seconds {
                 self.restart_count = 0;
                 self.restart_window_start = None;
             }

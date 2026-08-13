@@ -288,6 +288,45 @@ pub async fn execute_member_task(
         }
     };
 
+    // The agent axis of the permission model, enforced where every teams face
+    // funnels through — `team_delegate`, the dispatcher, and the workflow
+    // steps that reach here all run a member's task as some agent.
+    //
+    // `[agents.X.tool_permissions]` is a permission SET selected by naming an
+    // agent, and `allowed_users` is what fences who may select it. That fence
+    // exists at `handlers::agent::build_run_request`, so a member refused
+    // `chat.send{agent_id:"ops"}` is refused. But `team_create` and
+    // `team_delegate` are member-open, and this function resolved the agent
+    // straight out of the registry — so naming `ops` as a team MEMBER ran it
+    // with its permissions anyway. Both steps legal, the pair equivalent: the
+    // same two-step bypass §5.17 closed for `sessions_send`, which carries the
+    // argument verbatim.
+    //
+    // Resolver is `ambient_actor()` — the only one that survives the spawn a
+    // team run always executes inside (`CALLER_USER` is dead there, and
+    // `ambient_owner()` in a room is its creator rather than the speaker).
+    // `None` (the background dispatcher, cron, tests) is unrestricted, like
+    // every sibling predicate.
+    if let Some(allowed) = agent_registry.get_allowed_users(agent_id).await {
+        let actor = crate::gateway::visibility::ambient_actor();
+        if !crate::config::types::agent_admits_user(allowed.as_deref(), actor.as_deref()) {
+            tracing::warn!(
+                team_id = %team_id,
+                task_id = %task_id,
+                agent_id = %agent_id,
+                actor = ?actor,
+                "team member run: target agent's allowed_users denies this caller"
+            );
+            return MemberRunOutcome {
+                status: MemberRunStatus::Failed,
+                reply: None,
+                error: Some(format!(
+                    "Agent '{agent_id}' does not admit this caller (allowed_users)"
+                )),
+            };
+        }
+    }
+
     // G2 — provision a worktree handle when the caller requests isolation.
     // Kept in this function's scope so `Drop` fires on every exit path; the
     // happy path also calls `cleanup()` explicitly below.

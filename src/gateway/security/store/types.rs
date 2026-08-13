@@ -28,6 +28,19 @@ pub struct DeviceRow {
     pub approved_at: i64,
     pub last_seen_at: Option<i64>,
     pub revoked_at: Option<i64>,
+    /// The principal this device is bound to.
+    ///
+    /// Written by two producers since P0 (a bootstrap ticket's binding, and
+    /// `set_device_user_if_unbound`'s owner default) and read, until
+    /// 2026-08-13, by nothing a human could see: the `SELECT` behind this type
+    /// did not name the column, so `gateway.devices.list` — which SECURITY.md
+    /// calls "the inventory" — could not emit it even in principle. An
+    /// operator offboarding one of five members saw five rows named "iPhone"
+    /// and picked by guesswork.
+    ///
+    /// `None` for a legacy pre-v14 row that was never adopted; every live
+    /// pairing path sets it.
+    pub user_id: Option<String>,
 }
 
 impl DeviceRow {
@@ -47,6 +60,7 @@ impl DeviceRow {
             approved_at: row.get(8)?,
             last_seen_at: row.get(9)?,
             revoked_at: row.get(10)?,
+            user_id: row.get(11)?,
         })
     }
 }

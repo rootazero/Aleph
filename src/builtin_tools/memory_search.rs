@@ -146,6 +146,22 @@ fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathClus
         .collect()
 }
 
+/// Where note corpora live, with the temp-dir fallback this file used to spell
+/// out three times.
+///
+/// One spelling because the two fan-outs and the constructor must agree about
+/// which directory they are enumerating: a narrowing computed over one
+/// directory and applied to a listing of another is a filter that silently
+/// admits everything.
+fn note_memory_dir() -> std::path::PathBuf {
+    crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+        std::env::temp_dir()
+            .join("aleph")
+            .join("memory")
+            .join("note")
+    })
+}
+
 /// Memory search tool with hybrid retrieval
 pub struct MemorySearchTool {
     database: MemoryBackend,
@@ -219,12 +235,7 @@ impl MemorySearchTool {
         let _threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
 
         // NoteFactRetrieval: used for the primary long-term recall path.
-        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-            std::env::temp_dir()
-                .join("aleph")
-                .join("memory")
-                .join("note")
-        });
+        let memory_dir = note_memory_dir();
         let note_indexer = Arc::new(NoteIndexer::new(memory_dir, database.clone()));
         let mut retrieval = NoteFactRetrieval::new(note_indexer, Arc::clone(&embedder));
         if let Some(cfg) = rerank_config {
@@ -324,6 +335,16 @@ impl MemorySearchTool {
             Some(agent_id) => agent_id,
             None => DEFAULT_AGENT.to_string(),
         };
+        // The partitions an un-argumented search reads: the session's own
+        // scope composed onto the base persona, unioned with the org tier.
+        // See the `else` branch below for why the bare persona was wrong.
+        let default_read_ids = || {
+            crate::memory::project_scope::session_read_ids(
+                &default_ws,
+                self.project_scoped,
+                crate::projects::current_project_root().as_deref(),
+            )
+        };
         // All three workspace arguments are MODEL-supplied and name a memory
         // partition directly, which is the same caller-supplied id the gateway
         // gates at ~20 sites with `visibility::partition_visible`. The tool
@@ -356,42 +377,56 @@ impl MemorySearchTool {
 
         let mut filtered_out = 0usize;
         let workspace_filter = if args.cross_workspace.unwrap_or(false) {
-            match actor.as_deref() {
-                // Unrestricted caller (cron / A2A / tests): the whole-disk
-                // fan-out is what it has always been.
-                None => AgentEnvFilter::All,
-                // A scoped caller gets "all the partitions that are yours",
-                // resolved HERE so there is one decision point rather than a
-                // second copy of the predicate inside the retrieval fan-out.
-                // `list_note_corpora` is the same enumeration `All` reaches;
-                // naming it here makes the narrowing visible and countable.
-                Some(_) => {
-                    let dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                        std::env::temp_dir()
-                            .join("aleph")
-                            .join("memory")
-                            .join("note")
-                    });
-                    let all = crate::memory::project_scope::list_note_corpora(&dir);
-                    let kept: Vec<String> = all.iter().filter(|id| admits(id)).cloned().collect();
-                    filtered_out = all.len() - kept.len();
-                    AgentEnvFilter::Multiple(kept)
-                }
-            }
+            // One arm, not two. This used to branch on the actor —
+            // `None => AgentEnvFilter::All` for the unrestricted caller (cron /
+            // A2A / tests), enumerate-and-filter for a scoped one — but
+            // `partition_visible_to(_, None)` admits everything, so the filtered
+            // enumeration IS the whole-disk fan-out when the actor is absent.
+            // The branch was two spellings of one answer, and it was the second
+            // spelling that let `AgentEnvFilter::All` reach a
+            // `retrieve_all_agents` the narrowing does not pass through.
+            //
+            // Resolved HERE so there is one decision point rather than a second
+            // copy of the predicate inside the retrieval fan-out — the property
+            // this comment has always claimed, now true of both fan-outs.
+            let all = crate::memory::project_scope::list_note_corpora(&note_memory_dir());
+            let kept: Vec<String> = all.iter().filter(|id| admits(id)).cloned().collect();
+            filtered_out = all.len() - kept.len();
+            AgentEnvFilter::Multiple(kept)
         } else if let Some(ref wss) = args.workspaces {
             let kept: Vec<String> = wss.iter().filter(|w| admits(w)).cloned().collect();
             filtered_out = wss.len() - kept.len();
             AgentEnvFilter::Multiple(kept)
-        } else {
-            let ws = args.workspace.as_deref().unwrap_or(&default_ws);
-            if !admits(ws) {
+        } else if let Some(ws) = args.workspace.as_deref() {
+            if admits(ws) {
+                AgentEnvFilter::Single(ws.to_string())
+            } else {
                 filtered_out = 1;
                 // Fall back to the caller's OWN default rather than erroring:
                 // a refusal that names the partition confirms it exists.
-                AgentEnvFilter::Single(default_ws.clone())
-            } else {
-                AgentEnvFilter::Single(ws.to_string())
+                AgentEnvFilter::Multiple(default_read_ids())
             }
+        } else {
+            // No `workspace` argument — the call the model actually makes, and
+            // the one that was broken on a STOCK SINGLE-USER install.
+            //
+            // Every writer composes the session's scope
+            // (`project_scope::session_write_id`, converged for the tool face
+            // on `caller_memory_partition`), and a zero-config loopback Panel
+            // session resolves to `Personal(u-owner)` — so notes land in
+            // `main__u-owner` while this reader searched the bare `main`.
+            // "Search my notes" answered "nothing found" about notes written
+            // minutes earlier in the same conversation. Round-3 ② fixed nine
+            // readers on exactly this argument and did not reach the flagship
+            // one, because its census is a seven-name literal list that does
+            // not contain `memory_search`.
+            //
+            // `session_read_ids` rather than `session_write_id` because this is
+            // the READ contract: a scoped session unions `[org, its own
+            // partition]`, which is what keeps shared org notes reachable from
+            // inside a personal or room scope. Outside any scope it is exactly
+            // `[base]` — byte-identical to what this branch did before.
+            AgentEnvFilter::Multiple(default_read_ids())
         };
 
         // For logging and path lookups, extract a primary workspace name
@@ -536,15 +571,31 @@ impl MemorySearchTool {
                         threshold = threshold,
                         "Smart Recall Phase 2 triggered — expanding to all agents"
                     );
-                    let memory_dir =
-                        crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                            std::env::temp_dir()
-                                .join("aleph")
-                                .join("memory")
-                                .join("note")
-                        });
+                    let memory_dir = note_memory_dir();
+                    // The SECOND fan-out, and the one the narrowing above never
+                    // reached. `retrieve_all_agents` is `list_note_corpora`
+                    // over the whole memory directory, so a sparse primary
+                    // result silently widened the search to every `main__u-*`
+                    // and `main__p-*` corpus on disk and returned other
+                    // people's note content to the model as
+                    // `CrossWorkspaceFact`.
+                    //
+                    // The comment 200 lines up says the actor is "resolved HERE
+                    // so there is one decision point rather than a second copy
+                    // of the predicate inside the retrieval fan-out" — this is
+                    // the fan-out that decision point did not reach. Narrowing
+                    // it with the SAME `admits` closure keeps that true rather
+                    // than adding the second copy.
+                    //
+                    // `None` actor (cron / A2A / tests) admits everything, so
+                    // this is byte-identical to `retrieve_all_agents` there.
+                    let visible: Vec<String> =
+                        crate::memory::project_scope::list_note_corpora(&memory_dir)
+                            .into_iter()
+                            .filter(|id| admits(id))
+                            .collect();
                     self.note_retrieval
-                        .retrieve_all_agents(&args.query, &memory_dir, args.max_results)
+                        .retrieve_multi_agent(&args.query, &visible, args.max_results)
                         .await
                         .map_err(|e| {
                             ToolError::Execution(format!("Smart recall phase 2 failed: {e}"))
@@ -612,23 +663,22 @@ impl MemorySearchTool {
                         .map_err(|e| {
                             ToolError::Execution(format!("Multi-workspace retrieval failed: {e}"))
                         })?,
-                    AgentEnvFilter::All => {
-                        let memory_dir =
-                            crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                                std::env::temp_dir()
-                                    .join("aleph")
-                                    .join("memory")
-                                    .join("note")
-                            });
-                        self.note_retrieval
-                            .retrieve_all_agents(&args.query, &memory_dir, args.max_results)
-                            .await
-                            .map_err(|e| {
-                                ToolError::Execution(format!(
-                                    "Cross-workspace retrieval failed: {e}"
-                                ))
-                            })?
-                    }
+                    // No longer constructed above — the `cross_workspace` branch
+                    // enumerates and filters, which for an unrestricted actor is
+                    // the same set. The arm stays because `AgentEnvFilter` is a
+                    // shared enum, and it goes through the SAME enumeration so
+                    // there is no second path into the corpora on disk.
+                    AgentEnvFilter::All => self
+                        .note_retrieval
+                        .retrieve_multi_agent(
+                            &args.query,
+                            &crate::memory::project_scope::list_note_corpora(&note_memory_dir()),
+                            args.max_results,
+                        )
+                        .await
+                        .map_err(|e| {
+                            ToolError::Execution(format!("Cross-workspace retrieval failed: {e}"))
+                        })?,
                 };
                 // Convert Vec<ScoredFact> → RetrievalResult for the comptroller pipeline.
                 let facts = scored
@@ -761,6 +811,60 @@ impl AlephTool for MemorySearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The flagship reader must compose the session's scope, and its second
+    /// fan-out must reuse the narrowing the first one computed.
+    ///
+    /// Source-level for the same reason `every_memory_dispatch_arm_composes_the_partition`
+    /// is: the failure is silent in both directions. A reader pointed at the
+    /// bare persona finds an empty directory and honestly reports it as empty
+    /// ("no notes" about notes written minutes ago), and a fan-out that skips
+    /// the actor filter returns other people's notes with no error anywhere.
+    /// No test that builds this tool with a base id and asserts against that
+    /// same base id can cross either seam.
+    ///
+    /// This lives here rather than in that census because `memory_search`
+    /// composes INTERNALLY — nothing hands it a resolved partition — so the
+    /// census's shape (scan a dispatch arm for `caller_memory_partition`) is
+    /// structurally unable to ask about it. Which is exactly why it was never
+    /// asked: that census is a seven-name literal list, and a whitelist only
+    /// covers the world of the day it was written.
+    #[test]
+    fn the_reader_composes_its_default_scope_and_narrows_both_fan_outs() {
+        let src = include_str!("memory_search.rs");
+        // Unanchored separator — `"\n#[cfg(test)]\n"` matches nothing on a CRLF
+        // checkout, which would make `prod` the whole file and let this test be
+        // satisfied by its own assertion strings (§10).
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+        // Comments stripped before the negative assertion, or the paragraph
+        // *explaining* why `retrieve_all_agents` is wrong satisfies the check
+        // that it is gone. `gateway/CLAUDE.md` records the mirror of this: a
+        // severed wire whose only remaining reference is the comment claiming
+        // it is wired. A name in prose is not a call site in either direction.
+        let code: String = prod
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            code.contains("session_read_ids"),
+            "an un-argumented `memory_search` must read the partitions the \
+             writers wrote to (`project_scope::session_read_ids`), not the bare \
+             persona. A zero-config loopback session already resolves to \
+             `Personal(u-owner)`, so the bare persona is wrong on a stock \
+             single-user install, not only in a multi-user one."
+        );
+        assert!(
+            !code.contains("retrieve_all_agents"),
+            "Smart Recall's phase-2 expansion must go through \
+             `retrieve_multi_agent` with the corpora this caller may see. \
+             `retrieve_all_agents` is `list_note_corpora` over the whole memory \
+             directory, so a sparse primary result silently widened the search \
+             to every other principal's notes and returned their content to the \
+             model as `CrossWorkspaceFact`."
+        );
+    }
 
     #[tokio::test]
     async fn test_memory_search_args_serialization() {
