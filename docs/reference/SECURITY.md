@@ -182,7 +182,9 @@ precedence composition point), `src/tools/scoped/` (enforcement),
 The exec tier is the **one user-facing dial** over tool permissions. It is not a
 second policy engine and not a second enforcement mechanism: it is a rule
 consulted at the chokepoint every tool call already funnels through, whenever no
-explicit `[policies.tool_permissions]` entry names the tool.
+explicit `[policies.tool_permissions]` entry names the tool — with exactly one
+exception, `Plan`'s refusal, which is a **floor above** that entry rather than a
+rule beneath it (see the lattice below).
 
 | Tier | What it asks about | Notes |
 |------|--------------------|-------|
@@ -201,6 +203,8 @@ the composer pill offers `session_tiers()` (four).
 ### The lattice (who wins)
 
 ```
+a tier verdict of Deny — today `Plan`     (rung 0: a floor, nothing outranks it)
+        ↓  (the tier said Ask, or had nothing to say)
 explicit [policies.tool_permissions] entry   (exact name > glob)
         ↓  (nothing named this tool)
 configured `default`   TIGHTENED BY   the tier's verdict
@@ -209,6 +213,25 @@ tool-declared confirmation gate              (CONFIRMATION_REQUIRED_TOOLS + MCP 
         ↓  (read by check_confirmation_gate independently of the tier)
 [sandbox.command_policy] hardline floor      (no tier can lower it — not even Full)
 ```
+
+⚠️ **Rung 0 exists because a floor an entry can outrank is a default.** `Ask` /
+`Auto` / `Full` only ever raise a tool to *ask*, so an operator who named the
+tool has answered the very question the tier was about to pose — for those three
+"more specific wins" is right, and they are byte-identical to before rung 0
+existed. `Plan` poses no question: its promise, restated to the model every turn,
+is that nothing runs. Under "more specific wins", one `"bash" = "allow"` written
+months earlier for an unrelated reason would retract that promise silently, and
+only on installs whose operator configured tool permissions at all — the ones
+with the most to lose. Rung 0 is keyed on the **verdict** (`rule_for` answering
+`Deny`), not on `ExecTier::Plan`: `rule_for`'s contract is that a tier yields at
+most `Ask`, so a future refusing tier inherits the floor without a name table.
+It fires only on the tier's *own* `Deny`, never on a composed one, so
+`default = "deny"` is still a baseline an explicit `allow` outranks, and the
+`Plan` carve-outs plus every idempotent tool fall straight through to rung 1 —
+an operator's explicit `deny` on `ctx_search` still denies while planning.
+This deliberately **inverts** the tier's shipped behaviour, whose test
+`an_explicit_entry_still_outranks_the_plan_tier` asserted the opposite; the
+three replacement tests in `exec_tier.rs` pin the scope of the inversion.
 
 ⚠️ **`Full` means "the tier gates nothing", not "nothing is gated."** The
 second-from-bottom row is easy to miss because it is not part of

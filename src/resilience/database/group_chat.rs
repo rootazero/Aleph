@@ -58,7 +58,15 @@ impl StateDatabase {
                 created_at, updated_at, owner_user_id
             ) VALUES (?1, ?2, 'active', ?3, ?4, ?5, ?6, ?7)
             "#,
-            params![id, topic, source_channel, source_session_key, now, now, owner_user_id],
+            params![
+                id,
+                topic,
+                source_channel,
+                source_session_key,
+                now,
+                now,
+                owner_user_id
+            ],
         )
         .map_err(|e| AlephError::config(format!("Failed to insert group chat session: {e}")))?;
         Ok(())
@@ -84,9 +92,7 @@ impl StateDatabase {
             )
             .optional()
             .map_err(|e| {
-                AlephError::config(format!(
-                    "Failed to read group chat session owner: {e}"
-                ))
+                AlephError::config(format!("Failed to read group chat session owner: {e}"))
             })?;
         Ok(owner.flatten())
     }

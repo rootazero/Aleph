@@ -139,7 +139,7 @@ pub use agent_manage::{
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use browser_tools::{
-    BrowserBatchArgs, BrowserBatchOutput, BrowserBatchTool, BrowserClickArgs, BrowserClickOutput,
+    BrowserExecArgs, BrowserExecOutput, BrowserExecTool, BrowserClickArgs, BrowserClickOutput,
     BrowserClickTool, BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool,
     BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool, BrowserDialogArgs,
     BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs, BrowserDragOutput, BrowserDragTool,

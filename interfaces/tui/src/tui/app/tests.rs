@@ -261,7 +261,10 @@ fn a_typed_answer_is_sent_verbatim() {
     let dialog = state.dialog.as_mut().unwrap();
     dialog.typing = true;
     dialog.input = "  neither, wait for Ana  ".into();
-    assert_eq!(dialog.pending_reply().as_deref(), Some("neither, wait for Ana"));
+    assert_eq!(
+        dialog.pending_reply().as_deref(),
+        Some("neither, wait for Ana")
+    );
     // Tabbing back to the list means the list, buffer or no buffer.
     dialog.typing = false;
     assert_eq!(dialog.pending_reply().as_deref(), Some("1"));
@@ -1374,7 +1377,10 @@ fn a_clarification_ending_in_another_session_leaves_this_card_alone() {
         outcome: "cancelled".into(),
     });
 
-    assert!(state.dialog.is_some(), "a foreign frame must not close this card");
+    assert!(
+        state.dialog.is_some(),
+        "a foreign frame must not close this card"
+    );
     assert_eq!(state.focus, Focus::Dialog);
 }
 

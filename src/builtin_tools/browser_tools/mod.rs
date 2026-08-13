@@ -2,7 +2,7 @@
 //
 // Each tool wraps a ProfileManager and implements AlephTool for one operation.
 
-pub mod batch;
+pub mod exec;
 pub mod click;
 pub mod console;
 pub mod cookies;
@@ -32,7 +32,10 @@ pub mod wait_for;
 use crate::browser::backend::BrowserBackend;
 use crate::browser::error::BrowserError;
 use crate::browser::manager::ProfileManager;
-use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
+use crate::browser::tab_registry;
+use crate::security::content_sanitizer::{
+    sanitize_external_text, wrap_external_content, ContentSource,
+};
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::sync_primitives::Arc;
@@ -55,11 +58,15 @@ pub(crate) async fn check_browser_approval(
     target: &str,
 ) -> Option<String> {
     let policy = policy?;
-    let (agent_id, context) = crate::approval::audit_identity("browser", action, target);
+    // The prompt and the audit context get the *display* target, never the raw
+    // one — see [`approval_display_target`]. Matching still runs against the
+    // raw `target` below, so allow/blocklist patterns are unaffected.
+    let display_target = approval_display_target(&action_type, action, target);
+    let (agent_id, context) = crate::approval::audit_identity("browser", action, &display_target);
     let request = ActionRequest {
         action_type,
         target: target.to_string(),
-        display_target: String::new(),
+        display_target,
         agent_id,
         context,
         timestamp: chrono::Utc::now(),
@@ -76,6 +83,76 @@ pub(crate) async fn check_browser_approval(
             Some(format!("Action denied by approval policy: {reason}"))
         }
         ApprovalDecision::Ask { ref prompt } => Some(format!("Approval required: {prompt}")),
+    }
+}
+
+/// The short, non-secret-bearing label a human (and, via the `Ask` prompt, the
+/// model) is shown for a browser approval.
+///
+/// `ActionRequest::target` is the raw action payload: the cookie `name=value`
+/// being written, the whole `browser_evaluate` script, the exact text being
+/// typed into a form. `ConfigApprovalPolicy::check` falls back to `target` when
+/// `display_target` is empty, so leaving it empty echoed all of that straight
+/// back into model context — on the very call the gate exists to guard, and
+/// unbounded. `pim` / `media` / `automation` all pass a display target for this
+/// reason; browser is the last holdout.
+///
+/// Only the *presentation* narrows here. Allow/blocklist regexes keep matching
+/// the real `target`, so no policy semantics change.
+///
+/// Navigation is the one action whose target the user genuinely needs to see,
+/// so it keeps the URL — reduced to `scheme://host[:port]`, which drops the
+/// query string where bearer tokens and session ids live. Anything that does
+/// not parse as a URL is described by verb alone rather than echoed: the three
+/// history verbs are literals we emit ourselves, and everything else is model-
+/// supplied bytes we decline to reflect.
+fn approval_display_target(action_type: &ActionType, action: &str, target: &str) -> String {
+    if matches!(action_type, ActionType::BrowserNavigate) {
+        return match url::Url::parse(target).map(|u| u.origin()) {
+            Ok(origin) if origin.is_tuple() => {
+                format!("navigate to {}", origin.ascii_serialization())
+            }
+            _ if matches!(target, "back" | "forward" | "refresh") => format!("navigate {target}"),
+            _ => "navigate to a non-URL target".to_string(),
+        };
+    }
+    format!("browser {action}")
+}
+
+/// Character budget for backend error text handed back to the model.
+///
+/// Errors are one-liners in the happy case, but `classify_stderr` embeds raw
+/// playwright-cli stderr — which can carry a page-sized dump (a rejected
+/// `evaluate` echoes the script, a navigation failure can echo the response
+/// body). 2 000 chars is enough for a stack head and the failing message.
+pub(crate) const MAX_BACKEND_ERROR_CHARS: usize = 2_000;
+
+/// Egress chokepoint for **backend error text** — the fourth channel by which
+/// page-adjacent bytes reach the model, alongside [`redact_and_wrap`],
+/// [`redact_and_wrap_log`] and [`redact_wrap`].
+///
+/// `BrowserError` carries raw playwright-cli stderr verbatim, and every tool
+/// `format!`s it into its `message` field. That text is neither ours nor
+/// trusted: it can contain a credential the page put in a URL, and it is
+/// unbounded. This bounds it (head+tail, so the *reason* at the end of a
+/// stderr dump survives), then redacts secrets through the same
+/// `ProfileManager` policy every content read uses.
+///
+/// Deliberately scrubbed with [`sanitize_external_text`] rather than fenced
+/// with `wrap_external_content`: the result is interpolated into a sentence we
+/// wrote (`"Snapshot failed: {…}"`), so a fence would open mid-line and the
+/// two marker lines would no longer bracket a standalone block — and an
+/// unbalanced fence is strictly worse than none. `sanitize_external_text` is
+/// documented for exactly this case: the scrubbing without the ~150 bytes of
+/// boundary.
+pub(crate) fn backend_error_text(manager: &ProfileManager, err: &BrowserError) -> String {
+    let raw = err.to_string();
+    let (bounded, truncated) = bound_content_head_tail(&raw, MAX_BACKEND_ERROR_CHARS);
+    let scrubbed = sanitize_external_text(&manager.redact_content(&bounded));
+    if truncated {
+        format!("{scrubbed} [backend error truncated to {MAX_BACKEND_ERROR_CHARS} chars]")
+    } else {
+        scrubbed
     }
 }
 
@@ -99,68 +176,34 @@ pub(crate) fn check_input_secret_block(manager: &ProfileManager, text: &str) -> 
     })
 }
 
-/// Parse one `list_tabs` line into `(id, url)`.
-///
-/// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
-/// CLI format `"Tab N: URL"`, and strips a trailing annotation such as
-/// `" [selected]"` from the URL. Returns `None` for lines without a numeric id.
-fn parse_tab_line(line: &str) -> Option<(String, String)> {
-    let line = line.trim();
-    // Normalize "Tab N: URL" → "N: URL" so both formats share one parser.
-    let rest = line.strip_prefix("Tab ").unwrap_or(line);
-    let colon = rest.find(": ")?;
-    let id = rest.get(..colon)?.trim();
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let url_part = rest.get(colon + 2..)?.trim();
-    // Strip a trailing " [selected]" / " [active]" style annotation so the URL
-    // round-trips through a strict parser.
-    let url = match url_part.rfind(" [") {
-        Some(pos) if url_part.ends_with(']') => url_part.get(..pos).unwrap_or(url_part).trim(),
-        _ => url_part,
-    };
-    Some((id.to_string(), url.to_string()))
-}
-
-/// The active (most recent) tab id, or `None` if no tabs are open.
-/// Uses the last entry because newly opened tabs append to the list.
-fn parse_active_tab_id(tabs_text: &str) -> Option<String> {
-    tabs_text
-        .lines()
-        .filter_map(parse_tab_line)
-        .map(|(id, _)| id)
-        .next_back()
-}
-
-/// The current URL of `tab_id` as reported by `list_tabs`, if present.
-fn extract_tab_url(tabs_text: &str, tab_id: &str) -> Option<String> {
-    tabs_text
-        .lines()
-        .filter_map(parse_tab_line)
-        .rfind(|(id, _)| id == tab_id)
-        .map(|(_, url)| url)
-}
-
-/// Returns `Some(violation)` if the active tab's current http(s) URL is blocked
-/// by the SSRF policy. Non-http schemes (`about:blank`, `chrome://`, …) carry no
+/// Returns `Some(violation)` if `tab_id`'s current http(s) URL is blocked by
+/// the SSRF policy. Non-http schemes (`about:blank`, `chrome://`, …) carry no
 /// network target and are skipped.
-async fn current_page_block(
+pub(crate) async fn current_page_block(
     manager: &ProfileManager,
     tabs_text: &str,
     tab_id: &str,
 ) -> Option<String> {
-    let url = extract_tab_url(tabs_text, tab_id)?;
+    let url = tab_registry::tab_url_for(tabs_text, tab_id)?;
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return None;
     }
     manager.check_url(&url).await.err().map(|v| v.to_string())
 }
 
-/// Get the active (most recent) tab from the backend, or return an error if none open.
+/// Get the active tab from the backend, or return an error if none are open.
+///
+/// "Which tab is active" is answered in exactly one place —
+/// [`tab_registry::active_tab_id`], which prefers the driver's own
+/// `[selected]` marker and only falls back to last-listed when the listing
+/// carries no marker at all. This module used to keep a second copy of that
+/// question that answered it with `.next_back()` unconditionally, which
+/// `browser_tabs {switch}` falsified: after a switch the selected tab is not
+/// the last line, so the read-time SSRF re-check below could vet tab N while
+/// the content read landed on tab M.
 async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserError> {
     let tabs_text = backend.list_tabs().await?;
-    parse_active_tab_id(&tabs_text)
+    tab_registry::active_tab_id(&tabs_text)
         .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
 }
 
@@ -209,7 +252,7 @@ pub(crate) async fn make_backend_and_tab_guarded(
 ) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
     let backend = make_backend(manager, profile)?;
     let tabs_text = backend.list_tabs().await?;
-    let tab_id = parse_active_tab_id(&tabs_text).ok_or_else(|| {
+    let tab_id = tab_registry::active_tab_id(&tabs_text).ok_or_else(|| {
         BrowserError::ActionFailed("No tabs open. Use browser_open first.".into())
     })?;
     if let Some(violation) = current_page_block(manager, &tabs_text, &tab_id).await {
@@ -325,8 +368,14 @@ pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
     let wrapped = redact_wrap(manager, &bounded);
     if truncated {
         format!(
+            // Name a lever that exists. "Read the page in smaller sections" was
+            // not one: no browser tool takes an offset, and the dropped tail is
+            // gone by the time the model reads this. What the callers of this
+            // function (evaluate / cookies / tabs) can actually do is return
+            // less from the action itself.
             "{wrapped}\n[content truncated to {DEFAULT_CONTENT_MAX_CHARS} chars; \
-             refine the action or read the page in smaller sections]"
+             the dropped tail is not recoverable — narrow the action so it \
+             returns less]"
         )
     } else {
         wrapped
@@ -439,7 +488,7 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
     smallest
 }
 
-pub use batch::{BrowserBatchArgs, BrowserBatchOutput, BrowserBatchTool};
+pub use exec::{BrowserExecArgs, BrowserExecOutput, BrowserExecTool};
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
 pub use cookies::{BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool};
@@ -476,40 +525,25 @@ mod tests {
     use super::*;
     use crate::browser::profile::BrowserSystemConfig;
 
+    /// The tool layer resolves the active tab through the same function the
+    /// backends and the post-navigation audit use, so a `browser_tabs {switch}`
+    /// cannot leave the read-time SSRF re-check vetting one tab while the read
+    /// lands on another. (The parsing itself is covered where it lives, in
+    /// `browser::tab_registry`; this pins the delegation, which is the part
+    /// that was wrong here.)
     #[test]
-    fn parse_tab_line_handles_both_formats_and_annotations() {
+    fn the_tool_layer_reads_the_selected_tab_not_the_last_line() {
+        let switched = "1: https://a.com [selected]\n2: https://b.com";
         assert_eq!(
-            parse_tab_line("1: https://example.com [selected]"),
-            Some(("1".into(), "https://example.com".into()))
+            tab_registry::active_tab_id(switched).as_deref(),
+            Some("1"),
+            "the marker wins over line order"
         );
         assert_eq!(
-            parse_tab_line("Tab 2: http://10.0.0.1/x"),
-            Some(("2".into(), "http://10.0.0.1/x".into()))
+            tab_registry::tab_url_for(switched, "1").as_deref(),
+            Some("https://a.com"),
+            "and the URL the SSRF re-check reads belongs to that same tab"
         );
-        assert_eq!(
-            parse_tab_line("3: about:blank"),
-            Some(("3".into(), "about:blank".into()))
-        );
-        // Non-numeric / malformed lines are ignored.
-        assert_eq!(parse_tab_line("no colon here"), None);
-        assert_eq!(parse_tab_line("Tab x: http://a"), None);
-    }
-
-    #[test]
-    fn parse_active_tab_id_picks_last() {
-        let text = "1: https://a.com\n2: https://b.com\n3: https://c.com";
-        assert_eq!(parse_active_tab_id(text).as_deref(), Some("3"));
-        assert_eq!(parse_active_tab_id("").as_deref(), None);
-    }
-
-    #[test]
-    fn extract_tab_url_matches_id() {
-        let text = "1: https://a.com\n2: http://10.0.0.1/x [selected]";
-        assert_eq!(
-            extract_tab_url(text, "2").as_deref(),
-            Some("http://10.0.0.1/x")
-        );
-        assert_eq!(extract_tab_url(text, "9"), None);
     }
 
     #[test]
@@ -698,5 +732,300 @@ mod tests {
         assert!(current_page_block(&manager, "1: http://127.0.0.1/", "2")
             .await
             .is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // The egress chokepoint itself: redact → fence, whole, on every path.
+    // ---------------------------------------------------------------
+
+    /// A page that renders a credential must not put it back into model
+    /// context, and the untrusted region must be bracketed by BOTH marker
+    /// lines — `split_external_fence` is the strict oracle for that (it refuses
+    /// anything it cannot put back together byte-for-byte, so a half fence
+    /// yields `None`).
+    fn assert_masked_and_wholly_fenced(out: &str, secret: &str) {
+        use crate::security::content_sanitizer::split_external_fence;
+        assert!(!out.contains(secret), "secret reached the model: {out}");
+        assert!(out.contains("[REDACTED:"), "no redaction marker: {out}");
+        let fenced = split_external_fence(out).expect("exactly one well-formed fence");
+        assert!(
+            fenced.interior.contains("[REDACTED:"),
+            "the page text must sit INSIDE the fence: {out}"
+        );
+    }
+
+    const LEAKED_SECRET: &str = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+
+    #[test]
+    fn redact_wrap_masks_secrets_and_emits_a_whole_fence() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let page = format!("- text \"API token: {LEAKED_SECRET}\" [ref=e1]");
+        assert_masked_and_wholly_fenced(&redact_wrap(&manager, &page), LEAKED_SECRET);
+    }
+
+    #[test]
+    fn redact_and_wrap_masks_secrets_and_emits_a_whole_fence_when_truncating() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        // Over the default budget, so the truncation footer is appended AFTER
+        // the closing marker — the fence must still be whole and the footer
+        // must sit outside it.
+        let mut page = "- generic \"filler\" [ref=e0]\n".repeat(4_000);
+        page.push_str(&format!("- text \"token {LEAKED_SECRET}\"\n"));
+        let out = redact_and_wrap(&manager, &page);
+        assert!(
+            out.contains("content truncated to"),
+            "expected a footer: {out}"
+        );
+        // The truncated head has no secret in it, so assert the fence shape on
+        // a body that does.
+        let short = format!("- text \"token {LEAKED_SECRET}\"");
+        assert_masked_and_wholly_fenced(&redact_and_wrap(&manager, &short), LEAKED_SECRET);
+        // And the footer is ours, not the page's: it must land outside the fence.
+        use crate::security::content_sanitizer::split_external_fence;
+        let fenced = split_external_fence(&out).expect("whole fence even with a footer");
+        assert!(fenced.suffix.contains("content truncated to"));
+    }
+
+    #[test]
+    fn redact_and_wrap_log_masks_secrets_and_emits_a_whole_fence() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let line = format!("[error] auth failed for {LEAKED_SECRET}");
+        assert_masked_and_wholly_fenced(&redact_and_wrap_log(&manager, &line), LEAKED_SECRET);
+    }
+
+    #[test]
+    fn backend_error_text_bounds_and_redacts_stderr() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+
+        // Secrets in a stderr dump are the same egress as secrets in page text.
+        let err = BrowserError::ActionFailed(format!("playwright: 401 for token {LEAKED_SECRET}"));
+        let out = backend_error_text(&manager, &err);
+        assert!(!out.contains("sk-ant-api03"), "secret in error text: {out}");
+        assert!(out.contains("[REDACTED:"));
+
+        // …and an unbounded dump is cut, keeping the tail where the reason is.
+        let huge = BrowserError::ActionFailed(format!(
+            "{}\nECONNREFUSED: the real reason\n",
+            "stack frame noise\n".repeat(2_000)
+        ));
+        let out = backend_error_text(&manager, &huge);
+        assert!(
+            out.chars().count() < MAX_BACKEND_ERROR_CHARS * 2,
+            "unbounded error text: {} chars",
+            out.chars().count()
+        );
+        assert!(
+            out.contains("ECONNREFUSED: the real reason"),
+            "head+tail bounding must keep the reason: {out}"
+        );
+        assert!(out.contains("backend error truncated to"));
+    }
+
+    // ---------------------------------------------------------------
+    // Approval prompts must not echo the payload back into context.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn approval_display_target_never_echoes_the_payload() {
+        // A cookie write, an eval script and typed text are all raw payloads.
+        let cookie = "session=eyJhbGciOiJIUzI1NiJ9.super-secret-value";
+        assert_eq!(
+            approval_display_target(&ActionType::BrowserCookiesWrite, "cookies", cookie),
+            "browser cookies"
+        );
+        let script = "fetch('/admin').then(r=>r.text())".repeat(2_000);
+        let shown = approval_display_target(&ActionType::BrowserEvaluate, "evaluate", &script);
+        assert_eq!(shown, "browser evaluate");
+        assert!(!shown.contains("fetch("));
+    }
+
+    #[test]
+    fn approval_display_target_keeps_navigation_origin_but_drops_the_query() {
+        assert_eq!(
+            approval_display_target(
+                &ActionType::BrowserNavigate,
+                "navigate",
+                "https://example.com:8443/callback?access_token=abc123"
+            ),
+            "navigate to https://example.com:8443"
+        );
+        // The three history verbs are literals we emit ourselves.
+        assert_eq!(
+            approval_display_target(&ActionType::BrowserNavigate, "navigate", "back"),
+            "navigate back"
+        );
+        // Anything else that is not a tuple origin is described, not echoed.
+        let shown = approval_display_target(
+            &ActionType::BrowserNavigate,
+            "navigate",
+            "javascript:fetch('/admin')",
+        );
+        assert!(!shown.contains("fetch("), "payload echoed: {shown}");
+    }
+}
+
+/// Source-level census: a tool that consults the approval policy must be
+/// *given* one at its production construction site.
+///
+/// The gate in [`check_browser_approval`] is opt-in — with no policy wired it
+/// returns `None`, i.e. allow. That default is deliberate (tools built by
+/// `new()` in tests must not need a policy), but it means a forgotten
+/// `.with_approval_policy(..)` in the registry constructor produces a tool
+/// whose gate exists only in its own unit tests. That is exactly what happened
+/// to `browser_emulate` and `browser_session`: both grew a gate, both had
+/// passing gate tests, and both shipped ungated because the two construction
+/// sites were never updated. Nothing was red.
+///
+/// So the assertion is about the *effect* reaching production, not about the
+/// gate being written: for every browser tool whose source calls
+/// `check_browser_approval`, the registry constructor must construct it with
+/// `.with_approval_policy`. The `pub mod` list is re-derived from this file's
+/// own source, so a 27th browser tool reds by name here rather than silently
+/// escaping the census (`no_catalog_entry_inlines_its_description` in
+/// `builtin_registry::definitions` is the precedent for this shape).
+#[cfg(test)]
+mod approval_wiring_census {
+    /// `(module name, module source)` for every file under this directory.
+    ///
+    /// `include_str!` needs literal paths, so this list cannot be globbed —
+    /// which is precisely why the test below re-derives the expected set from
+    /// `mod.rs`'s `pub mod` declarations and fails on any name missing here.
+    const SOURCES: &[(&str, &str)] = &[
+        ("exec", include_str!("exec.rs")),
+        ("click", include_str!("click.rs")),
+        ("console", include_str!("console.rs")),
+        ("cookies", include_str!("cookies.rs")),
+        ("dialog", include_str!("dialog.rs")),
+        ("drag", include_str!("drag.rs")),
+        ("emulate", include_str!("emulate.rs")),
+        ("evaluate", include_str!("evaluate.rs")),
+        ("fill_form", include_str!("fill_form.rs")),
+        ("hover", include_str!("hover.rs")),
+        ("navigate", include_str!("navigate.rs")),
+        ("network", include_str!("network.rs")),
+        ("open", include_str!("open.rs")),
+        ("pdf", include_str!("pdf.rs")),
+        ("press_key", include_str!("press_key.rs")),
+        ("profile_tool", include_str!("profile_tool.rs")),
+        ("resize", include_str!("resize.rs")),
+        ("screenshot", include_str!("screenshot.rs")),
+        ("scroll", include_str!("scroll.rs")),
+        ("select", include_str!("select.rs")),
+        ("session", include_str!("session.rs")),
+        ("snapshot", include_str!("snapshot.rs")),
+        ("tabs", include_str!("tabs.rs")),
+        ("type_text", include_str!("type_text.rs")),
+        ("upload", include_str!("upload.rs")),
+        ("wait_for", include_str!("wait_for.rs")),
+    ];
+
+    /// This module's own source, used to derive the module list.
+    const MOD_SOURCE: &str = include_str!("mod.rs");
+
+    /// The registry constructor — the one production site that assembles these
+    /// tools with their shared approval policy and vision bridge.
+    const CONSTRUCTOR_SOURCE: &str =
+        include_str!("../../executor/builtin_registry/builder/constructor/mod.rs");
+
+    /// Everything before the first `#[cfg(test)]`.
+    ///
+    /// Not anchored to a line boundary: a Windows checkout is CRLF, so `\r` is
+    /// stripped first and the token is matched bare. Anchoring on `"\n#[cfg(test)]\n"`
+    /// silently matches nothing under CRLF, which turns the "production prefix"
+    /// into the whole file and lets a test-module string literal satisfy the
+    /// scan (CLAUDE.md §10 — this repo has shipped that bug twice).
+    fn production_prefix(src: &str) -> String {
+        let normalized = src.replace('\r', "");
+        match normalized.find("#[cfg(test)]") {
+            Some(i) => normalized[..i].to_string(),
+            None => normalized,
+        }
+    }
+
+    /// The struct a file implements `AlephTool` for, e.g. `BrowserClickTool`.
+    fn tool_struct(src: &str) -> Option<String> {
+        let idx = src.find("impl AlephTool for ")?;
+        let rest = &src[idx + "impl AlephTool for ".len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        (!name.is_empty()).then_some(name)
+    }
+
+    #[test]
+    fn every_browser_module_is_in_the_census() {
+        let declared: Vec<&str> = production_prefix(MOD_SOURCE)
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub mod ")?.strip_suffix(';'))
+            .map(|n| {
+                SOURCES
+                    .iter()
+                    .find(|(m, _)| *m == n)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "`pub mod {n};` is declared but absent from \
+                             approval_wiring_census::SOURCES — add \
+                             (\"{n}\", include_str!(\"{n}.rs\")) so the new tool is covered"
+                        )
+                    })
+                    .0
+            })
+            .collect();
+        assert!(
+            declared.len() >= 26,
+            "the module scan found only {} modules — the `pub mod` parse broke, \
+             so this census is inspecting nothing",
+            declared.len()
+        );
+    }
+
+    #[test]
+    fn every_gated_browser_tool_is_constructed_with_the_approval_policy() {
+        let constructor = production_prefix(CONSTRUCTOR_SOURCE);
+        let mut checked = 0usize;
+        let mut ungated: Vec<String> = Vec::new();
+
+        for (module, src) in SOURCES {
+            let production = production_prefix(src);
+            if !production.contains("check_browser_approval") {
+                continue;
+            }
+            let Some(name) = tool_struct(&production) else {
+                panic!("{module}.rs consults the approval policy but has no `impl AlephTool for`");
+            };
+            checked += 1;
+            // The construction and the builder call sit on separate lines, so
+            // the window has to span the whole `let … = X::new(..)…;` statement
+            // — and it has to STOP at that statement's `;`. A fixed-size
+            // character window instead reads into the NEXT tool's construction,
+            // and since these are declared adjacently it happily finds that
+            // neighbour's `.with_approval_policy` and passes. (Observed: with
+            // a 400-char window, deleting the call from `browser_emulate` left
+            // the census green because `browser_cookies` is the next line.)
+            let Some(at) = constructor.find(&format!("{name}::new(")) else {
+                panic!(
+                    "{name} consults the approval policy but is never constructed in the \
+                     registry constructor — either wire it or it is unreachable"
+                );
+            };
+            let statement_end = constructor[at..]
+                .find(';')
+                .map_or(constructor.len(), |off| at + off);
+            if !constructor[at..statement_end].contains(".with_approval_policy") {
+                ungated.push(name);
+            }
+        }
+
+        assert!(
+            checked >= 15,
+            "only {checked} gated tools found — the scan is not seeing production code"
+        );
+        assert!(
+            ungated.is_empty(),
+            "these browser tools consult the approval policy but are constructed without \
+             one, so their gate is inert in production (it will only ever fire in their own \
+             unit tests): {ungated:?}"
+        );
     }
 }

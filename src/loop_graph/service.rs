@@ -279,11 +279,7 @@ async fn notify_node_settled(node_id: &str) -> bool {
 /// settle was waiting on: either the run actually executed, or an earlier
 /// in-window run was already taken for THIS very node. Other debounce
 /// outcomes (held for another node, error) return `false`.
-async fn poke_one_watcher(
-    cron: SharedCronService,
-    job_id: &str,
-    node_id: &str,
-) -> bool {
+async fn poke_one_watcher(cron: SharedCronService, job_id: &str, node_id: &str) -> bool {
     match debounce_pass(job_id, node_id) {
         // The run this was held off against was taken for this very node —
         // that run IS the review this settle wanted.
@@ -443,7 +439,14 @@ pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
-    render_session_topology_inner(store, session).ok()?
+// `.flatten()`, not `?`: BOTH the store error and a genuine "not a
+    // registered node" collapse to `None` here, deliberately. This is the
+    // prompt-rendering path — an unreadable store must render nothing rather
+    // than break the turn — and `render_session_topology_strict` above is the
+    // variant for callers that need to tell the two apart. (Behaviourally
+    // identical to `.ok()?` — both fold the same two `None`s — but written
+    // as `.flatten()` so the intent is named.)
+    render_session_topology_inner(store, session).ok().flatten()
 }
 
 /// Strict variant of [`render_session_topology_in`] — propagates the store
@@ -487,12 +490,12 @@ fn render_session_topology_inner(
             )))
         }
     };
-    let edges = store
-        .list_edges(DEFAULT_AGENT)
-        .map_err(|e| crate::error::AlephError::other(format!("loop_graph topology read edges: {e}")))?;
-    let nodes = store
-        .list_nodes(DEFAULT_AGENT)
-        .map_err(|e| crate::error::AlephError::other(format!("loop_graph topology read nodes: {e}")))?;
+    let edges = store.list_edges(DEFAULT_AGENT).map_err(|e| {
+        crate::error::AlephError::other(format!("loop_graph topology read edges: {e}"))
+    })?;
+    let nodes = store.list_nodes(DEFAULT_AGENT).map_err(|e| {
+        crate::error::AlephError::other(format!("loop_graph topology read nodes: {e}"))
+    })?;
     // Every interpolated value below is model-authored free text (`label`,
     // `cadence`, and the ids the model chose) and this format is line-oriented
     // with privileged lines — so each one is flattened at the seam. See

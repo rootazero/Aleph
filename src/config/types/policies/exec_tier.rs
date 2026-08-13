@@ -418,20 +418,51 @@ impl ExecTier {
     }
 }
 
-/// The effective permission for a tool: the operator's explicit decision, else
-/// their configured baseline TIGHTENED by the tier.
+/// The effective permission for a tool: a refusing tier's floor, else the
+/// operator's explicit decision, else their configured baseline TIGHTENED by
+/// the tier.
 ///
-/// Precedence, most specific first:
+/// Precedence, most binding first:
+/// 0. a tier verdict of **`Deny`** — a floor. Nothing below may outrank it;
 /// 1. an **explicit** entry (exact name, then glob) in the merged
 ///    [`ToolPermissionsConfig`] — an operator who names a tool has decided;
 /// 2. the configured `default` (`Allow` when no policy is attached), tightened
 ///    by [`ExecTier::rule_for`] through the restrictiveness lattice.
 ///
-/// The tier only ever tightens, which is what [`ExecTier::rule_for`]'s contract
-/// promises: it yields at most `Ask`, and `restrictive_min` keeps a `Deny`
-/// default denying. Consulting the tier *before* the default would invert a
-/// `default = "deny"` install into ask-by-default for exactly the tools the tier
-/// wanted to guard.
+/// # Why rung 0 exists
+///
+/// Rungs 1 and 2 encode "more specific wins", and for `Ask` / `Auto` / `Full`
+/// that is exactly right: those tiers only ever raise a tool to *ask*, so an
+/// operator who named the tool has answered the very question the tier was
+/// going to pose. [`ExecTier::Plan`] asks nothing — its whole promise, stated
+/// to the model on every turn of a planning conversation, is that **nothing
+/// runs**. Under "more specific wins" a single `"bash" = "allow"` sitting in
+/// `[policies.tool_permissions]` — written months earlier, for an unrelated
+/// reason — would hollow that promise out silently, on the one install shape
+/// where it matters most: the one whose operator bothered to configure tools
+/// at all. A floor that an entry can outrank is not a floor, it is a default.
+///
+/// # Why it is keyed on the verdict, not on the tier
+///
+/// `Some(Deny)` is *by construction* "a tier that refuses rather than asks":
+/// [`ExecTier::rule_for`]'s contract is that a tier yields at most `Ask`, and
+/// its `match` is exhaustive, so a new refusing tier is a compile error there
+/// and inherits this floor here for free. A `tier == Some(ExecTier::Plan)` test
+/// would instead describe only the tiers that existed the day it was written.
+///
+/// # What rung 0 does NOT change
+///
+/// It fires only where `rule_for` itself answered `Deny`, never on a composed
+/// `Deny`. So `default = "deny"` still loses to an explicit `allow` (rung 1),
+/// `Ask` / `Auto` / `Full` are byte-identical to before it existed, and the
+/// `Plan` carve-outs (`HUMAN_CONTACT_TOOLS`, [`PLAN_REACHABLE_TOOLS`], and
+/// every idempotent tool) answer `None` and fall straight through to rung 1 —
+/// an explicit `deny` on `read_file` still denies while planning.
+///
+/// Consulting the tier *before* the `default` for the non-`Deny` verdicts would
+/// invert a `default = "deny"` install into ask-by-default for exactly the tools
+/// the tier wanted to guard, which is why rung 2 composes rather than short-
+/// circuits.
 ///
 /// The single composition point: `ScopedToolService::permission_for` (the loop's
 /// enforcement chokepoint) and the gateway slash-command fast path both call it,
@@ -442,11 +473,17 @@ pub fn effective_permission(
     tier: Option<ExecTier>,
     facts: ToolFacts<'_>,
 ) -> PermissionAction {
+    let tier_verdict = tier.and_then(|t| t.rule_for(facts));
+    // Rung 0 — see "Why rung 0 exists" above. Must stay ahead of the explicit
+    // lookup; moving it below turns the read-only phase back into a suggestion.
+    if tier_verdict == Some(PermissionAction::Deny) {
+        return PermissionAction::Deny;
+    }
     if let Some(explicit) = permissions.and_then(|p| p.resolve_explicit(facts.name)) {
         return explicit;
     }
     let base = permissions.map_or(PermissionAction::Allow, |p| p.default);
-    match tier.and_then(|t| t.rule_for(facts)) {
+    match tier_verdict {
         Some(tier_action) => restrictive_min(base, tier_action),
         None => base,
     }
@@ -1062,18 +1099,96 @@ mod tests {
         );
     }
 
-    /// …but an operator who NAMED the tool still wins, exactly as at every
-    /// other tier: an explicit entry is a decision a human wrote, and the tier
-    /// never gets a word in about a tool it names.
+    /// …and unlike at every OTHER tier, an operator who NAMED the tool does
+    /// not win. The planning refusal is rung 0.
+    ///
+    /// This deliberately inverts what this tier shipped with. The original
+    /// reasoning — "an explicit entry is a decision a human wrote, and the
+    /// tier never gets a word in about a tool it names" — is correct for
+    /// `Ask` / `Auto` / `Full`, which only ever *ask*: naming the tool answers
+    /// the very question the tier was going to pose. `Plan` poses no question.
+    /// Its promise, restated to the model on every turn of a planning
+    /// conversation, is that nothing runs. A `"file_write" = "allow"` written
+    /// months earlier for an unrelated reason would retract that promise with
+    /// no surface saying so — and only on installs whose operator configured
+    /// tools at all, i.e. the ones with the most to lose.
     #[test]
-    fn an_explicit_entry_still_outranks_the_plan_tier() {
+    fn an_explicit_allow_cannot_hollow_out_the_planning_floor() {
         let mut perms = ToolPermissionsConfig::default();
         perms
             .overrides
             .insert("file_write".to_string(), PermissionAction::Allow);
         assert_eq!(
             effective_permission(Some(&perms), Some(ExecTier::Plan), unknown("file_write")),
-            PermissionAction::Allow
+            PermissionAction::Deny,
+            "a named tool must not outrank the floor the phase is made of"
+        );
+    }
+
+    /// The scope proof for rung 0: every tier that ASKS is byte-identical to
+    /// before the floor existed. Without this assertion, "the floor works" and
+    /// "the floor ate the permission model" look the same from the suite.
+    #[test]
+    fn the_planning_floor_leaves_every_asking_tier_untouched() {
+        let mut perms = ToolPermissionsConfig::default();
+        perms
+            .overrides
+            .insert("file_write".to_string(), PermissionAction::Allow);
+        for tier in [ExecTier::Ask, ExecTier::Auto, ExecTier::Full] {
+            assert_eq!(
+                effective_permission(Some(&perms), Some(tier), unknown("file_write")),
+                PermissionAction::Allow,
+                "{tier:?}: an explicit entry still decides — no tier but `Plan` refuses"
+            );
+        }
+    }
+
+    /// Rung 0 keys on the tier's OWN `Deny`, never on a composed one. So a
+    /// `default = "deny"` install is still a baseline an explicit `allow`
+    /// outranks — at every tier, `Plan` included, for a tool the floor has
+    /// nothing to say about.
+    #[test]
+    fn a_denying_default_is_a_baseline_not_a_floor() {
+        let mut perms = ToolPermissionsConfig {
+            default: PermissionAction::Deny,
+            ..Default::default()
+        };
+        perms
+            .overrides
+            .insert("ctx_search".to_string(), PermissionAction::Allow);
+        let facts = builtin("ctx_search");
+        assert!(
+            facts.idempotent,
+            "fixture: `ctx_search` must read as idempotent, else this asserts nothing"
+        );
+        for tier in [
+            ExecTier::Plan,
+            ExecTier::Ask,
+            ExecTier::Auto,
+            ExecTier::Full,
+        ] {
+            assert_eq!(
+                effective_permission(Some(&perms), Some(tier), facts),
+                PermissionAction::Allow,
+                "{tier:?}: a denying DEFAULT is not a floor"
+            );
+        }
+    }
+
+    /// The other direction, which is the one a floor gets wrong quietly: it
+    /// adds refusals, it never grants. `Plan` answers `None` for every
+    /// idempotent tool, so those fall through to rung 1 and an operator's
+    /// explicit `deny` still denies while planning.
+    #[test]
+    fn the_planning_floor_never_grants_what_the_operator_denied() {
+        let mut perms = ToolPermissionsConfig::default();
+        perms
+            .overrides
+            .insert("ctx_search".to_string(), PermissionAction::Deny);
+        assert_eq!(
+            effective_permission(Some(&perms), Some(ExecTier::Plan), builtin("ctx_search")),
+            PermissionAction::Deny,
+            "the floor must not become a grant for tools it is silent about"
         );
     }
 

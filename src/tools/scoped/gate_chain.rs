@@ -103,9 +103,16 @@ pub(super) enum GateRule<'a> {
     /// the removable one would invite a repair that cannot work.
     GateRemoval,
     /// An explicit `[policies.tool_permissions]` entry resolves the tool to
-    /// `ask`. The operator named it — by exact name or by glob — and the tier
-    /// never gets a word in (see
+    /// `ask`. The operator named it — by exact name or by glob — and no tier
+    /// that ASKS gets a word in (see
     /// [`effective_permission`](crate::config::types::policies::effective_permission)).
+    ///
+    /// One tier does: `Plan` refuses rather than asks, and its refusal is rung
+    /// 0 — above the entry, not beneath it. So a mutating tool carrying an
+    /// explicit `ask` arrives here as [`Self::PlanMode`] while planning and as
+    /// `PolicyAsk` at every other tier. That is the honest split: quoting the
+    /// entry during a planning turn would point the reader at a setting whose
+    /// edit changes nothing until the plan is approved.
     PolicyAsk {
         /// The override key that asked, as written in the config.
         pattern: &'a str,
@@ -196,10 +203,22 @@ impl GateRule<'_> {
     pub(super) const fn is_floor(self) -> bool {
         match self {
             Self::ToolDeclared | Self::GateRemoval => true,
-            // `PlanMode` is emphatically NOT a floor: it is the one rule in the
-            // chain that a single human "approved" retires for the rest of the
-            // turn. (It also never reaches a card — it refuses — so the
-            // persistent-grant question it would otherwise answer is moot.)
+            // `PlanMode` is emphatically NOT a floor **in this sense**: it is
+            // the one rule in the chain that a single human "approved" retires
+            // for the rest of the turn. (It also never reaches a card — it
+            // refuses — so the persistent-grant question it would otherwise
+            // answer is moot.)
+            //
+            // ⚠️ "Floor" means two different things in this subsystem and they
+            // are not in conflict. HERE it means "no card this rule raises may
+            // offer a persistent grant" — `PlanMode` raises no card, and its
+            // exit is one human `approved`, so `false` is right. In
+            // `effective_permission` it means "rung 0: an explicit
+            // `[policies.tool_permissions]` entry may not outrank this" — and
+            // there the plan denial IS the floor, which is what lets
+            // `denied_only_by_plan` above resolve `true` for a tool carrying an
+            // explicit `allow` instead of never being asked at all. One rule,
+            // two axes: unrelaxable by config, retired by a person.
             Self::PolicyDeny { .. }
             | Self::DestructiveArguments
             | Self::PolicyAsk { .. }

@@ -7,7 +7,6 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::security::ssrf::ip::is_ip_blocked_by_policy;
 use crate::security::ssrf::{self, SsrfPolicy as CoreSsrfPolicy};
 
 /// Configuration for SSRF protection policy.
@@ -228,95 +227,30 @@ impl BrowserSsrfGuard {
         Ok(())
     }
 
-    /// Build a Chrome `--host-resolver-rules` MAP argument that pins the
-    /// URL's hostname to the IPs returned by a fresh DNS lookup, after each
-    /// IP has been re-validated via `is_ip_blocked_by_policy`.
-    ///
-    /// This is the second DNS-validation step that closes the rebinding
-    /// window between [`Self::check_url`] (which resolves once) and Chrome's
-    /// own resolver (which may resolve again, possibly to a different set of
-    /// IPs). Callers must invoke [`Self::check_url`] (or
-    /// [`Self::check_navigation`]) first; this method does **not** re-run
-    /// domain blocklist / allowlist / secret-scan checks.
-    ///
-    /// Returns:
-    /// - `Ok(None)` for IP-literal URLs (Chrome resolves the address directly),
-    ///   schemeless/hostless URLs, and when the policy is disabled (no IP
-    ///   validation possible).
-    /// - `Ok(Some(arg))` for hostnames whose returned IPs include at least one
-    ///   IP that passes the policy — the arg lists every passing IP comma-
-    ///   separated so Chrome can round-robin them.
-    /// - `Err(PolicyViolation)` when DNS resolution fails or every returned IP
-    ///   is blocked by the policy (the classic rebinding-into-loopback case).
-    ///
-    /// Residual TOCTOU: this method and `check_url` observe the same DNS
-    /// snapshot within a single async task, so a rebinding race between the
-    /// two lookups requires an attacker to mutate the OS resolver from
-    /// outside the process — outside what this layer can deterministically
-    /// test. The defense-in-depth contract: every IP Chrome is allowed to use
-    /// has been validated at least once via `is_ip_blocked_by_policy` before
-    /// the process starts.
-    pub async fn pin_host_resolver_args(
-        &self,
-        url_str: &str,
-    ) -> Result<Option<String>, PolicyViolation> {
-        let url =
-            url::Url::parse(url_str).map_err(|e| PolicyViolation::InvalidUrl(e.to_string()))?;
-
-        // Scheme floor (same policy as check_url): non-http/https schemes must
-        // not produce a MAP rule even if the host would pass.
-        let scheme = url.scheme();
-        if scheme != "http" && scheme != "https" {
-            return Err(PolicyViolation::InvalidUrl(format!(
-                "unsupported scheme '{scheme}': browser navigation allows only http/https"
-            )));
-        }
-
-        let host = match url.host_str() {
-            Some(h) => h,
-            None => return Ok(None),
-        };
-
-        // IP literal → no hostname to MAP.
-        if matches!(url.host(), Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))) {
-            return Ok(None);
-        }
-
-        let core_policy = self.build_core_policy();
-
-        // Disabled SSRF → no IP validation possible, skip pinning rather than
-        // hand Chrome an unvalidated MAP.
-        if !core_policy.enabled {
-            return Ok(None);
-        }
-
-        // Re-resolve and filter (rebinding defense). All returned IPs are
-        // classified; only those that pass `is_ip_blocked_by_policy` are
-        // included in the MAP. If none pass, surface as PrivateNetwork so the
-        // caller sees the same violation shape as `check_url`.
-        let port = url.port_or_known_default().unwrap_or(80);
-        let all_ips = ssrf::dns::lookup_all(host, port)
-            .await
-            .map_err(PolicyViolation::from)?;
-
-        let passing: Vec<std::net::IpAddr> = all_ips
-            .into_iter()
-            .filter(|ip| !is_ip_blocked_by_policy(*ip, &core_policy))
-            .collect();
-
-        if passing.is_empty() {
-            return Err(PolicyViolation::PrivateNetwork(host.to_string()));
-        }
-
-        let map_value = passing
-            .iter()
-            .map(std::net::IpAddr::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        Ok(Some(format!(
-            "--host-resolver-rules=\"MAP {host} {map_value}\""
-        )))
-    }
+    // Deliberately no DNS pin here (removed 2026-08-12).
+    //
+    // A `--host-resolver-rules=MAP <host> <ip>` flag used to be built here and
+    // staged for the next Chrome launch. It never protected anything and is not
+    // fixable, so it is gone rather than repaired:
+    //
+    // 1. **Unreachable on the path that matters.** The flag can only be passed
+    //    at process start, and `ChromeMcpDriver::ensure_chrome_running` refuses
+    //    (returns `Err`) whenever Chrome is already running — which is the
+    //    entire point of existing-session mode. Attaching to the user's Chrome
+    //    therefore could never be pinned, and restarting it to pin it would be
+    //    hostile (R5).
+    // 2. **Process-wide and single-host even when it did fire.** The flag lives
+    //    for Chrome's whole lifetime, so it could pin at most the first
+    //    navigated hostname of the session; every later host was unpinned.
+    // 3. It was also malformed: the value embedded literal double quotes and
+    //    was handed to `Command::arg` with no shell, so Chrome ignored it.
+    //
+    // What actually guards DNS on this path: `check_url` resolves and validates
+    // every returned IP before the navigation is issued, and `post_nav`
+    // re-checks the *landed* URL afterwards and quarantines the tab. The
+    // residual window (Chrome re-resolving between those two points) is a real
+    // limitation and is now stated instead of being papered over by a control
+    // that never fired.
 
     /// Validate a URL for an **agent-initiated navigation target**: the full
     /// SSRF policy ([`Self::check_url`]) plus, when `block_secrets_in_url` is
@@ -829,170 +763,6 @@ mod tests {
         assert!(
             result.is_ok(),
             "with all SSRF gating disabled, even loopback resolution must pass — got {result:?}"
-        );
-    }
-
-    // --- DNS pinning for Chrome launch (defense against DNS rebinding
-    //     between check_url time and Chrome's own resolver time) ---
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_returns_none_for_ip_literal_url() {
-        // IP literal: Chrome resolves the address directly, no MAP rule needed.
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("http://8.8.8.8/path")
-            .await
-            .expect("IP literal must not error");
-        assert_eq!(
-            result, None,
-            "IP literal has no hostname to pin (Chrome resolves the literal directly)"
-        );
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_returns_none_when_ssrf_policy_disabled() {
-        // When SSRF is disabled we cannot validate any IPs, so we skip pinning
-        // rather than hand Chrome an unvalidated MAP rule.
-        let _lock = serial_test_lock();
-        let _scope = install_resolved("anything.example", "127.0.0.1".parse().unwrap());
-        let policy = BrowserSsrfGuard::new(SsrfConfig {
-            block_private: false,
-            blocked_domains: vec![],
-            allowed_domains: vec![],
-            block_secrets_in_url: false,
-            block_secrets_in_input: false,
-            redact_secrets_in_content: false,
-        });
-        let result = policy
-            .pin_host_resolver_args("http://anything.example/")
-            .await
-            .expect("disabled policy must not error");
-        assert_eq!(result, None, "disabled SSRF → no DNS pinning");
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_blocks_hostname_resolving_to_loopback() {
-        // Same DNS rejection floor as check_url: hostname → 127.0.0.1 is refused
-        // before any MAP rule is built.
-        let _lock = serial_test_lock();
-        let _scope = install_resolved(
-            "evil.example",
-            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-        );
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("http://evil.example/admin")
-            .await;
-        assert!(
-            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
-            "hostname resolving to 127.0.0.1 must be blocked — got {result:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_blocks_hostname_resolving_to_private_10() {
-        let _lock = serial_test_lock();
-        let _scope = install_resolved("internal.corp", "10.0.0.5".parse().unwrap());
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("http://internal.corp/api")
-            .await;
-        assert!(
-            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
-            "RFC1918 10.0.0.0/8 resolution must be blocked — got {result:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_blocks_hostname_resolving_to_cloud_metadata() {
-        let _lock = serial_test_lock();
-        let _scope = install_resolved("aws.example", "169.254.169.254".parse().unwrap());
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("http://aws.example/latest/meta-data/")
-            .await;
-        assert!(
-            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
-            "cloud-metadata resolution must be blocked — got {result:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_returns_map_arg_for_public_hostname() {
-        let _lock = serial_test_lock();
-        let _scope = install_resolved("good.example", "8.8.8.8".parse().unwrap());
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("https://good.example/path")
-            .await
-            .expect("public hostname must produce a MAP arg");
-        let arg = result.expect("hostname should produce MAP arg");
-        assert!(arg.starts_with("--host-resolver-rules="), "arg = {arg}");
-        assert!(arg.contains("MAP good.example"), "arg = {arg}");
-        assert!(arg.contains("8.8.8.8"), "arg = {arg}");
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_lists_all_public_ips_for_multi_a_record_hostname() {
-        // Chrome's --host-resolver-rules accepts comma-separated IPs and
-        // round-robins them; include every passing IP so all valid resolution
-        // paths stay reachable.
-        let _lock = serial_test_lock();
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            "multi.example".to_string(),
-            vec!["8.8.8.8".parse().unwrap(), "1.1.1.1".parse().unwrap()],
-        );
-        let _scope = install_resolved_multi(map);
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("http://multi.example/")
-            .await
-            .expect("public multi-A hostname must produce a MAP arg");
-        let arg = result.expect("hostname should produce MAP arg");
-        assert!(arg.contains("8.8.8.8"), "arg = {arg}");
-        assert!(arg.contains("1.1.1.1"), "arg = {arg}");
-        assert!(
-            arg.contains("8.8.8.8, 1.1.1.1") || arg.contains("1.1.1.1, 8.8.8.8"),
-            "IPs must be comma-separated — arg = {arg}"
-        );
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_rejects_non_http_scheme() {
-        // Scheme floor mirrors check_url: gopher:// must not produce a MAP.
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("gopher://internal:6379/x")
-            .await;
-        assert!(
-            matches!(result, Err(PolicyViolation::InvalidUrl(_))),
-            "non-http scheme must be rejected — got {result:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn pin_host_resolver_args_rejects_when_all_resolved_ips_are_loopback() {
-        // Residual TOCTOU scenario: between check_url and Chrome launch, an
-        // attacker flips a hostname's A records to loopback. The second DNS
-        // lookup catches it, every IP fails is_ip_blocked_by_policy, and we
-        // surface a PrivateNetwork violation rather than handing Chrome an
-        // empty/useless MAP. (Full rebinding coverage is a platform concern —
-        // see chrome_launch_args_omits_pin_when_chrome_already_running.)
-        let _lock = serial_test_lock();
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            "rebinding.example".to_string(),
-            vec!["127.0.0.1".parse().unwrap(), "127.0.0.2".parse().unwrap()],
-        );
-        let _scope = install_resolved_multi(map);
-        let policy = BrowserSsrfGuard::default();
-        let result = policy
-            .pin_host_resolver_args("http://rebinding.example/")
-            .await;
-        assert!(
-            matches!(result, Err(PolicyViolation::PrivateNetwork(_))),
-            "all-loopback rebinding must surface as PrivateNetwork — got {result:?}"
         );
     }
 }

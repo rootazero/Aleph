@@ -141,7 +141,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "browser_fill_form",
             "browser_press_key",
             "browser_wait_for",
-            "browser_batch",
+            "browser_exec",
             "browser_console",
             "browser_hover",
             "browser_scroll",

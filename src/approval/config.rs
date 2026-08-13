@@ -201,19 +201,33 @@ impl ConfigApprovalPolicy {
 
     /// Load the policy from `~/.aleph/approval-policy.json`.
     ///
-    /// If the file does not exist or cannot be parsed, a sensible default
-    /// policy is returned instead.
+    /// See [`Self::load_from`] for what happens when the file is absent or
+    /// unusable — the two cases are deliberately not the same.
     #[must_use]
     pub fn load() -> Self {
         Self::load_from(Self::config_path())
     }
 
-    /// Load the policy from the given path.
+    /// Load the policy from the given path. The fallback is chosen by **cause**,
+    /// because "the operator never wrote a policy" and "the operator's policy is
+    /// broken" are different facts and deserve different postures:
     ///
-    /// If the file does not exist, a sensible default policy is returned.
-    /// If the file exists but cannot be read or parsed, a **safe** default
-    /// is returned instead — all actions require explicit approval.
-    /// This prevents configuration errors from silently weakening security.
+    /// - **File absent** → [`Self::default`], the curated map. Nothing in the
+    ///   product ever writes this file, so absence is the shipped state of every
+    ///   install; treating it as "deny everything" made the entire
+    ///   approval-gated tool surface (browser, desktop, PIM, media, hooks)
+    ///   return a refusal the model could not resolve — there is no in-product
+    ///   action that creates the file. The curated map is the documented intent
+    ///   and keeps read-only browser motion usable while still routing
+    ///   state-changing and egress verbs through approval.
+    /// - **File present but unreadable or unparseable** → [`Self::safe_default`],
+    ///   every action escalates to `Ask`. A corrupt or unreadable policy must
+    ///   never silently resolve to something *weaker* than what the operator
+    ///   wrote, and unlike absence this state is visible and fixable.
+    ///
+    /// Note this layer only supplies policy *defaults*; the interactive
+    /// approval surface that a resulting `Ask` is routed to lives in
+    /// `src/exec/approval` + `src/tools/scoped`.
     pub fn load_from(path: PathBuf) -> Self {
         match std::fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<PolicyConfig>(&contents) {
@@ -223,7 +237,7 @@ impl ConfigApprovalPolicy {
                 }
                 Err(e) => {
                     error!(
-                        "Failed to parse approval policy at {}: {}. Using safe defaults (all actions require approval).",
+                        "Failed to parse approval policy at {}: {}. The file exists but is broken, so falling back to the safe posture: every action requires approval.",
                         path.display(),
                         e
                     );
@@ -232,14 +246,14 @@ impl ConfigApprovalPolicy {
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
-                    "Approval policy file not found at {}. Using safe defaults (all actions require approval).",
+                    "No approval policy at {}. Using the curated built-in defaults (read-only browser motion allowed; state-changing, egress, desktop, PIM, media and hooks actions ask).",
                     path.display()
                 );
-                Self::safe_default()
+                Self::default()
             }
             Err(e) => {
                 error!(
-                    "Failed to read approval policy at {}: {}. Using safe defaults (all actions require approval).",
+                    "Failed to read approval policy at {}: {}. The file exists but is unreadable, so falling back to the safe posture: every action requires approval.",
                     path.display(),
                     e
                 );
@@ -264,10 +278,14 @@ impl ConfigApprovalPolicy {
         )
     }
 
-    /// Safe fallback when the policy file exists but cannot be read or parsed.
+    /// Safe fallback for the one cause that warrants it: the policy file
+    /// **exists** but cannot be read or parsed.
     ///
-    /// Every action type returns [`ApprovalDecision::Ask`] — never silently
-    /// allow or deny. This ensures configuration errors cannot weaken security.
+    /// The empty `defaults` map makes [`ApprovalPolicy::check`] fall through to
+    /// its step 4, so every action type returns [`ApprovalDecision::Ask`] —
+    /// never silently allow or deny. This ensures a broken config cannot weaken
+    /// security. It is deliberately **not** the fallback for an absent file;
+    /// see [`Self::load_from`] for why the two causes diverge.
     fn safe_default() -> Self {
         Self::new(PolicyConfig {
             defaults: HashMap::new(),
@@ -278,6 +296,11 @@ impl ConfigApprovalPolicy {
 }
 
 impl Default for ConfigApprovalPolicy {
+    /// The curated built-in policy. This is the posture of an install with no
+    /// `~/.aleph/approval-policy.json` — [`ConfigApprovalPolicy::load_from`]
+    /// returns it on the file-absent arm, so it is production behavior, not a
+    /// test convenience.
+    ///
     /// Sensible defaults:
     /// - Browser navigate/click/type → Allow
     /// - Browser evaluate → Ask
@@ -288,6 +311,8 @@ impl Default for ConfigApprovalPolicy {
     /// - Browser select/drag/dialog/upload → Ask (page-state changing or
     ///   file-egress)
     /// - Browser cookies write → Ask (the value is a credential by design)
+    /// - Browser identity override / session state → Ask (same reason: a
+    ///   request header and a saved storage state are both credentials)
     /// - Desktop actions → Ask
     /// - Hooks manage → Ask (control-plane write)
     fn default() -> Self {
@@ -306,6 +331,8 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserDrag, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserUpload, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserSessionState, DefaultDecision::Ask);
         defaults.insert(ActionType::HooksManage, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
@@ -367,7 +394,17 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         }
 
         // 3. Fall back to defaults
-        if let Some(default_decision) = self.config.defaults.get(action) {
+        // A policy file replaces these defaults wholesale, so an action the
+        // operator did not name falls back to the action it was split out of
+        // (see `ActionType::inherited_from`) before falling through to Ask.
+        // Without this, renaming a variant loosens every existing policy file.
+        let inherited = action.inherited_from();
+        let resolved = self.config.defaults.get(action).or_else(|| {
+            inherited
+                .as_ref()
+                .and_then(|parent| self.config.defaults.get(parent))
+        });
+        if let Some(default_decision) = resolved {
             return match default_decision {
                 DefaultDecision::Allow => ApprovalDecision::Allow,
                 DefaultDecision::Deny => ApprovalDecision::Deny {
@@ -669,6 +706,154 @@ mod tests {
                 !target_value.contains(secret_script),
                 "target field must not contain raw script body, got: {target_value}"
             );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Fallback-by-cause: absent file vs. broken file
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn missing_policy_file_yields_the_curated_defaults_not_all_ask() {
+        // Nothing in this repo ever writes `approval-policy.json`, so "absent"
+        // is the shipped state of every install. Falling back to an empty
+        // defaults map here turned every approval-gated tool into a refusal
+        // string with no in-product way to resolve it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let policy = ConfigApprovalPolicy::load_from(dir.path().join("nope.json"));
+
+        let req = make_request_with_target(ActionType::BrowserNavigate, "https://example.com");
+        assert_eq!(
+            policy.check(&req).await,
+            ApprovalDecision::Allow,
+            "an install with no policy file must be able to navigate the browser"
+        );
+    }
+
+    #[tokio::test]
+    async fn corrupt_policy_file_still_falls_back_to_all_ask() {
+        // The half that must never loosen: a policy the operator wrote but that
+        // no longer parses cannot silently resolve to something weaker.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("approval-policy.json");
+        std::fs::write(&path, "{ this is not json").expect("write corrupt policy");
+        let policy = ConfigApprovalPolicy::load_from(path);
+
+        let req = make_request_with_target(ActionType::BrowserNavigate, "https://example.com");
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Ask { .. }),
+            "a broken policy file must escalate everything to Ask"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_curated_default_map_is_reachable_from_load() {
+        // Pins the file-absent path to `Default::default()` so the curated map
+        // cannot drift back into being an unreachable, test-only artifact.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let loaded = ConfigApprovalPolicy::load_from(dir.path().join("nope.json"));
+        let curated = ConfigApprovalPolicy::default();
+
+        for (action, expected) in [
+            (ActionType::BrowserOpen, DefaultDecision::Ask),
+            (ActionType::BrowserNavigate, DefaultDecision::Allow),
+            (ActionType::BrowserEvaluate, DefaultDecision::Ask),
+        ] {
+            let req = make_request_with_target(action.clone(), "https://example.com");
+            let from_load = loaded.check(&req).await;
+            assert_eq!(
+                from_load,
+                curated.check(&req).await,
+                "{action} must resolve identically through load_from(missing) and Default::default()"
+            );
+            let matches_expectation = match expected {
+                DefaultDecision::Allow => matches!(from_load, ApprovalDecision::Allow),
+                DefaultDecision::Ask => matches!(from_load, ApprovalDecision::Ask { .. }),
+                DefaultDecision::Deny => matches!(from_load, ApprovalDecision::Deny { .. }),
+            };
+            assert!(
+                matches_expectation,
+                "{action} resolved to {from_load:?}, expected {expected:?}"
+            );
+        }
+    }
+
+    /// Splitting an `ActionType` in two must not loosen a policy file written
+    /// against the old name.
+    ///
+    /// A policy file replaces the curated defaults wholesale, so an operator
+    /// whose file says `browser_cookies_write: deny` — and who was thereby
+    /// denying header injection and storage-state moves, because those WERE
+    /// that action — must keep denying them after the rename, without editing
+    /// anything.
+    #[tokio::test]
+    async fn a_renamed_action_inherits_the_old_key_rather_than_falling_through_to_ask() {
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        });
+
+        for split_out in [
+            ActionType::BrowserIdentityOverride,
+            ActionType::BrowserSessionState,
+        ] {
+            let req = make_request_with_target(split_out.clone(), "x");
+            assert!(
+                matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+                "{split_out} must inherit the deny the operator wrote for its old name"
+            );
+        }
+    }
+
+    /// …and the inheritance is a fallback, not an override: naming the new key
+    /// explicitly wins, which is what makes the split worth having.
+    #[tokio::test]
+    async fn an_explicit_entry_for_the_new_key_beats_the_inherited_one() {
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Allow);
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        });
+
+        let allowed = make_request_with_target(ActionType::BrowserIdentityOverride, "x");
+        assert!(matches!(
+            policy.check(&allowed).await,
+            ApprovalDecision::Allow
+        ));
+        // The sibling that was NOT named still inherits.
+        let inherited = make_request_with_target(ActionType::BrowserSessionState, "x");
+        assert!(matches!(
+            policy.check(&inherited).await,
+            ApprovalDecision::Deny { .. }
+        ));
+    }
+
+    /// The chain must stay one level deep and acyclic — it exists to preserve
+    /// a rename, not to grow a taxonomy that could loop in `check`.
+    #[test]
+    fn inheritance_is_one_level_and_acyclic() {
+        for action in [
+            ActionType::BrowserIdentityOverride,
+            ActionType::BrowserSessionState,
+            ActionType::BrowserCookiesWrite,
+            ActionType::BrowserNavigate,
+            ActionType::HooksManage,
+            ActionType::MediaCapture,
+        ] {
+            if let Some(parent) = action.inherited_from() {
+                assert_ne!(parent, action, "{action} inherits from itself");
+                assert_eq!(
+                    parent.inherited_from(),
+                    None,
+                    "{action} -> {parent} is more than one level deep"
+                );
+            }
         }
     }
 }

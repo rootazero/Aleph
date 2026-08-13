@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::browser::types::ActionTarget;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -17,9 +17,8 @@ pub struct BrowserSelectArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
-    /// CSS selector of the dropdown/select element.
-    pub selector: Option<String>,
-    /// Accessibility `ref_id` from a previous snapshot.
+    /// Accessibility `ref_id` of the dropdown/select element, from a previous
+    /// snapshot.
     pub ref_id: Option<String>,
     /// Value to select from the dropdown.
     pub value: String,
@@ -61,11 +60,30 @@ impl BrowserSelectTool {
 impl AlephTool for BrowserSelectTool {
     const NAME: &'static str = "browser_select";
     const DESCRIPTION: &'static str =
-        "Select an option from a dropdown/select element by CSS selector or ref_id";
+        "Select an option from a dropdown/select element, addressed by the ref_id a \
+         browser_snapshot reported for it";
     type Args = BrowserSelectArgs;
     type Output = BrowserSelectOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Validate first: a malformed call is a model mistake and must not
+        // consume a user approval or touch the page. It degrades to
+        // success:false with the contract spelled out, never a hard `Err` —
+        // the shape exec.rs and wait_for.rs already state in prose.
+        let Some(ref ref_id) = args.ref_id else {
+            return Ok(BrowserSelectOutput {
+                success: false,
+                message: Some(
+                    "browser_select requires 'ref_id': call browser_snapshot and pass the \
+                     ref_id it reports for the dropdown."
+                        .into(),
+                ),
+            });
+        };
+        let target = ActionTarget::Ref {
+            ref_id: ref_id.clone(),
+        };
+
         // Input-side secret scan: a dropdown value is still text typed into the
         // page, so the same deterministic policy gate as browser_type applies.
         if let Some(message) = super::check_input_secret_block(&self.manager, &args.value) {
@@ -74,20 +92,6 @@ impl AlephTool for BrowserSelectTool {
                 message: Some(message),
             });
         }
-
-        let target = if let Some(ref rid) = args.ref_id {
-            ActionTarget::Ref {
-                ref_id: rid.clone(),
-            }
-        } else if args.selector.is_some() {
-            return Err(AlephError::invalid_input(
-                "CSS selector targeting is no longer supported. Use 'ref_id' from browser_snapshot.",
-            ));
-        } else {
-            return Err(AlephError::invalid_input(
-                "browser_select requires 'ref_id'",
-            ));
-        };
 
         if let Some(message) = super::check_browser_approval(
             self.approval_policy.as_ref(),
@@ -111,12 +115,15 @@ impl AlephTool for BrowserSelectTool {
                 }),
                 Err(e) => Ok(BrowserSelectOutput {
                     success: false,
-                    message: Some(format!("Select failed: {e}")),
+                    message: Some(format!(
+                        "Select failed: {}",
+                        super::backend_error_text(&self.manager, &e)
+                    )),
                 }),
             },
             Err(e) => Ok(BrowserSelectOutput {
                 success: false,
-                message: Some(format!("{e}")),
+                message: Some(super::backend_error_text(&self.manager, &e)),
             }),
         }
     }
@@ -128,25 +135,6 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_select_with_selector_returns_error() {
-        // CSS selector targeting is no longer supported — must use ref_id.
-        let config = BrowserSystemConfig::default();
-        let manager = Arc::new(ProfileManager::new(config));
-        let tool = BrowserSelectTool::new(manager);
-
-        let result = tool
-            .call(BrowserSelectArgs {
-                profile: "default".into(),
-                selector: Some("select#country".into()),
-                ref_id: None,
-                value: "us".into(),
-            })
-            .await;
-
-        assert!(result.is_err(), "selector-only select should return Err");
-    }
-
-    #[tokio::test]
     async fn test_select_with_ref_id() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
@@ -155,18 +143,21 @@ mod tests {
         let result = tool
             .call(BrowserSelectArgs {
                 profile: "default".into(),
-                selector: None,
                 ref_id: Some("combobox[0]".into()),
                 value: "us".into(),
             })
             .await
             .unwrap();
 
-        assert!(!result.success); // No browser running
+        // ref_id is the supported targeting method and still reaches the
+        // backend, which fails gracefully with no browser running.
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(!message.contains("requires 'ref_id'"), "got: {message}");
     }
 
     #[tokio::test]
-    async fn test_select_no_target_fails() {
+    async fn test_select_no_target_is_graceful_failure() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserSelectTool::new(manager);
@@ -174,13 +165,50 @@ mod tests {
         let result = tool
             .call(BrowserSelectArgs {
                 profile: "default".into(),
-                selector: None,
                 ref_id: None,
                 value: "us".into(),
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_err());
+        assert!(!result.success);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("browser_snapshot")),
+            "got: {:?}",
+            result.message
+        );
+    }
+
+    #[tokio::test]
+    async fn test_select_malformed_call_does_not_consume_approval() {
+        use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
+        use std::collections::HashMap;
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserSelect, DefaultDecision::Deny);
+        let policy = Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        }));
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSelectTool::new(manager).with_approval_policy(policy);
+
+        let result = tool
+            .call(BrowserSelectArgs {
+                profile: "default".into(),
+                ref_id: None,
+                value: "us".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("browser_snapshot"), "got: {message}");
+        assert!(!message.contains("denied"), "got: {message}");
     }
 
     #[tokio::test]
@@ -192,7 +220,6 @@ mod tests {
         let result = tool
             .call(BrowserSelectArgs {
                 profile: "default".into(),
-                selector: None,
                 ref_id: Some("combobox[0]".into()),
                 value: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into(),
             })
@@ -215,7 +242,6 @@ mod tests {
         let result = tool
             .call(BrowserSelectArgs {
                 profile: "default".into(),
-                selector: None,
                 ref_id: Some("combobox[0]".into()),
                 value: "us".into(),
             })

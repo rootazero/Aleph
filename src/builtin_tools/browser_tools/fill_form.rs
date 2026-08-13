@@ -14,10 +14,7 @@ use crate::tools::AlephTool;
 /// A single form field to fill.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FormField {
-    /// CSS selector of the form field (used in managed mode).
-    #[serde(default)]
-    pub selector: Option<String>,
-    /// ARIA snapshot `ref_id` of the form field (used in existing-session mode).
+    /// ARIA snapshot `ref_id` of the form field.
     #[serde(default)]
     pub ref_id: Option<String>,
     /// Value to fill into the field.
@@ -68,11 +65,53 @@ impl BrowserFillFormTool {
 #[async_trait]
 impl AlephTool for BrowserFillFormTool {
     const NAME: &'static str = "browser_fill_form";
-    const DESCRIPTION: &'static str = "Fill multiple form fields at once";
+    const DESCRIPTION: &'static str =
+        "Fill multiple form fields at once; address each field by the ref_id a \
+         browser_snapshot reported for it";
     type Args = BrowserFillFormArgs;
     type Output = BrowserFillFormOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Lower every field to an `ActionTarget` FIRST — before the secret
+        // scan, the approval check and the backend lookup. A malformed call is
+        // a model mistake and must not consume a user approval or touch the
+        // page (the rule `exec.rs::plan_actions` already states); this used to
+        // run after both, so a form with one unaddressable field spent the
+        // user's approval before discovering it could not be filled.
+        // An empty batch is the degenerate case of the same mistake, and it
+        // used to be the expensive one: the loop below has nothing to reject,
+        // so the call spent a user approval, resolved a tab, and came back
+        // `success: true, filled_count: 0` — a no-op reported as a completed
+        // fill. `browser_upload` refuses its empty `paths` for this reason.
+        if args.fields.is_empty() {
+            return Ok(BrowserFillFormOutput {
+                success: false,
+                filled_count: 0,
+                message: Some("browser_fill_form requires at least one field in `fields`".into()),
+            });
+        }
+
+        let mut targets = Vec::with_capacity(args.fields.len());
+        for field in &args.fields {
+            let Some(ref ref_id) = field.ref_id else {
+                return Ok(BrowserFillFormOutput {
+                    success: false,
+                    filled_count: 0,
+                    message: Some(
+                        "each field requires 'ref_id': call browser_snapshot and pass the \
+                         ref_id it reports for each input."
+                            .into(),
+                    ),
+                });
+            };
+            targets.push((
+                ActionTarget::Ref {
+                    ref_id: ref_id.clone(),
+                },
+                field.value.clone(),
+            ));
+        }
+
         // Input-side secret scan runs BEFORE the approval check: deterministic
         // policy beats interactive approval (and is cheaper). Every field value
         // is scanned — a single credential-shaped value anywhere in the batch
@@ -92,7 +131,7 @@ impl AlephTool for BrowserFillFormTool {
             args.fields.len(),
             args.fields
                 .iter()
-                .filter_map(|f| f.ref_id.as_deref().or(f.selector.as_deref()))
+                .filter_map(|f| f.ref_id.as_deref())
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -118,33 +157,10 @@ impl AlephTool for BrowserFillFormTool {
                     return Ok(BrowserFillFormOutput {
                         success: false,
                         filled_count: 0,
-                        message: Some(format!("{e}")),
+                        message: Some(super::backend_error_text(&self.manager, &e)),
                     });
                 }
             };
-
-        // Build (ActionTarget, value) pairs for the batch fill_form method
-        let mut targets = Vec::with_capacity(args.fields.len());
-        for field in &args.fields {
-            let target = if let Some(ref ref_id) = field.ref_id {
-                ActionTarget::Ref {
-                    ref_id: ref_id.clone(),
-                }
-            } else if field.selector.is_some() {
-                return Ok(BrowserFillFormOutput {
-                    success: false,
-                    filled_count: 0,
-                    message: Some("CSS selector targeting is no longer supported. Use 'ref_id' from browser_snapshot.".into()),
-                });
-            } else {
-                return Ok(BrowserFillFormOutput {
-                    success: false,
-                    filled_count: 0,
-                    message: Some("Each field must have either 'selector' or 'ref_id'".into()),
-                });
-            };
-            targets.push((target, field.value.clone()));
-        }
 
         match backend.fill_form(&tab_id, &targets).await {
             Ok(filled) => Ok(BrowserFillFormOutput {
@@ -158,7 +174,10 @@ impl AlephTool for BrowserFillFormTool {
             Err(e) => Ok(BrowserFillFormOutput {
                 success: false,
                 filled_count: 0,
-                message: Some(format!("Fill form failed: {e}")),
+                message: Some(format!(
+                    "Fill form failed: {}",
+                    super::backend_error_text(&self.manager, &e)
+                )),
             }),
         }
     }
@@ -180,13 +199,11 @@ mod tests {
                 profile: "default".into(),
                 fields: vec![
                     FormField {
-                        selector: Some("input#name".into()),
-                        ref_id: None,
+                        ref_id: Some("e1".into()),
                         value: "Alice".into(),
                     },
                     FormField {
-                        selector: Some("input#email".into()),
-                        ref_id: None,
+                        ref_id: Some("e2".into()),
                         value: "alice@example.com".into(),
                     },
                 ],
@@ -194,9 +211,95 @@ mod tests {
             .await
             .unwrap();
 
-        // Without a running browser, tools degrade gracefully
+        // ref_id targeting reaches the backend, which degrades gracefully
+        // without a running browser.
         assert!(!result.success);
-        assert!(result.message.is_some());
+        let message = result.message.unwrap();
+        assert!(!message.contains("requires 'ref_id'"), "got: {message}");
+    }
+
+    /// An empty `fields` batch is refused rather than reported as a completed
+    /// fill of nothing — and refused before the approval gate, which an
+    /// `Allow`-counting policy proves was never consulted.
+    #[tokio::test]
+    async fn an_empty_batch_is_refused_before_the_approval_gate() {
+        use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
+        use async_trait::async_trait;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingAllow(Arc<AtomicUsize>);
+        #[async_trait]
+        impl ApprovalPolicy for CountingAllow {
+            async fn check(&self, _req: &ActionRequest) -> ApprovalDecision {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                ApprovalDecision::Allow
+            }
+            async fn record(&self, _req: &ActionRequest, _dec: &ApprovalDecision) {}
+        }
+
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let asked = Arc::new(AtomicUsize::new(0));
+        let tool = BrowserFillFormTool::new(manager)
+            .with_approval_policy(
+                Arc::new(CountingAllow(Arc::clone(&asked))) as Arc<dyn ApprovalPolicy>
+            );
+
+        let result = tool
+            .call(BrowserFillFormArgs {
+                profile: "default".into(),
+                fields: vec![],
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success, "an empty fill is not a completed fill");
+        assert_eq!(result.filled_count, 0);
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("at least one field")),
+            "got: {:?}",
+            result.message
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "an empty batch must not consume an approval"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fill_form_unaddressable_field_does_not_consume_approval() {
+        use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
+        use std::collections::HashMap;
+        // Deny fills outright: a field with no ref_id must still report the
+        // targeting contract, proving validation ran before the gate.
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserFill, DefaultDecision::Deny);
+        let policy = Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        }));
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserFillFormTool::new(manager).with_approval_policy(policy);
+
+        let result = tool
+            .call(BrowserFillFormArgs {
+                profile: "default".into(),
+                fields: vec![FormField {
+                    ref_id: None,
+                    value: "Alice".into(),
+                }],
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        let message = result.message.unwrap();
+        assert!(message.contains("ref_id"), "got: {message}");
+        assert!(!message.contains("denied"), "got: {message}");
     }
 
     #[tokio::test]
@@ -230,12 +333,10 @@ mod tests {
                 profile: "default".into(),
                 fields: vec![
                     FormField {
-                        selector: None,
                         ref_id: Some("e1".into()),
                         value: "Alice".into(),
                     },
                     FormField {
-                        selector: None,
                         ref_id: Some("e2".into()),
                         value: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into(),
                     },
@@ -262,7 +363,6 @@ mod tests {
             .call(BrowserFillFormArgs {
                 profile: "default".into(),
                 fields: vec![FormField {
-                    selector: None,
                     ref_id: Some("e1".into()),
                     value: "alice@example.com".into(),
                 }],

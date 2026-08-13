@@ -28,18 +28,70 @@ pub struct BrowserScreenshotArgs {
     pub describe: Option<bool>,
 }
 
+/// Maximum characters of vision-model `description` handed back to the model.
+///
+/// A scene description is prose about one screen; anything longer than this is
+/// not a description, it is a hostile page having talked the vision model into
+/// relaying a wall of text. Much tighter than the page-read budget
+/// [`DEFAULT_CONTENT_MAX_CHARS`](super::DEFAULT_CONTENT_MAX_CHARS) that
+/// `ocr_text` gets, because OCR legitimately scales with the page.
+const MAX_DESCRIPTION_CHARS: usize = 4_000;
+
+/// Route the two `describe: true` text layers through the module egress
+/// chokepoint. Both are page-derived — i.e. attacker-controlled — and were the
+/// only page reads in this module that skipped it entirely: no redaction, no
+/// injection fence, no size bound.
+///
+/// The two get different budgets but the same wrapper, and the difference is
+/// deliberate:
+///
+/// - `ocr_text` is verbatim on-screen text, so it is a page read like any
+///   other — full [`redact_and_wrap`](super::redact_and_wrap): the page-sized
+///   char budget, secret redaction, injection fence.
+/// - `description` is a vision model's prose *about* the page rather than a
+///   transcript, but a page that paints "ignore previous instructions" gets it
+///   relayed verbatim by any model asked to describe what it sees, so it earns
+///   the same fence. What legitimately differs is the size: one screen's worth
+///   of prose, not a page. It is bounded at [`MAX_DESCRIPTION_CHARS`] and then
+///   handed to [`redact_wrap`](super::redact_wrap), the already-bounded entry
+///   point `browser_snapshot` uses.
+fn wrap_describe_layers(
+    manager: &ProfileManager,
+    ocr_text: Option<String>,
+    description: Option<String>,
+) -> (Option<String>, Option<String>) {
+    (
+        ocr_text.map(|t| super::redact_and_wrap(manager, &t)),
+        description.map(|t| {
+            let (bounded, _) = super::bound_content(&t, MAX_DESCRIPTION_CHARS);
+            super::redact_wrap(manager, &bounded)
+        }),
+    )
+}
+
 /// Output from the `browser_screenshot` tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserScreenshotOutput {
     pub success: bool,
     pub image_base64: Option<String>,
+    /// Encoding of `image_base64` — always `"png"` (see the `ScreenshotOpts`
+    /// default). Not decoration: `result_processing::extract_image_in_place`
+    /// refuses to hoist an inline image without a recognised `format`, so
+    /// without this field the base64 stayed in the TEXT channel and the result
+    /// budget truncated it into an undecodable fragment — the model acted on a
+    /// screen it never saw. `desktop`'s screenshot output has always carried it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
     pub message: Option<String>,
     /// Flat OCR text from the page (only when `describe: true` and a provider
-    /// produced it). Lets a text-only model read on-screen text.
+    /// produced it). Lets a text-only model read on-screen text. Page-derived,
+    /// so it leaves through the module egress chokepoint like every other page
+    /// read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ocr_text: Option<String>,
     /// Multimodal scene description (only when `describe: true` and a vision
-    /// model is configured).
+    /// model is configured). Also page-derived — see the wrapping note in
+    /// `call`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
@@ -107,9 +159,13 @@ impl AlephTool for BrowserScreenshotTool {
                             _ => (None, None),
                         };
 
+                        let (ocr_text, description) =
+                            wrap_describe_layers(&self.manager, ocr_text, description);
+
                         Ok(BrowserScreenshotOutput {
                             success: true,
                             image_base64: Some(image_base64),
+                            format: Some("png".into()),
                             message: Some(format!(
                                 "Screenshot captured in profile '{}'",
                                 args.profile
@@ -121,7 +177,11 @@ impl AlephTool for BrowserScreenshotTool {
                     Err(e) => Ok(BrowserScreenshotOutput {
                         success: false,
                         image_base64: None,
-                        message: Some(format!("Screenshot failed: {e}")),
+                        format: None,
+                        message: Some(format!(
+                            "Screenshot failed: {}",
+                            super::backend_error_text(&self.manager, &e)
+                        )),
                         ocr_text: None,
                         description: None,
                     }),
@@ -130,7 +190,8 @@ impl AlephTool for BrowserScreenshotTool {
             Err(e) => Ok(BrowserScreenshotOutput {
                 success: false,
                 image_base64: None,
-                message: Some(format!("{e}")),
+                format: None,
+                message: Some(super::backend_error_text(&self.manager, &e)),
                 ocr_text: None,
                 description: None,
             }),
@@ -184,5 +245,68 @@ mod tests {
         assert!(result.message.is_some());
         assert!(result.ocr_text.is_none());
         assert!(result.description.is_none());
+    }
+
+    /// The perceive→act loop: without a `format` key
+    /// `result_processing::extract_image_in_place` bails out and the base64
+    /// stays in the text channel, where the result budget truncates it into an
+    /// undecodable fragment. `desktop`'s screenshot output has always carried
+    /// the key; this asserts browser's does too.
+    #[test]
+    fn screenshot_output_is_hoisted_as_a_real_image_block() {
+        let out = BrowserScreenshotOutput {
+            success: true,
+            // > 256 chars, so the hoister treats it as an image and not a marker.
+            image_base64: Some("A".repeat(5_000)),
+            format: Some("png".into()),
+            message: Some("Screenshot captured in profile 'default'".into()),
+            ocr_text: None,
+            description: None,
+        };
+        let mut value = serde_json::to_value(&out).expect("output serializes");
+        let images = crate::tools::result_processing::hoist_inline_images(&mut value);
+
+        assert_eq!(
+            images.len(),
+            1,
+            "the screenshot must reach the model as an image block"
+        );
+        assert_eq!(images[0].mime_type, "image/png");
+        assert_eq!(images[0].data.len(), 5_000);
+        // …and the budget-blowing blob is gone from the text channel.
+        assert!(value["image_base64"].as_str().unwrap().len() < 256);
+    }
+
+    /// `describe: true` returns page-derived text. Until now it was the only
+    /// page read in the module that reached the model unredacted, unfenced and
+    /// unbounded.
+    #[test]
+    fn describe_layers_go_through_the_egress_chokepoint() {
+        use crate::security::content_sanitizer::split_external_fence;
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+
+        // A "description" long enough to be an injected relay, not a description.
+        let flood = "x".repeat(MAX_DESCRIPTION_CHARS * 3);
+        let (ocr, desc) = wrap_describe_layers(
+            &manager,
+            Some("Signed in. token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into()),
+            Some(flood),
+        );
+
+        let ocr = ocr.expect("ocr layer");
+        assert!(!ocr.contains("sk-ant-api03"), "secret survived: {ocr}");
+        assert!(ocr.contains("[REDACTED:"));
+        assert!(
+            split_external_fence(&ocr).is_some(),
+            "OCR text must be wholly fenced: {ocr}"
+        );
+
+        let desc = desc.expect("description layer");
+        let fenced = split_external_fence(&desc).expect("description must be wholly fenced");
+        assert!(
+            fenced.interior.chars().count() <= MAX_DESCRIPTION_CHARS,
+            "description is not bounded: {} chars",
+            fenced.interior.chars().count()
+        );
     }
 }

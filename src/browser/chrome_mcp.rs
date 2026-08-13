@@ -24,25 +24,22 @@ struct ChromeMcpSession {
     client: McpClient,
 }
 
-/// Build the argument vector for `chrome --remote-debugging-port=0`,
-/// optionally appending a `--host-resolver-rules` MAP argument to pin the
-/// browser's hostname resolution to a pre-validated set of IPs (DNS
-/// rebinding defense). Baseline flags stay identical whether or not a
-/// pin is supplied.
+/// Build the argument vector for `chrome --remote-debugging-port=0`.
 ///
 /// When the launching profile is known, its `proxy` / `user_data_dir` are
 /// appended next, and `extra_args` go LAST so a user-supplied flag always
 /// wins over a config-derived one (Chrome honors the last occurrence of a
 /// repeated switch).
-fn chrome_launch_args(pin: Option<&str>, profile_cfg: Option<&ProfileConfig>) -> Vec<String> {
+///
+/// No `--host-resolver-rules` DNS pin is passed — see the note in
+/// [`super::network_policy`] for why that control was removed rather than
+/// repaired.
+fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>) -> Vec<String> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
     ];
-    if let Some(p) = pin {
-        args.push(p.to_string());
-    }
     if let Some(cfg) = profile_cfg {
         if let Some(proxy) = &cfg.proxy {
             args.push(format!("--proxy-server={proxy}"));
@@ -72,12 +69,14 @@ pub struct ChromeMcpDriver {
     /// operation. The backend holds the matching lock across the whole pair.
     /// Mirrors `PlaywrightCliDriver`'s per-session lock.
     profile_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
-    /// Per-profile pending `--host-resolver-rules` argument to inject into the
-    /// next Chrome launch. The backend sets this before each navigation; the
-    /// launcher consumes it inside `ensure_chrome_running`. Consumed once
-    /// because Chrome's host-resolver-rules are process-wide — once Chrome is
-    /// up, the pin is fixed for its lifetime.
-    pending_launch_pins: Mutex<HashMap<String, String>>,
+    /// Per-profile session-creation locks. Creating a session starts an MCP
+    /// server and may launch Chrome — seconds of `await`. Serializing that per
+    /// profile here (rather than under the `sessions` write lock) keeps the map
+    /// readable by every other profile meanwhile. Distinct from
+    /// [`Self::profile_locks`] on purpose: a backend action holds *that* lock
+    /// while calling a tool, which is what triggers session creation — sharing
+    /// one lock for both would deadlock.
+    session_create_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
 }
 
 impl ChromeMcpDriver {
@@ -89,37 +88,8 @@ impl ChromeMcpDriver {
             profiles,
             chrome_launch_lock: tokio::sync::Mutex::new(()),
             profile_locks: Mutex::new(HashMap::new()),
-            pending_launch_pins: Mutex::new(HashMap::new()),
+            session_create_locks: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// Stage a `--host-resolver-rules` argument for the next Chrome launch on
-    /// `profile_name`. Passing `None` clears any previously staged value. The
-    /// backend calls this immediately before invoking a navigation tool so the
-    /// pin is ready when `ensure_chrome_running` needs it.
-    pub fn set_pending_launch_pin(&self, profile_name: &str, pin: Option<String>) {
-        let mut map = self
-            .pending_launch_pins
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        match pin {
-            Some(p) => {
-                map.insert(profile_name.to_string(), p);
-            }
-            None => {
-                map.remove(profile_name);
-            }
-        }
-    }
-
-    /// Consume and return any pending pin arg for `profile_name`. Returns
-    /// `None` if nothing was staged or the value was already taken.
-    fn take_pending_launch_pin(&self, profile_name: &str) -> Option<String> {
-        let mut map = self
-            .pending_launch_pins
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        map.remove(profile_name)
     }
 
     /// Get (or lazily create) the per-profile serialization lock. The returned
@@ -152,15 +122,22 @@ impl ChromeMcpDriver {
         // MCP tools are namespaced with server prefix: "chrome-mcp-{profile}:{tool}"
         let server_name = format!("chrome-mcp-{profile_name}");
         let full_tool_name = format!("{server_name}:{tool_name}");
+        // Two error shapes, kept apart deliberately. A failure of the *call*
+        // (the client never got an answer) is a transport failure; a failure
+        // reported *inside* a successful answer is the tool's own verdict about
+        // the page. Callers must be able to tell them apart — `wait_for` folds
+        // a tool-level "text never appeared" into `Ok(false)`, and folding a
+        // dead pipe into the same value tells the model the text is not on the
+        // page when in truth nothing ever looked.
         let result = match session.client.call_tool(&full_tool_name, args).await {
             Ok(r) => r,
             Err(e) => {
                 let err_str = e.to_string();
-                let is_transport_error = err_str.contains("broken pipe")
+                let is_broken_pipe = err_str.contains("broken pipe")
                     || err_str.contains("connection reset")
                     || err_str.contains("process exited")
                     || err_str.contains("channel closed");
-                if is_transport_error {
+                if is_broken_pipe {
                     tracing::warn!(
                         "Chrome MCP transport error for profile '{profile_name}': {err_str}"
                     );
@@ -169,7 +146,7 @@ impl ChromeMcpDriver {
                     // the errored session).
                     self.destroy_session_if_same(profile_name, &session).await;
                 }
-                return Err(BrowserError::ChromeMcpError(err_str));
+                return Err(BrowserError::ChromeMcpTransport(err_str));
             }
         };
 
@@ -183,7 +160,26 @@ impl ChromeMcpDriver {
         Ok(result.content)
     }
 
+    /// Get (or lazily create) the per-profile session-creation lock — see
+    /// [`Self::session_create_locks`].
+    fn session_create_lock(&self, profile_name: &str) -> Arc<AsyncMutex<()>> {
+        let mut map = self
+            .session_create_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        map.entry(profile_name.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
     /// Ensure a session exists for the given profile, creating one if needed.
+    ///
+    /// The process-wide `sessions` map is never write-locked across the
+    /// creation itself: `create_session` starts an MCP server and may launch
+    /// Chrome (seconds of `await`), and holding the map's writer for that long
+    /// stalls every other profile's `call_tool`, the idle reaper and the
+    /// liveness read. Concurrency is serialized by a per-profile creation lock
+    /// instead, and the map is only locked for the two short read/insert steps.
     async fn ensure_session(&self, profile_name: &str) -> Result<(), BrowserError> {
         // Fast path: check if session already exists
         {
@@ -193,16 +189,23 @@ impl ChromeMcpDriver {
             }
         }
 
-        // Slow path: create a new session
-        let mut sessions = self.sessions.write().await;
+        // Slow path: one creation at a time per profile.
+        let create_lock = self.session_create_lock(profile_name);
+        let _create_guard = create_lock.lock().await;
 
-        // Double-check after acquiring write lock
-        if sessions.contains_key(profile_name) {
-            return Ok(());
+        // Double-check: a concurrent creator for this profile may have won.
+        {
+            let sessions = self.sessions.read().await;
+            if sessions.contains_key(profile_name) {
+                return Ok(());
+            }
         }
 
         let session = self.create_session(profile_name).await?;
-        sessions.insert(profile_name.to_string(), Arc::new(session));
+        self.sessions
+            .write()
+            .await
+            .insert(profile_name.to_string(), Arc::new(session));
         Ok(())
     }
 
@@ -292,8 +295,7 @@ impl ChromeMcpDriver {
             chrome_path.display()
         );
 
-        let pin = self.take_pending_launch_pin(profile_name);
-        let args = chrome_launch_args(pin.as_deref(), profile_cfg);
+        let args = chrome_launch_args(profile_cfg);
 
         let mut cmd = Command::new(&chrome_path);
         for a in &args {
@@ -447,24 +449,14 @@ mod tests {
     }
 
     #[test]
-    fn chrome_launch_args_includes_pin_arg_when_provided() {
-        // Baseline flags are present and the pin arg is appended verbatim.
-        let pin = "--host-resolver-rules=\"MAP foo 1.2.3.4\"";
-        let args = chrome_launch_args(Some(pin), None);
-        assert!(
-            args.iter().any(|a| a == pin),
-            "pin arg must be passed through verbatim — args = {args:?}"
-        );
-        assert!(args.contains(&"--remote-debugging-port=0".to_string()));
-    }
-
-    #[test]
-    fn chrome_launch_args_omits_pin_arg_when_none() {
-        // Without a pin, no --host-resolver-rules flag reaches Chrome.
-        let args = chrome_launch_args(None, None);
+    fn chrome_launch_args_never_pass_a_host_resolver_pin() {
+        // The DNS pin was removed (see network_policy's note): a control that
+        // cannot fire on the reachable path is worse than none, because three
+        // comments claimed it worked. This asserts it stays gone.
+        let args = chrome_launch_args(None);
         assert!(
             !args.iter().any(|a| a.contains("--host-resolver-rules")),
-            "no pin → no --host-resolver-rules — args = {args:?}"
+            "no --host-resolver-rules may reach Chrome — args = {args:?}"
         );
         assert!(args.contains(&"--remote-debugging-port=0".to_string()));
     }
@@ -476,7 +468,7 @@ mod tests {
             user_data_dir: Some("/tmp/aleph-profile".into()),
             ..Default::default()
         };
-        let args = chrome_launch_args(None, Some(&cfg));
+        let args = chrome_launch_args(Some(&cfg));
         assert!(args.contains(&"--proxy-server=socks5://127.0.0.1:1080".to_string()));
         assert!(args.contains(&"--user-data-dir=/tmp/aleph-profile".to_string()));
         // Baseline flags still lead the argv.
@@ -494,7 +486,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let args = chrome_launch_args(None, Some(&cfg));
+        let args = chrome_launch_args(Some(&cfg));
         let n = args.len();
         assert_eq!(args[n - 2], "--disable-gpu");
         assert_eq!(args[n - 1], "--proxy-server=http://override:1");
@@ -506,8 +498,8 @@ mod tests {
     fn chrome_launch_args_default_profile_matches_baseline() {
         // A profile with no proxy/user-data/extra args must not change the argv.
         assert_eq!(
-            chrome_launch_args(None, Some(&ProfileConfig::default())),
-            chrome_launch_args(None, None)
+            chrome_launch_args(Some(&ProfileConfig::default())),
+            chrome_launch_args(None)
         );
     }
 
@@ -529,48 +521,6 @@ mod tests {
             Some(&BrowserType::Brave)
         );
         assert!(!driver.profiles.contains_key("unknown"));
-    }
-
-    #[test]
-    fn chrome_mcp_driver_set_pending_launch_pin_then_take_round_trip() {
-        let driver = test_driver();
-        driver.set_pending_launch_pin(
-            "user",
-            Some("--host-resolver-rules=\"MAP x 1.1.1.1\"".to_string()),
-        );
-        let taken = driver.take_pending_launch_pin("user");
-        assert_eq!(
-            taken,
-            Some("--host-resolver-rules=\"MAP x 1.1.1.1\"".to_string())
-        );
-        // Consume semantics: second take returns None.
-        assert_eq!(driver.take_pending_launch_pin("user"), None);
-    }
-
-    #[test]
-    fn chrome_mcp_driver_set_pending_launch_pin_none_clears_value() {
-        let driver = test_driver();
-        driver.set_pending_launch_pin(
-            "user",
-            Some("--host-resolver-rules=\"MAP x 1.1.1.1\"".to_string()),
-        );
-        driver.set_pending_launch_pin("user", None);
-        assert_eq!(driver.take_pending_launch_pin("user"), None);
-    }
-
-    #[test]
-    fn chrome_mcp_driver_set_pending_launch_pin_scoped_per_profile() {
-        let driver = test_driver();
-        driver.set_pending_launch_pin("user-a", Some("PIN-A".to_string()));
-        driver.set_pending_launch_pin("user-b", Some("PIN-B".to_string()));
-        assert_eq!(
-            driver.take_pending_launch_pin("user-a"),
-            Some("PIN-A".to_string())
-        );
-        assert_eq!(
-            driver.take_pending_launch_pin("user-b"),
-            Some("PIN-B".to_string())
-        );
     }
 }
 

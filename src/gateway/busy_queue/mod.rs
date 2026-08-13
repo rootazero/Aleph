@@ -135,6 +135,18 @@ struct Lane {
     /// every waiter on this session so one signal wakes all of them (each
     /// re-checks its own state, so only the front proceeds).
     wake: Arc<Notify>,
+    /// How many steering-burst drains this session has seen, counted by
+    /// [`notify_burst_drained`] whether or not any ticket was marked at the
+    /// time.
+    ///
+    /// The wake above is edge-triggered, and an edge is exactly what the
+    /// check-then-mark window loses: a drain that commits between
+    /// `try_inject_steering`'s read and [`mark_awaiting_burst_drain`] finds no
+    /// marked ticket, so the filter suppresses the notify and there is no
+    /// signal for an early-armed waiter to catch. This counter is the level
+    /// the waiter can still observe afterwards — see
+    /// [`TicketGuard::drain_epoch`].
+    drain_epoch: u64,
 }
 
 fn lanes() -> &'static Mutex<HashMap<String, Lane>> {
@@ -214,15 +226,27 @@ pub fn notify_slot_free(session_key: &str) {
 /// "redelivers once the burst drains" degraded to the `wake_fallback_secs`
 /// tick.
 ///
-/// # The check-then-mark window is covered by the burst itself
+/// # The check-then-mark window, and why arming early does not close it
 ///
-/// The mark lands *after* the read that found the burst at the cap, so a drain
-/// that commits in between fires against an unmarked lane and is missed. That
-/// costs one turn, never the message: the burst is at the cap, so the loop has
-/// un-answered user messages to consume and every answer is another drain edge —
-/// and the last one of the run is followed by [`notify_slot_free`]. The waiter
-/// is armed on the lane's `Notify` before its attempt begins, so a drain during
-/// the attempt itself is delivered, not dropped.
+/// The mark lands *after* the read that found the burst at the cap — and that
+/// read is an `await` on the session log, so the window is a real one, not a
+/// few instructions. A drain committing inside it calls
+/// [`notify_burst_drained`] against a lane with no marked ticket, the filter
+/// there suppresses the wake, and **no signal is emitted at all**. Arming the
+/// lane's `Notify` before the attempt (which `deliver_with_ticket` does, and
+/// which is what makes a drain landing *after* the mark safe) cannot rescue a
+/// signal that was never fired.
+///
+/// Nor is the residual cost merely "one turn". An assistant turn drains the
+/// whole burst at once, so the next drain edge is the next turn — and if the
+/// drained turn was the run's last, the waiter sleeps until
+/// [`notify_slot_free`] and the steer degrades into a *separate run*, which is
+/// the failure this wake edge exists to remove.
+///
+/// So the window is closed on the level rather than the edge: `Lane::drain_epoch`
+/// counts every drain regardless of marks, and the waiter compares it across
+/// its attempt ([`TicketGuard::drain_epoch`]). Guarded by
+/// `deliver::tests::a_drain_that_races_the_mark_does_not_park_the_deferred_steer`.
 pub fn mark_awaiting_burst_drain(session_key: &str, run_id: &str) {
     let mut map = lock();
     let Some(lane) = map.get_mut(session_key) else {
@@ -248,14 +272,22 @@ pub fn mark_awaiting_burst_drain(session_key: &str, run_id: &str) {
 /// storm, gaining nothing (only the slot can admit them).
 pub fn notify_burst_drained(session_key: &str) {
     let wake = {
-        let map = lock();
-        map.get(session_key)
-            .filter(|lane| {
-                lane.tickets
-                    .iter()
-                    .any(|t| t.awaiting_burst_drain && !t.cancelled)
-            })
-            .map(|lane| Arc::clone(&lane.wake))
+        let mut map = lock();
+        let Some(lane) = map.get_mut(session_key) else {
+            return;
+        };
+        // Count the drain first and unconditionally. The wake below is for
+        // waiters already marked; the epoch is for the one that is about to
+        // be — a drain landing inside the check-then-mark window emits no
+        // wake at all, and this is the only trace of it left for that waiter
+        // to find. Wrapping is not a correctness concern: the waiter compares
+        // two reads for *inequality*, and a session would need 2^64 assistant
+        // turns inside one delivery attempt to alias.
+        lane.drain_epoch = lane.drain_epoch.wrapping_add(1);
+        lane.tickets
+            .iter()
+            .any(|t| t.awaiting_burst_drain && !t.cancelled)
+            .then(|| Arc::clone(&lane.wake))
     };
     if let Some(wake) = wake {
         wake.notify_waiters();
@@ -526,6 +558,40 @@ impl TicketGuard {
             lane.tickets
                 .iter()
                 .any(|t| t.id == self.ticket && t.cancelled)
+        })
+    }
+
+    /// This session's steering-burst drain count.
+    ///
+    /// Snapshotted by the wait loop before a delivery attempt and re-read after
+    /// one that deferred for backpressure: [`notify_burst_drained`] bumps it
+    /// even when no ticket is marked yet, so it is the one observable trace of
+    /// a drain that fired inside the check-then-mark window and emitted no
+    /// wake. A missing lane reads `0` — the value is only ever compared
+    /// against another read of the same lane, so a lane that is not there
+    /// simply never reports movement (fail open, same posture as
+    /// [`Self::is_front`]).
+    #[must_use]
+    pub(super) fn drain_epoch(&self) -> u64 {
+        lock()
+            .get(&self.session_key)
+            .map_or(0, |lane| lane.drain_epoch)
+    }
+
+    /// Whether this ticket was deferred by steering backpressure — i.e. it is
+    /// waiting for the running loop's burst to drain rather than for the run
+    /// slot to free. Set by [`mark_awaiting_burst_drain`].
+    ///
+    /// Gates the epoch comparison in the wait loop: an ordinary `Queue`-mode
+    /// waiter can only be helped by the slot, so letting it retry on every
+    /// assistant turn would trade its one slot-free wake for a per-turn retry
+    /// storm that gains it nothing.
+    #[must_use]
+    pub(super) fn awaits_burst_drain(&self) -> bool {
+        lock().get(&self.session_key).is_some_and(|lane| {
+            lane.tickets
+                .iter()
+                .any(|t| t.id == self.ticket && t.awaiting_burst_drain)
         })
     }
 
