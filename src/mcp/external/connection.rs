@@ -50,6 +50,26 @@ pub struct ChangedLists {
     pub prompts: bool,
 }
 
+/// Marker that says "the server answered, and its answer was a failure".
+///
+/// A tool-level failure (`isError: true`) and a transport failure both leave
+/// this layer as `AlephError::IoError`, which erases a distinction some callers
+/// depend on: `browser::chrome_mcp` documents that a tool's own verdict may be
+/// folded into a value (`wait_for` → `Ok(false)`) while a dead pipe never may,
+/// and it was classifying every tool error as a dead pipe — so "the text never
+/// appeared" reached the model as a transport failure instead of an answer.
+///
+/// Exposed as a constant, and used to *build* the message as well as to
+/// recognise it, so the two ends cannot drift.
+pub(crate) const TOOL_ERROR_MARKER: &str = "' returned error: ";
+
+/// Whether an error from [`McpConnection::call_tool`] is the tool's own verdict
+/// rather than a failure to reach it.
+#[must_use]
+pub(crate) fn is_tool_error(message: &str) -> bool {
+    message.contains(TOOL_ERROR_MARKER)
+}
+
 impl ChangedLists {
     /// Combine two reports, as when one client fronts several connections.
     #[must_use]
@@ -1229,8 +1249,9 @@ impl McpServerConnection {
 
             let kind = crate::mcp::classify_mcp_error(&error_text);
             return Err(AlephError::IoError(format!(
-                "Tool '{}' returned error: {}{}",
+                "Tool '{}{}{}{}",
                 tool_name,
+                TOOL_ERROR_MARKER,
                 error_text,
                 kind.guidance_suffix()
             )));
@@ -1507,6 +1528,25 @@ impl McpServerConnection {
 
 #[cfg(test)]
 mod tests {
+
+    /// The marker must separate a tool's verdict from every other `IoError`
+    /// this layer produces — that is its only job, and getting it wrong turns
+    /// "the page never showed the text" into "the browser is unreachable".
+    #[test]
+    fn only_a_tool_verdict_is_recognised_as_one() {
+        let verdict = format!(
+            "Tool '{}{}{}",
+            "wait_for", TOOL_ERROR_MARKER, "Error: Timed out after waiting 2000ms"
+        );
+        assert!(is_tool_error(&verdict));
+
+        // A dead pipe is not a verdict.
+        assert!(!is_tool_error("broken pipe (os error 32)"));
+        // Neither is a protocol failure, even though it also names the tool.
+        assert!(!is_tool_error(
+            "Tool 'wait_for' returned malformed result from 'srv': EOF while parsing a value"
+        ));
+    }
     use super::*;
 
     use std::collections::VecDeque;

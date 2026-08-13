@@ -42,6 +42,20 @@ pub trait BrowserBackend: Send + Sync {
         opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError>;
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError>;
+    /// Evaluate `js` in the page and return **the value it produced** — not a
+    /// transcript of the call.
+    ///
+    /// The distinction is load-bearing, not stylistic: `wait_probe` searches
+    /// this string for a sentinel that is a literal inside every probe it
+    /// builds, so a backend that echoes the script back makes the search true
+    /// on the first poll and every `wait_for` on that driver silently reports
+    /// "found". The managed driver did exactly that for as long as it existed
+    /// (`playwright-cli eval` prints `### Ran Playwright code` under the
+    /// result); see `playwright_cli::parse_result_value`.
+    ///
+    /// A failure the backend cannot express as a value (a thrown script) may be
+    /// returned as its diagnostic text, provided that text does not restate the
+    /// script.
     async fn evaluate(&self, tab_id: &str, js: &str) -> Result<String, BrowserError>;
     async fn select(
         &self,

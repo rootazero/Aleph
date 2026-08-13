@@ -852,16 +852,23 @@ actor InputSession {
     private func boundsOf(_ element: AXUIElement) -> Region? {
         var posVal: AnyObject?
         var sizeVal: AnyObject?
+        // The AX API documents kAXPositionAttribute/kAXSizeAttribute as
+        // AXValue returns, but a misbehaving element can violate that and
+        // hand back a different CFType. `as!` would crash the helper
+        // subprocess — and a helper that crashes mid-RPC looks identical to
+        // a refused action to the bridge client, which is exactly the
+        // failure mode this whole ladder was built to diagnose. Conditional
+        // cast + bail to `nil` lets the caller retry the rung above.
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posVal) == .success,
               AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeVal) == .success,
-              let pv = posVal, let sv = sizeVal
+              let pv = posVal, let sv = sizeVal,
+              let pvValue = pv as? AXValue, let svValue = sv as? AXValue
         else { return nil }
         var point = CGPoint.zero
         var size = CGSize.zero
-        // swiftlint:disable:next force_cast
-        AXValueGetValue(pv as! AXValue, .cgPoint, &point)
-        // swiftlint:disable:next force_cast
-        AXValueGetValue(sv as! AXValue, .cgSize, &size)
+        guard AXValueGetValue(pvValue, .cgPoint, &point),
+              AXValueGetValue(svValue, .cgSize, &size)
+        else { return nil }
         return Region(
             x: Double(point.x),
             y: Double(point.y),

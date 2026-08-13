@@ -26,6 +26,15 @@ pub struct PlaywrightCliBackend {
     launch: SessionLaunch,
 }
 
+/// Whether a failure is the CLI saying "there is no file chooser open".
+///
+/// Matched on the CLI's own phrase rather than a loose word: this runs over
+/// failure text that can carry page content.
+fn needs_file_chooser(e: &BrowserError) -> bool {
+    let text = e.to_string().to_lowercase();
+    text.contains("modal state") && text.contains("browser_file_upload")
+}
+
 impl PlaywrightCliBackend {
     pub fn new(
         driver: Arc<PlaywrightCliDriver>,
@@ -259,6 +268,19 @@ impl BrowserBackend for PlaywrightCliBackend {
         }
     }
 
+    /// Keystroke-level text entry.
+    ///
+    /// `playwright-cli type` takes **one** positional (`type <text>`) and acts
+    /// on whatever is focused — unlike `fill <target> <text>`, which it does
+    /// *not* mirror. Passing a ref as an extra positional made the CLI exit 1,
+    /// so `browser_type` with a `ref_id` — the tool's documented primary
+    /// targeting mode — failed on every call against the managed driver.
+    ///
+    /// Focus is therefore established first, with `click`. `fill` would be the
+    /// shorter fix and the wrong one: it sets the value atomically, which is
+    /// exactly the behaviour `browser_fill_form` already provides, and would
+    /// erase the reason `browser_type` exists (per-character key events, which
+    /// autocomplete and key-handler pages need).
     async fn type_text(
         &self,
         _tab_id: &str,
@@ -266,11 +288,9 @@ impl BrowserBackend for PlaywrightCliBackend {
         text: &str,
     ) -> Result<(), BrowserError> {
         match target {
-            // Ref target — type into the specific element (positional, mirrors `fill`).
             ActionTarget::Ref { ref_id } => {
-                let _ = self
-                    .run(&["type", &ref_id, text], self.action_timeout())
-                    .await?;
+                let _ = self.run(&["click", &ref_id], self.action_timeout()).await?;
+                let _ = self.run(&["type", text], self.action_timeout()).await?;
             }
             // No element ref — type into whatever currently holds focus.
             ActionTarget::Coordinates { .. } => {
@@ -367,9 +387,22 @@ impl BrowserBackend for PlaywrightCliBackend {
         })
     }
 
+    /// Returns the **value** the script produced, not the CLI's transcript of
+    /// the call.
+    ///
+    /// `playwright-cli eval` prints `### Result` followed by `### Ran Playwright
+    /// code` — an echo of the script itself. Handing that back conflates the
+    /// answer with the question, and `wait_probe::poll_wait_for` searches this
+    /// string for a sentinel that is a literal inside every probe it builds: the
+    /// echo alone satisfied the search, so every wait on this driver reported
+    /// "found" on its first poll. See [`parse_result_value`].
+    ///
+    /// A transcript with no `### Result` (i.e. `### Error`) is passed through
+    /// unchanged: it carries the failure text the caller needs, and no echoed
+    /// source for a token search to trip over.
     async fn evaluate(&self, _tab_id: &str, js: &str) -> Result<String, BrowserError> {
         let output = self.run(&["eval", js], self.action_timeout()).await?;
-        Ok(output.stdout)
+        Ok(super::playwright_cli::parse_result_value(&output.stdout).unwrap_or(output.stdout))
     }
 
     async fn select(
@@ -444,10 +477,26 @@ impl BrowserBackend for PlaywrightCliBackend {
         Ok(())
     }
 
+    /// Attach files to the page's file chooser, opening it first if it is not
+    /// already showing.
+    ///
+    /// `playwright-cli upload` sets files on a *pending* file chooser and
+    /// refuses outright when there is none ("can only be used when there is
+    /// related modal state present"). Nothing opened one: the ref was
+    /// documented as "only meaningful to the existing-session backend" and
+    /// dropped here, so on the managed driver the refusal was the only outcome
+    /// — and, being reported in-band with exit 0, it reached the model as
+    /// "Uploaded 1 file(s)" with nothing attached.
+    ///
+    /// The click is issued off the CLI's **own refusal**, not off a guess about
+    /// whether a chooser is open, for the same reason the lazy `open` is
+    /// (`PlaywrightCliDriver::run`): clicking while a chooser is already showing
+    /// is itself refused ("does not handle the modal state"), so a click-first
+    /// ordering would break the case where the page opened the chooser.
     async fn upload(
         &self,
         _tab_id: &str,
-        _target: Option<ActionTarget>,
+        target: Option<ActionTarget>,
         paths: &[String],
     ) -> Result<(), BrowserError> {
         if paths.is_empty() {
@@ -455,13 +504,31 @@ impl BrowserBackend for PlaywrightCliBackend {
                 "upload requires at least one file path".into(),
             ));
         }
-        // `playwright-cli upload <file...>` self-targets the page's file chooser;
-        // the element ref is only meaningful to the existing-session backend.
         let mut args: Vec<&str> = Vec::with_capacity(paths.len() + 1);
         args.push("upload");
         args.extend(paths.iter().map(String::as_str));
-        let _ = self.run(&args, self.action_timeout()).await?;
-        Ok(())
+
+        match self.run(&args, self.action_timeout()).await {
+            Ok(_) => Ok(()),
+            Err(e) if needs_file_chooser(&e) => {
+                let ref_id = target.as_ref().and_then(|t| match t {
+                    ActionTarget::Ref { ref_id } => Some(ref_id.as_str()),
+                    ActionTarget::Coordinates { .. } => None,
+                });
+                let Some(ref_id) = ref_id else {
+                    return Err(BrowserError::ActionFailed(
+                        "no file chooser is open and no element ref was given to open one;                          pass the ref_id of the <input type=file> element"
+                            .into(),
+                    ));
+                };
+                self.run(&["click", ref_id], self.action_timeout()).await?;
+                // One retry only: a chooser that still is not there after
+                // clicking the element is a real failure, not a race.
+                let _ = self.run(&args, self.action_timeout()).await?;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn resize(&self, _tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError> {

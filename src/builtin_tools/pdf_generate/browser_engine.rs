@@ -51,7 +51,23 @@ pub fn build_html_document(markdown: &str, title: Option<&str>) -> String {
 /// Cheap synchronous check: is the playwright-cli toolchain likely available
 /// on this system? Callers use this to short-circuit before invoking the
 /// async `generate()` path.
-pub fn is_browser_engine_available() -> bool {
+///
+/// Asks the same question the driver will: an operator-pinned `binary_path`
+/// counts, and counts *first*. A bare `which` was the only probe, which made
+/// this the third of three disagreeing answers to "where is playwright-cli"
+/// (the pin, the driver's `fnm` resolution, and this) — on an install where the
+/// CLI lives only at the pinned path, the browser tools worked while
+/// `render_engine: auto` reported "Chrome not available" and silently produced a
+/// natively-rendered PDF.
+///
+/// Deliberately does NOT try to resolve through `fnm` like
+/// `PlaywrightCliDriver::provision_binary` does: this runs on the `auto` path
+/// where a wrong "no" costs a lower-fidelity PDF, and a wrong "yes" costs a
+/// network install the operator did not ask for.
+pub fn is_browser_engine_available(config: Option<&PlaywrightCliConfig>) -> bool {
+    if let Some(pinned) = config.and_then(|c| c.binary_path.as_deref()) {
+        return Path::new(pinned).exists();
+    }
     which::which("playwright-cli").is_ok()
 }
 
@@ -66,6 +82,7 @@ pub fn is_browser_engine_available() -> bool {
 pub async fn generate(
     args: &PdfGenerateArgs,
     output_path: &Path,
+    config: Option<&PlaywrightCliConfig>,
 ) -> Result<PdfGenerateOutput, ToolError> {
     let html_doc = match args.format {
         ContentFormat::Markdown => build_html_document(&args.content, args.title.as_deref()),
@@ -92,7 +109,9 @@ pub async fn generate(
     let file_url = file_url_from_path(tmp.path());
     debug!("pdf_generate wrote HTML to {}", tmp.path().display());
 
-    let driver = PlaywrightCliDriver::new(PlaywrightCliConfig::default());
+    // The operator's settings, not fresh defaults — see
+    // [`is_browser_engine_available`] for what inheriting nothing cost.
+    let driver = PlaywrightCliDriver::new(config.cloned().unwrap_or_default());
     let session = "aleph-pdf-gen";
     // PDF rendering wants no window; the launch is otherwise unconfigured.
     // Passing it is what lets the first call open the browser at all — until

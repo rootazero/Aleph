@@ -274,10 +274,16 @@ actor AxQuerier {
             root = withTimeout(AXUIElementCreateSystemWide())
         }
         guard let el = axAttr(root, kAXFocusedUIElementAttribute) else { return nil }
+        // `kAXFocusedUIElementAttribute` is documented to return an
+        // `AXUIElementRef`, but a misbehaving element can return a different
+        // CFType — and `as!` would crash the helper, which the bridge client
+        // reads as a refused action. Conditional cast + bail preserves the
+        // "no focus" answer (the open `guard let el = axAttr(...)` already
+        // named it the fail-open case in its comment).
+        guard let axEl = el as? AXUIElement else { return nil }
         var budget = WalkBudget()
-        // swiftlint:disable:next force_cast
         return buildElement(
-            from: withTimeout(el as! AXUIElement),
+            from: withTimeout(axEl),
             depth: 0, maxDepth: 2, maxNodes: Self.defaultMaxNodes, budget: &budget
         )
     }
@@ -590,16 +596,22 @@ actor AxQuerier {
     private func boundsOf(_ ax: AXUIElement) -> Region? {
         var posVal: AnyObject?
         var sizeVal: AnyObject?
+        // kAXPositionAttribute/kAXSizeAttribute are documented AXValue
+        // returns, but a misbehaving element can hand back a different CFType
+        // and `as!` would crash the helper subprocess — which the bridge
+        // client reads as a refused action (silent rung failure). Conditional
+        // cast + bail to `nil` lets the caller report "no bounds" and the
+        // rung above retry with a different element.
         guard AXUIElementCopyAttributeValue(ax, kAXPositionAttribute as CFString, &posVal) == .success,
               AXUIElementCopyAttributeValue(ax, kAXSizeAttribute as CFString, &sizeVal) == .success,
-              let pv = posVal, let sv = sizeVal
+              let pv = posVal, let sv = sizeVal,
+              let pvValue = pv as? AXValue, let svValue = sv as? AXValue
         else { return nil }
         var point = CGPoint.zero
         var size  = CGSize.zero
-        // swiftlint:disable:next force_cast
-        AXValueGetValue(pv as! AXValue, .cgPoint, &point)
-        // swiftlint:disable:next force_cast
-        AXValueGetValue(sv as! AXValue, .cgSize, &size)
+        guard AXValueGetValue(pvValue, .cgPoint, &point),
+              AXValueGetValue(svValue, .cgSize, &size)
+        else { return nil }
         return Region(
             x: Double(point.x),
             y: Double(point.y),

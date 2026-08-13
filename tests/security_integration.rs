@@ -1,13 +1,19 @@
 // short-lived sync guards held across await; reviewed non-contending.
 #![allow(clippy::await_holding_lock)]
 
-use alephcore::pii::{PiiAction, PiiEngine, PlatformPiiPolicy, PrivacyConfig};
+// `PiiEngine` comes from `pii`; the three config types it takes live in
+// `config/types/privacy.rs` and are re-exported at the crate root (the `config`
+// module itself is private). Importing all four from `pii` stopped this whole
+// test binary compiling — invisible to `cargo check` and to
+// `cargo test --lib`, and visible only under `--test '*'`.
+use alephcore::pii::PiiEngine;
 use alephcore::secrets::injection::AsyncSecretResolver;
 use alephcore::secrets::types::{DecryptedSecret, SecretError};
 use alephcore::security::audit::{AuditEventType, AuditSeverity};
 use alephcore::security::{
     GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig,
 };
+use alephcore::{PiiAction, PlatformPiiPolicy, PrivacyConfig};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::time::timeout;

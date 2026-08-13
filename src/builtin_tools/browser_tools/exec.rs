@@ -536,22 +536,36 @@ async fn read_guard(
 
 /// Read the accessibility tree for a `snapshot` step, bounded by that step's
 /// own `max_chars`, then redacted and fenced through [`super::redact_wrap`] —
-/// the same three transforms `browser_snapshot` applies, in the same order.
+/// the same three transforms `browser_snapshot` applies, in the same order, and
+/// with the same offload when the budget cuts the tree.
 ///
-/// Unlike `browser_snapshot` a truncated tree is NOT offloaded to the tool
-/// result store: that spill path is the snapshot tool's own, keyed to its call
-/// id, and a second writer of it would be a second source. The note names the
-/// lever that exists here instead.
+/// This used to decline the offload, reasoning that the spill path "is the
+/// snapshot tool's own, keyed to its call id, and a second writer of it would be
+/// a second source". That reads the mechanism backwards: `recovery_footer` is
+/// the harness's generic spill, keyed by `(tool_call_id, tool_name)` and already
+/// shared with `harness::agent::act`'s turn spill — `browser_exec` has its own
+/// call id, so it is the first writer of its own entry.
+///
+/// The cost of the misreading was not a missing convenience. `browser_exec` runs
+/// a **procedure**: a snapshot cut at step 2 is followed by clicks and
+/// navigations, so by the time the model could act on "take a standalone
+/// browser_snapshot" that advice names a page which no longer exists. The
+/// dropped tail was unrecoverable, and the note said otherwise.
 fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize) -> String {
     let (text, truncated) = super::bound_content(raw, max_chars);
     let wrapped = super::redact_wrap(manager, &text);
-    if truncated {
-        format!(
-            "{wrapped}\n[snapshot truncated to {max_chars} chars; raise this step's max_chars, \
-             or take a standalone browser_snapshot — it offloads the full tree for ctx_search]"
-        )
-    } else {
-        wrapped
+    if !truncated {
+        return wrapped;
+    }
+    match super::offload_full_content(manager, BrowserExecTool::NAME, raw) {
+        Some(footer) => format!("{wrapped}\n{footer}"),
+        // No store or no call id (direct `tools.invoke`, tests): say the tail is
+        // gone rather than name a lever that cannot bring it back.
+        None => format!(
+            "{wrapped}\n[snapshot truncated to {max_chars} chars and the full tree could not be \
+             offloaded here; the dropped tail is not recoverable — act on the refs above, raise \
+             this step's max_chars, or add an `evaluate` step with a targeted DOM query]"
+        ),
     }
 }
 
@@ -810,6 +824,68 @@ impl AlephTool for BrowserExecTool {
 
 #[cfg(test)]
 mod tests {
+    /// The offload half of [`snapshot_output`], which the real-machine fixture
+    /// structurally cannot reach: `tools.invoke` establishes no call identity,
+    /// so the live run only ever exercises the "no store" branch.
+    ///
+    /// Written against `browser_exec`'s own tool name, because that is the
+    /// claim: the spill is keyed by `(tool_call_id, tool_name)`, so `exec`
+    /// writing there is a first writer of its own entry — not, as the code used
+    /// to reason, a second writer of `browser_snapshot`'s.
+    #[test]
+    fn a_truncated_exec_snapshot_offloads_the_whole_tree_under_its_own_tool_name() {
+        use crate::browser::profile::BrowserSystemConfig;
+        use crate::tools::result_store::ToolResultStore;
+
+        let base = std::env::temp_dir()
+            .join("aleph_test_browser_exec")
+            .join("offload");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let store = ToolResultStore::with_dir_for_tests(base.clone());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+
+        let mut tree: String = (0..4_000)
+            .map(|i| format!("- generic \"filler {i}\" [ref=e{i}]\n"))
+            .collect();
+        tree.push_str("- text \"token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789\"\n");
+        tree.push_str("- button \"Submit order\" [ref=eLAST]\n");
+
+        let footer = crate::builtin_tools::browser_tools::offload_content_to(
+            &store,
+            "exec-call-1",
+            &manager,
+            BrowserExecTool::NAME,
+            &tree,
+        )
+        .expect("an over-budget tree must be offloaded");
+        assert!(footer.contains("[Full output persisted: "), "got: {footer}");
+        assert!(
+            footer.contains("ctx_search"),
+            "the blob must be indexed: {footer}"
+        );
+        assert!(
+            footer.contains(BrowserExecTool::NAME),
+            "the entry must be filed under the calling tool, not the snapshot tool: {footer}"
+        );
+
+        let path = footer
+            .split("[Full output persisted: ")
+            .nth(1)
+            .and_then(|rest| rest.split(" (").next())
+            .expect("marker names a path");
+        let blob = std::fs::read_to_string(path).expect("blob exists on disk");
+        assert!(
+            blob.contains("[ref=eLAST]"),
+            "the tail a procedure's later steps would have scrolled past must be recoverable"
+        );
+        assert!(
+            !blob.contains("sk-ant-api03"),
+            "the persisted copy is read back into context, so it must be redacted"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     use super::*;
     use crate::browser::profile::BrowserSystemConfig;
     use crate::browser::testkit::FakeBackend;

@@ -4,13 +4,9 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::approval::current_tool_call_id;
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
-use crate::tools::result_processing::recovery_footer;
-use crate::tools::result_store::{global_tool_result_store, ToolResultStore};
-use crate::tools::turn_context::current_session_key;
 use crate::tools::AlephTool;
 
 /// Clamp bounds for the model-supplied `max_chars`.
@@ -71,55 +67,10 @@ impl BrowserSnapshotTool {
         Self { manager }
     }
 
-    /// Offload the FULL snapshot to the tool-result store and return the
-    /// standard recovery footer (persist marker + `ctx_search` hint).
-    ///
-    /// Truncating inside the tool is otherwise irreversible: the tail is
-    /// dropped *before* `tool_output` ingress ever sees the value, so the
-    /// pipeline's own "persist the pre-reduction original" contract
-    /// (`tool_output::ingress`) cannot apply — it only ever sees the already-cut
-    /// text. Reusing the harness's own spill pair (`ToolResultStore` +
-    /// [`recovery_footer`]) rather than inventing a second mechanism means the
-    /// blob is indexed, so the model gets `ctx_search` and not just a file path.
-    ///
-    /// Redacted before it hits disk: everything persisted here is read back
-    /// into model context by `ctx_search` / `read_file`, so it must clear the
-    /// same secret-egress boundary the in-context copy clears. The injection
-    /// fence is deliberately NOT applied to the blob — `ctx_search` returns
-    /// *excerpts*, and an excerpt of a fenced blob carries at most one of the
-    /// two marker lines; an unbalanced fence is worse than none.
-    ///
-    /// `None` when the store or the call id is unavailable (direct `tools.invoke`,
-    /// tests, non-gateway paths) — the caller then says so instead of pointing
-    /// the model at a file that does not exist.
+    /// Offload the FULL snapshot; see [`super::offload_full_content`], which
+    /// both this tool and `browser_exec`'s `snapshot` step share.
     fn offload_full(&self, full: &str) -> Option<String> {
-        let call_id = current_tool_call_id()?;
-        let store = global_tool_result_store()?;
-        // Narrow to the session running this tool, because that is the scope
-        // `ctx_search` resolves its own reads under; searching the unscoped
-        // handle finds nothing. Same reasoning as `builtin_tools::ctx_search`.
-        let store = match current_session_key() {
-            Some(session) => ToolResultStore::for_session(&store, session),
-            None => store,
-        };
-        Self::offload_to(&store, &call_id, &self.manager, full)
-    }
-
-    /// The store-facing half of [`Self::offload_full`], split out so it can be
-    /// exercised against a temp-dir store — the process-wide store singleton is
-    /// a `OnceLock` and installing one from a test would leak into every other
-    /// test in the binary.
-    fn offload_to(
-        store: &ToolResultStore,
-        call_id: &str,
-        manager: &ProfileManager,
-        full: &str,
-    ) -> Option<String> {
-        let redacted = manager.redact_content(full);
-        // Threshold 0: we already know the text overflowed the tool's own
-        // budget, so persist unconditionally — same call shape the harness
-        // turn-spill uses.
-        recovery_footer(Some(store), call_id, Self::NAME, &redacted, 0).map(|(footer, _)| footer)
+        super::offload_full_content(&self.manager, Self::NAME, full)
     }
 }
 
@@ -195,6 +146,7 @@ impl AlephTool for BrowserSnapshotTool {
 mod tests {
     use super::*;
     use crate::browser::profile::BrowserSystemConfig;
+    use crate::tools::result_store::ToolResultStore;
 
     #[tokio::test]
     async fn test_snapshot_returns_snapshot() {
@@ -252,8 +204,14 @@ mod tests {
         tree.push_str("- text \"token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789\"\n");
         tree.push_str("- button \"Submit order\" [ref=eLAST]\n");
 
-        let footer = BrowserSnapshotTool::offload_to(&store, "call-1", &manager, &tree)
-            .expect("an over-budget tree must be offloaded");
+        let footer = super::super::offload_content_to(
+            &store,
+            "call-1",
+            &manager,
+            BrowserSnapshotTool::NAME,
+            &tree,
+        )
+        .expect("an over-budget tree must be offloaded");
         assert!(
             footer.contains("[Full output persisted: "),
             "the model needs a recovery handle: {footer}"

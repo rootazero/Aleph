@@ -37,13 +37,25 @@ impl ToolContext {
 pub type ToolContextHandle = Arc<tokio::sync::RwLock<ToolContext>>;
 
 /// Create a new `ToolContext` handle with default paths (main workspace).
+///
+/// Resolves the workspace root through [`crate::utils::paths::get_config_dir`]
+/// so it honors `ALEPH_HOME` — `<aleph_home>/workspaces/main` — instead of
+/// collapsing to the real `~/.aleph/workspaces/main` on any machine that
+/// picked a different home. Hand-rolling the path off `dirs::home_dir()` (the
+/// pre-fix behaviour) was a home-isolation hole: two instances with different
+/// `ALEPH_HOME` values would both write into the real `~/.aleph` and the
+/// isolation knob silently stopped covering the tool-output path.
+///
+/// Falls back to `<temp>/.aleph/workspaces/main` only when `get_config_dir`
+/// itself fails (no home directory at all). Tool output is best-effort there
+/// — every existing fail-closed path retains its old behaviour.
 #[must_use]
 pub fn new_tool_context_handle() -> ToolContextHandle {
-    let default_workspace = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".aleph")
-        .join("workspaces")
-        .join("main");
+    let default_workspace = crate::utils::paths::get_config_dir()
+        .map(|c| c.join("workspaces").join("main"))
+        .unwrap_or_else(|_| {
+            PathBuf::from("/tmp").join(".aleph").join("workspaces").join("main")
+        });
     let ctx = ToolContext::from_workspace(&default_workspace).unwrap_or_else(|e| {
         tracing::warn!(
             error = %e,

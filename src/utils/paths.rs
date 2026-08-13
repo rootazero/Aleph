@@ -891,7 +891,6 @@ mod tests {
         ),
         ("src/gateway/interfaces/wechat/config.rs", "state root"),
         ("src/sandbox/config.rs", "workspaces root"),
-        ("src/tools/context.rs", "default workspace"),
     ];
 
     /// Split a source file into the lines that are real code — the guard's

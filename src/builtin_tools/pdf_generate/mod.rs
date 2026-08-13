@@ -39,6 +39,12 @@ pub use args::{ContentFormat, PageSize, PdfGenerateArgs, PdfGenerateOutput, Rend
 pub struct PdfGenerateTool {
     /// Handle to workspace-scoped tool context (provides `output_dir`, etc.)
     pub tool_context_handle: Option<crate::tools::ToolContextHandle>,
+    /// The managed browser driver's configuration, so the browser engine
+    /// resolves the same `playwright-cli` the browser tools do.
+    ///
+    /// `None` only where no browser subsystem exists (tests, ad-hoc
+    /// construction); the registry always supplies it.
+    pub playwright_config: Option<crate::browser::profile::PlaywrightCliConfig>,
 }
 
 impl PdfGenerateTool {
@@ -67,12 +73,28 @@ Examples:\n\
     pub const fn new() -> Self {
         Self {
             tool_context_handle: None,
+            playwright_config: None,
         }
     }
 
     /// Attach a `ToolContext` handle for workspace-scoped output path resolution
     pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
         self.tool_context_handle = Some(handle);
+        self
+    }
+
+    /// Adopt the managed browser driver's `playwright-cli` settings.
+    ///
+    /// The registry must call this: without it the engine builds a driver from
+    /// `PlaywrightCliConfig::default()` and resolves its binary as though no
+    /// `binary_path` had ever been configured — a second construction site
+    /// inheriting none of the first's settings.
+    #[must_use]
+    pub fn with_playwright_config(
+        mut self,
+        config: crate::browser::profile::PlaywrightCliConfig,
+    ) -> Self {
+        self.playwright_config = Some(config);
         self
     }
 
@@ -171,11 +193,19 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
         let output_path = self.resolve_output_path(&args.output_path).await?;
 
         let result = match args.render_engine {
-            RenderEngine::Browser => browser_engine::generate(&args, &output_path).await,
+            RenderEngine::Browser => {
+                browser_engine::generate(&args, &output_path, self.playwright_config.as_ref()).await
+            }
             RenderEngine::Native => native_engine::generate(&args, &output_path),
             RenderEngine::Auto => {
-                if browser_engine::is_browser_engine_available() {
-                    match browser_engine::generate(&args, &output_path).await {
+                if browser_engine::is_browser_engine_available(self.playwright_config.as_ref()) {
+                    match browser_engine::generate(
+                        &args,
+                        &output_path,
+                        self.playwright_config.as_ref(),
+                    )
+                    .await
+                    {
                         Ok(output) => Ok(output),
                         Err(e) => {
                             warn!(error = %e, "Browser engine failed, falling back to native");
