@@ -53,12 +53,16 @@ impl BrowserEmulateTool {
     /// `extra_http_headers` attaches a caller-chosen header — canonically
     /// `Authorization: Bearer …` — to EVERY request the page makes from then
     /// on, and `user_agent` rewrites how the page identifies itself. Both are
-    /// request-level auth/identity writes, which is the surface
-    /// [`ActionType::BrowserCookiesWrite`] already names ("a cookie value is a
-    /// credential by design"); reusing it means one policy knob covers every
-    /// way an agent can attach a credential to page traffic. A dedicated
-    /// `BrowserEmulate` variant would read better in a policy file but lives in
-    /// `src/approval/types.rs`.
+    /// request-level auth/identity writes, the same surface a cookie write is
+    /// ("a cookie value is a credential by design"), and they were classified
+    /// as [`ActionType::BrowserCookiesWrite`] for that reason.
+    ///
+    /// They now have their own [`ActionType::BrowserIdentityOverride`]: the
+    /// trust surface was right, but a policy file is read by a person, and
+    /// `browser_cookies_write` does not tell that person that it also governs
+    /// header injection. The old key still governs this one unless the policy
+    /// names it — see [`ActionType::inherited_from`] — so the rename cannot
+    /// loosen an existing deployment.
     ///
     /// The presentation-only overrides (color scheme, geolocation, network
     /// condition, CPU throttle) deliberately stay ungated: they carry no
@@ -143,7 +147,7 @@ impl AlephTool for BrowserEmulateTool {
         if carries_request_identity(&args.options) {
             if let Some(message) = super::check_browser_approval(
                 self.approval_policy.as_ref(),
-                ActionType::BrowserCookiesWrite,
+                ActionType::BrowserIdentityOverride,
                 "emulate",
                 // Header NAMES and the presence of a UA override are enough for
                 // the audit trail; the values are the credential and never
@@ -208,7 +212,7 @@ mod tests {
     fn deny_policy() -> Arc<crate::approval::ConfigApprovalPolicy> {
         use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
         let mut defaults = std::collections::HashMap::new();
-        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Deny);
         Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
             defaults,
             allowlist: vec![],
@@ -297,7 +301,7 @@ mod tests {
         // proving it runs first — and before any backend lookup.
         use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
         let mut defaults = std::collections::HashMap::new();
-        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Allow);
         let policy = Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
             defaults,
             allowlist: vec![],

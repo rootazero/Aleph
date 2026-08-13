@@ -665,6 +665,15 @@ pub async fn handle_healthcheck(
 /// concurrently. Per-provider failures are reported as rows, not as an RPC
 /// error — one unreachable vendor must not blank the whole result.
 ///
+/// # A narrowed sweep is an explicit request, so it bypasses `enabled`
+///
+/// The `enabled` filter exists so a blanket sweep does not dial vendors nobody
+/// is using. Applied to a *named* target it does something else entirely:
+/// asking to refresh one specific provider that happens to be switched off
+/// returned an empty array, which reads exactly like "nothing happened". So the
+/// filter is now the un-narrowed sweep's rule only — naming a provider is
+/// saying "go look at this one", and the answer is about that one.
+///
 /// # Every target gets a row, including the ones that cannot be probed
 ///
 /// A provider with no resolvable credential used to be dropped from the target
@@ -674,6 +683,12 @@ pub async fn handle_healthcheck(
 /// usually right; doing it *silently* is what costs — so the skip is now a row
 /// carrying [`DiscoveryFailureKind::MissingCredential`], which is also the one
 /// state the UI can actually act on ("link this provider first").
+///
+/// The same is true one step earlier: a named id with **no config section at
+/// all** — an unlinked preset — used to fall out of the iteration before any of
+/// that could apply, and so did one whose address cannot be resolved. Both now
+/// answer, and the two are deliberately different kinds: "link it first" is
+/// actionable, "this cannot be addressed" is not.
 pub async fn handle_models_refresh(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -705,21 +720,46 @@ pub async fn handle_models_refresh(
         Blocked(ModelsRefreshRow),
     }
 
+    /// A row saying why a provider could not be probed at all.
+    fn blocked(name: &str, kind: DiscoveryFailureKind, error: String) -> Target {
+        Target::Blocked(ModelsRefreshRow {
+            provider: name.to_string(),
+            ok: false,
+            stale: false,
+            fetched_at: None,
+            models: Vec::new(),
+            kind: Some(kind),
+            error: Some(error),
+        })
+    }
+
     // Same discipline as `handle_healthcheck`: snapshot under the read lock,
     // release before any network I/O.
     let targets: Vec<Target> = {
         let cfg = config.read().await;
-        cfg.providers
+        let mut targets: Vec<Target> = cfg
+            .providers
             .iter()
-            .filter(|(name, pc)| {
-                pc.enabled && only.as_ref().is_none_or(|o| o.eq_ignore_ascii_case(name))
+            .filter(|(name, pc)| match only.as_ref() {
+                // Naming a provider is saying "go look at this one" — an
+                // explicit request outranks the blanket sweep's opt-out.
+                Some(o) => o.eq_ignore_ascii_case(name),
+                None => pc.enabled,
             })
-            .filter_map(|(name, pc)| {
+            .map(|(name, pc)| {
                 let preset = crate::providers::presets::get_preset(name);
-                let base_url = pc
+                let Some(base_url) = pc
                     .base_url
                     .clone()
-                    .or_else(|| preset.map(|p| p.base_url.to_string()))?;
+                    .or_else(|| preset.map(|p| p.base_url.to_string()))
+                else {
+                    warn!(provider = %name, "modelsRefresh: no base URL resolvable");
+                    return blocked(
+                        name,
+                        DiscoveryFailureKind::Unsupported,
+                        format!("provider '{name}' has no base URL to probe"),
+                    );
+                };
                 let protocol = pc
                     .protocol
                     .clone()
@@ -728,24 +768,34 @@ pub async fn handle_models_refresh(
                 let Some(api_key) = pc.api_key.clone().or_else(|| resolve_api_key(name, &vault))
                 else {
                     warn!(provider = %name, "modelsRefresh: no API key resolvable");
-                    return Some(Target::Blocked(ModelsRefreshRow {
-                        provider: name.clone(),
-                        ok: false,
-                        stale: false,
-                        fetched_at: None,
-                        models: Vec::new(),
-                        kind: Some(DiscoveryFailureKind::MissingCredential),
-                        error: Some(format!("no credential configured for provider '{name}'")),
-                    }));
+                    return blocked(
+                        name,
+                        DiscoveryFailureKind::MissingCredential,
+                        format!("no credential configured for provider '{name}'"),
+                    );
                 };
-                Some(Target::Probe {
+                Target::Probe {
                     name: name.clone(),
                     base_url,
                     protocol,
                     api_key,
-                })
+                }
             })
-            .collect()
+            .collect();
+
+        // A named id with no config section at all — an unlinked preset, or a
+        // typo. Silence here is the same lie as every other skipped record:
+        // the caller asked about one thing and got an empty list back.
+        if let Some(name) = only.as_deref() {
+            if targets.is_empty() {
+                targets.push(blocked(
+                    name,
+                    DiscoveryFailureKind::MissingCredential,
+                    format!("provider '{name}' is not configured"),
+                ));
+            }
+        }
+        targets
     };
 
     let sweeps = targets.into_iter().map(|target| async move {

@@ -40,7 +40,7 @@ use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use app::{Action, AppState, Focus};
 use commands::{
     attach_session, confirm_provider_pick, confirm_session_switch, execute_local_command,
-    fetch_gateway_commands, send_to_agent, shadowed_gateway_commands,
+    fetch_gateway_commands, refresh_picker_provider, send_to_agent, shadowed_gateway_commands,
 };
 use slash::ParsedInput;
 
@@ -447,6 +447,9 @@ async fn main_loop(
             }
             Action::ProviderPickerConfirm => {
                 confirm_provider_pick(state, client).await;
+            }
+            Action::ProviderPickerRefresh => {
+                refresh_picker_provider(state, client).await;
             }
         }
 

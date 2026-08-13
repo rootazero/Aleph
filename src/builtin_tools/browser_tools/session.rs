@@ -67,7 +67,7 @@ impl BrowserSessionTool {
     }
 
     /// Gate save/load behind the approval policy, classified as
-    /// [`ActionType::BrowserCookiesWrite`].
+    /// [`ActionType::BrowserSessionState`].
     ///
     /// `browser_cookies set` is gated on the stated ground that "a cookie value
     /// is a credential by design" — and this tool moves EVERY cookie plus
@@ -154,7 +154,7 @@ impl AlephTool for BrowserSessionTool {
         // contents.
         if let Some(message) = super::check_browser_approval(
             self.approval_policy.as_ref(),
-            ActionType::BrowserCookiesWrite,
+            ActionType::BrowserSessionState,
             "session",
             &format!("{:?} auth state '{}'", args.action, args.name),
         )
@@ -258,7 +258,7 @@ mod tests {
     fn deny_policy() -> Arc<crate::approval::ConfigApprovalPolicy> {
         use crate::approval::{ConfigApprovalPolicy, DefaultDecision, PolicyConfig};
         let mut defaults = std::collections::HashMap::new();
-        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        defaults.insert(ActionType::BrowserSessionState, DefaultDecision::Deny);
         Arc::new(ConfigApprovalPolicy::new(PolicyConfig {
             defaults,
             allowlist: vec![],

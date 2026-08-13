@@ -15,6 +15,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, 
 use crate::gateway::security::SharedTokenManager;
 use crate::generation::GenerationType;
 use crate::sync_primitives::Arc;
+use aleph_protocol::providers::GenerationPresetRow;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
@@ -639,39 +640,56 @@ pub async fn handle_test_connection(
 /// no longer keeps a parallel hard-coded registry. Entries without metadata
 /// (i.e. zero declared modalities) are skipped — `modality unknown` means
 /// the catalog can't decide which category tab to show.
+///
+/// # Built from the contract type, not from a `json!` literal
+///
+/// [`GenerationPresetRow`] is what the Panel parses. Constructing the response
+/// from it makes "the server sends a key the client never declared" a compile
+/// error rather than a silent drop — which is exactly how `signup_url` reached
+/// nobody for the whole life of this endpoint, on the one page where "where do
+/// I get a key" is the only action available.
 pub async fn handle_list_presets(request: JsonRpcRequest) -> JsonRpcResponse {
-    let mut items: Vec<serde_json::Value> = PRESETS
+    let mut items: Vec<GenerationPresetRow> = PRESETS
         .iter()
         .filter_map(|(id, preset)| {
             let meta = generation_metadata(id)?;
             if preset.modalities.is_empty() {
                 return None;
             }
-            let modalities: Vec<&'static str> =
-                preset.modalities.iter().map(|m| m.as_str()).collect();
-            Some(serde_json::json!({
-                "id": id,
-                "provider_type": preset.provider_type,
-                "default_model": preset.default_model,
-                "base_url": preset.base_url,
-                "display_name": meta.display_name,
-                "modalities": modalities,
-                "homepage": meta.homepage,
-                "notes": meta.notes,
-                "signup_url": preset.signup_url,
-            }))
+            Some(GenerationPresetRow {
+                id: (*id).to_string(),
+                provider_type: preset.provider_type.to_string(),
+                default_model: preset.default_model.to_string(),
+                base_url: preset.base_url.map(String::from),
+                display_name: meta.display_name.to_string(),
+                modalities: preset
+                    .modalities
+                    .iter()
+                    .map(|m| m.as_str().to_string())
+                    .collect(),
+                homepage: meta.homepage.map(String::from),
+                notes: meta.notes.map(String::from),
+                signup_url: preset.signup_url.map(String::from),
+            })
         })
         .collect();
 
     // Stable order: by id ascending (HashMap iteration is unordered).
-    items.sort_by(|a, b| {
-        a.get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .cmp(b.get("id").and_then(|v| v.as_str()).unwrap_or(""))
-    });
+    items.sort_by(|a, b| a.id.cmp(&b.id));
 
-    JsonRpcResponse::success(request.id, serde_json::Value::Array(items))
+    match serde_json::to_value(&items) {
+        Ok(value) => JsonRpcResponse::success(request.id, value),
+        // Unreachable for a Vec of plain owned strings, but an empty array is
+        // a lie about the catalogue — say which it is.
+        Err(e) => {
+            error!(error = %e, "list_presets: failed to encode the preset catalogue");
+            JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                "failed to encode the generation preset catalogue".to_string(),
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -741,5 +759,88 @@ mod list_presets_tests {
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(ids, sorted, "preset list must be sorted by id");
+    }
+
+    /// The catalogue speaks only the contract's vocabulary — no more, no less.
+    ///
+    /// Both directions matter and only one of them is free. Parsing proves the
+    /// response is a *superset* of what the client declared, because serde
+    /// ignores unknown keys; it can never see an over-send. So the expected key
+    /// set is derived by serialising a fully populated contract row rather than
+    /// written out as a literal — a literal list is the same enumeration error
+    /// one level up.
+    #[tokio::test]
+    async fn the_preset_catalogue_speaks_only_the_contracts_vocabulary() {
+        let expected: std::collections::BTreeSet<String> =
+            serde_json::to_value(GenerationPresetRow {
+                id: "x".into(),
+                provider_type: "x".into(),
+                default_model: "x".into(),
+                base_url: Some("x".into()),
+                display_name: "x".into(),
+                modalities: vec!["image".into()],
+                homepage: Some("x".into()),
+                notes: Some("x".into()),
+                signup_url: Some("x".into()),
+            })
+            .expect("contract row must serialise")
+            .as_object()
+            .expect("contract row must be an object")
+            .keys()
+            .cloned()
+            .collect();
+
+        let resp = handle_list_presets(request()).await;
+        let arr = resp.result.expect("result").as_array().cloned().unwrap();
+        assert!(!arr.is_empty(), "an empty catalogue proves nothing");
+
+        for entry in &arr {
+            // Every row must decode into the type the Panel holds…
+            let row: GenerationPresetRow = serde_json::from_value(entry.clone())
+                .unwrap_or_else(|e| panic!("client must decode {entry}: {e}"));
+            // …and carry no key the contract does not declare. Optionals the
+            // preset legitimately omits are absent, so compare the row's own
+            // keys against the contract's, minus the ones it skipped.
+            let sent: std::collections::BTreeSet<String> = entry
+                .as_object()
+                .expect("row must be an object")
+                .keys()
+                .cloned()
+                .collect();
+            assert!(
+                sent.is_subset(&expected),
+                "row {} sends {:?}, which the contract does not declare",
+                row.id,
+                sent.difference(&expected).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// `signup_url` is the reason this endpoint has a typed row at all: it was
+    /// served for every preset that declares one and declared by no client, so
+    /// serde dropped it silently on the one page where "where do I get a key"
+    /// is the only available action.
+    #[tokio::test]
+    async fn the_signup_link_reaches_the_client() {
+        let resp = handle_list_presets(request()).await;
+        let arr = resp.result.expect("result").as_array().cloned().unwrap();
+        let rows: Vec<GenerationPresetRow> = arr
+            .iter()
+            .map(|e| serde_json::from_value(e.clone()).expect("decode"))
+            .collect();
+
+        let with_signup = rows.iter().filter(|r| r.signup_url.is_some()).count();
+        assert!(
+            with_signup >= 10,
+            "expected the curated signup links to survive the wire, got {with_signup}"
+        );
+        let dalle = rows
+            .iter()
+            .find(|r| r.id == "openai-dalle")
+            .expect("openai-dalle is in the registry");
+        assert!(
+            dalle.signup_url.is_some(),
+            "openai-dalle declares a signup url in the registry"
+        );
     }
 }
