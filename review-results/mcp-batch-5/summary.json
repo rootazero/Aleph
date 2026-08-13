@@ -1,0 +1,94 @@
+{
+  "batch": "mcp-batch-5",
+  "title": "Auth: provider, storage, callback",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-mcp-audit",
+  "report": "review-results/mcp-batch-5/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 2,
+    "medium": 3,
+    "low": 3,
+    "total": 8
+  },
+  "by_category": {
+    "security": 4,
+    "logic": 3,
+    "architecture": 0,
+    "quality": 1
+  },
+  "files_reviewed": [
+    { "path": "src/mcp/auth/mod.rs", "loc": 93, "findings": 0 },
+    { "path": "src/mcp/auth/provider.rs", "loc": 880, "findings": 2 },
+    { "path": "src/mcp/auth/storage.rs", "loc": 639, "findings": 3 },
+    { "path": "src/mcp/auth/callback.rs", "loc": 412, "findings": 1 }
+  ],
+  "total_loc": 2024,
+  "findings": [
+    {
+      "id": "B5-01",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/mcp/auth/storage.rs",
+      "line": 38,
+      "title": "OAuthStorage: file_mtime() is read before the cache write lock; a writer in the window is missed"
+    },
+    {
+      "id": "B5-02",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/mcp/auth/callback.rs",
+      "line": 140,
+      "title": "url_decode is permissive: malformed % sequences in 'state' are silently passed through, conflating CSRF failure with parse failure"
+    },
+    {
+      "id": "B5-03",
+      "severity": "Medium",
+      "category": "Security",
+      "file": "src/mcp/auth/provider.rs",
+      "line": 55,
+      "title": "OAuthServerMetadata does not validate same-origin for endpoints vs issuer (RFC 8414 §3.3)"
+    },
+    {
+      "id": "B5-04",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/auth/storage.rs",
+      "line": 281,
+      "title": "save_to_file order is file → cached_mtime → cache (write); readers can see new mtime with old cache"
+    },
+    {
+      "id": "B5-05",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/auth/storage.rs",
+      "line": 200,
+      "title": "load_for_write and load both read cached_mtime without holding the cache lock; dual-lock ordering is fragile"
+    },
+    {
+      "id": "B5-06",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/auth/provider.rs",
+      "line": 73,
+      "title": "OAuthProvider::new falls back to a no-timeout Client when builder() fails"
+    },
+    {
+      "id": "B5-07",
+      "severity": "Low",
+      "category": "Security",
+      "file": "src/mcp/auth/callback.rs",
+      "line": 178,
+      "title": "send_success_response is correctly escaped; static setTimeout has no interpolation risk"
+    },
+    {
+      "id": "B5-08",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/auth/storage.rs",
+      "line": 355,
+      "title": "concurrent_instance_write test serializes with sleep(20ms); real-world race is tighter"
+    }
+  ]
+}
