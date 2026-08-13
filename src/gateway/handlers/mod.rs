@@ -631,6 +631,14 @@ impl HandlerRegistry {
             let default_kick = users::UserDeactivationKick {
                 connections: Arc::new(AsyncRwLock::new(HashMap::new())),
                 event_bus: Arc::new(GatewayEventBus::new()),
+                // Inert like its two siblings above: this registry has no
+                // channel axis, so there is nothing for deactivation to
+                // withdraw. Boot re-registers `users.update` against the same
+                // store the inbound router and `channel.pairing.*` share.
+                pairing: Arc::new(
+                    crate::gateway::pairing_store::SqlitePairingStore::in_memory()
+                        .expect("in-memory PairingStore for default registrations"),
+                ),
             };
             let s = default_store.clone();
             registry.register("users.me", move |req| {

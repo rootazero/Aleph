@@ -30,6 +30,24 @@ pub struct PairingRequest {
     pub metadata: HashMap<String, String>,
 }
 
+/// One row of `approved_senders` — an approved channel sender and the Aleph
+/// principal it speaks as.
+///
+/// `user_id` is `None` only for a row written before the column existed and
+/// never adopted; every live write path sets it (the store's `COALESCE`
+/// defaults an unbound approval to the owner). A `None` here therefore reads
+/// as "unlinked → owner semantics", the same thing
+/// [`PairingStore::sender_user`] means by it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovedSender {
+    /// Channel-native sender identity (phone, Telegram id, …), normalized.
+    pub sender_id: String,
+    /// Aleph principal this sender speaks as.
+    pub user_id: Option<String>,
+    /// When the approval was granted (RFC 3339, as stored).
+    pub approved_at: String,
+}
+
 /// Error type for pairing operations
 #[derive(Debug, thiserror::Error)]
 pub enum PairingError {
@@ -83,11 +101,37 @@ pub trait PairingStore: Send + Sync {
     /// Check if a sender is in the approved list
     async fn is_approved(&self, channel: &str, sender_id: &str) -> Result<bool, PairingError>;
 
-    /// Get approved senders for a channel
-    async fn list_approved(&self, channel: &str) -> Result<Vec<String>, PairingError>;
+    /// Get approved senders for a channel, each carrying the principal it is
+    /// bound to.
+    ///
+    /// This returns rows rather than bare `sender_id` strings because
+    /// enumerability is the prerequisite for revocability: `channel.pairing.revoke`
+    /// takes `{channel, sender_id}`, and SECURITY.md names it as the way to cut
+    /// a principal off a chat channel — which an operator cannot do if no
+    /// surface will tell them which sender is that principal's. The column has
+    /// been on the table since P0; only the projection dropped it.
+    async fn list_approved(&self, channel: &str) -> Result<Vec<ApprovedSender>, PairingError>;
 
     /// Remove a sender from the approved list
     async fn revoke(&self, channel: &str, sender_id: &str) -> Result<(), PairingError>;
+
+    /// Revoke every approved sender bound to `user_id`, returning the
+    /// `(channel, sender_id)` pairs actually removed.
+    ///
+    /// The deactivation counterpart of `gateway.devices.revoke`: a walled
+    /// principal must lose the channel axis the same way they lose the device
+    /// axis, and for the same reason — both are credentials that answer "this
+    /// traffic is that person".
+    ///
+    /// **Why removal rather than a liveness check inside [`Self::sender_user`]:**
+    /// that resolver's `None` does not mean "refused", it means *unlinked*, and
+    /// its consumer (`inbound_router::executor`) reads unlinked as legacy owner
+    /// semantics — it stamps no attribution and the run is adopted by the
+    /// operator. Answering a deactivated member with `None` would therefore
+    /// hand them the **owner's** scope, memory and sessions: strictly more
+    /// authority than the leak it was meant to close. A refusal folded into a
+    /// value that already means something else inverts into a grant.
+    async fn revoke_for_user(&self, user_id: &str) -> Result<Vec<(String, String)>, PairingError>;
 
     /// Looks up the Aleph user id linked to an approved channel sender.
     ///
@@ -456,12 +500,19 @@ impl PairingStore for SqlitePairingStore {
         Ok(exists.is_some())
     }
 
-    async fn list_approved(&self, channel: &str) -> Result<Vec<String>, PairingError> {
+    async fn list_approved(&self, channel: &str) -> Result<Vec<ApprovedSender>, PairingError> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT sender_id FROM approved_senders WHERE channel = ?1 ORDER BY approved_at DESC",
+            "SELECT sender_id, user_id, approved_at FROM approved_senders \
+             WHERE channel = ?1 ORDER BY approved_at DESC",
         )?;
-        let rows = stmt.query_map(params![channel], |row| row.get(0))?;
+        let rows = stmt.query_map(params![channel], |row| {
+            Ok(ApprovedSender {
+                sender_id: row.get(0)?,
+                user_id: row.get::<_, Option<String>>(1)?,
+                approved_at: row.get(2)?,
+            })
+        })?;
 
         let mut senders = Vec::new();
         for row in rows {
@@ -478,6 +529,35 @@ impl PairingStore for SqlitePairingStore {
         )?;
         info!("Revoked approval for {}:{}", channel, sender_id);
         Ok(())
+    }
+
+    async fn revoke_for_user(&self, user_id: &str) -> Result<Vec<(String, String)>, PairingError> {
+        let conn = self.conn.lock().await;
+        // Collect before deleting: the caller reports what it withdrew, and a
+        // deactivation that says nothing about the channel bindings it just
+        // cut is the same silence that made this leg invisible for four rounds.
+        let revoked = {
+            let mut stmt =
+                conn.prepare("SELECT channel, sender_id FROM approved_senders WHERE user_id = ?1")?;
+            let rows = stmt.query_map(params![user_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            let mut out: Vec<(String, String)> = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+        if !revoked.is_empty() {
+            conn.execute(
+                "DELETE FROM approved_senders WHERE user_id = ?1",
+                params![user_id],
+            )?;
+            info!(
+                "Revoked {} channel sender approval(s) bound to {}",
+                revoked.len(),
+                user_id
+            );
+        }
+        Ok(revoked)
     }
 
     async fn sender_user(&self, channel: &str, sender_id: &str) -> Option<String> {

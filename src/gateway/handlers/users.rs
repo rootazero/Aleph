@@ -23,12 +23,13 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use super::gateway_devices::revoke_device_and_kick;
 use super::parse_params;
 use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::pairing_store::PairingStore;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::store::{
     SecurityStore, UserRecord, UserRole, UserStatus, OWNER_USER_ID,
@@ -68,6 +69,10 @@ impl From<UserRecord> for UserView {
 pub struct UserDeactivationKick {
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     pub event_bus: Arc<GatewayEventBus>,
+    /// The same `PairingStore` Arc the inbound router and the
+    /// `channel.pairing.*` handlers hold — deactivation must withdraw the
+    /// channel axis from the store those two read, not from a second copy.
+    pub pairing: Arc<dyn PairingStore>,
 }
 
 // ============================================================================
@@ -292,15 +297,26 @@ pub async fn handle_update(
         restamp_live_connections(&store, &kick, &params.user_id, new_role).await;
     }
 
+    let mut revoked_senders: Vec<Value> = Vec::new();
     if status == Some(UserStatus::Deactivated) {
         deactivate_devices(&store, &kick, &params.user_id).await;
+        revoked_senders = revoke_channel_bindings(&kick, &params.user_id).await;
         freeze_owned_background_work(&params.user_id);
     }
 
     match store.get_user(&params.user_id) {
-        Ok(Some(user)) => {
-            JsonRpcResponse::success(request.id, json!({ "user": UserView::from(user) }))
-        }
+        Ok(Some(user)) => JsonRpcResponse::success(
+            request.id,
+            // The revoked bindings are named in the response because they are
+            // the one deactivation effect with no other surface: devices show
+            // up as closed connections and frozen goals/loops are listable,
+            // while a withdrawn channel approval is only visible as traffic
+            // that stopped arriving.
+            json!({
+                "user": UserView::from(user),
+                "revoked_channel_senders": revoked_senders,
+            }),
+        ),
         Ok(None) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -459,6 +475,64 @@ async fn deactivate_devices(
     }
 }
 
+/// Withdraw every approved channel sender bound to `user_id`, returning one
+/// `{channel, sender_id}` object per binding actually removed.
+///
+/// # Why deactivation has to reach this axis at all
+///
+/// A principal is bound to Aleph through two independent credentials, and
+/// SECURITY.md says so: a **device** (Panel/CLI, via a bootstrap ticket) and a
+/// **channel sender** (Telegram/webhook/…, via `channel.pairing.approve`).
+/// Deactivation revoked the first and left the second, so an offboarded member
+/// kept messaging the bot from Telegram: `inbound_router::executor` stamps
+/// `ScopeAttribution::personal` from `sender_user` on every inbound turn, so
+/// they kept their sessions, kept reading and writing `main__u-<them>`, kept
+/// having their curated memory injected — and could call
+/// `goal(action='update', status='active')` / `loop(action='resume')` to undo
+/// the freeze [`freeze_owned_background_work`] had just applied. No error, no
+/// failing test.
+///
+/// # Why removal, and not a status check inside the resolver
+///
+/// Teaching `sender_user` to answer `None` for a deactivated principal looks
+/// like the smaller fix and is the more dangerous one: `None` on that resolver
+/// does not mean "refused", it means *unlinked*, and the consumer reads
+/// unlinked as legacy owner semantics — it stamps nothing and the run is
+/// adopted by the operator. A walled member would have been upgraded to the
+/// **owner's** scope, memory and sessions. Removal instead makes the channel
+/// axis fail the way the device axis already does: the credential is gone, the
+/// sender is a stranger again, and re-admission runs back through
+/// `channel.pairing.approve`, which now refuses to bind onto a deactivated
+/// principal.
+///
+/// Best-effort in the same shape as its siblings: the store write above is
+/// already committed, so a failure here is logged and does not abort the rest.
+async fn revoke_channel_bindings(kick: &UserDeactivationKick, user_id: &str) -> Vec<Value> {
+    match kick.pairing.revoke_for_user(user_id).await {
+        Ok(pairs) => {
+            if !pairs.is_empty() {
+                tracing::info!(
+                    user_id = %user_id,
+                    count = pairs.len(),
+                    "users.update: deactivation revoked channel sender approvals"
+                );
+            }
+            pairs
+                .into_iter()
+                .map(|(channel, sender_id)| json!({ "channel": channel, "sender_id": sender_id }))
+                .collect()
+        }
+        Err(e) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error = %e,
+                "users.update: failed to revoke channel sender approvals during deactivation"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Deactivation freeze (spec §10): pause every goal and loop OWNED BY
 /// `user_id`, mirroring [`deactivate_devices`]'s best-effort shape (a scan
 /// failure for one subsystem must not abort the other, and neither aborts
@@ -580,9 +654,18 @@ mod tests {
     /// loop (`server/handler.rs::device_revoked_should_close`), already
     /// covered by that module's own tests, and isn't exercised here.
     fn test_kick_sink() -> UserDeactivationKick {
+        kick_with_pairing(Arc::new(
+            crate::gateway::pairing_store::SqlitePairingStore::in_memory().unwrap(),
+        ))
+    }
+
+    /// [`test_kick_sink`] with a caller-supplied pairing store, so a test can
+    /// seed approved senders and assert the deactivation revoke.
+    fn kick_with_pairing(pairing: Arc<dyn PairingStore>) -> UserDeactivationKick {
         UserDeactivationKick {
             connections: Arc::new(RwLock::new(HashMap::new())),
             event_bus: Arc::new(GatewayEventBus::new()),
+            pairing,
         }
     }
 
@@ -634,6 +717,131 @@ mod tests {
         }
         // Owner only — no half-created rows from the rejected calls.
         assert_eq!(store.list_users().unwrap().len(), 1);
+    }
+
+    /// A principal is bound to Aleph through two independent credentials — a
+    /// device and a channel sender. Deactivation revoked the first and left the
+    /// second, so an offboarded member kept talking to the bot from Telegram
+    /// under their own identity: their sessions, their memory partition, their
+    /// curated memory in the prompt, and `goal(action='update')` to thaw the
+    /// freeze this same handler had just applied.
+    ///
+    /// The response is asserted too, because a withdrawn channel approval has
+    /// no other surface: a closed connection is visible, a paused goal is
+    /// listable, and a revoked sender is only "traffic that stopped arriving".
+    #[tokio::test]
+    async fn deactivate_revokes_the_users_channel_sender_approvals() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        store.create_user("u-bob", "Bob", UserRole::Member).unwrap();
+
+        let pairing =
+            Arc::new(crate::gateway::pairing_store::SqlitePairingStore::in_memory().unwrap());
+        for (channel, sender, user) in [
+            ("telegram", "tg-alice", "u-alice"),
+            ("webhook", "wh-alice", "u-alice"),
+            ("telegram", "tg-bob", "u-bob"),
+        ] {
+            let (code, _) = pairing
+                .upsert(channel, sender, HashMap::new())
+                .await
+                .unwrap();
+            pairing.approve(channel, &code, Some(user)).await.unwrap();
+        }
+        assert_eq!(
+            pairing.list_approved("telegram").await.unwrap().len(),
+            2,
+            "fixture must seed both principals on one channel, or the negative control below is vacuous"
+        );
+
+        let resp = handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "status": "deactivated"}),
+            ),
+            store.clone(),
+            kick_with_pairing(pairing.clone()),
+        )
+        .await;
+
+        let telegram = pairing.list_approved("telegram").await.unwrap();
+        assert_eq!(
+            telegram.len(),
+            1,
+            "only Alice's binding may be withdrawn from this channel"
+        );
+        assert_eq!(telegram[0].sender_id, "tg-bob");
+        assert!(
+            pairing.list_approved("webhook").await.unwrap().is_empty(),
+            "the sweep is per-principal, not per-channel — every channel Alice \
+             was approved on must lose her"
+        );
+        assert!(
+            pairing.sender_user("telegram", "tg-alice").await.is_none(),
+            "the resolver the inbound router reads must no longer know her"
+        );
+
+        let v = response_json(&resp);
+        let revoked = v["revoked_channel_senders"]
+            .as_array()
+            .expect("the response names what it withdrew");
+        assert_eq!(revoked.len(), 2);
+        let mut pairs: Vec<(String, String)> = revoked
+            .iter()
+            .map(|r| {
+                (
+                    r["channel"].as_str().unwrap().to_string(),
+                    r["sender_id"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![
+                ("telegram".to_string(), "tg-alice".to_string()),
+                ("webhook".to_string(), "wh-alice".to_string()),
+            ]
+        );
+    }
+
+    /// The counterpart nobody would notice was missing: a role change or a
+    /// display-name edit must not touch the channel axis. The sweep is bound to
+    /// `status == Deactivated`, not to "this handler ran".
+    #[tokio::test]
+    async fn a_non_deactivating_update_leaves_channel_bindings_alone() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        let pairing =
+            Arc::new(crate::gateway::pairing_store::SqlitePairingStore::in_memory().unwrap());
+        let (code, _) = pairing
+            .upsert("telegram", "tg-alice", HashMap::new())
+            .await
+            .unwrap();
+        pairing
+            .approve("telegram", &code, Some("u-alice"))
+            .await
+            .unwrap();
+
+        handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "role": "admin"}),
+            ),
+            store.clone(),
+            kick_with_pairing(pairing.clone()),
+        )
+        .await;
+
+        assert_eq!(
+            pairing.list_approved("telegram").await.unwrap().len(),
+            1,
+            "a promotion must not withdraw a channel credential"
+        );
     }
 
     #[tokio::test]

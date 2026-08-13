@@ -820,9 +820,7 @@ async fn every_catalog_row_deserialises_into_the_contract_type() {
     let mut cfg = ProviderConfig::test_config("some-relay-model");
     cfg.enabled = true;
     cfg.verified = true;
-    config
-        .providers
-        .insert("my-relay".to_string(), cfg);
+    config.providers.insert("my-relay".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
 
     let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;

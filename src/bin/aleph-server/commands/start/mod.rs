@@ -615,6 +615,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             });
     }
+    // Channel pairing store — one Arc shared by `users.update`'s deactivation
+    // path (just below), the `channel.pairing.*` RPC handlers and the
+    // `InboundMessageRouter` (both far below). It is constructed here rather
+    // than at its first RPC registration because deactivation has to be able
+    // to withdraw a channel credential, and a second store instance would
+    // withdraw it from a database nobody reads.
+    let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
+        let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
+            .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
+        let store = SqlitePairingStore::new(&pairing_store_path)
+            .or_else(|e| {
+                eprintln!("Warning: Failed to create pairing store: {e}. Using in-memory.");
+                SqlitePairingStore::in_memory()
+            })
+            .map_err(|e| format!("Failed to create pairing store: {e}"))?;
+        Arc::new(store)
+    };
+
     // User (principal) management RPCs: me / list / create / update. Admin
     // gate (create/update) is enforced upstream in `method_admin.rs`; me/list
     // are member carve-outs. Store is the SAME `SecurityStore` Arc used for
@@ -628,6 +646,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let users_kick = alephcore::gateway::handlers::users::UserDeactivationKick {
             connections: server.connections.clone(),
             event_bus: event_bus.clone(),
+            // Same Arc the inbound router and the `channel.pairing.*` handlers
+            // get below — deactivation withdraws the channel credential from
+            // the store those two actually read.
+            pairing: channel_pairing_store.clone(),
         };
         let s = users_store.clone();
         server.handlers_mut().register("users.me", move |req| {
@@ -2658,18 +2680,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         (shared_orch, gc_executor)
     };
 
-    // Create channel pairing store (shared between InboundMessageRouter and RPC handlers)
-    let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
-        let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
-            .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
-        let store = SqlitePairingStore::new(&pairing_store_path)
-            .or_else(|e| {
-                eprintln!("Warning: Failed to create pairing store: {e}. Using in-memory.");
-                SqlitePairingStore::in_memory()
-            })
-            .map_err(|e| format!("Failed to create pairing store: {e}"))?;
-        Arc::new(store)
-    };
+    // The pairing store was constructed up with the `users.*` registrations,
+    // because `users.update`'s deactivation path revokes channel credentials
+    // and must do so against this same instance.
 
     // Register channel pairing RPC handlers (uses same store as InboundMessageRouter)
     {

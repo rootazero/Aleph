@@ -9,6 +9,8 @@ use tracing::debug;
 
 use crate::gateway::pairing_store::{PairingRequest, PairingStore};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::security::store::UserStatus;
+use aleph_protocol::channel_pairing::{ApprovedSenderList, ApprovedSenderRow};
 
 /// Pairing request response format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,7 +137,27 @@ pub async fn handle_approve(
 
     if let Some(ref uid) = user_id {
         match users.get_user(uid) {
-            Ok(Some(_)) => {}
+            // Active only. A deactivated principal is walled everywhere else
+            // — `connect` fails their devices closed to `("guest", None)`,
+            // `users.update` revokes those devices and freezes their goals and
+            // loops — so minting them a *fresh* channel identity here would
+            // hand back, through a different door, exactly the authority the
+            // deactivation withdrew. The sibling id-binding producer already
+            // asks this question in this exact shape
+            // (`handlers/projects.rs::require_known_user`); this one asked
+            // only whether the row existed.
+            Ok(Some(u)) if u.status == UserStatus::Active => {}
+            Ok(Some(_)) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!(
+                        "user {uid} is deactivated — approving a sender onto a walled principal \
+                         would restore on the channel axis the identity deactivation withdrew \
+                         everywhere else"
+                    ),
+                );
+            }
             Ok(None) => {
                 return JsonRpcResponse::error(
                     request.id,
@@ -256,14 +278,38 @@ pub async fn handle_approved_list(
     debug!("Handling pairing.approved for channel: {}", channel);
 
     match store.list_approved(channel).await {
-        Ok(senders) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "channel": channel,
-                "approved": senders,
-                "count": senders.len(),
-            }),
-        ),
+        Ok(senders) => {
+            // Built FROM the shared contract type, not hand-assembled next to
+            // it: `senders` is the key the Panel has always walked, while this
+            // response only ever carried `approved` (a bare string array under
+            // a different key), so that list rendered empty on every channel
+            // from the day it shipped. Constructing the contract makes the
+            // field names one fact instead of two, and makes over-sending a
+            // compile impossibility rather than an untested hope.
+            let rows = senders
+                .into_iter()
+                .map(|s| ApprovedSenderRow {
+                    // Resolved through the same directory projection the room
+                    // bubbles use, so an operator deciding which sender to
+                    // revoke reads a name, not a `u-` id.
+                    display_name: s
+                        .user_id
+                        .as_deref()
+                        .and_then(crate::scope::directory::display_name),
+                    sender_id: s.sender_id,
+                    user_id: s.user_id,
+                    approved_at: s.approved_at,
+                })
+                .collect();
+            match serde_json::to_value(ApprovedSenderList::new(channel, rows)) {
+                Ok(v) => JsonRpcResponse::success(request.id, v),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to encode approved senders: {e}"),
+                ),
+            }
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -383,6 +429,117 @@ mod tests {
     /// anybody else.
     fn users() -> Arc<crate::gateway::security::store::SecurityStore> {
         Arc::new(crate::gateway::security::store::SecurityStore::in_memory().unwrap())
+    }
+
+    /// A deactivated principal is walled on every other axis — their devices
+    /// are revoked, their live connections closed, their goals and loops
+    /// paused, and (since this round) their existing channel senders withdrawn.
+    /// Binding a *fresh* sender onto them would restore, through a different
+    /// door, exactly the authority deactivation withdrew.
+    ///
+    /// The sibling id-binding producer, `projects.member.add`, has always asked
+    /// the full question; this one asked only whether the row existed.
+    #[tokio::test]
+    async fn an_approval_refuses_to_bind_a_sender_onto_a_deactivated_principal() {
+        let store: Arc<dyn PairingStore> = Arc::new(SqlitePairingStore::in_memory().unwrap());
+        let users = users();
+        users
+            .create_user(
+                "u-bob",
+                "Bob",
+                crate::gateway::security::store::UserRole::Member,
+            )
+            .unwrap();
+        users
+            .update_user("u-bob", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+
+        let (code, _) = store
+            .upsert("telegram", "tg-bob", HashMap::new())
+            .await
+            .unwrap();
+        let response = handle_approve(
+            JsonRpcRequest::new(
+                "pairing.approve",
+                Some(json!({"channel": "telegram", "code": code, "user_id": "u-bob"})),
+                Some(json!(1)),
+            ),
+            store.clone(),
+            users,
+        )
+        .await;
+
+        assert!(
+            response.is_error(),
+            "a walled principal must not be bindable"
+        );
+        assert!(
+            response.error.unwrap().message.contains("deactivated"),
+            "the refusal must name why, not just say no"
+        );
+        assert!(
+            store.list_approved("telegram").await.unwrap().is_empty(),
+            "a refused approval must not have consumed the code or approved the sender"
+        );
+    }
+
+    /// The response has to carry the principal each sender speaks as, because
+    /// `channel.pairing.revoke` is keyed on `sender_id`: SECURITY.md names it
+    /// as the way to cut someone off a channel, which is impossible if no
+    /// surface says which sender is theirs.
+    ///
+    /// The `senders` key is also the one the Panel has always read while this
+    /// handler emitted only `approved` — so this assertion is the one that
+    /// would have failed on the day the two shapes diverged.
+    #[tokio::test]
+    async fn the_approved_list_names_the_principal_behind_each_sender() {
+        let store: Arc<dyn PairingStore> = Arc::new(SqlitePairingStore::in_memory().unwrap());
+        let users = users();
+        users
+            .create_user(
+                "u-alice",
+                "Alice",
+                crate::gateway::security::store::UserRole::Member,
+            )
+            .unwrap();
+        let (code, _) = store
+            .upsert("telegram", "tg-42", HashMap::new())
+            .await
+            .unwrap();
+        handle_approve(
+            JsonRpcRequest::new(
+                "pairing.approve",
+                Some(json!({"channel": "telegram", "code": code, "user_id": "u-alice"})),
+                Some(json!(1)),
+            ),
+            store.clone(),
+            users.clone(),
+        )
+        .await;
+
+        let response = handle_approved_list(
+            JsonRpcRequest::new(
+                "pairing.approved",
+                Some(json!({"channel": "telegram"})),
+                Some(json!(1)),
+            ),
+            store,
+        )
+        .await;
+        let v = response.result.expect("success");
+        // Decoded through the shared contract, not by walking keys: the whole
+        // point is that both sides read one definition of the shape.
+        let list: ApprovedSenderList =
+            serde_json::from_value(v).expect("the response must be the contract");
+        assert_eq!(list.senders.len(), 1);
+        assert_eq!(list.senders[0].sender_id, "tg-42");
+        assert_eq!(list.senders[0].user_id.as_deref(), Some("u-alice"));
+        assert_eq!(
+            list.approved,
+            vec!["tg-42".to_string()],
+            "the legacy projection must still describe the same rows"
+        );
+        assert_eq!(list.count, 1);
     }
 
     /// The producer this parameter exists to be: an approval that names a

@@ -251,7 +251,11 @@ mod tests {
         assert_eq!(c[ranked[0].index].id, "openai");
         assert_eq!(ranked[0].rank, MatchRank::ModelOnly);
         assert_eq!(
-            ranked[0].models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ranked[0]
+                .models
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["gpt-5.6-luna"]
         );
     }
