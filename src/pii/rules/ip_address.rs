@@ -1,4 +1,16 @@
 //! IPv4 address detection
+//!
+//! Scope: IPv4 only. Each octet is bounded to 0–255, and the match is
+//! anchored with `\b` on both sides. IPv6 addresses (e.g. `2001:db8::1`,
+//! `fe80::1%eth0`) are **not** detected — add an `ip_v6` custom rule via
+//! `[[privacy.custom_rules]]` if IPv6 coverage is required.
+//!
+//! PII impact: an IPv4 address can identify a residential customer
+//! (especially when combined with a timestamp), and IPv6 addresses are
+//! stable per-device; IPv6 leak is a similar risk. We accept the IPv6
+//! gap as a precision/recall trade-off — IPv6 plaintext in chat is rare
+//! and the placeholder `[IP]` adds value only when the address is
+//! operationally meaningful.
 
 use crate::pii::engine::{PiiMatch, PiiSeverity};
 use crate::pii::rules::PiiRule;

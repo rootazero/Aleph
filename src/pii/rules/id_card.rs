@@ -11,8 +11,15 @@ use std::sync::OnceLock;
 static ID_CARD_RE: OnceLock<Regex> = OnceLock::new();
 
 fn id_card_regex() -> &'static Regex {
-    // rust-doctor-disable-next-line unwrap-in-production
-    ID_CARD_RE.get_or_init(|| Regex::new(r"\d{17}[\dXx]").expect("static id card regex compiles"))
+    ID_CARD_RE.get_or_init(|| {
+        // Real-world ID transcriptions often include a single space or
+        // hyphen between digit groups ("110101 1990 0307 002X" or
+        // "110101-1990-0307-002X"). The bare 18-digit form still matches
+        // because each separator is optional.
+        Regex::new(r"\d(?:[ \-]?\d){16}[\dXx]")
+            // rust-doctor-disable-next-line unwrap-in-production
+            .expect("static id card regex compiles")
+    })
 }
 
 // Valid Chinese province/municipality codes (first 2 digits)
@@ -147,8 +154,18 @@ impl PiiRule for IdCardRule {
                 continue;
             }
 
+            // Strip optional space/hyphen separators before structural
+            // validation: real-world transcriptions are often grouped
+            // (e.g. "110101 1990 0307 002X"). The matched span keeps the
+            // original separators so the placeholder aligns with what the
+            // user sees, but the checksum only sees the 18 raw chars.
+            let digits_only: String = matched
+                .chars()
+                .filter(|c| !c.is_whitespace() && *c != '-')
+                .collect();
+
             // Normalize X to uppercase for validation
-            let normalized = matched.to_uppercase();
+            let normalized = digits_only.to_uppercase();
             if !Self::is_valid_id_card(&normalized) {
                 continue;
             }
@@ -188,6 +205,28 @@ mod tests {
     fn test_detect_id_with_lowercase_x() {
         let matches = rule().detect("身份证号: 11010119900307002x");
         assert_eq!(matches.len(), 1);
+    }
+
+    // === Spaced/hyphenated forms (regression: B2-H2) ===
+
+    #[test]
+    fn test_detect_spaced_id_card() {
+        let matches = rule().detect("身份证号: 110101 1990 0307 002X");
+        assert_eq!(matches.len(), 1, "spaced ID card must be detected");
+    }
+
+    #[test]
+    fn test_detect_hyphenated_id_card() {
+        let matches = rule().detect("ID: 110101-1990-0307-002-X");
+        assert_eq!(matches.len(), 1, "hyphenated ID card must be detected");
+    }
+
+    #[test]
+    fn test_no_match_spaced_id_card_with_bad_checksum() {
+        // Same shape as the spaced test, but the final digit is wrong.
+        // The checksum strip path must still reject invalid IDs.
+        let matches = rule().detect("ID: 110101 1990 0307 002Y");
+        assert_eq!(matches.len(), 0, "spaced ID with bad checksum must be rejected");
     }
 
     // === Anti-false-positive: Discord Snowflake ===

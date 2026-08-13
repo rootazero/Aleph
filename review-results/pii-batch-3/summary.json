@@ -1,0 +1,51 @@
+{
+  "batch": "pii-batch-3",
+  "title": "Secrets defense, custom rules, module wiring, seam audit",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-pii",
+  "branch": "review/pii",
+  "report": "review-results/pii-batch-3/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 4,
+    "medium": 4,
+    "low": 3,
+    "total": 11
+  },
+  "by_category": {
+    "security": 3,
+    "logic": 5,
+    "architecture": 1,
+    "quality": 2
+  },
+  "files_reviewed": [
+    { "path": "src/pii/rules/api_key.rs", "loc": 141, "findings": 3 },
+    { "path": "src/pii/rules/ssh_key.rs", "loc": 127, "findings": 2 },
+    { "path": "src/pii/rules/custom.rs", "loc": 122, "findings": 0 },
+    { "path": "src/pii/rules/mod.rs", "loc": 73, "findings": 1 },
+    { "path": "src/mcp/redact.rs", "loc": 53, "findings": 0, "seam": "A — OK" },
+    { "path": "src/security/runtime_guard.rs", "loc": 612, "findings": 0, "seam": "B — OK; case-sensitive platform-key finding (B1-H3) applies here too" },
+    { "path": "src/browser/secret_guard.rs", "loc": 207, "findings": 0, "seam": "C — OK" },
+    { "path": "src/providers/http_provider.rs", "loc": 800, "findings": 0, "seam": "D — OK (read-only)" },
+    { "path": "src/gateway/handlers/search_config/update.rs", "loc": 250, "findings": 0, "seam": "E — OK (read-only)" },
+    { "path": "src/config/types/privacy.rs", "loc": 360, "findings": 1, "seam": "F — From<CustomPiiSeverity> for PiiSeverity is in config but belongs in pii (smell, not defect)" },
+    { "path": "src/guardrails/pii_secrets.rs", "loc": 0, "findings": 0, "seam": "G — independent of src/pii, no issues" }
+  ],
+  "total_loc_in_module": 463,
+  "total_loc_seam_audit": 2282,
+  "findings": [
+    { "id": 1, "severity": "High", "category": "Security", "file": "src/pii/rules/api_key.rs", "line": 24, "title": "Bearer pattern is case-sensitive; `bearer`/`BEARER` headers are missed (RFC 7235 says case-insensitive)" },
+    { "id": 2, "severity": "High", "category": "Security", "file": "src/pii/rules/api_key.rs", "line": 22, "title": "Missing high-impact API-key families: AWS Secret, Google (AIza), GitLab PAT, Stripe live, HuggingFace, Linear, npm, Perplexity, OpenRouter" },
+    { "id": 3, "severity": "High", "category": "Security", "file": "src/pii/rules/api_key.rs", "line": 23, "title": "Slack xoxe- (Enterprise) not covered — current regex is xox[bpras]" },
+    { "id": 4, "severity": "High", "category": "Security/Logic", "file": "src/pii/rules/ssh_key.rs", "line": 24, "title": "SSH-key regex does not require BEGIN/END labels to match; malformed PEM bundles are partially accepted" },
+    { "id": 5, "severity": "Medium", "category": "Logic", "file": "src/pii/rules/api_key.rs", "line": 13, "title": "No checksum on ghp_/github_pat_ — heuristic only; documented design, not a fix" },
+    { "id": 6, "severity": "Medium", "category": "Logic/Quality", "file": "src/pii/rules/ssh_key.rs", "line": 24, "title": "Non-greedy .*? picks the first END after a BEGIN; concatenated multi-key bundles may behave unexpectedly" },
+    { "id": 7, "severity": "Medium", "category": "Security/Logic", "file": "src/pii/rules/custom.rs", "line": 23, "title": "Custom rule compile failures are warn-logged and silently dropped; no startup self-check reports inactive rules" },
+    { "id": 8, "severity": "Medium", "category": "Performance/Logic", "file": "src/pii/rules/mod.rs", "line": 33, "title": "All 7 built-in rule objects constructed on every reload — design is OK (OnceLock caches regex), recorded for completeness" },
+    { "id": 9, "severity": "Low", "category": "Quality", "file": "src/pii/rules/api_key.rs", "line": 13, "title": "Inline regex comments depend on (?x) extended mode; no guard test" },
+    { "id": 10, "severity": "Low", "category": "Performance", "file": "src/pii/rules/custom.rs", "line": 60, "title": "PiiMatch.rule_name/placeholder clones on every match — requires PiiMatch → Cow<str> refactor (out of scope)" },
+    { "id": 11, "severity": "Low", "category": "Architecture", "file": "src/pii/rules/mod.rs", "line": 1, "title": "build_rules returns Vec<Box<dyn PiiRule>>; metadata-only callers can't avoid detect() — minor" },
+    { "id": "Seam-F", "severity": "Low", "category": "Architecture", "file": "src/config/types/privacy.rs", "line": 98, "title": "From<CustomPiiSeverity> for crate::pii::engine::PiiSeverity crosses config→pii boundary; belongs in src/pii (seam smell)" }
+  ]
+}

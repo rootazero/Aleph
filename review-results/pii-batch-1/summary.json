@@ -1,0 +1,42 @@
+{
+  "batch": "pii-batch-1",
+  "title": "Core engine, allowlist, and module entry",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-review-pii",
+  "branch": "review/pii",
+  "report": "review-results/pii-batch-1/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 3,
+    "medium": 4,
+    "low": 4,
+    "total": 11
+  },
+  "by_category": {
+    "security": 1,
+    "logic": 2,
+    "architecture": 2,
+    "quality": 2,
+    "performance": 4
+  },
+  "files_reviewed": [
+    { "path": "src/pii/mod.rs", "loc": 16, "findings": 1 },
+    { "path": "src/pii/engine.rs", "loc": 562, "findings": 9 },
+    { "path": "src/pii/allowlist.rs", "loc": 82, "findings": 1 }
+  ],
+  "total_loc": 660,
+  "findings": [
+    { "id": 1, "severity": "High", "category": "Performance/Logic", "file": "src/pii/engine.rs", "line": 140, "title": "effective_config clones entire PrivacyConfig for every call, even when platform=None" },
+    { "id": 2, "severity": "High", "category": "Performance", "file": "src/pii/engine.rs", "line": 140, "title": "action_for_rule is O(M) per match (M = custom_rules.len())" },
+    { "id": 3, "severity": "High", "category": "Logic/Security", "file": "src/pii/engine.rs", "line": 141, "title": "Platform-key matching is case-sensitive — case drift silently falls back to global policy" },
+    { "id": 4, "severity": "Medium", "category": "Quality/Performance", "file": "src/pii/engine.rs", "line": 281, "title": "warn! per PII match floods logs in normal traffic" },
+    { "id": 5, "severity": "Medium", "category": "Performance", "file": "src/pii/allowlist.rs", "line": 32, "title": "test_phones() and local_ips() reallocate on every Default::default()" },
+    { "id": 6, "severity": "Medium", "category": "Performance", "file": "src/pii/allowlist.rs", "line": 65, "title": "system_email_patterns().clone() in Default deep-clones the regex Vec" },
+    { "id": 7, "severity": "Medium", "category": "Architecture/Performance", "file": "src/pii/engine.rs", "line": 228, "title": "sort + dedup are two passes over Vec<PiiMatch> for a job that could be one with a named priority key" },
+    { "id": 8, "severity": "Low", "category": "Quality", "file": "src/pii/engine.rs", "line": 97, "title": "init() second-call path is silent and untested" },
+    { "id": 9, "severity": "Low", "category": "Performance", "file": "src/pii/engine.rs", "line": 130, "title": "is_provider_excluded does a linear scan over exclude_providers every call" },
+    { "id": 10, "severity": "Low", "category": "Logic/Quality", "file": "src/pii/engine.rs", "line": 289, "title": "Invalid-offset replacement path logs warn but reports no counter" },
+    { "id": 11, "severity": "Low", "category": "Architecture", "file": "src/pii/mod.rs", "line": 9, "title": "pub use re-exports of PiiAction/PlatformPiiPolicy/PrivacyConfig have zero callers (dead scaffolding)" }
+  ]
+}
