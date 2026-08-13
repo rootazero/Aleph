@@ -116,7 +116,7 @@ mod tests {
         // must return consistent total/filtered counts.
         let _home = crate::utils::paths::IsolatedAlephHome::new();
         let system = crate::skill::shared_skill_system().clone();
-        let _ = system.init(crate::skill::default_skill_dirs()).await;
+        system.init(crate::skill::default_skill_dirs()).await;
         let tool = SkillStatusTool::new(system);
         let out = tool
             .call(SkillStatusArgs {

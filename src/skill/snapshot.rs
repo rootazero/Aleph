@@ -1,16 +1,14 @@
 //! Snapshot Manager — builds a point-in-time snapshot of eligible skills with prompt XML.
 //!
-//! A `SkillSnapshot` captures which skills are eligible, which are not (and why),
-//! and the pre-rendered prompt XML for system prompt injection. Each snapshot is
-//! versioned; version increments indicate cache invalidation.
+//! A `SkillSnapshot` captures which skills are eligible and the pre-rendered
+//! prompt XML for system prompt injection. Each snapshot is versioned; version
+//! increments indicate cache invalidation.
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
-
 use crate::domain::skill::{SkillId, SkillManifest};
 use crate::skill::config::SkillEntryConfig;
-use crate::skill::eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
+use crate::skill::eligibility::{EligibilityResult, EligibilityService};
 use crate::skill::prompt::SkillPromptBudget;
 use crate::skill::registry::SkillRegistry;
 
@@ -21,12 +19,8 @@ pub struct SkillSnapshot {
     pub version: u64,
     /// Skill IDs that passed eligibility evaluation.
     pub eligible: Vec<SkillId>,
-    /// Skill IDs that failed eligibility, mapped to their reasons.
-    pub ineligible: HashMap<SkillId, Vec<IneligibilityReason>>,
     /// Full manifests for eligible + model-visible skills (for scope-aware filtering).
     pub eligible_manifests: Vec<SkillManifest>,
-    /// When this snapshot was built.
-    pub built_at: DateTime<Utc>,
     /// Budget the **live** prompt render applies. The authoritative
     /// `<available_skills>` index is rendered by `SkillInstructionsLayer`
     /// (it alone knows the active tool set for `Tool`-scope filtering); this
@@ -49,9 +43,7 @@ impl SkillSnapshot {
         Self {
             version: 0,
             eligible: Vec::new(),
-            ineligible: HashMap::new(),
             eligible_manifests: Vec::new(),
-            built_at: Utc::now(),
             prompt_budget: SkillPromptBudget::default(),
         }
     }
@@ -74,10 +66,11 @@ impl SkillSnapshot {
     /// explicit `skill_read` still work) but are excluded from the injected
     /// prompt index so dormant skills stop consuming prompt budget.
     ///
-    /// Iterates every skill, evaluates eligibility, and collects:
-    /// - eligible skill IDs
-    /// - ineligible skill IDs with reasons
-    /// - prompt XML for eligible + model-visible skills
+    /// Iterates every skill, evaluates eligibility, and collects the eligible
+    /// skill IDs and the manifest set used by scope-aware prompt filtering.
+    /// Skills that fail evaluation (or are user-disabled) are simply skipped —
+    /// their reasons are read directly by `SkillStatusEntry::build` from
+    /// `EligibilityResult`, so re-storing them here would be wasted memory.
     #[must_use]
     pub fn build(
         registry: &SkillRegistry,
@@ -88,7 +81,6 @@ impl SkillSnapshot {
         archived: &HashSet<String>,
     ) -> Self {
         let mut eligible = Vec::new();
-        let mut ineligible: HashMap<SkillId, Vec<IneligibilityReason>> = HashMap::new();
         let mut eligible_manifests: Vec<SkillManifest> = Vec::new();
 
         // Collect and sort by skill ID for deterministic ordering
@@ -101,7 +93,6 @@ impl SkillSnapshot {
             // A config-level disable overrides everything — the skill must not
             // appear as eligible, nor leak into the injected prompt index.
             if entry.and_then(|e| e.enabled) == Some(false) {
-                ineligible.insert(id.clone(), vec![IneligibilityReason::Disabled]);
                 continue;
             }
 
@@ -128,8 +119,10 @@ impl SkillSnapshot {
                         eligible_manifests.push(effective);
                     }
                 }
-                EligibilityResult::Ineligible(reasons) => {
-                    ineligible.insert(id.clone(), reasons);
+                EligibilityResult::Ineligible(_reasons) => {
+                    // Reasons are not stored: `SkillStatusEntry::build` reads
+                    // them directly from the original `EligibilityResult`,
+                    // never from the snapshot.
                 }
             }
         }
@@ -137,9 +130,7 @@ impl SkillSnapshot {
         Self {
             version,
             eligible,
-            ineligible,
             eligible_manifests,
-            built_at: Utc::now(),
             prompt_budget: SkillPromptBudget::default(),
         }
     }
@@ -178,7 +169,7 @@ mod tests {
         let snap = SkillSnapshot::empty();
         assert_eq!(snap.version, 0);
         assert!(snap.eligible.is_empty());
-        assert!(snap.ineligible.is_empty());
+        assert!(snap.eligible_manifests.is_empty());
     }
 
     #[test]
@@ -209,9 +200,11 @@ mod tests {
 
         assert_eq!(snap.version, 1);
         assert_eq!(snap.eligible.len(), 1);
-        assert_eq!(snap.ineligible.len(), 1);
         assert!(snap.eligible.contains(&SkillId::new("git:commit")));
-        assert!(snap.ineligible.contains_key(&SkillId::new("docker:build")));
+        // The disabled skill (docker:build) is omitted from `eligible`; its
+        // reasons are still available to `SkillStatusEntry::build` via the
+        // original `EligibilityResult`.
+        assert!(!snap.eligible.contains(&SkillId::new("docker:build")));
         assert_eq!(snap.eligible_manifests.len(), 1);
         assert_eq!(snap.eligible_manifests[0].name(), "git:commit");
     }
@@ -334,10 +327,6 @@ mod tests {
             snap.eligible.is_empty(),
             "config-disabled skill must not be eligible"
         );
-        assert!(snap
-            .ineligible
-            .get(&SkillId::new("git:commit"))
-            .is_some_and(|r| r.contains(&IneligibilityReason::Disabled)));
         assert!(
             snap.eligible_manifests.is_empty(),
             "disabled skill must not leak into the injected prompt"
