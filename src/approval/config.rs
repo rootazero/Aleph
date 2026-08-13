@@ -311,6 +311,8 @@ impl Default for ConfigApprovalPolicy {
     /// - Browser select/drag/dialog/upload → Ask (page-state changing or
     ///   file-egress)
     /// - Browser cookies write → Ask (the value is a credential by design)
+    /// - Browser identity override / session state → Ask (same reason: a
+    ///   request header and a saved storage state are both credentials)
     /// - Desktop actions → Ask
     /// - Hooks manage → Ask (control-plane write)
     fn default() -> Self {
@@ -329,6 +331,8 @@ impl Default for ConfigApprovalPolicy {
         defaults.insert(ActionType::BrowserDrag, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserUpload, DefaultDecision::Ask);
         defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Ask);
+        defaults.insert(ActionType::BrowserSessionState, DefaultDecision::Ask);
         defaults.insert(ActionType::HooksManage, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopClick, DefaultDecision::Ask);
         defaults.insert(ActionType::DesktopType, DefaultDecision::Ask);
@@ -390,7 +394,17 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         }
 
         // 3. Fall back to defaults
-        if let Some(default_decision) = self.config.defaults.get(action) {
+        // A policy file replaces these defaults wholesale, so an action the
+        // operator did not name falls back to the action it was split out of
+        // (see `ActionType::inherited_from`) before falling through to Ask.
+        // Without this, renaming a variant loosens every existing policy file.
+        let inherited = action.inherited_from();
+        let resolved = self.config.defaults.get(action).or_else(|| {
+            inherited
+                .as_ref()
+                .and_then(|parent| self.config.defaults.get(parent))
+        });
+        if let Some(default_decision) = resolved {
             return match default_decision {
                 DefaultDecision::Allow => ApprovalDecision::Allow,
                 DefaultDecision::Deny => ApprovalDecision::Deny {
@@ -761,6 +775,85 @@ mod tests {
                 matches_expectation,
                 "{action} resolved to {from_load:?}, expected {expected:?}"
             );
+        }
+    }
+
+    /// Splitting an `ActionType` in two must not loosen a policy file written
+    /// against the old name.
+    ///
+    /// A policy file replaces the curated defaults wholesale, so an operator
+    /// whose file says `browser_cookies_write: deny` — and who was thereby
+    /// denying header injection and storage-state moves, because those WERE
+    /// that action — must keep denying them after the rename, without editing
+    /// anything.
+    #[tokio::test]
+    async fn a_renamed_action_inherits_the_old_key_rather_than_falling_through_to_ask() {
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        });
+
+        for split_out in [
+            ActionType::BrowserIdentityOverride,
+            ActionType::BrowserSessionState,
+        ] {
+            let req = make_request_with_target(split_out.clone(), "x");
+            assert!(
+                matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+                "{split_out} must inherit the deny the operator wrote for its old name"
+            );
+        }
+    }
+
+    /// …and the inheritance is a fallback, not an override: naming the new key
+    /// explicitly wins, which is what makes the split worth having.
+    #[tokio::test]
+    async fn an_explicit_entry_for_the_new_key_beats_the_inherited_one() {
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserCookiesWrite, DefaultDecision::Deny);
+        defaults.insert(ActionType::BrowserIdentityOverride, DefaultDecision::Allow);
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![],
+            blocklist: vec![],
+        });
+
+        let allowed = make_request_with_target(ActionType::BrowserIdentityOverride, "x");
+        assert!(matches!(
+            policy.check(&allowed).await,
+            ApprovalDecision::Allow
+        ));
+        // The sibling that was NOT named still inherits.
+        let inherited = make_request_with_target(ActionType::BrowserSessionState, "x");
+        assert!(matches!(
+            policy.check(&inherited).await,
+            ApprovalDecision::Deny { .. }
+        ));
+    }
+
+    /// The chain must stay one level deep and acyclic — it exists to preserve
+    /// a rename, not to grow a taxonomy that could loop in `check`.
+    #[test]
+    fn inheritance_is_one_level_and_acyclic() {
+        for action in [
+            ActionType::BrowserIdentityOverride,
+            ActionType::BrowserSessionState,
+            ActionType::BrowserCookiesWrite,
+            ActionType::BrowserNavigate,
+            ActionType::HooksManage,
+            ActionType::MediaCapture,
+        ] {
+            if let Some(parent) = action.inherited_from() {
+                assert_ne!(parent, action, "{action} inherits from itself");
+                assert_eq!(
+                    parent.inherited_from(),
+                    None,
+                    "{action} -> {parent} is more than one level deep"
+                );
+            }
         }
     }
 }

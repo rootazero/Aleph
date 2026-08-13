@@ -98,11 +98,22 @@ impl AlephTool for BrowserOpenTool {
             }
         };
         match backend.open_tab(&args.url).await {
-            Ok(tab_id) => Ok(BrowserOpenOutput {
-                success: true,
-                tab_id: Some(tab_id),
-                message: Some(format!("Opened {} in profile '{}'", args.url, args.profile)),
-            }),
+            Ok(tab_id) => {
+                // Register the tab we just created. Every OTHER browser verb
+                // reaches the registry through `make_backend_and_tab`, but this
+                // one resolves no existing tab and so registered nothing — and
+                // both reapers take their candidate list from the registry
+                // (`TabRegistry::has_tabs`). A session that only ever called
+                // `browser_open` was therefore invisible to the LRU cap and to
+                // the idle sweep alike: the registry did not know about the one
+                // thing it exists to bound.
+                self.manager.touch_tab(&args.profile, &tab_id);
+                Ok(BrowserOpenOutput {
+                    success: true,
+                    tab_id: Some(tab_id),
+                    message: Some(format!("Opened {} in profile '{}'", args.url, args.profile)),
+                })
+            }
             Err(e) => Ok(BrowserOpenOutput {
                 success: false,
                 tab_id: None,

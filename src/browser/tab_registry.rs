@@ -164,31 +164,72 @@ pub struct TabLine {
     pub selected: bool,
 }
 
+/// Split a playwright-cli markdown tab rendering `"[title](url)"` into its
+/// URL. Returns `None` for anything that is not that shape, which is how the
+/// caller tells the two drivers' renderings apart.
+///
+/// Splits on the LAST `"]("` so a title containing brackets still resolves;
+/// a URL containing `"]("` would not, and no real one does.
+fn markdown_link_url(s: &str) -> Option<&str> {
+    let inner = s.strip_prefix('[')?.strip_suffix(')')?;
+    let pos = inner.rfind("](")?;
+    inner.get(pos + 2..)
+}
+
 /// Parse one `list_tabs` line.
 ///
-/// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
-/// CLI format `"Tab N: URL"`, splitting off a trailing annotation such as
-/// `" [selected]"` from the URL. Returns `None` for lines without a numeric id.
+/// Two renderings reach here, and BOTH are transcribed from live output rather
+/// than described from memory — the previous description ("the Playwright CLI
+/// format `Tab N: URL`") named a format no driver emits, so every real
+/// playwright listing parsed to nothing:
 ///
-/// Mirrors `parse_tab_line` in the browser-tools layer
-/// (`builtin_tools::browser_tools::mod`) — an acknowledged layering
-/// duplication: the `browser` crate layer may not reach up into
-/// `builtin_tools`, so the reaper and the post-navigation audit keep their own
-/// copy here. That copy still guesses "active = last-listed"; it should call
-/// [`active_tab_id`] instead.
+/// - chrome-devtools-mcp `list_pages`: `"1: about:blank [selected]"` — a bare
+///   URL with an optional trailing ` [selected]` annotation.
+/// - `playwright-cli tab-list` (0.1.8): `"- 1: (current) [Title](https://x/)"`
+///   — a `- ` bullet, a markdown link, and the selection marked by a leading
+///   `(current)` rather than a trailing annotation.
+///
+/// `"Tab N: URL"` is still tolerated; it has no known emitter and is kept only
+/// because tolerating it costs one `strip_prefix`.
+///
+/// Returns `None` for lines without a numeric id (headers such as
+/// `"### Result"` and `"## Pages"` fall out here).
+///
+/// This is the lower-layer twin of the tab-line question; the browser-tools
+/// layer no longer keeps its own copy and calls [`active_tab_id`] instead.
 #[must_use]
 pub fn parse_tab_line(line: &str) -> Option<TabLine> {
     let line = line.trim();
-    // Normalize "Tab N: URL" → "N: URL" so both formats share one parser.
-    let rest = line.strip_prefix("Tab ").unwrap_or(line);
+    // Normalize the two id prefixes ("- N: …" / "Tab N: …") to "N: …" so one
+    // parser serves both drivers.
+    let rest = line.strip_prefix("- ").unwrap_or(line);
+    let rest = rest.strip_prefix("Tab ").unwrap_or(rest);
     let colon = rest.find(": ")?;
     let id = rest.get(..colon)?.trim();
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     let url_part = rest.get(colon + 2..)?.trim();
-    // Split a trailing " [selected]" / " [active]" style annotation off the URL
-    // so the URL round-trips through a strict parser AND the marker survives.
+
+    // playwright-cli marks the selected line with a LEADING "(current)".
+    let (url_part, current_marker) = match url_part.strip_prefix("(current)") {
+        Some(rest) => (rest.trim(), true),
+        None => (url_part, false),
+    };
+
+    // playwright-cli renders the tab as a markdown link; when it does, the URL
+    // is unambiguous and there is no trailing annotation to split.
+    if let Some(url) = markdown_link_url(url_part) {
+        return Some(TabLine {
+            id: id.to_string(),
+            url: url.to_string(),
+            selected: current_marker,
+        });
+    }
+
+    // chrome-devtools-mcp: bare URL, with a trailing " [selected]" / " [active]"
+    // annotation split off so the URL round-trips through a strict parser AND
+    // the marker survives.
     let (url, annotation) = match url_part.rfind(" [") {
         Some(pos) if url_part.ends_with(']') => (
             url_part.get(..pos).unwrap_or(url_part).trim(),
@@ -200,7 +241,7 @@ pub fn parse_tab_line(line: &str) -> Option<TabLine> {
     Some(TabLine {
         id: id.to_string(),
         url: url.to_string(),
-        selected: marker.contains("selected") || marker.contains("active"),
+        selected: current_marker || marker.contains("selected") || marker.contains("active"),
     })
 }
 
@@ -269,6 +310,57 @@ mod tests {
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The real `playwright-cli tab-list` listing, copied verbatim from
+    /// `playwright-cli 0.1.8` (`- <id>: [<title>](<url>)`, with the selected
+    /// line prefixed `(current) `). Every line of it used to parse to `None`:
+    /// the pre-colon segment is `- 0`, which is not all-digits, so the whole
+    /// listing yielded no tabs at all.
+    ///
+    /// That failure is silent and it is not cosmetic — with no parsed lines
+    /// [`active_tab_id`] returns `None`, so the tab id falls back to the
+    /// `"last"` sentinel and `post_nav::audit_listing` runs over an empty
+    /// listing, i.e. the post-navigation SSRF audit passes having checked
+    /// nothing.
+    #[test]
+    fn parse_reads_the_real_playwright_cli_listing() {
+        let text = "### Result\n                    - 0: [](about:blank)\n                    - 1: (current) [Example Domain](https://example.com/)";
+        assert_eq!(parse_tab_ids(text), ids(&["0", "1"]));
+        // The `(current)` marker is the driver's own answer to "which tab is
+        // active"; without it this listing would fall back to last-listed and
+        // only accidentally agree.
+        assert_eq!(active_tab_id(text).as_deref(), Some("1"));
+        assert_eq!(
+            active_tab_url(text).as_deref(),
+            Some("https://example.com/")
+        );
+        assert_eq!(
+            tab_url_for(text, "0").as_deref(),
+            Some("about:blank"),
+            "the non-selected line must resolve too"
+        );
+    }
+
+    /// The `(current)` marker really is load-bearing: when it names a line
+    /// that is NOT last, the parser must follow the marker.
+    #[test]
+    fn the_playwright_current_marker_beats_last_listed() {
+        let text = "- 0: (current) [A](https://a.com/)\n- 1: [B](https://b.com/)";
+        assert_eq!(active_tab_id(text).as_deref(), Some("0"));
+        assert_eq!(active_tab_url(text).as_deref(), Some("https://a.com/"));
+    }
+
+    /// The chrome-devtools-mcp `list_pages` listing, copied verbatim from a
+    /// live session. Kept alongside the playwright case so one parser is
+    /// proven against BOTH drivers' real output rather than against a format
+    /// that was only ever written down here.
+    #[test]
+    fn parse_reads_the_real_chrome_devtools_mcp_listing() {
+        let text = "## Pages\n1: about:blank [selected]";
+        assert_eq!(parse_tab_ids(text), ids(&["1"]));
+        assert_eq!(active_tab_id(text).as_deref(), Some("1"));
+        assert_eq!(active_tab_url(text).as_deref(), Some("about:blank"));
     }
 
     #[test]

@@ -34,10 +34,12 @@ pub enum BrowserDriver {
 pub struct ProfileConfig {
     /// Which browser engine to use.
     ///
-    /// **`existing_session` only.** The managed driver runs whatever browser
-    /// the Playwright CLI is provisioned with; it has no engine switch. A
-    /// managed profile that sets this is warned about at startup
-    /// (`ProfileManager::new` → `unhonored_managed_fields`).
+    /// Honored by both drivers, with one gap: the managed driver passes
+    /// `playwright-cli open --browser`, which accepts `chrome` / `msedge`
+    /// (and expresses Chromium by omission) but has no value for `Brave`. A
+    /// managed Brave profile is warned about at startup
+    /// (`ProfileManager::new` → `unhonored_managed_fields`) rather than
+    /// silently given Chromium.
     #[serde(default)]
     pub browser: BrowserType,
 
@@ -48,35 +50,42 @@ pub struct ProfileConfig {
 
     /// Proxy server URL (e.g. "<socks5://127.0.0.1:1080>").
     ///
-    /// **`existing_session` only** — passed as Chrome's `--proxy-server`. The
-    /// Playwright CLI exposes no proxy flag; see [`Self::browser`] for how a
-    /// managed profile that sets it is told.
+    /// Honored by both drivers: Chrome's `--proxy-server` on the
+    /// existing-session launch argv, and `browser.launchOptions.proxy.server`
+    /// in the generated `open --config` file on the managed side. The CLI has
+    /// no proxy *flag*, which is why this was once documented as
+    /// existing-session only — the surface is the config file, not the flag
+    /// list.
     #[serde(default)]
     pub proxy: Option<String>,
 
     /// Custom user data directory for browser state isolation.
     ///
-    /// **`existing_session` only** — Chrome's `--user-data-dir`. Managed
-    /// sessions are isolated by their CLI session key instead; see
-    /// [`Self::browser`].
+    /// Honored by both drivers: Chrome's `--user-data-dir` on the
+    /// existing-session launch argv, and `browser.userDataDir` in the
+    /// generated `open --config` file on the managed side. Left unset, a
+    /// managed session keeps its profile in memory.
     #[serde(default)]
     pub user_data_dir: Option<String>,
 
     /// Extra command-line arguments passed to the browser process.
     ///
-    /// **`existing_session` only** — appended last to the Chrome launch argv.
-    /// The managed driver never launches a browser process itself; see
-    /// [`Self::browser`].
+    /// Honored by both drivers: appended last to the Chrome launch argv on the
+    /// existing-session side, and passed as `browser.launchOptions.args` in
+    /// the generated `open --config` file on the managed side.
     #[serde(default)]
     pub extra_args: Vec<String>,
 
     /// Seconds of inactivity before the browser session is automatically torn
     /// down.
     ///
-    /// **`existing_session` only.** The Playwright CLI has no "stop session"
-    /// command, so a managed profile is reclaimed per *tab*
-    /// ([`Self::tab_idle_timeout_secs`]) and never as a whole; a managed
-    /// profile that changes this from the default is warned about at startup.
+    /// Honored by both drivers: `ProfileManager::reap_idle` destroys the
+    /// Chrome MCP session for an existing-session profile and runs
+    /// `playwright-cli close` for a managed one. (The CLI does have a
+    /// stop-session command — `close`, plus `close-all` / `kill-all`; this was
+    /// once documented as having none, so the setting was accepted and never
+    /// enforced on the managed side.) Tabs are reclaimed sooner and
+    /// separately, via [`Self::tab_idle_timeout_secs`].
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
 

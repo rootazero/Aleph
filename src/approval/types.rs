@@ -52,6 +52,24 @@ pub enum ActionType {
     /// design (session id, auth token); writing them is the highest-impact
     /// browser mutation, default Ask so a deny-by-default policy works.
     BrowserCookiesWrite,
+    /// Attach caller-chosen HTTP headers to every request the page makes, or
+    /// rewrite the user agent (`browser_emulate`). Canonically an
+    /// `Authorization: Bearer …`, i.e. the same request-level credential
+    /// write [`Self::BrowserCookiesWrite`] names — and it was classified as
+    /// that variant for exactly that reason. The trust surface was right; the
+    /// name an operator read in the policy file was not, and a policy file is
+    /// read by people. The presentation-only overrides (color scheme,
+    /// geolocation, network condition, CPU throttle) are NOT classified here:
+    /// they carry no credential, and gating them would train the user to click
+    /// through.
+    BrowserIdentityOverride,
+    /// Save or restore a whole browser storage state — every cookie plus
+    /// localStorage — to or from a file (`browser_session`). `save` writes an
+    /// entire authenticated identity to disk; `load` installs one into the
+    /// live browser. Also formerly [`Self::BrowserCookiesWrite`]: leaving the
+    /// bulk operation ungated while the single-cookie one asked would have
+    /// made the gate trivially avoidable.
+    BrowserSessionState,
     /// Edit / install / uninstall event hooks that fire arbitrary commands
     /// or HTTP requests on lifecycle events. Hooks are a control-plane
     /// write, hence operator-tier defaults already cover `hooks_manage` at
@@ -78,6 +96,33 @@ pub enum ActionType {
     MediaCapture,
 }
 
+impl ActionType {
+    /// The action whose configured decision covers this one when a policy file
+    /// does not name it.
+    ///
+    /// A policy file **replaces** the curated defaults rather than merging with
+    /// them ([`ConfigApprovalPolicy::load_from`](super::ConfigApprovalPolicy)),
+    /// so splitting a variant in two silently loosens every deployment that
+    /// configured the old name: an operator with
+    /// `"browser_cookies_write": "deny"` was denying header/user-agent
+    /// overrides and storage-state moves too, and after the split those keys
+    /// would be unmentioned and fall through to Ask. Inheriting keeps the
+    /// operator's stated intent while letting them tighten or loosen the new
+    /// names individually.
+    ///
+    /// Deliberately one level deep and acyclic: the chain exists to preserve a
+    /// rename, not to build a taxonomy.
+    #[must_use]
+    pub fn inherited_from(&self) -> Option<Self> {
+        match self {
+            Self::BrowserIdentityOverride | Self::BrowserSessionState => {
+                Some(Self::BrowserCookiesWrite)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for ActionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
@@ -95,6 +140,8 @@ impl fmt::Display for ActionType {
             Self::BrowserDrag => "browser drag",
             Self::BrowserUpload => "browser upload",
             Self::BrowserCookiesWrite => "browser cookies write",
+            Self::BrowserIdentityOverride => "browser identity override",
+            Self::BrowserSessionState => "browser session state",
             Self::HooksManage => "hooks manage",
             Self::DesktopClick => "desktop click",
             Self::DesktopType => "desktop type",

@@ -484,6 +484,10 @@
 - **Hub 只消费不策展** —— 目录槽是 **replace 语义**，可疑 artifact 会静默覆盖 last-good ⇒ 校验必须在**任何条目进缓存之前**；**给用户看的数字必须有校验者**（`sha256`/`git_ref` 曾展示却从不校验）；**`installed` 与 `update_available` 是两个不同的真源**且生产者必须落在消费者那条路上 → §5.21
 - **一个"展示用"字段在提交前必须能指出渲染它的那一行代码** —— 指不出就是 CUT，不是"以后再接" → §5.21
 - **加 hub 工具要动五处登记**（`hub/mod.rs` + `definitions.rs` + `groups.rs` + constructor 的**构造段和 schema 段**两处 + dispatch）—— 漏 schema 段＝注册了但模型看不见，漏 dispatch＝看得见但调不到 → §5.21
+- **一个「驱动外部 CLI」的适配器，先数它发过那个 CLI 要求的**生命周期**动词没有** —— browser 的 managed backend 发了 28 个子命令、独独没有 `open`，而 `playwright-cli` 的每一个动词都要求先 `open`：**默认 driver 从来没启动过浏览器**，四轮无人发现。症状在类型上是可见的——`BrowserError::NoSession` 被构造、**全仓零消费者**——但只有真机会告诉你为什么。配套两条：① **错误分类器只读 stderr，就分不出把诊断写到 stdout 的 CLI**（那句 "not open" 在 stdout、stderr 空、退出 1 ⇒ `NoSession` 永远分类不出来，惰性修复也就永远触发不了）；② **重复执行「开始」动词可能是破坏性的**（实测第二次 `open` 换新 pid 并丢掉全部 tab），所以自动补发只能挂在**对方自己的拒绝**上，不能挂在自己的猜测上 → §3.12
+- **「这个 CLI 没有对应 flag」不等于「没有对应面」** —— 上一条的孪生，且它推翻的是一条**有理有据的旧记录**：上一轮读了 `--help` 的 flag 列表、没找到 proxy/user_data_dir/extra_args，就诚实记下「无对应面，猜 flag 名会产出静默忽略」。找错了面——`open --config <file>` 有一份文档化的 JSON schema（`browser.launchOptions` 就是 playwright `LaunchOptions`，含 `proxy` 与 `args`），`close` 也一直存在。判据：写下「这个外部工具做不到 X」之前，**把 flag 列表、配置文件 schema、子命令表分别看一遍**；三者是三个面，`--help` 只答得了第一个 → §3.12
+- **一个「读外部进程输出」的 parser，格式必须从**真实输出**抄，不能从记忆里描述** —— `parse_tab_line` 的 doc 写着「Playwright CLI 格式 `Tab N: URL`」，那个格式**没有任何 driver 发过**（真格式 `- 1: (current) [Title](url)`）⇒ 每一行解析成 `None`，而后果不是"少了点信息"：`active_tab_id` 恒 `None` ⇒ tab id 回退哨兵、`post_nav` 的落点 SSRF 复检**对空列表审计通过**。判据：parser 的每种支持格式旁边要能指出它是从哪次真实输出抄来的 → §3.12
+- **凡「无 X 降级」的测试，先问它的绿是代码属性还是机器属性** —— 那批断言在浏览器不可达时全绿，`open` 一修好，其中一个当场把真 Chrome 开到公网（而它的慢路径还会**联网装运行时**）。密封点要落在**唯一那个伸手到进程外的边界**（这里是 `resolve_binary` 的 `cfg(test)` 早返回），不是逐个改测试——后者会漏，且下一个新测试默认不密封。⚠️ 两条配套：密封**本身要有断言**（否则它只是没被证伪过），且要说清**它覆盖哪几种块**（`cfg(test)` 只覆盖 `--lib`，`tests/` 集成测试不在其内）→ §3.12
 - **「动态路由」是三件事，且第三件不在 `src/routing/`** —— 工具选择（prompt，禁止意图分类）/ 消息→agent（`src/routing/`）/ 请求→provider（`src/providers/route_policy.rs`）。业界那些"路由大脑"整类违 R7，**不移植** → §3.6
 - **判断"这是主槽吗"只认 `SlotKind`，绝不能拿 `tier == Unknown` 当代理**（两个方向都错过）；**装饰器少一层委托，整条链的能力就没了**（门是 `AiProvider::supports_streaming()`）；**「这一轮用哪个模型」只有一个决定点** `runner_impl.rs::effective_model_directive`，**别让新来源止步于 UI** → §3.6
 - **状态码判断一律走 `llm_retry::has_status_code`** —— `contains("401")` 会命中 `40123` 这种 token 计数 → §3.6
@@ -523,6 +527,7 @@
 | `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 §6.9 |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
+| `src/browser/` `src/builtin_tools/browser_tools/` | §3.12 · 判据清单 §9（外部 CLI 适配器四条）· 真机 QA `qa/browser_managed/` |
 | `src/mcp/` | §5.20（dual-era 协议） |
 | `src/hub/` | [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) · §5.21 |
 | `src/loop_graph/` `src/workflow/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) · §4.12 |
