@@ -22,6 +22,12 @@ pub struct MissingRequirements {
     pub bins: Vec<String>,
     pub env: Vec<String>,
     pub config: Vec<String>,
+    /// OSes the skill declares support for but the current platform isn't in.
+    /// `non-empty` means `eligible: false` purely due to OS mismatch (no
+    /// install path can fix it — distinct from `bins` / `env` / `config`,
+    /// which the user can resolve).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub os: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,7 +91,16 @@ impl SkillStatusEntry {
                         }
                         IneligibilityReason::MissingEnv(env) => missing.env.push(env.clone()),
                         IneligibilityReason::MissingConfig(cfg) => missing.config.push(cfg.clone()),
-                        _ => {}
+                        IneligibilityReason::OsNotSupported(os) => {
+                            missing.os.push(os.as_str().to_string());
+                        }
+                        IneligibilityReason::Disabled => {
+                            // Surfaced by the `disabled` field (set just below
+                            // when `entry_config.enabled == Some(false)`); the
+                            // Disabled reason covers the manifest-level
+                            // `eligibility.enabled: false` case which has no
+                            // entry_config counterpart.
+                        }
                     }
                 }
                 false
