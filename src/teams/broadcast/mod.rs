@@ -666,6 +666,26 @@ impl GroupChatBroadcaster {
             return;
         };
 
+        // The third teams face of the agent axis (the other two are
+        // `team_delegate` and the dispatcher, both funnelling through
+        // `dispatcher::runner::execute_member_task`). Naming a restricted agent
+        // as a group-chat roster member ran it with its `tool_permissions`
+        // regardless of whether the speaker may select that agent — the same
+        // two-step bypass, on a face that is member-open by design.
+        //
+        // `ambient_actor()` because a fan-out member always executes inside a
+        // spawn (`CALLER_USER` is dead there) and, in a project room, the
+        // speaker is not the owner. `None` — the background dispatcher, cron,
+        // tests — is unrestricted, like every sibling predicate.
+        if let Some(allowed) = self.ctx.agent_registry().get_allowed_users(&agent_id).await {
+            let actor = crate::gateway::visibility::ambient_actor();
+            if !crate::config::types::agent_admits_user(allowed.as_deref(), actor.as_deref()) {
+                tracing::warn!(team_id = %team_id, agent_id = %agent_id, actor = ?actor,
+                    "group-chat: target agent's allowed_users denies this speaker; skipped");
+                return;
+            }
+        }
+
         // Pull latest transcript (including the just-arrived message) and format it
         let history = self
             .msg_store
