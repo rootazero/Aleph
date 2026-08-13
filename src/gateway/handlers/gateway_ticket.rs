@@ -22,7 +22,7 @@ use std::net::IpAddr;
 
 use serde_json::json;
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::DeviceTokenManager;
 use crate::sync_primitives::Arc;
 
@@ -128,11 +128,20 @@ pub fn pairing_urls(hosts: &[String], port: u16, tls_enabled: bool, ticket: &str
 /// Request params (all optional):
 /// - `ttl_seconds`: ticket lifetime in seconds (default 300, min 60)
 /// - `user_id`: bind the ticket to a user — the device that exchanges it
-///   inherits the binding. Admin-only surface; P0 does not validate that the
-///   user exists (a bad id just produces a device bound to a nonexistent
-///   user, which the fail-closed `connect` identity resolution already walls
-///   off). Omit for an unbound ticket (defaults the paired device to the
-///   owner).
+///   inherits the binding. Validated here (exists AND active), mirroring
+///   `aleph-server pair --user`, because the two id-binding producers must ask
+///   the same question. The paragraph that used to stand here argued
+///   validation was unnecessary since `connect` walls a dangling binding off
+///   anyway; that is the argument `pair.rs` explicitly rejects — an invitation
+///   that mints, prints a URL, and silently cannot work is worse than a
+///   refusal at the point of the typo, where the operator is still looking.
+///
+///   Omit for an UNBOUND ticket. Note what unbound means: the redeeming
+///   device defaults to the owner, i.e. whoever scans it becomes the operator.
+///   That is the right default for pairing your own phone and the wrong one
+///   for inviting a colleague, which is why `pair --user` prints a warning and
+///   why the Panel now offers a principal picker instead of only sending
+///   `{}`.
 ///
 /// Response:
 /// - `ticket`: the bootstrap ticket string (`aleph-bt-<uuid>`)
@@ -153,6 +162,47 @@ pub async fn handle_ticket_create(
         .as_ref()
         .and_then(|p| p.get("user_id").and_then(serde_json::Value::as_str))
         .map(String::from);
+
+    // Same question `pair --user` asks, against the same table `connect`
+    // resolves against — reached through the manager's own store rather than a
+    // second `SecurityStore` handle on this context, so the two cannot drift.
+    //
+    // Active-only for the same reason `channel.pairing.approve` is: a
+    // deactivated principal is walled everywhere else, and a ticket bound to
+    // them mints, prints a URL, pairs the phone, and then refuses every frame
+    // with nothing on either end explaining why.
+    if let Some(ref uid) = user_id {
+        match ctx.device_token_mgr.store().get_user(uid) {
+            Ok(Some(u)) if u.status == crate::gateway::security::store::UserStatus::Active => {}
+            Ok(Some(_)) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!(
+                        "user {uid} is deactivated — a ticket bound to a walled principal \
+                         pairs successfully and then refuses every frame"
+                    ),
+                );
+            }
+            Ok(None) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!(
+                        "no such user: {uid} — a ticket bound to a dangling id gives the \
+                         device an identity nobody can grant, revoke or list"
+                    ),
+                );
+            }
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to resolve user {uid}: {e}"),
+                );
+            }
+        }
+    }
 
     // Clamp caller-supplied ttl to a sane bounded range before the *1000 (raw
     // `s as i64 * 1000` overflows i64 for huge values) — and pass the SAME clamped

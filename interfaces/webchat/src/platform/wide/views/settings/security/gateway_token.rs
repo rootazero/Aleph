@@ -143,6 +143,13 @@ pub fn GatewayTokenSection() -> impl IntoView {
     let pairing_urls = RwSignal::new(Vec::<String>::new());
     let pairing_expires_at = RwSignal::new(Option::<i64>::None);
     let pairing_error = RwSignal::new(Option::<String>::None);
+    // Which principal a generated ticket binds to. Empty = unbound, which
+    // means the redeeming device becomes the OWNER — the right default for
+    // pairing your own phone and the wrong one for inviting a colleague. This
+    // page had no way to express the difference and always sent `{}`.
+    let pairing_user_id = RwSignal::new(String::new());
+    let dir = expect_context::<crate::state::user_directory::UserDirectoryState>();
+    dir.ensure_loaded(state);
 
     // Paired-device inventory state.
     let devices = RwSignal::new(Vec::<PairedDevice>::new());
@@ -278,7 +285,16 @@ pub fn GatewayTokenSection() -> impl IntoView {
 
     let generate_pairing_link = move |_| {
         spawn_local(async move {
-            match state.rpc_call("gateway.ticket.create", json!({})).await {
+            // The binding is the difference between "pair my own phone" and
+            // "invite a colleague". An UNBOUND ticket defaults the redeeming
+            // device to the OWNER — `pair --user` shouts about that in capitals
+            // and this page used to send `json!({})` and say nothing.
+            let mut params = json!({});
+            let bind_to = pairing_user_id.get_untracked();
+            if !bind_to.is_empty() {
+                params["user_id"] = json!(bind_to);
+            }
+            match state.rpc_call("gateway.ticket.create", params).await {
                 Ok(v) => {
                     pairing_ticket.set(
                         v.get("ticket")
@@ -346,6 +362,30 @@ pub fn GatewayTokenSection() -> impl IntoView {
                 {move || pairing_error.get().map(|e| view! {
                     <div class="p-2 mb-3 bg-danger-subtle text-danger rounded text-sm">{e}</div>
                 })}
+                // Who this ticket is for. Rendered only when a second
+                // principal exists — on a single-user install the control has
+                // exactly one option and would be pure noise. Same gating
+                // shape as the channel-pairing picker, for the same reason.
+                {move || {
+                    let people = dir.selectable();
+                    (people.len() > 1).then(|| view! {
+                        <div class="flex items-center gap-2 mb-3">
+                            <label class="text-xs text-text-secondary whitespace-nowrap">
+                                {t!(i18n, common.gateway_pairing_for)}
+                            </label>
+                            <select
+                                class="flex-1 px-2 py-1.5 text-xs bg-surface border border-border rounded focus:outline-none focus:border-primary text-text-primary"
+                                prop:value=move || pairing_user_id.get()
+                                on:change=move |ev| pairing_user_id.set(event_target_value(&ev))
+                            >
+                                <option value="">{t!(i18n, common.gateway_pairing_for_owner)}</option>
+                                {people.into_iter().map(|(uid, name)| view! {
+                                    <option value=uid.clone()>{name}</option>
+                                }).collect_view()}
+                            </select>
+                        </div>
+                    })
+                }}
                 <button
                     class="text-xs px-3 py-2 rounded border border-border hover:bg-surface mb-3"
                     on:click=generate_pairing_link

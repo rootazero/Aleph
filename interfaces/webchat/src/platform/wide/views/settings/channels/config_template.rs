@@ -764,10 +764,29 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                         // cannot describe. Saying so beats the previous `if
                         // let`, which left the list at its last value and let
                         // the empty state speak for the server.
-                        Err(e) => approved_error.set(Some(format!(
-                            "{}{e}",
-                            t_string!(i18n, channel_config.pairing_approved_load_failed)
-                        ))),
+                        //
+                        // Routed through the same classifier as the RPC error
+                        // below, not `format!`: this arm is a decode failure so
+                        // the wrapper is a no-op here, and that is exactly why
+                        // the rule has no allowlist — an exception would be a
+                        // second answer to "is this a refusal", maintained by
+                        // hand, on the surface where getting it wrong shows a
+                        // member a raw protocol string.
+                        Err(e) => approved_error.set(Some(
+                            crate::components::admin_refusal::settings_load_error(
+                                i18n,
+                                &e.to_string(),
+                                |e| {
+                                    format!(
+                                        "{}{e}",
+                                        t_string!(
+                                            i18n,
+                                            channel_config.pairing_approved_load_failed
+                                        )
+                                    )
+                                },
+                            ),
+                        )),
                     }
                 }
                 // A refused read is not an empty list. This arm used to be
