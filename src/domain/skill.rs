@@ -144,6 +144,24 @@ pub enum Os {
     Windows,
 }
 
+impl fmt::Display for Os {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Os {
+    /// Canonical lowercase name matching the serde rename rule.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Darwin => "darwin",
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for Os {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

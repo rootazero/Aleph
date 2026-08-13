@@ -18,7 +18,7 @@ use tracing::{info, warn};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
-use crate::skill::{install_allowed, scan_skill_directory, ThreatLevel, TrustLevel};
+use crate::skill::{install_allowed, scan_content, scan_skill_directory, ThreatLevel, TrustLevel};
 use crate::tools::markdown_skill::{load_skills_from_dir, MarkdownCliTool};
 use crate::tools::AlephToolServer;
 
