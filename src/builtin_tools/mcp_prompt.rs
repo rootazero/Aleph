@@ -138,7 +138,7 @@ impl AlephToolDyn for McpGetPromptTool {
                         }
                     };
                     PromptOutputMessage {
-                        role: m.role,
+                        role: m.role.as_str().to_string(),
                         content,
                     }
                 })

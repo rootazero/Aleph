@@ -15,7 +15,23 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/plan_handoff/run.sh handoff     # §3.16 refuse -> card -> approve -> unlock
 ./qa/plan_handoff/run.sh deny        # a declined plan leaves the floor engaged
 ./qa/plan_handoff/run.sh floor       # explicit `allow` + `full` tier still lose
+
+./qa/browser_managed/run.sh open     # managed driver actually reaches a browser
+./qa/browser_managed/run.sh ambient  # a planted cwd cli.config.json is ignored
+./qa/browser_managed/run.sh headed   # headless=false really launches headed
 ```
+
+`browser_managed` is the one scenario that needs **no mock provider**: it drives
+`tools.invoke`, which runs a tool without an agent turn, so nothing in the run
+needs a model. It does need a real `playwright-cli` (pinned via config so the
+run never triggers the network install path) and a browser it can launch —
+which is the entire point. It exists because four defects survived four rounds
+of unit tests: the managed driver, which is the DEFAULT driver, never issued
+`playwright-cli open`, so every tool answered "the browser is not open";
+`--headed` was prepended to `tab-new`, which rejects it outright; no line of a
+real `tab-list` parsed, so the post-navigation SSRF audit ran over an empty
+listing; and the PDF engine drove the same never-opened session. Every one of
+them is invisible to a fake backend.
 
 Knobs (all optional): `KEEP=1` keeps the scratch dir, `SKIP_BUILD=1` reuses the
 binary already at `target/debug/aleph-server`, `QA_ROOT=<dir>` fixes the scratch
@@ -86,6 +102,38 @@ worktree you deleted (`build.rs` bakes `{manifest_dir}` into link args, and
 each feature combination caches its own fingerprint). Cure: `touch build.rs`.
 Note that `cargo build --bin aleph-server` succeeding does **not** mean
 `--features test-helpers` will link — different features, different cache entry.
+
+**A config section name copied off a unit test is not the section name.**
+`config/types/general.rs` has a doc test that deserializes `[browser.policy]`
+straight into `GeneralConfig`, but a *generated* config nests everything under
+`[general]`. The first `browser_managed` patcher wrote `[browser.*]`, which is a
+table nothing reads — so `block_private` stayed `true` and the browser was
+refused the fixture's own page on 127.0.0.1. Read a generated config, not a
+unit test's fixture.
+
+**An oracle that shells out needs the real PATH.** `playwright-cli` is a node
+script. The first version of the fixture's `playwright-cli list` oracle passed a
+hand-made `PATH` without `node`, so it returned `env: node: No such file or
+directory` — which does not contain `status: open` and therefore *passed* the
+"no session is open" check. An oracle that cannot run is not an oracle that
+says no.
+
+**A control group can pass for the wrong reason.** The same fixture's control
+("a non-launching verb must not open a browser") sent `{"action": "goto", "url":
+...}` when `NavigateAction` is externally tagged (`{"goto": {"url": ...}}`). The
+call was refused — for failing deserialization — and the control went green
+having proven nothing about browsers. Assert the *reason* a control was
+refused, not just that it was.
+
+**An absence claim is a vacuous pass unless it is paired with presence.**
+"the server's cwd has no `.playwright-cli/` litter" is also satisfied by a CLI
+that wrote nothing at all, i.e. by a browser that never rendered. The claim only
+means something next to "…and the snapshots did land under `~/.aleph` instead".
+
+**A detail string computed before the check will lie on a pass.** The same
+assertion first printed `[PASS] … — found /…/.playwright-cli` because the
+detail was formatted unconditionally. A reader scanning the log cannot tell that
+apart from a failure — build the detail from what was actually observed.
 
 **Server logs are not on stdout when stdout is not a TTY.** They go to
 `$ALEPH_HOME/logs/aleph-server.log.<date>`; the redirected stdout holds only the

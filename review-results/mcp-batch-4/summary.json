@@ -1,0 +1,104 @@
+{
+  "batch": "mcp-batch-4",
+  "title": "Manager: actor, handle, config, types, secret_resolver",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-mcp-audit",
+  "report": "review-results/mcp-batch-4/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 2,
+    "medium": 4,
+    "low": 3,
+    "total": 9
+  },
+  "by_category": {
+    "security": 0,
+    "logic": 6,
+    "architecture": 1,
+    "quality": 2
+  },
+  "files_reviewed": [
+    { "path": "src/mcp/manager/mod.rs", "loc": 65, "findings": 0 },
+    { "path": "src/mcp/manager/actor.rs", "loc": 1309, "findings": 3 },
+    { "path": "src/mcp/manager/handle.rs", "loc": 505, "findings": 0 },
+    { "path": "src/mcp/manager/config.rs", "loc": 534, "findings": 1 },
+    { "path": "src/mcp/manager/types.rs", "loc": 912, "findings": 2 },
+    { "path": "src/mcp/manager/secret_resolver.rs", "loc": 123, "findings": 1 }
+  ],
+  "total_loc": 3448,
+  "findings": [
+    {
+      "id": "B4-01",
+      "severity": "High",
+      "category": "Logic",
+      "file": "src/mcp/manager/actor.rs",
+      "line": 172,
+      "title": "Shutdown races the in-flight health pass; self-sent ServerListChanged events are lost"
+    },
+    {
+      "id": "B4-02",
+      "severity": "High",
+      "category": "Logic",
+      "file": "src/mcp/manager/actor.rs",
+      "line": 194,
+      "title": "Bridge resync is O(n) on every broadcast lag; lag + connect storm walks every server's list_tools"
+    },
+    {
+      "id": "B4-03",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/manager/actor.rs",
+      "line": 582,
+      "title": "Auto-installed notification handler captures the actor's own cmd_tx; the handler outlives the actor"
+    },
+    {
+      "id": "B4-04",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/manager/types.rs",
+      "line": 364,
+      "title": "ServerHealth::should_restart uses strict > on window_seconds; boundary == does not reset"
+    },
+    {
+      "id": "B4-05",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/manager/actor.rs",
+      "line": 534,
+      "title": "stop_server_internal calls client's stop_all() even though McpClient is per-server; sampling callback torn down"
+    },
+    {
+      "id": "B4-06",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/manager/config.rs",
+      "line": 271,
+      "title": "save() does not fsync the temp file before rename; durability gap on power loss"
+    },
+    {
+      "id": "B4-07",
+      "severity": "Low",
+      "category": "Logic",
+      "file": "src/mcp/manager/actor.rs",
+      "line": 732,
+      "title": "aggregate_from_healthy reads client list_tools after a health snapshot; not atomic with the health check"
+    },
+    {
+      "id": "B4-08",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/manager/secret_resolver.rs",
+      "line": 42,
+      "title": "resolve_secret_map does not validate the resolved value (e.g. multi-line for HTTP headers)"
+    },
+    {
+      "id": "B4-09",
+      "severity": "Low",
+      "category": "Logic",
+      "file": "src/mcp/manager/config.rs",
+      "line": 144,
+      "title": "expand_env_var is one-pass; recursive ${VAR} references are not re-expanded"
+    }
+  ]
+}

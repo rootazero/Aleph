@@ -96,10 +96,18 @@ fn to_unified(msg: &crate::mcp::jsonrpc::mcp::SamplingMessage) -> UnifiedMessage
         SamplingContent::Image { mime_type, .. } => {
             format!("[unsupported {mime_type} image omitted]")
         }
+        // Audio was added in spec revision 2025-03-26; degrade to a textual
+        // placeholder until the provider advertises audio_capability.
+        SamplingContent::Audio { mime_type, .. } => {
+            format!("[unsupported {mime_type} audio omitted]")
+        }
     };
     match msg.role {
         PromptRole::Assistant => UnifiedMessage::assistant(text),
-        PromptRole::User | PromptRole::System => UnifiedMessage::user(text),
+        // Tool-role messages (added in later revisions) are surfaced as
+        // user turns so the model sees their content; the alternative is
+        // a silent drop.
+        PromptRole::User | PromptRole::System | PromptRole::Tool => UnifiedMessage::user(text),
     }
 }
 

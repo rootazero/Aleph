@@ -14,6 +14,7 @@ use tracing::{debug, info};
 use super::args::{ContentFormat, PdfGenerateArgs, PdfGenerateOutput};
 use super::styles;
 use crate::browser::playwright_cli::PlaywrightCliDriver;
+use crate::browser::playwright_launch::{LaunchPolicy, SessionLaunch};
 use crate::browser::profile::PlaywrightCliConfig;
 use crate::builtin_tools::error::ToolError;
 
@@ -93,8 +94,19 @@ pub async fn generate(
 
     let driver = PlaywrightCliDriver::new(PlaywrightCliConfig::default());
     let session = "aleph-pdf-gen";
+    // PDF rendering wants no window; the launch is otherwise unconfigured.
+    // Passing it is what lets the first call open the browser at all — until
+    // the driver learned to do that, `goto` on this never-opened session was
+    // answered with "the browser is not open, please run open first", i.e.
+    // this engine could never have produced a PDF.
+    let launch = SessionLaunch::headless_default();
     driver
-        .run(session, &["goto", &file_url], Duration::from_secs(30))
+        .run(
+            session,
+            LaunchPolicy::OpenIfNeeded(&launch),
+            &["goto", &file_url],
+            Duration::from_secs(30),
+        )
         .await
         .map_err(|e| ToolError::Execution(format!("goto: {e}")))?;
 
@@ -102,6 +114,9 @@ pub async fn generate(
     driver
         .run(
             session,
+            // The `goto` above already opened it; this call only needs the
+            // page that is now there.
+            LaunchPolicy::Refuse,
             &["pdf", "--filename", &out_str],
             Duration::from_secs(60),
         )

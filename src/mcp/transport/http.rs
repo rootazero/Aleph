@@ -47,6 +47,22 @@ use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SafeFetchResponse, Ssr
 /// Header carrying the Streamable HTTP session identifier.
 const SESSION_HEADER: &str = "Mcp-Session-Id";
 
+/// Largest response body the HTTP transport will buffer for JSON parsing.
+///
+/// A hostile MCP server that returns a 2 GB body with `Content-Type:
+/// application/json` would otherwise be fully read into memory before the
+/// transport saw a single byte. The cap is a defence-in-depth bound; the
+/// upstream `reqwest`/`tokio` read also still has the per-request timeout.
+const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
+/// Largest single `data:` line `parse_sse_response` will buffer.
+///
+/// The SSE walker builds a `String` per event from the wire's `data: …`
+/// lines. A server that emits a single unbounded line (rather than many
+/// short ones) can otherwise OOM the daemon before the JSON parser sees a
+/// byte. Picked well above the largest reasonable Streamable HTTP response.
+const MAX_SSE_DATA_LINE_BYTES: usize = 1024 * 1024;
+
 /// HTTP transport configuration
 #[derive(Debug, Clone)]
 pub struct HttpTransportConfig {
@@ -273,11 +289,29 @@ impl HttpTransport {
 /// stream; a stray `{jsonrpc, method, ...}` frame would still satisfy
 /// `JsonRpcResponse`'s optional fields, so a frame only counts when it
 /// carries our id AND a `result`/`error` member.
+///
+/// A single `data:` line is capped at [`MAX_SSE_DATA_LINE_BYTES`]; a server
+/// that emits a longer line is treated as a stream that will never yield the
+/// expected response and the parse returns `None`. The wire-level
+/// `MAX_RESPONSE_BYTES` cap on the body is the outer bound; this is the
+/// inner one that prevents a single hostile event from allocating without
+/// bound.
 fn parse_sse_response(body: &str, expected_id: u64) -> Option<JsonRpcResponse> {
     let mut data = String::new();
     let mut found: Option<JsonRpcResponse> = None;
+    let mut overflow: bool = false;
 
-    fn flush(data: &mut String, found: &mut Option<JsonRpcResponse>, expected_id: u64) {
+    fn flush(
+        data: &mut String,
+        found: &mut Option<JsonRpcResponse>,
+        expected_id: u64,
+        overflow: &mut bool,
+    ) {
+        if *overflow {
+            // Don't bother parsing — we already know the event is unusable.
+            data.clear();
+            return;
+        }
         if data.is_empty() {
             return;
         }
@@ -294,16 +328,24 @@ fn parse_sse_response(body: &str, expected_id: u64) -> Option<JsonRpcResponse> {
     for line in body.lines() {
         let line = line.strip_suffix('\r').unwrap_or(line);
         if line.is_empty() {
-            flush(&mut data, &mut found, expected_id);
+            flush(&mut data, &mut found, expected_id, &mut overflow);
         } else if let Some(rest) = line.strip_prefix("data:") {
-            if !data.is_empty() {
-                data.push('\n');
+            if !overflow {
+                let piece = rest.strip_prefix(' ').unwrap_or(rest);
+                if data.len() + piece.len() > MAX_SSE_DATA_LINE_BYTES {
+                    overflow = true;
+                    data.clear();
+                } else {
+                    if !data.is_empty() {
+                        data.push('\n');
+                    }
+                    data.push_str(piece);
+                }
             }
-            data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
         }
         // Other SSE fields (event:, id:, retry:, comments) carry no payload.
     }
-    flush(&mut data, &mut found, expected_id);
+    flush(&mut data, &mut found, expected_id, &mut overflow);
     found
 }
 
@@ -396,6 +438,15 @@ impl McpTransport for HttpTransport {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/event-stream"));
+
+        if response.body.len() > MAX_RESPONSE_BYTES {
+            return Err(AlephError::IoError(format!(
+                "HTTP response from '{}' exceeds {} MB cap (was {} bytes); refusing to buffer",
+                self.server_name,
+                MAX_RESPONSE_BYTES / (1024 * 1024),
+                response.body.len()
+            )));
+        }
 
         let text = String::from_utf8(response.body)
             .map_err(|e| AlephError::IoError(format!("Failed to read response: {e}")))?;
@@ -729,5 +780,15 @@ mod tests {
             "\n",
         );
         assert!(parse_sse_response(body, 9).is_none());
+    }
+
+    #[test]
+    fn parse_sse_caps_a_single_data_line() {
+        // A single data: line longer than the per-line cap is treated as a
+        // stream that will never yield the expected response. The line
+        // overflows the bound; the rest of the stream is ignored.
+        let huge = "x".repeat(MAX_SSE_DATA_LINE_BYTES + 1024);
+        let body = format!("data: {huge}\n\n");
+        assert!(parse_sse_response(&body, 1).is_none());
     }
 }

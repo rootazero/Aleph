@@ -9,7 +9,18 @@
 //! The previous incarnation of this file hard-coded nine presets and went
 //! stale every time the backend grew (Round-2 / Round-3 added 23 more that
 //! never surfaced in the UI). Single source of truth fixes that drift.
+//!
+//! # Why the wire shape is no longer declared here
+//!
+//! It used to be, and it was wrong: the server has always sent `signup_url`
+//! and the local DTO never declared it, so serde dropped the link on every one
+//! of the 44 presets. Nothing failed, nothing logged — the page simply never
+//! had the one actionable thing an unconfigured row can offer. The shape now
+//! comes from [`aleph_protocol::providers::GenerationPresetRow`], which the
+//! server also *builds* its response from, so the same omission is a compile
+//! error on both sides.
 use crate::generation::GenerationType;
+use aleph_protocol::providers::{GenerationPresetRow, Searchable};
 use serde::{Deserialize, Serialize};
 
 /// Catalog entry rendered as a card in the Generation Providers settings view.
@@ -25,47 +36,50 @@ pub struct PresetProvider {
     pub description: String,
     pub base_url: Option<String>,
     pub homepage: Option<String>,
+    /// Where to get an API key. Rendered on the unconfigured setup panel, which
+    /// is the only place it can be acted on.
+    pub signup_url: Option<String>,
 }
 
-/// Wire-shape returned by `generation_providers.list_presets`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct PresetProviderDto {
-    pub id: String,
-    pub provider_type: String,
-    pub default_model: String,
-    #[serde(default)]
-    pub base_url: Option<String>,
-    pub display_name: String,
-    pub modalities: Vec<String>,
-    #[serde(default)]
-    pub homepage: Option<String>,
-    #[serde(default)]
-    pub notes: Option<String>,
+/// The preset grid ranks through the same matcher as the chat catalogue.
+///
+/// `search_aliases` is deliberately left at its default: generation ids carry
+/// no vendor nicknames, and claiming an empty alias set is the honest answer
+/// rather than a placeholder for one.
+impl Searchable for PresetProvider {
+    fn search_id(&self) -> &str {
+        &self.id
+    }
+    fn search_display_name(&self) -> &str {
+        &self.name
+    }
 }
 
-impl PresetProviderDto {
-    /// Convert a server DTO into a UI-ready preset, synthesising icon/color
-    /// from `provider_type` (curated brand colors) with modality fallback.
-    #[must_use]
-    pub fn into_preset(self) -> PresetProvider {
-        let capabilities = self
-            .modalities
-            .iter()
-            .filter_map(|m| modality_to_generation_type(m))
-            .collect::<Vec<_>>();
-        let primary = capabilities.first().copied();
-        PresetProvider {
-            icon: icon_for(&self.provider_type, primary),
-            color: color_for(&self.provider_type, primary),
-            description: self.notes.unwrap_or_default(),
-            id: self.id,
-            name: self.display_name,
-            provider_type: self.provider_type,
-            capabilities,
-            default_model: self.default_model,
-            base_url: self.base_url,
-            homepage: self.homepage,
-        }
+/// Convert a wire row into a UI-ready preset, synthesising icon/color from
+/// `provider_type` (curated brand colors) with modality fallback.
+///
+/// The synthesis stays here on purpose: which emoji and which hex a vendor gets
+/// is a pure presentation choice the core has no business knowing.
+#[must_use]
+pub fn into_preset(row: GenerationPresetRow) -> PresetProvider {
+    let capabilities = row
+        .modalities
+        .iter()
+        .filter_map(|m| modality_to_generation_type(m))
+        .collect::<Vec<_>>();
+    let primary = capabilities.first().copied();
+    PresetProvider {
+        icon: icon_for(&row.provider_type, primary),
+        color: color_for(&row.provider_type, primary),
+        description: row.notes.unwrap_or_default(),
+        id: row.id,
+        name: row.display_name,
+        provider_type: row.provider_type,
+        capabilities,
+        default_model: row.default_model,
+        base_url: row.base_url,
+        homepage: row.homepage,
+        signup_url: row.signup_url,
     }
 }
 
@@ -77,12 +91,9 @@ pub struct PresetCatalog {
 }
 
 impl PresetCatalog {
-    pub fn from_dtos(dtos: Vec<PresetProviderDto>) -> Self {
+    pub fn from_rows(rows: Vec<GenerationPresetRow>) -> Self {
         Self {
-            presets: dtos
-                .into_iter()
-                .map(PresetProviderDto::into_preset)
-                .collect(),
+            presets: rows.into_iter().map(into_preset).collect(),
         }
     }
 
@@ -98,6 +109,17 @@ impl PresetCatalog {
             .filter(|p| p.capabilities.contains(&category))
             .cloned()
             .collect()
+    }
+
+    /// One category's presets, narrowed to a search query.
+    ///
+    /// Category first, then the shared ranker — so a query never pulls a video
+    /// preset into the image tab, and the rows that survive come back best
+    /// match first. An empty query is a no-op, which is what makes this safe to
+    /// call unconditionally instead of branching on "is the box empty".
+    #[must_use]
+    pub fn by_category_matching(&self, category: GenerationType, query: &str) -> Vec<PresetProvider> {
+        aleph_protocol::providers::filter_rows(&self.by_category(category), query)
     }
 
     #[must_use]

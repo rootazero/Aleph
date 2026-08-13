@@ -1,0 +1,102 @@
+{
+  "batch": "mcp-batch-3",
+  "title": "External server + Client",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-mcp-audit",
+  "report": "review-results/mcp-batch-3/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 2,
+    "medium": 4,
+    "low": 3,
+    "total": 9
+  },
+  "by_category": {
+    "security": 0,
+    "logic": 6,
+    "architecture": 0,
+    "quality": 3
+  },
+  "files_reviewed": [
+    { "path": "src/mcp/external/mod.rs", "loc": 9, "findings": 0 },
+    { "path": "src/mcp/external/runtime.rs", "loc": 267, "findings": 1 },
+    { "path": "src/mcp/external/connection.rs", "loc": 2136, "findings": 5 },
+    { "path": "src/mcp/client.rs", "loc": 758, "findings": 3 }
+  ],
+  "total_loc": 3170,
+  "findings": [
+    {
+      "id": "B3-01",
+      "severity": "High",
+      "category": "Logic",
+      "file": "src/mcp/external/connection.rs",
+      "line": 213,
+      "title": "close() does not wait for the stdio reader task to drain; in-flight RPC bodies leak past ServerStopped"
+    },
+    {
+      "id": "B3-02",
+      "severity": "High",
+      "category": "Logic",
+      "file": "src/mcp/external/connection.rs",
+      "line": 209,
+      "title": "connect() timeout covers the whole flow, but a single hanging list-method inside the handshake suffers the full 300s"
+    },
+    {
+      "id": "B3-03",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/external/connection.rs",
+      "line": 921,
+      "title": "Era probe does not validate response.id matches request.id"
+    },
+    {
+      "id": "B3-04",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/client.rs",
+      "line": 308,
+      "title": "call_tool fallback scans every server's tool list — O(n*m) per call"
+    },
+    {
+      "id": "B3-05",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/external/connection.rs",
+      "line": 679,
+      "title": "Header extraction order is correct (raw schema before normalize); order is undocumented and brittle to refactor"
+    },
+    {
+      "id": "B3-06",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/external/connection.rs",
+      "line": 1179,
+      "title": "ping() uses fixed dialect; a server that flips between modern and legacy mid-connection silently dies"
+    },
+    {
+      "id": "B3-07",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/external/connection.rs",
+      "line": 773,
+      "title": "strip_server_prefix allocates a String per call"
+    },
+    {
+      "id": "B3-08",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/external/runtime.rs",
+      "line": 122,
+      "title": "check_runtime forks twice (--version + which) per availability probe"
+    },
+    {
+      "id": "B3-09",
+      "severity": "Low",
+      "category": "Logic",
+      "file": "src/mcp/client.rs",
+      "line": 466,
+      "title": "find_server_by_prefix is degenerate on empty server ids"
+    }
+  ]
+}

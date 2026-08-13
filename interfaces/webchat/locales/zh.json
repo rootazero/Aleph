@@ -830,7 +830,10 @@
       "smart_routing": "智能路由",
       "smart_routing_hint": "自动将请求路由到最合适的提供商",
       "current_suffix": "（当前）",
-      "select_provider": "选择提供商以查看详情"
+      "select_provider": "选择提供商以查看详情",
+      "search_placeholder": "搜索生成供应商",
+      "no_search_match": "没有匹配的供应商。",
+      "get_a_key": "获取 API 密钥"
     },
     "memory": {
       "title": "记忆与知识",

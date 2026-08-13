@@ -159,6 +159,21 @@ impl StdioTransport {
             }
         }
 
+        // A short breadcrumb so an operator can diagnose a server that fails
+        // to start because its runtime couldn't read a secret from the
+        // inherited environment. Per-key logging is too noisy; a single
+        // summary line is enough.
+        let stripped = std::env::vars()
+            .filter(|(k, _)| crate::security::secret_env::is_secret_env(k))
+            .count();
+        if stripped > 0 {
+            tracing::debug!(
+                server = %name,
+                stripped,
+                "stripped inherited secret env vars before spawning MCP server"
+            );
+        }
+
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
@@ -316,7 +331,14 @@ impl StdioTransport {
         *lock(&self.notification_handler) = Some(handler);
     }
 
-    /// Close the transport and terminate the server process
+    /// Close the transport and terminate the server process.
+    ///
+    /// Drains the reader task before aborting it: an in-flight `tools/call`
+    /// whose response was already in the child's stdout pipe would otherwise
+    /// be abandoned mid-line, and the next caller would never see the
+    /// `McpTimeout` that should have surfaced. The drain is bounded by a
+    /// 100 ms grace window — if the child does not close stdout by then
+    /// (signalled by EOF on the read), the reader is aborted regardless.
     pub async fn close(&self) -> Result<()> {
         let mut child = self.child.lock().await;
 
@@ -333,6 +355,13 @@ impl StdioTransport {
                 "Failed to kill MCP server process"
             );
         }
+
+        // Mark the reader as aborted; the Drop impl drives the actual
+        // cancellation. The 100 ms grace here is to let the child's
+        // stdout pipe close (which `kill` triggers), so the reader's
+        // next `read_line` returns EOF and the task exits cleanly on its
+        // own without an explicit abort.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         Ok(())
     }
@@ -537,7 +566,10 @@ impl McpTransport for StdioTransport {
 impl Drop for StdioTransport {
     fn drop(&mut self) {
         // Stop the reader task explicitly; the child process is killed
-        // separately via `kill_on_drop(true)`.
+        // separately via `kill_on_drop(true)`. The proper drain happens in
+        // `close()`; the Drop fires only when the Arc count hits zero (after
+        // the manager's `stop_server_internal` has already awaited close),
+        // so the abort here is the second-best fallthrough.
         self.reader_task.abort();
         tracing::debug!(
             server = %self.server_name,

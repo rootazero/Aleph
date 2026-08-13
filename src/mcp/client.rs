@@ -55,6 +55,11 @@ pub struct McpClient {
     /// [`Self::list_tools`] so registration, aggregation, and counts all see
     /// the same filtered set.
     tool_filter: Option<McpToolFilter>,
+    /// O(1) qualified-name → server-id index for `call_tool`'s fallback
+    /// path. Rebuilt whenever a server's tool list refreshes. Without it,
+    /// `call_tool` falls back to `O(n*m)` over servers × tools — fine on a
+    /// 2-server setup, ruinous on a 20-server × 30-tool deployment.
+    tool_name_index: tokio::sync::RwLock<HashMap<String, String>>,
 }
 
 impl McpClient {
@@ -65,6 +70,7 @@ impl McpClient {
             external_servers: tokio::sync::RwLock::new(HashMap::new()),
             sampling_handler: Arc::new(SamplingHandler::new()),
             tool_filter: None,
+            tool_name_index: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
@@ -180,6 +186,12 @@ impl McpClient {
             }
             tools.extend(conn_tools);
         }
+
+        // Rebuild the qualified-name → server-id index off the same
+        // observed sets. Keep it close to the list call so the O(1) lookup
+        // never gets stale across reconnects.
+        self.rebuild_tool_name_index().await;
+
         tools
     }
 
@@ -350,16 +362,35 @@ impl McpClient {
     /// Call a tool by name
     pub async fn call_tool(&self, name: &str, args: serde_json::Value) -> Result<McpToolResult> {
         // Clone Arc refs under lock, then release lock before awaiting network I/O
-        let (direct_match, all_connections) = {
+        let (direct_match, indexed_match, all_connections) = {
             let servers = self.external_servers.read().await;
 
+            // Check if URI has server prefix (handles colons inside server ids)
             let direct = self.find_server_by_prefix(name, &servers).cloned();
 
+            // O(1) lookup in the rebuilt name index. The index is rebuilt
+            // from every server's last-known tool list, so a stale entry is
+            // possible across reconnects; the O(n*m) fallback below catches
+            // misses for callers that pass the unqualified name.
+            let indexed = if direct.is_none() {
+                let index = self.tool_name_index.read().await;
+                index
+                    .get(name)
+                    .and_then(|server_id| servers.get(server_id).cloned())
+            } else {
+                None
+            };
+
             let all: Vec<_> = servers.values().cloned().collect();
-            (direct, all)
+            (direct, indexed, all)
         };
 
         if let Some(connection) = direct_match {
+            let result = connection.call_tool(name, args).await?;
+            return Ok(McpToolResult::success(result));
+        }
+
+        if let Some(connection) = indexed_match {
             let result = connection.call_tool(name, args).await?;
             return Ok(McpToolResult::success(result));
         }
@@ -374,6 +405,28 @@ impl McpClient {
         }
 
         Err(AlephError::McpToolNotFound(name.to_string()))
+    }
+
+    /// Rebuild the qualified-name → server-id index from every server's
+    /// current tool list. Called from `list_tools`, after the connection
+    /// lock is released, so the index is kept warm by the natural call
+    /// rate and cannot fall behind the live cache.
+    async fn rebuild_tool_name_index(&self) {
+        let pairs: Vec<(String, String)> = {
+            let servers = self.external_servers.read().await;
+            let mut out = Vec::new();
+            for (server_id, conn) in servers.iter() {
+                for tool in conn.list_tools().await {
+                    out.push((tool.name, server_id.clone()));
+                }
+            }
+            out
+        };
+        let mut index = self.tool_name_index.write().await;
+        index.clear();
+        for (name, server_id) in pairs {
+            index.insert(name, server_id);
+        }
     }
 
     /// Get list of registered external server names

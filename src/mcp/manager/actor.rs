@@ -211,6 +211,7 @@ impl McpManagerActor {
         // health tick fires once immediately; that first tick is consumed
         // before the loop because servers were just auto-started above.
         let mut shutdown_respond_to = None;
+        let mut shutting_down = false;
         let mut health_tick = tokio::time::interval(self.health_config.interval);
         health_tick.tick().await;
         loop {
@@ -219,6 +220,7 @@ impl McpManagerActor {
                     match maybe_cmd {
                         Some(McpCommand::Shutdown { respond_to }) => {
                             shutdown_respond_to = Some(respond_to);
+                            shutting_down = true;
                             break;
                         }
                         Some(other) => {
@@ -230,8 +232,30 @@ impl McpManagerActor {
                     }
                 }
                 _ = health_tick.tick() => {
-                    self.health_check_pass().await;
+                    // Skip the health pass during shutdown so a leaked
+                    // ServerListChanged event from a probe that landed
+                    // mid-shutdown is not sent into a closed channel.
+                    if !shutting_down {
+                        self.health_check_pass().await;
+                    }
                 }
+            }
+        }
+
+        // Drain any self-sent events that landed in the mailbox during the
+        // health pass before we observed the shutdown. The health probe calls
+        // `cmd_tx.try_send(McpCommand::ServerListChanged { ... })` for every
+        // server whose TTL refreshed; those events would otherwise be lost
+        // when we drop the channel, and the bridge sees an abrupt gap.
+        if !shutting_down {
+            // Entered via `None` from the receiver — no need to drain.
+        } else {
+            while let Ok(cmd) = self.cmd_rx.try_recv() {
+                if matches!(cmd, McpCommand::Shutdown { respond_to: _ }) {
+                    // A second shutdown is a no-op; the first wins.
+                    continue;
+                }
+                let _ = self.handle_command(cmd).await;
             }
         }
 

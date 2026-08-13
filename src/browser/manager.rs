@@ -16,6 +16,7 @@ use super::error::BrowserError;
 use super::network_policy::{BrowserSsrfGuard, PolicyViolation, SsrfConfig};
 use super::playwright_cli::PlaywrightCliDriver;
 use super::playwright_cli_backend::PlaywrightCliBackend;
+use super::playwright_launch::{LaunchPolicy, SessionLaunch};
 use super::profile::{BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig};
 use super::tab_registry::{parse_tab_ids, TabRegistry};
 
@@ -243,7 +244,7 @@ impl ProfileManager {
                     self.playwright_cli_driver.clone(),
                     profile_name.to_string(),
                     self.ssrf_guard.load_full(),
-                    headless,
+                    SessionLaunch::from_profile(&cfg, headless),
                 )))
             }
             BrowserDriver::ExistingSession => Ok(Arc::new(ChromeMcpBackend::new(
@@ -254,24 +255,70 @@ impl ProfileManager {
         }
     }
 
-    /// Sweep idle profiles: tear down Chrome MCP sessions for `ExistingSession`
-    /// profiles past their `idle_timeout_secs`. Liveness comes from the
-    /// driver's session map (the only place a session actually exists).
+    /// Sweep idle profiles past their `idle_timeout_secs`, both drivers.
     /// Returns the number of profiles reaped (best-effort; safe to call any time).
     ///
-    /// `Managed` profiles are deliberately absent: the Playwright CLI exposes no
-    /// "stop this session" command, so there is nothing to tear down — their
-    /// reclamation is per-tab, in [`Self::reap_idle_tabs`]. That gap is
-    /// announced at construction by [`unhonored_managed_fields`] rather than
-    /// left for an operator to discover from a timeout that never fires.
+    /// - `ExistingSession` → tear down the Chrome MCP session. Liveness comes
+    ///   from the driver's session map (the only place a session exists).
+    /// - `Managed` → `playwright-cli close`. This used to be documented as
+    ///   impossible ("the Playwright CLI exposes no stop-this-session
+    ///   command"), which is false: `close`, `close-all` and `kill-all` are all
+    ///   there. `idle_timeout_secs` was therefore accepted and never enforced
+    ///   for managed profiles.
+    ///
+    /// The close runs under [`LaunchPolicy::Refuse`]: a reaper that opened a
+    /// browser in order to close it would be absurd, and the lazy launch makes
+    /// that a real possibility rather than a hypothetical one.
     pub async fn reap_idle(&self) -> usize {
-        let idle = self.idle_existing_session_profiles();
         let mut reaped = 0;
-        for name in idle {
+        for name in self.idle_existing_session_profiles() {
             self.chrome_mcp_driver.destroy_session(&name).await;
             reaped += 1;
         }
+        for name in self.idle_managed_profiles() {
+            match self
+                .playwright_cli_driver
+                .run(
+                    &name,
+                    LaunchPolicy::Refuse,
+                    &["close"],
+                    std::time::Duration::from_secs(self.config.playwright_cli.action_timeout_secs),
+                )
+                .await
+            {
+                // Already gone is the same outcome as just-closed, and the
+                // registry must be cleared either way or the profile stays a
+                // reap candidate forever.
+                Ok(_) | Err(BrowserError::NoSession(_)) => {}
+                Err(e) => {
+                    tracing::warn!(profile = %name, error = %e, "reap_idle: failed to close managed session");
+                    continue;
+                }
+            }
+            self.tab_registry.clear_profile(&name);
+            reaped += 1;
+        }
         reaped
+    }
+
+    /// `Managed` profiles idle past their timeout that plausibly still have a
+    /// browser.
+    ///
+    /// "Plausibly" is [`TabRegistry::has_tabs`] — the same approximation
+    /// [`Self::session_active`] uses, and the reason the close tolerates a
+    /// `NoSession` answer instead of trusting this predicate.
+    fn idle_managed_profiles(&self) -> Vec<String> {
+        let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        profiles
+            .iter()
+            .filter(|(name, p)| {
+                p.config.driver == BrowserDriver::Managed
+                    && is_idle(p.last_activity, now, p.config.idle_timeout_secs)
+                    && self.tab_registry.has_tabs(name)
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// Whether the profile currently has a live browser session, derived from
@@ -469,36 +516,28 @@ fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_s
 /// Fields this profile sets that the **managed** (playwright-cli) driver cannot
 /// honor — empty for an existing-session profile, which honors all of them.
 ///
-/// The managed driver drives a session-keyed CLI: it has no flag for a proxy, a
-/// user-data directory, extra browser switches or an engine choice, and no
-/// command that stops a session, so `idle_timeout_secs` has no reaper on that
-/// side either (only the per-tab reclamation in [`ProfileManager::reap_idle_tabs`]
-/// applies). Until the CLI grows equivalents, the honest answer is to say so at
-/// boot rather than accept the setting and drop it — which is what happened
-/// from the day these fields were wired (the 2026-07-30 wiring only reached the
-/// Chrome/existing-session launch path).
+/// This list used to name five fields. It named them because an earlier round
+/// looked for the settings among the CLI's *flags*, did not find them, and
+/// recorded "no equivalent exists" rather than guessing flag names — the right
+/// instinct, applied to the wrong surface. `playwright-cli open` takes
+/// `--config <file>`, whose documented schema carries `browser.userDataDir` and
+/// `browser.launchOptions` (Playwright's `LaunchOptions`, i.e. `proxy` and
+/// `args`); `--browser` selects the engine; and `close` ends a session. Four of
+/// the five are now wired — see [`super::playwright_launch`] and
+/// [`ProfileManager::reap_idle`].
 ///
-/// `idle_timeout_secs` is reported only when it differs from the default, since
-/// the type cannot distinguish "left alone" from "set to 1800".
+/// What is left is genuinely unhonorable: `Brave` has no Playwright channel, so
+/// a managed Brave profile would silently get Chromium. Saying so at boot beats
+/// accepting the setting and dropping it.
 fn unhonored_managed_fields(cfg: &ProfileConfig) -> Vec<&'static str> {
     if cfg.driver != BrowserDriver::Managed {
         return Vec::new();
     }
     let mut fields = Vec::new();
-    if cfg.proxy.is_some() {
-        fields.push("proxy");
-    }
-    if cfg.user_data_dir.is_some() {
-        fields.push("user_data_dir");
-    }
-    if !cfg.extra_args.is_empty() {
-        fields.push("extra_args");
-    }
-    if cfg.browser != BrowserType::default() {
+    if super::playwright_launch::browser_flag_value(&cfg.browser).is_none()
+        && cfg.browser != BrowserType::default()
+    {
         fields.push("browser");
-    }
-    if cfg.idle_timeout_secs != ProfileConfig::default().idle_timeout_secs {
-        fields.push("idle_timeout_secs");
     }
     fields
 }
@@ -738,9 +777,14 @@ mod tests {
         assert!(!apply_policy_to(Some(&handle), open));
     }
 
+    /// The warning must name what is dropped and **nothing else**: a boot
+    /// warning about a setting that now works trains the operator to ignore
+    /// the warning.
     #[test]
     fn managed_profiles_name_the_fields_their_driver_drops() {
-        // Everything a managed profile can set but the CLI cannot honor.
+        // Four of these reach the browser now — via `open --config` and
+        // `--browser` — so the only thing left to warn about is the engine
+        // Playwright has no channel for.
         let cfg = ProfileConfig {
             driver: BrowserDriver::Managed,
             proxy: Some("socks5://127.0.0.1:1080".into()),
@@ -750,16 +794,26 @@ mod tests {
             idle_timeout_secs: 60,
             ..Default::default()
         };
-        assert_eq!(
-            unhonored_managed_fields(&cfg),
-            vec![
-                "proxy",
-                "user_data_dir",
-                "extra_args",
-                "browser",
-                "idle_timeout_secs"
-            ]
-        );
+        assert_eq!(unhonored_managed_fields(&cfg), vec!["browser"]);
+
+        // …and an engine that DOES have a mapping is silent, so the warning
+        // tracks the mapping rather than "differs from the default".
+        for honored in [BrowserType::Chrome, BrowserType::Edge] {
+            let cfg = ProfileConfig {
+                driver: BrowserDriver::Managed,
+                browser: honored.clone(),
+                proxy: Some("socks5://127.0.0.1:1080".into()),
+                user_data_dir: Some("/tmp/p".into()),
+                extra_args: vec!["--disable-gpu".into()],
+                idle_timeout_secs: 60,
+                ..Default::default()
+            };
+            assert!(
+                unhonored_managed_fields(&cfg).is_empty(),
+                "{honored:?} is mapped and must not warn"
+            );
+        }
+
         // A default managed profile sets none of them → silence.
         assert!(unhonored_managed_fields(&ProfileConfig::default()).is_empty());
         // The existing-session driver honors all of them → silence.

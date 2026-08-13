@@ -147,6 +147,16 @@ impl McpPersistentConfig {
             }
         }
 
+        // fsync the temp file before rename so a power loss between the
+        // write and the rename does not leave the temp file half-written
+        // and the next `load` reading the old (pre-rename) file.
+        #[cfg(unix)]
+        {
+            if let Ok(file) = std::fs::File::open(&temp_path) {
+                let _ = file.sync_all();
+            }
+        }
+
         if let Err(e) = tokio::fs::rename(&temp_path, path).await {
             // Clean up orphaned temp file on rename failure
             let _ = tokio::fs::remove_file(&temp_path).await;

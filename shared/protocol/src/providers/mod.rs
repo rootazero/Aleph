@@ -11,9 +11,16 @@
 //!   crates that speak it, because two of them are forbidden from depending on
 //!   `alephcore` and each had shipped a permanently-broken hand copy.
 //! * [`search`] — *which rows the user meant*. One matcher, so the Panel and
-//!   the TUI agree about which row a bare Enter selects.
+//!   the TUI agree about which row a bare Enter selects, and — through the
+//!   [`search::Searchable`] trait — so the generation/embedding preset grids
+//!   rank identically without keeping a second copy of the rule.
+//!
+//! [`generation`] sits alongside them for the sibling `generation_providers.*`
+//! family, which had one client instead of three and the same defect for it:
+//! a field the server sends that the client never declared.
 
 pub mod catalog;
+pub mod generation;
 pub mod search;
 pub mod wire;
 
@@ -21,7 +28,11 @@ pub use catalog::{
     DiscoveredModel, ModelCapabilities, ModelLifecycle, ModelSource, ModelStatus, RateBasis,
     RateCard, RosterModel,
 };
-pub use search::{filter_catalog, rank_entries, rank_models, EntryMatch, MatchRank};
+pub use generation::GenerationPresetRow;
+pub use search::{
+    filter_catalog, filter_rows, rank_entries, rank_models, rank_rows, EntryMatch, MatchRank,
+    RowMatch, Searchable,
+};
 pub use wire::{
     deserialize_models, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView,
     CreateParams, DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams,

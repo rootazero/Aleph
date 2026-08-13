@@ -611,8 +611,13 @@ async fn dispatch_providers(
 ) -> CliResult<()> {
     use commands::providers_cmd;
     match action {
-        ProvidersAction::List => providers_cmd::list(server_url, config, json).await,
+        ProvidersAction::List { query } => {
+            providers_cmd::list(server_url, config, query.as_deref(), json).await
+        }
         ProvidersAction::Get { name } => providers_cmd::get(server_url, config, &name, json).await,
+        ProvidersAction::SetModels { name, models } => {
+            providers_cmd::set_models(server_url, config, &name, &models, json).await
+        }
         ProvidersAction::Add {
             name,
             r#type,

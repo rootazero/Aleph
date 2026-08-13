@@ -10,6 +10,7 @@ use super::backend::BrowserBackend;
 use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::playwright_cli::{CliOutput, PlaywrightCliDriver};
+use super::playwright_launch::{LaunchPolicy, SessionLaunch};
 use super::types::{
     ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
     ScrollDirection, SnapshotOutput, TabId,
@@ -19,7 +20,10 @@ pub struct PlaywrightCliBackend {
     driver: Arc<PlaywrightCliDriver>,
     session_key: String,
     ssrf_guard: Arc<BrowserSsrfGuard>,
-    headless: bool,
+    /// How this session's browser is launched, carried because the driver is
+    /// shared across sessions and cannot know a session key's profile. Every
+    /// call passes it down so the first one can open the browser.
+    launch: SessionLaunch,
 }
 
 impl PlaywrightCliBackend {
@@ -27,13 +31,13 @@ impl PlaywrightCliBackend {
         driver: Arc<PlaywrightCliDriver>,
         session_key: impl Into<String>,
         ssrf_guard: Arc<BrowserSsrfGuard>,
-        headless: bool,
+        launch: SessionLaunch,
     ) -> Self {
         Self {
             driver,
             session_key: session_key.into(),
             ssrf_guard,
-            headless,
+            launch,
         }
     }
 
@@ -45,8 +49,33 @@ impl PlaywrightCliBackend {
         Duration::from_secs(self.driver.config().action_timeout_secs)
     }
 
+    /// Run a subcommand against an already-open session.
+    ///
+    /// Deliberately [`LaunchPolicy::Refuse`]: 27 of the 28 subcommands act on
+    /// a page that must already exist, and letting any of them launch would
+    /// make observers (the idle-tab reaper, a health probe) create the browser
+    /// they were checking on. Only [`Self::run_launching`] may open one.
     async fn run(&self, args: &[&str], timeout: Duration) -> Result<CliOutput, BrowserError> {
-        self.driver.run(&self.session_key, args, timeout).await
+        self.driver
+            .run(&self.session_key, LaunchPolicy::Refuse, args, timeout)
+            .await
+    }
+
+    /// Run a subcommand that is entitled to launch the session's browser —
+    /// i.e. the one that means "give me a browser".
+    async fn run_launching(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<CliOutput, BrowserError> {
+        self.driver
+            .run(
+                &self.session_key,
+                LaunchPolicy::OpenIfNeeded(&self.launch),
+                args,
+                timeout,
+            )
+            .await
     }
 }
 
@@ -127,13 +156,14 @@ impl BrowserBackend for PlaywrightCliBackend {
             .check_navigation(url)
             .await
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        let mut args: Vec<&str> = Vec::new();
-        if !self.headless {
-            args.push("--headed");
-        }
-        args.push("tab-new");
-        args.push(url);
-        let _ = self.run(&args, self.nav_timeout()).await?;
+        // `--headed` is NOT passed here: it is an option of `open`, and
+        // `tab-new` rejects it outright (`Unknown option: --headed`, exit 1),
+        // so prepending it made every headed call a hard failure rather than a
+        // degraded one. Headedness now rides on the launch, in
+        // `playwright_launch::open_argv`.
+        let _ = self
+            .run_launching(&["tab-new", url], self.nav_timeout())
+            .await?;
         // Re-list once: the CLI's `tab-new` returns no id, so both the real
         // tab id AND the post-navigation audit come from this single snapshot.
         // A failed listing degrades to an empty snapshot — the audit skips and
@@ -540,7 +570,7 @@ mod tests {
     fn test_backend() -> PlaywrightCliBackend {
         let driver = Arc::new(PlaywrightCliDriver::new(PlaywrightCliConfig::default()));
         let guard = Arc::new(BrowserSsrfGuard::new(SsrfConfig::default()));
-        PlaywrightCliBackend::new(driver, "test", guard, true)
+        PlaywrightCliBackend::new(driver, "test", guard, SessionLaunch::headless_default())
     }
 
     #[test]

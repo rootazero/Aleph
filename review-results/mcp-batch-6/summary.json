@@ -1,0 +1,109 @@
+{
+  "batch": "mcp-batch-6",
+  "title": "Modern protocol, sampling, tool_bridge, tool_sanitize, context_injector, presets",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-mcp-audit",
+  "report": "review-results/mcp-batch-6/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 2,
+    "medium": 4,
+    "low": 3,
+    "total": 9
+  },
+  "by_category": {
+    "security": 2,
+    "logic": 4,
+    "architecture": 0,
+    "quality": 3
+  },
+  "files_reviewed": [
+    { "path": "src/mcp/modern/mod.rs", "loc": 497, "findings": 0 },
+    { "path": "src/mcp/modern/discover.rs", "loc": 202, "findings": 0 },
+    { "path": "src/mcp/modern/cache.rs", "loc": 144, "findings": 0 },
+    { "path": "src/mcp/modern/headers.rs", "loc": 700, "findings": 2 },
+    { "path": "src/mcp/modern/mrtr.rs", "loc": 361, "findings": 1 },
+    { "path": "src/mcp/sampling.rs", "loc": 215, "findings": 1 },
+    { "path": "src/mcp/sampling_bridge.rs", "loc": 176, "findings": 1 },
+    { "path": "src/mcp/tool_bridge.rs", "loc": 473, "findings": 1 },
+    { "path": "src/mcp/tool_sanitize.rs", "loc": 369, "findings": 1 },
+    { "path": "src/mcp/context_injector.rs", "loc": 317, "findings": 1 },
+    { "path": "src/mcp/presets/mod.rs", "loc": 177, "findings": 1 }
+  ],
+  "total_loc": 3631,
+  "findings": [
+    {
+      "id": "B6-01",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/mcp/modern/headers.rs",
+      "line": 240,
+      "title": "walk_schema recurses with no depth cap; a deeply-nested anyOf blows the stack"
+    },
+    {
+      "id": "B6-02",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/mcp/tool_sanitize.rs",
+      "line": 39,
+      "title": "Tool descriptions and prompt resource.text are not length-bounded; a malicious server fills the prompt"
+    },
+    {
+      "id": "B6-03",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/modern/headers.rs",
+      "line": 303,
+      "title": "walk_schema iterates UNREACHABLE_KEYS for every null value; perf footgun"
+    },
+    {
+      "id": "B6-04",
+      "severity": "Medium",
+      "category": "Quality",
+      "file": "src/mcp/modern/mrtr.rs",
+      "line": 180,
+      "title": "retry_params clones the full original params on every round"
+    },
+    {
+      "id": "B6-05",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/tool_bridge.rs",
+      "line": 128,
+      "title": "spawn_tool_bridge's resync_all triggers N parallel list_tools calls; bridges on slow servers are slow"
+    },
+    {
+      "id": "B6-06",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/sampling_bridge.rs",
+      "line": 73,
+      "title": "serve_sampling drops tool-call responses from the provider"
+    },
+    {
+      "id": "B6-07",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/sampling.rs",
+      "line": 106,
+      "title": "SamplingHandler::set_client is dead state; never called by the manager"
+    },
+    {
+      "id": "B6-08",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/context_injector.rs",
+      "line": 80,
+      "title": "format_as_system_message interpolates unbounded descriptions"
+    },
+    {
+      "id": "B6-09",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/presets/mod.rs",
+      "line": 55,
+      "title": "catalog() panics on malformed bundled catalog.json"
+    }
+  ]
+}

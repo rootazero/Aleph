@@ -18,8 +18,24 @@ use aleph_protocol::providers::{
     filter_catalog, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
     DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
     ModelsRefreshRow, ProviderConfigJson, ProviderGetResult, ProviderInfo, ProviderListResult,
-    RosterModel, SetDefaultParams, TestParams, TestResult,
+    RosterModel, Searchable, SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
+
+/// `providers list` filters through the same matcher as every other picker.
+///
+/// A configured provider's name is both its id and its label — there is no
+/// second display string, and inventing one would make the display-name tier
+/// fire on rows that have none.
+struct ProviderRow<'a>(&'a ProviderInfo);
+
+impl Searchable for ProviderRow<'_> {
+    fn search_id(&self) -> &str {
+        &self.0.name
+    }
+    fn search_display_name(&self) -> &str {
+        &self.0.name
+    }
+}
 
 /// Columns of `aleph providers list`.
 ///
@@ -325,8 +341,18 @@ fn test_params(provider: &ProviderInfo) -> CliResult<TestParams> {
     })
 }
 
-/// List all configured AI providers
-pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+/// List configured AI providers, optionally narrowed to a query.
+///
+/// The filter is client-side and deliberately so: `providers.list` has no
+/// `query` parameter and must not grow one — the rows are already in hand, and
+/// a server-side filter would be a second answer to "which row did you mean"
+/// that the Panel and the TUI do not share.
+pub async fn list(
+    server_url: &str,
+    config: &CliConfig,
+    query: Option<&str>,
+    json: bool,
+) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
     let result: Value = client.call("providers.list", None::<()>).await?;
@@ -337,10 +363,11 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     let rows: Vec<Vec<String>> = if json {
         Vec::new()
     } else {
-        serde_json::from_value::<ProviderListResult>(result.clone())?
-            .providers
-            .iter()
-            .map(row_cells)
+        let providers = serde_json::from_value::<ProviderListResult>(result.clone())?.providers;
+        let wrapped: Vec<ProviderRow<'_>> = providers.iter().map(ProviderRow).collect();
+        aleph_protocol::providers::rank_rows(&wrapped, query.unwrap_or_default())
+            .into_iter()
+            .map(|m| row_cells(&providers[m.index]))
             .collect()
     };
 
@@ -366,6 +393,97 @@ pub async fn get(server_url: &str, config: &CliConfig, name: &str, json: bool) -
     };
 
     output::print_detail(&pairs, json, &result);
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Build the `providers.update` body that changes only the ladder.
+///
+/// `providers.update` replaces the stored config wholesale, so every field not
+/// being changed has to be re-sent. `api_key` stays absent on purpose: absent
+/// means "keep the stored one", and a response never carries a secret back to
+/// re-send anyway.
+fn update_params(current: &ProviderInfo, models: Vec<String>) -> UpdateParams {
+    let mut config = ProviderConfigJson::new(models);
+    config.enabled = current.enabled;
+    config.protocol = current.provider_type.clone();
+    config.base_url = current.base_url.clone();
+    config.color = Some(current.color.clone());
+    config.timeout_seconds = Some(current.timeout_seconds);
+    config.max_tokens = current.max_tokens;
+    config.context_window = current.context_window;
+    config.temperature = current.temperature;
+
+    UpdateParams {
+        name: current.name.clone(),
+        config,
+    }
+}
+
+/// Rewrite a stored provider's model ladder.
+///
+/// # Why this exists, and why it takes the whole ladder
+///
+/// `aleph providers models <name> --refresh` reports what a vendor serves now,
+/// and until this verb existed there was no way to adopt any of it: `add`
+/// demands an API key and refuses to touch an existing row, and nothing else
+/// wrote `models`. The discover half of "link, discover, choose" shipped
+/// without the choose half, which is the same "no client" defect that kept
+/// `providers.modelsRefresh` itself unreachable for a whole round.
+///
+/// `providers.update` replaces the stored config wholesale, so a partial body
+/// is a silent way to blank fields the caller never mentioned. Everything not
+/// being changed is therefore read back from the server and re-sent — the same
+/// passthrough discipline the Panel and the phone screen use, and for the same
+/// reason: this endpoint has no merge semantics to rely on.
+///
+/// The ladder is ordered and the order is the point: `models[0]` is what a turn
+/// naming no model gets, the rest are the failover rungs.
+pub async fn set_models(
+    server_url: &str,
+    config: &CliConfig,
+    name: &str,
+    models: &[String],
+    json: bool,
+) -> CliResult<()> {
+    // An empty ladder is an `INVALID_PARAMS` the server is guaranteed to
+    // answer, so it never leaves the terminal.
+    if models.is_empty() {
+        return Err(CliError::Other(format!(
+            "provider '{name}' needs at least one model: pass --model <ID> \
+             (repeat it, first is the default and the rest are failover rungs)"
+        )));
+    }
+
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
+
+    let stored: Value = client
+        .call(
+            "providers.get",
+            Some(GetParams {
+                name: name.to_string(),
+            }),
+        )
+        .await?;
+    let current = serde_json::from_value::<ProviderGetResult>(stored)?.provider;
+
+    let result: Value = client
+        .call(
+            "providers.update",
+            Some(update_params(&current, models.to_vec())),
+        )
+        .await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        println!("Provider '{name}' now offers: {}", models.join(", "));
+        println!("  default: {}", models[0]);
+        if models.len() > 1 {
+            println!("  failover: {}", models[1..].join(" → "));
+        }
+    }
 
     client.close().await?;
     Ok(())
@@ -535,6 +653,72 @@ pub async fn remove(server_url: &str, config: &CliConfig, name: &str, json: bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stored row in the shape `providers.get` actually returns.
+    fn stored_row() -> ProviderInfo {
+        serde_json::from_value(serde_json::json!({
+            "name": "my-relay",
+            "enabled": true,
+            "models": ["gpt-5"],
+            "model": "gpt-5",
+            "provider_type": "openai",
+            "has_api_key": true,
+            "base_url": "https://relay.example/v1",
+            "color": "#123456",
+            "timeout_seconds": 120,
+            "max_tokens": 4096,
+            "context_window": 128_000,
+            "temperature": 0.5,
+            "is_default": false,
+            "verified": true,
+        }))
+        .expect("a real providers.get row must parse")
+    }
+
+    /// The whole point of `set-models`: adopting a discovered id must not
+    /// silently blank everything else. `providers.update` replaces the stored
+    /// config wholesale, so a body carrying only `models` is a way to wipe the
+    /// base URL, the timeout and the tuning of a working provider.
+    #[test]
+    fn changing_the_ladder_carries_every_other_field_through() {
+        let params = update_params(&stored_row(), vec!["gpt-5.6".into(), "gpt-5".into()]);
+
+        assert_eq!(params.name, "my-relay");
+        assert_eq!(params.config.models, vec!["gpt-5.6", "gpt-5"]);
+        assert_eq!(params.config.protocol.as_deref(), Some("openai"));
+        assert_eq!(
+            params.config.base_url.as_deref(),
+            Some("https://relay.example/v1")
+        );
+        assert_eq!(params.config.timeout_seconds, Some(120));
+        assert_eq!(params.config.max_tokens, Some(4096));
+        assert_eq!(params.config.context_window, Some(128_000));
+        assert_eq!(params.config.temperature, Some(0.5));
+        assert!(params.config.enabled);
+        // Absent, not empty: an absent key means "keep the stored one", and a
+        // response never carries a secret back to re-send.
+        assert!(params.config.api_key.is_none());
+    }
+
+    /// The wire body, asserted from what actually serialises rather than from
+    /// a literal written beside it — the flat `{name, type, api_key, base_url}`
+    /// body this family used to send looked entirely plausible and was refused
+    /// by every server that ever received it.
+    #[test]
+    fn the_update_body_is_the_envelope_the_handler_declares() {
+        let params = update_params(&stored_row(), vec!["gpt-5.6".into()]);
+        let wire = serde_json::to_value(&params).expect("params must serialise");
+
+        assert_eq!(wire["name"], "my-relay");
+        assert!(
+            wire.get("config").and_then(|c| c.get("models")).is_some(),
+            "the ladder must ride inside `config`, not at the top level: {wire}"
+        );
+
+        let decoded: UpdateParams = serde_json::from_value(wire)
+            .expect("the handler must accept what the contract encodes");
+        assert_eq!(decoded.config.models, vec!["gpt-5.6"]);
+    }
 
     /// The `list` regression itself, driven by a body in the shape
     /// `provider_info_row` builds — not by a `ProviderInfo` constructed beside

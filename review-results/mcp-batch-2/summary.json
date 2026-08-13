@@ -1,0 +1,112 @@
+{
+  "batch": "mcp-batch-2",
+  "title": "Transport: traits, stdio, http, sse, sse_events",
+  "date": "2026-08-13",
+  "reviewer": "static (4-perspective protocol)",
+  "worktree": "/tmp/aleph-mcp-audit",
+  "report": "review-results/mcp-batch-2/REPORT.md",
+  "counts": {
+    "critical": 0,
+    "high": 3,
+    "medium": 4,
+    "low": 3,
+    "total": 10
+  },
+  "by_category": {
+    "security": 4,
+    "logic": 4,
+    "architecture": 1,
+    "quality": 1
+  },
+  "files_reviewed": [
+    { "path": "src/mcp/transport/mod.rs", "loc": 26, "findings": 1 },
+    { "path": "src/mcp/transport/traits.rs", "loc": 410, "findings": 0 },
+    { "path": "src/mcp/transport/stdio.rs", "loc": 878, "findings": 1 },
+    { "path": "src/mcp/transport/http.rs", "loc": 733, "findings": 4 },
+    { "path": "src/mcp/transport/sse.rs", "loc": 962, "findings": 3 },
+    { "path": "src/mcp/transport/sse_events.rs", "loc": 141, "findings": 1 }
+  ],
+  "total_loc": 3150,
+  "findings": [
+    {
+      "id": "B2-01",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/mcp/transport/sse.rs",
+      "line": 135,
+      "title": "SseTransport posts to a server-announced endpoint and continues to send configured auth headers — endpoint URL acts as a session fixation carrier"
+    },
+    {
+      "id": "B2-02",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/mcp/transport/http.rs",
+      "line": 331,
+      "title": "HttpTransport::send_body has no max_response_bytes cap; a hostile server can OOM the daemon via the health probe"
+    },
+    {
+      "id": "B2-03",
+      "severity": "High",
+      "category": "Security",
+      "file": "src/mcp/transport/sse.rs",
+      "line": 541,
+      "title": "HttpTransport::parse_sse_response scans the entire body; a malicious SSE stream can OOM via a single huge data: line"
+    },
+    {
+      "id": "B2-04",
+      "severity": "Medium",
+      "category": "Security",
+      "file": "src/mcp/transport/stdio.rs",
+      "line": 119,
+      "title": "StdioTransport strips inherited secret env vars silently; no log line at debug or info"
+    },
+    {
+      "id": "B2-05",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/transport/http.rs",
+      "line": 262,
+      "title": "parse_sse_response skips a response with matching id but no result/error; turns a malformed response into StreamEnded"
+    },
+    {
+      "id": "B2-06",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/transport/sse.rs",
+      "line": 387,
+      "title": "SSE listener reconnects on a fixed 5s delay; no exponential backoff"
+    },
+    {
+      "id": "B2-07",
+      "severity": "Medium",
+      "category": "Logic",
+      "file": "src/mcp/transport/http.rs",
+      "line": 418,
+      "title": "HttpTransport::close branches on session_id being Some(); encodes era via a side channel"
+    },
+    {
+      "id": "B2-08",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/transport/http.rs",
+      "line": 401,
+      "title": "HTTP transport accepts and discards the notification handler; the bridge has no clean opt-out"
+    },
+    {
+      "id": "B2-09",
+      "severity": "Low",
+      "category": "Quality",
+      "file": "src/mcp/transport/mod.rs",
+      "line": 13,
+      "title": "No StdioConfig counterpart; stdio callers must hand-build args every time"
+    },
+    {
+      "id": "B2-10",
+      "severity": "Low",
+      "category": "Logic",
+      "file": "src/mcp/transport/sse_events.rs",
+      "line": 67,
+      "title": "SseEvent::parse is case-sensitive on event_type; 'Message' / 'MESSAGE' silently dropped"
+    }
+  ]
+}

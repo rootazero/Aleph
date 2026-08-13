@@ -20,7 +20,7 @@ use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
-use crate::i18n::{t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::preset_providers::{PresetCatalog, PresetProvider};
 
 use add_custom::AddCustomProviderPanel;
@@ -71,6 +71,11 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let (show_add_form, set_show_add_form) = signal(false);
     let (is_loading, set_is_loading) = signal(true);
     let (error_message, set_error_message) = signal(Option::<String>::None);
+    // Live filter over the rows already in hand. 44 presets across five
+    // category tabs is past the point where scrolling is the answer, and the
+    // matcher is the shared one — so a query here ranks exactly the way the
+    // same query ranks in the chat provider list and the TUI picker.
+    let (search, set_search) = signal(String::new());
 
     // (Re)load providers + preset catalogue whenever the gateway is connected.
     // Subscribes to `is_connected` so a server restart (the only realistic catalog
@@ -95,7 +100,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                 )),
             }
             match presets_res {
-                Ok(dtos) => set_catalog.set(PresetCatalog::from_dtos(dtos)),
+                Ok(rows) => set_catalog.set(PresetCatalog::from_rows(rows)),
                 Err(e) => set_error_message.set(Some(
                     crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
                         format!("Failed to load preset catalog: {e}")
@@ -157,8 +162,38 @@ pub fn GenerationProvidersView() -> impl IntoView {
         });
     };
 
-    // Get current category presets
-    let current_presets = move || catalog.get().by_category(selected_category.get());
+    // Get current category presets, narrowed by the search box.
+    //
+    // Category first, then the ranker: a query must never pull a video preset
+    // into the image tab. An empty query is a no-op inside the matcher, so
+    // this is the unconditional path rather than a branch on "is it empty".
+    let current_presets =
+        move || catalog.get().by_category_matching(selected_category.get(), &search.get());
+
+    // The custom (non-preset) providers in the selected category, after the
+    // same filter. A free function of the signals rather than an inline block,
+    // because the empty state has to know whether *either* list has rows —
+    // telling the operator "nothing matches" above a list of matches is worse
+    // than not having an empty state at all.
+    let current_custom = move || {
+        // Exclusion over the whole category, never the filtered view: a preset
+        // the search hid is still a preset.
+        let preset_ids: Vec<String> = catalog
+            .get()
+            .by_category(selected_category.get())
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
+        let current_cat = selected_category.get();
+        let owned: Vec<GenerationProviderEntry> = providers
+            .get()
+            .into_iter()
+            .filter(|p| {
+                !preset_ids.contains(&p.name) && p.effective_generation_type() == Some(current_cat)
+            })
+            .collect();
+        aleph_protocol::providers::filter_rows(&owned, &search.get())
+    };
 
     // Check if a preset is configured
     let is_configured = move |preset_id: &str| providers.get().iter().any(|p| p.name == preset_id);
@@ -212,6 +247,18 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     </div>
                 </div>
 
+                // Search — filters the preset rows already in hand, within the
+                // selected category. Same matcher as the chat provider list.
+                <div class="px-6 py-3 border-b border-border">
+                    <input
+                        type="text"
+                        prop:value=move || search.get()
+                        on:input=move |ev| set_search.set(event_target_value(&ev))
+                        placeholder=move || t_string!(i18n, settings.generation.search_placeholder).to_string()
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+
                 // Content
                 <div class="flex-1 overflow-auto">
                     // Provider cards (loading/error/list)
@@ -230,10 +277,19 @@ pub fn GenerationProvidersView() -> impl IntoView {
                             }.into_any()
                         } else {
                             let presets = current_presets();
+                            // "Nothing matched" only when *neither* list has a
+                            // row. A message above a populated custom section
+                            // would be worse than no message.
+                            let nothing_matched = presets.is_empty() && current_custom().is_empty();
                             view! {
                                 <div class="p-6 space-y-4">
+                                    <Show when=move || nothing_matched>
+                                        <div class="py-8 text-center text-sm text-text-tertiary">
+                                            {t!(i18n, settings.generation.no_search_match)}
+                                        </div>
+                                    </Show>
                                     <div class="grid grid-cols-1 gap-2">
-                                        {presets.into_iter().map(|preset| {
+                                        {presets.clone().into_iter().map(|preset| {
                                             let preset_id = preset.id.clone();
                                             let configured = is_configured(&preset_id);
                                             let entry = get_provider_entry(&preset_id);
@@ -265,16 +321,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
 
                                     // Custom providers (not matching any preset in current category)
                                     {move || {
-                                        let all_presets = catalog.get().by_category(selected_category.get());
-                                        let preset_ids: Vec<String> = all_presets.iter().map(|p| p.id.clone()).collect();
-                                        let provider_list = providers.get();
-                                        let current_cat = selected_category.get();
-                                        let custom: Vec<_> = provider_list.into_iter()
-                                            .filter(|p| {
-                                                !preset_ids.contains(&p.name)
-                                                    && p.effective_generation_type() == Some(current_cat)
-                                            })
-                                            .collect();
+                                        let custom = current_custom();
                                         if custom.is_empty() {
                                             view! { <div></div> }.into_any()
                                         } else {

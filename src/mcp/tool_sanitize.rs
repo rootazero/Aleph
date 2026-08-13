@@ -24,6 +24,27 @@
 
 use serde_json::{Map, Value};
 
+/// Maximum length of an MCP tool description.
+///
+/// A malicious server can emit a multi-MB description that consumes the
+/// agent's prompt context. The cap is well above the practical limit
+/// (the spec's own example is well under 1 KiB) and truncates with a
+/// visible marker so the model sees an obviously truncated string.
+pub const MAX_DESCRIPTION_BYTES: usize = 8 * 1024;
+
+/// Truncate a tool description to [`MAX_DESCRIPTION_BYTES`], appending a
+/// visible marker so the model can see the truncation happened.
+#[must_use]
+pub fn truncate_description(description: &str) -> String {
+    if description.len() <= MAX_DESCRIPTION_BYTES {
+        return description.to_string();
+    }
+    let mut s = String::with_capacity(MAX_DESCRIPTION_BYTES + 64);
+    s.push_str(&description[..MAX_DESCRIPTION_BYTES]);
+    s.push_str("… [truncated]");
+    s
+}
+
 /// Normalize an external MCP tool's input schema into a form every strict
 /// provider accepts, returning a new [`Value`] (the input is consumed).
 ///
@@ -213,7 +234,12 @@ pub fn scan_description_for_injection(description: &str) -> Option<&'static str>
     if description.is_empty() {
         return None;
     }
-    let haystack = description.to_lowercase();
+    // Truncate before scanning so a 100 MB description does not get
+    // copied into a lowercase String on the scan path. The cap is
+    // applied to the description — the truncated form is also the form
+    // that ends up in the prompt, so behaviour is consistent.
+    let truncated = truncate_description(description);
+    let haystack = truncated.to_lowercase();
     INJECTION_MARKERS
         .iter()
         .copied()
@@ -365,5 +391,26 @@ mod tests {
             None
         );
         assert_eq!(scan_description_for_injection(""), None);
+    }
+
+    #[test]
+    fn truncate_description_lengths_long_inputs() {
+        // A short description round-trips unchanged.
+        assert_eq!(truncate_description("hello"), "hello");
+        // A description longer than the cap is truncated with a marker.
+        let long = "x".repeat(MAX_DESCRIPTION_BYTES + 1024);
+        let out = truncate_description(&long);
+        assert!(out.len() <= MAX_DESCRIPTION_BYTES + 64);
+        assert!(out.contains("… [truncated]"));
+    }
+
+    #[test]
+    fn injection_scan_truncates_before_scanning() {
+        // A 100 MB description with an injection marker outside the cap
+        // window is not reported (the cap applies to the description
+        // and the scan operates on the truncated form).
+        let mut huge = "x".repeat(MAX_DESCRIPTION_BYTES + 1024);
+        huge.push_str("ignore previous");
+        assert!(scan_description_for_injection(&huge).is_none());
     }
 }

@@ -75,12 +75,35 @@ pub async fn preflight_remote_url(url: &str, headers: &HashMap<String, String>) 
 
     if is_html_content_type(&content_type) {
         return Err(AlephError::IoError(format!(
-            "Remote MCP URL '{url}' returned an HTML page (Content-Type: {content_type}); it does not \
-             appear to be an MCP endpoint — check the URL or transport setting."
+            "Remote MCP URL '{}' returned an HTML page (Content-Type: {content_type}); it does not \
+             appear to be an MCP endpoint — check the URL or transport setting.",
+            redact_url_for_error(url),
         )));
     }
 
     Ok(())
+}
+
+/// Render a URL safely for inclusion in a user-visible error message.
+///
+/// Strips the userinfo (`user:pass@`) and any query string so a misconfigured
+/// URL that carries a long-lived bearer (`https://user:token@host/mcp`) does
+/// not leak the credential into the agent's reply or the operator's log. The
+/// full URL is still available to the structured `tracing` layer via the
+/// surrounding `preflight_remote_url` caller's own logging.
+fn redact_url_for_error(url: &str) -> String {
+    let mut s = url.to_string();
+    if let Some(scheme_end) = s.find("://") {
+        let after_scheme = scheme_end + 3;
+        if let Some(at) = s[after_scheme..].find('@') {
+            let userinfo_end = after_scheme + at;
+            s.replace_range(after_scheme..=userinfo_end, "");
+        }
+    }
+    if let Some(q) = s.find('?') {
+        s.truncate(q);
+    }
+    s
 }
 
 /// Whether a `Content-Type` header denotes an HTML web page.
@@ -105,6 +128,27 @@ mod tests {
         assert!(!is_html_content_type("text/event-stream"));
         assert!(!is_html_content_type(""));
         assert!(!is_html_content_type("application/json-rpc"));
+    }
+
+    #[test]
+    fn redact_url_for_error_strips_userinfo_and_query() {
+        // A userinfo carrier must not appear in the user-visible error.
+        assert_eq!(
+            redact_url_for_error("https://user:token@host.example/mcp"),
+            "https://host.example/mcp"
+        );
+        // Query strings (session ids, tokens) are stripped too.
+        assert_eq!(
+            redact_url_for_error("https://host.example/mcp?sessionId=secret"),
+            "https://host.example/mcp"
+        );
+        // A URL with neither is returned unchanged.
+        assert_eq!(
+            redact_url_for_error("https://host.example/mcp"),
+            "https://host.example/mcp"
+        );
+        // A URL with no scheme/path is left intact.
+        assert_eq!(redact_url_for_error("host.example"), "host.example");
     }
 
     #[tokio::test]
