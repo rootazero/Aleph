@@ -313,6 +313,15 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 
 **五个守卫必须全部用 `prefix_matches` 比较，即查表自己用的那个谓词**（§5.1）。用裸 `starts_with` 的守卫对折叠后才出现的遮蔽是瞎的（一条 `gpt-5-6` 行藏在更早的 `gpt-5.6` 行后面），会在查表已经跳过某行时报告"表是干净的"。`MODEL_VENDOR_PREFIXES` 与 `LIFECYCLE_TABLE` 这两张表**此前根本没有守卫**，2026-08-03 补上；lifecycle 那个**按 scope 分桶**——`groq` 行遮蔽不了 `github-copilot` 行，跨 scope 比较会错杀正确的表。
 
+### 表里的**数字**过期了怎么办（2026-08-13 round-4）
+
+漂移守卫抓的是**内部一致性**（默认指向退役 id、缺能力行、aux 贵过主模型…），它**结构性地看不见**「这一行的数字与厂商现在收的钱不一致」——那需要一个外部来源。本轮建立的做法：
+
+1. **取一份可核实的快照**，不靠记忆。models.dev 的 `api.json`（184 provider / 6293 模型，含 `limit` / `cost` / `reasoning` / `attachment` / `release_date` / `status`）是 openclaw 目录自己的上游，一次 curl 就是全量。**它只当离线源**——§9 第一条禁的是把它做成运行时依赖，不是禁止拿它当刷新素材。比对脚本留在 scratchpad：进仓就是第二个真源，且它需要网络才跑得动。
+2. **比对必须复现查表语义**。逐行比对会报出上千条「分歧」，因为宽行按设计覆盖了大量本仓从不广告的变体。正确的形状是**拿上游的每一个模型走一遍 Aleph 的查表**（canonicalise → 首个前缀命中者胜；价格先按 vendor 分桶），再把结果收敛到**被广告的 id**（default / fallback / aux）——那才是承重的集合。2026-08-13 那次：1385+722 → 266 → **37**。
+3. **每一条候选先读它自己的注释**。`claude-sonnet-5` 那一行写着为什么它是 $3/$15 而不是上游的 $2/$10（launch promo 的 durable 价）；那条理由指向一个外部事实，而那个事实**已被厂商作废**（定价页现在写 $2/$10「is now the standard price」、原定涨价「will not occur」）。**上游不自动正确，注释也不自动正确——判据是注释里的理由指向的那个事实**。
+4. **分辨"修数字"与"加数据"**。修一个已存在的行是低风险的；新增档位表行、抬高会被别处当预留用的字段、改默认 id，都是别的动作，各有各的判据。
+
 ### 怎么加豁免
 
 两张显式清单，都带理由，且被 `exemptions_still_name_something_real` 钉住：
@@ -494,6 +503,15 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **把 `providers.healthcheck` 合并进 `providers/connectivity`** — 两者答的问题不同：前者是一张带延迟的表，后者是整个诊断引擎的一部分（散文式 finding + 总停机闸 + `fix_hint` 路由）。它们该共用的是**探测**与**探测判据**（`probe::probe_provider_bounded` / `probe::probe_disposition`），不是输出形状。
 - **复活 `providers.needsSetup`** — 零客户端，且是"agent 能不能作答"这个问题的**第三个答案**（Panel 清单一个、它一个、真相一个）。判据落在 Panel 的 `usable()` 上：`enabled && (has_api_key || verified)`。
 - **把 `usable()` 提到协议 crate** — `needsSetup` 撤回之后它只有一个消费者；为一个调用者建跨 crate 抽象就是 R10 要撤回的那种。
+
+以下是 2026-08-13 **round-4**（数据刷新 + 真机 QA）评估后**明确不做**的：
+
+- **按上游报的 `limit.output` 抬高 `max_output_tokens`** — 这个字段的实际消费者是 `derive_token_budget` 的**输出预留**（`usable = window − reserve`），而上游报的是**厂商上限**，很多家等于窗口本身。照抄 kimi-k2.6（262144/262144）、mistral-large-2512（262144/262144）、step-3.7-flash（256000/256000）会让 reserve == window，可用预算塌到 `MIN_USABLE_BUDGET`；deepseek-v4（65536 → 384000）、glm-4.7（8192 → 131072）、minimax-m2（16384 → 131072）、claude-sonnet-4-6（64000 → 128000）是同一类，只是没那么极端。**只采向下的修正**（既减少 400 风险又还回预算）。根因是一个字段被 doc（「模型一次能吐多少」）和消费者（「该给回答留多少」）各答一问——收敛它需要拆字段，是独立一件事，不该搭在数据刷新里做。
+- **按 models.dev 改 `qwen3.6-plus` / `qwen3.6-flash` 的费率** — 上游 `alibaba` 报 $0.50/$3.00 与 $0.1875/$1.125，Aleph 表里是 $0.115/$0.688 与 $0.029/$0.287（人民币价换算的量级）。**两边都可能是对的**：Aleph 的 `qwen` 预设 `base_url` 指的是 `dashscope.aliyuncs.com`（中国站），而 models.dev 另有 `alibaba-cn` 条目，说明它的 `alibaba` 大概率是国际站。同一个模型两个区两套价，改之前要先确定这条预设服务的是哪一个区——那是一次 endpoint 语义的裁定，不是一次数字修正。
+- **按 cerebras 的 40960 改 `gpt-oss` 的 max-output** — Groq 报 65536、Cerebras 报 40960，**这是宿主差异不是漂移**，而能力表是全局前缀表、说不出「在谁家上」。Aleph 现有的 65536 与 Groq 一致（`groq` 预设的默认就是它）。要表达这一维得给能力表加 provider scope（`LIFECYCLE_TABLE` 那样），成本远大于收益。
+- **退役 `grok-4-fast` / `grok-3-mini` / `moonshot-v1-*` / `kimi-latest`** — 它们都不在各自厂商的上游 roster 里，但**「上游没列」比「上游标了 deprecated」弱一档**，而本表 doc 的规则是按后者写行。唯一的旁证是 `zenmux`（一家转售商）标了 `grok-4-fast` deprecated，按规则那只够写一条 scoped 行，而 Aleph 没有 `zenmux` 预设可以 scope。更实际的理由：退役 `grok-4-fast` 会连带逼着改 `xai` 的 aux 槽（`no_preset_points_its_aux_model_at_a_retired_id`），而**改默认/aux 是本轮明确划在范围外的一类**。这四个是**候选**，需要第二个来源。
+- **改 `qwen` 的默认模型** — `qwen3-max-2026-01-23` 不在上游 `alibaba` 的 roster 里（上游有 `qwen3-max` / `qwen3.7-max` / `qwen3.8-max`），即它可能是个**已经不存在**的日期快照 id 而不只是陈旧。仍不动：范围裁定同上，且「阿里保留历史快照 id」与「这个 id 已经 404」在没有第二个来源时分不开。记在这里是为了让下一轮不必重新发现它。
+- **给 `minimax-m3` / `grok-4.3` / `gpt-5.6` 系补长上下文档位行** — 上游对这三家都报了 context tier（M3 >512K 翻倍；grok-4.3 >200K 翻倍；5.6 三档各有 >272K 档）。`TIER_TABLE` 装得下，但**新增档位是加数据不是修数字**，而本轮的范围是后者。记下确切数字供下一轮直接采用。⚠️ 顺带说明 `minimax-m3` 修正后的方向：此前是**全部**运行高估 2 倍，现在是短提示准确、>512K 低估 2 倍——净改善，但不是完全正确。
 
 ---
 

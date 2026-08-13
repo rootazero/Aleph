@@ -430,7 +430,10 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         "grok-4.3",
         ModelCapabilities {
             context_window: 1_000_000,
-            max_output_tokens: 64_000,
+            // 30K, not the 64K this carried: xAI's published cap. Overstating
+            // it both invites a 400 and inflates the output reserve that
+            // `derive_token_budget` subtracts from the window.
+            max_output_tokens: 30_000,
             supports_vision: true,
             supports_tools: true,
             supports_reasoning: true,
@@ -467,6 +470,25 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── Mistral ──────────────────────────────────────────────────────────
+    (
+        // `mistral-large-latest` (the `mistral` preset's default) now points at
+        // the 2512 snapshot: 256K window, and it sees images. The broad
+        // `mistral-large` row below still describes the 2411-era snapshots
+        // (128K, text-only), so this has to precede it.
+        //
+        // `max_output_tokens` deliberately keeps the curated 8K rather than the
+        // 256K the vendor catalog reports as the cap: this field is also the
+        // output reserve `derive_token_budget` subtracts from the window, and
+        // reserve == window collapses the usable budget to the floor.
+        "mistral-large-latest",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 8_192,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
     (
         "mistral-large",
         ModelCapabilities {
@@ -815,7 +837,7 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         ModelCapabilities {
             context_window: 256_000,
             max_output_tokens: 64_000,
-            supports_vision: true,
+            supports_vision: false,
             supports_tools: true,
             supports_reasoning: true,
         },
@@ -847,8 +869,8 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         "sonar-reasoning",
         ModelCapabilities {
             context_window: 128_000,
-            max_output_tokens: 8_192,
-            supports_vision: false,
+            max_output_tokens: 4_096,
+            supports_vision: true,
             supports_tools: false,
             supports_reasoning: true,
         },
@@ -858,7 +880,7 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         ModelCapabilities {
             context_window: 200_000,
             max_output_tokens: 8_192,
-            supports_vision: false,
+            supports_vision: true,
             supports_tools: false,
             supports_reasoning: false,
         },
@@ -867,7 +889,7 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         "sonar",
         ModelCapabilities {
             context_window: 128_000,
-            max_output_tokens: 8_192,
+            max_output_tokens: 4_096,
             supports_vision: false,
             supports_tools: false,
             supports_reasoning: false,
@@ -881,7 +903,7 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     (
         "step-3",
         ModelCapabilities {
-            context_window: 262_144,
+            context_window: 256_000,
             max_output_tokens: 65_536,
             supports_vision: true,
             supports_tools: true,
@@ -936,6 +958,20 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     // ── Xiaomi MiMo ────────────────────────────────────────────────────────
+    (
+        // The v2 family is mixed on vision: `mimo-v2-omni` and plain
+        // `mimo-v2.5` take images, the `-pro` line (the `xiaomi` preset's
+        // default, and its `-ultraspeed` sibling) does not. Must precede the
+        // broad `mimo-v2` row, which keeps the family's `true`.
+        "mimo-v2.5-pro",
+        ModelCapabilities {
+            context_window: 1_048_576,
+            max_output_tokens: 131_072,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
     (
         "mimo-v2",
         ModelCapabilities {

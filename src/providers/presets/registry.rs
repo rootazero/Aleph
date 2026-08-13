@@ -30,7 +30,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             .with_aux_model("gpt-5.4-mini")
             // `gpt-5.5` was retired in favour of 5.6; `gpt-5.6-terra` is the
             // mid-priced 5.6 tier and the natural second rung.
-            .with_fallback_models(&["gpt-5.6", "gpt-5.6-terra", "gpt-5.4-mini", "o4-mini"]),
+            .with_fallback_models(&["gpt-5.6", "gpt-5.6-terra", "gpt-5.4-mini"]),
     ),
     (
         "chatgpt",
