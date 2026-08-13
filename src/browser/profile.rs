@@ -193,12 +193,37 @@ fn default_chrome_mcp_command() -> String {
     "npx".to_string()
 }
 
+/// The default `npx` invocation for the Chrome DevTools MCP server.
+///
+/// `--allow-unrestricted-paths` turns OFF a guard the server added in v1.6.0,
+/// and that is deliberate. Absent negotiated MCP `roots`, the server confines
+/// every `filePath` argument to the OS temp directory — a boundary nobody here
+/// chose: it permits anything under `/tmp` while refusing the user's own
+/// Downloads folder, so `browser_upload` failed for the files people actually
+/// want to upload and succeeded for scratch files nobody does.
+///
+/// The gate that stays is Aleph's own: `file_ops`' protected-location denylist
+/// and allowed roots run over the upload path before the tool is ever called,
+/// and that one is informed, configurable and tested. This is the same call
+/// made for the managed driver when `outputDir` was found to have narrowed
+/// playwright-cli's write roots: switch off the weaker second answer rather
+/// than route around it.
+///
+/// Deliberately NOT solved by declaring the `roots` capability. That is the
+/// protocol-correct answer, and it belongs in `src/mcp/` where it would apply
+/// to every server Aleph connects to — a much larger blast radius than a
+/// browser-profile default, and one that needs its own round.
+///
+/// Servers older than 1.6.0 ignore the unknown switch (yargs is not strict
+/// here — verified against 1.5.0), so the default stays safe for a pinned
+/// older version.
 fn default_chrome_mcp_args() -> Vec<String> {
     vec![
         "-y".to_string(),
         "chrome-devtools-mcp@latest".to_string(),
         "--autoConnect".to_string(),
         "--experimentalStructuredContent".to_string(),
+        "--allow-unrestricted-paths".to_string(),
     ]
 }
 

@@ -24,11 +24,12 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh reap     # the idle reaper really closes a session (~3 min)
 ./qa/browser_managed/run.sh pdf      # pdf_generate's browser engine, CLI off PATH
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
+./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 ```
 
-`browser_managed` is the one scenario that needs **no mock provider**: it drives
-`tools.invoke`, which runs a tool without an agent turn, so nothing in the run
-needs a model. It does need a real `playwright-cli` (pinned via config so the
+`browser_managed` needs **no mock provider** in every scenario but
+`exec-offload`: it drives `tools.invoke`, which runs a tool without an agent
+turn, so nothing in the run needs a model. It does need a real `playwright-cli` (pinned via config so the
 run never triggers the network install path) and a browser it can launch —
 which is the entire point. It exists because four defects survived four rounds
 of unit tests: the managed driver, which is the DEFAULT driver, never issued
@@ -55,6 +56,37 @@ refusal differently from an unknown one, so the lazy relaunch never fired and
 the reaper bricked what it reclaimed; and on the *other* driver
 `browser_wait_for(text=…)` sent a string where the MCP schema has always
 required a list.
+
+The third round widened `existing` from three verbs to every verb the Chrome
+DevTools MCP driver has, and found four more — all of the same shape, all
+invisible to a fake backend, because **a wire contract with an external server
+is settled by that server's schema and by nothing else**:
+`browser_fill_form` sent its array under `fields` where the schema requires
+`elements`, so it had never once filled a form; `browser_evaluate` handed back
+the server's prose (`Script ran on page and returned:\n\`\`\`json\n…`) instead of
+the value, which is the same defect the managed driver was fixed for in round 2
+and which left the two drivers answering one call with two shapes;
+`browser_select` routed through the MCP `fill`, which cannot interact with a
+`<select>` at all (`fill_form` fails identically — same locator), so no dropdown
+had ever been set on that driver; and `browser_upload` failed for **every path
+outside the OS temp directory**, because chrome-devtools-mcp v1.6.0 added a path
+guard that applies to clients which do not negotiate MCP `roots`, and Aleph
+declares `sampling` only.
+
+That last one also cost a false conclusion worth remembering: the guard was read
+in a cached copy of the server picked with `ls | tail -1` — version **1.3.0**,
+where the guard really is inert — while `run.sh` picks the newest by `sort -V`,
+which is **1.7.0**. The source said "no restriction", the machine said "Access
+denied". *Check the version you are actually running, not the one you happened
+to open.*
+
+The same round added `exec-offload`, which exists because a branch can be
+unreachable from a whole surface: `browser_exec`'s spill is keyed by a tool call
+id the harness Act phase mints, and `tools.invoke` has none, so over that surface
+the tool always takes its other branch. It is the only browser scenario with a
+mock provider, and its oracle is the mock's **request log** — turn 2 carries
+turn 1's `tool_result` verbatim, which is what the model saw; the tool's RPC
+reply is a different thing on a different path.
 
 Three of the five scenarios exist to make a specific claim non-vacuous:
 `frames` proves the iframe is cross-origin **before** asking whether the
@@ -106,6 +138,20 @@ prose. `plan_handoff` asserts on the tool_result text, which is how it caught
 the one real defect this fixture has found so far — see below.
 
 ## Traps — each of these cost a debugging session
+
+**A scratch dir under `$TMPDIR` cannot test a path restriction.** `QA_ROOT` is a
+`mktemp -d`, so anything the fixture writes there is *inside* the OS temp
+directory — exactly the region chrome-devtools-mcp's path guard permits. An
+upload from `QA_ROOT` therefore passes whether the guard is armed or inert, and
+proves nothing either way. `existing` plants its payload under `target/` instead
+and asserts the file really is outside `tempfile.gettempdir()` before using it.
+
+**Element names are not portable between the drivers.** A plain
+`<div aria-label="Drag source">` is `Drag source` in playwright-cli's tree and
+`StaticText "DRAGSRC"` in chrome-devtools-mcp's, which prunes the label off a
+non-interactive node and keeps the text. A fixture that knew only one of them
+reported "this control is not addressable" for an element that was right there
+— a fixture bug wearing a product bug's costume. `ref_for_any` takes both names.
 
 **The session log is the clock, not the wall.** `count_pending_steering` reads
 the session event log, so anything paced by `time.sleep` is paced by something

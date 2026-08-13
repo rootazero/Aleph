@@ -632,6 +632,62 @@ mod tests {
     }
 
     #[test]
+    fn case_variant_platform_keys_resolve_to_the_same_policy_every_time() {
+        // `platform_policies` is a `HashMap`, so a winner picked by
+        // iteration order would differ between runs of the same binary on
+        // the same config. Rebuild the index repeatedly to resample that
+        // order and assert the winner never moves.
+        let mut winners = std::collections::HashSet::new();
+        for _ in 0..64 {
+            let mut config = PrivacyConfig::default();
+            config.platform_policies.insert(
+                "Telegram".to_string(),
+                PlatformPiiPolicy {
+                    exclude_providers: Some(vec!["upper-case-policy".to_string()]),
+                    ..Default::default()
+                },
+            );
+            config.platform_policies.insert(
+                "telegram".to_string(),
+                PlatformPiiPolicy {
+                    exclude_providers: Some(vec!["lower-case-policy".to_string()]),
+                    ..Default::default()
+                },
+            );
+            let engine = PiiEngine::new(config);
+            // Neither literal key matches, so the fold decides.
+            let upper = engine.is_platform_excluded(Some("TELEGRAM"), "upper-case-policy");
+            let lower = engine.is_platform_excluded(Some("TELEGRAM"), "lower-case-policy");
+            winners.insert((upper, lower));
+        }
+        assert_eq!(
+            winners.len(),
+            1,
+            "case-variant platform keys must fold to a stable winner, saw: {winners:?}"
+        );
+        // An exactly-spelled key still reaches its own policy — the fold is
+        // only the fallback.
+        let mut config = PrivacyConfig::default();
+        config.platform_policies.insert(
+            "Telegram".to_string(),
+            PlatformPiiPolicy {
+                exclude_providers: Some(vec!["upper-case-policy".to_string()]),
+                ..Default::default()
+            },
+        );
+        config.platform_policies.insert(
+            "telegram".to_string(),
+            PlatformPiiPolicy {
+                exclude_providers: Some(vec!["lower-case-policy".to_string()]),
+                ..Default::default()
+            },
+        );
+        let engine = PiiEngine::new(config);
+        assert!(engine.is_platform_excluded(Some("Telegram"), "upper-case-policy"));
+        assert!(engine.is_platform_excluded(Some("telegram"), "lower-case-policy"));
+    }
+
+    #[test]
     fn test_filter_with_platform_override_case_insensitive() {
         // Same regression as `test_platform_lookup_is_case_insensitive`
         // but exercised through the production `filter_with_platform` path.

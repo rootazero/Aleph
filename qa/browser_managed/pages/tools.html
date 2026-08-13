@@ -34,6 +34,9 @@
 <input id="file" type="file" aria-label="Upload file">
 <div id="filename">filename:none</div>
 
+<button id="dblbtn" aria-label="Double click target">Dbl</button>
+<div id="dblclicked">dbl:no</div>
+
 <button id="alertbtn" aria-label="Alert button">Alert</button>
 
 <div id="later">later:pending</div>
@@ -72,6 +75,12 @@ document.getElementById('hoverbox').addEventListener('mouseover', function () {
 document.getElementById('file').addEventListener('change', function (e) {
   document.getElementById('filename').textContent =
     'filename:' + (e.target.files[0] ? e.target.files[0].name : 'none');
+});
+// A target of its own rather than a second listener on #go: a double click
+// also delivers two ordinary clicks, so sharing the button would make
+// "the click handler ran" true for reasons the click claim does not own.
+document.getElementById('dblbtn').addEventListener('dblclick', function () {
+  document.getElementById('dblclicked').textContent = 'dbl:yes';
 });
 document.getElementById('alertbtn').addEventListener('click', function () {
   window.alert('__DIALOG_MARKER__');
