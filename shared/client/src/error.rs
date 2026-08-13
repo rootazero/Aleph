@@ -38,9 +38,3 @@ impl From<tokio_tungstenite::tungstenite::Error> for CliError {
         Self::Connection(err.to_string())
     }
 }
-
-impl From<anyhow::Error> for CliError {
-    fn from(err: anyhow::Error) -> Self {
-        Self::Other(err.to_string())
-    }
-}
