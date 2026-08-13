@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::output;
-use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use aleph_protocol::{
     present_agent_trace_event_with_preset, AgentTracePresentationPreset, AgentTraceReplay,
     AgentTraceReplayListItem,
@@ -21,7 +21,7 @@ pub async fn list(server_url: &str, config: &CliConfig, limit: usize, json: bool
         output::print_json(&result);
     } else {
         let items: Vec<AgentTraceReplayListItem> = serde_json::from_value(result.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to parse trace list: {e}"))?;
+            .map_err(|e| CliError::Other(format!("Failed to parse trace list: {e}")))?;
 
         if items.is_empty() {
             println!("No traces found.");

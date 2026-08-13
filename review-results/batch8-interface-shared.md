@@ -19,15 +19,17 @@
 | ID  | 模块 | Sev | 标题 | 状态 |
 |----:|------|----:|------|:----:|
 | B8-01 | shared/client | Med | `anyhow` 死依赖 + 无 caller 的 `From<anyhow::Error>` impl | fixed |
-| B8-02 | shared/client | Low | `ManifestConfig` 三个字段（`tool_categories`/`specific_tools`/`excluded_tools`）无 caller | fixed (字段加 `#[allow(dead_code)]` 并保留 serde 字段以避免 wire-shape 漂移) |
-| B8-03 | shared/client | Low | `GatewayClient::with_ca_cert` setter 唯一调用点缺失 | fixed (字段加 `#[allow(dead_code)]` 并保留以备未来调用) |
+| B8-02 | shared/client | Med | 整个 `shared/client/src/output.rs` 模块从未被使用 | fixed (删除模块) |
+| B8-03 | shared/client | Low | `ManifestConfig` 三个字段无 caller | fixed (字段加 `#[allow(dead_code)]` 保留 wire-shape ABI) |
+| B8-04 | shared/client | Low | `GatewayClient::ca_cert` 字段 + `with_ca_cert` setter 无 caller | fixed (字段加 `#[allow(dead_code)]` 保留预留接口) |
 
 ## CUT 候选 (复核)
 
 ### shared/client
 - `CliError::WebSocket` 变体:  **不存在**（已删），From impl 现在的目标是 `Connection` ✓
 - `anyhow` 依赖:  死（无 caller）→ **B8-01 修复**
-- `ManifestConfig` struct: 仍在使用（CliConfig.manifest）✓ 但字段 dead → **B8-02 修复**
+- `ManifestConfig` struct: 仍在使用（CliConfig.manifest）✓ 但字段 dead → **B8-03 修复**
+- `shared/client/src/output.rs` 整个模块: 死代码 → **B8-02 修复**
 
 ### shared/logging
 - `PiiScrubbingLayer` 已加 `#[deprecated]` ✓ (batch6 未修，现已修)
@@ -69,10 +71,23 @@
 
 ## 修复决策说明
 
-### B8-02 决策：保留 ManifestConfig 字段
+### B8-02 决策：删除整个 output 模块
+
+`shared/client/src/output.rs` 整个模块（114 行）从未被任何 caller 使用：
+- 它的 `OutputFormat`/`print_json`/`print_table`/`print_list_table`/`print_success`/`print_error`
+  在 CLI 中无 caller
+- CLI 有自己的 `crate::output` 模块（含更丰富的 `print_table`，支持 `--json` 模式）
+- 通过 `pub use` 的 re-export 在 `lib.rs` 中也没人用
+
+选择删除整个模块而非保留 `#[allow(dead_code)]`：
+- 118 行代码全部删除
+- 没有破坏任何 ABI（CLI 自带实现）
+- 没有破坏任何 wire-shape（CLI 输出格式由 CLI 自己决定）
+
+### B8-03 决策：保留 ManifestConfig 字段 + 加 allow
 
 `ManifestConfig` 是公开类型（被 `lib.rs` re-export），其三个字段是 wire-shape 的一部分。
-即使现在没有 caller 删除字段也会让 `aleph-client` 的 serde schema 减少键，
+即使现在没有 caller，删除字段会让 `aleph-client` 的 serde schema 减少键，
 任何持有旧 `~/.aleph/cli.toml` 的用户会看到键被静默丢弃（保留 `#[serde(default)]`
 能避免这种情况但仍可能让远程配置检查工具误报丢失）。
 
@@ -83,7 +98,7 @@
 - 不触发 unused 警告
 - 给未来的代码留下重新启用的钩子
 
-### B8-03 决策：保留 GatewayClient::ca_cert + with_ca_cert
+### B8-04 决策：保留 GatewayClient::ca_cert + with_ca_cert
 
 `with_ca_cert` 的 doc-comment 已经解释了它的设计意图：
 "this client is reached through `aleph-server gateway call`, which by
