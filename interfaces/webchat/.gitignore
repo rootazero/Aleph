@@ -1,9 +1,8 @@
 node_modules/
 package-lock.json
 
-# Trunk build outputs — generated JS/WASM/CSS/HTML. Keep dist/ itself
-# tracked (RustEmbed on src/gateway/control_plane/assets.rs needs the
-# directory to exist at compile time) but ignore its contents so future
-# `trunk build` runs cannot re-introduce build artifacts.
-dist/*
-!dist/.gitkeep
+# Trunk build outputs — generated JS/WASM/CSS/HTML. Nothing under dist/ is
+# tracked. The directory itself must exist at compile time (RustEmbed on
+# src/gateway/control_plane/assets.rs), and the root build.rs creates it, so
+# no sentinel file is needed to hold that requirement up.
+dist/

@@ -37,6 +37,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 
 import websockets
@@ -66,6 +67,24 @@ def ref_for(snapshot, needle):
             m = REF_RE.search(line)
             if m:
                 return m.group(1) or m.group(2)
+    return None
+
+
+def ref_for_any(snapshot, *needles):
+    """First ref matching any of `needles`.
+
+    The two drivers do not name the same element the same way. A plain `<div
+    aria-label="Drag source">` is `Drag source` in playwright-cli's tree and
+    `StaticText "DRAGSRC"` in chrome-devtools-mcp's, which prunes the label off
+    a non-interactive node and keeps the text. A fixture that knew only the
+    first reported "this control is not addressable" for an element that was
+    right there under another name — a fixture bug wearing a product bug's
+    costume.
+    """
+    for needle in needles:
+        found = ref_for(snapshot, needle)
+        if found:
+            return found
     return None
 
 
@@ -671,21 +690,22 @@ async def scenario_pdf(rpc, led, args):
 # scenario: existing  (the OTHER driver — Chrome DevTools MCP)
 # --------------------------------------------------------------------------
 async def scenario_existing(rpc, led, args):
-    """Real-machine coverage for `driver = "existing_session"`.
+    """Real-machine coverage for `driver = "existing_session"` (Chrome DevTools MCP).
 
-    Narrower than `tools` on purpose. The claims that only this driver can
-    settle are the ones where the two drivers answer the same question
-    differently:
+    Round 5 drove three verbs here — read, wait, click — and every other verb on
+    this driver still had only fake-backend coverage. That is not a smaller
+    version of the same coverage: this backend talks to an **external MCP
+    server** whose tool schemas are the contract, and a fake backend answers
+    with whatever the calling code hoped for. Two defects on this driver have
+    now been found the same way and only the same way: `wait_for` sent a bare
+    string where the schema has always required `string[]`, and `fill_form`
+    sent its array under `fields` where the schema requires `elements`. Both
+    read fine; both had never once succeeded.
 
-    * `wait_for` — this backend overrides the `Text` arm with a native tool and
-      falls back to the SHARED `wait_probe` for `selector` / `url_contains`.
-      That shared probe searches `evaluate`'s return for a sentinel that is a
-      literal in the probe's own source, which is sound only if `evaluate`
-      returns a value rather than a transcript. The managed driver returned a
-      transcript and every wait there was a lie; whether this one does is a
-      question no unit test can answer, because the fake backend returns
-      exactly what the code hopes for.
-    * the read path reaching a real page at all.
+    So every claim below is an **effect** claim read back out of the live page,
+    plus — for the four capabilities this driver genuinely lacks — a claim about
+    the *shape of the refusal*, because a silent success there would be worse
+    than the missing feature.
     """
     p = Page(rpc, led, profile=args.existing_profile)
 
@@ -693,7 +713,9 @@ async def scenario_existing(rpc, led, args):
     ok, res = await p.call("browser_open", url=args.page_url)
     if not led.check("browser_open succeeds", ok and res.get("success"), json.dumps(res)[:300]):
         return
+    first_tab = (res or {}).get("tab_id")
 
+    # ---- read path ---------------------------------------------------------
     led.log("\n--- the read path ---")
     ok, snap, _ = await p.snapshot()
     led.check("browser_snapshot succeeds", ok, snap[:200])
@@ -702,6 +724,19 @@ async def scenario_existing(rpc, led, args):
     ok, val = await p.dom("#clicked")
     led.check("browser_evaluate reads the DOM", ok and "clicked:no" in str(val), f"value={val!r}")
 
+    refs = {
+        name: ref_for(snap, name)
+        for name in ("Go button", "Full name", "Email address", "Pick one",
+                     "Hover target", "Upload file", "Double click target", "Alert button")
+    }
+    # This driver prunes the aria-label off the two non-interactive drag divs and
+    # keeps their text, so they are addressed by what the tree actually calls them.
+    refs["Drag source"] = ref_for_any(snap, "Drag source", "DRAGSRC")
+    refs["Drop target"] = ref_for_any(snap, "Drop target", "DROPHERE")
+    missing = [k for k, v in refs.items() if not v]
+    led.check("every labelled control resolved to a uid", not missing, f"missing={missing}")
+
+    # ---- wait_for: the native Text arm ------------------------------------
     led.log("\n--- wait_for: the native Text arm ---")
     ok, res = await p.call("browser_wait_for", text=args.late_marker, timeout_ms=8000)
     led.check("wait_for(text) finds a delayed string",
@@ -710,6 +745,7 @@ async def scenario_existing(rpc, led, args):
     led.check("wait_for(text) reports a genuine absence",
               ok and res.get("success") and res.get("found") is False, json.dumps(res)[:200])
 
+    # ---- wait_for: the SHARED evaluate-probe arms --------------------------
     led.log("\n--- wait_for: the SHARED evaluate-probe arms ---")
     # The pair that matters. A backend whose `evaluate` echoed the script would
     # answer "found" to both, which is indistinguishable from working unless the
@@ -728,12 +764,283 @@ async def scenario_existing(rpc, led, args):
     led.check("wait_for(url_contains) reports a URL that does not match",
               ok and res.get("success") and res.get("found") is False, json.dumps(res)[:200])
 
-    led.log("\n--- the act path ---")
-    cref = ref_for(snap, "Go button")
-    if led.check("a labelled control resolved to a ref", bool(cref), f"ref={cref!r}"):
-        ok, res = await p.call("browser_click", ref_id=cref)
+    # ---- click / dblclick --------------------------------------------------
+    led.log("\n--- click / dblclick ---")
+    if refs["Go button"]:
+        ok, res = await p.call("browser_click", ref_id=refs["Go button"])
         led.check("browser_click returns success", ok and res.get("success"), json.dumps(res)[:200])
         await p.effect("…and the page's click handler actually ran", "#clicked", "clicked:yes")
+    if refs["Double click target"]:
+        ok, res = await p.call("browser_click", ref_id=refs["Double click target"], double=True)
+        led.check("browser_click double=true returns success",
+                  ok and res.get("success"), json.dumps(res)[:200])
+        await p.effect("…and the page saw a real dblclick", "#dblclicked", "dbl:yes")
+
+    # ---- type / fill_form / select ----------------------------------------
+    # This driver has no keystroke-level write with a target: `browser_type`
+    # routes through the MCP `fill` (clear-then-set). The claim is therefore
+    # about the value landing, not about per-character input.
+    led.log("\n--- type / fill_form / select ---")
+    typed = "TYPED_" + args.marker
+    ok, res = await p.call("browser_type", ref_id=refs["Full name"], text=typed)
+    led.check("browser_type returns success", ok and res.get("success"), json.dumps(res)[:200])
+    await p.effect("…and the text landed in that input", "#name", typed, prop="value")
+
+    # The verb that shipped broken on this driver: the native `fill_form` takes
+    # its array under `elements`. Both fields are asserted — a loop that filled
+    # only the first would satisfy a one-field check.
+    ok, res = await p.call(
+        "browser_fill_form",
+        fields=[
+            {"ref_id": refs["Full name"], "value": "FILLED_NAME"},
+            {"ref_id": refs["Email address"], "value": "QA"},
+        ],
+    )
+    led.check("browser_fill_form returns success", ok and res.get("success"), json.dumps(res)[:220])
+    await p.effect("…field 1 was filled", "#name", "FILLED_NAME", prop="value")
+    await p.effect("…field 2 was filled (both, not just the first)", "#email", "QA", prop="value")
+
+    ok, res = await p.call("browser_select", ref_id=refs["Pick one"], value="b")
+    led.check("browser_select returns success", ok and res.get("success"), json.dumps(res)[:200])
+    await p.effect("…and the change event fired with the new value", "#picked", "picked:b")
+
+    # ---- hover / press_key / drag -----------------------------------------
+    led.log("\n--- hover / press_key / drag ---")
+    ok, res = await p.call("browser_hover", ref_id=refs["Hover target"])
+    led.check("browser_hover returns success", ok and res.get("success"), json.dumps(res)[:200])
+    await p.effect("…and the page saw a real mouseover", "#hovered", "hovered:yes")
+
+    await p.call("browser_click", ref_id=refs["Email address"])
+    await p.call("browser_press_key", key="End")
+    ok, res = await p.call("browser_press_key", key="Backspace")
+    led.check("browser_press_key returns success", ok and res.get("success"), json.dumps(res)[:200])
+    ok, val = await p.dom("#email", "value")
+    led.check("…and the keystroke edited the focused field", ok and val == "Q", f"value={val!r}")
+
+    if refs["Drag source"] and refs["Drop target"]:
+        ok, res = await p.call("browser_drag", from_ref=refs["Drag source"],
+                               to_ref=refs["Drop target"])
+        led.check("browser_drag returns success", ok and res.get("success"), json.dumps(res)[:200])
+        ok, val = await p.dom("#dropped")
+        led.check("…and the drop target observed the gesture", ok and val != "dropped:no",
+                  f"state={val!r}")
+
+    # ---- scroll / resize / screenshot -------------------------------------
+    led.log("\n--- scroll / resize / screenshot ---")
+    # On this driver `scroll` is a PageDown keypress, so the claim is about the
+    # viewport having moved and not about which primitive moved it.
+    ok, res = await p.call("browser_scroll", direction="down")
+    led.check("browser_scroll returns success", ok and res.get("success"), json.dumps(res)[:200])
+    ok, val = await p.js("window.scrollY")
+    led.check("…and the viewport actually moved",
+              ok and isinstance(val, (int, float)) and val > 0, f"scrollY={val!r}")
+
+    ok, res = await p.call("browser_resize", width=900, height=600)
+    led.check("browser_resize returns success", ok and res.get("success"), json.dumps(res)[:200])
+    ok, val = await p.js("[window.innerWidth, window.innerHeight].join('x')")
+    led.check("…and the viewport is the size we asked for", ok and val == "900x600", f"inner={val!r}")
+
+    ok, res = await p.call("browser_screenshot")
+    b64 = (res or {}).get("image_base64") if isinstance(res, dict) else None
+    led.check("browser_screenshot returns success", ok and res.get("success"), json.dumps(res)[:200])
+    png = False
+    if b64:
+        try:
+            png = base64.b64decode(b64)[:8] == b"\x89PNG\r\n\x1a\n"
+        except Exception:  # noqa: BLE001 - a malformed payload is the failure
+            png = False
+    led.check("…and the payload decodes to a real PNG", png, f"len={len(b64 or '')}")
+
+    # ---- console / network -------------------------------------------------
+    led.log("\n--- console / network ---")
+    ok, res = await p.call("browser_console")
+    msgs = (res or {}).get("messages") or "" if isinstance(res, dict) else ""
+    led.check("browser_console carries the page's own console.log",
+              ok and res.get("success") and args.console_marker in msgs,
+              f"messages[:200]={msgs[:200]!r}")
+
+    ok, res = await p.call("browser_network")
+    reqs = (res or {}).get("requests") or "" if isinstance(res, dict) else ""
+    led.check("browser_network carries the subresource the page fetched",
+              ok and res.get("success") and "net-probe.json" in reqs,
+              f"requests[:200]={reqs[:200]!r}")
+
+    # ---- emulate -----------------------------------------------------------
+    # This driver's emulation surface is a strict SUPERSET of the managed one:
+    # `color_scheme` is the axis the managed backend refuses, so asserting it
+    # here is what tells the two capability sets apart empirically instead of
+    # from the docs.
+    led.log("\n--- emulate ---")
+    ok, val = await p.js("matchMedia('(prefers-color-scheme: dark)').matches")
+    led.check("baseline: the page is not in dark mode", ok and val is False, f"dark={val!r}")
+    ok, res = await p.call("browser_emulate", color_scheme="dark")
+    led.check("browser_emulate(color_scheme) returns success on THIS driver",
+              ok and res.get("success"), json.dumps(res)[:220])
+    ok, val = await p.js("matchMedia('(prefers-color-scheme: dark)').matches")
+    led.check("…and the page really sees dark mode", ok and val is True, f"dark={val!r}")
+    await p.call("browser_emulate", color_scheme="auto")
+
+    ok, res = await p.call("browser_emulate", network_condition="offline")
+    led.check("browser_emulate(network_condition) returns success",
+              ok and res.get("success"), json.dumps(res)[:220])
+    ok, val = await p.js("navigator.onLine")
+    led.check("…and the page really went offline", ok and val is False, f"onLine={val!r}")
+    # Restore before anything else needs the network — a scenario that leaves
+    # the tab offline turns every later navigation into a failure with an
+    # unrelated-looking message.
+    await p.call("browser_emulate", network_condition="online")
+    ok, val = await p.js("navigator.onLine")
+    led.check("…and it comes back online", ok and val is True, f"onLine={val!r}")
+
+    # ---- tabs --------------------------------------------------------------
+    led.log("\n--- tabs ---")
+    ok, res = await p.call("browser_tabs", action="list")
+    tabs = (res or {}).get("tabs") or [] if isinstance(res, dict) else []
+    led.check("browser_tabs list returns the open tabs", ok and len(tabs) >= 1, json.dumps(res)[:220])
+    before = len(tabs)
+    ok, res = await p.call("browser_open", url=args.page_url)
+    second_tab = (res or {}).get("tab_id")
+    ok, res = await p.call("browser_tabs", action="list")
+    tabs2 = (res or {}).get("tabs") or [] if isinstance(res, dict) else []
+    led.check("…and a newly opened tab shows up in the listing", len(tabs2) == before + 1,
+              f"{before} -> {len(tabs2)}")
+    ok, res = await p.call("browser_tabs", action={"switch": {"tab_id": str(first_tab)}})
+    led.check("browser_tabs switch returns success", ok and res.get("success"), json.dumps(res)[:200])
+    ok, res = await p.call("browser_tabs", action={"close": {"tab_id": str(second_tab)}})
+    led.check("browser_tabs close returns success", ok and res.get("success"), json.dumps(res)[:200])
+    ok, res = await p.call("browser_tabs", action="list")
+    tabs3 = (res or {}).get("tabs") or [] if isinstance(res, dict) else []
+    led.check("…and the closed tab is gone from the listing", len(tabs3) == before,
+              f"{len(tabs2)} -> {len(tabs3)}")
+
+    # ---- navigate: goto / back / refresh -----------------------------------
+    led.log("\n--- navigate goto / back ---")
+    ok, res = await p.call("browser_navigate", action={"goto": {"url": args.second_url}})
+    led.check("browser_navigate goto returns success", ok and res.get("success"), json.dumps(res)[:200])
+    ok, val = await p.js("location.href")
+    led.check("…and the tab is on the new URL", ok and "second" in str(val), f"href={val!r}")
+    ok, res = await p.call("browser_navigate", action="back")
+    led.check("browser_navigate back returns success", ok and res.get("success"), json.dumps(res)[:200])
+    ok, val = await p.js("location.href")
+    led.check("…and the tab went back", ok and "second" not in str(val), f"href={val!r}")
+    # Refresh is a third arm of the same MCP tool (`navigate_page {type}`), and
+    # its effect is that page state is gone: the click flag returns to baseline.
+    await p.call("browser_click", ref_id=refs["Go button"])
+    await p.effect("staged: the click flag is set before the refresh", "#clicked", "clicked:yes")
+    ok, res = await p.call("browser_navigate", action="refresh")
+    led.check("browser_navigate refresh returns success",
+              ok and res.get("success"), json.dumps(res)[:200])
+    await p.effect("…and the reload really discarded page state", "#clicked", "clicked:no")
+
+    # ---- emulate: the identity axis ----------------------------------------
+    # `user_agent` carries an identity rather than a presentation preference —
+    # it is why `browser_emulate` is gated as `BrowserIdentityOverride` — and the
+    # managed driver cannot apply it at all, so it is a second place the two
+    # capability sets are told apart by effect rather than by documentation.
+    led.log("\n--- emulate: user agent ---")
+    ua = "AlephQA/" + args.marker
+    ok, res = await p.call("browser_emulate", user_agent=ua)
+    led.check("browser_emulate(user_agent) returns success",
+              ok and res.get("success"), json.dumps(res)[:220])
+    ok, val = await p.js("navigator.userAgent")
+    led.check("…and the page reports the user agent we asked for",
+              ok and str(val) == ua, f"ua={val!r}")
+    await p.call("browser_emulate", user_agent="")
+
+    # ---- browser_exec on this driver ---------------------------------------
+    led.log("\n--- browser_exec (multi-step, on the MCP driver) ---")
+    ok, res = await p.call(
+        "browser_exec",
+        actions=[
+            {"action": "navigate", "url": args.page_url},
+            {"action": "wait", "text": args.late_marker, "timeout_ms": 8000},
+            {"action": "snapshot"},
+        ],
+    )
+    led.check(
+        "browser_exec ran every step",
+        ok and res.get("success") and res.get("completed") == res.get("total")
+        and res.get("failed_at") is None,
+        json.dumps({k: res.get(k) for k in
+                    ("success", "total", "completed", "failed_at", "message")})[:240],
+    )
+    # `navigate` reloaded the page, so the click state is back to its baseline —
+    # which is itself the evidence the navigate step ran.
+    await p.effect("…and the navigate step really reloaded the page", "#clicked", "clicked:no")
+
+    # ---- upload, from OUTSIDE the OS temp dir ------------------------------
+    # chrome-devtools-mcp gates every `filePath` argument through `validatePath`,
+    # which is a no-op while the client has declared no `roots` capability and a
+    # tmpdir-plus-roots allowlist once it has. Aleph declares `sampling` only
+    # (`aleph_client_capabilities`), so the gate should be inert — but "should"
+    # is a reading of someone else's source, and the QA_ROOT scratch dir lives
+    # UNDER $TMPDIR, so an upload from there would satisfy the allowlist too and
+    # prove nothing either way. The file is therefore planted outside the temp
+    # dir, and that fact is asserted before it is used.
+    led.log("\n--- upload (file outside the OS temp dir) ---")
+    outside = args.outside_tmp_file
+    tmp_root = os.path.realpath(tempfile.gettempdir())
+    real_outside = os.path.realpath(outside) if outside else ""
+    led.check(
+        "the upload payload really is outside the OS temp dir",
+        bool(real_outside) and os.path.exists(real_outside)
+        and not real_outside.startswith(tmp_root + os.sep),
+        f"file={real_outside} tmp={tmp_root}",
+    )
+    ok, snap, _ = await p.snapshot()
+    fref = ref_for(snap, "Upload file")
+    ok, res = await p.call("browser_upload", paths=[outside], ref_id=fref)
+    led.check("browser_upload returns success for a path outside the temp dir",
+              ok and res.get("success"), json.dumps(res)[:260])
+    await p.effect("…and the page's file input holds the file",
+                   "#filename", os.path.basename(outside))
+
+    # ---- capabilities this driver does NOT have ----------------------------
+    # A missing capability must arrive as a refusal that names the remedy, not
+    # as a success. The positive half above cannot catch a stub that returns
+    # `success: true` and does nothing; only this half can.
+    led.log("\n--- the one-sided capabilities: refusal, not silent success ---")
+    for tool, kw in (
+        ("browser_pdf", {"output_path": os.path.join(args.out_dir, "existing.pdf")}),
+        ("browser_session", {"action": "save", "name": "qastate-existing"}),
+        ("browser_cookies", {"action": "list"}),
+    ):
+        ok, res = await p.call(tool, **kw)
+        blob = json.dumps(res)
+        led.check(
+            f"{tool} is refused on the existing-session driver",
+            not (ok and isinstance(res, dict) and res.get("success")),
+            blob[:200],
+        )
+        led.check(
+            f"…and the refusal names the remedy (a managed profile), not just the gap",
+            "managed profile" in blob,
+            blob[:260],
+        )
+
+    # ---- dialog (blocks the page, so last) ---------------------------------
+    led.log("\n--- dialog ---")
+    ok, snap, _ = await p.snapshot()
+    aref = ref_for(snap, "Alert button")
+    ok, res = await p.call("browser_click", ref_id=aref)
+    led.log(f"  (click on the alert button returned: {json.dumps(res)[:200]})")
+    ok, res = await p.call("browser_dialog", action="accept")
+    led.check("browser_dialog accept returns success", ok and res.get("success"), json.dumps(res)[:220])
+    ok, val = await p.dom("#marker")
+    led.check("…and the page is responsive again afterwards", ok and args.marker in str(val),
+              f"marker={str(val)[:120]}")
+
+    # `dismiss` is a different argument down the same path, and the claim is the
+    # same: the page is usable again. An `accept`-only test would pass just as
+    # well for a backend that ignored the action word entirely.
+    ok, res = await p.call("browser_click", ref_id=aref)
+    led.log(f"  (second alert click returned: {json.dumps(res)[:160]})")
+    ok, res = await p.call("browser_dialog", action="dismiss")
+    led.check("browser_dialog dismiss returns success", ok and res.get("success"),
+              json.dumps(res)[:220])
+    ok, val = await p.dom("#marker")
+    led.check("…and the page is responsive after a dismiss too",
+              ok and args.marker in str(val), f"marker={str(val)[:120]}")
 
 
 SCENARIOS = {
@@ -765,6 +1072,7 @@ def parse_args():
     ap.add_argument("--control-user-data-dir", default="")
     ap.add_argument("--control-max-tabs", type=int, default=2)
     ap.add_argument("--existing-profile", default="existing")
+    ap.add_argument("--outside-tmp-file", default="")
     ap.add_argument("--idle-secs", type=int, default=5)
     ap.add_argument("--wait-secs", type=int, default=150)
     return ap.parse_args()

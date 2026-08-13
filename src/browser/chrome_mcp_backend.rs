@@ -205,8 +205,14 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     /// Delegates to `fill` (clear-then-set), not keystroke simulation.
-    /// The chrome-devtools-mcp server does not expose a discrete `type` tool,
-    /// so this behaves as fill rather than as character-by-character typing.
+    ///
+    /// The server *does* expose a `type_text` tool — an earlier note here said
+    /// it did not — but its schema is `{text, submitKey}` with **no element
+    /// argument**: it types into whatever currently has focus. `browser_type`
+    /// takes a target, so routing it through `type_text` would silently drop
+    /// the caller's ref and type into some other element. `fill` is the only
+    /// targeted write this server offers; the cost is that the write is not
+    /// character-by-character, which is what this comment exists to say.
     async fn type_text(
         &self,
         tab_id: &str,
@@ -322,21 +328,63 @@ impl BrowserBackend for ChromeMcpBackend {
         let result = self
             .select_and_call(tab_id, "evaluate_script", json!({ "function": js }))
             .await?;
-        Ok(Self::extract_text(&result))
+        let text = Self::extract_text(&result);
+        // Hand back the VALUE, not the server's prose about it. The managed
+        // driver had this same defect and it was fixed there; leaving it here
+        // meant the two drivers answered the same `browser_evaluate` call with
+        // two different shapes — one a JSON scalar, the other
+        // "Script ran on page and returned:\n```json\n<value>\n```" — so any
+        // caller that compared a value (rather than searching a substring) was
+        // right on one driver and wrong on the other.
+        Ok(parse_evaluate_value(&text).unwrap_or(text))
     }
 
+    /// Set a `<select>`'s value.
+    ///
+    /// NOT `fill`. chrome-devtools-mcp's `fill` waits for the element to become
+    /// "interactive" in the sense a text field is, which a `<select>` never
+    /// does: every call came back
+    /// `Failed to interact with the element with uid … within the configured
+    /// timeout`, so `browser_select` on an existing-session profile had never
+    /// once changed a dropdown. `fill_form` fails identically — it is the same
+    /// locator underneath — so batching was not an escape either.
+    ///
+    /// The server exposes no select primitive, so the write goes through
+    /// `evaluate_script`, whose `args` are **element uids resolved by the
+    /// server**. That matters: the alternative was to synthesise a CSS selector
+    /// from the ref, which is the guessing this driver's whole uid scheme
+    /// exists to avoid.
+    ///
+    /// Assigning a value that matches no `<option>` leaves `el.value` as the
+    /// empty string and raises nothing, so the function returns what it landed
+    /// on and a mismatch is reported as a failure. Silently answering "selected"
+    /// for an option that does not exist is the failure mode this whole driver
+    /// keeps being caught by.
     async fn select(
         &self,
         tab_id: &str,
         target: ActionTarget,
         value: &str,
     ) -> Result<(), BrowserError> {
-        // Inline `fill`'s body rather than delegating: calling the public `fill`
-        // here would re-acquire the per-profile lock and deadlock.
         let element = Self::extract_element_ref(&target)?;
-        self.select_and_call(tab_id, "fill", json!({ "uid": element, "value": value }))
+        let result = self
+            .select_and_call(
+                tab_id,
+                "evaluate_script",
+                select_script_args(&element, value),
+            )
             .await?;
-        Ok(())
+        let landed = Self::extract_text(&result);
+        let landed = parse_evaluate_value(&landed)
+            .and_then(|v| serde_json::from_str::<String>(&v).ok())
+            .unwrap_or_default();
+        if landed == value {
+            return Ok(());
+        }
+        Err(BrowserError::ActionFailed(format!(
+            "select did not take: asked for '{value}', the element now holds '{landed}' \
+             (no matching <option>?)"
+        )))
     }
 
     async fn press_key(&self, tab_id: &str, key: &str) -> Result<(), BrowserError> {
@@ -464,7 +512,8 @@ impl BrowserBackend for ChromeMcpBackend {
         // chrome-devtools-mcp's `upload_file` is single-file; apply each path in order.
         for path in paths {
             self.call("upload_file", json!({ "uid": uid, "filePath": path }))
-                .await?;
+                .await
+                .map_err(explain_path_denial)?;
         }
         Ok(())
     }
@@ -537,10 +586,108 @@ impl BrowserBackend for ChromeMcpBackend {
                 "No valid ref_id targets for fill_form".into(),
             ));
         }
-        self.select_and_call(tab_id, "fill_form", json!({ "fields": form_fields }))
+        let count = form_fields.len();
+        self.select_and_call(tab_id, "fill_form", fill_form_args(form_fields))
             .await?;
-        Ok(form_fields.len())
+        Ok(count)
     }
+}
+
+/// Pull the value out of chrome-devtools-mcp's `evaluate_script` transcript.
+///
+/// The server answers a successful evaluation with
+///
+/// ```text
+/// Script ran on page and returned:
+/// ```json
+/// <the JSON-encoded value>
+/// ```
+/// ```
+///
+/// and a thrown script with a bare `Error: …` carrying no fence at all. So the
+/// fence is the anchor, and its absence means "there is no value here" — the
+/// caller then passes the text on unchanged rather than inventing one. Same
+/// contract as the managed driver's `playwright_cli::parse_result_value`, which
+/// exists for the same reason on the other side.
+///
+/// A JSON scalar is always a single line (strings escape their newlines), and a
+/// returned string containing a fence arrives quoted (`"```"`), so requiring the
+/// closing line to be exactly ``` cannot be satisfied by the payload.
+fn parse_evaluate_value(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    lines.by_ref().find(|l| l.trim() == "```json")?;
+    let mut value = String::new();
+    for line in lines {
+        if line.trim() == "```" {
+            return Some(value.trim().to_string());
+        }
+        if !value.is_empty() {
+            value.push('\n');
+        }
+        value.push_str(line);
+    }
+    // An opening fence with no close is a truncated answer, not a value.
+    None
+}
+
+/// Arguments for the `evaluate_script` call that stands in for a select
+/// primitive. Split out so the shape is pinned by a test rather than reviewed.
+fn select_script_args(uid: &str, value: &str) -> serde_json::Value {
+    // The value is baked into the function source, not passed through `args`:
+    // `args` items are *element uids* the server resolves, so a plain string
+    // there comes back as `Element uid "b" not found on page`.
+    let encoded = serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string());
+    let function = format!(
+        "(el) => {{ el.value = {encoded}; \
+         el.dispatchEvent(new Event('input', {{ bubbles: true }})); \
+         el.dispatchEvent(new Event('change', {{ bubbles: true }})); \
+         return el.value; }}"
+    );
+    json!({ "function": function, "args": [uid] })
+}
+
+/// Turn chrome-devtools-mcp's path refusal into one that names the remedy.
+///
+/// From 1.6.0 the server restricts every `filePath` argument to the OS temp
+/// directory unless the client negotiated MCP `roots` or the operator passed
+/// `--allow-unrestricted-paths`. Aleph declares `sampling` only
+/// (`mcp::modern::aleph_client_capabilities`), so uploading anything from
+/// outside the temp dir — a user's Downloads folder, say — came back as a bare
+/// "Access denied: path … is not within any of the configured workspace roots",
+/// which names neither the server that refused nor the switch that lifts it.
+///
+/// [`super::profile::default_chrome_mcp_args`] now passes that switch, so this
+/// only fires for an operator who has overridden `args` — exactly the person
+/// who can act on the advice.
+fn explain_path_denial(err: BrowserError) -> BrowserError {
+    let text = err.to_string();
+    if !text.contains("Access denied") || !text.contains("workspace roots") {
+        return err;
+    }
+    BrowserError::ActionFailed(format!(
+        "{text}\n\nThis is chrome-devtools-mcp's own path restriction, not Aleph's: from v1.6.0 \
+         it confines file arguments to the OS temp directory for clients that do not negotiate \
+         MCP roots. Add \"--allow-unrestricted-paths\" to \
+         [general.browser.chrome_mcp] args, or copy the file into the temp directory first."
+    ))
+}
+
+/// Arguments for chrome-devtools-mcp's native `fill_form`.
+///
+/// The array key is **`elements`**, not `fields`. Aleph sent `fields`, and the
+/// server's schema marks `elements` as *required* while leaving
+/// `additionalProperties: true` — so the stray key was tolerated and the
+/// missing one rejected the call outright. `browser_fill_form` on an
+/// existing-session profile had therefore never once filled a form; every
+/// invocation came back `MCP error -32602: Input validation error`.
+///
+/// Same shape as the `wait_for` string-vs-list defect directly below, on the
+/// same driver, for the same reason: a wire contract with an external server
+/// cannot be checked by a fake backend, because a fake answers with whatever
+/// the code hoped for. Only the real `tools/list` schema — or a real call —
+/// settles it.
+fn fill_form_args(elements: Vec<serde_json::Value>) -> serde_json::Value {
+    json!({ "elements": elements })
 }
 
 /// Arguments for chrome-devtools-mcp's native `wait_for`.
@@ -636,6 +783,81 @@ mod tests {
         let transport =
             BrowserError::ChromeMcpTransport("I/O error: request timed out; broken pipe".into());
         assert!(super::classify_wait_error(transport, "t1").is_err());
+    }
+
+    /// Shapes copied verbatim from a live chrome-devtools-mcp 1.7.0 — a
+    /// hand-imagined transcript here would reproduce the very mistake the
+    /// parser exists to correct.
+    #[test]
+    fn parse_evaluate_value_takes_the_value_out_of_the_transcript() {
+        let t = "Script ran on page and returned:\n```json\n0\n```";
+        assert_eq!(super::parse_evaluate_value(t).as_deref(), Some("0"));
+        let t = "Script ran on page and returned:\n```json\n{\"a\":1,\"b\":[1,2]}\n```";
+        assert_eq!(
+            super::parse_evaluate_value(t).as_deref(),
+            Some("{\"a\":1,\"b\":[1,2]}")
+        );
+        // A returned string that is itself a fence: it arrives quoted, so the
+        // closing-fence line stays unambiguous.
+        let t = "Script ran on page and returned:\n```json\n\"```\"\n```";
+        assert_eq!(super::parse_evaluate_value(t).as_deref(), Some("\"```\""));
+    }
+
+    /// A thrown script carries no fence. `None` means "pass the text on", not
+    /// "the value was empty" — folding the two would hand the model an empty
+    /// string where an error message belongs.
+    #[test]
+    fn parse_evaluate_value_declines_a_transcript_with_no_value() {
+        assert_eq!(super::parse_evaluate_value("Error: boom"), None);
+        assert_eq!(super::parse_evaluate_value(""), None);
+        // Opening fence, no close: truncated, not a value.
+        assert_eq!(
+            super::parse_evaluate_value("Script ran on page and returned:\n```json\n1"),
+            None
+        );
+    }
+
+    /// The value belongs in the function source. `args` items are element uids
+    /// the server resolves, so a bare string there comes back as
+    /// `Element uid "b" not found on page`.
+    #[test]
+    fn select_passes_only_the_uid_as_an_arg() {
+        let args = super::select_script_args("1_6", "b");
+        assert_eq!(args["args"], serde_json::json!(["1_6"]));
+        let function = args["function"].as_str().expect("function is a string");
+        assert!(function.contains("el.value = \"b\""), "{function}");
+        assert!(function.contains("'change'"), "{function}");
+    }
+
+    /// The refusal must name the switch that lifts it. Anything else passes
+    /// through untouched — a wrapper that fired on every error would bury the
+    /// real message under advice about a setting that is not the problem.
+    #[test]
+    fn a_path_denial_names_the_switch_and_nothing_else_does() {
+        let denied = BrowserError::ChromeMcpError(
+            "Access denied: path /home/u/a.txt (canonical: /home/u/a.txt) is not within any of \
+             the configured workspace roots."
+                .into(),
+        );
+        let text = super::explain_path_denial(denied).to_string();
+        assert!(text.contains("--allow-unrestricted-paths"), "{text}");
+
+        let unrelated = BrowserError::ChromeMcpError("Element uid \"1_6\" not found".into());
+        let text = super::explain_path_denial(unrelated).to_string();
+        assert!(!text.contains("--allow-unrestricted-paths"), "{text}");
+    }
+
+    /// Pins the argument shape against the server's schema. The key is
+    /// `elements`; `fields` reads just as plausibly and is what shipped, which
+    /// is exactly why it needs pinning rather than reviewing.
+    #[test]
+    fn fill_form_sends_its_array_under_elements() {
+        let args = super::fill_form_args(vec![serde_json::json!({"uid": "1_2", "value": "x"})]);
+        assert_eq!(
+            args,
+            serde_json::json!({ "elements": [{"uid": "1_2", "value": "x"}] }),
+            "chrome-devtools-mcp's fill_form requires `elements`"
+        );
     }
 
     /// Pins the argument shape against the server's schema, which is the only

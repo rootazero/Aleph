@@ -39,6 +39,45 @@ pub fn provider_vault_key(provider_name: &str) -> String {
     format!("ai:{provider_name}")
 }
 
+/// Whether a connectivity sweep should dial this provider at all.
+///
+/// This module already owned "can it answer a ping"; it did not own "should we
+/// even ask", and that one step earlier was answered twice with two different
+/// answers. `providers/connectivity` honoured the preset's
+/// `supports_health_check` opt-out; `providers.healthcheck` did not, so the six
+/// presets that opt out — OAuth-only endpoints and per-deployment hosts that
+/// 404 or rate-limit a `/models` probe — came back from the RPC as hard
+/// `unreachable` failures while the doctor check reported them, correctly, as
+/// not applicable. Neither face was reading the other, and both had tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeDisposition {
+    /// Dial it.
+    Probe,
+    /// The operator turned this provider off.
+    Disabled,
+    /// The preset declares that a `/models` probe cannot answer for it, so a
+    /// failure here would say nothing about the credential.
+    Unsupported,
+}
+
+/// Decide [`ProbeDisposition`] for one configured provider.
+///
+/// A provider with no preset (a custom relay) is probeable: the opt-out is a
+/// statement a preset makes about its own endpoint, and absence of a preset is
+/// not that statement.
+#[must_use]
+pub fn probe_disposition(provider_name: &str, enabled: bool) -> ProbeDisposition {
+    if !enabled {
+        return ProbeDisposition::Disabled;
+    }
+    if crate::providers::presets::get_preset(provider_name)
+        .is_some_and(|p| !p.supports_health_check)
+    {
+        return ProbeDisposition::Unsupported;
+    }
+    ProbeDisposition::Probe
+}
+
 /// Probe a single provider with a lightweight `ping` round-trip and measure
 /// latency. Takes a fully-resolved [`ProviderConfig`] (`api_key` already
 /// injected from the vault). Read-only: never mutates config or health state.
@@ -113,5 +152,47 @@ mod tests {
     #[test]
     fn shared_timeout_is_ten_seconds() {
         assert_eq!(PROBE_TIMEOUT, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn the_operator_switch_outranks_everything() {
+        assert_eq!(
+            probe_disposition("openai", false),
+            ProbeDisposition::Disabled
+        );
+        // Even for a preset that could not be probed anyway: the operator's
+        // own answer is the one to report back.
+        assert_eq!(
+            probe_disposition("chatgpt", false),
+            ProbeDisposition::Disabled
+        );
+    }
+
+    /// The bit that used to be read on one face and not the other.
+    #[test]
+    fn a_preset_that_opts_out_of_probing_is_not_dialled() {
+        for name in crate::providers::presets::canonical_profiles()
+            .iter()
+            .filter(|(_, p)| !p.supports_health_check)
+            .map(|(name, _)| *name)
+        {
+            assert_eq!(
+                probe_disposition(name, true),
+                ProbeDisposition::Unsupported,
+                "{name} declares no /models endpoint, so a probe can only fail"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_with_no_preset_is_probeable() {
+        // The opt-out is a statement a preset makes about its own endpoint.
+        // Absence of a preset is not that statement, and a custom relay is
+        // OpenAI-compatible by construction.
+        assert_eq!(
+            probe_disposition("some-custom-relay", true),
+            ProbeDisposition::Probe
+        );
+        assert_eq!(probe_disposition("openai", true), ProbeDisposition::Probe);
     }
 }

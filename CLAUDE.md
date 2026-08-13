@@ -232,7 +232,8 @@
 ### 0. 跨子系统通用形状（每次改动都适用）
 
 - **恒真的谓词等于没判，且它撒的谎只有对面看得见** —— 「有没有 handler」是结构性恒真，「这件事真做得到吗」才是谓词
-- **零消费者的通道优先 CUT，不 CONNECT** —— R10；接一条死抽象比删它贵
+- **零消费者的通道优先 CUT，不 CONNECT** —— R10；接一条死抽象比删它贵。⚠️ **但「优先」不是「一律」，而分辨它们的问句不是"这东西有用吗"（什么都有用），是「这个问题在仓里已经有几个答案」**：同一天在 `providers.*` 上抓到的两个零客户端 RPC 要了**相反**的处置——`needsSetup` 是"agent 能不能作答"的**第三个**答案（Panel 清单一个、它一个、真相一个）⇒ CUT；`healthcheck` 答的那一问**没有别的答案**（`providers test` 只覆盖一个，`aleph doctor` 是整个引擎 + 散文 finding，而无头部署没有 Panel）⇒ CONNECT，代价是一条 CLI 命令。判据的第二半是**这个能力的第 N 个答案本身就是缺陷**：三个答案里有两个是错的，且方向相反（"有没有行" vs "点过 Test 没有"），因为没有一个是在问真正的那件事
+- **一个机制的存在理由如果写在另一个文件里，删它的人不会读到那里——而删除本身没有测试** —— 「同一事实的两份表述」最贵的形态：不是两份描述漂了，是**其中一份被当成残留清掉了**。`interfaces/webchat/dist/.gitkeep` 唯一的用途说明在 `.gitignore` 的注释里（就在保留它的那条规则上面两行），哨兵被读成 vestigial 删掉 ⇒ `#[derive(RustEmbed)]` 的 `folder` 不存在是**硬编译错误**，`alephcore` 在任何全新 clone 上四条错误起步，而删它的那笔改动在作者机器上有 dist/ 所以全绿。判据两句：① **删一个"看起来没用"的文件/常量/条目之前，grep 它的名字**——它的理由通常写在一个不会被一起打开的文件里（`.gitignore` / build 脚本 / 另一个 crate 的 doc）；② 修法**不是把哨兵加回来**，而是让那条要求**自满足**（`build.rs` 在自己 crate 编译前 `create_dir_all`），因为一条靠"有人知道"活着的约定会被删第二次
 - **守卫要断言「效果到达了」，不是「调用发生了」** —— 问「把这一步的返回值扔掉，测试还绿吗？」绿 ⇒ 你守的是产地不是连线 → §3.5
 - **一张列举法名单的上游，常常是一个装了两种东西的字段** —— 白名单存在，往往不是因为作者偷懒，而是因为**形状答不了那一问**，消费者只能靠字段之外的信息重建区别。`ScratchpadOutput.content` 同时装原始 markdown 与进度回显 ⇒ 频道推送只能靠 `PROGRESS_ACTIONS` 四个动作名判断"这算不算进度"，而名单只描述立法当天的动作。删名单之前先问**这两种东西凭什么共用一个字段**；拆成两个字段之后判据回到形状上，名单整体消失（不是缩短）→ §3.13
 - **收敛写者时要数一遍写者，不然最后那个是靠没人扫过活下来的** —— 「所有写 X 的路径都必须走单一源」这类收敛**分三轮**才做完过：`upsert_section` 收了 `set_objective`/`set_plan`（§3.13 ⑤），一轮后发现 `set_item_status` 没加入（round-2 ②），再一轮后发现 `append_note` **也**没加入（2026-08-10 ②）——每一轮都以为自己扫完了，每一轮的漏网者都在报 `success: true` 地做 no-op。判据：写下"现在所有写者都过单一源了"之前，**grep 出这个 section / 这张表 / 这个键的全部写入点并逐个点名**，别按记忆列举 → §3.13
@@ -494,6 +495,10 @@
 
 - **「这个 CLI 没有对应 flag」不等于「没有对应面」** —— 上一条的孪生，且它推翻的是一条**有理有据的旧记录**：上一轮读了 `--help` 的 flag 列表、没找到 proxy/user_data_dir/extra_args，就诚实记下「无对应面，猜 flag 名会产出静默忽略」。找错了面——`open --config <file>` 有一份文档化的 JSON schema（`browser.launchOptions` 就是 playwright `LaunchOptions`，含 `proxy` 与 `args`），`close` 也一直存在。判据：写下「这个外部工具做不到 X」之前，**把 flag 列表、配置文件 schema、子命令表分别看一遍**；三者是三个面，`--help` 只答得了第一个 → §3.12
 - **一个「读外部进程输出」的 parser，格式必须从**真实输出**抄，不能从记忆里描述** —— `parse_tab_line` 的 doc 写着「Playwright CLI 格式 `Tab N: URL`」，那个格式**没有任何 driver 发过**（真格式 `- 1: (current) [Title](url)`）⇒ 每一行解析成 `None`，而后果不是"少了点信息"：`active_tab_id` 恒 `None` ⇒ tab id 回退哨兵、`post_nav` 的落点 SSRF 复检**对空列表审计通过**。判据：parser 的每种支持格式旁边要能指出它是从哪次真实输出抄来的 → §3.12
+- **一个 verb 发给外部 server 的参数名，只有那台 server 的 schema 能裁决——fake backend 结构上看不见它** —— 因为假后端返回的正是代码所期望的东西。chrome-devtools-mcp 的 `fill_form` 要 `elements`，Aleph 发的是 `fields`，而顶层 `additionalProperties: true` 会**收下**多余的键、只拒缺失的必填键 ⇒ 每次调用 `-32602`，`browser_fill_form` 在该 driver 上从未填过一次表。与 round-2 的 `wait_for` 收 `string[]` 而我们发裸字符串是同一个形状、同一个 driver。判据：接一个外部 MCP/CLI 动词时，**去问它 `tools/list`（或 `--help`/config schema）要真的 schema**，然后把参数构造抽成一个有名字的函数、用测试把键钉住——「这个键读起来很合理」是这类缺陷的全部成因 → §3.12
+- **⚠️ 而你读的那份源码，必须是正在跑的那个版本** —— 上一条的元判据，本轮亲自踩：npx 缓存里躺着 8 个版本的 chrome-devtools-mcp，我用 `ls -d … | tail -1` 打开了 **1.3.0**（那里路径闸对未协商 roots 的客户端确实是 no-op），而 run.sh 用 `sort -V | tail -1` 跑的是 **1.7.0**（v1.6.0 起路径闸**默认生效**，`roots()` 恒含 tmpdir，只有 `--allow-unrestricted-paths` 能关）。源码说「没有限制」，真机说「Access denied」。判据一句话：**写下「这个外部工具的行为是 X」之前，先确认你读的那份拷贝就是被测的那份**；版本选择用 `sort -V`，别用目录序
+- **两个 backend 实现同一个 trait 时，一边修好的判据要主动搬过去**（§0 孪生条的 backend 形态）—— 管理型 driver 在 round-2 被修成「交出值而不是通话记录」（`parse_result_value`），MCP driver 没有：`browser_evaluate` 一直回「Script ran on page and returned: + 一段 json 代码块」这样一段散文。**症状不是报错，是同一个工具在两个 driver 上返回两种形状** ⇒ 任何比较值（而非子串搜索）的调用方在一个 driver 上对、在另一个上错。单一源 `chrome_mcp_backend::parse_evaluate_value`，契约与 `playwright_cli::parse_result_value` 逐条对齐（无 fence ⇒ `None` ⇒ 原样透传，因为抛异常的脚本回的是裸 `Error:`）
+- **一个 trait 默认方法说「不支持」时，正面覆盖测不到它——负面那半要单独断言** —— MCP driver 的 `pdf`/`save_state`/`cookies` 是一侧能力，`Err(unsupported_in_existing_session)`；一个返回 `success: true` 却什么都不做的桩，正面用例一条都抓不到。QA 因此对这三个动词断言**拒绝**且**拒绝里点名补救**（"use a managed profile"）
 - **凡「无 X 降级」的测试，先问它的绿是代码属性还是机器属性** —— 那批断言在浏览器不可达时全绿，`open` 一修好，其中一个当场把真 Chrome 开到公网（而它的慢路径还会**联网装运行时**）。密封点要落在**唯一那个伸手到进程外的边界**（这里是 `resolve_binary` 的 `cfg(test)` 早返回），不是逐个改测试——后者会漏，且下一个新测试默认不密封。⚠️ 两条配套：密封**本身要有断言**（否则它只是没被证伪过），且要说清**它覆盖哪几种块**（`cfg(test)` 只覆盖 `--lib`，`tests/` 集成测试不在其内）→ §3.12
 - **「动态路由」是三件事，且第三件不在 `src/routing/`** —— 工具选择（prompt，禁止意图分类）/ 消息→agent（`src/routing/`）/ 请求→provider（`src/providers/route_policy.rs`）。业界那些"路由大脑"整类违 R7，**不移植** → §3.6
 - **判断"这是主槽吗"只认 `SlotKind`，绝不能拿 `tier == Unknown` 当代理**（两个方向都错过）；**装饰器少一层委托，整条链的能力就没了**（门是 `AiProvider::supports_streaming()`）；**「这一轮用哪个模型」只有一个决定点** `runner_impl.rs::effective_model_directive`，**别让新来源止步于 UI** → §3.6
@@ -504,6 +509,7 @@
 ### 10. 构建与验证
 
 - **`cargo check` 不编译 `#[cfg(test)]`** —— 删 `pub fn` / 字段的同一笔里必须跑 `cargo test --no-run`；只跑 `cargo check` 等于没验证 → [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md)
+- **⚠️ 这条对每个 crate 都成立，而最小验证集只对 `alephcore` 用了 `--no-run`** —— `aleph-panel` 的文档化检查就是 `cargo check -p aleph-panel`，于是它的测试二进制在一次形状搬迁（`PresetProviderDto` → `aleph_protocol::providers::GenerationPresetRow`）之后**整程编译不过、805 条测试一条没跑**，包括同一段改动里新写的那些。同族更外一层：`cargo check` / `--lib` 也**不编译 `tests/`**，所以「这三个 re-export 零调用者」这类论断可以在两条命令都同意的情况下是假的（`tests/security_integration.rs` 一直在 import 它们，`--all-targets` 因此整程没构建过）。判据：**说"零调用者"之前，先问哪几条命令编译得到那些调用者**
 - **把一个函数改成 `async`，它的调用点会变成一个未 await 的 future——Rust 报的是 WARNING 不是 error** —— 于是那一步在**一切照常编译**的情况下静默停止执行。`freeze_owned_background_work` 加第三条腿时正是这个形状：整个停用扫描（吊销设备 / 撤销频道凭据 / 冻结 goal·loop·cron）会一起不再运行，而 `cargo check`、`cargo test --no-run`、CI 全绿。判据两句：① **给一个已有调用点的函数加 `async` 时，去读那些调用点**，别信构建；② grep 编译输出时别只筛 `^error`——这一类只出现在 `^warning` 里（`unused_must_use` / `unused` 家族）
 - **一个 `from_row` 配 N 个 `SELECT`，位置解码就是一份没有编译器背书的契约** —— 给其中一个投影加第 K 列会让另外那些的 `row.get(K)` 变成**运行时**错误（这里差点炸的是 `get_device_by_fingerprint`——每次远程 connect——与 `get_device`——节点准入）。判据：列清单收敛成**一个常量**由所有 `SELECT` 插值；「三处手抄的列名恰好一致」不是不变量，是巧合 → §5.22 round-4 ⑤
 - **CLI 参数定义的冲突是 debug 断言，不是编译错误——所以「编译 + 单测全绿」与「这个二进制根本起不来」可以同时为真** —— `aleph-tui` 的 `-c` 被 `--config` 和新加的 `--continue` 同时占用，clap 的 `debug_asserts` 在 `Args::parse()` 里 panic，**早于 main 的任何一行**：debug 构建 100% 启动即死、任何参数都一样；release 不 assert，改为静默把字母判给其中一个。三样东西同时看不见它：不是编译错误、`cargo check` 不编译测试、**而下面那五条最小验证集根本不到 `aleph-tui` / `aleph-cli` 这两个 crate**。判据两句：① 每个 clap 二进制都欠一条 `Args::command().debug_assert()` 测试（clap 自己的校验器，当测试跑）；② **给一个已发布的二进制加短参之前，先数这个字母已经有谁在用**——冲突时字母归**已发布**的那一个，新参数走长名（`--session` 在同一个 struct 里早有先例：`-s` 被 `--server` 占了就用 `-k`） → §5.23b
@@ -515,11 +521,11 @@
   ```
   cargo test -p alephcore --lib --no-run
   cargo test -p alephcore --features test-helpers --test '*' --no-run   # --all-targets 只展开 target 不展开 feature
-  cargo check -p aleph-panel                                            # -p alephcore 永远看不见这个 crate
+  cargo test -p aleph-panel --lib --no-run                               # check 看不见它的 #[cfg(test)]；曾整程编译不过
   cargo check -p aleph-desktop-{macos,windows,linux}                    # 跨平台改动要 check 那个目标的限肢 crate
   cargo clippy --all-targets                                            # examples 只有它才暴露
   ```
-- **`interfaces/webchat/` 有任何改动（哪怕不是你改的）就跑一次 `cargo check -p aleph-panel`** —— 这个 crate 的**语义合并冲突是常态形状**：一侧的类型 + 另一侧的调用点，git 不报冲突、两边单独看都完整。合并实现过同一功能的分支前先 grep 功能名；修完**先看警告再看错误**（`unused variable` 说明那半边根本没有调用者，正解是 CUT）
+- **`interfaces/webchat/` 有任何改动（哪怕不是你改的）就跑一次 `cargo test -p aleph-panel --lib`**（不是 `cargo check`——它看不见这个 crate 的测试模块，那正是 805 条测试整程没跑的原因） —— 这个 crate 的**语义合并冲突是常态形状**：一侧的类型 + 另一侧的调用点，git 不报冲突、两边单独看都完整。合并实现过同一功能的分支前先 grep 功能名；修完**先看警告再看错误**（`unused variable` 说明那半边根本没有调用者，正解是 CUT）
 - **`cargo check -p aleph-desktop-shell` 前需先 `just _stage-shell-placeholders`**（tauri-build 要求 externalBin 占位文件存在）
 - **`MessageRecord.timestamp` 单位有歧义**（SQLite 写秒 / file backend 写毫秒）—— 一律走 `MessageRecord::instant()` / `rfc3339()`（`src/gateway/session_store/types.rs`，1e11 分界），裸格式化就是这个 bug 的下一次复发。**源头未改是有意的**——该值同时是 `get_history_before` 的分页游标，改单位要连全部存量会话一起迁移
 
@@ -536,7 +542,7 @@
 | `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 §6.9 |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
-| `src/browser/` `src/builtin_tools/browser_tools/` | §3.12 · 判据清单 §9（外部 CLI 适配器七条）· **真机 QA `qa/browser_managed/run.sh {open,ambient,headed,tools,frames,reap,pdf,existing}`——26 个工具全部有效果断言，改这两个目录前跑一遍** |
+| `src/browser/` `src/builtin_tools/browser_tools/` | §3.12 · 判据清单 §9（外部 CLI/MCP 适配器）· **真机 QA `qa/browser_managed/run.sh {open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——两个 driver 的每个动词都有效果断言，改这两个目录前跑一遍** |
 | `src/mcp/` | §5.20（dual-era 协议） |
 | `src/hub/` | [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) · §5.21 |
 | `src/loop_graph/` `src/workflow/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) · §4.12 |

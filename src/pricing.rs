@@ -1060,7 +1060,8 @@ struct ResolvedRates {
 ///
 /// Matched **exactly** against the canonicalised id, so it can never shadow an
 /// open-platform model: `kimi-k3` and `kimi-k2.6` are genuinely per-token and
-/// stay priced.
+/// stay priced. Entries are therefore written in *canonical* form, not the
+/// vendor's wire spelling — see `k2.5` below and the guard that enforces it.
 ///
 /// Deliberate consequence: these ids report [`CostStatus::Unknown`], which the
 /// failover layer maps to the `u64::MAX` "unpriced cloud" sentinel, so
@@ -1073,7 +1074,13 @@ const QUOTA_BILLED_MODELS: &[&str] = &[
     "kimi-for-coding",
     "kimi-for-coding-highspeed",
     "kimi-code",
-    "k2p5",
+    // `k2p5` on the wire (and in the preset chain, and in
+    // `reasoning_effort::is_other_moonshot`, which normalises differently).
+    // Canonicalisation restores the Fireworks-style `<digit>p<digit>` to a
+    // decimal point before this list is read, so the wire spelling here would
+    // be a row nothing can reach. Guarded by
+    // `quota_billed_ids_are_stated_in_lookup_form`.
+    "k2.5",
 ];
 
 /// Find the first [`Rates`] row in `vendor`'s section that prefix-matches an
@@ -2119,6 +2126,34 @@ mod tests {
         assert!(rate_card("moonshot", "kimi-k3").is_some());
         assert!(rate_card("moonshot", "kimi-k2.6").is_some());
         assert!(rate_card("moonshot", "kimi-latest").is_some());
+    }
+
+    /// The list above is consulted **after** [`canonicalize_model`], so an entry
+    /// written in the vendor's wire spelling is a row that can never match.
+    ///
+    /// `k2p5` was exactly that. The same id is matched literally two modules
+    /// away (`reasoning_effort::is_other_moonshot`), because that module
+    /// normalises differently — lowercase and a date suffix, no separator fold.
+    /// Copying the id across that boundary is what produced a dead row, and
+    /// nothing downstream could report it: `kimi_code_subscription_ids_stay_unpriced`
+    /// stays green because `k2.5` happens to match no price prefix either, so
+    /// the outcome is right for the wrong reason and would stay right until the
+    /// day a `k2` row lands in the Moonshot section.
+    ///
+    /// Stating the invariant on the list itself is what closes the class: any
+    /// future entry whose canonical form differs — a Fireworks `p` separator, a
+    /// vendor tag, an `:tag`, a trailing date stamp — fails here by name.
+    #[test]
+    fn quota_billed_ids_are_stated_in_lookup_form() {
+        for id in QUOTA_BILLED_MODELS {
+            assert_eq!(
+                &canonicalize_model(id),
+                id,
+                "QUOTA_BILLED_MODELS entry {id:?} is not its own canonical form, \
+                 so `lookup_rates` can never match it. Write the canonical id \
+                 here and keep the wire spelling in a comment."
+            );
+        }
     }
 
     #[test]

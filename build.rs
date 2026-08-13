@@ -21,6 +21,16 @@ fn main() {
     // build`) don't enable that feature, so a gated trigger never fires and the
     // panel never re-embeds.
     println!("cargo:rerun-if-changed=interfaces/webchat/dist");
+    // `#[derive(RustEmbed)]` is a hard compile-time error when its `folder`
+    // does not exist, and `dist/` holds only generated artifacts — so a fresh
+    // clone (or anyone who `rm -rf`s it) cannot build alephcore at all. That
+    // requirement used to be carried by a tracked `dist/.gitkeep`, i.e. by a
+    // file whose only purpose lived in a .gitignore comment; it was read as
+    // vestigial and deleted, and main stopped compiling. Build scripts run
+    // before the crate they belong to, so creating the directory here makes
+    // the requirement self-satisfying instead of a convention someone has to
+    // know about.
+    let _ = std::fs::create_dir_all("interfaces/webchat/dist");
     if let Ok(entries) = std::fs::read_dir("interfaces/webchat/dist") {
         for entry in entries.flatten() {
             println!("cargo:rerun-if-changed={}", entry.path().display());

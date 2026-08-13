@@ -18,8 +18,9 @@
 pub use aleph_protocol::providers::{
     AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams, DeleteParams,
     DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult, ModelsRefreshRow,
-    OAuthStatus, ProviderConfigJson, ProviderGetResult, ProviderHealthRow, ProviderInfo,
-    ProviderListResult, RosterModel, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    OAuthStatus, ProviderConfigJson, ProviderGetResult, ProviderHealthResult, ProviderHealthRow,
+    ProviderInfo, ProviderListResult, RosterModel, SetDefaultParams, TestParams, TestResult,
+    UpdateParams,
 };
 
 impl From<crate::providers::probe::ProbeOutcome> for TestResult {

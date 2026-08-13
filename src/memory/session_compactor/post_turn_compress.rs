@@ -171,9 +171,9 @@ impl SessionCompactor {
                     // before adding the next. Keeps the in-flight count at
                     // MAX_INFLIGHT_PRECOMPRESS regardless of session length.
                     if precompress_set.len() >= MAX_INFLIGHT_PRECOMPRESS {
-                        if precompress_set.join_next().await.is_none() {
-                            // All tasks finished; the set is empty.
-                        }
+                        // `None` means the set drained on its own, which is the
+                        // same "there is room now" the await is here for.
+                        let _ = precompress_set.join_next().await;
                     }
                     precompress_set.spawn(write_precompress_raw(writer, registry_opt, raw));
                 }
