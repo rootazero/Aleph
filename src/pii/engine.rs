@@ -185,18 +185,34 @@ impl PiiEngine {
     /// passes `"telegram"` (or vice versa). Without a case-insensitive
     /// lookup the policy is silently skipped, falling back to the global
     /// config — which can mean PII that the operator explicitly relaxed on
-    /// that platform is now blocked, or vice versa. Try the literal key
-    /// first; fall back to the lower-cased key when the operator wrote
-    /// the policy in upper case.
+    /// that platform is now blocked, or vice versa. The literal key is tried
+    /// first as a fast path; otherwise both sides are folded.
     fn lookup_platform_policy(&self, platform: &str) -> Option<&crate::config::PlatformPiiPolicy> {
         if let Some(p) = self.config.platform_policies.get(platform) {
             return Some(p);
         }
-        let lower = platform.to_ascii_lowercase();
-        if lower == platform {
-            return None;
-        }
-        self.config.platform_policies.get(&lower)
+        // The fallback used to lower-case the *runtime* key and look that up,
+        // which only folds one of the two directions the doc above promises:
+        // it found `[platform_policies.telegram]` for a runtime `"TELEGRAM"`,
+        // and missed `[platform_policies.Telegram]` for a runtime `"telegram"`
+        // — the direction an operator actually writes, because a capitalised
+        // platform name is how the product spells it everywhere else.
+        //
+        // Both sides have to be folded, so the comparison is over the keys
+        // rather than a second lookup. `platform_policies` holds one entry per
+        // configured platform, so the scan is over a handful of strings on a
+        // path that already allocates.
+        //
+        // The tie-break is not decoration: a config carrying both `Telegram`
+        // and `telegram` has two matches, and picking whichever the map
+        // happens to yield first would make the effective policy re-roll on
+        // every process start. Smallest key wins, deterministically.
+        self.config
+            .platform_policies
+            .iter()
+            .filter(|(key, _)| key.eq_ignore_ascii_case(platform))
+            .min_by(|(a, _), (b, _)| a.cmp(b))
+            .map(|(_, policy)| policy)
     }
 
     /// Check whether a provider is excluded, considering platform overrides.
@@ -236,9 +252,7 @@ impl PiiEngine {
             "ip_address" => &config.ip_address,
             "api_key" => &config.api_key,
             "ssh_key" => &config.ssh_key,
-            _ => custom_actions
-                .get(rule_name)
-                .unwrap_or(&PiiAction::Block),
+            _ => custom_actions.get(rule_name).unwrap_or(&PiiAction::Block),
         }
     }
 
@@ -346,7 +360,8 @@ impl PiiEngine {
         let mut skipped_count = 0;
 
         for detection in &sorted {
-            let action = Self::action_for_rule(config, &self.custom_rule_actions, &detection.rule_name);
+            let action =
+                Self::action_for_rule(config, &self.custom_rule_actions, &detection.rule_name);
             match action {
                 PiiAction::Off => {}
                 PiiAction::Block => {
@@ -655,40 +670,48 @@ mod tests {
         assert!(result.text.contains("[PHONE]"));
     }
 
+    /// `PiiEngine::init` is meant to run once at boot; a second call must warn
+    /// and leave the installed engine alone, because every concurrent reader of
+    /// the global holds a handle to it.
+    ///
+    /// The engine is a **process** global and libtest runs in parallel, so the
+    /// test cannot be written as "install mine first, then check mine survived"
+    /// — `test_reload_updates_rules` initialises the same `OnceLock`, and
+    /// whichever test the scheduler starts first decides whose config is live.
+    /// Written that way it passed alone and failed at random in a full run,
+    /// which is the worst shape a guard can have: the isolated run is the one
+    /// telling the comforting story.
+    ///
+    /// The contract is order-independent if it is stated as a negative. Claim
+    /// the lock first with a config that asserts nothing (idempotent — it
+    /// either installs or is ignored), then init a marked config and require
+    /// that the marker is *not* live. Both orders, and a concurrent `reload`,
+    /// satisfy it for the same reason: a second `init` never installs.
     #[test]
-    fn test_init_idempotent_warns_and_keeps_first_config() {
-        // `PiiEngine::init` is intended to be called once at boot. A
-        // second call must NOT replace the engine (that would surprise
-        // every concurrent reader of the global) — only log a warning.
-        // This test guards that contract.
-        let mut first = PrivacyConfig::default();
-        first.custom_rules.push(crate::config::types::CustomPiiRule {
-            name: "init_test_first".to_string(),
-            pattern: r"INIT_FIRST_[A-Z0-9]{4}".to_string(),
-            placeholder: "[FIRST]".to_string(),
-            severity: crate::config::types::CustomPiiSeverity::High,
-            action: PiiAction::Block,
-        });
-        PiiEngine::init(first);
+    fn a_second_init_never_replaces_the_installed_engine() {
+        PiiEngine::init(PrivacyConfig::default());
 
         let mut second = PrivacyConfig::default();
-        second.custom_rules.push(crate::config::types::CustomPiiRule {
-            name: "init_test_second".to_string(),
-            pattern: r"INIT_SECOND_[A-Z0-9]{4}".to_string(),
-            placeholder: "[SECOND]".to_string(),
-            severity: crate::config::types::CustomPiiSeverity::High,
-            action: PiiAction::Block,
-        });
+        second
+            .custom_rules
+            .push(crate::config::types::CustomPiiRule {
+                name: "init_test_second".to_string(),
+                pattern: r"INIT_SECOND_[A-Z0-9]{4}".to_string(),
+                placeholder: "[SECOND]".to_string(),
+                severity: crate::config::types::CustomPiiSeverity::High,
+                action: PiiAction::Block,
+            });
         PiiEngine::init(second);
 
-        // The first config must still be live: the first rule matches,
-        // the second does not.
-        let engine = PiiEngine::global().expect("global engine should be set");
+        let engine = PiiEngine::global().expect("the init above installs one if nothing had");
         let guard = engine.read().unwrap_or_else(|e| e.into_inner());
-        let hit_first = guard.filter("hit INIT_FIRST_AB12");
-        assert!(hit_first.text.contains("[FIRST]"));
-        let miss_second = guard.filter("hit INIT_SECOND_AB12");
-        assert_eq!(miss_second.blocked_count, 0);
+        let miss = guard.filter("hit INIT_SECOND_AB12");
+        assert_eq!(
+            miss.blocked_count, 0,
+            "the second init's rule became live, so init replaced the engine \
+             under every handle already held"
+        );
+        assert!(!miss.text.contains("[SECOND]"));
     }
 
     #[test]
