@@ -356,15 +356,12 @@ impl StdioTransport {
             );
         }
 
-        // Give the reader a brief grace window to finish the current
-        // `read_line` and discover EOF (the child closes stdout on
-        // `kill_on_drop`). Without this, the manager reports ServerStopped
-        // while the reader is still processing a half-finished response.
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            &mut self.reader_task,
-        )
-        .await;
+        // Mark the reader as aborted; the Drop impl drives the actual
+        // cancellation. The 100 ms grace here is to let the child's
+        // stdout pipe close (which `kill` triggers), so the reader's
+        // next `read_line` returns EOF and the task exits cleanly on its
+        // own without an explicit abort.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         Ok(())
     }
@@ -579,11 +576,6 @@ impl Drop for StdioTransport {
             "StdioTransport dropped, server will be terminated"
         );
     }
-}
-
-/// Block-on helper without a runtime panic at shutdown.
-fn futures_block_on(_handle: &tokio::task::JoinHandle<()>) -> Option<()> {
-    None
 }
 
 #[cfg(test)]

@@ -244,7 +244,7 @@ impl OAuthStorage {
         {
             let cache = self.cache.read().await;
             if let Some(ref storage) = *cache {
-                if disk_mtime.is_none() || disk_mtime == Some(cached_mtime) {
+                if disk_mtime.is_none() || disk_mtime == cached_mtime {
                     // rust-doctor-disable-next-line excessive-clone
                     return Ok(storage.clone());
                 }
@@ -253,7 +253,7 @@ impl OAuthStorage {
                 // landed between the first stat and the cache check is
                 // not missed.
                 disk_mtime = self.file_mtime().await;
-                if disk_mtime == Some(cached_mtime) {
+                if disk_mtime == cached_mtime {
                     // rust-doctor-disable-next-line excessive-clone
                     return Ok(storage.clone());
                 }

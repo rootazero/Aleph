@@ -461,6 +461,20 @@ pub enum PromptRole {
     Tool,
 }
 
+impl PromptRole {
+    /// The wire-form lowercase string used by `serde` and forwarded to
+    /// downstream renderers (provider messages, builtin tool output).
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Tool => "tool",
+        }
+    }
+}
+
 /// Content in a prompt message
 ///
 /// Same wire rules as [`ToolResultContent`]: camelCase field names, embedded
