@@ -9,7 +9,11 @@
 //! actually reachable again. The check reuses the same bounded probe as the
 //! `providers.healthcheck` RPC handler
 //! ([`crate::providers::probe::probe_provider_bounded`] — one source of truth)
-//! against the live daemon config + vault handles.
+//! against the live daemon config + vault handles, and the same derivation of
+//! *whether* to dial at all ([`crate::providers::probe::probe_disposition`]).
+//! Sharing the probe but not that predicate is what let the two faces disagree:
+//! this check honoured the preset's `supports_health_check` opt-out, the RPC did
+//! not, and the six opt-out presets came back from one surface as unreachable.
 //!
 //! Read-only and **non-repairable**: an unreachable provider is a credential
 //! or network condition; the fix is an LLM/user action (store a fresh key,
@@ -28,7 +32,9 @@ use crate::config::{Config, ProviderConfig};
 use crate::diagnostics::check::{HealthCheck, Posture};
 use crate::diagnostics::finding::{Finding, Severity};
 use crate::gateway::security::SharedTokenManager;
-use crate::providers::probe::{probe_provider_bounded, provider_vault_key, PROBE_TIMEOUT};
+use crate::providers::probe::{
+    probe_disposition, probe_provider_bounded, provider_vault_key, ProbeDisposition, PROBE_TIMEOUT,
+};
 use crate::sync_primitives::Arc;
 
 const ID: &str = "providers/connectivity";
@@ -115,34 +121,37 @@ impl HealthCheck for ProvidersConnectivityCheck {
         let probed_count = probes
             .iter()
             .filter(|(name, enabled, _)| {
-                *enabled
-                    && crate::providers::presets::get_preset(name)
-                        .is_none_or(|p| p.supports_health_check)
+                probe_disposition(name, *enabled) == ProbeDisposition::Probe
             })
             .count();
         let futures = probes
             .into_iter()
             .map(|(name, enabled, runtime)| async move {
-                if !enabled {
-                    return Finding::ok(
-                        ID,
-                        format!("{name}: disabled"),
-                        "Provider is disabled; not probed.",
-                    );
-                }
-                // Honor the preset's `supports_health_check` opt-out: OAuth-only
-                // or placeholder-URL providers 404 / rate-limit on `/models`, so
-                // probing them yields a false `unreachable`. Report `skipped`
-                // (Info) instead — and the outage gate ignores them.
-                if !crate::providers::presets::get_preset(&name)
-                    .is_none_or(|p| p.supports_health_check)
-                {
-                    return Finding::ok(
-                        ID,
-                        format!("{name}: probe skipped"),
-                        "Preset opts out of /models health probing (OAuth-only or \
-                         placeholder endpoint); credentials not verifiable here.",
-                    );
+                // Both faces of "should this provider be dialled" read the same
+                // derivation (`probe::probe_disposition`); the `providers.healthcheck`
+                // RPC used to answer it with `enabled` alone and reported the
+                // opt-out presets as unreachable.
+                match probe_disposition(&name, enabled) {
+                    ProbeDisposition::Disabled => {
+                        return Finding::ok(
+                            ID,
+                            format!("{name}: disabled"),
+                            "Provider is disabled; not probed.",
+                        )
+                    }
+                    // OAuth-only or placeholder-URL providers 404 / rate-limit
+                    // on `/models`, so probing them yields a false
+                    // `unreachable`. Report `skipped` (Info) instead — and the
+                    // outage gate ignores them.
+                    ProbeDisposition::Unsupported => {
+                        return Finding::ok(
+                            ID,
+                            format!("{name}: probe skipped"),
+                            "Preset opts out of /models health probing (OAuth-only or \
+                             placeholder endpoint); credentials not verifiable here.",
+                        )
+                    }
+                    ProbeDisposition::Probe => {}
                 }
                 let outcome = probe_provider_bounded(&name, runtime).await;
                 if outcome.success {

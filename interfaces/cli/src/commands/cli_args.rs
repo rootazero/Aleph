@@ -631,6 +631,14 @@ pub enum ProvidersAction {
     },
     /// Test provider connectivity
     Test { name: String },
+    /// Probe every configured provider in one sweep
+    ///
+    /// `test` asks about one provider; this asks about all of them, which is
+    /// the question after rotating a key or moving a relay. `aleph doctor`
+    /// answers a wider one — the whole diagnostic engine, prose findings and a
+    /// total-outage gate — so it is the tool for "is anything wrong", not for
+    /// "which of my providers answer".
+    Health,
     /// List the models a provider offers, or refresh them from the vendor
     Models {
         /// Provider name — omit to cover every provider

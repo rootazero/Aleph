@@ -1179,17 +1179,16 @@ impl NoteStore for SqliteMemoryBackend {
                 // (`EMBEDDING_DIM_TABLES`), so the format! here is safe.
                 // rust-doctor-disable-next-line sql-injection-risk
                 let sql = format!("DELETE FROM {table} WHERE rowid IN (");
-                let placeholders = std::iter::repeat("?")
-                    .take(chunk.len())
+                let placeholders = std::iter::repeat_n("?", chunk.len())
                     .collect::<Vec<_>>()
                     .join(",");
                 let sql = format!("{sql}{placeholders})");
                 let binds = rusqlite::params_from_iter(chunk.iter().copied());
-                tx.execute(&sql, binds)
-                    .map_err(|e| AlephError::config(format!("prune_orphan_vectors {table}: {e}")))?;
+                tx.execute(&sql, binds).map_err(|e| {
+                    AlephError::config(format!("prune_orphan_vectors {table}: {e}"))
+                })?;
             }
-            let placeholders = std::iter::repeat("?")
-                .take(chunk.len())
+            let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
                 .join(",");
             let sql = format!("DELETE FROM notes_vec_map WHERE rowid IN ({placeholders})");

@@ -17,8 +17,9 @@ use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use aleph_protocol::providers::{
     filter_catalog, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
     DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
-    ModelsRefreshRow, ProviderConfigJson, ProviderGetResult, ProviderInfo, ProviderListResult,
-    RosterModel, Searchable, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    ModelsRefreshRow, ProviderConfigJson, ProviderGetResult, ProviderHealthResult,
+    ProviderHealthRow, ProviderInfo, ProviderListResult, RosterModel, Searchable, SetDefaultParams,
+    TestParams, TestResult, UpdateParams,
 };
 
 /// `providers list` filters through the same matcher as every other picker.
@@ -43,6 +44,9 @@ impl Searchable for ProviderRow<'_> {
 /// was written: it read `type` and `default`, and the server has only ever
 /// sent `provider_type` and `is_default`. Both now come off [`ProviderInfo`].
 const LIST_HEADERS: &[&str] = &["Name", "Type", "Default"];
+
+/// Columns of `aleph providers health`.
+const HEALTH_HEADERS: &[&str] = &["Provider", "State", "Latency", "Detail"];
 
 /// Columns of `aleph providers models`.
 const ROSTER_HEADERS: &[&str] = &["Provider", "Model", "Source", "Status"];
@@ -553,6 +557,61 @@ pub async fn test(server_url: &str, config: &CliConfig, name: &str, json: bool) 
     Ok(())
 }
 
+/// Probe every configured provider in one sweep.
+///
+/// `providers.healthcheck` had no client at all until this one: the server half
+/// was complete, registered and tested, and nothing anywhere called it. The
+/// deployment that needs it most is the one with no Panel — a headless server
+/// and a terminal — which is the same argument that put `modelsRefresh` on the
+/// TUI.
+pub async fn health(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
+
+    let result: Value = client.call("providers.healthcheck", None::<()>).await?;
+
+    let rows: Vec<Vec<String>> = if json {
+        Vec::new()
+    } else {
+        serde_json::from_value::<ProviderHealthResult>(result.clone())?
+            .providers
+            .iter()
+            .map(health_cells)
+            .collect()
+    };
+
+    output::print_table(HEALTH_HEADERS, &rows, json, &result);
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Render one `providers health` row.
+///
+/// A skipped row is not a failure, and the two reasons to skip read very
+/// differently to an operator: one is their own switch, the other says the
+/// endpoint cannot answer this question at all. `enabled` separates them —
+/// the server deliberately ships no third field for it.
+fn health_cells(row: &ProviderHealthRow) -> Vec<String> {
+    let state = if row.skipped {
+        if row.enabled {
+            "skipped (endpoint opts out)"
+        } else {
+            "skipped (disabled)"
+        }
+    } else if row.ok {
+        "reachable"
+    } else {
+        "unreachable"
+    };
+    vec![
+        row.name.clone(),
+        state.to_string(),
+        row.latency_ms
+            .map_or_else(|| "-".to_string(), |ms| format!("{ms} ms")),
+        row.error.clone().unwrap_or_else(|| "-".to_string()),
+    ]
+}
+
 /// Show the models a provider offers, or ask the vendor what it serves now.
 ///
 /// Two different questions, hence the flag rather than two verbs. Without
@@ -748,6 +807,39 @@ mod tests {
             vec!["openai", "openai", "yes"]
         );
         assert_eq!(LIST_HEADERS.len(), row_cells(&body.providers[0]).len());
+    }
+
+    /// `providers.healthcheck` had no client, so nothing had ever read its
+    /// body. Driven by the shape the handler builds, including the two skip
+    /// rows it can produce — a disabled provider and a preset whose endpoint
+    /// publishes no `/models`. They differ only by `enabled`, which is exactly
+    /// what the server relies on instead of a third field, so a renderer that
+    /// ignores it collapses "you turned this off" into "this cannot be checked".
+    #[test]
+    fn every_health_column_renders_from_a_real_healthcheck_body() {
+        let body: ProviderHealthResult = serde_json::from_value(serde_json::json!({
+            "providers": [
+                { "name": "anthropic", "enabled": true, "ok": true, "skipped": false,
+                  "latency_ms": 143 },
+                { "name": "chatgpt", "enabled": true, "ok": false, "skipped": true },
+                { "name": "groq", "enabled": false, "ok": false, "skipped": true },
+                { "name": "openai", "enabled": true, "ok": false, "skipped": false,
+                  "error": "401 Unauthorized" },
+            ]
+        }))
+        .expect("a real providers.healthcheck body must parse");
+
+        let rendered: Vec<Vec<String>> = body.providers.iter().map(health_cells).collect();
+        assert_eq!(
+            rendered,
+            vec![
+                vec!["anthropic", "reachable", "143 ms", "-"],
+                vec!["chatgpt", "skipped (endpoint opts out)", "-", "-"],
+                vec!["groq", "skipped (disabled)", "-", "-"],
+                vec!["openai", "unreachable", "-", "401 Unauthorized"],
+            ]
+        );
+        assert_eq!(HEALTH_HEADERS.len(), rendered[0].len());
     }
 
     /// `providers.get` wraps its row in a `provider` key. The command read the

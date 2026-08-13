@@ -167,8 +167,11 @@ pub fn GenerationProvidersView() -> impl IntoView {
     // Category first, then the ranker: a query must never pull a video preset
     // into the image tab. An empty query is a no-op inside the matcher, so
     // this is the unconditional path rather than a branch on "is it empty".
-    let current_presets =
-        move || catalog.get().by_category_matching(selected_category.get(), &search.get());
+    let current_presets = move || {
+        catalog
+            .get()
+            .by_category_matching(selected_category.get(), &search.get())
+    };
 
     // The custom (non-preset) providers in the selected category, after the
     // same filter. A free function of the signals rather than an inline block,

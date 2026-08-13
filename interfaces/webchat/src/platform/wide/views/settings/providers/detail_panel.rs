@@ -18,10 +18,10 @@
 //! The editor itself lives in [`super::model_ladder`]; this file owns the form
 //! around it, and the [`RefreshState`] both it and the ladder write to.
 
+use super::model_ladder::{ModelLadder, RefreshState};
 use crate::api::{
     AuthKind, CatalogEntry, OAuthStatus, ProviderConfigJson, ProviderInfo, ProvidersApi, TestResult,
 };
-use super::model_ladder::{ModelLadder, RefreshState};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
@@ -983,4 +983,3 @@ pub(super) fn ProviderDetailPanel(
         </div>
     }
 }
-

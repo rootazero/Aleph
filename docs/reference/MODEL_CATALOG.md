@@ -161,6 +161,8 @@ scoped 行**先查**，所以一家宿主可以早于厂商退役某个 id 而�
 
 ⚠️ **"不写 rate 行"不等于"不定价"**。`PRICE_TABLE` 是前缀扫描：它能说"这个 id 值 $X"，说不出"这个 id 根本没有单价"。`k3` / `k3-256k` / `k2p5` 恰好不匹配任何前缀，于是看起来没问题；而 `kimi-for-coding` / `kimi-for-coding-highspeed` / `kimi-code` 以 `kimi` 开头，**落进开放平台的 K2 时代家族兜底行，被报成 $0.60/$2.50** ——一个订阅用户根本不会被收的价。前缀表表达不了否定，所以这条事实只能显式写出来：单一源 `pricing::QUOTA_BILLED_MODELS`，在两条查找路（provider-keyed 与 vendor-inferred）**之前**短路。**按整串精确匹配**，所以永远不会遮蔽开放平台的 `kimi-k3` / `kimi-k2.6`。
 
+⚠️ **那张表在 `canonicalize_model` 之后被读，所以条目必须写成 canonical 形式**（2026-08-13 round-3）。`k2p5` 是**线上**拼法，归一会把 Fireworks 式 `<digit>p<digit>` 还原成 `k2.5` —— 写线上拼法就是一行**从写下之日起从未命中**的规则。同一个 id 在 `reasoning_effort::is_other_moonshot` 里被字面比较且**是对的**（那个模块另一套归一：小写 + 剥日期戳，不折分隔符），把它跨过那条边界抄过来正是成因。端到端测试看不见这件事：`k2.5` 恰好也不匹配任何价格前缀，所以结论对而理由错。守卫 `quota_billed_ids_are_stated_in_lookup_form` 钉在表自身上。
+
 两个配套结论：① 该端点的模型报 `CostStatus::Unknown` → failover 层映射成 `u64::MAX` "unpriced cloud" 哨兵 → `cost_aware` 把它们排在**最后**。对一个报不出价的成本，这是诚实的排序，且在这份清单存在之前就已经是它默认模型 `k3` 的处境。② **配额端点不需要逐 id 的价格豁免**：整个 preset 一个模型都不定价 ⇒ `advertised_models_of_priced_vendors_have_rates` 的 `vendor_is_priced` 自然为假、整条跳过。真留了逐 id 豁免，反而会让将来**误加**到 Kimi Code 上的一个 rate 静默通过——所以 `ENDPOINT_LOCAL_ALIASES` 现在只管 capability（仅剩 `k2p5`，厂商没公布窗口）。
 
 ### 4.3 长上下文 tier
@@ -316,7 +318,7 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 两张显式清单，都带理由，且被 `exemptions_still_name_something_real` 钉住：
 
 - `UNCATALOGUED_FAMILIES` — 按 preset id。"这家的窗口我们没有可核实的数据"。删一条是进步；加一条要写清为什么核实不了。这张表本身就是"哪些 provider 在 picker 里不会显示上下文窗口，以及为什么"的答案。
-- `ENDPOINT_LOCAL_ALIASES` — 按模型 id。只存在于某一个厂商端点、没有公开能力/价格数据的别名。**当前为空**，而这正是目标状态：唯一的那条（`k2p5`）随着广告它的 `kimi-for-coding` 链一起消失，`exemptions_still_name_something_real` 让"留着一条死豁免"变得不可能。
+- `ENDPOINT_LOCAL_ALIASES` — 按模型 id。只存在于某一个厂商端点、没有公开能力/价格数据的别名。**当前一条：`k2p5`**（`kimi-for-coding` 链仍在广告它，厂商没公布窗口）。目标状态是空——删一条是进步；而 `exemptions_still_name_something_real` 保证它一旦不再被任何 preset 广告就必须被删掉，所以这张表不会变成一份坟场。
 
 > **链要在"可定价性"上同质**。`advertised_models_of_priced_vendors_have_rates` 对"已定价 vendor"的定义是**按结果**的（这个 provider 的**另一个**模型能定价 ⇒ 这个也该能）。所以往一条全部走 vendor-inferred 定价的链里加一根开放权重的横杠（Together 的 Llama-3.3、Qianfan 的 DeepSeek V4）会被报成漂移——这不是守卫过严，而是"半条链能算钱、半条不能"本来就是个说不清的成本视图。
 
@@ -486,6 +488,13 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **给 `DiscoveryFailureKind` 加 `Disabled` / `NotConfigured` 变体** — 它是普通外部标签枚举（无 `#[serde(other)]`，unit enum 也用不了），加一个变体会让旧客户端**整行**解析失败而不只是丢一个字段（`#[serde(default)]` 只管缺失、不管非法），而 "Panel-lite 连局域网内老 server" 是有记录的部署形态。两种新情形都折进既有词汇：不可行动的用 `Unsupported`，可行动的用 `MissingCredential`（"先链接它"）。
 - **给 generation 预设行加 `discoverable` 位** — 那一族里这个概念不存在（上一条已说明），发一个恒 `false` 的字段只会引来一个永远不该出现的刷新按钮。
 
+以下是 2026-08-13 **round-3**（零消费者裁决 + 探测面收敛）评估后**明确不做**的：
+
+- **给 `ProviderHealthRow` 加 `skip_reason` 枚举** — 跳过有两个理由（operator 关了它 / preset 声明 `/models` 答不了这一问），而 `enabled` 已经把它们分开了。加一个外部标签 unit enum 会让旧客户端在遇到新变体时**整行**解析失败（同 round-2 对 `DiscoveryFailureKind` 的裁定，`#[serde(default)]` 只管缺失不管非法）。
+- **把 `providers.healthcheck` 合并进 `providers/connectivity`** — 两者答的问题不同：前者是一张带延迟的表，后者是整个诊断引擎的一部分（散文式 finding + 总停机闸 + `fix_hint` 路由）。它们该共用的是**探测**与**探测判据**（`probe::probe_provider_bounded` / `probe::probe_disposition`），不是输出形状。
+- **复活 `providers.needsSetup`** — 零客户端，且是"agent 能不能作答"这个问题的**第三个答案**（Panel 清单一个、它一个、真相一个）。判据落在 Panel 的 `usable()` 上：`enabled && (has_api_key || verified)`。
+- **把 `usable()` 提到协议 crate** — `needsSetup` 撤回之后它只有一个消费者；为一个调用者建跨 crate 抽象就是 R10 要撤回的那种。
+
 ---
 
 ## 10. 常见修改的落点
@@ -507,5 +516,7 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |
 | 某宿主用了别的 id 拼法 | `alias.rs::canonicalize_model_id`（host 路径折末段 / `p` 分隔符）；点号-短横见 §5.1 |
 | **默认模型过期了？** | **先跑 `cargo test -p alephcore --lib drift_tests`** |
+| **想一次看完所有 provider 通不通** | `aleph providers health`（`providers.healthcheck`）。`aleph doctor` 是更宽的那一问；两者共用 `probe::probe_provider_bounded` **与** `probe::probe_disposition` —— 后者是"要不要拨号"，此前只有 doctor 那一面认得 `supports_health_check` |
+| **给 `QUOTA_BILLED_MODELS` 加一条** | 写 **canonical** 形式（表在 `canonicalize_model` 之后被读），线上拼法留注释；守卫 `quota_billed_ids_are_stated_in_lookup_form` |
 | **要一个表里没有的新模型** | **`list_models { refresh: true }` 或 `providers.modelsRefresh`** |
 | 子代理 / MoA 扇出跨厂商 | `provider/model` 限定名；消费点 `agents/runtime.rs::resolve_spawn_route`（见 §4.5 round-7）。守卫是"前缀须命中已配置 provider 才剥离"，**别改成无守卫剥离**。主循环侧同型解析是 `thinker/mod.rs::MultiProviderRegistry::get`（同一守卫；此前并排的 `resolve_model_to_provider_and_model` 只服务那条已 CUT 的预测式 `resolve_with_fallback`，见 §3.6 round-3） |
