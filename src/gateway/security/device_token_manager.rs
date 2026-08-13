@@ -75,6 +75,17 @@ pub struct DeviceTokenManager {
 }
 
 impl DeviceTokenManager {
+    /// The store behind this manager.
+    ///
+    /// Exposed so `gateway.ticket.create` can validate a `user_id` binding
+    /// against the same `users` table `connect` resolves against, instead of
+    /// growing a second `SecurityStore` handle on the ticket handler's context
+    /// and letting the two drift.
+    #[must_use]
+    pub fn store(&self) -> &Arc<SecurityStore> {
+        &self.store
+    }
+
     /// Create a new manager backed by the given security store.
     #[must_use]
     pub const fn new(store: Arc<SecurityStore>) -> Self {

@@ -371,15 +371,7 @@ impl BrowserBackend for ChromeMcpBackend {
             let _guard = self.profile_guard().await;
             self.select_page(tab_id).await?;
         }
-        let outcome = self
-            .call(
-                "wait_for",
-                // Note: chrome-devtools-mcp rejects a `timeout` above its own
-                // ceiling with a validation error (not a timeout result) — the
-                // tool layer's clamp (≤120s) keeps us inside the accepted range.
-                json!({ "text": text, "timeout": timeout_ms }),
-            )
-            .await;
+        let outcome = self.call("wait_for", wait_for_args(text, timeout_ms)).await;
         match outcome {
             Ok(_) => Ok(true),
             Err(e) => classify_wait_error(e, tab_id),
@@ -551,6 +543,25 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 }
 
+/// Arguments for chrome-devtools-mcp's native `wait_for`.
+///
+/// `text` is a **list** — `zod.array(zod.string()).min(1)`, "resolves when any
+/// value appears" — in every published version of the server, including the
+/// oldest one still on this machine. Aleph sent a bare string, so the call was
+/// answered with `MCP error -32602: Input validation error` and
+/// `browser_wait_for(text=…)` on an existing-session profile has never
+/// completed. It failed loudly (`classify_wait_error` refuses to read a
+/// validation error as "not found"), which is why it survived: a loud failure
+/// on a driver nobody had exercised on a real machine looks like the driver
+/// being unavailable.
+///
+/// `timeout` above the server's own ceiling is likewise a validation error
+/// rather than a timeout result — the tool layer's clamp (≤120 s) keeps us
+/// inside the accepted range.
+fn wait_for_args(text: &str, timeout_ms: u64) -> serde_json::Value {
+    json!({ "text": [text], "timeout": timeout_ms })
+}
+
 /// Turn a failed MCP `wait_for` call into a wait outcome.
 ///
 /// Only ONE failure means "the text did not appear": the tool answered, and its
@@ -608,6 +619,36 @@ fn parse_snapshot_header(text: &str) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
+
+    /// The fold, both ways. A timeout the *tool* reported is the answer
+    /// "not found"; the same words arriving as a *transport* failure must stay
+    /// an error, because nothing looked at the page.
+    #[test]
+    fn a_tool_timeout_folds_to_not_found_and_a_transport_timeout_does_not() {
+        let verdict = BrowserError::ChromeMcpError(
+            "Tool 'wait_for' returned error: Error: Timed out after waiting 2000ms".into(),
+        );
+        assert!(matches!(
+            super::classify_wait_error(verdict, "t1"),
+            Ok(false)
+        ));
+
+        let transport =
+            BrowserError::ChromeMcpTransport("I/O error: request timed out; broken pipe".into());
+        assert!(super::classify_wait_error(transport, "t1").is_err());
+    }
+
+    /// Pins the argument shape against the server's schema, which is the only
+    /// thing that made this call fail — the code read fine.
+    #[test]
+    fn wait_for_sends_the_text_as_a_list() {
+        let args = super::wait_for_args("Loading done", 5_000);
+        assert_eq!(
+            args,
+            serde_json::json!({ "text": ["Loading done"], "timeout": 5_000 }),
+            "chrome-devtools-mcp's wait_for takes zod.array(zod.string()).min(1)"
+        );
+    }
     use super::*;
 
     #[test]

@@ -34,10 +34,11 @@ import argparse
 import asyncio
 import json
 import os
-import subprocess
 import sys
 
 import websockets
+
+from qa_rpc import Ledger, Rpc, cli_sessions
 
 ap = argparse.ArgumentParser()
 ap.add_argument("url")
@@ -56,55 +57,21 @@ ap.add_argument(
 )
 args = ap.parse_args()
 
-failures = []
-_id = [100]
-
-
-def log(*a):
-    print(*a, flush=True)
-
-
-def check(claim, ok, detail=""):
-    log(f"  [{'PASS' if ok else 'FAIL'}] {claim}" + (f" — {detail}" if detail else ""))
-    if not ok:
-        failures.append(f"{claim} ({detail})" if detail else claim)
-    return ok
-
-
-async def rpc(ws, method, params):
-    _id[0] += 1
-    rid = _id[0]
-    await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
-    while True:
-        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=180))
-        if msg.get("id") == rid:
-            return msg
+# The RPC plumbing and the out-of-band `playwright-cli` oracle live in
+# `qa_rpc.py`, shared with `drive_tools.py`: the two drivers are meant to
+# disagree about what to assert, never about how they talk to the gateway.
+_led = Ledger()
+log = Ledger.log
+check = _led.check
+_rpc = [None]
 
 
 async def invoke(ws, tool, arguments):
-    """One `tools.invoke`. Returns (ok, result_or_error_text)."""
-    msg = await rpc(ws, "tools.invoke", {"tool_name": tool, "arguments": arguments})
-    if "error" in msg:
-        return False, json.dumps(msg["error"])
-    res = msg["result"]
-    return bool(res.get("ok")), res.get("result", res)
+    return await _rpc[0].invoke(tool, arguments)
 
 
-def cli_sessions():
-    """`playwright-cli list`, read with the scratch HOME. Out-of-band oracle."""
-    out = subprocess.run(
-        [args.cli, "list"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        # HOME is overridden (the CLI's session store is HOME-scoped, and the
-        # developer's own sessions are not ours to read) but PATH is inherited:
-        # `playwright-cli` is a node script and a hand-made PATH without `node`
-        # turns the oracle into `env: node: No such file or directory` — which
-        # reads exactly like "no sessions" and would have passed the check.
-        env={**os.environ, "HOME": args.home},
-    )
-    return out.stdout + out.stderr
+def sessions():
+    return cli_sessions(args.cli, args.home)
 
 
 async def scenario(ws):
@@ -134,7 +101,7 @@ async def scenario(ws):
         and "invalid arguments" not in blob,
         f"result={json.dumps(res)[:220]}",
     )
-    before = cli_sessions()
+    before = sessions()
     check(
         "and it left no open session behind",
         "status: open" not in before,
@@ -154,7 +121,7 @@ async def scenario(ws):
         f"tab_id={tab_id!r}",
     )
 
-    after = cli_sessions()
+    after = sessions()
     check("the CLI now reports an open session", "status: open" in after, after.strip()[:200])
 
     log(f"\n--- the generated --config must have reached the browser ---")
@@ -241,18 +208,10 @@ async def scenario(ws):
 
 async def main():
     async with websockets.connect(args.url, max_size=None) as ws:
-        msg = await rpc(ws, "connect", {"client_info": {"name": "qa-browser-managed"}})
-        log("connect ->", json.dumps(msg.get("result", msg))[:160])
+        _rpc[0] = Rpc(ws)
+        await _rpc[0].connect("qa-browser-managed")
         await scenario(ws)
-
-    log("")
-    if failures:
-        log(f"VERDICT: FAIL ({len(failures)} claim(s))")
-        for f in failures:
-            log(f"  - {f}")
-        return 1
-    log("VERDICT: PASS")
-    return 0
+    return _led.verdict()
 
 
 sys.exit(asyncio.run(main()))

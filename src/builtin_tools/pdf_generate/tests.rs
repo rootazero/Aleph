@@ -274,7 +274,7 @@ fn test_build_full_html_document() {
 #[tokio::test]
 #[ignore]
 async fn test_browser_engine_markdown_pdf() {
-    if !super::browser_engine::is_browser_engine_available() {
+    if !super::browser_engine::is_browser_engine_available(None) {
         eprintln!("Skipping browser engine test — Chrome not available");
         return;
     }

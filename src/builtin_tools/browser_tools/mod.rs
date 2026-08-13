@@ -2,7 +2,6 @@
 //
 // Each tool wraps a ProfileManager and implements AlephTool for one operation.
 
-pub mod exec;
 pub mod click;
 pub mod console;
 pub mod cookies;
@@ -10,6 +9,7 @@ pub mod dialog;
 pub mod drag;
 pub mod emulate;
 pub mod evaluate;
+pub mod exec;
 pub mod fill_form;
 pub mod hover;
 pub mod navigate;
@@ -382,6 +382,70 @@ pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
     }
 }
 
+/// Offload the FULL text of a page read to the tool-result store and return the
+/// standard recovery footer (persist marker + `ctx_search` hint).
+///
+/// Truncating inside a tool is otherwise irreversible: the tail is dropped
+/// *before* `tool_output` ingress ever sees the value, so the pipeline's own
+/// "persist the pre-reduction original" contract (`tool_output::ingress`) cannot
+/// apply — it only ever sees the already-cut text. Reusing the harness's own
+/// spill pair (`ToolResultStore` + [`recovery_footer`]) rather than inventing a
+/// second mechanism means the blob is indexed, so the model gets `ctx_search`
+/// and not just a file path.
+///
+/// Redacted before it hits disk: everything persisted here is read back into
+/// model context by `ctx_search` / `read_file`, so it must clear the same
+/// secret-egress boundary the in-context copy clears. The injection fence is
+/// deliberately NOT applied to the blob — `ctx_search` returns *excerpts*, and
+/// an excerpt of a fenced blob carries at most one of the two marker lines; an
+/// unbalanced fence is worse than none.
+///
+/// `tool_name` is the caller's, not a fixed one: the store is keyed by
+/// `(tool_call_id, tool_name)` and every caller has its own call id, so a second
+/// caller is a first writer of its own entry, not a second writer of someone
+/// else's. `browser_exec` declined to offload for exactly that misreading and
+/// told the model to "take a standalone browser_snapshot" instead — advice that
+/// names a different page, since a procedure's later steps have moved on by the
+/// time the model could act on it.
+///
+/// `None` when the store or the call id is unavailable (direct `tools.invoke`,
+/// tests, non-gateway paths) — the caller then says so instead of pointing the
+/// model at a file that does not exist.
+pub(crate) fn offload_full_content(
+    manager: &ProfileManager,
+    tool_name: &str,
+    full: &str,
+) -> Option<String> {
+    let call_id = crate::approval::current_tool_call_id()?;
+    let store = crate::tools::result_store::global_tool_result_store()?;
+    // Narrow to the session running this tool, because that is the scope
+    // `ctx_search` resolves its own reads under; searching the unscoped handle
+    // finds nothing. Same reasoning as `builtin_tools::ctx_search`.
+    let store = match crate::tools::turn_context::current_session_key() {
+        Some(session) => crate::tools::result_store::ToolResultStore::for_session(&store, session),
+        None => store,
+    };
+    offload_content_to(&store, &call_id, manager, tool_name, full)
+}
+
+/// The store-facing half of [`offload_full_content`], split out so it can be
+/// exercised against a temp-dir store — the process-wide store singleton is a
+/// `OnceLock` and installing one from a test would leak into every other test in
+/// the binary.
+pub(crate) fn offload_content_to(
+    store: &crate::tools::result_store::ToolResultStore,
+    call_id: &str,
+    manager: &ProfileManager,
+    tool_name: &str,
+    full: &str,
+) -> Option<String> {
+    let redacted = manager.redact_content(full);
+    // Threshold 0: we already know the text overflowed the tool's own budget,
+    // so persist unconditionally — same call shape the harness turn-spill uses.
+    crate::tools::result_processing::recovery_footer(Some(store), call_id, tool_name, &redacted, 0)
+        .map(|(footer, _)| footer)
+}
+
 pub(crate) fn process_evaluate_result(manager: &ProfileManager, raw: &str) -> serde_json::Value {
     let text = match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(serde_json::Value::String(s)) => s,
@@ -488,7 +552,6 @@ pub(crate) fn bound_screenshot_png(png_bytes: Vec<u8>) -> Vec<u8> {
     smallest
 }
 
-pub use exec::{BrowserExecArgs, BrowserExecOutput, BrowserExecTool};
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
 pub use cookies::{BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool};
@@ -496,6 +559,7 @@ pub use dialog::{BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool};
 pub use drag::{BrowserDragArgs, BrowserDragOutput, BrowserDragTool};
 pub use emulate::{BrowserEmulateArgs, BrowserEmulateOutput, BrowserEmulateTool};
 pub use evaluate::{BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool};
+pub use exec::{BrowserExecArgs, BrowserExecOutput, BrowserExecTool};
 pub use fill_form::{BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool};
 pub use hover::{BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool};
 pub use navigate::{BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool};

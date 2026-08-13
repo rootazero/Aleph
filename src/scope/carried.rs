@@ -8,7 +8,7 @@
 //! belongs on the side that is depended upon — puts it here: `agents` and
 //! `teams` both depend on `scope`, and neither depends on the other.
 
-/// The three task-locals a spawned unit of work must carry across a
+/// The task-locals a spawned unit of work must carry across a
 /// `tokio::spawn`, and the one way to carry them.
 ///
 /// `tokio::task_local!` does not cross a spawn boundary — a child task reads
@@ -32,16 +32,31 @@
 /// written NULL/NULL (adopted by the operator) and every memory write it made
 /// landed in the BASE partition that `session_read_ids` unions into every other
 /// principal's turn.
+/// The room author was the fifth, and it fails in a third direction again:
+/// not quiet, not open, but **confidently wrong**. `ambient_actor()` — the
+/// resolver every "who is asking" predicate uses — falls back to the scope's
+/// `owner_user_id` when no author is in scope, and a project room's owner is
+/// its CREATOR, the same person for every member. So a child spawned from
+/// Bob's turn in Alice's room does not lose its actor: it acquires Alice's.
+/// `memory_search` then passes `partition_visible_to("main__u-alice", …)` and
+/// reads her personal corpus, `session_list` enumerates her personal sessions,
+/// and the signed ledger files Bob's child's actions under her name.
+///
+/// `scope/mod.rs`'s own
+/// `dropping_the_author_at_a_spawn_silently_reports_the_room_owner` already
+/// asserted this shape, commented "not a missing label, it is a confidently
+/// wrong one" — it just had no carrier to fix it in.
 #[derive(Clone, Default)]
 pub struct CarriedAttribution {
     scope: Option<super::ScopeAttribution>,
     project_root: Option<std::path::PathBuf>,
     agent_id: Option<String>,
     caller_role: Option<String>,
+    room_author: Option<String>,
 }
 
 impl CarriedAttribution {
-    /// Read the four task-locals. **Must be called BEFORE `tokio::spawn`** —
+    /// Read the five task-locals. **Must be called BEFORE `tokio::spawn`** —
     /// inside the spawned future they are already gone.
     ///
     /// `caller_role` joined the other three because it fails in the same way and
@@ -61,6 +76,7 @@ impl CarriedAttribution {
             project_root: crate::projects::current_project_root(),
             agent_id: crate::agents::current_agent_id(),
             caller_role: crate::gateway::caller_identity::current_caller_role(),
+            room_author: super::current_room_author(),
         }
     }
 
@@ -76,7 +92,7 @@ impl CarriedAttribution {
         self.scope.as_ref()
     }
 
-    /// Re-establish all three around `fut`, inside the spawned task.
+    /// Re-establish all five around `fut`, inside the spawned task.
     ///
     /// Boxed: `AgentRuntime::run`'s state machine is already large, and nesting
     /// three task-local combinators around it inline overflowed the
@@ -94,7 +110,10 @@ impl CarriedAttribution {
                     self.agent_id,
                     crate::projects::with_project_root(
                         self.project_root,
-                        super::with_scope(self.scope, Box::pin(fut)),
+                        super::with_scope(
+                            self.scope,
+                            super::with_room_author(self.room_author, Box::pin(fut)),
+                        ),
                     ),
                 ),
             )
@@ -133,6 +152,43 @@ mod tests {
         assert_eq!(
             carried.map(|a| a.owner_user_id),
             Some("u-alice".to_string())
+        );
+    }
+
+    /// The room author must survive the spawn, and this is the one carried
+    /// value whose loss is not silent-and-empty but silent-and-WRONG: with the
+    /// scope carried and the author dropped, `ambient_room_author()` falls back
+    /// to the scope's `owner_user_id`, which in a project room is the CREATOR.
+    /// A child spawned from Bob's turn in Alice's room does not become
+    /// anonymous — it becomes Alice, and every "who is asking" predicate
+    /// downstream agrees.
+    ///
+    /// `scope/mod.rs::dropping_the_author_at_a_spawn_silently_reports_the_room_owner`
+    /// is the negative half of this pair: it asserts the wrong answer that
+    /// carrying the scope alone produces.
+    #[tokio::test]
+    async fn the_carrier_keeps_the_room_author_and_not_just_the_room() {
+        let room = ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-room".into()),
+        };
+
+        let carried = with_scope(
+            Some(room),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async {
+                let carrier = CarriedAttribution::capture();
+                tokio::spawn(carrier.reestablish(async { crate::scope::ambient_room_author() }))
+                    .await
+                    .unwrap()
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            carried,
+            Some("u-bob".to_string()),
+            "the speaker must cross the spawn; falling back to u-alice is the \
+             room's creator, which is a confident answer about the wrong person"
         );
     }
 

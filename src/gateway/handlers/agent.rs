@@ -582,9 +582,63 @@ async fn resolve_attribution(
         }
         // Absent OR foreign project: one refusal, no oracle.
         Some(pid) => Err(BuildRunError::ProjectNotFound(pid.to_string())),
-        None => Ok(user
-            .as_deref()
-            .map(crate::scope::ScopeAttribution::personal)),
+        // No `project_id` — but the KEY may already have been declared a room's
+        // by `projects.room_session`, and that declaration is the only thing
+        // that knows it in this window.
+        //
+        // `claim_session_key` writes `projects.current_session_key` when the
+        // room is opened; the session ROW is created later, by whoever speaks
+        // first. A bare `chat.send` into that gap (the Panel always sends
+        // `project_id`, a plain RPC client need not) used to fall straight to
+        // the personal arm below and stamp the row `personal:<first speaker>` —
+        // PERMANENTLY, since `stamp_attribution` is create-only and
+        // `attribution_backfill` only heals rows that are NULL/NULL, not rows
+        // that are stamped wrong. The room then became invisible to every other
+        // member including its owner, while `projects.list` kept listing it.
+        // Recorded as still-open by round-3's real-machine QA.
+        //
+        // Asked only in the `None` arm: an explicit `project_id` is already
+        // decided above (and refused if foreign), so this adds no second
+        // answer to a question that has one.
+        None => {
+            if let Some(pid) = room_claiming(session_key) {
+                // Visibility still decides. A key claimed by a room the caller
+                // is not on the roster of gets the same refusal a named foreign
+                // project gets — the shape must not depend on how the caller
+                // spelled it.
+                if !crate::gateway::visibility::project_visible(&pid) {
+                    return Err(BuildRunError::ProjectNotFound(pid));
+                }
+                return Ok(Some(crate::scope::ScopeAttribution {
+                    owner_user_id: user.clone().unwrap_or_else(|| {
+                        crate::gateway::security::store::OWNER_USER_ID.to_string()
+                    }),
+                    scope: crate::scope::ScopeId::Project(pid),
+                }));
+            }
+            Ok(user
+                .as_deref()
+                .map(crate::scope::ScopeAttribution::personal))
+        }
+    }
+}
+
+/// The project that has claimed `session_key` as its room conversation.
+///
+/// A store failure reads as "not a room" rather than propagating, matching
+/// [`bound_workspace_of`]'s ruling for the same store: a degraded catalogue
+/// must not turn into a refused turn. The cost of that choice is bounded —
+/// the row is then stamped personal, which is what happens today anyway — and
+/// the alternative would make a SQLite hiccup look like a permissions failure.
+fn room_claiming(session_key: &SessionKey) -> Option<String> {
+    match crate::projects::ProjectStore::shared()
+        .project_for_session_key(&session_key.to_key_string())
+    {
+        Ok(pid) => pid,
+        Err(e) => {
+            tracing::warn!(error = %e, "projects: room claim lookup failed; treating as not-a-room");
+            None
+        }
     }
 }
 
@@ -2589,6 +2643,87 @@ mod tests {
                     .get(crate::scope::SCOPE_META_KEY)
                     .map(|s| s.as_str()),
             )
+        }
+
+        /// A room is opened by `projects.room_session`, which claims the key
+        /// but creates no session row. Whoever speaks first creates it — and if
+        /// they speak WITHOUT `project_id` (the Panel always sends one, a plain
+        /// RPC client need not), the row used to be stamped
+        /// `personal:<that speaker>`, permanently: `stamp_attribution` is
+        /// create-only, and `attribution_backfill` only heals NULL/NULL rows,
+        /// not rows stamped with the wrong thing. The room then went invisible
+        /// to every other member — including its owner — while `projects.list`
+        /// kept listing it. Recorded as still-open by round-3's real-machine QA.
+        ///
+        /// The claim itself is the evidence: `claim_session_key` is the sole
+        /// writer of `current_session_key`, so a key it names is a room by
+        /// declaration, not by inference.
+        #[tokio::test]
+        async fn a_claimed_room_key_keeps_its_room_scope_without_a_project_id() {
+            let (store, _pid, _tmp, _guard) = room();
+            // The shared catalogue is what `resolve_attribution` consults, and
+            // in tests it is a separate in-memory store from the fixture's.
+            let shared = ProjectStore::shared();
+            let p = shared.create("shared-room", Some("u-alice"), None).unwrap();
+            shared.add_member(&p.id, "u-bob").unwrap();
+            let key = SessionKey::project_room("main", &p.id);
+            shared
+                .claim_session_key(&p.id, &key.to_key_string())
+                .unwrap();
+
+            let req = CALLER_USER
+                .scope(
+                    Some("u-bob".to_string()),
+                    build_run_request(
+                        "r-room".into(),
+                        &key,
+                        // No `project_id` — the whole point.
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect("a member on the roster may speak in the room");
+
+            assert_eq!(
+                stamped(&req),
+                (Some("u-bob"), Some(format!("project:{}", p.id).as_str())),
+                "the scope is the ROOM the key was claimed for, not the first \
+                 speaker's personal partition"
+            );
+        }
+
+        /// The claim does not widen access: a key claimed by a room the caller
+        /// is not on the roster of gets the same refusal a NAMED foreign
+        /// project gets. The refusal shape must not depend on how the caller
+        /// spelled it, or the two spellings become an existence oracle.
+        #[tokio::test]
+        async fn a_claimed_room_key_still_refuses_a_non_member() {
+            let (store, _pid, _tmp, _guard) = room();
+            let shared = ProjectStore::shared();
+            let p = shared.create("closed-room", Some("u-alice"), None).unwrap();
+            let key = SessionKey::project_room("main", &p.id);
+            shared
+                .claim_session_key(&p.id, &key.to_key_string())
+                .unwrap();
+
+            let err = CALLER_USER
+                .scope(
+                    Some("u-carol".to_string()),
+                    build_run_request(
+                        "r-room-2".into(),
+                        &key,
+                        params(None),
+                        None,
+                        Some(&store),
+                        &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+                    ),
+                )
+                .await
+                .expect_err("a non-member must not open the room's conversation");
+            assert!(matches!(err, BuildRunError::ProjectNotFound(_)));
         }
 
         #[tokio::test]

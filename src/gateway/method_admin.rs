@@ -287,6 +287,21 @@ const ADMIN_PREFIXES: &[&str] = &[
     // debugging commands `aleph trace list|get` (CLI) and the TUI's `/trace`.
     // See `handlers/trace_replay.rs`'s module doc for the full split. ---
     "trace.",
+    // --- Offline memory maintenance. `dreaming.run_now` force-drives a full
+    // cycle of the globally-registered daemon, and that cycle's corpus list is
+    // `maintenance_corpora` — every `main__u-*` and `main__p-*` partition on
+    // disk. It is an LLM-driven lint / consolidate / synthesize / ARCHIVE pass
+    // over every other principal's notes, and there is no visibility predicate
+    // anywhere in `src/memory/dreaming/`. Nothing gated it: this prefix did not
+    // exist, so the family fell through to the default-open tail, while three
+    // separate places in the tree (`handlers/dreaming.rs`'s module doc,
+    // `dreaming/mod.rs:470` and `:800`) called it "the admin RPC" — a gate
+    // three documents asserted and no code performed.
+    //
+    // Gated as a family so a future `dreaming.*` sibling is gated by default;
+    // `dreaming.list_insights` is the read face and stays member-open (it is
+    // pinned as such below), narrowed by its own partition predicate. ---
+    "dreaming.",
 ];
 
 /// Member-safe reads inside otherwise-admin families.
@@ -383,10 +398,49 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // `config.update_tool_permissions` stays gated with the rest of `config.`;
     // this carve-out is a read of the dial positions, not a hand on the dial.
     "config.get_tool_permissions",
+    // The read face of `dreaming.` — daily digests, synthesis notes and run
+    // history for a corpus the caller can already see. Member-open since it
+    // was written and pinned as such in the tests below; the family prefix
+    // added in this round would otherwise have closed it, which would have
+    // gated a read while leaving the write to be discovered later.
+    // Its own narrowing is `visibility::partition_visible` in the handler.
+    "dreaming.list_insights",
 ];
+
+/// Server-global verbs that live inside a **deliberately open** family.
+///
+/// [`ADMIN_PREFIXES`] gates by family, which works when the family is
+/// uniformly one thing. `memory.` is not: its module doc above calls it a
+/// member daily surface whose per-caller narrowing is P1's job, and that is
+/// right for `memory.search` / `memory.stats` / `memory.list_corrections`. It
+/// is not right for the three maintenance verbs below, which do not read or
+/// write the *caller's* data — they sweep **every corpus on disk**, including
+/// every `main__u-*` and `main__p-*` partition:
+///
+/// - `memory.compress` iterates `SELECT DISTINCT agent_id FROM raw_memories`
+///   and rewrites each one's raw memories.
+/// - `memory.reembed` enumerates every corpus and re-embeds it; a member could
+///   start an install-wide migration.
+/// - `memory.reembed.cancel` kills whichever migration is running, including
+///   one an operator started.
+///
+/// A per-caller *filter* cannot express this: there is no caller-owned subset
+/// of "recompress the whole install". The question is admission, not
+/// visibility — which is also why `method_visibility.rs` records `memory.reembed`
+/// as having no filter to apply. That ruling is correct and says nothing about
+/// who may call it; this table is the half it was silent on.
+///
+/// Checked **before** [`MEMBER_CARVE_OUTS`] so this is a floor rather than a
+/// default: a name here cannot be re-opened by adding it to the carve-out list
+/// on the other side of the file. The two tables naming the same method is a
+/// contradiction, and `no_admin_method_is_also_a_carve_out` fails on it.
+const ADMIN_METHODS: &[&str] = &["memory.compress", "memory.reembed", "memory.reembed.cancel"];
 
 #[must_use]
 pub fn method_requires_admin(method: &str) -> bool {
+    if ADMIN_METHODS.contains(&method) {
+        return true;
+    }
     if MEMBER_CARVE_OUTS.contains(&method) {
         return false;
     }
@@ -396,6 +450,67 @@ pub fn method_requires_admin(method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two tables answer the same question with opposite answers, so a
+    /// name in both is not a redundancy — it is a contradiction whose resolved
+    /// value depends only on which `if` was written first.
+    #[test]
+    fn no_admin_method_is_also_a_carve_out() {
+        for m in ADMIN_METHODS {
+            assert!(
+                !MEMBER_CARVE_OUTS.contains(m),
+                "{m} is listed as both admin-only and a member carve-out"
+            );
+        }
+    }
+
+    /// An entry here is only worth its maintenance if the family around it is
+    /// open — otherwise the prefix already said it, and the duplicate is a
+    /// second place to drift when the prefix is later removed.
+    #[test]
+    fn every_admin_method_names_a_verb_inside_an_open_family() {
+        for m in ADMIN_METHODS {
+            assert!(
+                !ADMIN_PREFIXES.iter().any(|p| m.starts_with(p)),
+                "{m} is already covered by an ADMIN_PREFIX — drop the redundant entry"
+            );
+        }
+    }
+
+    /// The four server-global maintenance verbs, pinned by name.
+    ///
+    /// Each one sweeps every corpus on disk — every `main__u-*` and
+    /// `main__p-*` partition — so "who may call it" is an admission question
+    /// that no per-caller filter can answer. They were reachable by any member
+    /// until 2026-08-13: `dreaming.` had no prefix at all, and the three
+    /// `memory.*` verbs sat inside a family that is deliberately open because
+    /// its *other* members really are per-caller reads.
+    #[test]
+    fn the_server_global_maintenance_verbs_are_admin_only() {
+        for m in [
+            "dreaming.run_now",
+            "memory.compress",
+            "memory.reembed",
+            "memory.reembed.cancel",
+        ] {
+            assert!(method_requires_admin(m), "{m} must be admin-only");
+        }
+    }
+
+    /// …and the per-caller reads beside them are untouched. Gating a family to
+    /// close a write must not close the read a member's own page depends on —
+    /// that is how a permission fix becomes a visible feature regression.
+    #[test]
+    fn the_member_daily_memory_surface_stays_open() {
+        for m in [
+            "memory.search",
+            "memory.stats",
+            "memory.list_corrections",
+            "dreaming.list_insights",
+        ] {
+            assert!(!method_requires_admin(m), "{m} must stay member-open");
+        }
+    }
 
     /// A curated security table must not say the same thing twice.
     ///

@@ -14,7 +14,10 @@
 //! works whether or not the daemon is running and never contends with it.
 
 use alephcore::gateway::handlers::gateway_ticket::{pairing_urls, reachable_hosts};
-use alephcore::gateway::security::{store::SecurityStore, DeviceTokenManager};
+use alephcore::gateway::security::{
+    store::{SecurityStore, UserStatus},
+    DeviceTokenManager,
+};
 use alephcore::gateway::tls::discover_interface_ips;
 use alephcore::gateway::GatewayConfig;
 use std::error::Error;
@@ -63,9 +66,22 @@ pub fn handle_pair(
     // redeems it resolves through the dangling-user arm to `("guest")` and hits
     // the login wall on every frame — an invitation that looks minted, prints a
     // URL, and silently cannot work. Fail where the operator is still looking.
+    //
+    // A DEACTIVATED id produces byte-identical symptoms: `connect` walls it to
+    // `(None, "guest")` on the same arm the dangling one takes. So the guard
+    // asks the whole question — existence *and* status — the way the sibling
+    // id-binding producer `channel.pairing.approve` does.
     if let Some(ref uid) = user_id {
         match store.get_user(uid) {
-            Ok(Some(_)) => {}
+            Ok(Some(u)) if u.status == UserStatus::Active => {}
+            Ok(Some(_)) => {
+                return Err(format!(
+                    "user {uid} is deactivated\n\nA ticket bound to a walled principal mints, \
+                     prints a URL, and refuses every frame after pairing. Run \
+                     `aleph users update {uid} --status active` first."
+                )
+                .into())
+            }
             Ok(None) => {
                 return Err(format!(
                     "no such user: {uid}\n\nRun `aleph users list` to see who exists, \

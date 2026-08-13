@@ -62,6 +62,32 @@ use store::CronStore;
 /// Shared handle to `CronService` for use in gateway handlers
 pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 
+/// Process-global cron service, installed once at daemon boot.
+///
+/// The third of three: `goal::global()` and `looping::global()` already exist
+/// for exactly this reason — `users.update`'s deactivation freeze is a free
+/// function with no injected dependencies, and it has to reach every
+/// subsystem that runs work on a principal's behalf. Cron was the one it could
+/// not reach, and the exclusion was written down as a product fact ("`cron.*`
+/// is admin-gated, so a deactivated MEMBER owns none by construction") that a
+/// sibling handler in the same file falsifies: `users.create` accepts
+/// `role: "admin"`, and a second admin is fully deactivatable.
+///
+/// `None` until boot, so tests and early-boot read as "no cron subsystem" and
+/// the freeze skips the leg rather than failing.
+static GLOBAL_CRON: once_cell::sync::OnceCell<SharedCronService> = once_cell::sync::OnceCell::new();
+
+/// Install the global service at boot. Idempotent: a second call is ignored.
+pub fn init_global(service: SharedCronService) {
+    let _ = GLOBAL_CRON.set(service);
+}
+
+/// Read the global service, if initialized.
+#[must_use]
+pub fn global() -> Option<SharedCronService> {
+    GLOBAL_CRON.get().cloned()
+}
+
 /// High-level cron service wrapping the internal `ServiceState`.
 ///
 /// Provides a simple async API for gateway handlers and CLI.
@@ -146,6 +172,38 @@ impl CronService {
     pub async fn get_job(&self, id: &str) -> Result<CronJobView, TaskError> {
         let store = self.state.store.lock().await;
         service::ops::get_job(&store, id).ok_or_else(|| TaskError::not_found("job", id))
+    }
+
+    /// Disable every enabled job owned by `user_id`, returning how many were
+    /// disabled. The deactivation counterpart of `GoalStore::pause_all_owned_by`
+    /// and `LoopRegistry::pause_all_owned_by`.
+    ///
+    /// Set-to-disabled rather than toggle: a sweep must be idempotent, and
+    /// `toggle_job` on an already-disabled job would ENABLE it — arming
+    /// background work during an offboarding.
+    ///
+    /// One-way, like its two siblings: reactivating the user does not
+    /// re-enable these. The owner re-enables their own from a live session.
+    pub async fn pause_all_owned_by(&self, user_id: &str) -> Result<usize, TaskError> {
+        let paused: Vec<String> = {
+            let mut store = self.state.store.lock().await;
+            let mut ids = Vec::new();
+            for job in store.jobs_mut() {
+                if job.enabled && job.owner_user_id.as_deref() == Some(user_id) {
+                    job.enabled = false;
+                    ids.push(job.id.clone());
+                }
+            }
+            if ids.is_empty() {
+                return Ok(0);
+            }
+            store.persist().map_err(TaskError::internal)?;
+            ids
+        };
+        for id in &paused {
+            self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
+        }
+        Ok(paused.len())
     }
 
     // ── Write operations ────────────────────────────────────────────
@@ -400,6 +458,86 @@ impl CronService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The deactivation sweep's third leg. Two properties, and the second is
+    /// the reason this is `enabled = false` rather than `toggle_job`:
+    ///
+    /// - it is scoped to the principal, so offboarding one person does not
+    ///   silence everyone else's schedules;
+    /// - it is idempotent, so a second sweep (a repeated
+    ///   `users.update{status:"deactivated"}`, or a retry) cannot ENABLE an
+    ///   already-disabled job — which is what a toggle would do, arming
+    ///   background work in the middle of an offboarding.
+    #[tokio::test]
+    async fn pausing_by_owner_is_scoped_and_idempotent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = CronService::new(CronConfig {
+            db_path: dir.path().join("cron.db").to_string_lossy().to_string(),
+            ..CronConfig::default()
+        })
+        .unwrap();
+
+        let make = |name: &str, owner: Option<&str>, enabled: bool| {
+            let mut job = CronJob::new(
+                name,
+                "agent-1",
+                "do something",
+                ScheduleKind::Every {
+                    every_ms: 60_000,
+                    anchor_ms: None,
+                },
+            );
+            job.owner_user_id = owner.map(str::to_string);
+            job.enabled = enabled;
+            job
+        };
+        let alice_on = make("alice-live", Some("u-alice"), true);
+        let alice_off = make("alice-already-off", Some("u-alice"), false);
+        let bob_on = make("bob-live", Some("u-bob"), true);
+        let unowned = make("legacy", None, true);
+        for job in [
+            alice_on.clone(),
+            alice_off.clone(),
+            bob_on.clone(),
+            unowned.clone(),
+        ] {
+            service.add_job(job).await.unwrap();
+        }
+
+        assert_eq!(
+            service.pause_all_owned_by("u-alice").await.unwrap(),
+            1,
+            "only the ENABLED job of that principal counts as newly paused"
+        );
+
+        let by_name = |jobs: &[CronJobView], name: &str| {
+            jobs.iter()
+                .find(|j| j.name == name)
+                .expect("job present")
+                .enabled
+        };
+        let jobs = service.list_jobs().await.unwrap();
+        assert!(!by_name(&jobs, "alice-live"));
+        assert!(!by_name(&jobs, "alice-already-off"));
+        assert!(
+            by_name(&jobs, "bob-live"),
+            "another principal's schedule must survive"
+        );
+        assert!(
+            by_name(&jobs, "legacy"),
+            "a pre-P1 job with no owner belongs to nobody in particular and \
+             must not be swept by a per-principal offboarding"
+        );
+
+        assert_eq!(
+            service.pause_all_owned_by("u-alice").await.unwrap(),
+            0,
+            "a second sweep is a no-op, not a re-toggle"
+        );
+        let jobs = service.list_jobs().await.unwrap();
+        assert!(!by_name(&jobs, "alice-live"));
+        assert!(!by_name(&jobs, "alice-already-off"));
+    }
 
     #[tokio::test]
     async fn cron_service_basic_lifecycle() {

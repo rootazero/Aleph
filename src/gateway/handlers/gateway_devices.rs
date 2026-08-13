@@ -133,6 +133,17 @@ pub async fn handle_devices_list(
                 "device_name": d.device_name,
                 "created_at": d.created_at,
                 "last_seen_at": d.last_seen_at,
+                // Which principal this device speaks as. SECURITY.md calls
+                // this list "the inventory", and until 2026-08-13 it was an
+                // inventory with no owners: five members' phones showed as
+                // five rows named "iPhone", so revoking the right one was
+                // guesswork and verifying that a deactivation actually cut
+                // someone's devices was impossible from any surface.
+                // `display_name` resolves through the same directory
+                // projection the channel-pairing list and the room bubbles
+                // use, so an operator reads a name rather than a `u-` id.
+                "user_id": d.user_id,
+                "display_name": d.user_id.as_deref().and_then(crate::scope::directory::display_name),
             })
         })
         .collect();

@@ -17,7 +17,9 @@ use super::network_policy::{BrowserSsrfGuard, PolicyViolation, SsrfConfig};
 use super::playwright_cli::PlaywrightCliDriver;
 use super::playwright_cli_backend::PlaywrightCliBackend;
 use super::playwright_launch::{LaunchPolicy, SessionLaunch};
-use super::profile::{BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig};
+use super::profile::{
+    BrowserDriver, BrowserSystemConfig, BrowserType, PlaywrightCliConfig, ProfileConfig,
+};
 use super::tab_registry::{parse_tab_ids, TabRegistry};
 
 /// The manager the running daemon actually serves browser tools from, so a
@@ -227,6 +229,21 @@ impl ProfileManager {
                 }
             }
         });
+    }
+
+    /// The managed driver's configuration, for the one consumer that runs a
+    /// `playwright-cli` session of its own rather than through a profile:
+    /// `pdf_generate`'s browser engine.
+    ///
+    /// Exposed rather than left to `PlaywrightCliConfig::default()` because a
+    /// second construction site inherits none of the first's settings — the PDF
+    /// engine was resolving its binary as though the operator had pinned
+    /// nothing, so an install whose `binary_path` points off `PATH` had working
+    /// browser tools and a PDF engine that either fell back to the native
+    /// renderer or reached for the network installer.
+    #[must_use]
+    pub const fn playwright_cli_config(&self) -> &PlaywrightCliConfig {
+        &self.config.playwright_cli
     }
 
     /// Route a profile to its appropriate `BrowserBackend` instance.

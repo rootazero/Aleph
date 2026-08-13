@@ -653,6 +653,42 @@ impl ProjectStore {
         })
     }
 
+    /// The project that claimed `session_key` as its room conversation, if any.
+    ///
+    /// The reverse of [`Self::claim_session_key`], and the reason it can exist
+    /// at all: that method is the SOLE writer of `current_session_key`, so this
+    /// column is a declaration by the room rather than an inference about it.
+    ///
+    /// It answers a question no other source can. The room's session ROW does
+    /// not yet exist when the room is opened — `projects.room_session` claims
+    /// the key, and whoever speaks first creates the row — so between those two
+    /// writes there is nothing that says the key belongs to a room. A bare
+    /// `chat.send` in that window (no `project_id`; the Panel always sends one,
+    /// a plain RPC client need not) stamps the row `personal:<first speaker>`,
+    /// permanently: `stamp_attribution` is create-only by design, and
+    /// `attribution_backfill` cannot heal it because its predicate is
+    /// `owner_user_id IS NULL AND scope_id IS NULL` and the row is stamped, not
+    /// blank. The room then vanishes for every other member INCLUDING its owner
+    /// while `projects.list` keeps listing it.
+    ///
+    /// `Ok(None)` for "no room claims this key" — the overwhelmingly common
+    /// case, and the one that must stay a cheap indexed lookup rather than a
+    /// scan.
+    pub fn project_for_session_key(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<String>, ProjectError> {
+        self.with_conn(|conn| {
+            conn.query_row(
+                "SELECT id FROM projects WHERE current_session_key = ?1",
+                [session_key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)
+        })
+    }
+
     pub fn members(&self, id: &str) -> Result<Vec<String>, ProjectError> {
         self.with_conn(|conn| {
             let mut stmt = conn

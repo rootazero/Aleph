@@ -107,6 +107,8 @@
     "gateway_devices_online": "Online now",
     "gateway_devices_last_seen": "Last seen",
     "gateway_devices_never_seen": "Never connected",
+    "gateway_pairing_for": "Pair as",
+    "gateway_pairing_for_owner": "Owner — whoever redeems it becomes the owner",
     "gateway_devices_revoke": "Revoke",
     "gateway_devices_revoke_self_confirm": "Revoke this device? You are using it — you will be signed out immediately and will need a new pairing code to get back in.",
     "gateway_token_legacy_title": "Shared token (recovery)",

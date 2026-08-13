@@ -17,8 +17,8 @@ use tracing::info;
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserExecTool, BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool,
-    BrowserDragTool, BrowserEmulateTool, BrowserEvaluateTool, BrowserFillFormTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
+    BrowserEmulateTool, BrowserEvaluateTool, BrowserExecTool, BrowserFillFormTool,
     BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool,
     BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool,
     BrowserScrollTool, BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool,
@@ -120,6 +120,8 @@ impl BuiltinToolRegistry {
         } else {
             CodeCheckTool::new()
         };
+        // NOTE: also needs the browser driver's config, which is built further
+        // down; `with_playwright_config` is applied there rather than here.
         let pdf_generate_tool = if let Some(ref tc) = config.tool_context {
             PdfGenerateTool::new().with_tool_context(Arc::clone(tc))
         } else {
@@ -534,6 +536,11 @@ impl BuiltinToolRegistry {
                 crate::browser::profile::BrowserSystemConfig::default(),
             ))
         });
+        // The PDF browser engine drives a `playwright-cli` session of its own,
+        // so it needs the same driver settings the browser tools got — see
+        // `PdfGenerateTool::with_playwright_config`.
+        let pdf_generate_tool = pdf_generate_tool
+            .with_playwright_config(browser_profile_manager.playwright_cli_config().clone());
         let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager))

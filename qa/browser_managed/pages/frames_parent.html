@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Aleph browser QA — frames</title></head>
+<body>
+<h1 id="marker">__MARKER__</h1>
+<p id="parent-only">PARENT_BODY_TEXT</p>
+
+<!-- The child is served by a SECOND http server on a DIFFERENT PORT, which
+     makes it a different origin under the same-origin policy even though both
+     are 127.0.0.1. That is the whole point: an out-of-process iframe, not a
+     same-origin one. The scenario proves the cross-origin-ness itself before it
+     asks any question about it — a same-origin iframe would make every later
+     claim vacuous. -->
+<iframe id="child" src="__CHILD_URL__" width="600" height="220"
+        title="Cross origin child frame"></iframe>
+
+<div id="probe">probe:unset</div>
+<script>
+// Record what the parent can see of the child. On a genuinely cross-origin
+// frame this MUST throw or yield null; if it yields a document, the fixture is
+// testing a same-origin iframe and says so instead of quietly passing.
+//
+// ⚠️ Timed on the frame's `load`, not on parse. Before the child's document
+// arrives the iframe still holds the initial `about:blank`, which IS
+// same-origin — probing at parse time reported SAME_ORIGIN for a frame that is
+// cross-origin a moment later, i.e. the control measured the wrong instant and
+// would have condemned a correct fixture.
+var frame = document.getElementById('child');
+function probeChild() {
+  try {
+    var d = frame.contentDocument;
+    document.getElementById('probe').textContent = d ? 'probe:SAME_ORIGIN' : 'probe:CROSS_ORIGIN';
+  } catch (e) {
+    document.getElementById('probe').textContent = 'probe:CROSS_ORIGIN';
+  }
+}
+frame.addEventListener('load', probeChild);
+</script>
+</body></html>

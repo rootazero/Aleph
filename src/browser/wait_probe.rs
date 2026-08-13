@@ -95,9 +95,16 @@ pub(crate) async fn poll_wait_for<B: BrowserBackend + ?Sized>(
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         let out = backend.evaluate(tab_id, &probe).await?;
-        // The probe's result value is the only thing echoed back (possibly
-        // JSON-encoded with quotes — `contains` tolerates either); the
-        // sentinels cannot appear unless the probe returned them.
+        // This search is only sound because `evaluate` is contracted to return
+        // the script's VALUE, not a transcript of the call. Both sentinels are
+        // literals inside every probe built above, so a backend that echoed the
+        // script back would satisfy `contains` on the first poll of every wait —
+        // which is exactly what `playwright-cli eval` does (`### Ran Playwright
+        // code`) and exactly what this code used to be handed. Every wait on the
+        // default driver reported "found" immediately, for conditions that never
+        // held, with no error anywhere; the guard for it lives in this file's
+        // tests (`a_transcript_that_echoes_the_probe_does_not_read_as_found`)
+        // because the invariant belongs to the predicate, not to one backend.
         if out.contains(WAIT_PROBE_FOUND) {
             return Ok(true);
         }
@@ -118,6 +125,57 @@ pub(crate) async fn poll_wait_for<B: BrowserBackend + ?Sized>(
 mod tests {
     use super::*;
     use crate::browser::testkit::FakeBackend;
+
+    /// The failure this file shipped with, pinned at the layer that owns it.
+    ///
+    /// Feeds `poll_wait_for`'s own predicate the shape a REAL `playwright-cli
+    /// eval` returns — result section plus an echo of the script — and requires
+    /// that the value extracted from it is the probe's answer, not a token
+    /// lifted out of the probe's own source. Written against a condition that
+    /// is FALSE, so a regression makes it red rather than merely less precise.
+    #[test]
+    fn a_transcript_that_echoes_the_probe_does_not_read_as_found() {
+        use crate::browser::playwright_cli::parse_result_value;
+
+        let probe = wait_probe_func(&WaitCondition::Text("never on this page".into()));
+        // Pre-condition of the whole problem: the sentinel IS a literal in the
+        // script. If that ever stops being true this test still passes, but the
+        // assertion below stops being the interesting one — so state it.
+        assert!(
+            probe.contains(WAIT_PROBE_FOUND),
+            "the probe embeds the sentinel; that is why the transcript is dangerous"
+        );
+
+        let transcript = format!(
+            "### Result\n\"absent\"\n### Ran Playwright code\n```js\nawait page.evaluate('{probe}');\n```\n"
+        );
+        assert!(
+            transcript.contains(WAIT_PROBE_FOUND),
+            "the raw transcript contains the sentinel — searching it is the bug"
+        );
+
+        let value = parse_result_value(&transcript).expect("transcript has a ### Result section");
+        assert!(
+            !value.contains(WAIT_PROBE_FOUND),
+            "the extracted value must not carry the echoed script: {value:?}"
+        );
+        assert_eq!(value, "\"absent\"");
+    }
+
+    /// The positive half: a transcript whose script really did return the
+    /// sentinel must still read as found, or the fix would have turned a
+    /// permanent "found" into a permanent "timed out".
+    #[test]
+    fn a_transcript_whose_script_returned_the_sentinel_reads_as_found() {
+        use crate::browser::playwright_cli::parse_result_value;
+
+        let probe = wait_probe_func(&WaitCondition::UrlContains("example".into()));
+        let transcript = format!(
+            "### Result\n\"{WAIT_PROBE_FOUND}\"\n### Ran Playwright code\n```js\nawait page.evaluate('{probe}');\n```\n"
+        );
+        let value = parse_result_value(&transcript).expect("transcript has a ### Result section");
+        assert!(value.contains(WAIT_PROBE_FOUND), "got {value:?}");
+    }
 
     #[test]
     fn text_probe_is_arrow_function_with_escaped_needle() {
