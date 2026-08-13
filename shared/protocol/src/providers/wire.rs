@@ -290,7 +290,15 @@ pub struct ProviderHealthRow {
     pub enabled: bool,
     /// True when a ping round-tripped successfully.
     pub ok: bool,
-    /// True when the provider was not probed because it is disabled.
+    /// True when the provider was not dialled at all, so `ok: false` says
+    /// nothing about it.
+    ///
+    /// There are two reasons and `enabled` tells them apart without a third
+    /// field: `!enabled` is the operator's own switch, `enabled` means the
+    /// preset opts out of `/models` probing (OAuth-only endpoints,
+    /// per-deployment hosts) and a probe could only ever fail there. Both
+    /// come from `providers::probe::probe_disposition`, which is also what the
+    /// `providers/connectivity` doctor check reads.
     pub skipped: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<u64>,
@@ -551,6 +559,16 @@ pub struct CatalogResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderListResult {
     pub providers: Vec<ProviderInfo>,
+}
+
+/// Response of `providers.healthcheck`.
+///
+/// The row type shipped here from the start; the envelope around it stayed a
+/// hand-written `json!({ "providers": … })` because the method had no client to
+/// disagree with it. It has one now, so the wrapper is a contract like the rest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderHealthResult {
+    pub providers: Vec<ProviderHealthRow>,
 }
 
 /// Response of `providers.get`.

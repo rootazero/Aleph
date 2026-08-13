@@ -170,6 +170,43 @@ async fn test_healthcheck_skips_disabled_without_probing() {
     assert!(providers[0].get("latency_ms").is_none());
 }
 
+/// The sweep must not dial a preset that declares `/models` probing cannot
+/// answer for it.
+///
+/// This arm read `enabled` alone, so all six opt-out presets — the OAuth-only
+/// endpoints and the per-deployment hosts — were dialled and came back
+/// `unreachable`. The doctor check next door had honoured the opt-out since it
+/// was written; the two faces of one verb had two derivations, and only the
+/// wrong one was operator-facing. Both now read `probe::probe_disposition`.
+///
+/// `chatgpt` carries `.no_health_check()`. Skipped-because-opted-out is told
+/// apart from skipped-because-disabled by `enabled`, which is why the row
+/// needs no third field.
+#[tokio::test]
+async fn healthcheck_skips_a_preset_that_opts_out_of_probing() {
+    let mut config = config_with_provider("chatgpt");
+    config.providers.get_mut("chatgpt").unwrap().enabled = true;
+    let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
+    let response = handle_healthcheck(request, Arc::new(RwLock::new(config)), test_vault()).await;
+    let result = response.result.unwrap();
+    let row = &result["providers"][0];
+
+    assert_eq!(row["name"], "chatgpt");
+    assert_eq!(
+        row["skipped"], true,
+        "an opt-out preset must not be dialled"
+    );
+    assert_eq!(
+        row["enabled"], true,
+        "the operator did not disable it — `enabled` is what separates the two \
+         reasons to skip"
+    );
+    assert!(
+        row.get("error").is_none(),
+        "not dialling is not a failure, so there is nothing to report"
+    );
+}
+
 #[tokio::test]
 async fn test_healthcheck_redacts_probe_error() {
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
@@ -201,49 +238,6 @@ fn test_provider_health_row_serialize() {
     assert_eq!(json["latency_ms"], 120);
     // error omitted when None
     assert!(json.get("error").is_none());
-}
-
-#[tokio::test]
-async fn test_needs_setup_empty_providers() {
-    let config = Arc::new(RwLock::new(Config::default()));
-    let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));
-    let response = handle_needs_setup(request, config).await;
-    let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
-    assert_eq!(result["needs_setup"], true);
-    assert_eq!(result["provider_count"], 0);
-    assert_eq!(result["has_verified"], false);
-}
-
-#[tokio::test]
-async fn test_needs_setup_has_verified_provider() {
-    let mut config = Config::default();
-    let mut provider_cfg = ProviderConfig::test_config("gpt-4o");
-    provider_cfg.enabled = true;
-    provider_cfg.verified = true;
-    config.providers.insert("openai".to_string(), provider_cfg);
-    let config = Arc::new(RwLock::new(config));
-    let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));
-    let response = handle_needs_setup(request, config).await;
-    let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
-    assert_eq!(result["needs_setup"], false);
-    assert_eq!(result["provider_count"], 1);
-    assert_eq!(result["has_verified"], true);
-}
-
-#[tokio::test]
-async fn test_needs_setup_has_unverified_provider() {
-    let mut config = Config::default();
-    let mut provider_cfg = ProviderConfig::test_config("gpt-4o");
-    provider_cfg.enabled = true;
-    provider_cfg.verified = false;
-    config.providers.insert("openai".to_string(), provider_cfg);
-    let config = Arc::new(RwLock::new(config));
-    let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));
-    let response = handle_needs_setup(request, config).await;
-    let result: serde_json::Value = serde_json::from_value(response.result.unwrap()).unwrap();
-    assert_eq!(result["needs_setup"], true);
-    assert_eq!(result["provider_count"], 1);
-    assert_eq!(result["has_verified"], false);
 }
 
 // Security (3def857c6): list/get report `has_api_key` from the vault but never

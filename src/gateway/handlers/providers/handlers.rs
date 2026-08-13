@@ -13,8 +13,8 @@ use super::parse_params;
 use super::types::{
     failure_kind, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
     DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
-    ModelsRefreshRow, ProviderGetResult, ProviderHealthRow, ProviderInfo, ProviderListResult,
-    RosterModel, SetDefaultParams, TestParams, TestResult, UpdateParams,
+    ModelsRefreshRow, ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo,
+    ProviderListResult, RosterModel, SetDefaultParams, TestParams, TestResult, UpdateParams,
 };
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -596,9 +596,16 @@ pub async fn handle_test(
 ///
 /// Read-only liveness sweep: snapshots each provider's config (injecting its
 /// vault key), then pings them all concurrently via [`futures::future::join_all`]
-/// — superior to the reference's serial per-provider checks. Disabled providers
-/// are reported as `skipped` without a network call. Returns
-/// `{ "providers": [ProviderHealthRow, ...] }` sorted by name.
+/// — superior to the reference's serial per-provider checks. Providers the
+/// sweep must not dial (disabled, or a preset that opts out of `/models`
+/// probing) are reported as `skipped` without a network call; which of the two
+/// applies is readable from `enabled`. Returns a [`ProviderHealthResult`]
+/// sorted by name.
+///
+/// The client is `aleph providers health`. `aleph doctor` answers a wider
+/// question through `diagnostics.run` (`providers/connectivity`, prose findings
+/// plus a total-outage gate over the whole engine); this is the narrow,
+/// tabular one an operator wants right after rotating a key.
 pub async fn handle_healthcheck(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -621,7 +628,14 @@ pub async fn handle_healthcheck(
     let probe_futures = probes
         .into_iter()
         .map(|(name, enabled, runtime)| async move {
-            if !enabled {
+            // Same disposition the doctor check reads. This arm used to test
+            // `enabled` alone, so every preset that opts out of `/models`
+            // probing was dialled anyway and reported `unreachable` — a red row
+            // about a provider that is fine, from the one surface an operator
+            // would consult to find out.
+            if crate::providers::probe::probe_disposition(&name, enabled)
+                != crate::providers::probe::ProbeDisposition::Probe
+            {
                 return ProviderHealthRow {
                     name,
                     enabled,
@@ -644,10 +658,14 @@ pub async fn handle_healthcheck(
             }
         });
 
-    let mut rows = futures::future::join_all(probe_futures).await;
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut providers = futures::future::join_all(probe_futures).await;
+    providers.sort_by(|a, b| a.name.cmp(&b.name));
 
-    JsonRpcResponse::success(request.id, json!({ "providers": rows }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(ProviderHealthResult { providers })
+            .unwrap_or_else(|_| json!({ "providers": [] })),
+    )
 }
 
 // ============================================================================
@@ -857,32 +875,6 @@ pub async fn handle_models_refresh(
         request.id,
         serde_json::to_value(ModelsRefreshResult { providers })
             .unwrap_or_else(|_| json!({ "providers": [] })),
-    )
-}
-
-// ============================================================================
-// Needs Setup
-// ============================================================================
-
-/// Check if first-run setup is needed
-///
-/// Returns true if no provider is both enabled and verified.
-/// Panel calls this on startup to decide whether to show the setup wizard.
-pub async fn handle_needs_setup(
-    request: JsonRpcRequest,
-    config_store: Arc<RwLock<Config>>,
-) -> JsonRpcResponse {
-    let cfg = config_store.read().await;
-    let provider_count = cfg.providers.len();
-    let has_verified = cfg.providers.values().any(|p| p.enabled && p.verified);
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "needs_setup": !has_verified,
-            "provider_count": provider_count,
-            "has_verified": has_verified,
-        }),
     )
 }
 

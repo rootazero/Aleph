@@ -640,6 +640,7 @@ async fn dispatch_providers(
         ProvidersAction::Test { name } => {
             providers_cmd::test(server_url, config, &name, json).await
         }
+        ProvidersAction::Health => providers_cmd::health(server_url, config, json).await,
         ProvidersAction::Models { name, refresh } => {
             providers_cmd::models(server_url, config, name.as_deref(), refresh, json).await
         }

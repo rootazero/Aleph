@@ -101,6 +101,27 @@ impl StepStatus {
     }
 }
 
+/// Could an agent answer a turn with this provider?
+///
+/// Step 1 used to ask a much weaker question — whether `providers.list` came
+/// back non-empty. That list is every section in `config.providers` whatever
+/// its state, so a provider the operator disabled, or saved with a key that
+/// never reached the vault, ticked the step green while the sentence printed
+/// under it ("without one, agents cannot respond") stayed true. A checklist
+/// that reports ready when nothing works is worse than no checklist, and this
+/// is the same family as the refusal bug above: a claim about the setting made
+/// by a read that never looked at it.
+///
+/// `verified` alone is the opposite error and was the server's own answer in
+/// the orphaned `providers.needsSetup` — it only turns true once someone clicks
+/// Test, and any later edit resets it, so a perfectly working provider reads as
+/// missing. Either arm suffices: a key in the vault, or a probe/OAuth login
+/// that already succeeded (`providers.oauthLogin` sets `verified` for the
+/// endpoints that carry no API key at all).
+fn usable(provider: &aleph_protocol::providers::ProviderInfo) -> bool {
+    provider.enabled && (provider.has_api_key || provider.verified)
+}
+
 #[component]
 #[must_use]
 pub fn Settings() -> impl IntoView {
@@ -124,9 +145,11 @@ pub fn Settings() -> impl IntoView {
             return;
         }
         leptos::task::spawn_local(async move {
-            // Step 1 — at least one chat provider configured.
+            // Step 1 — at least one chat provider an agent could actually use.
             providers_ready.set(StepStatus::of(
-                ProvidersApi::list(&state).await.map(|l| !l.is_empty()),
+                ProvidersApi::list(&state)
+                    .await
+                    .map(|l| l.iter().any(usable)),
             ));
 
             // Step 2 — at least one generation provider configured.
@@ -331,8 +354,9 @@ fn SetupRow(step: SetupStep, status: StepStatus) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::StepStatus;
+    use super::{usable, StepStatus};
     use aleph_protocol::jsonrpc::ADMIN_REQUIRED_MESSAGE;
+    use aleph_protocol::providers::ProviderInfo;
 
     /// The bug this checklist shipped with: a refused read rendered as
     /// `PENDING · Configure a chat provider` for a provider that was in fact
@@ -370,5 +394,49 @@ mod tests {
     fn a_successful_probe_still_answers_ready_or_pending() {
         assert!(StepStatus::of(Ok(true)) == StepStatus::Ready);
         assert!(StepStatus::of(Ok(false)) == StepStatus::Pending);
+    }
+
+    fn row(enabled: bool, has_api_key: bool, verified: bool) -> ProviderInfo {
+        ProviderInfo {
+            name: "openai".into(),
+            enabled,
+            models: vec!["gpt-5.6".into()],
+            model: "gpt-5.6".into(),
+            provider_type: Some("openai".into()),
+            has_api_key,
+            api_key: None,
+            base_url: None,
+            color: "#10a37f".into(),
+            timeout_seconds: 300,
+            max_tokens: None,
+            context_window: None,
+            temperature: None,
+            is_default: true,
+            verified,
+        }
+    }
+
+    /// The step's whole claim is that an agent can respond. A row on its own is
+    /// not that claim, and reporting it as one is what shipped.
+    #[test]
+    fn a_provider_row_alone_does_not_make_the_step_ready() {
+        assert!(
+            !usable(&row(true, false, false)),
+            "enabled but no credential anywhere: an agent cannot answer with it"
+        );
+        assert!(
+            !usable(&row(false, true, true)),
+            "the operator switched it off, so it is not the provider that will answer"
+        );
+    }
+
+    /// ...and the opposite error, which is the one the orphaned
+    /// `providers.needsSetup` made: `verified` only turns true after a manual
+    /// Test click and resets on the next edit.
+    #[test]
+    fn a_saved_key_is_enough_without_a_test_click() {
+        assert!(usable(&row(true, true, false)));
+        // OAuth endpoints carry no API key at all; the login sets `verified`.
+        assert!(usable(&row(true, false, true)));
     }
 }
