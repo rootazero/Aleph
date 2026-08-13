@@ -36,9 +36,11 @@ impl DuckDuckGoProvider {
 
 impl Default for DuckDuckGoProvider {
     fn default() -> Self {
-        Self {
-            client: build_client().expect("DuckDuckGo default client construction failed"),
-        }
+        // `new()` can only fail if `reqwest::Client::builder()` itself fails
+        // (effectively impossible in default builds — TLS backend init /
+        // invalid proxy URL). Propagate via `expect` so the panic message
+        // surfaces the diagnostic context rather than a bare `unwrap`.
+        Self::new().expect("DuckDuckGo default client construction failed")
     }
 }
 

@@ -18,11 +18,20 @@
 //! is empty. Dreaming and every other optimizer have no write path here —
 //! the topology is the held-out layer that watches them.
 
+pub mod events;
+pub mod export;
+pub mod inspector;
 pub mod service;
+pub mod snapshot;
 pub mod store;
 pub mod templates;
 pub mod types;
 
+pub use events::{TopologyEvent, TopologyEventBus};
+pub use export::{to_dot, to_json};
+pub use inspector::{ImpactReport, LoopGraphInspector, NodeSubgraph, TopologySummary};
+pub use service::notify_team_settled;
+pub use snapshot::{Snapshot, SnapshotStore, SnapshotSummary, TopologyDiff};
 pub use store::LoopGraphStore;
 pub use templates::AUDIT_NODE_BODY;
 pub use types::{EdgeKind, GraphEdge, GraphNode, NodeKind, Origin};
@@ -35,6 +44,15 @@ use once_cell::sync::OnceCell;
 /// "no graph subsystem" (fail-soft, mirrors `goal::global`).
 static GLOBAL: OnceCell<Arc<LoopGraphStore>> = OnceCell::new();
 
+/// Process-global topology event bus. Initialized once at daemon boot, next
+/// to [`init_global`]. `None` until then — publishing into an absent bus is a
+/// no-op, so tests and early boot need no special casing.
+static EVENT_BUS: OnceCell<TopologyEventBus> = OnceCell::new();
+
+/// Process-global snapshot store. Initialized once at daemon boot; `None`
+/// until then reads as "snapshot subsystem absent" (tool degrades gracefully).
+static SNAPSHOT_STORE: OnceCell<Arc<SnapshotStore>> = OnceCell::new();
+
 /// Install the global store at boot. Idempotent: a second call is ignored.
 pub fn init_global(store: Arc<LoopGraphStore>) {
     let _ = GLOBAL.set(store);
@@ -43,6 +61,34 @@ pub fn init_global(store: Arc<LoopGraphStore>) {
 /// Read the global store, if initialized.
 pub fn global() -> Option<Arc<LoopGraphStore>> {
     GLOBAL.get().cloned()
+}
+
+/// Install the global topology event bus at boot. Idempotent.
+pub fn init_event_bus(bus: TopologyEventBus) {
+    let _ = EVENT_BUS.set(bus);
+}
+
+/// Read the global event bus, if initialized.
+pub fn event_bus() -> Option<TopologyEventBus> {
+    EVENT_BUS.get().cloned()
+}
+
+/// Install the global snapshot store at boot. Idempotent.
+pub fn init_snapshot_store(store: Arc<SnapshotStore>) {
+    let _ = SNAPSHOT_STORE.set(store);
+}
+
+/// Read the global snapshot store, if initialized.
+pub fn snapshot_store() -> Option<Arc<SnapshotStore>> {
+    SNAPSHOT_STORE.get().cloned()
+}
+
+/// Publish a topology event to the global bus. No-op when the bus is absent
+/// (tests, early boot) — the graph itself is durable, the event is advisory.
+pub(crate) fn publish(ev: TopologyEvent) {
+    if let Some(bus) = EVENT_BUS.get() {
+        bus.publish(ev);
+    }
 }
 
 #[cfg(test)]

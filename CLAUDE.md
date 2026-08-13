@@ -496,6 +496,10 @@
 
 - **「这个 CLI 没有对应 flag」不等于「没有对应面」** —— 上一条的孪生，且它推翻的是一条**有理有据的旧记录**：上一轮读了 `--help` 的 flag 列表、没找到 proxy/user_data_dir/extra_args，就诚实记下「无对应面，猜 flag 名会产出静默忽略」。找错了面——`open --config <file>` 有一份文档化的 JSON schema（`browser.launchOptions` 就是 playwright `LaunchOptions`，含 `proxy` 与 `args`），`close` 也一直存在。判据：写下「这个外部工具做不到 X」之前，**把 flag 列表、配置文件 schema、子命令表分别看一遍**；三者是三个面，`--help` 只答得了第一个 → §3.12
 - **一个「读外部进程输出」的 parser，格式必须从**真实输出**抄，不能从记忆里描述** —— `parse_tab_line` 的 doc 写着「Playwright CLI 格式 `Tab N: URL`」，那个格式**没有任何 driver 发过**（真格式 `- 1: (current) [Title](url)`）⇒ 每一行解析成 `None`，而后果不是"少了点信息"：`active_tab_id` 恒 `None` ⇒ tab id 回退哨兵、`post_nav` 的落点 SSRF 复检**对空列表审计通过**。判据：parser 的每种支持格式旁边要能指出它是从哪次真实输出抄来的 → §3.12
+- **一个 verb 发给外部 server 的参数名，只有那台 server 的 schema 能裁决——fake backend 结构上看不见它** —— 因为假后端返回的正是代码所期望的东西。chrome-devtools-mcp 的 `fill_form` 要 `elements`，Aleph 发的是 `fields`，而顶层 `additionalProperties: true` 会**收下**多余的键、只拒缺失的必填键 ⇒ 每次调用 `-32602`，`browser_fill_form` 在该 driver 上从未填过一次表。与 round-2 的 `wait_for` 收 `string[]` 而我们发裸字符串是同一个形状、同一个 driver。判据：接一个外部 MCP/CLI 动词时，**去问它 `tools/list`（或 `--help`/config schema）要真的 schema**，然后把参数构造抽成一个有名字的函数、用测试把键钉住——「这个键读起来很合理」是这类缺陷的全部成因 → §3.12
+- **⚠️ 而你读的那份源码，必须是正在跑的那个版本** —— 上一条的元判据，本轮亲自踩：npx 缓存里躺着 8 个版本的 chrome-devtools-mcp，我用 `ls -d … | tail -1` 打开了 **1.3.0**（那里路径闸对未协商 roots 的客户端确实是 no-op），而 run.sh 用 `sort -V | tail -1` 跑的是 **1.7.0**（v1.6.0 起路径闸**默认生效**，`roots()` 恒含 tmpdir，只有 `--allow-unrestricted-paths` 能关）。源码说「没有限制」，真机说「Access denied」。判据一句话：**写下「这个外部工具的行为是 X」之前，先确认你读的那份拷贝就是被测的那份**；版本选择用 `sort -V`，别用目录序
+- **两个 backend 实现同一个 trait 时，一边修好的判据要主动搬过去**（§0 孪生条的 backend 形态）—— 管理型 driver 在 round-2 被修成「交出值而不是通话记录」（`parse_result_value`），MCP driver 没有：`browser_evaluate` 一直回「Script ran on page and returned: + 一段 json 代码块」这样一段散文。**症状不是报错，是同一个工具在两个 driver 上返回两种形状** ⇒ 任何比较值（而非子串搜索）的调用方在一个 driver 上对、在另一个上错。单一源 `chrome_mcp_backend::parse_evaluate_value`，契约与 `playwright_cli::parse_result_value` 逐条对齐（无 fence ⇒ `None` ⇒ 原样透传，因为抛异常的脚本回的是裸 `Error:`）
+- **一个 trait 默认方法说「不支持」时，正面覆盖测不到它——负面那半要单独断言** —— MCP driver 的 `pdf`/`save_state`/`cookies` 是一侧能力，`Err(unsupported_in_existing_session)`；一个返回 `success: true` 却什么都不做的桩，正面用例一条都抓不到。QA 因此对这三个动词断言**拒绝**且**拒绝里点名补救**（"use a managed profile"）
 - **凡「无 X 降级」的测试，先问它的绿是代码属性还是机器属性** —— 那批断言在浏览器不可达时全绿，`open` 一修好，其中一个当场把真 Chrome 开到公网（而它的慢路径还会**联网装运行时**）。密封点要落在**唯一那个伸手到进程外的边界**（这里是 `resolve_binary` 的 `cfg(test)` 早返回），不是逐个改测试——后者会漏，且下一个新测试默认不密封。⚠️ 两条配套：密封**本身要有断言**（否则它只是没被证伪过），且要说清**它覆盖哪几种块**（`cfg(test)` 只覆盖 `--lib`，`tests/` 集成测试不在其内）→ §3.12
 - **「动态路由」是三件事，且第三件不在 `src/routing/`** —— 工具选择（prompt，禁止意图分类）/ 消息→agent（`src/routing/`）/ 请求→provider（`src/providers/route_policy.rs`）。业界那些"路由大脑"整类违 R7，**不移植** → §3.6
 - **判断"这是主槽吗"只认 `SlotKind`，绝不能拿 `tier == Unknown` 当代理**（两个方向都错过）；**装饰器少一层委托，整条链的能力就没了**（门是 `AiProvider::supports_streaming()`）；**「这一轮用哪个模型」只有一个决定点** `runner_impl.rs::effective_model_directive`，**别让新来源止步于 UI** → §3.6
@@ -539,7 +543,7 @@
 | `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 §6.9 |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
-| `src/browser/` `src/builtin_tools/browser_tools/` | §3.12 · 判据清单 §9（外部 CLI 适配器七条）· **真机 QA `qa/browser_managed/run.sh {open,ambient,headed,tools,frames,reap,pdf,existing}`——26 个工具全部有效果断言，改这两个目录前跑一遍** |
+| `src/browser/` `src/builtin_tools/browser_tools/` | §3.12 · 判据清单 §9（外部 CLI/MCP 适配器）· **真机 QA `qa/browser_managed/run.sh {open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——两个 driver 的每个动词都有效果断言，改这两个目录前跑一遍** |
 | `src/mcp/` | §5.20（dual-era 协议） |
 | `src/hub/` | [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) · §5.21 |
 | `src/loop_graph/` `src/workflow/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) · §4.12 |

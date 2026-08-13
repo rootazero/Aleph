@@ -9,10 +9,14 @@
 #   ./qa/browser_managed/run.sh reap      # the idle reaper really closes a session (~2 min)
 #   ./qa/browser_managed/run.sh pdf       # pdf_generate's browser engine
 #   ./qa/browser_managed/run.sh existing  # the OTHER driver (Chrome DevTools MCP)
+#   ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 #
-# Same scratch-HOME discipline as qa/busy_input/run.sh. Unlike the other
-# scenarios this one needs NO mock provider: it drives `tools.invoke`, which
-# runs the tool without an agent turn, so nothing in the run needs a model.
+# Same scratch-HOME discipline as qa/busy_input/run.sh. Every scenario but
+# `exec-offload` needs NO mock provider: they drive `tools.invoke`, which runs
+# the tool without an agent turn, so nothing in the run needs a model.
+# `exec-offload` is the exception on purpose — the branch it tests is reachable
+# only from inside a turn, because the spill is keyed by a tool call id the
+# harness Act phase mints and `tools.invoke` has none.
 #
 # It does need two real things, and says so up front rather than discovering
 # them at minute three:
@@ -23,7 +27,7 @@ set -uo pipefail
 
 SCENARIO="${1:-open}"
 case "$SCENARIO" in
-  open|ambient|headed|tools|frames|reap|pdf|existing) ;;
+  open|ambient|headed|tools|frames|reap|pdf|existing|exec-offload) ;;
   *) echo "unknown scenario: $SCENARIO" >&2; exit 64 ;;
 esac
 
@@ -41,6 +45,11 @@ PAGE_PORT="${PAGE_PORT:-18898}"
 # frame that would satisfy every claim for the wrong reason.
 PAGE2_PORT="${PAGE2_PORT:-18899}"
 DEAD_MOCK_PORT="${DEAD_MOCK_PORT:-18999}"
+# `exec-offload` is the only scenario that dials the provider, so it is the only
+# one that gets a live port. The others keep the dead one, which is what makes
+# "no model was involved" a property of the fixture rather than a hope.
+LIVE_MOCK_PORT="${LIVE_MOCK_PORT:-18995}"
+MOCK_PID=""
 MARKER="aleph-qa-marker-${RANDOM}${RANDOM}"
 CONSOLE_MARKER="aleph-qa-console-${RANDOM}"
 LATE_MARKER="aleph-qa-late-${RANDOM}"
@@ -84,11 +93,20 @@ BIN="${TARGET_DIR:-$REPO/target}/debug/aleph-server"
 SERVER_PID=""
 PAGE_PID=""
 PAGE2_PID=""
+# A file the `existing` scenario uploads from OUTSIDE the OS temp dir.
+# QA_ROOT lives UNDER $TMPDIR, and chrome-devtools-mcp's path guard — when it is
+# armed at all — allowlists exactly tmpdir plus the client's declared roots. An
+# upload out of QA_ROOT would therefore pass whether the guard is inert or not,
+# which is the shape of a claim that cannot fail. `target/` is gitignored and
+# lives with the checkout, i.e. not under tmpdir; the fixture asserts that
+# rather than assuming it.
+OUTSIDE_TMP_DIR=""
 
 say() { printf '\n=== %s ===\n' "$*"; }
 
 cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
   [ -n "$PAGE_PID" ] && kill "$PAGE_PID" 2>/dev/null
   [ -n "$PAGE2_PID" ] && kill "$PAGE2_PID" 2>/dev/null
   # Close whatever the run launched — with the scratch HOME, because the CLI's
@@ -99,6 +117,7 @@ cleanup() {
   [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
   [ -n "$PAGE_PID" ] && kill -9 "$PAGE_PID" 2>/dev/null
   [ -n "$PAGE2_PID" ] && kill -9 "$PAGE2_PID" 2>/dev/null
+  [ -n "$OUTSIDE_TMP_DIR" ] && rm -rf "$OUTSIDE_TMP_DIR"
   if [ "$KEEP" = "1" ]; then
     echo "artifacts kept in $QA_ROOT"
   else
@@ -170,8 +189,10 @@ HEADLESS=true
 # Reuse the busy_input shaper for "make it inert + set the gateway port" rather
 # than growing a second copy; MOCK_PORT is a dead port on purpose — this
 # scenario never runs an agent turn, so the provider it writes is never dialled.
+PROVIDER_PORT="$DEAD_MOCK_PORT"
+[ "$SCENARIO" = "exec-offload" ] && PROVIDER_PORT="$LIVE_MOCK_PORT"
 python3 "$SHARED/patch_config.py" "$CONFIG" \
-  --gateway-port "$GATEWAY_PORT" --mock-port "$DEAD_MOCK_PORT" || exit 1
+  --gateway-port "$GATEWAY_PORT" --mock-port "$PROVIDER_PORT" || exit 1
 BROWSER_CFG_ARGS=(--cli-binary "$CLI" --user-data-dir "$UDD" --headless "$HEADLESS")
 if [ "$SCENARIO" = "existing" ]; then
   # Pin the MCP server to the newest copy already in the developer's npx cache.
@@ -205,6 +226,13 @@ if [ "$SCENARIO" = "existing" ]; then
     "--chrome-mcp-arg=--isolated"
     "--chrome-mcp-arg=--headless"
     "--chrome-mcp-arg=--experimentalStructuredContent"
+    # Mirrors the shipped default (`default_chrome_mcp_args`). Without it the
+    # server confines every filePath argument to the OS temp dir, which is what
+    # made `browser_upload` fail for a file in the checkout. This run pins the
+    # binary for hermeticity, so the args have to be restated here — and a QA
+    # that restated them WITHOUT this one would be testing a configuration
+    # nobody ships.
+    "--chrome-mcp-arg=--allow-unrestricted-paths"
   )
 fi
 if [ "$SCENARIO" = "reap" ]; then
@@ -251,6 +279,25 @@ JSON
   echo "planted userDataDir=$PLANTED_UDD"
 fi
 
+if [ "$SCENARIO" = "exec-offload" ]; then
+  say "start mock provider (one browser_exec call, then end)"
+  # `max_chars` is the point: 1000 is the floor `browser_snapshot` clamps to, and
+  # the fixture page's tree is comfortably larger, so the step is guaranteed to
+  # be cut — which is the precondition for the spill this scenario is about.
+  cat > "$QA_ROOT/tool-spec.json" <<JSON
+{"name": "browser_exec",
+ "input": {"profile": "default",
+           "actions": [{"action": "snapshot", "max_chars": 1000}]}}
+JSON
+  REQUEST_LOG="$QA_ROOT/mock-requests.jsonl"
+  # plan `quick` = one tool turn, then end. A longer plan would call the tool
+  # again and again for no extra evidence.
+  python3 "$SHARED/mock_anthropic.py" "$LIVE_MOCK_PORT" /etc/hostname quick \
+    "$QA_ROOT/tool-spec.json" "$REQUEST_LOG" >"$QA_ROOT/mock.log" 2>&1 &
+  MOCK_PID=$!
+  sleep 1
+fi
+
 say "start server (cwd=$CWD)"
 if [ "$SCENARIO" = "pdf" ]; then
   # Take `playwright-cli` OFF the server's PATH while leaving `binary_path`
@@ -284,8 +331,19 @@ OUTDIR="$QA_ROOT/out"
 mkdir -p "$OUTDIR"
 UPLOAD_FILE="$QA_ROOT/upload-me.txt"
 echo "$MARKER upload payload" > "$UPLOAD_FILE"
+OUTSIDE_TMP_DIR="${TARGET_DIR:-$REPO/target}/qa-browser-outside-tmp"
+mkdir -p "$OUTSIDE_TMP_DIR"
+OUTSIDE_TMP_FILE="$OUTSIDE_TMP_DIR/upload-me-outside-tmp.txt"
+echo "$MARKER upload payload (outside the OS temp dir)" > "$OUTSIDE_TMP_FILE"
 
 case "$SCENARIO" in
+  exec-offload)
+    python3 "$HERE/drive_exec_offload.py" \
+      "ws://127.0.0.1:$GATEWAY_PORT/ws" \
+      --page-url "http://127.0.0.1:$PAGE_PORT/tools.html" \
+      --request-log "$QA_ROOT/mock-requests.jsonl" \
+      --marker "$MARKER" || RC=$?
+    ;;
   open|ambient|headed)
     python3 "$HERE/drive_browser.py" \
       "ws://127.0.0.1:$GATEWAY_PORT/ws" "$SCENARIO" \
@@ -324,10 +382,16 @@ case "$SCENARIO" in
       --control-user-data-dir "$CONTROL_UDD" \
       --control-max-tabs "$CONTROL_MAX_TABS" \
       --existing-profile "existing" \
+      --outside-tmp-file "$OUTSIDE_TMP_FILE" \
       --idle-secs "$REAP_IDLE_SECS" \
       --wait-secs "$REAP_WAIT_SECS" || RC=$?
     ;;
 esac
+
+if [ "$SCENARIO" = "exec-offload" ]; then
+  say "mock provider log"
+  tail -20 "$QA_ROOT/mock.log"
+fi
 
 say "cli sessions at the end"
 HOME="$QA_ROOT/home" timeout 60 "$CLI" list 2>&1 | head -20

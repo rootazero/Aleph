@@ -33,12 +33,31 @@ static INIT_CELL: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new()
 /// (gateway RPC handlers, the Hub's installed-state reconciliation, tools) shares
 /// one first-init rather than each holding its own cell — the divergence this
 /// module exists to prevent, one level up.
+/// Populate the shared system with the default skill directories, once per process.
+///
+/// The latch lives here, beside the singleton it initializes, so every consumer
+/// (gateway RPC handlers, the Hub's installed-state reconciliation, tools)
+/// shares one first-init rather than each holding its own cell.
+///
+/// **Merge semantics, not replace.** `SkillSystem::init` replaces `skill_dirs`
+/// wholesale and rescans from scratch — calling it after `ExtensionManager`
+/// already populated the singleton with `discover_skill_dirs()` + every
+/// plugin's `<root>/skills` would silently drop every plugin skill and any
+/// project-local `.aleph/skills` from the registry, snapshot, and injected
+/// `<available_skills>` prompt index. The fix is to *widen* the dir set via
+/// `ensure_dir_registered` rather than replace it, so a second initializer can
+/// only add dirs, never remove them. `rescan_dirs` rebuilds the registry from
+/// the union on the first call only — subsequent ones short-circuit via the
+/// `INIT_CELL` latch.
 pub async fn ensure_shared_skill_system_initialized() {
     let system = shared_skill_system();
     let dirs = super::default_skill_dirs();
     INIT_CELL
         .get_or_init(|| async move {
-            let _ = system.init(dirs).await;
+            for dir in &dirs {
+                system.ensure_dir_registered(dir.clone()).await;
+            }
+            system.rescan_dirs().await;
         })
         .await;
 }

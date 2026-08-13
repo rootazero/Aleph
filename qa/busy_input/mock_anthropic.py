@@ -22,7 +22,18 @@ Turn plans are named so scenarios can pick their own pacing:
   quick          1,1,end          — barely-alive run, for arrival-ordering checks
   channel-burst  2, then 20 x15   — several runs in flight at once (interrupt/queue)
 
-Usage:  mock_anthropic.py [port] [probe_path] [plan_name]
+Two optional trailing arguments let a scenario say WHAT the turn calls and
+capture WHAT THE MODEL SAW coming back:
+
+  tool_spec   path to `{"name": ..., "input": {...}}` — the tool call every
+              `tool` turn emits, instead of the default `file_read` probe.
+  request_log path to append each incoming request body to, one JSON object
+              per line. Turn N+1's `messages` carry turn N's `tool_result`
+              verbatim, so this file is the only oracle for what a tool
+              actually handed the model — the tool's own RPC reply is a
+              different thing on a different path.
+
+Usage:  mock_anthropic.py [port] [probe_path] [plan_name] [tool_spec] [request_log]
 """
 import json
 import os
@@ -34,6 +45,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18991
 PROBE = sys.argv[2] if len(sys.argv) > 2 else "/etc/hostname"
 PLAN_NAME = sys.argv[3] if len(sys.argv) > 3 else "burst-drain"
+TOOL_SPEC_PATH = sys.argv[4] if len(sys.argv) > 4 else ""
+REQUEST_LOG = sys.argv[5] if len(sys.argv) > 5 else ""
+
+# The tool every `tool` turn calls. Default keeps the historical probe so the
+# busy-input scenarios are byte-for-byte unaffected.
+TOOL_SPEC = {"name": "file_read", "input": {"path": PROBE}}
+if TOOL_SPEC_PATH:
+    with open(TOOL_SPEC_PATH) as _fh:
+        TOOL_SPEC = json.load(_fh)
 
 PLANS = {
     "burst-drain": [(3, "tool"), (30, "tool"), (45, "tool"), (45, "tool"), (0, "end")],
@@ -111,6 +131,11 @@ class H(BaseHTTPRequestHandler):
             turn = _n[0]
         think, kind = PLAN[turn - 1] if turn <= len(PLAN) else (0, "end")
         msgs = body.get("messages", [])
+        if REQUEST_LOG:
+            # Append under the same lock that hands out turn numbers, so a
+            # scenario reading this file can trust the ordering.
+            with _lock, open(REQUEST_LOG, "a") as fh:
+                fh.write(json.dumps({"turn": turn, "body": body}) + "\n")
         log(f"turn #{turn} request ({describe(msgs)}) -> thinking {think}s, then {kind}")
         time.sleep(think)
 
@@ -121,8 +146,8 @@ class H(BaseHTTPRequestHandler):
                     {
                         "type": "tool_use",
                         "id": f"toolu_{turn}",
-                        "name": "file_read",
-                        "input": {"path": PROBE},
+                        "name": TOOL_SPEC["name"],
+                        "input": TOOL_SPEC["input"],
                     }
                 )
             payload = {
@@ -201,7 +226,7 @@ class H(BaseHTTPRequestHandler):
                         "content_block": {
                             "type": "tool_use",
                             "id": f"toolu_{turn}",
-                            "name": "file_read",
+                            "name": TOOL_SPEC["name"],
                             "input": {},
                         },
                     }
@@ -214,7 +239,7 @@ class H(BaseHTTPRequestHandler):
                         "index": 1,
                         "delta": {
                             "type": "input_json_delta",
-                            "partial_json": json.dumps({"path": PROBE}),
+                            "partial_json": json.dumps(TOOL_SPEC["input"]),
                         },
                     }
                 )

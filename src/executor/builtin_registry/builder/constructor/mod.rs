@@ -506,8 +506,23 @@ impl BuiltinToolRegistry {
             .map_err(|e| AlephError::other(format!("loop_graph store open: {e}")))?,
         );
         crate::loop_graph::init_global(loop_graph_store.clone());
+        crate::loop_graph::init_event_bus(crate::loop_graph::TopologyEventBus::new());
+        // Snapshot store: the audit-trail half of the role graph. Own DB for
+        // the same reason the topology DB is its own — snapshots are read for
+        // human review and diffing, and must not widen the write-lock surface
+        // of the governance store itself.
+        let snapshot_store = Arc::new(
+            crate::loop_graph::SnapshotStore::open(
+                &crate::utils::paths::get_data_dir()
+                    .map_err(|e| AlephError::other(format!("snapshot store data dir: {e}")))?
+                    .join("loop_graph_snapshots.db"),
+            )
+            .map_err(|e| AlephError::other(format!("snapshot store open: {e}")))?,
+        );
+        crate::loop_graph::init_snapshot_store(snapshot_store.clone());
         crate::loop_graph::service::init_cron_trigger(config.cron_service.clone());
         let loop_graph_tool = crate::builtin_tools::LoopGraphTool::new(loop_graph_store)
+            .with_snapshot_store(snapshot_store)
             .with_cron_service(config.cron_service.clone())
             .with_team_store(config.team_store.clone());
 

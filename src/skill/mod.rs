@@ -49,39 +49,6 @@ use crate::domain::skill::{SkillId, SkillManifest, SkillSource};
 use crate::domain::Entity;
 
 // ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
-/// Errors that can occur in the skill system.
-#[derive(Debug)]
-pub enum SkillSystemError {
-    /// Error parsing a skill file.
-    Parse(SkillParseError),
-}
-
-impl std::fmt::Display for SkillSystemError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Parse(e) => write!(f, "skill parse error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for SkillSystemError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Parse(e) => Some(e),
-        }
-    }
-}
-
-impl From<SkillParseError> for SkillSystemError {
-    fn from(e: SkillParseError) -> Self {
-        Self::Parse(e)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // SkillSystem facade
 // ---------------------------------------------------------------------------
 
@@ -137,17 +104,19 @@ impl SkillSystem {
     ///
     /// Each directory is scanned for SKILL.md files. The source is guessed
     /// from the path. After scanning, a snapshot is built.
-    pub async fn init(&self, dirs: Vec<PathBuf>) -> Result<(), SkillSystemError> {
+    pub async fn init(&self, dirs: Vec<PathBuf>) {
         {
             let mut skill_dirs = self.inner.skill_dirs.write().await;
             *skill_dirs = dirs;
         }
         self.rescan_dirs().await;
-        Ok(())
     }
 
     /// Reload a single skill file into the registry and rebuild the snapshot.
-    pub async fn reload_file(&self, path: impl AsRef<Path>) -> Result<(), SkillSystemError> {
+    pub async fn reload_file(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), SkillParseError> {
         let path = path.as_ref();
         let source = guess_source(path);
         let manifest = parse_skill_file(path, source)?;
@@ -522,7 +491,12 @@ impl SkillSystem {
     // --- Private helpers ---
 
     /// Scan all registered directories, atomically replace the registry, and rebuild the snapshot.
-    async fn rescan_dirs(&self) {
+    ///
+    /// `pub(crate)` so `super::shared::ensure_shared_skill_system_initialized`
+    /// can widen the dir set without going through `init` (which replaces the
+    /// whole dir set and would clobber the dirs the `ExtensionManager` already
+    /// pushed in).
+    pub(crate) async fn rescan_dirs(&self) {
         let dirs = self.inner.skill_dirs.read().await.clone();
 
         // Build a fresh registry so we can swap atomically — never expose an empty registry.
@@ -858,7 +832,7 @@ You are a test expert."#;
         tokio::fs::write(&skill_file, content).await.unwrap();
 
         let system = SkillSystem::new();
-        system.init(vec![dir.path().to_path_buf()]).await.unwrap();
+        system.init(vec![dir.path().to_path_buf()]).await;
 
         let snapshot = system.current_snapshot().await;
         assert!(snapshot.version > 0);
@@ -902,7 +876,7 @@ Content two."#,
         .unwrap();
 
         let system = SkillSystem::new();
-        system.init(vec![dir.path().to_path_buf()]).await.unwrap();
+        system.init(vec![dir.path().to_path_buf()]).await;
 
         let skills = system.list_skills().await;
         assert_eq!(skills.len(), 2);

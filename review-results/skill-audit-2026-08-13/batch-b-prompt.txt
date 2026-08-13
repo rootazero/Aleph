@@ -1,0 +1,70 @@
+You are doing a READ-ONLY static "severed-wire" audit of the Aleph skill system at /home/zou/data/workspace/Aleph/.worktrees/skill-audit. Do NOT edit any files. The audit follows the 2026-07-15 Aleph severed-wire protocol — focus on producer/consumer wiring, not generic code quality.
+
+This is ONE of 5 parallel groups covering src/skill/. Your batch is **B: Parsing pipeline**.
+
+## Your scope
+- src/skill/manifest.rs (650 lines) — SKILL.md parsing, parse_skill_content, parse_skill_file, SkillParseError, automation_notice
+- src/skill/preprocess.rs (385 lines) — preprocess_skill_content, SkillPreprocessContext
+- src/skill/prompt.rs (743 lines) — build_skills_prompt_xml, SkillPromptBudget
+
+## Specific checks
+1. **parse_skill_content / parse_skill_file**: every caller? grep the whole repo. Are there TWO callers for ONE function (e.g. parse_skill_file just wraps parse_skill_content with read_to_string)?
+2. **SkillParseError variants**: every variant — does any error path actually produce this variant? Any variant that's defined but never constructed?
+3. **automation_notice**: called from where?
+4. **preprocess_skill_content / SkillPreprocessContext**: every caller?
+5. **build_skills_prompt_xml**: called from where? Is there a v1 also still being called?
+6. **SkillPromptBudget**: every field/method — used?
+7. **manifest.rs SkillManifest fields**: every field — does the rest of the system read it? Any field that's parsed but never read downstream?
+8. **All `pub fn` and `pub struct` fields in these 3 files**: grep for non-test, non-same-file readers.
+
+## Method
+For each candidate: (a) grep the consumer side for a LIVE reader across the WHOLE repo (not just src/skill/), (b) if zero non-test found, that's a CUT candidate, (c) if found, it's wired — skip it, don't report noise.
+
+Use `graphify explain <file>` and `graphify path <file> <file>` once for orientation, then fall back to `grep -rn` via Bash.
+
+## Severity scale
+- CRITICAL: security bug, data loss, HMAC failure, vault corruption, panics on reachable paths
+- HIGH:    silent failure of a feature, broken wiring where a tool never reaches the model
+- MEDIUM:  dead code that should be deleted, inert config field
+- LOW:     minor style / documentation drift
+
+## Output format
+Write your report to: /home/zou/data/workspace/Aleph/review-results/skill-audit-2026-08-13/batch-b.md
+
+Use this format:
+```
+# Batch B — Parsing pipeline
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| Critical | N |
+| High     | N |
+| Medium   | N |
+| Low      | N |
+| **Total**| **N**|
+
+## Findings (highest severity first)
+
+### [B-N]. <short title>
+- **File:line**: src/skill/<file>:<line>
+- **Category**: dead-code / inert-config / stub-far-end / client-ghost / name-drift / never-compiled / logic-bug / unsafe-correctness / race / etc.
+- **Severity**: CRITICAL/HIGH/MEDIUM/LOW
+- **Description**: 2-3 lines
+- **Verification grep**: the actual grep command you ran and what it returned
+- **Triage**: CONNECT / CUT / DECIDE
+- **Proposed fix**: 1-3 lines of concrete change
+
+## Verified wired (no-op, do NOT re-flag)
+- ...
+```
+
+## Important: NOISE BUDGET
+- Do not flag pub items that DO have callers
+- Do not flag pub items that are re-exported
+- Do not flag #[cfg(test)] helpers
+- Do NOT report findings from outside your batch scope — those are other batches' jobs
+
+## Build verification
+Do NOT run cargo check / cargo test / cargo build. The orchestrator will do a unified cargo check after all batches finish. Just report static findings.

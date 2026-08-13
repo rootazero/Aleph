@@ -232,6 +232,19 @@ mod tests {
     }
 
     #[test]
+    fn test_no_match_hyphenated_check_char_with_bad_checksum() {
+        // The separator in front of the check character widens the span;
+        // it must not widen what counts as valid. Same grouping as
+        // `test_detect_hyphenated_id_card` with the check code wrong.
+        let matches = rule().detect("ID: 110101-1990-0307-002-Y");
+        assert_eq!(
+            matches.len(),
+            0,
+            "hyphenated ID with bad check code must be rejected"
+        );
+    }
+
+    #[test]
     fn test_no_match_spaced_id_card_with_bad_checksum() {
         // Same shape as the spaced test, but the final digit is wrong.
         // The checksum strip path must still reject invalid IDs.

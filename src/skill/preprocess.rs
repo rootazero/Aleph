@@ -7,10 +7,9 @@
 //! path lacked:
 //!
 //! 1. **Template variables** — `${ALEPH_SKILL_DIR}` resolves to the skill's own
-//!    directory (so instructions can point at bundled scripts/resources) and
-//!    `${ALEPH_SESSION_ID}` resolves to the active session when one is known.
-//!    An unknown session token is left literal — matching the reference, which
-//!    leaves it in place rather than erroring.
+//!    directory, so instructions can point at bundled scripts/resources.
+//!    An unknown token is left literal — matching the reference, which leaves
+//!    it in place rather than erroring.
 //! 2. **Inline shell** — `` !`cmd` `` snippets are executed with the skill
 //!    directory as the working directory and replaced by the command's stdout,
 //!    so a skill can embed live context (e.g. `` !`git rev-parse HEAD` ``).
@@ -38,11 +37,6 @@ use std::time::Duration;
 // rust-doctor-disable-next-line hardcoded-secrets
 // Not a secret: this is the literal placeholder name used in skill templates.
 const TOKEN_SKILL_DIR: &str = "${ALEPH_SKILL_DIR}";
-/// Template token resolving to the active session id (left literal if unknown).
-// rust-doctor-disable-next-line hardcoded-secrets
-// Not a secret: this is the literal placeholder name used in skill templates.
-const TOKEN_SESSION_ID: &str = "${ALEPH_SESSION_ID}";
-
 /// Default per-snippet wall-clock budget for inline-shell expansion.
 const DEFAULT_INLINE_SHELL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default cap on captured stdout per snippet, in bytes. Mirrors the
@@ -55,8 +49,6 @@ const DEFAULT_INLINE_SHELL_MAX_OUTPUT: usize = 4000;
 pub struct SkillPreprocessContext {
     /// Absolute path to the skill's directory (the parent of `SKILL.md`).
     pub skill_dir: PathBuf,
-    /// Active session id, if one is known to the caller.
-    pub session_id: Option<String>,
     /// Per-snippet timeout for inline-shell expansion.
     pub timeout: Duration,
     /// Per-snippet stdout cap, in bytes.
@@ -65,21 +57,13 @@ pub struct SkillPreprocessContext {
 
 impl SkillPreprocessContext {
     /// Build a context for a skill rooted at `skill_dir`, with inline-shell
-    /// limits at their defaults and no session bound.
+    /// limits at their defaults.
     pub fn new(skill_dir: impl Into<PathBuf>) -> Self {
         Self {
             skill_dir: skill_dir.into(),
-            session_id: None,
             timeout: DEFAULT_INLINE_SHELL_TIMEOUT,
             max_output: DEFAULT_INLINE_SHELL_MAX_OUTPUT,
         }
-    }
-
-    /// Attach the active session id so `${ALEPH_SESSION_ID}` resolves.
-    #[must_use]
-    pub fn with_session(mut self, session_id: Option<String>) -> Self {
-        self.session_id = session_id;
-        self
     }
 }
 
@@ -102,26 +86,21 @@ pub async fn preprocess_skill_content(content: &str, ctx: &SkillPreprocessContex
     }
 }
 
-/// Replace `${ALEPH_SKILL_DIR}` / `${ALEPH_SESSION_ID}` tokens.
+/// Replace `${ALEPH_SKILL_DIR}` tokens.
 ///
 /// Returns the input borrowed and unchanged when no resolvable token is
-/// present, so the overwhelmingly common case allocates nothing.
+/// present, so the overwhelmingly common case allocates nothing. Unknown
+/// `${ALEPH_SESSION_ID}` tokens are left literal — the wire that would feed
+/// them has been severed (the sole production caller never sets one), and the
+/// `retain` matches the upstream hermes-agent reference.
 #[must_use]
 pub fn expand_template_vars<'a>(content: &'a str, ctx: &SkillPreprocessContext) -> Cow<'a, str> {
-    let has_dir = content.contains(TOKEN_SKILL_DIR);
-    let has_session = ctx.session_id.is_some() && content.contains(TOKEN_SESSION_ID);
-    if !has_dir && !has_session {
+    if !content.contains(TOKEN_SKILL_DIR) {
         return Cow::Borrowed(content);
     }
 
     let mut out = content.to_string();
-    if has_dir {
-        out = out.replace(TOKEN_SKILL_DIR, &ctx.skill_dir.to_string_lossy());
-    }
-    if let Some(session_id) = &ctx.session_id {
-        // `has_session` guarantees the token is present when this is reached.
-        out = out.replace(TOKEN_SESSION_ID, session_id);
-    }
+    out = out.replace(TOKEN_SKILL_DIR, &ctx.skill_dir.to_string_lossy());
     Cow::Owned(out)
 }
 
@@ -241,9 +220,6 @@ async fn run_snippet(cmd: &str, ctx: &SkillPreprocessContext) -> String {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(session_id) = &ctx.session_id {
-        command.env("ALEPH_SESSION_ID", session_id);
-    }
 
     match tokio::time::timeout(ctx.timeout, command.no_window().output()).await {
         Ok(Ok(output)) => {
@@ -296,18 +272,13 @@ mod tests {
 
     #[test]
     fn template_session_left_literal_when_unknown() {
+        // `${ALEPH_SESSION_ID}` is no longer expanded by this module — the
+        // wire that would feed the session id has been severed (no production
+        // caller sets one). Tokens are now always left literal, matching the
+        // hermes-agent reference's "unknown → literal" semantics.
         let ctx = ctx_for(Path::new("/skills/demo"));
         let out = expand_template_vars("session=${ALEPH_SESSION_ID}", &ctx);
-        // Unknown session → token preserved verbatim, allocation-free.
-        assert!(matches!(out, Cow::Borrowed(_)));
         assert_eq!(out, "session=${ALEPH_SESSION_ID}");
-    }
-
-    #[test]
-    fn template_session_expands_when_known() {
-        let ctx = ctx_for(Path::new("/skills/demo")).with_session(Some("sess-42".to_string()));
-        let out = expand_template_vars("session=${ALEPH_SESSION_ID}", &ctx);
-        assert_eq!(out, "session=sess-42");
     }
 
     #[test]

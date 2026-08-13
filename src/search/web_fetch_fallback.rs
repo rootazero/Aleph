@@ -236,25 +236,33 @@ impl WebFetchSerpFallback {
     }
 
     fn is_cooling_down(&self, name: &'static str) -> bool {
-        let guard = self.cooldowns.lock().unwrap_or_else(|e| e.into_inner());
-        guard
+        self.lock_cooldowns()
             .get(name)
             .is_some_and(|t| t.elapsed() < MIRROR_COOLDOWN)
     }
 
     fn note_failure(&self, name: &'static str) {
-        let mut guard = self.cooldowns.lock().unwrap_or_else(|e| e.into_inner());
-        guard.insert(name, Instant::now());
+        self.lock_cooldowns().insert(name, Instant::now());
+    }
+
+    /// Acquire the cooldown map lock, recovering from poisoning.
+    ///
+    /// Cool-down writes are non-panicking (`HashMap::insert`), so the
+    /// only way the mutex can be poisoned is by a panic on a different
+    /// thread *while* the lock is held — which the existing code
+    /// (`is_cooling_down`, `note_failure`) cannot trigger. Recovering
+    /// via `into_inner()` rather than propagating the poison error
+    /// keeps the fallback path infallible: a stale poison would
+    /// otherwise lock out every mirror until process restart.
+    fn lock_cooldowns(&self) -> std::sync::MutexGuard<'_, HashMap<&'static str, Instant>> {
+        self.cooldowns.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Test-only: drop all cool-down state. Wiring tests want to
     /// re-attempt the same mirror without waiting 5 min.
     #[cfg(test)]
     pub(crate) fn clear_cooldowns(&self) {
-        self.cooldowns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.lock_cooldowns().clear();
     }
 
     /// Test-only: number of mirrors compiled into the fallback chain.

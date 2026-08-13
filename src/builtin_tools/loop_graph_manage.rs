@@ -39,15 +39,20 @@ pub enum LoopGraphAction {
     Status,
     /// Remove dangling edges (explicit only, never automatic).
     Gc,
-    /// Install the weekly audit loop: creates a cron with the audit template,
-    /// registers it as a node, and wires `audits` edges to every existing
-    /// optimization loop and frozen rule.
+    /// Install the weekly audit loop (cron + node + `audits` edges).
     EnableAudit,
-    /// Goodhart-pairing sugar: create a watcher cron (watch template + your
-    /// counter-metric instructions in `prompt`), register it as a node, and
-    /// wire a `watches` edge to `to_id` in one call. WHICH counter-metric to
-    /// watch is your judgment — the tool never generates it.
+    /// Goodhart-pairing sugar: watcher cron (template + your counter-metric
+    /// `prompt`) + node + `watches` edge to `to_id` in one call. WHICH
+    /// counter-metric to watch is your judgment — never the tool's.
     Pair,
+    /// Blast-radius simulation for `drop_node`: naked loops, orphaned
+    /// `owns_reference` ACLs, post-state lint. Read-only.
+    Impact,
+    /// Export the topology as `dot` (Graphviz) or `json` (Panel/audit log).
+    Export,
+    /// Topology snapshots: `op="capture"` (with `label`) | `op="list"` |
+    /// `op="diff"` (with `from_id`/`to_id` as snapshot ids). Audit trail.
+    Snapshot,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -67,16 +72,15 @@ pub struct LoopGraphArgs {
     /// One-line human-readable label (required for `node`)
     #[serde(default)]
     pub label: Option<String>,
-    /// Anchor: `{probe, truth}` declaration where truth ∈ exit_code |
-    /// numeric | line_count. Frozen: rule text + enforcement pointer.
-    /// Root: the human-authored reference text.
+    /// Anchor: `{probe, truth}` (truth ∈ exit_code | numeric | line_count).
+    /// Frozen: rule text + enforcement pointer. Root: human-authored reference.
     #[serde(default)]
     pub body: Option<String>,
     /// Declared pace: per_turn | hourly | nightly | weekly | monthly | free text
     #[serde(default)]
     pub cadence: Option<String>,
     /// Provenance: human | llm (default llm). Root nodes REQUIRE human —
-    /// only pass origin="human" when the user explicitly instructed this.
+    /// pass "human" only on explicit user instruction.
     #[serde(default)]
     pub origin: Option<Origin>,
 
@@ -85,26 +89,30 @@ pub struct LoopGraphArgs {
     pub from_id: Option<String>,
     #[serde(default)]
     pub to_id: Option<String>,
-    /// Edge verb: watches | owns_reference | arbitrates | audits |
-    /// anchored_by | feeds (closed vocabulary — anything else belongs in
-    /// notes, not in the graph)
+    /// Edge verb (closed six-word vocabulary — anything else belongs in notes)
     #[serde(default)]
     pub edge: Option<EdgeKind>,
-    /// One-line rationale for the edge (prose; code never parses it).
-    /// Omitting it on a re-`link` KEEPS the existing rationale (pass `""` to
-    /// clear) — same rule as a node's `body`/`cadence`.
+    /// One-line rationale (prose; code never parses it). Omitting on re-link
+    /// keeps the existing value; pass "" to clear.
     #[serde(default)]
     pub note: Option<String>,
 
     // ── enable_audit / pair ────────────────────────────────────────
-    /// 6-field cron expression (enable_audit default: Monday 10:00;
-    /// pair default: daily 09:30)
+    /// 6-field cron expression (enable_audit default: Mon 10:00; pair: daily 09:30)
     #[serde(default)]
     pub cron_expr: Option<String>,
-    /// pair: the counter-metric watch instructions (what to probe, from
-    /// which adversarial angle) — appended to the watch template
+    /// pair: the counter-metric watch instructions (what to probe, from which
+    /// adversarial angle) — appended to the watch template
     #[serde(default)]
     pub prompt: Option<String>,
+
+    // ── export / snapshot ──────────────────────────────────────────
+    /// export: output format — "dot" (default) or "json".
+    #[serde(default)]
+    pub format: Option<String>,
+    /// snapshot: operation — "capture" | "list" | "diff".
+    #[serde(default)]
+    pub op: Option<String>,
 
     // ── Internal (injected by the dispatcher, not LLM-visible) ─────
     /// Source channel id, injected from turn context. Stamped onto the cron
@@ -139,6 +147,7 @@ pub struct LoopGraphTool {
     store: Arc<LoopGraphStore>,
     cron: Option<SharedCronService>,
     teams: Option<Arc<dyn TeamStore>>,
+    snapshots: Option<Arc<crate::loop_graph::SnapshotStore>>,
 }
 
 impl LoopGraphTool {
@@ -147,7 +156,16 @@ impl LoopGraphTool {
             store,
             cron: None,
             teams: None,
+            snapshots: None,
         }
+    }
+
+    /// Attach the snapshot store (unlocks action="snapshot"). Absent = the
+    /// action reports the subsystem as unavailable rather than failing.
+    #[must_use]
+    pub fn with_snapshot_store(mut self, s: Arc<crate::loop_graph::SnapshotStore>) -> Self {
+        self.snapshots = Some(s);
+        self
     }
 
     /// Attach the cron service handle (unlocks `enable_audit` and cron live
@@ -411,7 +429,8 @@ impl AlephTool for LoopGraphTool {
         self-improvement loops (goal/cron/heartbeat/daemon/team), anchors (irrefutable measurements), \
         frozen rules and human root references as nodes; wire the six governance verbs \
         (watches/owns_reference/arbitrates/audits/anchored_by/feeds) as edges; render live \
-        status with structural lint; install the weekly audit loop (enable_audit). Use when the \
+        status with structural lint; install the weekly audit loop (enable_audit); preview a \
+        removal's blast radius (impact); export dot/json; capture/diff snapshots. Use when the \
         user says 配看守/建审计环/治理循环/loop graph, when creating a goal or cron that \
         optimizes a metric (pair it with a counter-metric watcher), or at the start of an audit \
         tick. Root nodes require origin='human' and an explicit user instruction. See skill \
@@ -463,6 +482,11 @@ impl AlephTool for LoopGraphTool {
                 node.body = args.body;
                 node.cadence = args.cadence;
                 self.store.upsert_node(&node)?;
+                crate::loop_graph::publish(crate::loop_graph::TopologyEvent::NodeUpserted {
+                    agent_id: agent_id.clone(),
+                    id: id.clone(),
+                    node_kind: kind,
+                });
                 info!(id = %id, kind = %kind.as_str(), "loop_graph node upserted");
                 // Report the origin the STORE now holds, not the one that was
                 // passed. `origin` is write-once by design (it is the
@@ -497,6 +521,12 @@ impl AlephTool for LoopGraphTool {
             LoopGraphAction::DropNode => {
                 let id = require(args.id, "drop_node", "id")?;
                 let removed = self.store.delete_node(&agent_id, &id)?;
+                if removed {
+                    crate::loop_graph::publish(crate::loop_graph::TopologyEvent::NodeDeleted {
+                        agent_id: agent_id.clone(),
+                        id: id.clone(),
+                    });
+                }
                 Ok(LoopGraphOutput {
                     message: if removed {
                         // The node is a BINDING to a live entity, never a copy
@@ -542,6 +572,12 @@ impl AlephTool for LoopGraphTool {
                 let mut edge = GraphEdge::new(&agent_id, &from_id, &to_id, kind, origin);
                 edge.note = args.note;
                 self.store.upsert_edge(&edge)?;
+                crate::loop_graph::publish(crate::loop_graph::TopologyEvent::EdgeUpserted {
+                    agent_id: agent_id.clone(),
+                    from_id: from_id.clone(),
+                    to_id: to_id.clone(),
+                    edge_kind: kind,
+                });
                 // Say so when the edge that was just built cannot carry the
                 // one thing a `watches` edge is chiefly for. Such a watcher
                 // satisfies `lint_naked_loops` and renders in the prompt
@@ -591,6 +627,14 @@ impl AlephTool for LoopGraphTool {
                     .edge
                     .ok_or_else(|| AlephError::tool("loop_graph unlink: 'edge' is required"))?;
                 let removed = self.store.delete_edge(&agent_id, &from_id, &to_id, kind)?;
+                if removed {
+                    crate::loop_graph::publish(crate::loop_graph::TopologyEvent::EdgeDeleted {
+                        agent_id: agent_id.clone(),
+                        from_id: from_id.clone(),
+                        to_id: to_id.clone(),
+                        edge_kind: kind,
+                    });
+                }
                 Ok(LoopGraphOutput {
                     message: if removed {
                         format!("边已移除: {from_id} -[{}]-> {to_id}", kind.as_str())
@@ -626,6 +670,13 @@ impl AlephTool for LoopGraphTool {
 
             LoopGraphAction::Gc => {
                 let report = self.store.gc(&agent_id)?;
+                if !report.removed.is_empty() || !report.retained_acl.is_empty() {
+                    crate::loop_graph::publish(crate::loop_graph::TopologyEvent::GcCompleted {
+                        agent_id: agent_id.clone(),
+                        removed: report.removed.len(),
+                        retained_acl: report.retained_acl.len(),
+                    });
+                }
                 let mut message = if report.removed.is_empty() {
                     "无悬空边".to_string()
                 } else {
@@ -755,7 +806,22 @@ impl AlephTool for LoopGraphTool {
                         .with_cadence("weekly")
                         .with_body(crate::loop_graph::AUDIT_NODE_BODY),
                     )?;
+                    crate::loop_graph::publish(crate::loop_graph::TopologyEvent::NodeUpserted {
+                        agent_id: agent_id.clone(),
+                        id: audit_node_id.clone(),
+                        node_kind: NodeKind::LoopCron,
+                    });
                     let rewired = self.wire_audit_edges(&agent_id, &audit_node_id, origin)?;
+                    if rewired > 0 {
+                        crate::loop_graph::publish(
+                            crate::loop_graph::TopologyEvent::EdgeUpserted {
+                                agent_id: agent_id.clone(),
+                                from_id: audit_node_id.clone(),
+                                to_id: "*".to_string(),
+                                edge_kind: EdgeKind::Audits,
+                            },
+                        );
+                    }
                     info!(job_id = %job_id, "orphaned audit cron re-adopted");
                     return Ok(LoopGraphOutput {
                         message: format!(
@@ -819,6 +885,19 @@ impl AlephTool for LoopGraphTool {
                 }
 
                 let wired = self.wire_audit_edges(&agent_id, &audit_node_id, origin)?;
+                crate::loop_graph::publish(crate::loop_graph::TopologyEvent::NodeUpserted {
+                    agent_id: agent_id.clone(),
+                    id: audit_node_id.clone(),
+                    node_kind: NodeKind::LoopCron,
+                });
+                if wired > 0 {
+                    crate::loop_graph::publish(crate::loop_graph::TopologyEvent::EdgeUpserted {
+                        agent_id: agent_id.clone(),
+                        from_id: audit_node_id.clone(),
+                        to_id: "*".to_string(),
+                        edge_kind: EdgeKind::Audits,
+                    });
+                }
                 info!(job_id = %job_id, targets = wired, "audit loop installed");
                 Ok(LoopGraphOutput {
                     message: format!(
@@ -922,6 +1001,17 @@ impl AlephTool for LoopGraphTool {
                     }
                     return Err(e);
                 }
+                crate::loop_graph::publish(crate::loop_graph::TopologyEvent::NodeUpserted {
+                    agent_id: agent_id.clone(),
+                    id: watcher_id.clone(),
+                    node_kind: NodeKind::LoopCron,
+                });
+                crate::loop_graph::publish(crate::loop_graph::TopologyEvent::EdgeUpserted {
+                    agent_id: agent_id.clone(),
+                    from_id: watcher_id.clone(),
+                    to_id: to_id.clone(),
+                    edge_kind: EdgeKind::Watches,
+                });
                 info!(job_id = %job_id, target = %to_id, "watcher paired");
                 // `pair` always builds a `cron:` watcher, so the watcher half
                 // of the promise always holds — but the TARGET half does not.
@@ -947,7 +1037,187 @@ impl AlephTool for LoopGraphTool {
                     rendered: None,
                 })
             }
+
+            LoopGraphAction::Impact => {
+                let id = require(args.id, "impact", "id")?;
+                let inspector = crate::loop_graph::LoopGraphInspector::new(&self.store, &agent_id);
+                let report = inspector.impact_of_removing(&id)?;
+                let Some(removed) = report.removed_node else {
+                    return Ok(LoopGraphOutput {
+                        message: format!("节点 {id} 不存在——模拟移除无影响。"),
+                        nodes: None,
+                        edges: None,
+                        rendered: None,
+                    });
+                };
+                let mut out = format!(
+                    "模拟移除 {}（{}，{}）:\n",
+                    removed.id,
+                    removed.kind.as_str(),
+                    removed.label
+                );
+                if report.would_become_naked.is_empty() {
+                    out.push_str("无环会因此失去看守。\n");
+                } else {
+                    out.push_str(&format!(
+                        "会失去看守的环（{}）: {}\n",
+                        report.would_become_naked.len(),
+                        report.would_become_naked.join(", ")
+                    ));
+                }
+                if !report.loses_acl.is_empty() {
+                    let pairs: Vec<String> = report
+                        .loses_acl
+                        .iter()
+                        .map(|(f, t, k)| format!("{f} -[{}]-> {t}", k.as_str()))
+                        .collect();
+                    out.push_str(&format!(
+                        "悬空但仍生效的 objective ACL（{}）: {} —— 治理者消失不解除写保护，\
+                         确需解除请用 action='unlink'（会向用户请示）。\n",
+                        report.loses_acl.len(),
+                        pairs.join("; ")
+                    ));
+                }
+                if !report.lint_findings.is_empty() {
+                    out.push_str("post-state lint 预览:\n");
+                    for f in &report.lint_findings {
+                        out.push_str(&format!("  ⚠ {f}\n"));
+                    }
+                }
+                out.push_str("（纯模拟——未做任何修改。确认后可用 action='drop_node' 执行。）");
+                Ok(LoopGraphOutput {
+                    message: format!("impact 模拟: {id}"),
+                    nodes: None,
+                    edges: None,
+                    rendered: Some(out),
+                })
+            }
+
+            LoopGraphAction::Export => {
+                let format = args.format.as_deref().unwrap_or("dot");
+                let body = match format {
+                    "dot" => crate::loop_graph::to_dot(&self.store, &agent_id)?,
+                    "json" => crate::loop_graph::to_json(&self.store, &agent_id)?,
+                    other => {
+                        return Err(AlephError::tool(format!(
+                            "loop_graph export: format 须为 dot | json，收到 '{other}'"
+                        )))
+                    }
+                };
+                Ok(LoopGraphOutput {
+                    message: format!("拓扑导出（{format}）"),
+                    nodes: None,
+                    edges: None,
+                    rendered: Some(body),
+                })
+            }
+
+            LoopGraphAction::Snapshot => {
+                let op = args.op.as_deref().unwrap_or("list");
+                let Some(snapshots) = &self.snapshots else {
+                    return Err(AlephError::tool(
+                        "loop_graph snapshot: snapshot store unavailable",
+                    ));
+                };
+                match op {
+                    "capture" => {
+                        let label = args.label.unwrap_or_else(|| "manual".to_string());
+                        let id = snapshots.capture(&self.store, &agent_id, &label)?;
+                        Ok(LoopGraphOutput {
+                            message: format!("快照已捕获（id={id}, label='{label}'）"),
+                            nodes: None,
+                            edges: None,
+                            rendered: None,
+                        })
+                    }
+                    "list" => {
+                        let list = snapshots.list_snapshots()?;
+                        if list.is_empty() {
+                            return Ok(LoopGraphOutput {
+                                message: "尚无快照。用 op='capture' 捕获一个。".into(),
+                                nodes: None,
+                                edges: None,
+                                rendered: None,
+                            });
+                        }
+                        let mut out = String::new();
+                        for s in &list {
+                            out.push_str(&format!(
+                                "#{}  [{}]  '{}'  {} 节点 / {} 边\n",
+                                s.id, s.taken_at_iso, s.label, s.node_count, s.edge_count
+                            ));
+                        }
+                        Ok(LoopGraphOutput {
+                            message: format!("{} 个快照", list.len()),
+                            nodes: None,
+                            edges: None,
+                            rendered: Some(out),
+                        })
+                    }
+                    "diff" => {
+                        let from_s = require(args.from_id, "snapshot diff", "from_id")?;
+                        let to_s = require(args.to_id, "snapshot diff", "to_id")?;
+                        let from: i64 = from_s.trim_start_matches('#').parse().map_err(|_| {
+                            AlephError::tool(format!(
+                                "loop_graph snapshot diff: from_id 须为快照数字 id，收到 '{from_s}'"
+                            ))
+                        })?;
+                        let to: i64 = to_s.trim_start_matches('#').parse().map_err(|_| {
+                            AlephError::tool(format!(
+                                "loop_graph snapshot diff: to_id 须为快照数字 id，收到 '{to_s}'"
+                            ))
+                        })?;
+                        let diff = snapshots.diff_snapshots(from, to)?;
+                        if diff.is_empty() {
+                            return Ok(LoopGraphOutput {
+                                message: format!("快照 #{from} 与 #{to} 无差异。"),
+                                nodes: None,
+                                edges: None,
+                                rendered: None,
+                            });
+                        }
+                        let mut out = format!("快照 #{from} → #{to} 差异（{} 项）:\n", diff.len());
+                        for d in &diff {
+                            out.push_str(&format!("  {}\n", render_diff_line(d)));
+                        }
+                        Ok(LoopGraphOutput {
+                            message: format!("{} 项差异", diff.len()),
+                            nodes: None,
+                            edges: None,
+                            rendered: Some(out),
+                        })
+                    }
+                    other => Err(AlephError::tool(format!(
+                        "loop_graph snapshot: op 须为 capture | list | diff，收到 '{other}'"
+                    ))),
+                }
+            }
         }
+    }
+}
+
+/// One-line rendering of a [`crate::loop_graph::TopologyDiff`] for the tool's
+/// text output. Kept here (not in the snapshot module) because the phrasing is
+/// model-facing prose, not storage.
+fn render_diff_line(d: &crate::loop_graph::TopologyDiff) -> String {
+    use crate::loop_graph::TopologyDiff as D;
+    match d {
+        D::Added { id, node_kind } => format!("+ 节点 {id}（{}）", node_kind.as_str()),
+        D::Removed { id, node_kind } => format!("- 节点 {id}（{}）", node_kind.as_str()),
+        D::Modified { id, changed_fields } => {
+            format!("~ 节点 {id}（改动字段: {}）", changed_fields.join(", "))
+        }
+        D::EdgeAdded { from_id, to_id, edge_kind } => {
+            format!("+ 边 {from_id} -[{}]-> {to_id}", edge_kind.as_str())
+        }
+        D::EdgeRemoved { from_id, to_id, edge_kind } => {
+            format!("- 边 {from_id} -[{}]-> {to_id}", edge_kind.as_str())
+        }
+        D::EdgeModified { from_id, to_id, edge_kind, changed_fields } => format!(
+            "~ 边 {from_id} -[{}]-> {to_id}（改动字段: {}）",
+            edge_kind.as_str(),
+            changed_fields.join(", ")
+        ),
     }
 }
 
@@ -1010,6 +1280,8 @@ mod tests {
             note: None,
             cron_expr: None,
             prompt: None,
+            format: None,
+            op: None,
             __channel: None,
             __conversation_id: None,
         }
@@ -1330,5 +1602,146 @@ mod tests {
         a.kind = Some(NodeKind::Team);
         a.label = Some("发版小队".into());
         assert!(t.call(a).await.is_err(), "team id must carry team: prefix");
+    }
+
+    /// End-to-end wiring: a `node` action on the tool publishes a
+    /// `TopologyEvent::NodeUpserted` on the GLOBAL bus. The bus is a process
+    /// OnceCell, so parallel tests may share it — the test subscribes to
+    /// whatever bus is installed and filters on a unique node id, ignoring
+    /// events fired by sibling tests.
+    #[tokio::test]
+    async fn node_action_publishes_upsert_to_global_bus() {
+        use crate::loop_graph::TopologyEvent;
+
+        if crate::loop_graph::event_bus().is_none() {
+            crate::loop_graph::init_event_bus(crate::loop_graph::TopologyEventBus::new());
+        }
+        let bus = crate::loop_graph::event_bus().expect("bus installed");
+        let mut rx = bus.subscribe();
+
+        let unique = format!("goal:ev-{:x}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos());
+        let (_d, t) = tool();
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some(unique.clone());
+        a.kind = Some(NodeKind::LoopGoal);
+        a.label = Some("event probe".into());
+        t.call(a).await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let found = loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(TopologyEvent::NodeUpserted { id, node_kind, .. }))
+                    if id == unique && node_kind == NodeKind::LoopGoal =>
+                {
+                    break true;
+                }
+                Ok(Ok(_)) => continue, // a sibling test's event — skip
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                _ => break false,
+            }
+        };
+        assert!(found, "NodeUpserted for {unique} must arrive on the global bus");
+    }
+
+    fn tool_with_snapshots() -> (tempfile::TempDir, LoopGraphTool) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(LoopGraphStore::open(&dir.path().join("g.db")).unwrap());
+        let snaps = Arc::new(
+            crate::loop_graph::SnapshotStore::open(&dir.path().join("s.db")).unwrap(),
+        );
+        (dir, LoopGraphTool::new(store).with_snapshot_store(snaps))
+    }
+
+    #[tokio::test]
+    async fn impact_reports_exposed_loops_without_mutating() {
+        let (_d, t) = tool();
+        seed_node(&t, "goal:s1", NodeKind::LoopGoal).await;
+        seed_node(&t, "cron:watcher", NodeKind::LoopCron).await;
+        let mut link = args(LoopGraphAction::Link);
+        link.from_id = Some("cron:watcher".into());
+        link.to_id = Some("goal:s1".into());
+        link.edge = Some(EdgeKind::Watches);
+        t.call(link).await.unwrap();
+
+        let mut a = args(LoopGraphAction::Impact);
+        a.id = Some("cron:watcher".into());
+        let out = t.call(a).await.unwrap();
+        let rendered = out.rendered.expect("impact renders a report");
+        assert!(rendered.contains("goal:s1"), "{rendered}");
+        assert!(rendered.contains("纯模拟"), "{rendered}");
+
+        // Nothing was removed.
+        let status = t.call(args(LoopGraphAction::List)).await.unwrap();
+        assert_eq!(status.nodes.unwrap().len(), 2);
+
+        // Unknown id is a clean no-op answer, not an error.
+        let mut a = args(LoopGraphAction::Impact);
+        a.id = Some("goal:nonexistent".into());
+        let out = t.call(a).await.unwrap();
+        assert!(out.message.contains("不存在"), "{}", out.message);
+    }
+
+    #[tokio::test]
+    async fn export_supports_dot_and_json_and_rejects_other_formats() {
+        let (_d, t) = tool();
+        seed_node(&t, "goal:s1", NodeKind::LoopGoal).await;
+
+        let dot = t.call(args(LoopGraphAction::Export)).await.unwrap();
+        assert!(dot.rendered.unwrap().contains("digraph loop_graph"));
+
+        let mut a = args(LoopGraphAction::Export);
+        a.format = Some("json".into());
+        let json = t.call(a).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json.rendered.unwrap()).unwrap();
+        assert_eq!(parsed["node_count"], 1);
+
+        let mut a = args(LoopGraphAction::Export);
+        a.format = Some("yaml".into());
+        assert!(t.call(a).await.is_err(), "unknown format must be rejected");
+    }
+
+    #[tokio::test]
+    async fn snapshot_capture_list_diff_round_trip() {
+        let (_d, t) = tool_with_snapshots();
+        seed_node(&t, "goal:s1", NodeKind::LoopGoal).await;
+
+        let mut a = args(LoopGraphAction::Snapshot);
+        a.op = Some("capture".into());
+        a.label = Some("baseline".into());
+        let first = t.call(a).await.unwrap();
+        assert!(first.message.contains("id="), "{}", first.message);
+
+        seed_node(&t, "daemon:dreaming", NodeKind::Daemon).await;
+
+        let mut a = args(LoopGraphAction::Snapshot);
+        a.op = Some("capture".into());
+        a.label = Some("after-daemon".into());
+        t.call(a).await.unwrap();
+
+        let mut a = args(LoopGraphAction::Snapshot);
+        a.op = Some("list".into());
+        let list = t.call(a).await.unwrap();
+        let rendered = list.rendered.unwrap();
+        assert!(rendered.contains("baseline"), "{rendered}");
+        assert!(rendered.contains("after-daemon"), "{rendered}");
+
+        let mut a = args(LoopGraphAction::Snapshot);
+        a.op = Some("diff".into());
+        a.from_id = Some("1".into());
+        a.to_id = Some("2".into());
+        let diff = t.call(a).await.unwrap();
+        let rendered = diff.rendered.unwrap();
+        assert!(rendered.contains("daemon:dreaming"), "{rendered}");
+        assert!(rendered.contains("+ 节点"), "{rendered}");
+
+        // Snapshot without a store attached degrades gracefully.
+        let (_d2, t2) = tool();
+        let mut a = args(LoopGraphAction::Snapshot);
+        a.op = Some("list".into());
+        let err = t2.call(a).await.unwrap_err().to_string();
+        assert!(err.contains("snapshot store unavailable"), "{err}");
     }
 }

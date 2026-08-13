@@ -1,0 +1,72 @@
+You are doing a READ-ONLY static "severed-wire" audit of the Aleph skill system at /home/zou/data/workspace/Aleph/.worktrees/skill-audit. Do NOT edit any files. The audit follows the 2026-07-15 Aleph severed-wire protocol — focus on producer/consumer wiring, not generic code quality.
+
+This is ONE of 5 parallel groups covering src/skill/. Your batch is **E: Co-occurrence & installation**.
+
+## Your scope
+- src/skill/cooccurrence.rs (259 lines) — cluster_chains, CoOccurrenceLog, RecentUse
+- src/skill/installer.rs (483 lines) — build_install_command, filter_install_specs_for_current_os, select_best_install, InstallExecutor, InstallResult
+
+## Specific checks
+1. **cluster_chains**: called from where? grep the whole repo.
+2. **CoOccurrenceLog**: every pub method — called from where? Any method only in tests?
+3. **RecentUse**: every pub field — live reader?
+4. **build_install_command**: called from where?
+5. **filter_install_specs_for_current_os**: called from where?
+6. **select_best_install**: called from where?
+7. **InstallExecutor**: every pub method — called from where?
+8. **InstallResult variants**: every variant — constructed somewhere? matched somewhere?
+9. **OS-conditional install spec branches**: filter_install_specs_for_current_os probably has Windows/macOS/Linux branching — does each branch have reachable install specs in the registry, or are some branches dead?
+10. **select_best_install selection criteria**: are all criteria actually used by callers?
+11. **All `pub fn` and `pub struct` fields in these 2 files**: grep for non-test, non-same-file readers.
+
+## Method
+For each candidate: (a) grep the consumer side for a LIVE reader across the WHOLE repo (not just src/skill/), (b) if zero non-test found, that's a CUT candidate, (c) if found, it's wired — skip it, don't report noise.
+
+Use `graphify explain <file>` and `graphify path <file> <file>` once for orientation, then fall back to `grep -rn` via Bash.
+
+## Severity scale
+- CRITICAL: security bug, data loss, HMAC failure, vault corruption, panics on reachable paths
+- HIGH:    silent failure of a feature, broken wiring where a tool never reaches the model
+- MEDIUM:  dead code that should be deleted, inert config field
+- LOW:     minor style / documentation drift
+
+## Output format
+Write your report to: /home/zou/data/workspace/Aleph/review-results/skill-audit-2026-08-13/batch-e.md
+
+Use this format:
+```
+# Batch E — Co-occurrence & installation
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| Critical | N |
+| High     | N |
+| Medium   | N |
+| Low      | N |
+| **Total**| **N**|
+
+## Findings (highest severity first)
+
+### [E-N]. <short title>
+- **File:line**: src/skill/<file>:<line>
+- **Category**: dead-code / inert-config / stub-far-end / client-ghost / name-drift / never-compiled / logic-bug / unsafe-correctness / race / etc.
+- **Severity**: CRITICAL/HIGH/MEDIUM/LOW
+- **Description**: 2-3 lines
+- **Verification grep**: the actual grep command you ran and what it returned
+- **Triage**: CONNECT / CUT / DECIDE
+- **Proposed fix**: 1-3 lines of concrete change
+
+## Verified wired (no-op, do NOT re-flag)
+- ...
+```
+
+## Important: NOISE BUDGET
+- Do not flag pub items that DO have callers
+- Do not flag pub items that are re-exported
+- Do not flag #[cfg(test)] helpers
+- Do NOT report findings from outside your batch scope — those are other batches' jobs
+
+## Build verification
+Do NOT run cargo check / cargo test / cargo build. The orchestrator will do a unified cargo check after all batches finish. Just report static findings.

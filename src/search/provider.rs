@@ -59,7 +59,7 @@ mod tests {
             Ok(vec![SearchResult::new(
                 "Mock Title".to_string(),
                 "https://mock.com".to_string(),
-                format!("Mock result for query: {}", query),
+                format!("Mock result for query: {query}"),
             )])
         }
 

@@ -1,0 +1,75 @@
+You are doing a READ-ONLY static "severed-wire" audit of the Aleph skill system at /home/zou/data/workspace/Aleph/.worktrees/skill-audit. Do NOT edit any files. The audit follows the 2026-07-15 Aleph severed-wire protocol — focus on producer/consumer wiring, not generic code quality.
+
+This is ONE of 5 parallel groups covering src/skill/. Your batch is **A: Facade, re-exports, shared state, compat layer**.
+
+## Your scope
+- src/skill/mod.rs (1079 lines) — facade, re-exports, SkillSystem struct, SkillSystemError enum, default_skill_dirs(), guess_source(), scan_directory(), plugin_id_from_path(), init_with_temp_dir(), list_skills()
+- src/skill/shared.rs (62 lines) — global shared state
+- src/skill/compat.rs (50 lines) — SkillInfo compatibility shim
+
+## Specific checks
+1. **Re-export parity**: every `pub use` from these files — does anything in the repo import that name via this re-export path? (Or do they all use the original `skill::manifest::foo` path?)
+2. **SkillSystem struct** in mod.rs: every pub fn / pub field — is it called from anywhere outside src/skill/? Methods to check include: install, remove, list, search, status, full_status, snapshot, refresh, scan_directory, etc.
+3. **default_skill_dirs()**: called from where? grep the whole repo.
+4. **guess_source()**: called from where? grep the whole repo.
+5. **scan_directory()**: called from where? grep the whole repo.
+6. **plugin_id_from_path()**: called from where? grep the whole repo.
+7. **SkillInfo** struct fields: every pub field — does any consumer read it?
+8. **shared_skill_system / ensure_shared_skill_system_initialized**: actually used at runtime? grep all call sites.
+9. **init_with_temp_dir()**: called from where?
+10. **list_skills()**: called from where?
+11. **TODO / unimplemented! / todo! / empty match arms / .unwrap() / .expect()** in these 3 files
+12. **SkillSystemError** variants: any variant that never gets constructed in practice?
+13. **Full status path**: full_status_returns_entries, remove_skill_from_registry, remove_skill_rejects_bundled — these look like test names. Confirm.
+
+## Method
+For each candidate: (a) grep the consumer side for a LIVE reader across the WHOLE repo (not just src/skill/), (b) if zero non-test found, that's a CUT candidate, (c) if found, it's wired — skip it, don't report noise.
+
+Use `graphify explain <file>` and `graphify path <file> <file>` once for orientation, then fall back to `grep -rn` via Bash.
+
+## Severity scale
+- CRITICAL: security bug, data loss, HMAC failure, vault corruption, panics on reachable paths
+- HIGH:    silent failure of a feature, broken wiring where a tool never reaches the model
+- MEDIUM:  dead code that should be deleted, inert config field
+- LOW:     minor style / documentation drift
+
+## Output format
+Write your report to: /home/zou/data/workspace/Aleph/review-results/skill-audit-2026-08-13/batch-a.md
+
+Use this format:
+```
+# Batch A — Facade, re-exports, shared state, compat
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| Critical | N |
+| High     | N |
+| Medium   | N |
+| Low      | N |
+| **Total**| **N**|
+
+## Findings (highest severity first)
+
+### [A-N]. <short title>
+- **File:line**: src/skill/<file>:<line>
+- **Category**: dead-code / inert-config / stub-far-end / client-ghost / name-drift / never-compiled / logic-bug / unsafe-correctness / race / etc.
+- **Severity**: CRITICAL/HIGH/MEDIUM/LOW
+- **Description**: 2-3 lines
+- **Verification grep**: the actual grep command you ran and what it returned
+- **Triage**: CONNECT / CUT / DECIDE
+- **Proposed fix**: 1-3 lines of concrete change
+
+## Verified wired (no-op, do NOT re-flag)
+- ...
+```
+
+## Important: NOISE BUDGET
+- Do not flag pub items that DO have callers
+- Do not flag pub items that are re-exported (they are meant to be reachable)
+- Do not flag #[cfg(test)] helpers
+- Do NOT report findings from outside your batch scope — those are other batches' jobs
+
+## Build verification
+Do NOT run cargo check / cargo test / cargo build. The orchestrator will do a unified cargo check after all batches finish. Just report static findings.

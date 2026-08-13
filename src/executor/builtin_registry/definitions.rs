@@ -1839,7 +1839,17 @@ mod tests {
     /// catalog byte and a request byte stopped being the same byte for this
     /// family, and the guard that bounds the second one is
     /// `session_mode::tests::browser_family_deferral_is_measured`.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_141;
+    ///
+    /// 2026-08-14, the loop-graph event-bus round: 98,141 -> 98,225 B (+84 B).
+    /// `loop_graph` gained three actions (impact/export/snapshot) and its
+    /// DESCRIPTION names them. Against the three questions: (1) the action
+    /// names and their ops are runtime facts invisible in the schema's enum
+    /// alone; (2) a stronger model cannot guess `impact` exists before a
+    /// `drop_node`; (3) no other tool says it — `loop_graph` is the sole owner
+    /// of the governance topology (R9's second ruler). The same round cut
+    /// 620 B of schema fat from the same tool (see REGISTRY_SCHEMA ceiling),
+    /// so the description raise is the residue of a net-negative batch.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_225;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2059,7 +2069,18 @@ mod tests {
     /// one shape is emitted — was rejected: it is the shape every existing
     /// prompt, skill and transcript produces, and paying ~1.3 kB to keep them
     /// working is cheaper than a silent argument-shape break.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 91_517;
+    ///
+    /// 2026-08-14, the loop-graph event-bus round: 91,517 -> 91,851 B (+334 B).
+    /// `loop_graph` gained three action variants (impact/export/snapshot) plus
+    /// the `format`/`op` fields. The batch PAID its way first: the same tool's
+    /// pre-existing prose was cut from 6,368 B to 6,702 B net (+334 against
+    /// the base), i.e. 620 B of the new shape was funded by deleting
+    /// redundant docstrings (verb lists the enum already states,
+    /// cross-references, hedges). Against the three questions for what
+    /// remains: (1) `op="capture"|"list"|"diff"` and the impact/export
+    /// semantics are runtime facts; (2) a stronger model cannot infer them;
+    /// (3) nothing else says them.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 91_851;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.
