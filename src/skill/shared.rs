@@ -38,7 +38,7 @@ pub async fn ensure_shared_skill_system_initialized() {
     let dirs = super::default_skill_dirs();
     INIT_CELL
         .get_or_init(|| async move {
-            let _ = system.init(dirs).await;
+            system.init(dirs).await;
         })
         .await;
 }

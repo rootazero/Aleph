@@ -600,9 +600,7 @@ impl ExtensionManager {
         };
         crate::agents::publish_plugin_subagents(plugin_subagent_defs);
 
-        if let Err(e) = self.skill_system.init(skill_dirs).await {
-            tracing::warn!("Failed to init skill system: {}", e);
-        }
+        self.skill_system.init(skill_dirs).await;
 
         self.refresh_active_plugin_tools().await;
 

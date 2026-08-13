@@ -729,7 +729,7 @@ mod tests {
         let root = dir.path().join(".aleph").join("skills");
         tokio::fs::create_dir_all(&root).await.expect("create root");
         let system = SkillSystem::new();
-        system.init(vec![root.clone()]).await.expect("init");
+        system.init(vec![root.clone()]).await;
         let tool = SkillManageTool::new(system).with_authoring_root(root.clone());
         (tool, root, (dir, home))
     }

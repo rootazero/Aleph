@@ -367,9 +367,7 @@ impl ExtensionManager {
             skill_dirs.extend(plugin_skill_dirs.iter().cloned());
             crate::utils::paths::publish_plugin_skill_dirs(plugin_skill_dirs);
             crate::agents::publish_plugin_subagents(plugin_subagents);
-            if let Err(e) = self.skill_system.init(skill_dirs).await {
-                tracing::warn!(error = %e, "Failed to refresh skill system after plugin toggle");
-            }
+            self.skill_system.init(skill_dirs).await;
         }
 
         changed
