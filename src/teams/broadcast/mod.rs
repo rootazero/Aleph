@@ -165,6 +165,24 @@ fn member_run_metadata(
     if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
         metadata.insert("caller_role".to_string(), role);
     }
+    // Third carrier, third failure direction: the room AUTHOR is what
+    // `visibility::ambient_actor()` answers "who is asking" with, and without
+    // it that resolver falls back to the scope's `owner_user_id` — which in a
+    // project room is the CREATOR, the same person for every member. So losing
+    // it here does not make the member run anonymous, it makes it *Alice*: her
+    // personal memory partition passes `partition_visible_to`, her personal
+    // sessions enumerate, and the signed ledger files the actions under her.
+    //
+    // The scope stamp above cannot cover this. `run_loop::with_request_scope`
+    // seeds the author from `AUTHOR_USER_KEY` specifically, and derives nothing
+    // about it from the scope — precisely because in a room those two are
+    // different people.
+    if let Some(author) = crate::scope::current_room_author() {
+        metadata.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            author,
+        );
+    }
     metadata
 }
 

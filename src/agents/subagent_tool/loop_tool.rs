@@ -983,8 +983,16 @@ impl LoopTool for SubagentTool {
                 // New exposure surface: sync-batch subagent writes now land in
                 // the room / personal partition for the first time — previously
                 // every one of them wrote to the default partition.
-                let captured_scope = crate::scope::current_scope();
-                let captured_agent = crate::agents::current_agent_id();
+                // The five task-locals a spawned leg must carry, read through
+                // the one type that knows what the set IS. This used to be two
+                // hand-rolled captures re-established as three combinators
+                // below — which meant the batch legs silently dropped
+                // `caller_role` (fail-OPEN: an absent role reads as trusted)
+                // and the room author (fail-WRONG: `ambient_actor()` falls back
+                // to the room's creator). Two copies of the ritual is exactly
+                // how this file lost the first three, and why
+                // `CarriedAttribution` exists at all — its doc names these legs.
+                let carried = crate::scope::CarriedAttribution::capture();
                 // W19 ③ — a `JoinSet`, not a `Vec<JoinHandle>`: dropping a
                 // `JoinHandle` DETACHES its task, so the pre-W19 timeout path
                 // left every unfinished child running — burning tokens with
@@ -1034,34 +1042,23 @@ impl LoopTool for SubagentTool {
                     };
 
                     let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
-                    let task_scope = captured_scope.clone();
-                    let task_root = project_root.clone();
-                    let task_agent = captured_agent.clone();
+                    let task_carried = carried.clone();
                     child_cancels.push(batch_cancel.clone());
                     let spawned = join_set.spawn(async move {
                         let _running_reg = running_reg;
                         let _cancel_guard = CancelGuard::new(batch_cancel.clone());
-                        // Boxed: `AgentRuntime::run`'s state machine is already
-                        // large, and nesting three more task-local combinators
-                        // directly around it inline overflows the (debug-build)
-                        // test-thread stack. Boxing moves that state machine to
-                        // the heap so the wrappers hold a pointer-sized
-                        // `Pin<Box<_>>` instead of embedding it.
-                        let outcome = crate::agents::with_agent_id(
-                            task_agent,
-                            crate::projects::with_project_root(
-                                task_root,
-                                crate::scope::with_scope(
-                                    task_scope,
-                                    Box::pin(async move {
-                                        AssertUnwindSafe(runtime.run(runtime_config))
-                                            .catch_unwind()
-                                            .await
-                                    }),
-                                ),
-                            ),
-                        )
-                        .await;
+                        // `reestablish` does the boxing that used to be spelled
+                        // out here: `AgentRuntime::run`'s state machine is
+                        // already large, and nesting the task-local combinators
+                        // around it inline overflows the debug-build test-thread
+                        // stack. That `Box::pin` is load-bearing, not tidiness.
+                        let outcome = task_carried
+                            .reestablish(async move {
+                                AssertUnwindSafe(runtime.run(runtime_config))
+                                    .catch_unwind()
+                                    .await
+                            })
+                            .await;
                         // Terminate this proposal's cancel-bridge watcher.
                         batch_cancel.cancel();
                         (idx, outcome)
@@ -2032,16 +2029,22 @@ mod tests {
     /// call site it exists for.
     const SPAWN_SHAPES: &[&str] = &["tokio::spawn(", "join_set.spawn("];
 
-    /// The task-locals a spawned leg must re-establish — **all** of them.
+    /// What a spawned leg must do about the run's task-locals.
     ///
-    /// This list used to exist only in the assertion *message* while the
-    /// predicate tested `with_scope` alone. A leg that re-established the scope
-    /// but dropped the agent id and the project root therefore passed the guard
-    /// that exists to catch exactly that, and the two carry different halves of
-    /// the partition: `with_scope` picks the room/personal namespace while
-    /// `with_agent_id` + `with_project_root` pick the corpus and the cwd within
-    /// it. Message and predicate are one list now.
-    const REQUIRED_TASK_LOCALS: &[&str] = &["with_agent_id", "with_project_root", "with_scope"];
+    /// This used to be a list of three combinator names — and that is exactly
+    /// how the set went stale. A guard that enumerates the task-locals it knows
+    /// about can only ever check the ones that existed when it was written:
+    /// `caller_role` joined the set and this list did not hear about it, then
+    /// the room author joined and it did not hear about that either. Both legs
+    /// stayed green while dropping both, because the three names it *did* know
+    /// were all present.
+    ///
+    /// So the requirement is now the CARRIER, not the members:
+    /// `CarriedAttribution` is the one type that knows what the set is, and
+    /// growing the set is a change to that type — which every spawn inherits
+    /// without this guard having to be edited. That is the difference between a
+    /// rule and a roster.
+    const REQUIRED_TASK_LOCALS: &[&str] = &[".reestablish("];
 
     /// Source-level guard: every task spawn in this file's production
     /// code must re-establish the run's task-locals inside the spawned
@@ -2081,22 +2084,25 @@ mod tests {
             for &task_local in REQUIRED_TASK_LOCALS {
                 assert!(
                     window.contains(task_local),
-                    "loop_tool.rs:{}: a spawned task must re-establish ALL of the \
-                     run's task-locals ({}) inside the spawned future — this one \
-                     is missing `{}`. Spawned tasks inherit none of them, so a \
-                     subagent's memory writes land in the default partition \
-                     instead of the room / personal one.\n\
+                    "loop_tool.rs:{}: a spawned task must re-establish the run's \
+                     task-locals inside the spawned future, through \
+                     `CarriedAttribution` ({}) — this one does not. Spawned tasks \
+                     inherit none of them, and each one fails in its own \
+                     direction: the scope / agent id / project root fail QUIET \
+                     (writes land in the default partition), `caller_role` fails \
+                     OPEN (an absent role reads as trusted), and the room author \
+                     fails WRONG (`ambient_actor()` reports the room's creator, \
+                     confidently, about someone else's work).\n\
                      \n\
-                     If this leg deliberately uses the OTHER compliant shape — \
-                     capture the value before the spawn and pass it in explicitly, \
-                     as `session_manager/ops/emit.rs` and \
-                     `execution_engine/run_loop/inner.rs` do — then teach this \
-                     guard that shape rather than deleting it. A repo-wide sweep \
-                     (2026-08-09) found those two and no actual violations, so a \
-                     red here is far more likely to be a real regression than a \
-                     false alarm.",
+                     Re-establishing the combinators by hand is what this guard \
+                     used to accept, and it is how two of those five were lost: \
+                     the hand-rolled list could only ever name the task-locals \
+                     that existed when it was written. If a leg genuinely cannot \
+                     use the carrier, teach this guard that shape rather than \
+                     deleting it — a repo-wide sweep (2026-08-09) found no real \
+                     violations, so a red here is far more likely to be a \
+                     regression than a false alarm.",
                     i + 1,
-                    REQUIRED_TASK_LOCALS.join(" / "),
                     task_local
                 );
             }
