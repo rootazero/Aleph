@@ -232,7 +232,8 @@
 ### 0. 跨子系统通用形状（每次改动都适用）
 
 - **恒真的谓词等于没判，且它撒的谎只有对面看得见** —— 「有没有 handler」是结构性恒真，「这件事真做得到吗」才是谓词
-- **零消费者的通道优先 CUT，不 CONNECT** —— R10；接一条死抽象比删它贵
+- **零消费者的通道优先 CUT，不 CONNECT** —— R10；接一条死抽象比删它贵。⚠️ **但「优先」不是「一律」，而分辨它们的问句不是"这东西有用吗"（什么都有用），是「这个问题在仓里已经有几个答案」**：同一天在 `providers.*` 上抓到的两个零客户端 RPC 要了**相反**的处置——`needsSetup` 是"agent 能不能作答"的**第三个**答案（Panel 清单一个、它一个、真相一个）⇒ CUT；`healthcheck` 答的那一问**没有别的答案**（`providers test` 只覆盖一个，`aleph doctor` 是整个引擎 + 散文 finding，而无头部署没有 Panel）⇒ CONNECT，代价是一条 CLI 命令。判据的第二半是**这个能力的第 N 个答案本身就是缺陷**：三个答案里有两个是错的，且方向相反（"有没有行" vs "点过 Test 没有"），因为没有一个是在问真正的那件事
+- **一个机制的存在理由如果写在另一个文件里，删它的人不会读到那里——而删除本身没有测试** —— 「同一事实的两份表述」最贵的形态：不是两份描述漂了，是**其中一份被当成残留清掉了**。`interfaces/webchat/dist/.gitkeep` 唯一的用途说明在 `.gitignore` 的注释里（就在保留它的那条规则上面两行），哨兵被读成 vestigial 删掉 ⇒ `#[derive(RustEmbed)]` 的 `folder` 不存在是**硬编译错误**，`alephcore` 在任何全新 clone 上四条错误起步，而删它的那笔改动在作者机器上有 dist/ 所以全绿。判据两句：① **删一个"看起来没用"的文件/常量/条目之前，grep 它的名字**——它的理由通常写在一个不会被一起打开的文件里（`.gitignore` / build 脚本 / 另一个 crate 的 doc）；② 修法**不是把哨兵加回来**，而是让那条要求**自满足**（`build.rs` 在自己 crate 编译前 `create_dir_all`），因为一条靠"有人知道"活着的约定会被删第二次
 - **守卫要断言「效果到达了」，不是「调用发生了」** —— 问「把这一步的返回值扔掉，测试还绿吗？」绿 ⇒ 你守的是产地不是连线 → §3.5
 - **一张列举法名单的上游，常常是一个装了两种东西的字段** —— 白名单存在，往往不是因为作者偷懒，而是因为**形状答不了那一问**，消费者只能靠字段之外的信息重建区别。`ScratchpadOutput.content` 同时装原始 markdown 与进度回显 ⇒ 频道推送只能靠 `PROGRESS_ACTIONS` 四个动作名判断"这算不算进度"，而名单只描述立法当天的动作。删名单之前先问**这两种东西凭什么共用一个字段**；拆成两个字段之后判据回到形状上，名单整体消失（不是缩短）→ §3.13
 - **收敛写者时要数一遍写者，不然最后那个是靠没人扫过活下来的** —— 「所有写 X 的路径都必须走单一源」这类收敛**分三轮**才做完过：`upsert_section` 收了 `set_objective`/`set_plan`（§3.13 ⑤），一轮后发现 `set_item_status` 没加入（round-2 ②），再一轮后发现 `append_note` **也**没加入（2026-08-10 ②）——每一轮都以为自己扫完了，每一轮的漏网者都在报 `success: true` 地做 no-op。判据：写下"现在所有写者都过单一源了"之前，**grep 出这个 section / 这张表 / 这个键的全部写入点并逐个点名**，别按记忆列举 → §3.13
@@ -499,6 +500,7 @@
 ### 10. 构建与验证
 
 - **`cargo check` 不编译 `#[cfg(test)]`** —— 删 `pub fn` / 字段的同一笔里必须跑 `cargo test --no-run`；只跑 `cargo check` 等于没验证 → [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md)
+- **⚠️ 这条对每个 crate 都成立，而最小验证集只对 `alephcore` 用了 `--no-run`** —— `aleph-panel` 的文档化检查就是 `cargo check -p aleph-panel`，于是它的测试二进制在一次形状搬迁（`PresetProviderDto` → `aleph_protocol::providers::GenerationPresetRow`）之后**整程编译不过、805 条测试一条没跑**，包括同一段改动里新写的那些。同族更外一层：`cargo check` / `--lib` 也**不编译 `tests/`**，所以「这三个 re-export 零调用者」这类论断可以在两条命令都同意的情况下是假的（`tests/security_integration.rs` 一直在 import 它们，`--all-targets` 因此整程没构建过）。判据：**说"零调用者"之前，先问哪几条命令编译得到那些调用者**
 - **把一个函数改成 `async`，它的调用点会变成一个未 await 的 future——Rust 报的是 WARNING 不是 error** —— 于是那一步在**一切照常编译**的情况下静默停止执行。`freeze_owned_background_work` 加第三条腿时正是这个形状：整个停用扫描（吊销设备 / 撤销频道凭据 / 冻结 goal·loop·cron）会一起不再运行，而 `cargo check`、`cargo test --no-run`、CI 全绿。判据两句：① **给一个已有调用点的函数加 `async` 时，去读那些调用点**，别信构建；② grep 编译输出时别只筛 `^error`——这一类只出现在 `^warning` 里（`unused_must_use` / `unused` 家族）
 - **一个 `from_row` 配 N 个 `SELECT`，位置解码就是一份没有编译器背书的契约** —— 给其中一个投影加第 K 列会让另外那些的 `row.get(K)` 变成**运行时**错误（这里差点炸的是 `get_device_by_fingerprint`——每次远程 connect——与 `get_device`——节点准入）。判据：列清单收敛成**一个常量**由所有 `SELECT` 插值；「三处手抄的列名恰好一致」不是不变量，是巧合 → §5.22 round-4 ⑤
 - **CLI 参数定义的冲突是 debug 断言，不是编译错误——所以「编译 + 单测全绿」与「这个二进制根本起不来」可以同时为真** —— `aleph-tui` 的 `-c` 被 `--config` 和新加的 `--continue` 同时占用，clap 的 `debug_asserts` 在 `Args::parse()` 里 panic，**早于 main 的任何一行**：debug 构建 100% 启动即死、任何参数都一样；release 不 assert，改为静默把字母判给其中一个。三样东西同时看不见它：不是编译错误、`cargo check` 不编译测试、**而下面那五条最小验证集根本不到 `aleph-tui` / `aleph-cli` 这两个 crate**。判据两句：① 每个 clap 二进制都欠一条 `Args::command().debug_assert()` 测试（clap 自己的校验器，当测试跑）；② **给一个已发布的二进制加短参之前，先数这个字母已经有谁在用**——冲突时字母归**已发布**的那一个，新参数走长名（`--session` 在同一个 struct 里早有先例：`-s` 被 `--server` 占了就用 `-k`） → §5.23b
@@ -510,11 +512,11 @@
   ```
   cargo test -p alephcore --lib --no-run
   cargo test -p alephcore --features test-helpers --test '*' --no-run   # --all-targets 只展开 target 不展开 feature
-  cargo check -p aleph-panel                                            # -p alephcore 永远看不见这个 crate
+  cargo test -p aleph-panel --lib --no-run                               # check 看不见它的 #[cfg(test)]；曾整程编译不过
   cargo check -p aleph-desktop-{macos,windows,linux}                    # 跨平台改动要 check 那个目标的限肢 crate
   cargo clippy --all-targets                                            # examples 只有它才暴露
   ```
-- **`interfaces/webchat/` 有任何改动（哪怕不是你改的）就跑一次 `cargo check -p aleph-panel`** —— 这个 crate 的**语义合并冲突是常态形状**：一侧的类型 + 另一侧的调用点，git 不报冲突、两边单独看都完整。合并实现过同一功能的分支前先 grep 功能名；修完**先看警告再看错误**（`unused variable` 说明那半边根本没有调用者，正解是 CUT）
+- **`interfaces/webchat/` 有任何改动（哪怕不是你改的）就跑一次 `cargo test -p aleph-panel --lib`**（不是 `cargo check`——它看不见这个 crate 的测试模块，那正是 805 条测试整程没跑的原因） —— 这个 crate 的**语义合并冲突是常态形状**：一侧的类型 + 另一侧的调用点，git 不报冲突、两边单独看都完整。合并实现过同一功能的分支前先 grep 功能名；修完**先看警告再看错误**（`unused variable` 说明那半边根本没有调用者，正解是 CUT）
 - **`cargo check -p aleph-desktop-shell` 前需先 `just _stage-shell-placeholders`**（tauri-build 要求 externalBin 占位文件存在）
 - **`MessageRecord.timestamp` 单位有歧义**（SQLite 写秒 / file backend 写毫秒）—— 一律走 `MessageRecord::instant()` / `rfc3339()`（`src/gateway/session_store/types.rs`，1e11 分界），裸格式化就是这个 bug 的下一次复发。**源头未改是有意的**——该值同时是 `get_history_before` 的分页游标，改单位要连全部存量会话一起迁移
 
