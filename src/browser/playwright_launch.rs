@@ -139,6 +139,38 @@ pub fn browser_flag_value(browser: &BrowserType) -> Option<&'static str> {
 /// in a git checkout. Naming a directory under `~/.aleph` keeps browsed page
 /// content inside Aleph's own storage.
 ///
+/// `allowUnrestrictedFileAccess` turns off a *second*, weaker answer to a
+/// question Aleph already answers. Naming `outputDir` has a side effect the
+/// setting's own purpose does not advertise: the CLI then refuses any
+/// explicitly-supplied path outside `outputDir ∪ process-cwd`
+/// (`checkFile` in playwright-core), **and reports the refusal with exit 0**.
+/// Every artifact verb was silently affected — `browser_pdf` and
+/// `browser_session(save)` answered success over a file that was never written,
+/// `browser_screenshot` failed reading a file the CLI had declined to create,
+/// and `browser_upload` could attach nothing outside those two directories.
+///
+/// The containment that was actually wanted is unaffected: page snapshots and
+/// console logs still land in `outputDir`, which is the whole reason it is set.
+/// What the flag disables applies only to paths a caller names, and there are
+/// exactly four such paths in the backend — two of them Aleph's own, two of them
+/// already gated:
+///
+/// * `screenshot --filename` — a temp path this crate chooses;
+/// * `state-save` / `state-load` — resolved under Aleph's browser state dir from
+///   a name that is validated to contain no separators;
+/// * `pdf --filename` — model-supplied, and `browser_tools::pdf` runs the file
+///   layer's protected-location deny check first (test:
+///   `test_pdf_refuses_a_protected_output_path`);
+/// * `upload <files…>` — model-supplied, same check in `browser_tools::upload`
+///   (test: `test_upload_refuses_a_protected_path_before_the_gate`).
+///
+/// A fifth path-taking verb has to answer the same question before it is added.
+///
+/// Aleph's guard is strictly better informed than the CLI's: `outputDir ∪ cwd`
+/// would happily admit the entire directory the server was started from (a git
+/// checkout, in practice) while refusing `/tmp`, which is not a boundary anyone
+/// chose.
+///
 /// The object is emitted even when it configures nothing, because passing
 /// `--config` unconditionally is what stops the CLI from reading an ambient
 /// one; see [`config_path_for`].
@@ -163,6 +195,7 @@ pub fn launch_config_json(launch: &SessionLaunch, output_dir: &Path) -> Value {
     json!({
         "browser": Value::Object(browser),
         "outputDir": output_dir.to_string_lossy(),
+        "allowUnrestrictedFileAccess": true,
     })
 }
 
@@ -213,7 +246,10 @@ pub fn open_argv(launch: &SessionLaunch, config_path: &Path) -> Vec<String> {
 /// the ambient `userDataDir` is not merged, not even as a fallback), so the
 /// file is written even when it configures nothing.
 pub fn config_path_for(session_key: &str) -> Result<PathBuf, super::error::BrowserError> {
-    Ok(browser_state_dir("cli-config")?.join(format!("{}.json", sanitize_session_key(session_key))))
+    Ok(
+        browser_state_dir("cli-config")?
+            .join(format!("{}.json", sanitize_session_key(session_key))),
+    )
 }
 
 /// `~/.aleph/data/browser/<leaf>`, resolved through the one home-dir helper.
@@ -311,6 +347,9 @@ mod tests {
                     }
                 },
                 "outputDir": "/tmp/out",
+                // Not decoration: naming `outputDir` without this makes the CLI
+                // refuse every caller-supplied path outside it — see the fn doc.
+                "allowUnrestrictedFileAccess": true,
             })
         );
     }
@@ -322,7 +361,14 @@ mod tests {
     #[test]
     fn a_default_launch_still_produces_a_config_to_displace_the_ambient_one() {
         let json = launch_config_json(&SessionLaunch::headless_default(), Path::new("/tmp/out"));
-        assert_eq!(json, json!({ "browser": {}, "outputDir": "/tmp/out" }));
+        assert_eq!(
+            json,
+            json!({
+                "browser": {},
+                "outputDir": "/tmp/out",
+                "allowUnrestrictedFileAccess": true,
+            })
+        );
     }
 
     #[test]

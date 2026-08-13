@@ -8,23 +8,26 @@ use crate::pii::rules::PiiRule;
 use regex::Regex;
 use std::sync::OnceLock;
 
-static SSH_KEY_RE: OnceLock<Regex> = OnceLock::new();
+static SSH_KEY_BEGIN_RE: OnceLock<Regex> = OnceLock::new();
 
-fn ssh_key_regex() -> &'static Regex {
-    SSH_KEY_RE.get_or_init(|| {
-        // Match the full PEM block from BEGIN to END, including key body.
-        // (?s) enables dot-matches-newline so .* spans across lines.
-        // The capture group + back-reference (`\1`) requires the BEGIN
-        // and END labels to MATCH: `BEGIN RSA PRIVATE KEY` ... `END RSA
-        // PRIVATE KEY` matches, but `BEGIN RSA PRIVATE KEY` ... `END EC
-        // PRIVATE KEY` (malformed concatenated bundle) does NOT. This
-        // prevents a malformed input from being accepted as a single
-        // block spanning unrelated keys.
-        Regex::new(
-            r"(?s)-----BEGIN ([A-Z ]*PRIVATE) KEY-----.*?-----END \1 KEY-----",
-        )
+/// Matches only the BEGIN header, capturing its label.
+///
+/// The END footer is **not** part of this pattern. The intent — a block whose
+/// END label equals its BEGIN label, so a malformed bundle
+/// (`BEGIN RSA … END EC …`) is not swallowed as one key — was originally
+/// written as a back-reference (`\1`), which the `regex` crate does not
+/// support: `Regex::new` returned `Syntax("backreferences are not supported")`
+/// and the `expect` beside it panicked on **first use**. Since `detect` is on
+/// the path every browser page read, every unattended output mask and every
+/// PII scan takes, the rule crashed its caller rather than redacting anything.
+///
+/// Keeping the label comparison therefore means doing it outside the engine:
+/// find a BEGIN, then look for the literal END built from that same label.
+fn ssh_key_begin_regex() -> &'static Regex {
+    SSH_KEY_BEGIN_RE.get_or_init(|| {
         // rust-doctor-disable-next-line unwrap-in-production
-        .expect("static SSH key regex compiles")
+        Regex::new(r"-----BEGIN ([A-Z0-9 ]*PRIVATE) KEY-----")
+            .expect("static SSH key regex compiles")
     })
 }
 
@@ -47,19 +50,39 @@ impl PiiRule for SshKeyRule {
         "[SSH_KEY]"
     }
 
+    /// Full PEM blocks, from `BEGIN <label> KEY` to the *matching*
+    /// `END <label> KEY`.
+    ///
+    /// Two phases rather than one pattern — see [`ssh_key_begin_regex`]. Scans
+    /// forward from the end of each match so overlapping/nested headers cannot
+    /// produce two matches over the same bytes; a BEGIN with no matching END is
+    /// not a block and is skipped, which is the same verdict the original
+    /// pattern gave it.
     fn detect(&self, text: &str) -> Vec<PiiMatch> {
-        let re = ssh_key_regex();
+        let re = ssh_key_begin_regex();
         let mut results = Vec::new();
+        let mut cursor = 0usize;
 
-        for m in re.find_iter(text) {
+        while let Some(caps) = re.captures_at(text, cursor) {
+            let whole = caps.get(0).expect("group 0 always present");
+            let label = caps.get(1).expect("group 1 always present").as_str();
+            let footer = format!("-----END {label} KEY-----");
+            let Some(rel) = text[whole.end()..].find(&footer) else {
+                // No matching footer: not a block. Resume after this header so
+                // a later, well-formed block is still found.
+                cursor = whole.end();
+                continue;
+            };
+            let end = whole.end() + rel + footer.len();
             results.push(PiiMatch {
                 rule_name: self.name().to_string(),
-                start: m.start(),
-                end: m.end(),
-                matched_text: m.as_str().to_string(),
+                start: whole.start(),
+                end,
+                matched_text: text[whole.start()..end].to_string(),
                 severity: self.severity(),
                 placeholder: self.placeholder().to_string(),
             });
+            cursor = end;
         }
 
         results

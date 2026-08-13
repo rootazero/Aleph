@@ -19,6 +19,11 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh open     # managed driver actually reaches a browser
 ./qa/browser_managed/run.sh ambient  # a planted cwd cli.config.json is ignored
 ./qa/browser_managed/run.sh headed   # headless=false really launches headed
+./qa/browser_managed/run.sh tools    # every remaining browser verb, asserted by EFFECT
+./qa/browser_managed/run.sh frames   # a genuinely cross-origin iframe (second port)
+./qa/browser_managed/run.sh reap     # the idle reaper really closes a session (~3 min)
+./qa/browser_managed/run.sh pdf      # pdf_generate's browser engine, CLI off PATH
+./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ```
 
 `browser_managed` is the one scenario that needs **no mock provider**: it drives
@@ -32,6 +37,33 @@ of unit tests: the managed driver, which is the DEFAULT driver, never issued
 real `tab-list` parsed, so the post-navigation SSRF audit ran over an empty
 listing; and the PDF engine drove the same never-opened session. Every one of
 them is invisible to a fake backend.
+
+The second round of it (`tools` / `frames` / `reap` / `pdf` / `existing`) found
+seven more, and the shape repeats: **a fake backend answers the question the
+code hoped for.** `browser_type` passed a ref as an extra positional to a CLI
+verb that takes one (`type <text>`, unlike `fill <target> <text>`) and had never
+once succeeded; `wait_for` searched `evaluate`'s output for a sentinel that is a
+literal inside every probe it builds, and the CLI echoes the script it ran, so
+**every wait on the default driver reported "found" on its first poll**;
+`playwright-cli` reports runtime failures with **exit code 0**, so
+`browser_pdf` answered "Saved PDF to <path>" for a file it had been refused
+permission to write; naming `outputDir` (the round-1 fix for cwd litter)
+silently narrowed the CLI's allowed write roots, breaking screenshot / pdf /
+session-save / upload at once; `browser_upload` never opened the file chooser it
+needs; a persistent profile closed by the idle reaper phrased its "not open"
+refusal differently from an unknown one, so the lazy relaunch never fired and
+the reaper bricked what it reclaimed; and on the *other* driver
+`browser_wait_for(text=…)` sent a string where the MCP schema has always
+required a list.
+
+Three of the five scenarios exist to make a specific claim non-vacuous:
+`frames` proves the iframe is cross-origin **before** asking whether the
+snapshot reaches into it (a same-origin frame would satisfy every later claim);
+`reap` runs a second profile with a far-future timeout, because "the idle one
+was closed" and "everything was closed" are otherwise the same observation; and
+`pdf` starts the server with `playwright-cli` **off its PATH**, because
+otherwise "the engine honored the operator's pinned `binary_path`" and "it found
+a binary on PATH" pass identically.
 
 Knobs (all optional): `KEEP=1` keeps the scratch dir, `SKIP_BUILD=1` reuses the
 binary already at `target/debug/aleph-server`, `QA_ROOT=<dir>` fixes the scratch

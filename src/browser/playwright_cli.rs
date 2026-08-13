@@ -290,6 +290,20 @@ impl PlaywrightCliDriver {
                 timeout.as_millis() as u64,
             ));
         }
+        // A clean exit status is not a success claim on this CLI — see
+        // [`parse_error_section`]. Routed through the same classifier as a
+        // non-zero exit so "the browser is not open" keeps producing
+        // `NoSession` (and therefore the lazy launch) no matter which channel
+        // the CLI chose to say it on.
+        if let Some(err) = parse_error_section(&stdout) {
+            return Err(classify_failure(
+                &stdout,
+                &err,
+                exit_code,
+                session_key,
+                timeout.as_millis() as u64,
+            ));
+        }
 
         let page_meta = parse_page_meta(&stdout);
         Ok(CliOutput {
@@ -315,26 +329,97 @@ impl PlaywrightCliDriver {
 ///
 /// The not-open match is deliberately anchored on the CLI's full phrase rather
 /// than a loose word: this runs on failure output that can include page text.
+///
+/// There are **two** such phrases, and they differ by more than wording:
+///
+/// * an *unknown* session prints to **stdout** —
+///   `The browser 'x' is not open, please run open first`;
+/// * a session the CLI still has a record of but whose browser is gone — which
+///   is every profile with a `user_data_dir`, since those survive `close` as
+///   `status: closed` — throws to **stderr** —
+///   `Error: Browser 'x' is not open. Run … to start the browser session`.
+///
+/// Only the first was matched. The consequence was not cosmetic: a persistent
+/// profile closed by the idle reaper never produced [`BrowserError::NoSession`],
+/// so the lazy launch never fired and the profile stayed unusable for the life
+/// of the process — the reaper's own housekeeping bricked the thing it reclaimed.
+/// `is not open` is the substring both phrasings share; the older, narrower
+/// anchors are kept because a third phrasing is likelier to resemble one of them
+/// than to be predicted here.
+///
+/// `detail` is the CLI's own account of the failure: stderr on a non-zero exit,
+/// the `### Error` body when the exit status was clean.
 fn classify_failure(
     stdout: &str,
-    stderr: &str,
+    detail: &str,
     exit_code: i32,
     session_key: &str,
     timeout_ms: u64,
 ) -> BrowserError {
-    let s = format!("{stdout}\n{stderr}").to_lowercase();
+    let s = format!("{stdout}\n{detail}").to_lowercase();
     if s.contains("please run open first")
+        || s.contains("is not open")
         || s.contains("no session")
         || s.contains("browser not open")
     {
         BrowserError::NoSession(session_key.to_string())
     } else if s.contains("timeout") {
         BrowserError::Timeout(timeout_ms)
-    } else if s.contains("element not found") || s.contains("no element") {
-        BrowserError::ActionFailed(format!("element not found ({stderr})"))
+    } else if s.contains("element not found")
+        || s.contains("no element")
+        || s.contains("does not match any elements")
+    {
+        BrowserError::ActionFailed(format!("element not found ({})", detail.trim()))
+    } else if exit_code == 0 {
+        // Reported in-band with a clean status: printing "exit 0" alongside a
+        // failure would be its own small lie.
+        BrowserError::ActionFailed(detail.trim().to_string())
     } else {
-        BrowserError::PlaywrightCliError(format!("exit {exit_code}: {stderr}"))
+        BrowserError::PlaywrightCliError(format!("exit {exit_code}: {detail}"))
     }
+}
+
+/// The `### Error` section, when the invocation reported a failure that its
+/// **exit code did not**.
+///
+/// `playwright-cli` exits 0 for runtime failures and says so only in stdout:
+/// a thrown `eval`, an element that matches nothing, an unhandled modal state,
+/// and every `File access denied` refusal all leave the process status clean.
+/// Deciding success on the exit code alone therefore reported each of them to
+/// the model as a success — `browser_pdf` answered "Saved PDF to <path>" for a
+/// file the CLI had refused to write, and `browser_upload` answered "Uploaded
+/// 1 file(s)" having attached nothing.
+///
+/// Only a transcript whose **first** `### ` header is `### Error` counts. The
+/// looser rule (any such line anywhere) would let untrusted page text decide:
+/// `snapshot` and `console` echo page content under `### Result`, so a page
+/// carrying a line `### Error` could make every read of itself fail. The CLI
+/// writes its own header first, which the page cannot precede.
+#[must_use]
+pub fn parse_error_section(stdout: &str) -> Option<String> {
+    let mut body = String::new();
+    let mut in_error = false;
+    for line in stdout.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("### ") {
+            if in_error {
+                break;
+            }
+            if trimmed.trim_end() == "### Error" {
+                in_error = true;
+                continue;
+            }
+            // Some other section came first — this is not an error transcript.
+            return None;
+        }
+        if in_error {
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(line);
+        }
+    }
+    in_error.then(|| body.trim().to_string())
 }
 
 /// Parse stdout for `### Page / URL / Title / Snapshot [path]` header.
@@ -374,9 +459,124 @@ pub fn parse_page_meta(stdout: &str) -> Option<PageMeta> {
     }
 }
 
+/// Extract the value an `eval` produced, out of the CLI's transcript.
+///
+/// `playwright-cli eval` answers with a transcript, not a value:
+///
+/// ```text
+/// ### Result
+/// "absent"
+/// ### Ran Playwright code
+/// ```js
+/// await page.evaluate('() => (...) ? "ALEPH_WAIT_FOUND" : \'absent\'');
+/// ```
+/// ```
+///
+/// The second section echoes **the script that was run**, so any caller that
+/// searches the raw stdout for a token is searching a channel that contains its
+/// own question. That is not hypothetical: `wait_probe`'s sentinel is a literal
+/// inside every probe it builds, so `out.contains(WAIT_PROBE_FOUND)` was true on
+/// the first poll of every wait — `browser_wait_for` and `browser_exec`'s `wait`
+/// step reported "found" instantly for conditions that never held, on the
+/// default driver, with no error anywhere. Its doc even asserted the opposite
+/// ("the probe's result value is the only thing echoed back"), which was true of
+/// the fake backend the unit tests used and false of the CLI.
+///
+/// Returns `None` when there is no `### Result` section — an `### Error`
+/// transcript, notably, which carries no echoed source either and so is safe for
+/// the caller to hand on raw.
+pub fn parse_result_value(stdout: &str) -> Option<String> {
+    let mut lines = stdout.lines();
+    lines.by_ref().find(|l| l.trim() == "### Result")?;
+    let mut value = String::new();
+    for line in lines {
+        // Any following `### ` header ends the value — `### Ran Playwright code`
+        // in practice, but the rule is the section, not that one heading.
+        if line.trim_start().starts_with("### ") {
+            break;
+        }
+        if !value.is_empty() {
+            value.push('\n');
+        }
+        value.push_str(line);
+    }
+    Some(value.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both refusals, copied verbatim from `playwright-cli 0.1.8` — one per
+    /// channel, because which one you get depends on whether the CLI still has
+    /// a record of the session, and only one of them was ever recognised.
+    #[test]
+    fn both_not_open_phrasings_classify_as_no_session() {
+        // Unknown session: stdout, exit 1.
+        let stdout = "The browser 'p' is not open, please run open first\n\n  playwright-cli -s=p open [params]\n";
+        assert!(matches!(
+            classify_failure(stdout, "", 1, "p", 1000),
+            BrowserError::NoSession(_)
+        ));
+
+        // Known-but-closed session (any profile with a user_data_dir): a raw
+        // node throw on stderr, no "please run open first" anywhere in it.
+        let stderr = "Error: Browser 'p' is not open. Run\n\n  playwright-cli -s=p open\n\nto start the browser session.\n    at Session.run (…/cli-client/session.js:61:13)\n";
+        assert!(
+            !stderr.contains("please run open first"),
+            "the whole point is that this message does not carry the old anchor"
+        );
+        assert!(matches!(
+            classify_failure("", stderr, 1, "p", 1000),
+            BrowserError::NoSession(_)
+        ));
+    }
+
+    /// The anchor must not swallow ordinary action failures — a `NoSession`
+    /// verdict triggers a relaunch, and relaunching drops every open tab.
+    #[test]
+    fn an_ordinary_failure_is_not_mistaken_for_a_closed_browser() {
+        assert!(matches!(
+            classify_failure(
+                "### Error\nError: \"#nope\" does not match any elements.\n",
+                "",
+                0,
+                "p",
+                1000
+            ),
+            BrowserError::ActionFailed(_)
+        ));
+    }
+
+    /// Shapes taken verbatim from a real `playwright-cli` 0.1.8 run — the
+    /// parser exists because the transcript was assumed to be the value, so a
+    /// hand-imagined format here would reproduce the original mistake.
+    #[test]
+    fn parse_result_value_takes_the_value_and_drops_the_echoed_script() {
+        let stdout = "### Result\n\"absent\"\n### Ran Playwright code\n```js\nawait page.evaluate('() => 1');\n```\n";
+        assert_eq!(parse_result_value(stdout).as_deref(), Some("\"absent\""));
+
+        // A non-JSON value (`undefined`) is still a value.
+        let stdout = "### Result\nundefined\n### Ran Playwright code\n```js\nx\n```\n";
+        assert_eq!(parse_result_value(stdout).as_deref(), Some("undefined"));
+
+        // A multi-line value keeps its interior newlines.
+        let stdout = "### Result\n{\n  \"a\": 1\n}\n### Ran Playwright code\n";
+        assert_eq!(
+            parse_result_value(stdout).as_deref(),
+            Some("{\n  \"a\": 1\n}")
+        );
+    }
+
+    #[test]
+    fn parse_result_value_declines_an_error_transcript() {
+        // `eval` exits 0 on a thrown script and prints `### Error` with NO
+        // echoed source, so returning `None` here hands the caller the
+        // diagnostic intact without reintroducing the echo.
+        let stdout = "### Error\nError: boom\n    at eval (<anonymous>:1:16)\n";
+        assert_eq!(parse_result_value(stdout), None);
+        assert_eq!(parse_result_value(""), None);
+    }
 
     #[test]
     fn test_parse_page_meta_full() {

@@ -1,0 +1,103 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Aleph browser QA — tools</title>
+<style>
+  body { font-family: sans-serif; }
+  #hoverbox { width: 160px; height: 40px; background: #eee; }
+  #hoverbox:hover { background: #0f0; }
+  #dst { width: 160px; height: 40px; background: #ddf; }
+  #tall { height: 4000px; background: linear-gradient(#fff, #ccc); }
+</style></head>
+<body>
+<h1 id="marker">__MARKER__</h1>
+
+<!-- Every interactive element carries an aria-label: the fixture resolves
+     `[ref=eNN]` out of the accessibility snapshot by accessible name, which is
+     the same path the model takes. A nameless element is unaddressable there. -->
+<input id="name"  type="text" aria-label="Full name">
+<input id="email" type="text" aria-label="Email address">
+<button id="go" aria-label="Go button">Go</button>
+<div id="clicked">clicked:no</div>
+
+<select id="pick" aria-label="Pick one">
+  <option value="a">Alpha</option>
+  <option value="b">Beta</option>
+</select>
+<div id="picked">picked:a</div>
+
+<div id="hoverbox" aria-label="Hover target" tabindex="0">hover me</div>
+<div id="hovered">hovered:no</div>
+
+<div id="src" aria-label="Drag source" draggable="true">DRAGSRC</div>
+<div id="dst" aria-label="Drop target">DROPHERE</div>
+<div id="dropped">dropped:no</div>
+
+<input id="file" type="file" aria-label="Upload file">
+<div id="filename">filename:none</div>
+
+<button id="alertbtn" aria-label="Alert button">Alert</button>
+
+<div id="later">later:pending</div>
+
+<!-- Filler with real text, so the accessibility tree is comfortably larger than
+     `MIN_SNAPSHOT_CHARS` (1000) — the floor `browser_snapshot` clamps
+     `max_chars` to. Without it the page sat right on that boundary and the
+     truncation claim passed or failed depending on how many tabs happened to be
+     open, i.e. the fixture would have been testing the wrong thing quietly. -->
+<div id="filler"></div>
+<script>
+(function () {
+  var f = document.getElementById('filler');
+  for (var i = 0; i < 60; i++) {
+    var d = document.createElement('p');
+    d.textContent = 'filler row ' + i + ' — padding so the snapshot exceeds the minimum budget';
+    f.appendChild(d);
+  }
+})();
+</script>
+
+<div id="tall"></div>
+
+<script>
+console.log("__CONSOLE_MARKER__");
+
+document.getElementById('go').addEventListener('click', function () {
+  document.getElementById('clicked').textContent = 'clicked:yes';
+});
+document.getElementById('pick').addEventListener('change', function (e) {
+  document.getElementById('picked').textContent = 'picked:' + e.target.value;
+});
+document.getElementById('hoverbox').addEventListener('mouseover', function () {
+  document.getElementById('hovered').textContent = 'hovered:yes';
+});
+document.getElementById('file').addEventListener('change', function (e) {
+  document.getElementById('filename').textContent =
+    'filename:' + (e.target.files[0] ? e.target.files[0].name : 'none');
+});
+document.getElementById('alertbtn').addEventListener('click', function () {
+  window.alert('__DIALOG_MARKER__');
+});
+
+// Drag: report BOTH the HTML5 drop event and a bare mouseup on the target, and
+// say which one fired. Playwright's dragTo synthesises real mouse motion; which
+// of the two a given engine turns into an HTML5 drop is exactly the thing this
+// fixture is here to observe, so it records the answer rather than assuming it.
+var src = document.getElementById('src'), dst = document.getElementById('dst');
+src.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', 'X'); });
+dst.addEventListener('dragover', function (e) { e.preventDefault(); });
+dst.addEventListener('drop', function (e) {
+  e.preventDefault();
+  document.getElementById('dropped').textContent = 'dropped:html5';
+});
+dst.addEventListener('mouseup', function () {
+  var d = document.getElementById('dropped');
+  if (d.textContent === 'dropped:no') { d.textContent = 'dropped:mouseup'; }
+});
+
+setTimeout(function () {
+  document.getElementById('later').textContent = 'later:__LATE_MARKER__';
+}, 1500);
+
+// One subresource request, so `browser_network` has something of ours to find.
+fetch('net-probe.json').catch(function () {});
+</script>
+</body></html>

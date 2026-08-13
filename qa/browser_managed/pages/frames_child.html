@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>QA child frame</title></head>
+<body>
+<p id="childmark">__CHILD_MARKER__</p>
+<button id="childbtn" aria-label="Child frame button">Child button</button>
+<div id="childstate">child:no</div>
+<script>
+document.getElementById('childbtn').addEventListener('click', function () {
+  document.getElementById('childstate').textContent = 'child:yes';
+});
+</script>
+</body></html>

@@ -151,6 +151,7 @@ pub use crate::config::{
         ContextBudgetToml, FallbackProviderToml, GuardrailsToml, ModelThresholdToml, StabilityToml,
         StrategyToml,
     },
+    types::privacy::{PiiAction, PlatformPiiPolicy, PrivacyConfig},
     types::resume::ResumeConfig,
     types::security::ShellSecurityConfig,
     types::stop_hooks::StopHookConfig,

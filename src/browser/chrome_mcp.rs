@@ -133,6 +133,13 @@ impl ChromeMcpDriver {
             Ok(r) => r,
             Err(e) => {
                 let err_str = e.to_string();
+                // The layer below returns `IoError` for BOTH "the pipe is dead"
+                // and "the tool answered, and its answer was a failure", which
+                // defeats the split this function documents. Ask it which one
+                // this is instead of guessing from the text.
+                if crate::mcp::external::is_tool_error(&err_str) {
+                    return Err(BrowserError::ChromeMcpError(err_str));
+                }
                 let is_broken_pipe = err_str.contains("broken pipe")
                     || err_str.contains("connection reset")
                     || err_str.contains("process exited")
