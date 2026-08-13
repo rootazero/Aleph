@@ -970,6 +970,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     // frames to subscribers (panel drops 5s polling).
                     let svc = svc.with_event_bus(event_bus.clone());
                     let shared: SharedCronService = Arc::new(tokio::sync::Mutex::new(svc));
+                    // Same shape as `goal::init_global` / `looping::init_global`:
+                    // `users.update`'s deactivation freeze is a free function
+                    // with no injected dependencies and has to reach all three
+                    // subsystems that run work on a principal's behalf.
+                    alephcore::tasks::cron::init_global(shared.clone());
                     register_cron_handlers(&mut server, &shared, args.daemon);
                     Some(shared)
                 }

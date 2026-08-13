@@ -301,7 +301,7 @@ pub async fn handle_update(
     if status == Some(UserStatus::Deactivated) {
         deactivate_devices(&store, &kick, &params.user_id).await;
         revoked_senders = revoke_channel_bindings(&kick, &params.user_id).await;
-        freeze_owned_background_work(&params.user_id);
+        freeze_owned_background_work(&params.user_id).await;
     }
 
     match store.get_user(&params.user_id) {
@@ -538,15 +538,27 @@ async fn revoke_channel_bindings(kick: &UserDeactivationKick, user_id: &str) -> 
 /// failure for one subsystem must not abort the other, and neither aborts
 /// the already-committed store write above).
 ///
-/// Cron jobs are DELIBERATELY skipped: `cron.*` is admin-gated (see
-/// `builtin_tools::cron_manage`), so a deactivated MEMBER owns none by
-/// construction — there is nothing to freeze. If cron creation is ever
-/// opened to non-admin members, this exclusion must be revisited.
+/// Cron used to be DELIBERATELY skipped here, on the reasoning that "`cron.*`
+/// is admin-gated, so a deactivated MEMBER owns none by construction — there
+/// is nothing to freeze", with the escape hatch named as "if cron creation is
+/// ever opened to non-admin members".
 ///
-/// One-way freeze: reactivating the user does NOT auto-resume its goals or
-/// loops (spec is silent on auto-resume) — each owner session resumes its
-/// own via `goal(action='update', status='active')` / `loop(action='resume')`.
-fn freeze_owned_background_work(user_id: &str) {
+/// Both halves were falsifiable from this same file. The owner guard above
+/// pins only `OWNER_USER_ID`, and `users.create` accepts `role: "admin"` — so
+/// a SECOND admin is fully deactivatable and certainly owns cron jobs. Their
+/// jobs kept firing afterwards, correctly attributed to a walled principal:
+/// rehydrating that attribution into every run
+/// (`cron::executor::build_cron_metadata`), writing their memory partition,
+/// delivering to their channel, indefinitely, with no surface saying so.
+/// (The hatch that fired was not the one the comment watched for, which is
+/// the usual way: an invariant asserted about one door while a second door
+/// stood open beside it.)
+///
+/// One-way freeze for all three: reactivating the user does NOT auto-resume
+/// its goals, loops or crons (spec is silent on auto-resume) — each owner
+/// session resumes its own via `goal(action='update', status='active')` /
+/// `loop(action='resume')` / `cron_manage(action='toggle')`.
+async fn freeze_owned_background_work(user_id: &str) {
     if let Some(store) = crate::goal::global() {
         match store.pause_all_owned_by(user_id) {
             Ok(count) if count > 0 => {
@@ -574,6 +586,25 @@ fn freeze_owned_background_work(user_id: &str) {
                 count,
                 "users.update: deactivation paused owned loops"
             );
+        }
+    }
+    if let Some(cron) = crate::tasks::cron::global() {
+        match cron.lock().await.pause_all_owned_by(user_id).await {
+            Ok(count) if count > 0 => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    count,
+                    "users.update: deactivation disabled owned cron jobs"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    error = %e,
+                    "users.update: failed to disable owned cron jobs during deactivation"
+                );
+            }
         }
     }
 }
