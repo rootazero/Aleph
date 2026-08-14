@@ -2395,6 +2395,31 @@
 
 ## 6. UI / Panel
 
+### 5.24 扩展调用记录 (Extension Invocation Records · 2026-08-10 建立 / 2026-08-14 round-2)
+
+- **口语关键词**：调用记录、用了几次、哪个扩展没人用、该清理哪个、idle extensions、tool_usage、usage 徽标
+- **代码锚点**：`src/tools/usage/`（`store.rs` 写侧 sidecar、`report.rs` join、`mod.rs`）· `src/diagnostics/checks/idle_extensions.rs` · `src/builtin_tools/tool_usage.rs` · `interfaces/webchat/src/components/usage_badge.rs`
+- **要回答的那一问**：**哪个装好的 MCP server / plugin / skill 其实没人在调**——这是任何人负责任地卸载之前需要的证据。
+
+**为什么是自建而不是移植**（三家对照 2026-08-10 已做完，**别重做**）：claude-code 的 `/stats`（`src/utils/stats.ts`）只从 transcript JSONL 派生 `toolCallCount` 聚合，无 per-tool/per-server 拆分；codex 只有 OTEL span（`core/src/mcp_tool_call.rs::record_mcp_call_outcome_span_telemetry`），本地不落盘；openclaw `src/audit/` 的 `tool_action` 只带 `toolName`，无 provenance。三家都答不了"哪个扩展该清理"。
+
+**三条已裁定的形状（勿反转）**：
+1. 存储＝JSON sidecar 聚合计数（`~/.aleph/data/tool_usage.json`），**不是**从 `session_events` 派生——`name→server` 映射只活在运行时 registry，server 一卸载/断连历史就不可归因，而那正是要清理的那批。
+2. 四个消费面全在：doctor `ext/idle-extensions` + `tool_usage` 工具 + `mcp_config.list`/`plugins.list` 的 usage 列 + Panel 徽标（`settings/mcp.rs` / `settings/plugins.rs` 两页渲染 `UsageBadge`）。
+3. 无工具的插件报 `—` 不报 `0`（`UsageSignal::NotMeasurable`）——把"零调用"的两种含义做成**类型**而非渲染约定。
+
+**round-2（2026-08-14）修四条**：
+
+① **清理报告不许列出清理不掉的东西，也不许给没有时长的行报时长**。`UsageEntry::is_idle` 原本是 `never_used ‖ idle_days≥N` 一个谓词，而它唯一的消费者只能写一句标题——它选的那句 `"{n} extension(s) idle for {idle_days}+ days"` 对 never-used 行是假的（那些行 `idle_days: None`，正因为没有"上次使用"可测量）。装机十分钟的机器于是把整套 bundled skill 报成"月度休眠"，并邀请清理。修法两半：**拆成互斥的两个谓词**（`is_never_used` / `is_idle`，各自一条 finding，标题只说自己证明得了的事）；新增 `UsageEntry::removable`（skill 侧由 `SkillSource::Bundled` 推导，因为 `remove_skill` 正是对它返回 `PermissionDenied`）——**卸不掉的行整类不进清理集合**。`removable` 的 serde 默认是 `true`，所以旧 payload 反序列化成旧行为而不是"什么都不可删"。守卫：`report.rs::never_used_and_idle_are_disjoint` / `a_bundled_skill_is_never_a_cleanup_candidate` · `idle_extensions.rs::never_used_rows_are_never_described_as_month_dormant` / `a_bundled_skill_is_not_offered_for_cleanup`。
+
+② **斜杠解析收敛到单一源**（本轮最大的一条，影响面超出记账）。当时有**两份**推导：router 与 `chat.send` 走 `CommandParser` + `serialize_parsed_command`（四种 mode：skill/custom/mcp/direct_tool），而 `ExecutionEngine::try_resolve_slash_command` 自建了一份 `tool_registry.get_tool()` 查表，**只产得出 `direct_tool`**。`agent.run`（即 **TUI**）没有 parser，落到后者 ⇒ ⓐ `/my-skill` 从不解析成 skill：不注入 `slash_skill_instructions`、不收窄 `allowed_tools`、不记 use；ⓑ 更贵的一半——`steering::carries_more_than_text` 靠 `SLASH_COMMAND_MODE_KEY` **在 busy lane 闸之前**存在来判断"这条不能折进正在跑的兄弟"，而引擎的兜底跑在闸**之后** ⇒ **TUI 在有 run 在飞时发的任何斜杠命令都被折成 steering 文本、永不执行**，零报错。且 `slash_command.rs` 那段 doc 当时逐字写着 *"both faces land here: the channel router and the Panel/CLI resolver"*——grep 找不到的谎。**修法**：`ExecutionEngine` 持 `command::CommandParserCell`（与 `command.execute`/`chat.send` 共用 `agent_init` 那一个），新 `stamp_slash_mode(input, &mut metadata)` 是唯一入口，被 ⅰ `chat.send`、ⅱ `agent.run`（新增，闸前）、ⅲ `execute()` 兜底（给 cron/heartbeat/团队派发这些不经 handler 的生产者）三处调用；`try_resolve_slash_command` 的自建函数体删除，改为 `parse_async` + `serialize_parsed_command`。**别名解析顺带变强**：原手搓 `resolve_shorthand` 换成 `ToolCatalog::find_best_match`（canonical → alias → `.`/`_` 宽容 + 多词路径），别名种子来自同一张 `SHORTHAND_ALIASES`，故等价且更宽。**`moa` 的 carve-out 刻意保留**（`/moa <prompt>` 在 `execute()` 更早处被改写、裸 `/moa` 必须到 LLM 才能映射结构化 schema），现按 canonical `command_name` 判，别名绕不过去。**守卫（两条都手工证伪过、会点名）**：`the_slash_mode_json_has_exactly_one_producer`（全 `src/` 扫，mode JSON 只许 `serialize_parsed_command` 造）· `every_run_start_handler_stamps_the_slash_mode_before_the_busy_lane`（按"凡 spawn 的函数"表述，不按 handler 名字列举，所以第三个 handler 自动继承）。
+
+③ **卸载时丢弃 usage 行**。`ToolUsageStore::forget` 此前唯一调用者是 `tool_usage(forget_orphans)`。同 id 重装的行**从来不是 orphan**，所以清扫永远看不到它，新装继承旧计数与旧 idle 年龄。现 `forget_mcp`/`forget_plugin` 接在：MCP = `mcp/manager/actor.rs::remove_server`（六个 `McpManagerHandle::remove_server` 调用点共同的咽喉，故第七个自动继承）；插件 = **三个各自独立删目录的写者**（`plugins.uninstall` RPC / hub `lifecycle.rs::uninstall_plugin` / CLI `handle_plugins_uninstall`）。**安装路径刻意不 forget**——原地升级是同一个插件，抹掉历史会把长期服役的插件报成全新。守卫 `every_plugin_removal_site_forgets_its_usage_row` 按"函数名表达卸载意图"数站点，并断言仍至少匹配到三个（改名把站点扫丢时会红而不是静默变绿）。
+
+④ **顺带修一条既有断裂**：`tests/skill_status_test.rs` 对返回 `()` 的 `SkillSystem::init` 调 `.unwrap()`，**在 main 上就编译不过**——而一个坏掉的集成 target 会让整个 `tests/*` 组停止构建，所以该 crate 的全部集成测试此前一条都没跑（判据清单 §10 那一族的又一次实例）。修掉后 40 个 target 全绿。
+
+- **打磨话术**：「‘哪个扩展没人用’= `tool_usage` 工具 / doctor `ext/idle-extensions` / 两个 list RPC 的 usage 列 / Panel 徽标，四面读同一个 `report::build_report` join，别新造第五个答案。‘为什么 bundled skill 不在清理清单里’= 它 `remove_skill` 拒删，列出来等于邀请一个必然 `PermissionDenied` 的动作（`UsageEntry::removable`）。‘never used’ 与 ‘idle N 天’ 是**互斥**两条 finding，别再合并——合并就必须共用一句对一半行为假的标题。‘TUI 的 /skill 不生效 / busy 时斜杠命令没反应’= 已由 `stamp_slash_mode` 收敛修掉，别再往 `try_resolve_slash_command` 里加第二份推导。」
+
 ### 6.1 流式回显与工作区面板 (Streaming Echo & Workspace Panel)
 - **口语关键词**：流式回显、工作区面板、叙述主线、探索聚合、详情查看器、Split 布局、工具行一直转圈 / 探索中不收起、只有第一段有打字机效果、发完消息不回到底部
 - **代码锚点**（⚠️ Panel 源码树 2026-07 已迁 `interfaces/webchat/src/platform/{wide,phone,tablet}/`；`crate::views::chat::*` 是 wide 的 re-export 别名，两种写法指同一文件）：

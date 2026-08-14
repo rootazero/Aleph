@@ -69,6 +69,9 @@ pub struct InstalledSkill {
     /// Newest of `last_used_at` / `last_viewed_at`, for the same reason.
     pub last_active_at: Option<String>,
     pub pinned: bool,
+    /// `false` for skills that ship inside the binary. See
+    /// [`UsageEntry::removable`] for why a cleanup report needs this.
+    pub removable: bool,
 }
 
 /// What is installed right now, per kind.
@@ -172,6 +175,26 @@ pub struct UsageEntry {
     /// Skill pinned against lifecycle auto-transitions; never propose deleting.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pinned: bool,
+    /// `false` when no uninstall path can act on this row.
+    ///
+    /// Bundled skills ship inside the binary and
+    /// [`SkillSystem::remove_skill`](crate::skill::SkillSystem::remove_skill)
+    /// refuses them with `PermissionDenied`. Naming one in a cleanup report
+    /// invites an action that cannot succeed — and on a fresh install the
+    /// bundled set is the overwhelming majority of every "never used" row,
+    /// so the report's first impression was 50+ items the reader is not
+    /// allowed to act on.
+    ///
+    /// Defaults to `true` so a payload written before this field existed
+    /// deserialises to the previous behaviour rather than to "nothing is
+    /// removable".
+    #[serde(default = "removable_default", skip_serializing_if = "is_true")]
+    pub removable: bool,
+}
+
+/// Serde default for [`UsageEntry::removable`] — see that field's doc.
+const fn removable_default() -> bool {
+    true
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -182,17 +205,46 @@ const fn is_zero(v: &u64) -> bool {
 const fn is_false(v: &bool) -> bool {
     !*v
 }
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_true(v: &bool) -> bool {
+    *v
+}
 
 impl UsageEntry {
-    /// `true` when this row is a cleanup candidate at the given threshold:
-    /// measurable, and either never called or idle for at least `idle_days`.
-    /// Pinned skills are never candidates.
+    /// Whether this row could be named in a cleanup report **at all**,
+    /// independent of how quiet it has been.
+    ///
+    /// Three things disqualify a row, and all three are properties of the row
+    /// rather than of its activity: it has no observable invocation channel
+    /// (`NotMeasurable` — no number would be honest), the user pinned it, or
+    /// nothing can uninstall it ([`Self::removable`]).
+    #[must_use]
+    pub fn is_cleanup_candidate(&self) -> bool {
+        !self.pinned && self.removable && self.usage.calls().is_some()
+    }
+
+    /// Installed, actionable, and genuinely never called.
+    ///
+    /// Deliberately **disjoint** from [`Self::is_idle`]. These two used to be
+    /// one predicate, which forced their one caller to describe both with a
+    /// single sentence — and the sentence it chose asserted a duration
+    /// ("idle for 30+ days") that a never-used row does not have: `idle_days`
+    /// is `None` precisely because there is no last use to measure from. A
+    /// machine installed ten minutes ago reported its whole bundled skill set
+    /// as month-dormant.
+    #[must_use]
+    pub fn is_never_used(&self) -> bool {
+        self.is_cleanup_candidate() && self.usage.is_never_used()
+    }
+
+    /// Installed, actionable, called at least once, and quiet for at least
+    /// `threshold_days`. Every row this returns `true` for has a real measured
+    /// `idle_days`, so a caller may quote the duration.
     #[must_use]
     pub fn is_idle(&self, threshold_days: i64) -> bool {
-        if self.pinned || self.usage.calls().is_none() {
-            return false;
-        }
-        self.usage.is_never_used() || self.idle_days.is_some_and(|d| d >= threshold_days)
+        self.is_cleanup_candidate()
+            && !self.usage.is_never_used()
+            && self.idle_days.is_some_and(|d| d >= threshold_days)
     }
 }
 
@@ -210,11 +262,17 @@ pub struct ExtensionUsageReport {
 }
 
 impl ExtensionUsageReport {
-    /// Rows that are cleanup candidates at `threshold_days`.
+    /// Rows called at least once and quiet for at least `threshold_days`.
+    /// Disjoint from [`Self::never_used`] — see [`UsageEntry::is_never_used`].
     pub fn idle(&self, threshold_days: i64) -> impl Iterator<Item = &UsageEntry> {
         self.entries
             .iter()
             .filter(move |e| e.is_idle(threshold_days))
+    }
+
+    /// Rows that are installed and actionable but have never been called.
+    pub fn never_used(&self) -> impl Iterator<Item = &UsageEntry> {
+        self.entries.iter().filter(|e| e.is_never_used())
     }
 }
 
@@ -282,6 +340,10 @@ pub fn build_report(
                 tools: BTreeMap::new(),
                 breakdown_partial: false,
                 pinned: false,
+                // A plugin is uninstallable regardless of whether its calls
+                // are measurable; `is_cleanup_candidate` excludes this row via
+                // the `NotMeasurable` signal, not via this flag.
+                removable: true,
             });
         } else {
             entries.push(entry_from_origin(
@@ -314,6 +376,7 @@ pub fn build_report(
             tools: BTreeMap::new(),
             breakdown_partial: false,
             pinned: skill.pinned,
+            removable: skill.removable,
         });
     }
 
@@ -365,6 +428,10 @@ fn entry_from_origin(
         tools: row.map(|r| r.tools.clone()).unwrap_or_default(),
         breakdown_partial: row.is_some_and(OriginUsage::breakdown_is_partial),
         pinned: false,
+        // Both kinds this helper builds have a real uninstall path
+        // (`mcp_config` remove / `plugins` uninstall). Only skills have a
+        // subset the binary owns, so only the skill arm computes this.
+        removable: true,
     }
 }
 
@@ -491,6 +558,11 @@ pub async fn collect_inventory(
                         .map(str::to_string)
                 }),
                 pinned: usage.is_some_and(|u| u.pinned),
+                // The single fact `remove_skill` gates on. Read from the
+                // manifest source rather than re-derived from the id or the
+                // path: those are two more ways to disagree with the code
+                // that actually refuses the removal.
+                removable: !matches!(e.source, crate::domain::skill::SkillSource::Bundled),
             }
         })
         .collect();
@@ -541,6 +613,73 @@ mod tests {
         }
     }
 
+    fn skill(id: &str, activity: u64, last: Option<&str>, removable: bool) -> InstalledSkill {
+        InstalledSkill {
+            id: id.into(),
+            name: id.into(),
+            disabled: false,
+            activity,
+            last_active_at: last.map(str::to_string),
+            pinned: false,
+            removable,
+        }
+    }
+
+    /// `remove_skill` refuses `SkillSource::Bundled` with `PermissionDenied`,
+    /// so a cleanup report that names one is inviting an action that cannot
+    /// succeed. On a fresh install the bundled set is ~all of the never-used
+    /// rows, which is how the first `doctor` run on a ten-minute-old machine
+    /// came to propose deleting 53 things.
+    #[test]
+    fn a_bundled_skill_is_never_a_cleanup_candidate() {
+        let inv = UsageInventory {
+            skills: vec![skill("bundled-one", 0, None, false)],
+            ..Default::default()
+        };
+        let report = build_report(&inv, &HashMap::new(), now());
+        assert!(
+            report.entries[0].usage.is_never_used(),
+            "the raw signal still reports the honest zero"
+        );
+        assert!(
+            !report.entries[0].is_cleanup_candidate(),
+            "but nothing can act on it, so it is not a candidate"
+        );
+        assert_eq!(report.never_used().count(), 0);
+        assert_eq!(report.idle(30).count(), 0);
+    }
+
+    /// The two populations must partition the candidates: a row that has never
+    /// been called has no `idle_days` to quote, and a row with a measured
+    /// duration is by definition not never-used. They were one predicate, and
+    /// the single sentence their one caller had to write was false for half of
+    /// them.
+    #[test]
+    fn never_used_and_idle_are_disjoint() {
+        let inv = UsageInventory {
+            skills: vec![
+                skill("quiet", 4, Some("2026-06-01T00:00:00Z"), true),
+                skill("untouched", 0, None, true),
+                skill("busy", 9, Some("2026-08-09T00:00:00Z"), true),
+            ],
+            ..Default::default()
+        };
+        let report = build_report(&inv, &HashMap::new(), now());
+
+        let never: Vec<&str> = report.never_used().map(|e| e.id.as_str()).collect();
+        let idle: Vec<&str> = report.idle(30).map(|e| e.id.as_str()).collect();
+        assert_eq!(never, vec!["untouched"]);
+        assert_eq!(idle, vec!["quiet"]);
+        assert!(
+            never.iter().all(|n| !idle.contains(n)),
+            "no row may be counted by both"
+        );
+        assert!(
+            report.idle(30).all(|e| e.idle_days.is_some()),
+            "every idle row must carry the duration its caller will quote"
+        );
+    }
+
     #[test]
     fn an_installed_server_with_no_row_reports_never_used() {
         let inv = UsageInventory {
@@ -552,7 +691,11 @@ mod tests {
         assert_eq!(e.usage, UsageSignal::Measured { calls: 0 });
         assert!(e.usage.is_never_used());
         assert_eq!(e.idle_days, None, "never used has no idle measurement");
-        assert!(e.is_idle(30));
+        // The line above is exactly why `is_idle` must be false here: this row
+        // has no duration, so the "idle for N+ days" heading cannot describe
+        // it. It belongs to the never-used population instead.
+        assert!(e.is_never_used());
+        assert!(!e.is_idle(30));
     }
 
     #[test]
@@ -644,6 +787,7 @@ mod tests {
                 activity: 0,
                 last_active_at: None,
                 pinned: true,
+                removable: true,
             }],
             ..Default::default()
         };

@@ -577,6 +577,15 @@ impl McpManagerActor {
             server_name,
         });
 
+        // Drop the invocation record here rather than at any of the six
+        // `McpManagerHandle::remove_server` call sites: this is the one point
+        // they all funnel through, so a seventh inherits it.
+        let owned = server_id.to_string();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::tools::usage::forget_mcp(&owned);
+        })
+        .await;
+
         tracing::info!(server_id = %server_id, "Server removed");
         Ok(())
     }

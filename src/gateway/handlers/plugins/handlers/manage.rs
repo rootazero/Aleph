@@ -104,6 +104,7 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
 
     match std::fs::remove_dir_all(&plugin_path) {
         Ok(()) => {
+            crate::tools::usage::forget_plugin(&params.name);
             if let Ok(manager) = get_extension_manager() {
                 if let Err(e) = manager.reload().await {
                     tracing::warn!("Failed to refresh extensions after uninstall: {}", e);

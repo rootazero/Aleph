@@ -131,6 +131,13 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// delegation capture dormant — `dispatch_on_delegation` no-ops on an empty
     /// registry, so this is a fail-soft default (P7).
     pub(super) capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    /// Deferred handle to the process's single slash-command parser.
+    ///
+    /// Empty in tests and in simulated mode, which is why the resolver it
+    /// backs degrades to "not a slash command" rather than to a second,
+    /// weaker derivation: a fallback that resolved `/foo` a *different* way
+    /// is precisely the drift this cell exists to remove.
+    pub(super) command_parser: crate::command::CommandParserCell,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -175,6 +182,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             channel_registry: Arc::new(tokio::sync::OnceCell::new()),
             planner_provider: None,
             capture_registry: None,
+            command_parser: Arc::new(tokio::sync::RwLock::new(None)),
         };
         super::concurrency_handle::install_global(&engine.concurrency);
         engine
@@ -189,6 +197,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         cell: crate::tasks::shared::targets::ChannelRegistryCell,
     ) -> Self {
         self.channel_registry = cell;
+        self
+    }
+
+    /// Inject the process-wide slash-command parser cell.
+    ///
+    /// Pass the same cell the boot path fills once the `ToolCatalog` is
+    /// populated (`agent_init`'s `command_parser_cell`). Sharing the cell —
+    /// rather than each surface constructing its own parser — is what keeps
+    /// `command.execute`, `chat.send`, `agent.run` and this engine's fallback
+    /// answering `/foo` identically.
+    #[must_use]
+    pub fn with_command_parser_cell(mut self, cell: crate::command::CommandParserCell) -> Self {
+        self.command_parser = cell;
         self
     }
 

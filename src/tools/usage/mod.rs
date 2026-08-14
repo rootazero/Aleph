@@ -51,4 +51,6 @@ pub mod report;
 pub mod store;
 
 pub use report::{build_report, ExtensionUsageReport, UsageEntry, UsageInventory};
-pub use store::{record_call_detached, OriginUsage, ToolUsageStore, UsageOrigin};
+pub use store::{
+    forget_mcp, forget_plugin, record_call_detached, OriginUsage, ToolUsageStore, UsageOrigin,
+};

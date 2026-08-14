@@ -189,6 +189,7 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
 
     match tokio::fs::remove_dir_all(&plugin_path).await {
         Ok(()) => {
+            alephcore::tools::usage::forget_plugin(name);
             println!("Plugin uninstalled successfully.");
         }
         Err(e) => {
