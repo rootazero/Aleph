@@ -41,6 +41,14 @@ pub struct CliConfig {
 }
 
 /// Client manifest configuration
+///
+/// Currently inert: the three fields below are reserved for a future
+/// "tell the server which tools this surface can render" handshake the
+/// protocol was specced to take but never activated. They are kept on
+/// the struct and on the wire (with `#[serde(default)]`) so any older
+/// `~/.aleph/cli.toml` still parses losslessly and a future activation
+/// is a wire-compatible addition rather than a rename.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ManifestConfig {
     /// Tool categories this client supports

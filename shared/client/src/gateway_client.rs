@@ -26,6 +26,12 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 30000;
 pub struct GatewayClient {
     url: String,
     timeout_ms: u64,
+    /// See [`Self::with_ca_cert`]. Setter is exercised by no current caller
+    /// (the only `GatewayClient` user is `aleph-server gateway call`, which
+    /// talks loopback and relies on the connector's automatic self-signed
+    /// lookup), but the field is kept so a non-loopback caller is a one-line
+    /// change rather than a rediscovery of the same trust problem.
+    #[allow(dead_code)]
     ca_cert: Option<String>,
 }
 
