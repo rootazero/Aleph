@@ -128,7 +128,7 @@ mod tests {
         );
         let cost = r.cost.expect("aggregator model must be priceable");
         assert_eq!(cost.basis, RateBasis::VendorInferred);
-        assert_eq!(cost.input_per_mtok, Some(3.0));
+        assert_eq!(cost.input_per_mtok, Some(2.0));
         // Capabilities resolve through the same canonicalisation.
         assert_eq!(r.capabilities.unwrap().context_window, 1_000_000);
     }
@@ -163,7 +163,7 @@ mod tests {
             ("cohere", "command-a-plus-05-2026", 128_000),
             ("qianfan", "ernie-5.1", 128_000),
             ("doubao", "doubao-seed-evolving", 1_024_000),
-            ("stepfun", "step-3.7-flash", 262_144),
+            ("stepfun", "step-3.7-flash", 256_000),
         ] {
             let r = ModelRecord::resolve(provider, model, None, ModelSource::PresetDefault);
             let caps = r

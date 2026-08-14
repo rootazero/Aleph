@@ -17,10 +17,12 @@ async fn skill_status_reports_skills_from_temp_dir() {
     .unwrap();
 
     let system = alephcore::skill::SkillSystem::new();
-    // `init` returns `()`: it logs and skips unreadable dirs rather than
-    // failing, so there is no Result to unwrap. This line said `.unwrap()` and
-    // so this whole test binary has not compiled — which `cargo check` and
-    // `cargo test --lib` both agree is fine, because neither builds `tests/`.
+    // `init` returns `()`, not a `Result` — it logs and skips unreadable dirs
+    // rather than failing. This line said `.unwrap()` and so this whole test
+    // binary has not compiled: a broken integration target stops the whole
+    // `tests/*` build, so none of the crate's integration tests ran. Neither
+    // `cargo check` nor `cargo test --lib` noticed, because neither builds
+    // `tests/`.
     system.init(vec![tmp.path().to_path_buf()]).await;
 
     let tool = SkillStatusTool::new(system);

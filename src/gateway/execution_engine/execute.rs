@@ -313,11 +313,13 @@ where
                 request.input = prompt.to_string();
             }
 
-            if let Some(mode_json) = self.try_resolve_slash_command(&request.input) {
-                request
-                    .metadata
-                    .insert(SLASH_COMMAND_MODE_KEY.to_string(), mode_json);
-            }
+            // Safety net for producers that never pass through a handler —
+            // cron jobs, heartbeat, team dispatch, goal/loop continuations —
+            // and so cannot stamp before the busy lane. `chat.send` and
+            // `agent.run` stamp earlier (they must: see `stamp_slash_mode`),
+            // and this call is a no-op for them.
+            self.stamp_slash_mode(&request.input, &mut request.metadata)
+                .await;
         }
 
         // Naked agent-loop strategic planner (StraTA round 2): on a genuine

@@ -121,7 +121,6 @@ dependencies = [
  "aleph-logging",
  "aleph-protocol",
  "aleph-tui",
- "anyhow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -151,7 +150,6 @@ name = "aleph-client"
 version = "0.1.0"
 dependencies = [
  "aleph-protocol",
- "anyhow",
  "dirs 6.0.0",
  "futures-util",
  "native-tls",

@@ -208,14 +208,19 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: None,
             },
             Rates {
-                // Sonnet 5 (current default). Durable rate $3/$15 (a launch
-                // promo of $2/$10 runs to 2026-08-31; we keep the durable rate
-                // so estimates don't under-report once it ends).
+                // Sonnet 5 (current default). $2/$10 was announced as
+                // introductory pricing through 2026-08-31; Anthropic's pricing
+                // page now states it **is the standard price** and that the
+                // scheduled 2026-09-01 rise to $3/$15 "will not occur". The
+                // row previously carried $3/$15 on the opposite reading — the
+                // premise of that comment was withdrawn by the vendor, not by
+                // us. Cache columns are the published 5m-write ($2.50) and
+                // cache-hit ($0.20) figures, not multiples of the base.
                 model_prefix: "claude-sonnet-5",
-                input_per_mtok: Some(3.0),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.30),
-                cache_creation_per_mtok: Some(3.75),
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(10.0),
+                cache_read_per_mtok: Some(0.20),
+                cache_creation_per_mtok: Some(2.50),
                 reasoning_per_mtok: None,
             },
             Rates {
@@ -259,24 +264,27 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             // GPT-5 family (openclaw catalog). Dotted specifics precede the
             // broad `gpt-5` fallback. 5.6 is the current default.
             //
-            // The 5.6 tiers are NOT flat-rated: Terra is half the flagship and
-            // Luna a fifth of it. Capabilities can share one `gpt-5.6` row
-            // because the shape is identical; rates cannot, and these two must
-            // precede `gpt-5.6` or they would silently bill at 5x.
+            // The 5.6 tiers are NOT flat-rated, and they are not multiples of
+            // the flagship either — each tier carries its own published quote.
+            // These rows used to hold `flagship / 2` and `flagship / 5`, which
+            // is where the 25% (Terra) and 5x (Luna) over-estimates came from.
+            // Capabilities can share one `gpt-5.6` row because the shape is
+            // identical; rates cannot, and these two must precede `gpt-5.6` or
+            // they would silently bill at the flagship rate.
             Rates {
                 model_prefix: "gpt-5.6-terra",
-                input_per_mtok: Some(2.50),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.25),
-                cache_creation_per_mtok: Some(3.125),
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(12.0),
+                cache_read_per_mtok: Some(0.20),
+                cache_creation_per_mtok: Some(2.50),
                 reasoning_per_mtok: None,
             },
             Rates {
                 model_prefix: "gpt-5.6-luna",
-                input_per_mtok: Some(1.0),
-                output_per_mtok: Some(6.0),
-                cache_read_per_mtok: Some(0.10),
-                cache_creation_per_mtok: Some(1.25),
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(1.20),
+                cache_read_per_mtok: Some(0.02),
+                cache_creation_per_mtok: Some(0.25),
                 reasoning_per_mtok: None,
             },
             Rates {
@@ -338,10 +346,13 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: None,
             },
             Rates {
+                // Retired (see `LIFECYCLE_TABLE`); the row stays so historical
+                // runs still price. Cache reads are $0.275, not the rounded
+                // $0.28 this carried.
                 model_prefix: "o4-mini",
                 input_per_mtok: Some(1.10),
                 output_per_mtok: Some(4.40),
-                cache_read_per_mtok: Some(0.28),
+                cache_read_per_mtok: Some(0.275),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -466,15 +477,16 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: Some(9.0),
             },
             Rates {
-                // `gemini-3-flash-preview` (the aux model): Google has not
-                // published a rate for the preview id separately, so the 3.x
-                // flash tier rate stands in. That errs *high* rather than 20x
-                // low, which is the safe direction for both a cost estimate and
-                // for `cost_aware` (it can never rank an expensive model first).
+                // `gemini-3-flash-preview` (the aux model). This row used to
+                // hold the 3.x *Pro* rate as a deliberate stand-in ("errs high
+                // rather than 20x low") because no separate rate was published
+                // for the preview id. One is now published, so the stand-in has
+                // nothing left to stand in for: $0.50/$3.00 with $0.05 cache
+                // reads, i.e. the row was 3x high.
                 model_prefix: "gemini-3-flash",
-                input_per_mtok: Some(1.50),
-                output_per_mtok: Some(7.50),
-                cache_read_per_mtok: Some(0.15),
+                input_per_mtok: Some(0.50),
+                output_per_mtok: Some(3.0),
+                cache_read_per_mtok: Some(0.05),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: Some(7.50),
             },
@@ -778,11 +790,30 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             Rates {
                 // M3 (current default) — without this row the default id
                 // reports CostStatus::Unknown. Must precede minimax-m2.
+                //
+                // The $0.60/$2.40 this used to carry is MiniMax's *over-512K*
+                // step-up, not the base rate, so every M3 run was estimated at
+                // 2x. Aleph has no tier row for it: the base is corrected here
+                // and long M3 prompts are now a documented under-estimate
+                // rather than a blanket over-estimate.
                 model_prefix: "minimax-m3",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(1.20),
+                cache_read_per_mtok: Some(0.06),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // The `-highspeed` variants are a separate SKU at 2x the base
+                // tier, and both `minimax` presets advertise
+                // `MiniMax-M2.7-highspeed` in their chains — without this row
+                // it fell through to `minimax-m2` and billed at half. Must
+                // precede `minimax-m2`.
+                model_prefix: "minimax-m2.7-highspeed",
                 input_per_mtok: Some(0.60),
                 output_per_mtok: Some(2.40),
-                cache_read_per_mtok: Some(0.12),
-                cache_creation_per_mtok: None,
+                cache_read_per_mtok: Some(0.06),
+                cache_creation_per_mtok: Some(0.375),
                 reasoning_per_mtok: None,
             },
             Rates {
@@ -972,31 +1003,31 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     ),
     (
         "anthropic",
-        // Sonnet 5 (current `claude` preset default) carries the 1M window, so
-        // it takes the same >200K long-context premium the 4.x 1M beta did —
-        // identical base rate ($3/$15), identical published multipliers (input
-        // and cache 2x, output 1.5x). Without this row the flagship default was
-        // the one model whose long-context runs were *never* tiered.
+        // Explicitly *not* tiered, and the empty slice is how that is said:
+        // Anthropic's pricing page states "Claude 4.6 and later models and
+        // Claude Mythos Preview include the full 1M token context window at
+        // standard pricing. (A 900k-token request is billed at the same
+        // per-token rate as a 9k-token request.)"
         //
-        // Deliberately absent: `claude-opus-4-6/7/8` and `claude-fable-5` also
-        // carry 1M windows, but their >200K rates are not published as a
-        // multiple we can confirm. Extrapolating Sonnet's 2x/1.5x onto them
-        // would be invented data; they stay flat-priced (a documented
-        // under-estimate) until a vendor figure is in hand.
-        "claude-sonnet-5",
-        &[PriceTier {
-            min_input_tokens: 200_000,
-            input_per_mtok: Some(6.0),
-            output_per_mtok: Some(22.50),
-            cache_read_per_mtok: Some(0.60),
-            cache_creation_per_mtok: Some(7.50),
-            reasoning_per_mtok: None,
-        }],
+        // This row exists only to keep the broad `claude-sonnet-4` beta row
+        // below from reaching 4.6+ by prefix. `claude-sonnet-5` and the
+        // opus/fable 1M models need no row at all — a miss already means flat.
+        //
+        // Prefix matching cannot say "4.6 and later", so this covers exactly
+        // 4.6: a future `claude-sonnet-4-7` would fall through to the beta row
+        // and silently take the 2x again. Sonnet went 4.6 → 5, so there is no
+        // such id today; if one appears it needs its own line here.
+        // The table previously carried a `claude-sonnet-5` tier that copied the
+        // 4.x beta's 2x/1.5x multipliers onto it, which over-estimated every
+        // long-context run on the current default by roughly 2x.
+        "claude-sonnet-4-6",
+        &[],
     ),
     (
         "anthropic",
         // Claude Sonnet 4.x 1M-context beta: prompts over 200K input tokens
-        // bill input/cache at 2x and output at 1.5x.
+        // bill input/cache at 2x and output at 1.5x. Pre-4.6 only — see the
+        // negative row above.
         "claude-sonnet-4",
         &[PriceTier {
             min_input_tokens: 200_000,
@@ -1365,13 +1396,18 @@ mod tests {
         }
     }
 
-    /// The long-context tier must apply to whatever the *current* flagships
-    /// are, not to whichever generation happened to be current when the tier
-    /// was written. `claude-sonnet-4` and `gemini-2.5-pro` had tiers while the
-    /// 1M-window defaults that replaced them did not, so every long-context run
-    /// on the current defaults billed at roughly half price.
+    /// Whether a long prompt costs more per token is a *vendor* fact with two
+    /// answers, and the table has to be able to say both.
+    ///
+    /// The guard used to assert only the first: "the current flagship must be
+    /// tiered", written when `claude-sonnet-4` and `gemini-2.5-pro` had tiers
+    /// their 1M-window successors did not. Anthropic has since published the
+    /// other answer for its own line — 4.6 and later "include the full 1M token
+    /// context window at standard pricing" — so asserting the tier for
+    /// `claude-sonnet-5` would now pin a 2x over-estimate in place. Both halves
+    /// are asserted here so removing either row is loud.
     #[test]
-    fn current_long_context_defaults_are_tiered() {
+    fn long_context_tiers_follow_the_vendor_not_the_generation() {
         // Input-only breakdowns: mixing output tokens in would let the output
         // rate dominate the short case and mask the input tier entirely.
         let long_prompt = TokenBreakdown {
@@ -1382,18 +1418,40 @@ mod tests {
             input: 100_000,
             ..Default::default()
         };
+        let per_token = |provider: &str, model: &str, b: &TokenBreakdown| {
+            estimate(provider, model, b).usd / f64::from(b.input)
+        };
+
+        // Tiered: the vendor publishes a step-up above 200K.
         for (provider, model) in [
-            ("anthropic", "claude-sonnet-5"),
             ("google", "gemini-3.1-pro-preview"),
+            // Pre-4.6 Sonnet 1M beta — the row the negative row above protects.
+            ("anthropic", "claude-sonnet-4-5"),
         ] {
-            let long = estimate(provider, model, &long_prompt);
-            let short = estimate(provider, model, &short_prompt);
-            let long_rate = long.usd / 400_000.0;
-            let short_rate = short.usd / 100_000.0;
+            let (long, short) = (
+                per_token(provider, model, &long_prompt),
+                per_token(provider, model, &short_prompt),
+            );
             assert!(
-                long_rate > short_rate,
+                long > short,
                 "{provider}/{model}: a 400K prompt must bill above the base \
-                 input rate (long={long:?}, short={short:?})"
+                 input rate (long={long}, short={short})"
+            );
+        }
+
+        // Flat: "a 900k-token request is billed at the same per-token rate as a
+        // 9k-token request". `claude-sonnet-4-6` is the case that needs the
+        // negative row — without it the broad `claude-sonnet-4` beta row
+        // catches it by prefix.
+        for model in ["claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5"] {
+            let (long, short) = (
+                per_token("anthropic", model, &long_prompt),
+                per_token("anthropic", model, &short_prompt),
+            );
+            assert!(
+                (long - short).abs() < 1e-9,
+                "anthropic/{model}: 4.6+ bills 1M at the standard rate \
+                 (long={long}, short={short})"
             );
         }
     }
@@ -1485,11 +1543,20 @@ mod tests {
         ] {
             let card = rate_card("gemini", model).unwrap_or_else(|| panic!("{model} must price"));
             assert!(
-                card.input_per_mtok.unwrap_or(0.0) > 1.0,
-                "{model} priced at {:?}/Mtok — that is the 2.0-flash rate",
+                card.input_per_mtok.unwrap_or(0.0) > 0.075,
+                "{model} priced at {:?}/Mtok — that is the broad `gemini` row, \
+                 i.e. the 2.0-flash rate",
                 card.input_per_mtok
             );
         }
+        // The preview id has a published rate of its own now; it used to borrow
+        // the 3.x *Pro* rate as a deliberate 3x-high stand-in.
+        assert_eq!(
+            rate_card("gemini", "gemini-3-flash-preview")
+                .unwrap()
+                .input_per_mtok,
+            Some(0.50)
+        );
         // …and the lite tier is genuinely cheaper, so its longer prefix has to
         // win over `gemini-3.5-flash`.
         let lite = rate_card("gemini", "gemini-3.5-flash-lite").expect("lite must price");
@@ -1503,8 +1570,8 @@ mod tests {
         let terra = rate_card("openai", "gpt-5.6-terra").expect("terra");
         let luna = rate_card("openai", "gpt-5.6-luna").expect("luna");
         assert_eq!(flagship.input_per_mtok, Some(5.0));
-        assert_eq!(terra.input_per_mtok, Some(2.50));
-        assert_eq!(luna.input_per_mtok, Some(1.0));
+        assert_eq!(terra.input_per_mtok, Some(2.0));
+        assert_eq!(luna.input_per_mtok, Some(0.20));
         // `-sol` deliberately shares the flagship row.
         assert_eq!(
             rate_card("openai", "gpt-5.6-sol").unwrap().input_per_mtok,
@@ -1573,7 +1640,7 @@ mod tests {
             output: 1_000_000,
             ..Default::default()
         };
-        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        let est = estimate("anthropic", "claude-sonnet-4-5", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
         assert!(
             (est.usd - 28.5).abs() < 1e-6,
@@ -1591,7 +1658,7 @@ mod tests {
             cache_creation: 1_000_000,
             ..Default::default()
         };
-        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        let est = estimate("anthropic", "claude-sonnet-4-5", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
         assert!(
             (est.usd - 8.10).abs() < 1e-6,
@@ -1814,6 +1881,9 @@ mod tests {
         );
     }
 
+    /// The vehicle is Sonnet **4.5**, not 4.6: Anthropic prices 4.6 and later
+    /// flat across the full 1M window, so 4.6 would exercise nothing here. The
+    /// 4.x 1M beta is the generation this tier describes.
     #[test]
     fn claude_sonnet_long_context_tier_doubles_input() {
         // 200K input (exactly at threshold) + 1M output → tier rates:
@@ -1823,7 +1893,7 @@ mod tests {
             output: 1_000_000,
             ..Default::default()
         };
-        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        let est = estimate("anthropic", "claude-sonnet-4-5", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
         // 200K * $6/M + 1M * $22.50/M = 1.2 + 22.5 = 23.7
         assert!(
@@ -1843,7 +1913,7 @@ mod tests {
             cache_read: 160_000,
             ..Default::default()
         };
-        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        let est = estimate("anthropic", "claude-sonnet-4-5", &breakdown);
         // input 50K * $6/M + cache_read 160K * $0.60/M = 0.3 + 0.096 = 0.396
         assert!(
             (est.usd - 0.396).abs() < 1e-6,
@@ -1861,7 +1931,7 @@ mod tests {
             output: 100_000,
             ..Default::default()
         };
-        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        let est = estimate("anthropic", "claude-sonnet-4-5", &breakdown);
         // 100K * $3/M + 100K * $15/M = 0.3 + 1.5 = 1.8
         assert!(
             (est.usd - 1.8).abs() < 1e-6,
@@ -1962,7 +2032,7 @@ mod tests {
         );
         assert_eq!(
             rate_card("openai", "o4-mini").unwrap().cache_read_per_mtok,
-            Some(0.28)
+            Some(0.275)
         );
     }
 
@@ -2187,16 +2257,30 @@ mod tests {
         let est = estimate("minimax", "MiniMax-M3", &input_1m);
         assert_eq!(est.status, CostStatus::Complete);
         assert!(
-            (est.usd - 0.60).abs() < 1e-6,
-            "expected $0.60, got ${}",
+            (est.usd - 0.30).abs() < 1e-6,
+            "expected $0.30, got ${}",
             est.usd
+        );
+        // The `-highspeed` SKU is a separate row at 2x, and it must win the
+        // prefix race against `minimax-m2`.
+        let hs = estimate("minimax", "MiniMax-M2.7-highspeed", &input_1m);
+        assert!(
+            (hs.usd - 0.60).abs() < 1e-6,
+            "expected $0.60 for the highspeed SKU, got ${}",
+            hs.usd
         );
     }
 
     #[test]
     fn lookup_tiers_only_matches_tiered_models() {
         assert!(lookup_tiers("google", "gemini-2.5-pro").is_some());
-        assert!(lookup_tiers("anthropic", "claude-sonnet-4-6").is_some());
+        // 4.6 resolves to the *negative* row — present, deliberately empty —
+        // so the broad `claude-sonnet-4` beta row can never reach it.
+        assert_eq!(
+            lookup_tiers("anthropic", "claude-sonnet-4-6").map(<[_]>::len),
+            Some(0)
+        );
+        assert!(!lookup_tiers("anthropic", "claude-sonnet-4-5").unwrap().is_empty());
         // Flat-priced families resolve to no tier.
         assert!(lookup_tiers("anthropic", "claude-opus-4-1").is_none());
         assert!(lookup_tiers("openai", "gpt-4o").is_none());

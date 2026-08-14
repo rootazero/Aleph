@@ -152,6 +152,16 @@ const LIFECYCLE_TABLE: &[LifecycleRow] = &[
     // precede the broad `gpt-5.5` row or it would never be reached.
     retired(None, "gpt-5.5-pro", "gpt-5.6", "superseded by GPT-5.6"),
     retired(None, "gpt-5.5", "gpt-5.6", "superseded by GPT-5.6"),
+    // OpenAI's own catalog marks `o4-mini` deprecated, so by the rule above the
+    // row is global. It was the `openai` preset's last fallback rung — a retry
+    // budget spent on an id the vendor has announced for retirement — and that
+    // rung is removed in the same change.
+    retired(
+        None,
+        "o4-mini",
+        "gpt-5.4-mini",
+        "deprecated in OpenAI's own catalog",
+    ),
     // Cohere folded the three specialised Command A variants into one flagship.
     retired(
         None,

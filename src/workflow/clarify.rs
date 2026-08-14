@@ -102,10 +102,23 @@ impl ClarifyTaskMeta {
     }
 
     /// Recover the clarify record from a `coord_task`'s metadata, if present.
+    /// On a present-but-malformed block (corruption, schema drift) the
+    /// malformed JSON is logged so the dispatcher can diagnose a stuck
+    /// clarify step instead of silently dropping the user's pending question.
     #[must_use]
     pub fn from_metadata(metadata: &Value) -> Option<Self> {
         let raw = metadata.get(CLARIFY_META_KEY)?;
-        serde_json::from_value(raw.clone()).ok()
+        match serde_json::from_value(raw.clone()) {
+            Ok(meta) => Some(meta),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    key = CLARIFY_META_KEY,
+                    "ClarifyTaskMeta failed to deserialise — clarify step will not be recognised"
+                );
+                None
+            }
+        }
     }
 
     /// Build the [`ClarificationRequest`] used to interpret the user's reply —

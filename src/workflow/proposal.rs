@@ -18,7 +18,6 @@
 //! workflow's `description`, so it survives `list`/`describe`/`accept`
 //! unchanged.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::canvas_io::sanitise_name;
@@ -192,7 +191,14 @@ pub fn already_covered(chain: &[String]) -> bool {
 /// catches the case where the user already built (and renamed) the same
 /// `MetaSkill` by hand, so the miner does not shadow it with a draft.
 pub fn covered_by_step_set(chain: &[String]) -> bool {
-    let want: HashSet<&str> = chain.iter().map(String::as_str).collect();
+    // Sort once into a side-allocated `Vec` and compare sorted vectors — avoids
+    // allocating two `HashSet`s per stored workflow (`store::load` already
+    // does the heavy lifting). Two sets match iff they have the same elements,
+    // so equal sorted sequences are equivalent.
+    let mut want: Vec<&str> = chain.iter().map(String::as_str).collect();
+    want.sort_unstable();
+    want.dedup();
+    let want_sanitised: Vec<String> = want.iter().map(|s| sanitise_name(s)).collect();
     let Ok(metas) = store::list() else {
         return false;
     };
@@ -200,10 +206,10 @@ pub fn covered_by_step_set(chain: &[String]) -> bool {
         let Ok(manifest) = store::load(&meta.name) else {
             continue;
         };
-        let have: HashSet<&str> = manifest.steps.iter().map(|s| s.id.as_str()).collect();
-        let want_sanitised: HashSet<String> = want.iter().map(|s| sanitise_name(s)).collect();
-        let want_ref: HashSet<&str> = want_sanitised.iter().map(String::as_str).collect();
-        if have == want_ref {
+        let mut have: Vec<&str> = manifest.steps.iter().map(|s| s.id.as_str()).collect();
+        have.sort_unstable();
+        have.dedup();
+        if have == want_sanitised {
             return true;
         }
     }

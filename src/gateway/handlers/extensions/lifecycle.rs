@@ -170,6 +170,7 @@ async fn uninstall_plugin(plugin_id: &str) -> Result<(), String> {
         let _ = mgr.unload_runtime_plugin(plugin_id).await;
     }
     std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::tools::usage::forget_plugin(plugin_id);
     if let Some(mgr) = crate::extension::try_extension_manager() {
         let _ = mgr.reload().await;
     }

@@ -307,6 +307,7 @@
 - **窗口以天计的检测器必须持久化** —— 把窗口长度 × tick 周期，跟进程实际寿命比一比；量级接近就必须落在进程之外 → §2.8
 - **同构分区有 N 个，维护默认只覆盖第一个** —— 写路径经合成 id 分区（`{base}__proj-*`/`__u-*`/`__p-*`）之后，每一条"遍历全部"的维护/对账/枚举路径都要重问「它遍历的是 default 那一个，还是全部」。已在**两个**子系统上各犯一次：做梦历史（§2.8）与笔记索引开机对账（§2.5）。**枚举必须有单一源**（`project_scope::list_note_corpora`；此前同一问题有三份互不一致的答案），且**脚手架（写）不得跟着对账（修）一起 fan-out** → §2.5 §2.8
 - **DEFER 若建立在「这条路走不到」上，就欠一次真实负载实测** —— 猜出来的边界只在边缘塌陷，而边缘正是真机所在 → §3.14
+- **一条注释可以在写下时完全正确，后来变成谎言而读起来仍然自洽——因为它引用的是一个会变的外部事实** —— 「同一事实的两份表述」那一族里最难看见的一种：没有第二份表述在打架，只有一份，而且它自证充分。`claude-sonnet-5` 的价格行逐字写着「durable rate $3/$15（$2/$10 是跑到 2026-08-31 的 launch promo，记 durable 免得促销结束后低报）」——推理无懈可击，只是厂商后来**取消了那次涨价**并把促销价定为标准价，于是这行注释每读一次都在把一个 50% 的高估论证得更牢。判据：**改一个数字之前先读它的注释；注释里的理由如果指向一个外部事实（厂商公告 / 上游目录 / 某个"还没公布"），那要核的是那个事实，不是这个数字**。⚠️ 反向也成立且更贵：**外部目录也不自动正确**——同一次比对里 models.dev 抄的正是那个 promo 价，照单全收就是把注释里已经写明的取舍推翻掉。→ MODEL_CATALOG §7「表里的数字过期了怎么办」
 - **能被精确回答的数字别用常量猜** —— 先问仓库里有没有人已经知道它；换算单位有没有单一源 → §4.9
 - **把一个字段升格成运行时能力之前，先数它有几个写入者** —— 休眠的展示字段（`workspace_path` 曾只是 picker 里的一行字）一旦接上运行时权力（成为 run 的 cwd），它的**每一个**写入者都追溯成了权限授予点；写入者与读取者必须同批过同一道闸，否则「两步都合法、合起来等价」（先注册目录、再进房间聊天）就是绕闸路径 → §5.22
 
@@ -383,6 +384,9 @@
 - **`Some("")` 不是「没有」，是一条通过每一次 `is_some()` 的假路由** —— 把 `String` 字段无条件包成 `Some(..)` 的注入器，在**恰恰没有那个东西**的回合上（无 channel 的 cron / heartbeat / webhook / `tools.invoke`）产出空串路由：下游 `approval_is_routable` 变真 ⇒ 值守判定反转、`UNATTENDED_KEY` 永不设置，而 prompt 还会告诉模型「运行时会替你投递，不要调消息工具」——**连它自己的兜底也一并拿走**。判据：`Option<String>` 的生产者要问**空串该不该塌缩成 `None`** → §4.12 round-12 ⑤
 - **命令硬底线扫的是 `normalize.rs` 的规范化副本**，不是你写的那行字（两份视图 / `-enc` 载荷已解码回注且关不掉 / 规则间隙用 `seg!()` 不是 `[^\n]*`）→ [SANDBOX.md](docs/reference/SANDBOX.md) §3.8
 
+- **一个谓词只有一个消费者时，它的两半会被迫共用一句话——而那句话通常对其中一半是假的** —— `UsageEntry::is_idle` ＝ `never_used ‖ idle_days≥N`，于是唯一的消费者只能写一个标题，它选的 `"N extension(s) idle for 30+ days"` 对 never-used 行**没有可引用的时长**（`idle_days` 正是 `None`）⇒ 装机十分钟的机器把整套 bundled skill 报成月度休眠。判据：**看一个 `‖` 谓词的下游能不能分别描述两条臂**；不能就拆成互斥的两个，别让措辞去掩盖类型上的合并 → §5.24 ①
+- **一张清单如果附带一个动作邀请，它列的每一行都必须真的能被那个动作作用** —— 上一条的第二半，且更贵：清理报告列出 bundled skill，而 `remove_skill` 对它们返回 `PermissionDenied` ⇒ 报告邀请了一个必然失败的动作，且在全新装机上那批就是清单的绝大多数（第一印象＝53 件删不掉的东西）。判据：**这一行，被我建议的那个动词作用会成功吗**；答不了就说明缺一个"可作用性"的位（`UsageEntry::removable`），而它必须从**真正拒绝的那段代码**推导，不是从 id 或路径猜 → §5.24 ①
+
 ### 4. 网关 · 通道 · 投递（`src/gateway/`）
 
 - **「至多一次」只覆盖了「传输层报了错」那一半——进程消失是第三种结局** → §5.6
@@ -396,6 +400,7 @@
 - **加了通道 adapter ≠ 用户能配** —— 必须手工进 `gateway/interfaces/plugin.rs` 的工厂表（`register_plain_channel!`）→ [GATEWAY.md](docs/reference/GATEWAY.md)
 - **`ChannelCapabilities` 的每个位都是承诺** —— 声明了就必须覆写对应的 `Channel` 方法（默认体一律 `Err` 并指名道姓）；⚠️ **反向不成立**：覆写存在 ≠ 能力存在——`line`/`wechat`/`signal` 的 `edit` 覆写只是把默认 `Err` 换了句措辞，`feishu` 的还转发一层给同样无条件 `Err` 的 `MessageOps::edit`。判据永远是**那个位**，不是有没有那个 `fn`；而这个位现在是流式的地板（`apply_channel_capabilities`），读错它就是静默截断 → §5.7。频道寻址是**两步**（先 `channel_directory` 换 id）→ §5.18
 - **一条唤醒边只回答它自己那个问题，而等待者可能在等别的事** —— 车道原有的两条边（`notify_slot_free` / `mark_admitted`）都在答「run 槽空了吗」，而被 `max_pending_steering` 推回的 steer **恰恰不等槽**（它要 steer 的 sibling 必须继续跑），它等的是 sibling **答话** ⇒ 睡满 `wake_fallback_secs`（30 s）兜底 tick，而三处文档都写着「burst 一排空就重投」。判据：**先说出这个等待者在等的那件事，再看现有的边有没有一条在描述它**；一条都没有时，兜底 tick 就成了你的机制（而它按定义只是安全网）。新边的产地要选**那件事变成事实的唯一接缝**（assistant 轮次有三个产地 ⇒ 只能挂 `MessageProjector::on_appended`，且排在会丢帧的 `try_send` **之前**），并且**只唤醒真正在等它的票**（高频事件一律唤醒＝把别人的「等槽」换成零收益的每轮重试）→ §4.8 Round-9
+- **一个在闸之后才算出来的事实，答不了闸的问题——而两者都"有代码"，所以看起来是接好的** —— `carries_more_than_text` 靠 `SLASH_COMMAND_MODE_KEY` 判断"这条消息不能折进正在跑的兄弟"，而 `agent.run`（TUI）唯一的解析发生在 `execute()` 里、即闸**之后** ⇒ 有 run 在飞时，TUI 发的**每一条**斜杠命令都被折成 steering 文本、永不执行，零报错零红测。判据：**这个字段是谁读的，读它的那一步排在算它的那一步前面还是后面**；顺带数一遍**有几个面在算它**（当时有两份推导，弱的那份只产得出 `direct_tool`，于是 skill/mcp/自定义命令在那个面上整类静默失效）。单一源 `ExecutionEngine::stamp_slash_mode`，两条守卫按"凡 spawn 的函数"表述而非按 handler 名字列举 → §5.24 ②
 - **车道是候车室，不是运行登记簿** —— 取槽成功时必须 `busy_queue::mark_admitted`，否则 `Steer`/`Interrupt` **静默退化成 `Queue`**（三件事一起修或一起坏）→ §4.8
 - **修好一条堵塞之后，被它挡住的每一个动词都第一次真正开火——包括那些「开火」意味着破坏的** —— 上一条的第二半，同一个车道。`mark_admitted` 让后来者能在前驱运行期间够到引擎，这正是 `Steer` 需要的；而 `Interrupt` 拿到同一条通路的意思是**每条排队消息都会在毫秒内杀掉前驱刚变成的那个 run**，一个 burst 里 N 条只剩最后一条活着、N-1 轮工作被销毁，而没有任何人按过停止。判据是**时间性的**：只能取消一个「在本消息**开始等待之前**就已被接纳」的 run（车道半边 `busy_queue::waiting_since`、引擎半边 `ActiveRun.admitted_at`，两边都必须是**单调钟**——墙钟跳变会静默反转判决，而 `started_at` 是给人看的那一份）。⚠️ **两条更便宜的判据都是错的**：「目标是不是本车道最近接纳的那个」会连同「sibling 健康时新到达的真 Interrupt」一起压掉（那正是这个模式存在的理由）；而忘了给「没有 ticket 的生产者」留 `None ⇒ 不设限` 那条臂，修的就不是 burst 而是把 Interrupt 整个关掉 → §4.8 Round-8 ①
 - **一个 id 在客户端手里的时刻，和它在投递过滤器眼里可解析的时刻，是两回事** —— `chat.send` 一返回，客户端就握着 `run_id`；而 `EventVisibilityIndex` 的 run→session 种子只来自 `stream.run_accepted`，那是**准入之后**才发的。于是每一个「这个 run 从没进过引擎」的终局帧（车道满 / 等待超时 / 被停止清掉）都分类 `ByRunId`、解析落空、**fail-closed 拒给每一条连接，operator 也不例外**——三条写在文档里的用户回执因此全是静默丢弃，其中一条正是专门写来关掉「停不掉的 pending 气泡」的那条。修法是**让帧自报归属**（`RunError.session_key`，只有 `spawn_queued_run` 设它），并把播种判据从「topic 是不是那一个」改成「**这一帧有没有同时说出 run_id 和 session_key**」——`note_frame` 跑在过滤器之前，所以帧给自己播种。判据一句话：**加一个只在准入前发得出来的帧之前，先问它凭什么被解析**（同族＝ `src/gateway/CLAUDE.md` 地雷 H：解析句柄的安装条件不得比帧的生产条件更窄）→ §4.8 Round-8 ②
@@ -475,6 +480,7 @@
 ### 8. 配置 · 诊断 · 自管理 · Hook
 
 - **一句关于运行时的承诺，必须由**每一条**到达它的路径执行** —— 先问**这句话是谁执行的**，再问**是不是每条路径都会执行它**（第二问才是这类缺陷的家）；执行点收进唯一写咽喉（`config/live_apply.rs::apply_live_sections`，执行的就是声明用的那张表 `reload_impact.rs::LIVE_SECTIONS`）；**声明要能被降级**——恒真的声明等于没声明 → §5.8
+- **一份"该清理什么"的报告，它的错误方向是不对称的：漏报只是少省了点空间，误报是在教用户删掉在用的东西** —— 所以它欠三个位而不是一个：这行**测得了吗**（`NotMeasurable`）、**动得了吗**（`removable`）、**它安静了多久是被测出来的还是根本没有过**（never-used vs idle 必须互斥）。任何一个位缺席，措辞都会替它编一个答案 → §5.24 ①
 - **传感器不许创造它测量的东西** —— 诊断 / 审计 / 只读 RPC 一律不能用会建目录的路径 helper（`get_config_dir()` 是纯查找，`get_data_dir()` 不是）→ §5.9
 - **「未知」不许读作「健康」** —— 没有死线的检查会把沉默伪装成健康（`doctor` 跑在 agent 回合里 ⇒ 挂住整个回合，唯一症状是沉默）；超时折叠成**指名道姓的 Warning** → §5.9
 - **脱敏这类"每条输出都必须过"的闸要下沉到咽喉** —— 那是唯一能替"作者根本没想过凭据"的检查兜住的位置 → §5.9。**先数这个东西有几条腿**：unattended 脱敏曾只包 `TraceSink`，而 run 的输出还从 `EventEmitter` 那条腿出去并被 `OriginFanoutEmitter` 明文投进 Telegram——同一段 final text 在同一个 run 里一边打码一边明文 → §5.1
@@ -486,6 +492,7 @@
 - **三个咽喉别绕开** —— 请求只能由 `connection.rs::request()` 造；`Mcp-Method`/`Mcp-Name` 由 `http.rs` 从正要发出的 body 现推；服务端发起的 sampling/elicitation/roots 全走 MRTR。**`resultType` 缺省必须读作 `complete`** → §5.20
 - **声明能力＝承诺** —— `can_sample` 的谓词必须是 `handler.has_callback()`（宿主实现 `mcp/sampling_bridge.rs::serve_sampling`，**必须懒解析**，回调要在**任何 transport 启动之前**装上）→ §5.20
 - **订阅事件流来建状态的机件，必须在订阅之后对账一次** —— 问「我订阅之前发生的事，谁告诉我？」；boot 恰恰把一切放在订阅之前（曾让**每一台**配好的 MCP server 的工具在每次启动后都进不了注册表，而 `mcp.list` 报 healthy）。顺序必须是先 `subscribe()` 再对账。**纯通知型订阅者不适用** → §5.20
+- **"卸载后残留会被清扫兜住"只对改了名字的东西成立** —— 同 id 重装的那一行**从来不是 orphan**，所以孤儿清扫永远看不到它，新装静默继承旧计数与旧 idle 年龄。判据：**这个兜底的触发条件，覆盖得了"换个同名的新东西"吗**。修法接在**咽喉**而不是调用点（MCP 的六个 `remove_server` 调用点共用一个 actor 方法；插件没有咽喉、有三个各自删目录的写者，所以那侧欠一条数站点的 census）。⚠️ **安装路径刻意不清**——原地升级是同一个插件，抹掉历史会把长期服役的报成全新 → §5.24 ③
 - **Hub 只消费不策展** —— 目录槽是 **replace 语义**，可疑 artifact 会静默覆盖 last-good ⇒ 校验必须在**任何条目进缓存之前**；**给用户看的数字必须有校验者**（`sha256`/`git_ref` 曾展示却从不校验）；**`installed` 与 `update_available` 是两个不同的真源**且生产者必须落在消费者那条路上 → §5.21
 - **一个"展示用"字段在提交前必须能指出渲染它的那一行代码** —— 指不出就是 CUT，不是"以后再接" → §5.21
 - **加 hub 工具要动五处登记**（`hub/mod.rs` + `definitions.rs` + `groups.rs` + constructor 的**构造段和 schema 段**两处 + dispatch）—— 漏 schema 段＝注册了但模型看不见，漏 dispatch＝看得见但调不到 → §5.21
@@ -544,11 +551,11 @@
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
 | `src/browser/` `src/builtin_tools/browser_tools/` | §3.12 · 判据清单 §9（外部 CLI/MCP 适配器）· **真机 QA `qa/browser_managed/run.sh {open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——两个 driver 的每个动词都有效果断言，改这两个目录前跑一遍** |
-| `src/mcp/` | §5.20（dual-era 协议） |
+| `src/mcp/` | §5.20（dual-era 协议）· §5.24（卸载要丢 usage 行）|
 | `src/hub/` | [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) · §5.21 |
 | `src/loop_graph/` `src/workflow/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) · §4.12 |
 | `src/identity/` | [AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) · §5.17 |
-| `src/config/` `src/diagnostics/` | §5.8 §5.9 §5.10 |
+| `src/config/` `src/diagnostics/` | §5.8 §5.9 §5.10 · §5.24（扩展调用记录 → `ext/idle-extensions`）|
 | `desktop/` | [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) · [LINUX_DESKTOP.md](docs/reference/LINUX_DESKTOP.md) · [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) · §7.1–§7.4 |
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 §6.9 |
 | `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | 判据清单 §0（跨 crate wire 契约）· FEATURE_LOCATOR §5.4（`providers.*` 契约 + 搜索匹配器）· §5.11 §5.13 §5.23 |

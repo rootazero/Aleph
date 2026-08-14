@@ -850,7 +850,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             Some(memory_db.clone()),
         )
         .with_app_config(app_config_arc.clone())
-        .with_tool_health(tool_health.clone());
+        .with_tool_health(tool_health.clone())
+        // Share the one parser cell with `command.execute`, `chat.send` and
+        // `agent.run`, so all four slash surfaces resolve `/foo` identically.
+        // Filled by `init_tool_catalog` further down, before readiness.
+        .with_command_parser_cell(command_parser_cell.clone());
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
         }
@@ -1330,8 +1334,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         });
 
         // chat.send also uses real ExecutionEngine
-        let command_parser_for_chat = command_parser_cell.clone();
-
         let engine_chat = engine.clone();
         let event_bus_chat = event_bus.clone();
         let router_chat = router.clone();
@@ -1349,9 +1351,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let wm = wm_chat.clone();
             let pr = pr_chat.clone();
             let sm = sm_chat.clone();
-            let cp = command_parser_for_chat.clone();
             async move {
-                let parser = cp.read().await.clone();
                 handle_chat_send_with_engine(
                     req,
                     engine,
@@ -1362,7 +1362,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     wm,
                     pr,
                     sm,
-                    parser,
                 )
                 .await
             }

@@ -194,6 +194,7 @@ mod tests {
             tools: Default::default(),
             breakdown_partial: false,
             pinned: false,
+            removable: true,
         }
     }
 

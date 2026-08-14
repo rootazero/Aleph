@@ -3,6 +3,8 @@
 //! Extracted from `engine.rs` to keep the main execution engine focused
 //! on lifecycle orchestration.
 
+use std::collections::HashMap;
+
 use tracing::info;
 
 use crate::sync_primitives::Arc;
@@ -16,12 +18,18 @@ use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
 use super::engine::ExecutionEngine;
 
-// Shorthand slash aliases now live in the tool-metadata layer
-// (`crate::tool_metadata::aliases`) as the single source shared by the
-// execution fast path (here), the inbound router's namespace check, and the
-// `ToolCatalog` discovery seed. Re-exported here so existing
-// `gateway::execution_engine::{is_shorthand_alias}` call sites keep resolving.
-pub(crate) use crate::tool_metadata::aliases::{is_shorthand_alias, resolve_shorthand};
+// Shorthand slash aliases live in the tool-metadata layer
+// (`crate::tool_metadata::aliases`) as the single source shared by the inbound
+// router's namespace check and the `ToolCatalog` discovery seed. Re-exported
+// here so existing `gateway::execution_engine::{is_shorthand_alias}` call
+// sites keep resolving.
+//
+// `resolve_shorthand` used to be re-exported alongside it, for a hand-rolled
+// alias pass in this module's resolver. That pass is gone: the resolver now
+// goes through `ToolCatalog::find_best_match`, whose alias tier is seeded from
+// this same `SHORTHAND_ALIASES` table (via `shorthand_aliases_for`) and which
+// additionally handles multi-word command paths and `.`/`_` leniency.
+pub(crate) use crate::tool_metadata::aliases::is_shorthand_alias;
 
 /// Continuation-driven slash tools (`/loop`, `/goal`) that must NOT take the
 /// L0 direct-tool fast path on ANY surface.
@@ -40,63 +48,77 @@ pub(crate) fn is_continuation_driven_slash(name: &str) -> bool {
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
-    /// Try to resolve a `/command args` input to a slash command mode JSON.
+    /// Stamp `SLASH_COMMAND_MODE_KEY` into `metadata` if `input` is a slash
+    /// command. Idempotent: an already-stamped request is left alone.
     ///
-    /// Used for non-router paths (Panel, CLI) where the inbound router's
-    /// command resolution doesn't run. Returns `Some(mode_json)` if the
-    /// command matches a registered tool, `None` otherwise.
-    pub(super) fn try_resolve_slash_command(&self, input: &str) -> Option<String> {
+    /// **Call this before the request enters the busy wait lane.**
+    /// `steering::carries_more_than_text` reads this key to decide that a
+    /// slash command must be redelivered as its own run rather than folded
+    /// into a running sibling as plain steering text. A surface that stamps
+    /// only inside `execute()` — i.e. after the lane gate — therefore has
+    /// every slash command silently swallowed whenever a run is already in
+    /// flight: the text lands in the transcript, the loop reads it as an
+    /// interjection, and the client gets no events and no error.
+    pub async fn stamp_slash_mode(&self, input: &str, metadata: &mut HashMap<String, String>) {
+        if metadata.contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY) {
+            return;
+        }
+        if let Some(mode_json) = self.try_resolve_slash_command(input).await {
+            metadata.insert(
+                crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+                mode_json,
+            );
+        }
+    }
+
+    /// Resolve a `/command args` input to the slash-command mode JSON.
+    ///
+    /// Delegates to the one [`CommandParser`](crate::command::CommandParser)
+    /// every surface shares, then to
+    /// [`serialize_parsed_command`](crate::gateway::inbound_router::serialize_parsed_command)
+    /// — the single producer of that JSON.
+    ///
+    /// This used to be a bespoke `tool_registry.get_tool()` lookup that could
+    /// only ever emit `type: "direct_tool"`, while the router emitted four
+    /// kinds. Any surface that fell back to it therefore lost skills, MCP
+    /// tools and custom commands *silently*: `/my-skill` resolved to nothing,
+    /// so it reached the model as literal text with no instructions overlay,
+    /// no `allowed_tools` narrowing, and no recorded use. `agent.run` — i.e.
+    /// the TUI — was that surface.
+    ///
+    /// Returns `None` when the parser cell is still empty (tests, simulated
+    /// mode). Deliberately *not* a degraded second derivation: resolving
+    /// `/foo` a different way is the drift this convergence removes.
+    pub(super) async fn try_resolve_slash_command(&self, input: &str) -> Option<String> {
         let trimmed = input.trim();
-        let without_slash = trimmed.strip_prefix('/')?;
-        if without_slash.is_empty() {
+        if !trimmed.starts_with('/') {
             return None;
         }
 
-        let (cmd_name, args) = match without_slash.split_once(char::is_whitespace) {
-            Some((name, rest)) => (name.to_lowercase(), rest.trim().to_string()),
-            None => (without_slash.to_lowercase(), String::new()),
-        };
+        let parser = self.command_parser.read().await.clone()?;
+        let parsed = parser.parse_async(trimmed).await?;
 
-        // Strip @botname suffix (e.g. "gen@mybot" → "gen")
-        let cmd_name = match cmd_name.split_once('@') {
-            Some((name, _)) => name.to_string(),
-            None => cmd_name,
-        };
-
-        // Map common shorthand commands to their actual tool names
-        let cmd_name = resolve_shorthand(&cmd_name).map_or(cmd_name, ToString::to_string);
-
-        // Continuation-driven tools must NOT take the L0 fast path: it
-        // returns before the post-run continuation hook, so a loop started
-        // (or goal set) here would sit registered but never scheduled — the
-        // loop's first tick / the goal's first pursuit only fire from a full
-        // agent run's completion. Falling through also lets the LLM map the
-        // free-text args onto the tool's structured schema, which the fast
-        // path's generic arg mapping cannot deserialize for these tools.
+        // `moa` stays surface-specific, as it was before this convergence and
+        // for the reason recorded then: `/moa <prompt>` is rewritten into a
+        // plain prompt earlier in `execute()` and never arrives here, while a
+        // bare `/moa` must reach the LLM so it can be mapped onto the tool's
+        // structured action schema — the fast path's generic argument mapping
+        // cannot deserialize it. Checked against the canonical
+        // `command_name`, so an alias cannot slip past it.
         //
-        // `moa` is excluded for a different reason: its one-shot form
-        // (`/moa <prompt>`) is intercepted earlier and never reaches here
-        // (the input is rewritten to a plain prompt before this function
-        // runs). A bare `/moa` (no prompt) falls through so the LLM maps it
-        // onto the tool's structured action schema instead of the fast
-        // path's generic arg mapping.
-        if is_continuation_driven_slash(&cmd_name) || cmd_name == "moa" {
+        // (`/loop` and `/goal` are excluded too, but inside
+        // `serialize_parsed_command` via `is_continuation_driven_slash`, so
+        // that exclusion is shared with the router rather than repeated here.)
+        if parsed.command_name == "moa" {
             return None;
         }
 
-        // Check if this matches a registered tool
-        if self.tool_registry.get_tool(&cmd_name).is_some() {
-            let mode = serde_json::json!({
-                "type": "direct_tool",
-                "tool_id": cmd_name,
-                "args": args,
-            });
-            let mode_json = serde_json::to_string(&mode).ok()?;
-            info!("[Engine] Inline slash command resolved: /{}", cmd_name);
-            Some(mode_json)
-        } else {
-            None
-        }
+        let mode_json = crate::gateway::inbound_router::serialize_parsed_command(&parsed)?;
+        info!(
+            "[Engine] Slash command resolved: /{} ({:?})",
+            parsed.command_name, parsed.source_type
+        );
+        Some(mode_json)
     }
 
     /// Execute a slash command directly, bypassing the full agent loop.
@@ -742,7 +764,8 @@ mod arg_mapping_tests {
     /// `{input, query, args}` fallback.
     #[test]
     fn model_shorthand_maps_the_argument_onto_the_model_field() {
-        let args = build_tool_arguments("select_model", "claude-sonnet-5", "/model claude-sonnet-5");
+        let args =
+            build_tool_arguments("select_model", "claude-sonnet-5", "/model claude-sonnet-5");
         assert_eq!(args["model"], "claude-sonnet-5");
         assert!(
             args.get("input").is_none(),
@@ -756,5 +779,140 @@ mod arg_mapping_tests {
     fn bare_model_shorthand_still_carries_the_required_field() {
         let args = build_tool_arguments("select_model", "", "/model");
         assert_eq!(args["model"], "");
+    }
+
+    // ================================================================
+    // Source-level guards: the slash-mode JSON must keep one producer
+    // ================================================================
+
+    /// Every `.rs` under this crate's `src/`, as (repo-relative, contents).
+    /// Includes `src/bin/`, which is where the two run-start handlers live.
+    fn all_sources() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(files.len() > 100, "walk found suspiciously few sources");
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let rel = file
+                    .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                    .unwrap_or(&file)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                std::fs::read_to_string(&file).ok().map(|t| (rel, t))
+            })
+            .collect()
+    }
+
+    /// The part of a file that ships. Split on the bare attribute — anchoring
+    /// the separator to a line start would match nothing on a CRLF checkout
+    /// and silently turn "production prefix" into "the whole file".
+    fn production_prefix(text: &str) -> String {
+        text.replace('\r', "")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with("//") && !t.starts_with('*')
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// `serialize_parsed_command` is the only place the fast path's mode JSON
+    /// is built. It was not always: this module held a second, weaker
+    /// derivation that could only emit `direct_tool`, so every surface falling
+    /// back to it lost skills, MCP tools and custom commands — silently, since
+    /// an unresolved slash command simply reaches the model as text.
+    #[test]
+    fn the_slash_mode_json_has_exactly_one_producer() {
+        const PRODUCER: &str = "src/gateway/inbound_router/command_handler.rs";
+        let kinds = ["skill", "mcp", "custom", "direct_tool"];
+
+        let mut offenders: Vec<String> = Vec::new();
+        for (rel, text) in all_sources() {
+            if rel == PRODUCER {
+                continue;
+            }
+            // Files that exist only as a test module have no `#[cfg(test)]`
+            // marker of their own to split on, so name them out structurally.
+            if rel.ends_with("/tests.rs") || rel.contains("/tests/") {
+                continue;
+            }
+            for (n, line) in production_prefix(&text).lines().enumerate() {
+                if line.contains("\"type\":")
+                    && kinds.iter().any(|k| line.contains(&format!("\"{k}\"")))
+                {
+                    offenders.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "the slash-command mode JSON must be built only by \
+             `serialize_parsed_command`; a second producer drifts from it one \
+             variant at a time and the loss is silent:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The stamp must land before the request enters the busy wait lane.
+    ///
+    /// `steering::carries_more_than_text` reads the key to keep a slash
+    /// command out of a running sibling's steering fold. `agent.run` used to
+    /// stamp nowhere at all, so every slash command it carried was swallowed
+    /// whenever a run was already in flight — no events, no error.
+    ///
+    /// Phrased over *whichever* functions spawn, not over a list of handler
+    /// names: a third run-start handler inherits the requirement instead of
+    /// having to be told about it.
+    #[test]
+    fn every_run_start_handler_stamps_the_slash_mode_before_the_busy_lane() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/bin/aleph-server/server_init.rs");
+        let text = production_prefix(&std::fs::read_to_string(&path).expect("server_init.rs"));
+
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for chunk in text.split("pub async fn handle_").skip(1) {
+            let Some(spawn) = chunk.find("spawn_queued_run(") else {
+                continue;
+            };
+            checked += 1;
+            let name = chunk.lines().next().unwrap_or("?").trim().to_string();
+            match chunk.find("stamp_slash_mode(") {
+                Some(stamp) if stamp < spawn => {}
+                _ => offenders.push(name),
+            }
+        }
+
+        assert!(
+            checked >= 2,
+            "expected to find both run-start handlers; found {checked} — the \
+             scan stopped matching, so its green means nothing"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these start a run without resolving slash input first, so any \
+             slash command they carry is folded into a running sibling as \
+             plain text and never executes: {offenders:?}"
+        );
     }
 }
