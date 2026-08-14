@@ -96,25 +96,67 @@ impl IdleExtensionsCheck {
             );
         }
 
+        // Two disjoint populations, two findings. They were one finding until
+        // the title it had to share turned out to be false for half of them:
+        // "idle for 30+ days" quotes a duration that a never-called row does
+        // not have, so a machine installed ten minutes ago announced its
+        // entire bundled skill set as month-dormant. See
+        // `UsageEntry::is_never_used`.
+        let never: Vec<&UsageEntry> = report.never_used().collect();
         let idle: Vec<&UsageEntry> = report.idle(idle_days).collect();
-        if idle.is_empty() {
-            if report.unavailable.is_empty() {
-                findings.push(Finding::ok(
+
+        if never.is_empty() && idle.is_empty() && report.unavailable.is_empty() {
+            let actionable = report
+                .entries
+                .iter()
+                .filter(|e| e.is_cleanup_candidate())
+                .count();
+            findings.push(Finding::ok(
+                ID,
+                "No idle extensions",
+                // Counts candidates, not rows: pinned, not-measurable and
+                // bundled entries are never proposed for cleanup, so claiming
+                // they "have been used" would be inventing an observation
+                // about entries this check does not measure.
+                format!(
+                    "All {actionable} removable extension(s) have been used within \
+                     {idle_days} days."
+                ),
+            ));
+        }
+
+        if !never.is_empty() {
+            findings.push(
+                Finding::problem(
                     ID,
-                    "No idle extensions",
-                    format!(
-                        "All {} installed extension(s) have been used within {idle_days} days.",
-                        report.entries.len()
-                    ),
-                ));
-            }
-        } else {
+                    Severity::Info,
+                    format!("{} extension(s) installed but never used", never.len()),
+                    render_rows(&never, &|_| "never used".to_string()),
+                )
+                .with_fix_hint(
+                    "Nothing here has ever been invoked. Inspect with the `tool_usage` tool, \
+                     or ask me to remove the ones you no longer want. Skills bundled with \
+                     Aleph are excluded — they ship inside the binary and cannot be removed.",
+                ),
+            );
+        }
+
+        if !idle.is_empty() {
             findings.push(
                 Finding::problem(
                     ID,
                     Severity::Info,
                     format!("{} extension(s) idle for {idle_days}+ days", idle.len()),
-                    render_idle(&idle),
+                    render_rows(&idle, &|e| {
+                        // `is_idle` guarantees both of these are present: it
+                        // requires a measurable count and a measured
+                        // `idle_days`. The defaults are unreachable.
+                        format!(
+                            "{} call(s), last used {}d ago",
+                            e.usage.calls().unwrap_or_default(),
+                            e.idle_days.unwrap_or_default()
+                        )
+                    }),
                 )
                 .with_fix_hint(
                     "Ask me to clean these up, or inspect them with the `tool_usage` tool. \
@@ -144,30 +186,23 @@ impl IdleExtensionsCheck {
     }
 }
 
-fn render_idle(idle: &[&UsageEntry]) -> String {
-    let mut lines: Vec<String> = idle
+/// One line per row, capped at [`MAX_LISTED`].
+///
+/// `when` renders the activity phrase. The two callers pass disjoint sets
+/// (never-called vs measured-and-quiet), so neither carries the other's
+/// branch — which is what let the old single renderer print "never used"
+/// under a heading that claimed a measured duration.
+fn render_rows(rows: &[&UsageEntry], when: &dyn Fn(&UsageEntry) -> String) -> String {
+    let mut lines: Vec<String> = rows
         .iter()
         .take(MAX_LISTED)
         .map(|e| {
-            let when = e.usage.calls().map_or_else(
-                || "not measurable".to_string(),
-                |calls| {
-                    if calls == 0 {
-                        "never used".to_string()
-                    } else {
-                        e.idle_days.map_or_else(
-                            || format!("{calls} call(s), last use unknown"),
-                            |d| format!("{calls} call(s), last used {d}d ago"),
-                        )
-                    }
-                },
-            );
             let state = if e.enabled { "" } else { ", disabled" };
-            format!("  {}:{} — {when}{state}", e.kind.as_str(), e.id)
+            format!("  {}:{} — {}{state}", e.kind.as_str(), e.id, when(e))
         })
         .collect();
-    if idle.len() > MAX_LISTED {
-        lines.push(format!("  … and {} more", idle.len() - MAX_LISTED));
+    if rows.len() > MAX_LISTED {
+        lines.push(format!("  … and {} more", rows.len() - MAX_LISTED));
     }
     lines.join("\n")
 }
@@ -217,6 +252,7 @@ mod tests {
             tools: Default::default(),
             breakdown_partial: false,
             pinned: false,
+            removable: true,
         }
     }
 
@@ -244,14 +280,67 @@ mod tests {
             entry(ExtensionKind::Plugin, "never", 0, None),
         ]);
         let f = IdleExtensionsCheck::findings_for(&r, 30);
-        assert_eq!(f.len(), 1);
-        assert_eq!(
-            f[0].severity,
-            Severity::Info,
+        assert_eq!(f.len(), 2, "never-used and idle are separate findings");
+        assert!(
+            f.iter().all(|x| x.severity == Severity::Info),
             "an unused extension is not a fault; Warning would poison the posture"
         );
-        assert!(f[0].detail.contains("mcp:old"));
-        assert!(f[0].detail.contains("never used"));
+    }
+
+    /// The regression this split exists for. A machine installed ten minutes
+    /// ago has a large never-used set and a *zero*-size idle set; the old
+    /// single finding folded them together under a title that quoted a
+    /// duration none of them had.
+    #[test]
+    fn never_used_rows_are_never_described_as_month_dormant() {
+        let r = report(vec![
+            entry(ExtensionKind::Skill, "fresh-a", 0, None),
+            entry(ExtensionKind::Skill, "fresh-b", 0, None),
+        ]);
+        let f = IdleExtensionsCheck::findings_for(&r, 30);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].title, "2 extension(s) installed but never used");
+        assert!(
+            !f.iter().any(|x| x.title.contains("idle for")),
+            "a row with no last use cannot be quoted a duration"
+        );
+        assert!(
+            !f[0].detail.contains("d ago"),
+            "nor may the detail invent one"
+        );
+    }
+
+    /// `remove_skill` refuses bundled skills, so naming one here proposes an
+    /// action that returns `PermissionDenied`.
+    #[test]
+    fn a_bundled_skill_is_not_offered_for_cleanup() {
+        let mut e = entry(ExtensionKind::Skill, "bundled-one", 0, None);
+        e.removable = false;
+        let f = IdleExtensionsCheck::findings_for(&report(vec![e]), 30);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].title, "No idle extensions");
+    }
+
+    #[test]
+    fn the_two_findings_partition_the_candidates() {
+        let r = report(vec![
+            entry(ExtensionKind::Mcp, "old", 3, Some(70)),
+            entry(ExtensionKind::Plugin, "never", 0, None),
+        ]);
+        let f = IdleExtensionsCheck::findings_for(&r, 30);
+        let never = f
+            .iter()
+            .find(|x| x.title.contains("never used"))
+            .expect("never-used finding");
+        let idle = f
+            .iter()
+            .find(|x| x.title.contains("idle for"))
+            .expect("idle finding");
+        assert!(never.detail.contains("plugin:never"));
+        assert!(!never.detail.contains("mcp:old"));
+        assert!(idle.detail.contains("mcp:old"));
+        assert!(idle.detail.contains("70d ago"));
+        assert!(!idle.detail.contains("plugin:never"));
     }
 
     /// The dangerous silence: if the inventory could not be enumerated, saying

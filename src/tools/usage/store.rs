@@ -229,6 +229,17 @@ impl ToolUsageStore {
         self.load_map()
     }
 
+    /// Forget an uninstalled MCP server's row, deriving the key the same way
+    /// recording does — the shapes must not be spelled out twice.
+    pub fn forget_mcp(&self, server_id: &str) {
+        self.forget(&UsageOrigin::mcp_key(server_id));
+    }
+
+    /// Forget an uninstalled plugin's row. See [`Self::forget_mcp`].
+    pub fn forget_plugin(&self, plugin_id: &str) {
+        self.forget(&UsageOrigin::plugin_key(plugin_id));
+    }
+
     /// Drop an origin's record — called when the server/plugin is uninstalled
     /// so the sidecar does not accumulate orphan rows.
     pub fn forget(&self, origin_key: &str) {
@@ -263,6 +274,30 @@ pub async fn record_call_detached(origin_key: String, tool: String, ok: bool) {
     });
     if let Err(e) = handle.await {
         tracing::warn!(error = %e, "tool usage: record task failed");
+    }
+}
+
+/// Forget an uninstalled MCP server's usage row.
+///
+/// Blocking file work, so callers on an async path should hand it to
+/// `spawn_blocking`; the write is a single small file under a lock.
+///
+/// Why at uninstall rather than leaving it to the orphan sweep: a row whose
+/// origin is reinstalled under the *same id* is never an orphan, so the sweep
+/// never sees it — and the new install silently inherits the old install's
+/// call count, `first_used_at` and idle age. The sweep
+/// (`tool_usage(forget_orphans)`) stays as the net for removals that do not
+/// pass through a call site here.
+pub fn forget_mcp(server_id: &str) {
+    if let Some(store) = ToolUsageStore::default_path() {
+        store.forget_mcp(server_id);
+    }
+}
+
+/// Forget an uninstalled plugin's usage row. See [`forget_mcp`].
+pub fn forget_plugin(plugin_id: &str) {
+    if let Some(store) = ToolUsageStore::default_path() {
+        store.forget_plugin(plugin_id);
     }
 }
 
@@ -374,6 +409,110 @@ mod tests {
         let usage = store.get("mcp:chatty").unwrap();
         assert_eq!(usage.tools.get("tool0"), Some(&2));
         assert_eq!(usage.other_tool_calls, 0);
+    }
+
+    #[test]
+    fn the_forget_verbs_agree_with_the_keys_recording_writes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = ToolUsageStore::at(tmp.path().join("tool_usage.json"));
+        store.record_call(&UsageOrigin::mcp_key("srv"), "read", true);
+        store.record_call(&UsageOrigin::plugin_key("plg"), "ping", true);
+        assert_eq!(store.snapshot().len(), 2);
+
+        store.forget_mcp("srv");
+        store.forget_plugin("plg");
+        assert!(
+            store.snapshot().is_empty(),
+            "a key spelled differently here than at the record site would \
+             leave the row behind, and a same-id reinstall would inherit it"
+        );
+    }
+
+    /// Plugin removal has three independent writers (the `plugins.uninstall`
+    /// RPC, the hub/extensions lifecycle path, and the `aleph plugins
+    /// uninstall` CLI), each deleting the directory itself. Nothing forces a
+    /// fourth to drop the usage row, so this counts them instead: the row
+    /// would otherwise survive, and a reinstall under the same id is never an
+    /// orphan, so the sweep never catches it either.
+    ///
+    /// (MCP needs no equivalent: all six `remove_server` call sites funnel
+    /// through one actor method, which is where the forget lives.)
+    ///
+    /// The scan reads intent from the function name, which only sees the
+    /// spellings it was taught — so it also asserts it still matches at least
+    /// the three known sites. A rename that drops a site out of the scan turns
+    /// this red rather than leaving it quietly green.
+    #[test]
+    fn every_plugin_removal_site_forgets_its_usage_row() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(files.len() > 100, "walk found suspiciously few sources");
+
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            // Split on the bare attribute: anchoring to a line start matches
+            // nothing on a CRLF checkout, which would silently widen the scan
+            // to the file's own test module.
+            let production = text
+                .replace('\r', "")
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            for chunk in production.split("fn ").skip(1) {
+                if !chunk.contains("default_plugins_dir()") || !chunk.contains("remove_dir_all") {
+                    continue;
+                }
+                // Install paths delete a plugin directory too — to overwrite an
+                // existing copy, or to clean up a failed download. Those must
+                // NOT forget: an in-place upgrade is the same plugin, and
+                // wiping its history would report a long-serving plugin as
+                // brand new. Only removal-by-intent qualifies, and intent is
+                // legible only in the name.
+                let signature = chunk.lines().next().unwrap_or("");
+                if !signature.contains("uninstall") && !signature.contains("remove_plugin") {
+                    continue;
+                }
+                checked += 1;
+                if !chunk.contains("forget_plugin") {
+                    offenders.push(format!(
+                        "{}: {}",
+                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        chunk.lines().next().unwrap_or("?").trim()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            checked >= 3,
+            "expected at least the three known plugin removal sites; found \
+             {checked} — the scan stopped matching, so its green means nothing"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these delete a plugin's directory without dropping its usage row, \
+             so a reinstall under the same id inherits the old call counts and \
+             idle age: {offenders:?}"
+        );
     }
 
     #[test]

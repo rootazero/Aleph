@@ -435,6 +435,39 @@ fn test_engine_with_config(
 }
 
 /// Default-config engine for tests that hold at most one permit at a time.
+/// An engine whose parser cell was never filled must resolve nothing, rather
+/// than reaching for a second, weaker derivation. Guessing `direct_tool` from
+/// a bare registry lookup is exactly the drift the convergence removed.
+#[tokio::test]
+async fn an_absent_parser_resolves_nothing_rather_than_guessing() {
+    let engine = test_engine();
+    let mut md = std::collections::HashMap::new();
+    engine.stamp_slash_mode("/help", &mut md).await;
+    assert!(
+        md.is_empty(),
+        "no parser means no answer; a fallback derivation would be a second \
+         definition of what `/foo` means"
+    );
+}
+
+/// Idempotent: the inbound router stamps before the engine ever sees the
+/// request, and re-resolving would let a later, differently-derived answer
+/// overwrite the router's.
+#[tokio::test]
+async fn stamp_slash_mode_never_overwrites_an_existing_stamp() {
+    let engine = test_engine();
+    let mut md = std::collections::HashMap::new();
+    md.insert(
+        crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+        "already-resolved".to_string(),
+    );
+    engine.stamp_slash_mode("/help", &mut md).await;
+    assert_eq!(
+        md[crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY],
+        "already-resolved"
+    );
+}
+
 fn test_engine() -> ExecutionEngine<crate::thinker::SingleProviderRegistry, EmptyToolRegistry> {
     test_engine_with_config(ExecutionEngineConfig::default())
 }

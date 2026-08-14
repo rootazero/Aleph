@@ -245,7 +245,8 @@ where
     // override, voice pin) is built by the one shared builder both this real
     // engine path and the Simulated-fallback `AgentRunManager::start_run`
     // call — see `gateway::handlers::agent::build_run_request`.
-    let run_request = match build_run_request(
+    let slash_input = params.input.clone();
+    let mut run_request = match build_run_request(
         run_id.clone(),
         &session_key,
         params,
@@ -258,6 +259,18 @@ where
         Ok(r) => r,
         Err(e) => return build_run_error_response(request.id, e),
     };
+
+    // Resolve `/foo` through the shared parser, exactly as `chat.send` and the
+    // inbound router do. This surface (the TUI, among others) had no slash
+    // resolution at all until now: it fell through to the engine's own
+    // fallback, which ran *after* the busy lane and could only ever produce
+    // `direct_tool`. Two things were broken by that and both are fixed here —
+    // `/my-skill` never loaded its instructions or recorded a use, and any
+    // slash command sent while a run was already in flight was folded into
+    // that run as plain steering text and silently never executed.
+    engine
+        .stamp_slash_mode(&slash_input, &mut run_request.metadata)
+        .await;
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound
     // router uses for channel messages).
@@ -296,7 +309,6 @@ pub async fn handle_chat_send_with_engine<P, R>(
     _workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     _provider_registry: Arc<P>,
     session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
-    command_parser: Option<Arc<alephcore::command::CommandParser>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -446,30 +458,13 @@ where
         Err(e) => return build_run_error_response(request.id, e),
     };
 
-    // Slash command detection: resolve via CommandParser and emit the
-    // source-aware mode JSON (preserves Skill instructions / Custom system
-    // prompt / MCP server name so the fast path can act on them). `chat.send`
-    // only — the inbound router does this for channel turns.
-    if params.message.trim().starts_with('/') {
-        if let Some(ref parser) = command_parser {
-            let slash_text = params.message.trim();
-            if let Some(parsed) = parser.parse_async(slash_text).await {
-                if let Some(mode_json) =
-                    alephcore::gateway::inbound_router::serialize_parsed_command(&parsed)
-                {
-                    tracing::info!(
-                        "[chat.send] Slash command resolved: name={}, args={:?}",
-                        parsed.command_name,
-                        parsed.arguments
-                    );
-                    run_request.metadata.insert(
-                        alephcore::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
-                        mode_json,
-                    );
-                }
-            }
-        }
-    }
+    // Slash command detection. Delegates to the engine's shared resolver
+    // rather than re-deriving the mode JSON here — this handler used to hold
+    // its own copy of "parse, then serialize", which is one more place for
+    // the four surfaces to disagree about what `/foo` means.
+    engine
+        .stamp_slash_mode(&params.message, &mut run_request.metadata)
+        .await;
 
     // Spawn onto the shared per-session busy wait lane (same queue the inbound
     // router uses for channel messages).
