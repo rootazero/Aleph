@@ -270,6 +270,8 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 | `providers.modelsRefresh` RPC | operator | **强制**真拉；可选 `provider` 参数收窄到一个 |
 | `providers.catalog` 的 `roster` | 人（Panel / TUI / CLI） | **只读磁盘缓存**，绝不发网络（2026-08-13） |
 
+⚠️ **sweep 行怎么读只有一个答案：`ModelsRefreshRow::outcome()`**（`Live` / `Stale` / `Failed` / `NotApplicable`，round-4）。CLI 的状态列、TUI 的那句话、Panel 的徽标此前各写一遍 `match (ok, stale)` —— 三份推导只在状态恰好是三个时活着，而 `NotApplicable`（＝`kind: Unsupported`）是第四个：**它不是失败**，那六家什么都没坏，只是没有清单可取。三张脸都曾把它印成红色/“no listing”，正是 round-3 在健康那张脸上修掉的“一排关于健康 provider 的红行”，从另一扇门进来。措辞各面自持（R4），**判决**归契约。
+
 ⚠️ **`providers.modelsRefresh` 从写下之日到 2026-08-13 一个客户端都没有**（全仓 grep 零命中），而它的 doc 自称是"picker 的按行刷新按钮想要的"——那个按钮不存在。CLAUDE.md §0：**没有客户端的能力不算已交付**。现在的三个客户端是 Panel 的按行刷新、Panel 保存成功后的 fire-and-forget 窄化刷新（**不阻塞保存响应**——一家挂掉的 vendor 不该让"保存我的 API key"变慢），以及 `aleph providers models --refresh`。
 
 ⚠️ **第三行是读，不是第三个触发面**：`providers.catalog` 把缓存里的 discovered id 合进 `roster`，所以人看到的和 `list_models` 给模型看的是同一份。在此之前只有模型那半合了——**同一份缓存、同一个 TTL，模型看得见、人看不见**。读缓存**闸在 `has_api_key` 上**：`cached_models` 是同步文件读，而发现无凭据不跑，所以没凭据的 preset 结构上不可能有缓存条目；不闸就是每次开设置页 stat 全部 preset。
@@ -285,6 +287,8 @@ kimi-cli 问每个已配置平台 `GET {base_url}/models`。数据少（基本�
 - **只贡献 id**。窗口 / 价格 / 生命周期仍归策展表——`/models` 响应基本不带这些。一个没有策展行的 discovered id 诚实地显示为"能力未知"，跟今天的自定义中继模型一样。
 - **无后台定时器**。悄悄按时给每个已配置厂商打电话是意外行为，不是功能。
 - **`supports_health_check = false` 的 preset 直接拒**（OAuth-only 端点 / 按部署的 Azure 资源 / 分区域云都会 404 或限流列表路由）。该位以 `CatalogEntry.discoverable` 上线，**让客户端在点之前就知道这 6 家不该有刷新按钮**——提供一个只可能失败的按钮比不提供更糟。
+  **单一源 `probe::supports_model_listing`（round-4）**：这个位此前在三个文件里各写一遍 `preset.supports_health_check`（`probe_disposition` / 本 leaf / catalog 赋值处）。字段名读起来像“能不能 ping”，它实际说的是“答不答 `GET {base_url}/models`”——**一个名字与含义争辩的谓词被手抄三次，早晚有一份是反的**。6 家分别是 `chatgpt` / `azure-openai` / `amazon-bedrock` / `vertex-anthropic` / `ai-gateway` / `azure-foundry`，守卫 `the_catalogue_bit_clients_render_is_the_one_the_server_gates_on` 逐 preset 对账。
+  ⚠️ **round-4 一度把这条读成“服务端根本没在闸，六家每次 sweep 都被拨号”，并按那个判断改了代码与三处文档。用 `if false` 破坏新守卫求证时只红了一条测试**，回头读 leaf 才发现拒绝从第一天就在这儿。**破坏守卫时红的条数比预期少，先怀疑的是自己的判断，不是守卫。** 真正剩下的是排序：`handle_models_refresh` 的凭据检查排在前面，于是**没链接过**的 opt-out 预设回 `MissingCredential`——可行动，且行动无效（贴 key 不会让端点长出 `/models`）。现按同一个谓词先答（`no_listing_endpoint_outranks_no_credential`，变异证过红）。
 - **失败是分类的，不是一句散文（2026-08-13）**。`DiscoveryError` 一直是分类器，只是在最后一步被 `e.to_string()` 抹平了：`ModelsRefreshRow.kind ∈ {unsupported, missing_credential, transport, status, shape, timeout}`。客户端要回答的第一个问题是"这值不值得重试"，而"这家不发布目录端点"和"请求超时"此前是同一句话。**没有凭据的 provider 现在得到一行而不是被静默跳过**——跳过一条坏记录通常对，沉默才是贵的那一半：问"刷新这一个"却拿回空数组，读起来和"什么都没发生"一样。
 - **缓存绑定端点指纹（2026-08 round-4）**。`DiscoveredModels.base_url` 记录清单取自哪个端点，`cached_models(provider, base_url)` 指纹不匹配即视为无缓存——operator 搬了 `base_url` 后旧清单是**另一台主机**的库存，绝不能复活（与 `models_url` override 的搬迁守卫同一条教条）。指纹字段引入前的旧缓存文件按"另一端点的库存"处理，代价是一次重拉。Bifrost 式 generation counter 评估为不需要（§9 round-4）。
 
@@ -511,7 +515,9 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 | provider / 模型搜索的排序规则 | `shared/protocol/src/providers/search.rs`（Panel 与 TUI 共用；顺序保留子串 + 分层，**不是 fuzzy**） |
 | **给一张新的预设列表加搜索** | **实现 `search::Searchable`**（`search_id` / `search_display_name`；别名有默认实现），然后 `rank_rows` / `filter_rows` —— **不要写 `.contains()`**。有子项的列表只有 `CatalogEntry`，它走 `rank_entries`；`MatchRank::ChildOnly` 对无子项列表**结构性不可达**是有意的（把 children 建进 trait 会让"没有子项"与"没有匹配的子项"分不开）。守卫 `both_halves_agree_on_identity_ranking` 拿目录自己的行两边各排一次断言相等 |
 | generation 预设行的形状 | **`shared/protocol/src/providers/generation.rs::GenerationPresetRow`**，服务端**从它 build**。这一族只有一个客户端，所以 `signup_url` 被 serde 静默丢弃了一整程——**一个客户端不等于不需要契约** |
-| **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处** |
+| **给模型记录加一个新维度** | **`model_catalog/record.rs::resolve` 一处**。`presets::model_roster` 是 round-4 补上的第五个消费者——它此前伸手直接调 `lifecycle_for`，只带走作者那天要的那一维，于是 roster 有生命周期而没有窗口和价格 |
+| **窗口 / 价格要在 picker 上看得见** | 它们在 **`RosterModel.capabilities` / `.cost`**（逐 id），**不在 `CatalogEntry` 上** —— 挂在 provider 行上时它们描述的是 `default_model`，而那一行的工作是让你挑**另一个**，所以三轮下来上了线也没有任何渲染者。数字的拼法归契约（`ModelCapabilities::context_window_short` / `RateCard::io_per_mtok_short`，同 `ModelStatus::as_str` 的先例），摆放归各面；**`None` 是“策展表没有这一行”，不是 0 也不是免费**，渲染成空白 |
+| **给一个 vendor 链接加渲染** | Panel 三处共用 `components/external_link.rs::safe_external_link`（http(s) 才成 `<a>`，其余渲染成纯文本而不是丢弃）。此前 skills 页有 scheme screen、provider 详情页的 `signup_url` 没有——**一个问题两个文件，没挡的那份才是要紧的那份** |
 | **某模型被厂商下线** | **`lifecycle.rs::LIFECYCLE_TABLE` 加一行，`provider: None`（带 successor）** |
 | **某模型只在一家宿主上下线** | **同表，`provider: Some("<preset id>")`** —— 别写成全局行，那会拒掉别处能用的 id（§3.1） |
 | 某宿主用了别的 id 拼法 | `alias.rs::canonicalize_model_id`（host 路径折末段 / `p` 分隔符）；点号-短横见 §5.1 |

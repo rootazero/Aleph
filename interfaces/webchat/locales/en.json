@@ -642,6 +642,7 @@
       "search_placeholder": "Search providers or models",
       "configured_providers": "Your Providers",
       "get_a_key": "Get an API key",
+      "vendor_docs": "Vendor docs",
       "name_required": "Provider name is required",
       "model_required": "At least one model is required",
       "models_label": "Models",

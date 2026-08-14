@@ -154,8 +154,12 @@ pub async fn refresh_models(
     if api_key.trim().is_empty() {
         return Err(DiscoveryError::MissingCredential(provider.to_string()));
     }
-    let preset = presets::get_preset(provider);
-    if preset.is_some_and(|p| !p.supports_health_check) {
+    // The authoritative refusal for the six presets that publish no listing.
+    // Through `probe::supports_model_listing` rather than reading the preset
+    // field here, so the bit the wire sends clients (`CatalogEntry::
+    // discoverable`), the bit the health sweep gates on and the bit that stops
+    // this fetch are provably one bit and not three copies that agree today.
+    if !crate::providers::probe::supports_model_listing(provider) {
         return Err(DiscoveryError::Unsupported(provider.to_string()));
     }
     let url = models_url_for(provider, base_url);

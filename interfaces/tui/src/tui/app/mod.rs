@@ -405,7 +405,12 @@ pub struct SessionPickerState {
 /// Two levels share one list, the way the palette's namespace stack does: the
 /// provider level offers rows to descend into, the model level offers ids to
 /// pin.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq` without `Eq`: a model row carries a [`RateCard`], and a price is
+/// a float. Nothing here is a map key.
+///
+/// [`RateCard`]: aleph_protocol::providers::RateCard
+#[derive(Debug, Clone, PartialEq)]
 pub enum PickerRow {
     Provider {
         /// Index into [`ProviderPickerState::entries`].
@@ -456,6 +461,30 @@ pub struct ProviderPickerState {
     pub selected: usize,
 }
 
+impl ProviderPickerState {
+    /// The catalogue row Ctrl+R would act on, or `None` when there is none.
+    ///
+    /// Lives on the picker state, not on [`AppState`], so the footer that
+    /// *advertises* the key and the handler that *performs* it resolve the row
+    /// through one function. Two independent index walks — one in the widget,
+    /// one in the command — would agree today and diverge the first time either
+    /// level's row list changes shape.
+    #[must_use]
+    pub fn refresh_target(&self) -> Option<&CatalogEntry> {
+        let index = match self.provider {
+            Some(index) => index,
+            None => match self.rows.get(self.selected)? {
+                PickerRow::Provider { index, .. } => *index,
+                // A model row at the provider level cannot happen (that level
+                // only emits provider rows), but answering `None` is the
+                // honest reading rather than an unwrap.
+                PickerRow::Model { .. } => return None,
+            },
+        };
+        self.entries.get(index)
+    }
+}
+
 /// A catalogue row for tests, built from the contract type so a field rename
 /// on the wire breaks every picker test at once rather than none of them.
 ///
@@ -465,7 +494,7 @@ pub struct ProviderPickerState {
 #[cfg(test)]
 #[must_use]
 pub(crate) fn sample_catalog_entry(id: &str, models: &[&str]) -> CatalogEntry {
-    use aleph_protocol::providers::{AuthKind, ModelLifecycle, ModelSource};
+    use aleph_protocol::providers::{AuthKind, ModelSource};
 
     CatalogEntry {
         id: id.to_string(),
@@ -477,8 +506,6 @@ pub(crate) fn sample_catalog_entry(id: &str, models: &[&str]) -> CatalogEntry {
         homepage: None,
         notes: None,
         signup_url: None,
-        fallback_models: Vec::new(),
-        default_aux_model: None,
         aliases: Vec::new(),
         modalities: Vec::new(),
         models: Vec::new(),
@@ -487,10 +514,7 @@ pub(crate) fn sample_catalog_entry(id: &str, models: &[&str]) -> CatalogEntry {
         enabled: false,
         is_default: false,
         auth_kind: AuthKind::ApiKey,
-        capabilities: None,
-        cost: None,
         endpoint: "cloud".to_string(),
-        lifecycle: ModelLifecycle::ACTIVE,
         requires_explicit_model: false,
         discoverable: true,
         roster: models
@@ -1045,18 +1069,7 @@ impl AppState {
     /// vendor.
     #[must_use]
     pub fn provider_picker_refresh_target(&self) -> Option<String> {
-        let picker = self.provider_picker.as_ref()?;
-        let index = match picker.provider {
-            Some(index) => index,
-            None => match picker.rows.get(picker.selected)? {
-                PickerRow::Provider { index, .. } => *index,
-                // A model row at the provider level cannot happen (that level
-                // only emits provider rows), but answering `None` is the
-                // honest reading rather than an unwrap.
-                PickerRow::Model { .. } => return None,
-            },
-        };
-        Some(picker.entries.get(index)?.id.clone())
+        Some(self.provider_picker.as_ref()?.refresh_target()?.id.clone())
     }
 
     /// Replace the catalogue behind the picker after a refetch.

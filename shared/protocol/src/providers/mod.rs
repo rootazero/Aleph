@@ -37,7 +37,6 @@ pub use wire::{
     deserialize_models, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView,
     CreateParams, DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams,
     ModelsRefreshResult, ModelsRefreshRow, OAuthStatus, ProviderConfigJson, ProviderGetResult,
-    ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult, SetDefaultParams,
-    TestParams, TestResult,
-    UpdateParams,
+    ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult, RefreshOutcome,
+    SetDefaultParams, TestParams, TestResult, UpdateParams,
 };

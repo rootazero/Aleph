@@ -60,19 +60,41 @@ pub enum ProbeDisposition {
     Unsupported,
 }
 
+/// Does this provider's endpoint publish a model listing Aleph can read?
+///
+/// One bit, asked in four places, previously spelled out in three of them:
+/// [`probe_disposition`] here, `discovery::refresh_models` at the leaf, and
+/// `CatalogEntry::discoverable` on the wire — each writing
+/// `preset.supports_health_check` out by hand. The fourth asker,
+/// `handle_models_refresh`, wanted it for *ordering* (see there) and had no
+/// function to call.
+///
+/// Naming it is the point. `supports_health_check` is what the preset table
+/// calls the field, and it reads like a claim about liveness probing; what it
+/// actually says is "this endpoint answers `GET {base_url}/models`", which is
+/// why the same bit decides whether a picker draws a refresh button. Three
+/// hand-copies of a predicate whose name argues for a different meaning is how
+/// one of them ends up inverted.
+///
+/// A provider with no preset (a custom relay) lists: the opt-out is a statement
+/// a preset makes about its own endpoint, and absence of a preset is not that
+/// statement.
+#[must_use]
+pub fn supports_model_listing(provider_name: &str) -> bool {
+    crate::providers::presets::get_preset(provider_name).is_none_or(|p| p.supports_health_check)
+}
+
 /// Decide [`ProbeDisposition`] for one configured provider.
 ///
-/// A provider with no preset (a custom relay) is probeable: the opt-out is a
-/// statement a preset makes about its own endpoint, and absence of a preset is
-/// not that statement.
+/// The operator's switch outranks the endpoint's capability: reporting
+/// "disabled" for a provider the operator turned off is the answer they can act
+/// on, even when a probe could not have run anyway.
 #[must_use]
 pub fn probe_disposition(provider_name: &str, enabled: bool) -> ProbeDisposition {
     if !enabled {
         return ProbeDisposition::Disabled;
     }
-    if crate::providers::presets::get_preset(provider_name)
-        .is_some_and(|p| !p.supports_health_check)
-    {
+    if !supports_model_listing(provider_name) {
         return ProbeDisposition::Unsupported;
     }
     ProbeDisposition::Probe

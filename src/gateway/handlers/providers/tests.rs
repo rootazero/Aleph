@@ -747,8 +747,6 @@ fn fully_populated_catalog_entry() -> CatalogEntry {
         homepage: Some("https://openai.com".into()),
         notes: Some("note".into()),
         signup_url: Some("https://platform.openai.com".into()),
-        fallback_models: vec!["gpt-5.6-luna".into()],
-        default_aux_model: Some("gpt-5.6-luna".into()),
         aliases: vec!["oai".into()],
         modalities: vec!["chat".into()],
         models: vec!["gpt-5.6".into()],
@@ -757,6 +755,25 @@ fn fully_populated_catalog_entry() -> CatalogEntry {
         enabled: true,
         is_default: true,
         auth_kind: AuthKind::ApiKey,
+        endpoint: "cloud".into(),
+        requires_explicit_model: true,
+        discoverable: true,
+        roster: vec![fully_populated_roster_model()],
+    }
+}
+
+/// A [`RosterModel`] with every optional field present.
+///
+/// The entry-level guard below only ever inspected top-level keys, which was
+/// adequate while the roster row was three scalars. It now carries the two
+/// fields that decide a pick, so an over-send has somewhere new to hide — and
+/// "the roster is a nested array" is exactly the kind of reason a check gets
+/// skipped once and then relied on forever.
+fn fully_populated_roster_model() -> RosterModel {
+    RosterModel {
+        id: "gpt-5.6".into(),
+        source: crate::providers::model_catalog::ModelSource::PresetDefault,
+        lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
         capabilities: Some(crate::providers::ModelCapabilities {
             context_window: 1,
             max_output_tokens: 1,
@@ -772,14 +789,6 @@ fn fully_populated_catalog_entry() -> CatalogEntry {
             reasoning_per_mtok: Some(1.0),
             basis: crate::pricing::RateBasis::Direct,
         }),
-        endpoint: "cloud".into(),
-        lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
-        requires_explicit_model: true,
-        discoverable: true,
-        roster: vec![RosterModel::new(
-            "gpt-5.6",
-            crate::providers::model_catalog::ModelSource::PresetDefault,
-        )],
     }
 }
 
@@ -794,6 +803,8 @@ async fn the_catalog_response_speaks_only_the_contracts_vocabulary() {
     assert!(!items.is_empty(), "fixture must produce rows to inspect");
 
     let allowed = contract_keys(&fully_populated_catalog_entry());
+    let allowed_roster = contract_keys(&fully_populated_roster_model());
+    let mut roster_rows_seen = 0usize;
     for item in &items {
         let extra: Vec<String> = object_keys(item).difference(&allowed).cloned().collect();
         assert!(
@@ -802,7 +813,27 @@ async fn the_catalog_response_speaks_only_the_contracts_vocabulary() {
              does not declare. Either add the field to the contract (so every client can read it) \
              or stop sending it — a key no client can name is bytes paid for on every call."
         );
+        for model in item
+            .get("roster")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            roster_rows_seen += 1;
+            let extra: Vec<String> = object_keys(model)
+                .difference(&allowed_roster)
+                .cloned()
+                .collect();
+            assert!(
+                extra.is_empty(),
+                "a roster row emitted {extra:?}, which \
+                 `aleph_protocol::providers::RosterModel` does not declare."
+            );
+        }
     }
+    // Without this the roster half passes vacuously the day the roster stops
+    // being populated — which is the failure it exists to catch.
+    assert!(roster_rows_seen > 0, "fixture must produce roster rows");
 }
 
 #[tokio::test]
@@ -979,6 +1010,140 @@ async fn a_disabled_provider_stays_out_of_the_blanket_sweep() {
         parsed.providers.is_empty(),
         "an un-narrowed sweep must skip disabled providers"
     );
+}
+
+/// Every preset that publishes no `/models` endpoint, by name, from the table.
+///
+/// Enumerated rather than listed: the six were `chatgpt`, `azure-openai`,
+/// `amazon-bedrock`, `vertex-anthropic`, `ai-gateway` and `azure-foundry` on
+/// the day this was written, and a literal here would go on passing while a
+/// seventh was dialled.
+fn presets_that_publish_no_listing() -> Vec<&'static str> {
+    crate::providers::presets::canonical_profiles()
+        .iter()
+        .filter(|(_, p)| !p.supports_health_check)
+        .map(|(name, _)| *name)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_preset_with_no_listing_endpoint_is_never_dialled() {
+    // A regression pin, not a fix: `refresh_models` has refused these at the
+    // leaf since discovery was written, so nothing here was ever dialled. What
+    // the round changed is the predicate — three files spelled
+    // `!preset.supports_health_check` out by hand and now call one function —
+    // and this asserts the classification that behaviour produces, so a fourth
+    // hand-copy landing inverted has something to be red about.
+    let names = presets_that_publish_no_listing();
+    assert!(
+        !names.is_empty(),
+        "the fixture is only meaningful while some preset opts out"
+    );
+
+    for name in names {
+        let mut config = Config::default();
+        let mut cfg = ProviderConfig::test_config("some-model");
+        cfg.enabled = true;
+        // A credential on purpose: with one present, any classification other
+        // than `Unsupported` means the listing check did not run.
+        cfg.api_key = Some("sk-test".to_string());
+        config.providers.insert(name.to_string(), cfg);
+
+        let row = refresh_one(config, name).await;
+        assert!(!row.ok, "{name}");
+        assert_eq!(
+            row.kind,
+            Some(DiscoveryFailureKind::Unsupported),
+            "{name} publishes no model listing, so the sweep must say so rather \
+             than dial it and report whatever the 404 looked like"
+        );
+        assert!(row.models.is_empty(), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn no_listing_endpoint_outranks_no_credential() {
+    // The one behavioural change of the pair, and the reason the handler asks
+    // the predicate at all: the credential check used to run first, so an
+    // unlinked preset with no listing came back `MissingCredential` — the most
+    // actionable answer available and a completely wrong one, because pasting a
+    // key does not give an endpoint a `/models` route. Proven red by replacing
+    // the guard with `if false`.
+    let name = presets_that_publish_no_listing()
+        .first()
+        .copied()
+        .expect("some preset must opt out");
+
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("some-model");
+    cfg.enabled = true;
+    cfg.api_key = None;
+    config.providers.insert(name.to_string(), cfg);
+
+    assert_eq!(
+        refresh_one(config, name).await.kind,
+        Some(DiscoveryFailureKind::Unsupported),
+        "a missing key is not the reason this one cannot be refreshed"
+    );
+}
+
+#[tokio::test]
+async fn the_blanket_sweep_reports_such_a_preset_instead_of_skipping_it() {
+    // Not silence, and not a failure: the row exists (asking about a provider
+    // and getting nothing back reads as "nothing happened") and it carries the
+    // one kind a client renders as *not applicable* rather than red.
+    let name = presets_that_publish_no_listing()
+        .first()
+        .copied()
+        .expect("some preset must opt out");
+
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("some-model");
+    cfg.enabled = true;
+    cfg.api_key = Some("sk-test".to_string());
+    config.providers.insert(name.to_string(), cfg);
+
+    let request = JsonRpcRequest::with_id("providers.modelsRefresh", None, json!(1));
+    let response =
+        handle_models_refresh(request, Arc::new(RwLock::new(config)), test_vault()).await;
+    let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
+        .expect("client must decode the sweep");
+
+    let row = parsed
+        .providers
+        .iter()
+        .find(|r| r.provider == name)
+        .unwrap_or_else(|| panic!("{name} must still get a row"));
+    assert_eq!(row.kind, Some(DiscoveryFailureKind::Unsupported));
+    assert_eq!(
+        row.outcome(),
+        aleph_protocol::providers::RefreshOutcome::NotApplicable,
+        "every face derives its wording from this verdict, so it is the thing \
+         that must not read as a failure"
+    );
+}
+
+#[test]
+fn the_catalogue_bit_clients_render_is_the_one_the_server_gates_on() {
+    // `CatalogEntry::discoverable` is what makes the Panel hide its fetch
+    // button and the CLI print "list them by hand", and its comment has always
+    // claimed to be "the same bit discovery gates on". That was true and
+    // unfalsifiable: the claim spanned two files that each wrote the field out
+    // by hand. It goes through one function now, so the claim is checkable —
+    // which is the only form in which it is worth making.
+    for (name, preset) in crate::providers::presets::canonical_profiles() {
+        assert_eq!(
+            crate::providers::probe::supports_model_listing(name),
+            preset.supports_health_check,
+            "{name}: the bit sent to clients and the bit the server gates on \
+             must be one bit"
+        );
+    }
+    // A custom relay has no preset to opt out, and absence of a statement is
+    // not a statement.
+    assert!(crate::providers::probe::supports_model_listing(
+        "some-unknown-relay"
+    ));
 }
 
 #[tokio::test]

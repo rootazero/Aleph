@@ -214,6 +214,14 @@ impl ListModelsTool {
                 .providers
                 .iter()
                 .filter(|(_, cfg)| cfg.enabled)
+                // Six presets publish no `/models` endpoint. `refresh_models`
+                // refuses them at the leaf, so this is not what stops the
+                // network call — it stops them being *counted*: `attempted`
+                // rides back to the model in the tool's own message, and a
+                // number that includes providers nobody asked anything is a
+                // small lie told to the one reader who cannot check it.
+                // Same predicate as the leaf, so the two cannot disagree.
+                .filter(|(name, _)| crate::providers::probe::supports_model_listing(name))
                 .filter_map(|(name, cfg)| {
                     let preset = crate::providers::presets::get_preset(name);
                     let base_url = cfg

@@ -182,7 +182,11 @@ pub fn Settings() -> impl IntoView {
         },
         SetupStep {
             title: "Configure a generation provider (optional)",
-            body: "Image / video / TTS providers power generation tools. 20+ presets available.",
+            // No count here on purpose. It said "20+" while the catalogue shipped
+            // 44, because a number written into prose has no way to notice the
+            // table growing — and the page this links to shows the real list with
+            // a search box over it.
+            body: "Image / video / TTS providers power generation tools.",
             href: "/settings/generation-providers",
             cta: "Open Generation",
         },

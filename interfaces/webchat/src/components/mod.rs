@@ -14,6 +14,7 @@ pub mod dial_labels;
 pub mod directory_browser;
 pub mod exec_tier_labels;
 pub mod extensions;
+pub mod external_link;
 pub mod forms;
 pub mod json_schema_form;
 pub mod layout_toggle;

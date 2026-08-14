@@ -83,32 +83,17 @@ const fn skill_status(skill: &SkillStatusEntry) -> &'static str {
     }
 }
 
-/// Only http/https homepages are rendered as clickable links. Other schemes
-/// (e.g. `javascript:`) are shown as plain text to avoid XSS.
-fn is_safe_homepage_url(hp: &str) -> bool {
-    let lower = hp.to_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
-}
-
+/// A vendor link on a skill row, screened by the shared predicate.
+///
+/// The screen used to live here alone, which is how the provider detail panel
+/// came to render its "Get a key" link with none at all — one question, two
+/// files, and only one of them answering it.
 fn safe_homepage_link(href: &str, label: impl IntoView) -> AnyView {
-    if is_safe_homepage_url(href) {
-        view! {
-            <a
-                href=href.to_string()
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs text-primary hover:underline"
-            >
-                {label}
-            </a>
-        }
-        .into_any()
-    } else {
-        view! {
-            <span class="text-xs text-text-secondary">{href}</span>
-        }
-        .into_any()
-    }
+    crate::components::external_link::safe_external_link(
+        href,
+        "text-xs text-primary hover:underline",
+        label,
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -642,6 +642,7 @@
       "search_placeholder": "搜索提供商或模型",
       "configured_providers": "已配置的提供商",
       "get_a_key": "获取 API 密钥",
+      "vendor_docs": "供应商文档",
       "name_required": "请填写提供商名称",
       "model_required": "至少需要一个模型",
       "models_label": "模型",

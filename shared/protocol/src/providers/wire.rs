@@ -40,7 +40,7 @@
 
 use serde::{de, Deserialize, Serialize};
 
-use super::catalog::{DiscoveredModel, ModelCapabilities, ModelLifecycle, RateCard, RosterModel};
+use super::catalog::{DiscoveredModel, RosterModel};
 
 // ============================================================================
 // Shared field helpers
@@ -417,13 +417,6 @@ pub struct CatalogEntry {
     /// Vendor signup / API-key creation URL — the "Get a key" call to action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signup_url: Option<String>,
-    /// Curated fallback ids the preset ships. Informational: the authoritative
-    /// list to offer is [`CatalogEntry::roster`].
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fallback_models: Vec<String>,
-    /// Cheap auxiliary model hint. `None` means "reuse `default_model`".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_aux_model: Option<String>,
     /// Alternative names this preset answers to (`moonshot` → `["kimi"]`).
     /// Searchable, so typing a vendor's other name still finds the row.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -441,20 +434,12 @@ pub struct CatalogEntry {
     /// How this provider is authenticated.
     #[serde(default)]
     pub auth_kind: AuthKind,
-    /// Capabilities of `default_model`. `None` when the family is not in the
-    /// curated table (a freshly discovered id, typically).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<ModelCapabilities>,
-    /// Per-million-token cost of `default_model`. `None` when unpriced —
-    /// which is not the same as free.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost: Option<RateCard>,
-    /// `"local"` (on-machine / LAN) or `"cloud"` (public API).
+    /// `"local"` (on-machine / LAN) or `"cloud"` (public API). A fact about the
+    /// *provider*, which is why it stays on the entry while the window, the
+    /// price and the lifecycle moved down onto [`RosterModel`]: those three
+    /// describe one model, and this row exists to let you pick among several.
     #[serde(default)]
     pub endpoint: String,
-    /// Lifecycle of `default_model`.
-    #[serde(default)]
-    pub lifecycle: ModelLifecycle,
     /// This provider ships no default — the operator must name a model.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub requires_explicit_model: bool,
@@ -532,6 +517,56 @@ pub struct ModelsRefreshRow {
     pub kind: Option<DiscoveryFailureKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+impl ModelsRefreshRow {
+    /// What this row actually says, as one verdict.
+    ///
+    /// # Why this is not three `match (ok, stale)` expressions
+    ///
+    /// It was. The CLI, the TUI and the Panel each derived the tri-state from
+    /// `(ok, stale)` in their own file, which is survivable only while the
+    /// states never change: the moment a fourth one appears, "how did this turn
+    /// out" has three independent answers and two of them are a round behind.
+    /// Wording stays per-face (R4 — a terminal line, a table cell and a
+    /// localized `<p>` are not the same sentence); the *verdict* is here.
+    ///
+    /// [`RefreshOutcome::NotApplicable`] is that fourth state: a preset that
+    /// publishes no `/models` endpoint is not a failure to report in red, it is
+    /// a question that does not apply to it. It is derived from `kind` rather
+    /// than from a new wire field on purpose — adding a variant to an
+    /// externally-tagged enum breaks old clients on the *whole row*, and this
+    /// row already carried everything needed to tell the four apart.
+    #[must_use]
+    pub const fn outcome(&self) -> RefreshOutcome {
+        if matches!(self.kind, Some(DiscoveryFailureKind::Unsupported)) && !self.ok {
+            return RefreshOutcome::NotApplicable;
+        }
+        if !self.ok {
+            return RefreshOutcome::Failed;
+        }
+        if self.stale {
+            return RefreshOutcome::Stale;
+        }
+        RefreshOutcome::Live
+    }
+}
+
+/// How one `providers.modelsRefresh` row turned out.
+///
+/// Not a wire type: derived from the row by [`ModelsRefreshRow::outcome`] so
+/// every face reaches the same verdict from the same bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    /// A listing was fetched just now.
+    Live,
+    /// The listing shown is the last known good snapshot; the live fetch failed.
+    Stale,
+    /// No listing, and asking again might work.
+    Failed,
+    /// This endpoint publishes no model listing at all. Nothing failed; there
+    /// was never anything to fetch. Offer manual entry, not a retry.
+    NotApplicable,
 }
 
 /// Response of `providers.modelsRefresh`.

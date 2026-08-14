@@ -16,10 +16,11 @@ use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use aleph_protocol::providers::{
     filter_catalog, CatalogEntry, CatalogParams, CatalogResult, CatalogView, CreateParams,
-    DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams, ModelsRefreshResult,
-    ModelsRefreshRow, ProviderConfigJson, ProviderGetResult, ProviderHealthResult,
-    ProviderHealthRow, ProviderInfo, ProviderListResult, RosterModel, Searchable, SetDefaultParams,
-    TestParams, TestResult, UpdateParams,
+    DeleteParams, DiscoveryFailureKind, GetParams, ModelCapabilities, ModelsRefreshParams,
+    ModelsRefreshResult, ModelsRefreshRow, ProviderConfigJson, ProviderGetResult,
+    ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult, RateCard,
+    RefreshOutcome, RosterModel, Searchable, SetDefaultParams, TestParams, TestResult,
+    UpdateParams,
 };
 
 /// `providers list` filters through the same matcher as every other picker.
@@ -49,7 +50,12 @@ const LIST_HEADERS: &[&str] = &["Name", "Type", "Default"];
 const HEALTH_HEADERS: &[&str] = &["Provider", "State", "Latency", "Detail"];
 
 /// Columns of `aleph providers models`.
-const ROSTER_HEADERS: &[&str] = &["Provider", "Model", "Source", "Status"];
+///
+/// `Context` and `$/Mtok` are the two facts a headless operator picks a ladder
+/// by, and they were on the wire for three rounds without reaching any face: the
+/// catalogue attached them to the provider's *default* model, on a row whose job
+/// is offering the others. They are per-model now, so they are columns.
+const ROSTER_HEADERS: &[&str] = &["Provider", "Model", "Context", "$/Mtok", "Source", "Status"];
 
 /// Columns of `aleph providers models --refresh`.
 const REFRESH_HEADERS: &[&str] = &["Provider", "State", "Models", "Detail"];
@@ -135,6 +141,22 @@ fn roster_rows(entries: &[CatalogEntry]) -> Vec<Vec<String>> {
                     vec![
                         entry.id.clone(),
                         model.id.clone(),
+                        // Blank, never `0` and never `free`: an absent row means
+                        // the curated tables have nothing on this family, which
+                        // is the normal state for a scraped id. Both cells are
+                        // formatted by the contract, so this table, the Panel's
+                        // ladder and the TUI's picker print one number each
+                        // rather than three spellings of it.
+                        model
+                            .capabilities
+                            .as_ref()
+                            .map(ModelCapabilities::context_window_short)
+                            .unwrap_or_default(),
+                        model
+                            .cost
+                            .as_ref()
+                            .and_then(RateCard::io_per_mtok_short)
+                            .unwrap_or_default(),
                         model.source.as_str().to_string(),
                         lifecycle_cell(model),
                     ]
@@ -158,6 +180,8 @@ fn empty_roster_cells(entry: &CatalogEntry) -> Vec<String> {
     };
     vec![
         entry.id.clone(),
+        "-".to_string(),
+        "-".to_string(),
         "-".to_string(),
         "-".to_string(),
         hint.to_string(),
@@ -202,12 +226,14 @@ where
 }
 
 fn refresh_state(row: &ModelsRefreshRow) -> &'static str {
-    if !row.ok {
-        "failed"
-    } else if row.stale {
-        "stale"
-    } else {
-        "live"
+    match row.outcome() {
+        RefreshOutcome::Live => "live",
+        RefreshOutcome::Stale => "stale",
+        // Not a failure: nothing broke, this endpoint publishes no listing at
+        // all. Printing `failed` here is the red-row-about-a-healthy-provider
+        // the health face was fixed for, arriving through the other door.
+        RefreshOutcome::NotApplicable => "n/a",
+        RefreshOutcome::Failed => "failed",
     }
 }
 
@@ -1010,7 +1036,22 @@ mod tests {
                 "endpoint": "cloud",
                 "discoverable": true,
                 "roster": [
-                    { "id": "gpt-5", "source": "preset_default" },
+                    {
+                        "id": "gpt-5",
+                        "source": "preset_default",
+                        "capabilities": {
+                            "context_window": 400000,
+                            "max_output_tokens": 128000,
+                            "supports_vision": true,
+                            "supports_tools": true,
+                            "supports_reasoning": true
+                        },
+                        "cost": {
+                            "input_per_mtok": 1.25,
+                            "output_per_mtok": 10.0,
+                            "basis": "direct"
+                        }
+                    },
                     {
                         "id": "gpt-4o",
                         "source": "preset_fallback",
@@ -1025,9 +1066,28 @@ mod tests {
         assert_eq!(
             roster_rows(&body.items),
             vec![
-                vec!["openai", "gpt-5", "preset_default", "active"],
-                vec!["openai", "gpt-4o", "preset_fallback", "deprecated → gpt-5"],
-                vec!["openai", "scraped-1", "discovered", "active"],
+                // The two decisive columns, formatted by the contract.
+                vec![
+                    "openai",
+                    "gpt-5",
+                    "391K",
+                    "$1.25/$10",
+                    "preset_default",
+                    "active"
+                ],
+                // A curated id the reference tables happen not to price: blank,
+                // not `$0` — an unpriced model is not a free one.
+                vec![
+                    "openai",
+                    "gpt-4o",
+                    "",
+                    "",
+                    "preset_fallback",
+                    "deprecated → gpt-5"
+                ],
+                // A scraped id carries no curated row at all, which is exactly
+                // when two empty cells are the honest answer.
+                vec!["openai", "scraped-1", "", "", "discovered", "active"],
             ]
         );
         assert_eq!(ROSTER_HEADERS.len(), roster_rows(&body.items)[0].len());
@@ -1077,16 +1137,20 @@ mod tests {
         .expect("a real providers.catalog body must parse");
 
         let rows = roster_rows(&body.items);
+        // The hint is the last cell, addressed as such: pinning its index made
+        // this assertion fail the day the table grew a column, which says
+        // nothing about the behaviour it is here to protect.
+        let hint = |row: &Vec<String>| row.last().expect("a row is never empty").clone();
         assert_eq!(rows.len(), 2, "neither provider may vanish");
         assert_eq!(rows[0][0], "relay");
         assert!(
-            rows[0][3].contains("--refresh"),
+            hint(&rows[0]).contains("--refresh"),
             "unexpected: {:?}",
             rows[0]
         );
         assert_eq!(rows[1][0], "bedrock");
         assert!(
-            !rows[1][3].contains("--refresh"),
+            !hint(&rows[1]).contains("--refresh"),
             "a provider with no /models endpoint must not be sent to refresh: {:?}",
             rows[1]
         );
@@ -1120,6 +1184,12 @@ mod tests {
                     "ok": false,
                     "kind": "missing_credential",
                     "error": "no API key"
+                },
+                {
+                    "provider": "amazon-bedrock",
+                    "ok": false,
+                    "kind": "unsupported",
+                    "error": "provider 'amazon-bedrock' publishes no model listing endpoint"
                 }
             ]
         }))
@@ -1148,6 +1218,16 @@ mod tests {
                     "failed".to_string(),
                     "0".to_string(),
                     "no API key — run `aleph secret set ai:anthropic`".to_string(),
+                ],
+                // Nothing failed here. This endpoint has no listing to fetch,
+                // and a red `failed` next to a provider that is answering
+                // requests perfectly is the exact report the health face was
+                // fixed for — the sweep just reached it through another door.
+                vec![
+                    "amazon-bedrock".to_string(),
+                    "n/a".to_string(),
+                    "0".to_string(),
+                    "no /models endpoint — models must be listed by hand".to_string(),
                 ],
             ]
         );

@@ -11,7 +11,7 @@ use tui_textarea::TextArea;
 
 use aleph_protocol::providers::{
     CatalogEntry, CatalogParams, CatalogResult, CatalogView, ModelsRefreshParams,
-    ModelsRefreshResult, ModelsRefreshRow,
+    ModelsRefreshResult, ModelsRefreshRow, RefreshOutcome,
 };
 use aleph_protocol::{
     AgentRunAccepted, AgentRunRequest, AgentTraceReplay, AgentTraceTaskSummary, SessionSnapshot,
@@ -301,23 +301,33 @@ pub(super) async fn refresh_picker_provider(state: &mut AppState, client: &Aleph
 
 /// One sentence per sweep outcome.
 ///
-/// The three states the server distinguishes are the three reported here. A
-/// stale listing is neither of its neighbours: it carries models *and* a
+/// The verdict comes from [`ModelsRefreshRow::outcome`], not from a local
+/// `match (ok, stale)`. This file, the CLI's status column and the Panel's
+/// refresh badge each used to derive the tri-state themselves, which held only
+/// while there were three states; the wording stays per-face (R4), the
+/// classification does not.
+///
+/// A stale listing is neither of its neighbours: it carries models *and* a
 /// failure, and collapsing it into "live" is what makes a dated answer look
-/// authoritative.
+/// authoritative. `NotApplicable` is likewise not a failure — nothing broke,
+/// this vendor simply publishes no listing — so it must not read as one.
 fn refresh_summary(row: &ModelsRefreshRow) -> String {
     let detail = row
         .error
         .as_deref()
         .map_or_else(String::new, |e| format!(" ({e})"));
-    match (row.ok, row.stale) {
-        (true, false) => format!("{}: {} models, live.", row.provider, row.models.len()),
-        (true, true) => format!(
+    match row.outcome() {
+        RefreshOutcome::Live => format!("{}: {} models, live.", row.provider, row.models.len()),
+        RefreshOutcome::Stale => format!(
             "{}: {} models from the last good snapshot — the live fetch failed{detail}.",
             row.provider,
             row.models.len()
         ),
-        (false, _) => format!("{}: no listing{detail}.", row.provider),
+        RefreshOutcome::NotApplicable => format!(
+            "{}: publishes no model list — send /model <id> yourself.",
+            row.provider
+        ),
+        RefreshOutcome::Failed => format!("{}: no listing{detail}.", row.provider),
     }
 }
 

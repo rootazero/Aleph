@@ -168,16 +168,11 @@ pub(super) fn PresetSetupPanel(
                         <div class="flex items-center gap-2 flex-wrap">
                             <h2 class="text-lg font-semibold text-text-primary">{format!("{} {}", t_string!(i18n, settings.generation.setup_prefix), preset.name)}</h2>
                             {match homepage {
-                                Some(url) if !url.is_empty() => view! {
-                                    <a
-                                        href=url
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        class="text-xs text-primary hover:underline shrink-0"
-                                    >
-                                        {"Docs ↗"}
-                                    </a>
-                                }.into_any(),
+                                Some(url) if !url.is_empty() => crate::components::external_link::safe_external_link(
+                                    &url,
+                                    "text-xs text-primary hover:underline shrink-0",
+                                    "Docs ↗",
+                                ),
                                 _ => view! { <span></span> }.into_any(),
                             }}
                         </div>
@@ -201,16 +196,11 @@ pub(super) fn PresetSetupPanel(
                         // has one since the registry was written; they reached
                         // no client until the row became a contract type.
                         {match signup_url.clone() {
-                            Some(url) => view! {
-                                <a
-                                    href=url
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    class="mt-1 inline-block text-xs text-primary hover:underline"
-                                >
-                                    {t!(i18n, settings.generation.get_a_key)}
-                                </a>
-                            }.into_any(),
+                            Some(url) => crate::components::external_link::safe_external_link(
+                                &url,
+                                "mt-1 inline-block text-xs text-primary hover:underline",
+                                t!(i18n, settings.generation.get_a_key),
+                            ),
                             None => view! { <span></span> }.into_any(),
                         }}
                     </div>

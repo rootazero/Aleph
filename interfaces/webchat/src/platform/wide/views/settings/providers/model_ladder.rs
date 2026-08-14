@@ -32,6 +32,7 @@
 
 use aleph_protocol::providers::{
     DiscoveryFailureKind, ModelSource, ModelStatus, ModelsRefreshResult, ModelsRefreshRow,
+    RefreshOutcome,
 };
 
 use crate::api::{CatalogEntry, ProvidersApi};
@@ -260,6 +261,7 @@ pub(super) fn ModelLadder(
                             {offer.into_iter().map(|r| {
                                 let id = r.id.clone();
                                 let retired = r.lifecycle.status == ModelStatus::Deprecated;
+                                let reference = reference_note(&r);
                                 let hint = r.lifecycle.successor.map(|s| s.to_string()).unwrap_or_default();
                                 let source = match r.source {
                                     ModelSource::Configured => t_string!(i18n, settings.providers.source_configured).to_string(),
@@ -276,6 +278,13 @@ pub(super) fn ModelLadder(
                                         class="flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-surface-sunken hover:border-primary/40 transition-colors"
                                     >
                                         <span class="text-xs font-mono text-text-secondary">{r.id.clone()}</span>
+                                        // The window and the price, when the curated tables have
+                                        // them. Absent is rendered as *nothing at all* rather than
+                                        // a zero: this is the only cell on the row that would be a
+                                        // false claim if it guessed.
+                                        {(!reference.is_empty()).then(|| view! {
+                                            <span class="text-[9px] text-text-tertiary">{reference}</span>
+                                        })}
                                         <span class="text-[9px] uppercase tracking-wider text-text-tertiary">{source}</span>
                                         {retired.then(|| view! {
                                             <span class="text-[9px] uppercase tracking-wider text-warning">
@@ -351,28 +360,39 @@ pub(super) fn ModelLadder(
                             RefreshState::Row(row) => {
                                 let count = row.models.len();
                                 let kind = row.kind.map(|k| failure_kind_label(i18n, k));
-                                if row.ok && !row.stale {
-                                    view! {
+                                // The verdict is `ModelsRefreshRow::outcome`, not a local
+                                // `match (ok, stale)`. This badge, the CLI's status column and
+                                // the TUI's sentence each derived the tri-state themselves,
+                                // which survives exactly until a fourth state exists.
+                                match row.outcome() {
+                                    RefreshOutcome::Live => view! {
                                         <p class="text-xs text-success">
                                             {t!(i18n, settings.providers.fetch_live)}
                                             " · "
                                             {count.to_string()}
                                         </p>
-                                    }.into_any()
-                                } else if row.ok {
-                                    view! {
+                                    }.into_any(),
+                                    RefreshOutcome::Stale => view! {
                                         <div class="text-xs text-warning">
                                             <p>{t!(i18n, settings.providers.fetch_stale)}" · "{count.to_string()}</p>
                                             {kind.map(|k| view! { <p class="text-text-tertiary">{k}</p> })}
                                         </div>
-                                    }.into_any()
-                                } else {
-                                    view! {
+                                    }.into_any(),
+                                    // Nothing broke: this endpoint has no listing to fetch. The
+                                    // button is already hidden for these rows, so reaching here
+                                    // means the server answered about a provider whose preset
+                                    // opts out — red would be a lie about a healthy vendor.
+                                    RefreshOutcome::NotApplicable => view! {
+                                        <div class="text-xs text-text-tertiary">
+                                            {kind.map(|k| view! { <p>{k}</p> })}
+                                        </div>
+                                    }.into_any(),
+                                    RefreshOutcome::Failed => view! {
                                         <div class="text-xs text-danger">
                                             <p>{t!(i18n, settings.providers.fetch_failed)}</p>
                                             {kind.map(|k| view! { <p class="text-text-tertiary">{k}</p> })}
                                         </div>
-                                    }.into_any()
+                                    }.into_any(),
                                 }
                             }
                         }}
@@ -380,6 +400,31 @@ pub(super) fn ModelLadder(
                 }.into_any()
             }}
         </div>
+    }
+}
+
+/// The window and the price for one offerable id, or an empty string.
+///
+/// Both halves come from the contract's own formatters — the same two functions
+/// the TUI picker and `aleph providers models` call — so the three faces print
+/// one number each instead of three roundings of it. Empty when the curated
+/// tables know neither, which is the normal state for an id scraped off a live
+/// `/models` endpoint and the one case where saying nothing is the honest
+/// answer.
+fn reference_note(model: &aleph_protocol::providers::RosterModel) -> String {
+    let window = model
+        .capabilities
+        .as_ref()
+        .map(aleph_protocol::providers::ModelCapabilities::context_window_short);
+    let price = model
+        .cost
+        .as_ref()
+        .and_then(aleph_protocol::providers::RateCard::io_per_mtok_short);
+    match (window, price) {
+        (Some(w), Some(p)) => format!("{w} · {p}"),
+        (Some(w), None) => w,
+        (None, Some(p)) => p,
+        (None, None) => String::new(),
     }
 }
 

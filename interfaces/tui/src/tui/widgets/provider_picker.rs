@@ -15,7 +15,7 @@ use ratatui::{
     Frame,
 };
 
-use aleph_protocol::providers::{AuthKind, CatalogEntry, ModelSource, RosterModel};
+use aleph_protocol::providers::{AuthKind, CatalogEntry, ModelSource, RateCard, RosterModel};
 
 use crate::tui::app::{PickerRow, ProviderPickerState};
 use crate::tui::theme::DEFAULT_THEME;
@@ -69,7 +69,7 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
             Style::default().fg(DEFAULT_THEME.primary),
         ),
         Span::styled(
-            "   ^R fetch models",
+            refresh_hint(picker),
             Style::default().fg(DEFAULT_THEME.muted),
         ),
     ]));
@@ -103,7 +103,15 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
                     let provider = picker.entries.get(*index)?;
                     (
                         provider_label(provider, *matched),
-                        provider.lifecycle.is_deprecated(),
+                        // The head of the roster is the id a bare `/model` would
+                        // land on, so this is the same warning the entry-level
+                        // `lifecycle` field used to carry — read off the list
+                        // actually being offered rather than off a `default_model`
+                        // the operator's ladder may have replaced.
+                        provider
+                            .roster
+                            .first()
+                            .is_some_and(|m| m.lifecycle.is_deprecated()),
                     )
                 }
                 PickerRow::Model { model } => (model_label(model), model.lifecycle.is_deprecated()),
@@ -128,6 +136,26 @@ pub fn render_provider_picker(frame: &mut Frame, picker: &ProviderPickerState, a
     list_state.select(Some(picker.selected));
 
     frame.render_stateful_widget(List::new(items), list_area, &mut list_state);
+}
+
+/// Whether to advertise Ctrl+R, and for what.
+///
+/// Six presets publish no `/models` endpoint. The Panel hides its fetch button
+/// for them and the CLI prints "no `/models` endpoint; list them by hand" — this
+/// footer offered the key to everyone, so on those rows it advertised an action
+/// whose only possible outcome was a failure message. The row it asks about is
+/// the one Ctrl+R would actually act on, taken from the same state method the
+/// handler calls, because "the hint and the action pick the same row" is not
+/// something two independent index walks can promise.
+fn refresh_hint(picker: &ProviderPickerState) -> String {
+    match picker.refresh_target() {
+        Some(target) if target.discoverable => "   ^R fetch models".to_string(),
+        // Naming the vendor matters at the provider level, where the highlight
+        // moves: "this one cannot" is only actionable if you know which one.
+        Some(target) => format!("   ({} publishes no model list)", target.display_name),
+        // No row to act on at all — a filter that matched nothing, say.
+        None => String::new(),
+    }
 }
 
 /// What an empty list means at this level.
@@ -183,12 +211,22 @@ const fn credential_note(entry: &CatalogEntry) -> &'static str {
     }
 }
 
-/// One model row: the id to send, where it came from, and whether the vendor
-/// has retired it.
+/// One model row: the id to send, what it costs, where it came from, and
+/// whether the vendor has retired it.
+///
+/// The window and the price are the two facts that decide the pick, and they
+/// used to reach no picker at all: the catalogue sent them for the provider's
+/// *default* model on a row whose job is choosing a different one. Per-model
+/// they are worth a column. Both are blank when the reference tables have no
+/// row — the normal state for an id scraped off a live `/models` endpoint, and
+/// the reason the cells are formatted by the contract rather than here (a `0`
+/// invented locally is a claim the catalogue never made).
 fn model_label(model: &RosterModel) -> String {
+    let reference = reference_note(model);
     let mut label = format!(
-        "{:<40} {}",
-        truncate_chars(&model.id, 40),
+        "{:<34} {:<16} {}",
+        truncate_chars(&model.id, 34),
+        reference,
         source_note(model.source)
     );
     if model.lifecycle.is_deprecated() {
@@ -202,6 +240,26 @@ fn model_label(model: &RosterModel) -> String {
         label.push_str("  preview");
     }
     label
+}
+
+/// The window and the price in one column, or an empty string when the
+/// reference tables know neither.
+///
+/// Both halves come from the contract's own formatters, for the same reason the
+/// lifecycle words do: `128K` and `$3/$15` are one number each, and a second
+/// spelling invented in a terminal widget is a second answer.
+fn reference_note(model: &RosterModel) -> String {
+    let window = model
+        .capabilities
+        .as_ref()
+        .map(|c| c.context_window_short());
+    let price = model.cost.as_ref().and_then(RateCard::io_per_mtok_short);
+    match (window, price) {
+        (Some(w), Some(p)) => format!("{w} {p}"),
+        (Some(w), None) => w,
+        (None, Some(p)) => p,
+        (None, None) => String::new(),
+    }
 }
 
 /// Human wording for a model's provenance. The wire spelling is snake_case;
@@ -230,7 +288,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::providers::{ModelLifecycle, ModelStatus};
+    use aleph_protocol::providers::{ModelCapabilities, ModelLifecycle, ModelStatus, RateBasis};
 
     fn model(id: &str, source: ModelSource) -> RosterModel {
         RosterModel::new(id, source)
@@ -300,5 +358,88 @@ mod tests {
     fn truncation_lands_on_a_char_boundary() {
         assert_eq!(truncate_chars("abc", 8), "abc");
         assert_eq!(truncate_chars("日本語のモデル名", 4), "日本語…");
+    }
+
+    /// The two facts that decide the pick have to be on the row being picked.
+    #[test]
+    fn a_model_row_shows_the_window_and_the_price() {
+        let mut m = model("claude-opus-4.6", ModelSource::Configured);
+        m.capabilities = Some(ModelCapabilities {
+            context_window: 1_000_000,
+            max_output_tokens: 64_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        });
+        m.cost = Some(RateCard {
+            input_per_mtok: Some(5.0),
+            output_per_mtok: Some(25.0),
+            cache_read_per_mtok: None,
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+            basis: RateBasis::Direct,
+        });
+        let label = model_label(&m);
+        assert!(label.contains("1M"), "{label}");
+        assert!(label.contains("$5/$25"), "{label}");
+    }
+
+    /// A scraped id has no curated row, and the cell must stay empty rather than
+    /// claim a zero window or a free price.
+    #[test]
+    fn a_discovered_row_with_no_curated_data_says_nothing() {
+        let m = model("some-relay-model", ModelSource::Discovered);
+        assert_eq!(reference_note(&m), "");
+        let label = model_label(&m);
+        assert!(!label.contains('$'), "{label}");
+        assert!(!label.contains('0'), "{label}");
+        assert!(label.contains("discovered"), "{label}");
+    }
+
+    /// Ctrl+R must not be advertised on the six presets that publish no
+    /// listing — the Panel hides its button for them and the CLI says so in
+    /// words; this footer used to offer the key to everyone.
+    #[test]
+    fn the_footer_only_offers_a_fetch_where_one_can_work() {
+        use crate::tui::app::{PickerRow, ProviderPickerState};
+
+        let mut listing = crate::tui::app::sample_catalog_entry("openai", &["gpt-5.6"]);
+        listing.discoverable = true;
+        let mut silent = crate::tui::app::sample_catalog_entry("amazon-bedrock", &["claude"]);
+        silent.discoverable = false;
+
+        let picker = |entries: Vec<CatalogEntry>| ProviderPickerState {
+            input: String::new(),
+            entries,
+            provider: None,
+            rows: vec![PickerRow::Provider {
+                index: 0,
+                matched: 1,
+            }],
+            selected: 0,
+        };
+
+        assert!(refresh_hint(&picker(vec![listing])).contains("^R"));
+
+        let hint = refresh_hint(&picker(vec![silent]));
+        assert!(!hint.contains("^R"), "{hint}");
+        // Naming the vendor is the actionable half at the provider level.
+        assert!(hint.contains("AMAZON-BEDROCK"), "{hint}");
+    }
+
+    /// With nothing highlighted there is no row to talk about, so the footer
+    /// says nothing rather than offering a key that resolves to no target.
+    #[test]
+    fn the_footer_is_silent_when_the_filter_matched_nothing() {
+        use crate::tui::app::ProviderPickerState;
+
+        let picker = ProviderPickerState {
+            input: "zzz".to_string(),
+            entries: vec![crate::tui::app::sample_catalog_entry("openai", &["a"])],
+            provider: None,
+            rows: Vec::new(),
+            selected: 0,
+        };
+        assert_eq!(refresh_hint(&picker), "");
     }
 }

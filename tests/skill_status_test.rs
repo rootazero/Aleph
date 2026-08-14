@@ -17,7 +17,11 @@ async fn skill_status_reports_skills_from_temp_dir() {
     .unwrap();
 
     let system = alephcore::skill::SkillSystem::new();
-    system.init(vec![tmp.path().to_path_buf()]).await.unwrap();
+    // `init` returns `()`: it logs and skips unreadable dirs rather than
+    // failing, so there is no Result to unwrap. This line said `.unwrap()` and
+    // so this whole test binary has not compiled — which `cargo check` and
+    // `cargo test --lib` both agree is fine, because neither builds `tests/`.
+    system.init(vec![tmp.path().to_path_buf()]).await;
 
     let tool = SkillStatusTool::new(system);
     let out = tool

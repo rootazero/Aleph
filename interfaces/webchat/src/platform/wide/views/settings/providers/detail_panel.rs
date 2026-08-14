@@ -455,6 +455,7 @@ pub(super) fn ProviderDetailPanel(
                 // to maintain by hand.
                 let keyless = is_oauth || entry.as_ref().is_some_and(|e| e.endpoint == "local");
                 let signup_url = entry.as_ref().and_then(|e| e.signup_url.clone());
+                let homepage = entry.as_ref().and_then(|e| e.homepage.clone());
                 let icon_color = entry.as_ref().map(|e| e.color.clone());
                 let base_url_hint = entry.as_ref().map(|e| e.base_url.clone());
                 let description = entry.as_ref().and_then(|e| e.notes.clone());
@@ -768,25 +769,43 @@ pub(super) fn ProviderDetailPanel(
                                                         <ProviderKeyField value=form_api_key has_api_key=has_api_key />
                                                     }
                                                 }
-                                                {if keyless {
-                                                    view! {
-                                                        <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.no_api_key_needed)}</p>
-                                                    }.into_any()
-                                                } else {
-                                                    match signup_url.clone() {
-                                                        Some(url) => view! {
-                                                            <a
-                                                                href=url
-                                                                target="_blank"
-                                                                rel="noopener noreferrer"
-                                                                class="mt-1 inline-block text-xs text-primary hover:underline"
-                                                            >
-                                                                {t!(i18n, settings.providers.get_a_key)}
-                                                            </a>
-                                                        }.into_any(),
+                                                // Two links, both straight off the catalogue row.
+                                                // "Get a key" is the act; the vendor's docs are
+                                                // the other half — sent for all 56 presets and
+                                                // rendered by nobody until now. They matter most
+                                                // on the four presets whose `base_url` ships a
+                                                // placeholder (`YOUR-PROJECT`, `ACCOUNT_ID`) and
+                                                // whose roster is empty by construction: there
+                                                // the docs link is the only actionable thing on
+                                                // the row.
+                                                //
+                                                // Both go through `safe_external_link`, the
+                                                // scheme screen the skills page has always
+                                                // applied and this panel never did.
+                                                <div class="mt-1 flex items-center gap-3">
+                                                    {if keyless {
+                                                        view! {
+                                                            <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.no_api_key_needed)}</p>
+                                                        }.into_any()
+                                                    } else {
+                                                        match signup_url.clone() {
+                                                            Some(url) => crate::components::external_link::safe_external_link(
+                                                                &url,
+                                                                "text-xs text-primary hover:underline",
+                                                                t!(i18n, settings.providers.get_a_key),
+                                                            ),
+                                                            None => view! { <span></span> }.into_any(),
+                                                        }
+                                                    }}
+                                                    {match homepage.clone() {
+                                                        Some(url) => crate::components::external_link::safe_external_link(
+                                                            &url,
+                                                            "text-xs text-text-tertiary hover:underline",
+                                                            t!(i18n, settings.providers.vendor_docs),
+                                                        ),
                                                         None => view! { <span></span> }.into_any(),
-                                                    }
-                                                }}
+                                                    }}
+                                                </div>
                                             </div>
 
                                             // Base URL

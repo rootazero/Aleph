@@ -299,16 +299,10 @@ pub fn get_preset(name: &str) -> Option<&'static ProviderPreset> {
 /// background jobs, not a failover candidate for the main loop.
 #[must_use]
 pub fn model_ladder(name: &str, base: Vec<String>, operator_base_url: Option<&str>) -> Vec<String> {
-    model_roster(
-        name,
-        base,
-        ModelSource::Configured,
-        &[],
-        operator_base_url,
-    )
-    .into_iter()
-    .map(|m| m.id)
-    .collect()
+    model_roster(name, base, ModelSource::Configured, &[], operator_base_url)
+        .into_iter()
+        .map(|m| m.id)
+        .collect()
 }
 
 /// The same merge, with each rung's provenance and lifecycle attached.
@@ -346,11 +340,23 @@ pub fn model_roster(
         if id.is_empty() || out.iter().any(|m| m.id.eq_ignore_ascii_case(&id)) {
             return;
         }
-        let lifecycle = crate::providers::model_catalog::lifecycle_for(Some(name), &id);
+        // Through the one join point, not a direct `lifecycle_for`. This
+        // function used to reach past `ModelRecord::resolve` for the single
+        // dimension it had a use for, which is precisely how the roster
+        // shipped with a lifecycle and without the window and the price —
+        // a hand-picked join only carries what its author needed that day.
+        let record = crate::providers::model_catalog::ModelRecord::resolve(
+            name,
+            &id,
+            operator_base_url,
+            source,
+        );
         out.push(RosterModel {
             id,
             source,
-            lifecycle,
+            lifecycle: record.lifecycle,
+            capabilities: record.capabilities,
+            cost: record.cost,
         });
     };
 

@@ -765,6 +765,22 @@ pub async fn handle_models_refresh(
                 None => pc.enabled,
             })
             .map(|(name, pc)| {
+                // Ordering, not a second gate. `refresh_models` already refuses
+                // these at the leaf, so nothing was ever dialled — but the
+                // credential check below runs *first*, so an unlinked preset
+                // that publishes no listing was reported as
+                // `MissingCredential`. That answer is worse than useless here:
+                // it is actionable ("paste a key") and the action changes
+                // nothing, because no key makes an endpoint grow a `/models`
+                // route. Asking the same predicate earlier is what puts the two
+                // refusals in the order that describes reality.
+                if !crate::providers::probe::supports_model_listing(name) {
+                    return blocked(
+                        name,
+                        DiscoveryFailureKind::Unsupported,
+                        format!("provider '{name}' publishes no model listing endpoint"),
+                    );
+                }
                 let preset = crate::providers::presets::get_preset(name);
                 let Some(base_url) = pc
                     .base_url
@@ -1218,12 +1234,6 @@ pub async fn handle_catalog(
                 homepage: preset.homepage.map(String::from),
                 notes: preset.description.map(String::from),
                 signup_url: preset.signup_url.map(String::from),
-                fallback_models: preset
-                    .fallback_models
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                default_aux_model: preset.default_aux_model.map(String::from),
                 aliases: preset.aliases.iter().map(|s| s.to_string()).collect(),
                 modalities: preset
                     .modalities
@@ -1245,14 +1255,13 @@ pub async fn handle_catalog(
                 } else {
                     AuthKind::ApiKey
                 },
-                capabilities: record.capabilities,
-                cost: record.cost,
                 endpoint: record.endpoint.as_str().to_string(),
-                lifecycle: record.lifecycle,
                 requires_explicit_model: preset.requires_explicit_model,
-                // Same bit `discovery` itself gates on, surfaced so a client
-                // can render manual entry instead of a refresh button that can
-                // only ever fail for these six presets.
+                // The same bit `probe::supports_model_listing` answers for the
+                // health sweep and the discovery leaf, surfaced so a client can
+                // render manual entry instead of a refresh button that can only
+                // ever fail for these six presets. "Same bit" is now one
+                // function rather than three hand-copies that happened to agree.
                 discoverable: preset.supports_health_check,
                 roster,
             })
@@ -1292,8 +1301,6 @@ pub async fn handle_catalog(
                 homepage: None,
                 notes: None,
                 signup_url: None,
-                fallback_models: Vec::new(),
-                default_aux_model: None,
                 aliases: Vec::new(),
                 modalities: vec![Modality::Chat.as_str().to_string()],
                 models: cfg.models.clone(),
@@ -1302,10 +1309,7 @@ pub async fn handle_catalog(
                 enabled: cfg.enabled,
                 is_default: default_provider.as_deref() == Some(name.as_str()),
                 auth_kind: AuthKind::ApiKey,
-                capabilities: record.capabilities,
-                cost: record.cost,
                 endpoint: record.endpoint.as_str().to_string(),
-                lifecycle: record.lifecycle,
                 // Custom providers are operator-defined: whatever they listed
                 // in `models` is the roster, so there is never a "no default
                 // shipped" state to announce.
@@ -1383,8 +1387,6 @@ pub async fn handle_catalog(
                         .to_string(),
                 ),
                 signup_url: None,
-                fallback_models: Vec::new(),
-                default_aux_model: None,
                 aliases: Vec::new(),
                 modalities: vec!["chat".to_string()],
                 models: names.clone(),
@@ -1393,21 +1395,17 @@ pub async fn handle_catalog(
                 enabled: true,
                 is_default: false,
                 auth_kind: AuthKind::ApiKey,
-                // No single capability/cost profile applies across a preset's
-                // mixed advisors + aggregator; leave both absent rather than
-                // guess from one slot.
-                capabilities: None,
-                cost: None,
                 // Virtual multiplexer, not a reachable host — conservatively
                 // "cloud" like any other absent/unparseable base_url.
                 endpoint: "cloud".to_string(),
-                // A preset name is not a vendor model id, so no vendor
-                // lifecycle applies. (A preset whose *slots* name retired
-                // models is caught where those slots are resolved, not here.)
-                lifecycle: crate::providers::model_catalog::ModelLifecycle::ACTIVE,
                 requires_explicit_model: false,
                 // Virtual multiplexer: nothing to ask for a model listing.
                 discoverable: false,
+                // `RosterModel::new` leaves the reference data absent, which is
+                // the honest answer here: a preset *name* is not a vendor model
+                // id, so no window, price or vendor lifecycle applies to it. (A
+                // preset whose *slots* name retired models is caught where
+                // those slots are resolved, not here.)
                 roster: names
                     .into_iter()
                     .map(|n| RosterModel::new(n, ModelSource::Configured))
