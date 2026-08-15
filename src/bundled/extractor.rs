@@ -331,20 +331,12 @@ fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
 
     // Clean up any leftover temp directory from a previous crash.
     // Use symlink_metadata to avoid following symlinks — prevents deletion
-    // outside the cache_dir if tmp_dir is a malicious symlink.
-    if let Ok(meta) = tmp_dir.symlink_metadata() {
-        if meta.is_dir() {
-            if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
-                warn!(error = %e, "Failed to remove old plugin cache temp directory");
-                return false;
-            }
-        } else {
-            warn!(path = %tmp_dir.display(), "Plugin cache temp path exists but is not a directory, skipping removal");
-            return false;
-        }
-    }
-    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
-        warn!(error = %e, "Failed to create plugin cache temp directory");
+    // outside the cache_dir if tmp_dir is a malicious symlink. Then peel the
+    // symlink itself off the path before `create_dir_all`, otherwise the
+    // subsequent `create_dir_all` would write through any user-planted
+    // symlink at the same path and copy plugins INTO the target (see
+    // `extract_plugins_from_dir` for the same fix).
+    if !prepare_plugin_temp_dir(&tmp_dir) {
         return false;
     }
 
@@ -363,6 +355,60 @@ fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
             false
         }
     }
+}
+
+fn extract_plugins_from_dir(src_root: &Path, cache_dir: &Path) -> bool {
+    let tmp_dir = cache_dir.with_extension("tmp");
+
+    // Same fix as `extract_plugins`: a leftover symlink at the temp path must
+    // be removed BEFORE `create_dir_all`, otherwise the staging copy writes
+    // through the symlink and lands outside the cache.
+    if !prepare_plugin_temp_dir(&tmp_dir) {
+        return false;
+    }
+    if let Err(e) = copy_dir_into(src_root, &tmp_dir) {
+        warn!(error = %e, "Failed to copy plugins from checkout");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return false;
+    }
+    swap_dir_into_place(&tmp_dir, cache_dir)
+}
+
+/// Atomically reclaim `tmp_dir` for use as a staging area: drop any existing
+/// directory, symlink, or other non-directory entry, then create a fresh
+/// directory.
+///
+/// The previous version branched only on `is_dir()` and `create_dir_all` — a
+/// symlink at the temp path was silently passed through, and the subsequent
+/// copy wrote to the symlink target. Peeling the symlink off with
+/// `remove_file` first closes that gap. Returns true on success.
+fn prepare_plugin_temp_dir(tmp_dir: &Path) -> bool {
+    match std::fs::symlink_metadata(tmp_dir) {
+        Ok(m) if m.is_dir() => {
+            if let Err(e) = std::fs::remove_dir_all(tmp_dir) {
+                warn!(error = %e, "Failed to remove old plugin cache temp directory");
+                return false;
+            }
+        }
+        Ok(_) => {
+            // Symlink or other non-directory — remove the entry itself (a
+            // symlink removal does not touch the target).
+            if let Err(e) = std::fs::remove_file(tmp_dir) {
+                warn!(error = %e, path = %tmp_dir.display(), "Failed to remove existing plugin cache temp entry");
+                return false;
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            warn!(error = %e, "Failed to stat plugin cache temp path");
+            return false;
+        }
+    }
+    if let Err(e) = std::fs::create_dir_all(tmp_dir) {
+        warn!(error = %e, "Failed to create plugin cache temp directory");
+        return false;
+    }
+    true
 }
 
 /// Atomically move `staged` into `dest`, replacing any existing `dest`.
@@ -579,35 +625,7 @@ pub(crate) fn extract_skill_tree_from_dir(
     all_ok
 }
 
-/// Filesystem-source analogue of `extract_plugins`: atomically swap the cloned
-/// plugins checkout into the official marketplace cache dir.
-pub(crate) fn extract_plugins_from_dir(src_root: &Path, cache_dir: &Path) -> bool {
-    let tmp_dir = cache_dir.with_extension("tmp");
 
-    // Use symlink_metadata to avoid following symlinks — prevents deletion
-    // outside the cache_dir if tmp_dir is a malicious symlink.
-    if let Ok(meta) = tmp_dir.symlink_metadata() {
-        if meta.is_dir() {
-            if let Err(e) = std::fs::remove_dir_all(&tmp_dir) {
-                warn!(error = %e, "Failed to remove old plugin cache temp directory");
-                return false;
-            }
-        } else {
-            warn!(path = %tmp_dir.display(), "Plugin cache temp path exists but is not a directory, skipping removal");
-            return false;
-        }
-    }
-    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
-        warn!(error = %e, "Failed to create plugin cache temp dir");
-        return false;
-    }
-    if let Err(e) = copy_dir_into(src_root, &tmp_dir) {
-        warn!(error = %e, "Failed to copy plugins from checkout");
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-        return false;
-    }
-    swap_dir_into_place(&tmp_dir, cache_dir)
-}
 
 /// Public alias for installing a single skill leaf from a filesystem source
 /// (used by the hub GitDir→skill installer). Copies + prunes like an official sync.
@@ -897,5 +915,37 @@ mod tests {
             "deep"
         );
         assert!(!dest.join("stale.txt").exists());
+    }
+
+    /// Regression: a leftover symlink at the plugin cache temp path would
+    /// silently redirect the staging copy outside the cache. The previous
+    /// `extract_plugins` accepted it as "not a directory" and let
+    /// `create_dir_all` write through. `prepare_plugin_temp_dir` now peels
+    /// the symlink and creates a fresh directory where the copy actually
+    /// lands.
+    #[cfg(unix)]
+    #[test]
+    fn prepare_plugin_temp_dir_rejects_symlink_passthrough() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let outside_marker = outside.join("marker.txt");
+        std::fs::write(&outside_marker, b"target").unwrap();
+
+        // Plant a symlink at the temp path pointing outside the cache.
+        let tmp_dir = tmp.path().join("cache.tmp");
+        std::os::unix::fs::symlink(&outside, &tmp_dir).unwrap();
+
+        // The fix removes the symlink and creates a fresh directory in place.
+        assert!(prepare_plugin_temp_dir(&tmp_dir));
+        let meta = std::fs::symlink_metadata(&tmp_dir).unwrap();
+        assert!(meta.is_dir(), "temp dir must be a real directory, not a symlink");
+        assert!(!meta.file_type().is_symlink(), "must not be a symlink");
+
+        // The original target was untouched.
+        assert_eq!(
+            std::fs::read_to_string(&outside_marker).unwrap(),
+            "target"
+        );
     }
 }
