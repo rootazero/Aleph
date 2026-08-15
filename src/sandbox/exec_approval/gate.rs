@@ -181,7 +181,7 @@ impl ApprovalGate {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        match requester {
+        let response = match requester {
             Some(requester) => requester.request_approval(action).await,
             None => {
                 tracing::warn!(
@@ -190,8 +190,78 @@ impl ApprovalGate {
                 );
                 ApprovalOutcome::Unavailable.into()
             }
-        }
+        };
+        record_gate_decision(action, &response).await;
+        response
     }
+}
+
+/// File this gate's decision on the signed operation ledger.
+///
+/// The tool-dispatch gate writes its own approval rows
+/// (`ScopedToolService::record_approval_decision`); this gate — sandbox
+/// capability elevation and route escalation — never did, so an approved
+/// `allow_network` left no signed trace even though it is the most
+/// privilege-widening decision the system makes. Wired here, on the shared
+/// chokepoint, for the same reason the unattended tax lives here: every
+/// current and future caller inherits it.
+///
+/// Only real decisions are recorded. `Timeout`/`Unavailable` are the
+/// *absence* of a decision (see [`ApprovalOutcome::Unavailable`]); filing
+/// them as `ApprovalDenied` would be the same lie that variant exists to
+/// prevent.
+async fn record_gate_decision(action: &ApprovalAction, response: &ApprovalResponse) {
+    use crate::identity::{LedgerAction, LedgerOutcome, NewRecord};
+
+    if crate::identity::global().is_none() {
+        return;
+    }
+    let (ledger_action, outcome, scope_note) = match response.outcome {
+        ApprovalOutcome::Approved => (LedgerAction::ApprovalGranted, LedgerOutcome::Ok, ""),
+        ApprovalOutcome::ApprovedForSession => (
+            LedgerAction::ApprovalGranted,
+            LedgerOutcome::Ok,
+            " (session)",
+        ),
+        ApprovalOutcome::ApprovedAlways => (
+            LedgerAction::ApprovalGranted,
+            LedgerOutcome::Ok,
+            " (always)",
+        ),
+        ApprovalOutcome::Denied => (LedgerAction::ApprovalDenied, LedgerOutcome::Denied, ""),
+        ApprovalOutcome::Timeout | ApprovalOutcome::Unavailable => return,
+    };
+    // Same attribution rule as the dispatch chokepoint
+    // (`ScopedToolService::ledger_actor_for`): the scoped sub-agent actor
+    // first, then the turn's own agent. No context → no record: an
+    // unattributable decision must not be filed under a guessed agent.
+    let Some(agent_id) = crate::identity::current_actor().or_else(|| {
+        crate::tools::turn_context::current_turn_context()
+            .map(|t| t.session_key.agent_id().to_string())
+    }) else {
+        return;
+    };
+    // Both halves are already redacted: `summary` by the same masker the
+    // approval cards use, `reason` authored by the gate itself. A human's
+    // deny reason is free text, so it goes through the masker too.
+    let detail = match response.deny_reason.as_deref() {
+        Some(r) => format!(
+            "{} — denied: {}",
+            action.summary,
+            crate::sandbox::exec_approval::redact_and_cap(r)
+        ),
+        None => format!("{} — {}{}", action.summary, action.reason, scope_note),
+    };
+    crate::identity::record_action(NewRecord {
+        agent_id,
+        principal: crate::gateway::visibility::ambient_actor(),
+        action: ledger_action,
+        target: action.tool_name.clone(),
+        outcome,
+        args_fp: action.grant_key.clone(),
+        detail,
+    })
+    .await;
 }
 
 /// The gate is itself an [`ApprovalRequester`], delegating to its own

@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::{AlephError, Result};
-use crate::identity::{AgentIdentityRow, AgentLedger, LedgerRecord};
+use crate::identity::{
+    AgentIdentityRow, AgentLedger, LedgerAction, LedgerOutcome, LedgerRecord, NewRecord,
+};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -43,15 +45,22 @@ const MAX_LIMIT: i64 = 200;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AgentIdentityArgs {
     /// One of: "list", "show", "keygen", "rotate", "revoke", "ledger",
-    /// "verify", "export".
+    /// "verify", "export", "sign", "verify-sig".
     pub action: String,
-    /// Agent id. Required for "show", "keygen", "rotate", "revoke" and
-    /// "export"; optional for "ledger" and "verify" (omit to span every agent).
+    /// Agent id. Required for "show", "keygen", "rotate", "revoke", "export"
+    /// and "sign"; optional for "ledger" and "verify" (omit to span every
+    /// agent) and for "verify-sig" (supply to assert who must have signed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     /// Max records to return for "ledger" / "show". Default 20, capped at 200.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<i64>,
+    /// File to sign ("sign") or to check against its envelope ("verify-sig").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Envelope override for "verify-sig" (default: `<path>.aleph-sig.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -83,6 +92,18 @@ impl AgentIdentityTool {
             .filter(|a| !a.is_empty())
             .map(str::to_string)
             .ok_or_else(|| AlephError::tool(format!("{action}: `agent` is required")))
+    }
+
+    /// The file an action operates on. Validated for presence only: the tool
+    /// is operator-gated as a whole, so there is no traversal policy to
+    /// enforce here that the operator could not already express directly.
+    fn path_of(args: &AgentIdentityArgs, action: &str) -> Result<String> {
+        args.path
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| AlephError::tool(format!("{action}: `path` is required")))
     }
 
     fn limit_of(args: &AgentIdentityArgs) -> i64 {
@@ -160,7 +181,9 @@ Each record answers "who" twice: `agent` is the identity that acted, `principal`
 - keygen — mint the key early (agents get one automatically on first recorded action).
 - rotate — replace the signing key. History signed by the old key stays verifiable; the chain is NOT reset.
 - revoke — stop the agent signing. Its chain stays readable and verifiable; `rotate` brings it back.
-- export — write the whole chain, its public keys and its anchor to one self-contained JSON file and report the path. No private key, no tool arguments. An auditor checks it with `aleph-server identity verify --input <path> --pin <root_fingerprint> --expect-head <expect_head>` on a machine with no Aleph, no database and no daemon.
+- export — write the whole chain, its public keys and its anchor to one self-contained JSON file and report the path. No private key, no tool arguments. The document is signed by the agent's active key when it has one (the `signature` field says `ed25519:<fingerprint>` or `unsigned`). An auditor checks it with `aleph-server identity verify --input <path> --pin <root_fingerprint> --expect-head <expect_head>` on a machine with no Aleph, no database and no daemon.
+- sign — sign a file (a patch, a report, a release) with the agent's active key: the envelope goes to `<path>.aleph-sig.json` and the signing is recorded on the agent's own chain. Args: agent, path.
+- verify-sig — check a file against its signature envelope. Args: path; optional sig (envelope path) and agent (assert who must have signed). A rotated or revoked key still verifies — that is why old keys are kept; only a deleted key reports `unknown_signer`.
 
 Rotation and revocation are themselves appended to the affected agent's chain and wait for that record before reporting success, so key history cannot be quietly rewritten by editing the database. A delegated sub-agent holds its own key and signs its own work: a separate agent here, not a line on its parent's chain.
 
@@ -361,6 +384,21 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 std::fs::write(&path, body).map_err(|e| {
                     AlephError::tool(format!("cannot write {}: {e}", path.display()))
                 })?;
+                // The export carries no secrets, but everything else under the
+                // data dir is 0600 (vault, identity files). Keep the discipline
+                // uniform rather than reasoned per file — a permissions
+                // exception is exactly the file someone later adds a secret to.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                        .map_err(|e| {
+                            AlephError::tool(format!(
+                                "cannot set permissions on {}: {e}",
+                                path.display()
+                            ))
+                        })?;
+                }
 
                 // The head, in the exact form `--expect-head` accepts. Emitted
                 // ready to paste because the alternative — telling an auditor to
@@ -370,6 +408,14 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                     .last_hash
                     .as_ref()
                     .map(|h| format!("{}:{h}", report.last_seq));
+                // Signed by the agent's active key, or "unsigned", said
+                // plainly: an orphan chain has no key to sign with, and an
+                // auditor reading this output must not have to open the file
+                // to learn which of the two it is.
+                let signature = doc.signature.as_ref().map_or_else(
+                    || "unsigned".to_string(),
+                    |s| format!("{}:{}", s.scheme, s.signer_fp),
+                );
                 Ok(json!({
                     "action": "export",
                     "agent": agent,
@@ -377,6 +423,7 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                     "records": report.records,
                     "last_seq": report.last_seq,
                     "verifies_now": report.ok,
+                    "signature": signature,
                     "faults": report.faults,
                     // The two values to pin off-box. Everything the export can
                     // prove to a third party rests on these having been taken
@@ -391,9 +438,109 @@ Arguments are never stored; each record carries a fingerprint of them, plus a se
                 }))
             }
 
+            "sign" => {
+                let agent = Self::agent_of(&args, "sign")?;
+                let path = Self::path_of(&args, "sign")?;
+                let envelope =
+                    crate::identity::sign_artifact(keys, &agent, std::path::Path::new(&path))
+                        .map_err(|e| AlephError::tool(e.to_string()))?;
+
+                let envelope_path = crate::identity::envelope_path(std::path::Path::new(&path));
+                let body = serde_json::to_string_pretty(&envelope)
+                    .map_err(|e| AlephError::tool(e.to_string()))?;
+                std::fs::write(&envelope_path, body).map_err(|e| {
+                    AlephError::tool(format!("cannot write {}: {e}", envelope_path.display()))
+                })?;
+                // Same 0600 discipline as the chain export. The envelope sits
+                // next to the artifact (not under the data dir), but it names
+                // the agent and its key fingerprint — metadata the local
+                // multi-user box has no reason to world-read.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(
+                        &envelope_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    )
+                    .map_err(|e| {
+                        AlephError::tool(format!(
+                            "cannot set permissions on {}: {e}",
+                            envelope_path.display()
+                        ))
+                    })?;
+                }
+
+                // The signing is itself a fact the agent's chain must be able
+                // to prove: the envelope can be copied anywhere, so the chain
+                // is the only place "this agent signed this digest" is
+                // tamper-evident. The principal is captured HERE — the single
+                // ledger writer runs on its own task, where task-locals are
+                // gone (see `rotate_identity`).
+                crate::identity::record_action(NewRecord {
+                    agent_id: agent.clone(),
+                    action: LedgerAction::ArtifactSigned,
+                    target: path.clone(),
+                    outcome: LedgerOutcome::Ok,
+                    // The artifact's SHA-256: which bytes were signed, without
+                    // storing the artifact.
+                    args_fp: Some(envelope.sha256.clone()),
+                    detail: format!("signed artifact; envelope at {}", envelope_path.display()),
+                    principal: crate::gateway::visibility::ambient_actor(),
+                })
+                .await;
+
+                Ok(json!({
+                    "action": "sign",
+                    "agent": agent,
+                    "path": path,
+                    "signature_file": envelope_path.display().to_string(),
+                    "sha256": envelope.sha256,
+                    "signer_fp": envelope.signer_fp,
+                    // The chain record is enqueued, not awaited — the same
+                    // fire-and-forget every tool call's own record takes, with
+                    // `failed_appends` counting a loss.
+                    "recorded_in_chain": true,
+                }))
+            }
+
+            "verify-sig" => {
+                let path = Self::path_of(&args, "verify-sig")?;
+                let artifact = std::path::Path::new(&path);
+                let envelope_path = args.sig.as_deref().map_or_else(
+                    || crate::identity::envelope_path(artifact),
+                    std::path::PathBuf::from,
+                );
+                let envelope = crate::identity::read_envelope(&envelope_path)
+                    .map_err(|e| AlephError::tool(e.to_string()))?;
+                let expected = args
+                    .agent
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty());
+                // The store, not the keystore: verification needs public keys
+                // only, and retired/revoked keys resolve — that is why they
+                // are kept.
+                let verdict =
+                    crate::identity::verify_artifact(keys.store(), artifact, &envelope, expected)
+                        .map_err(|e| AlephError::tool(e.to_string()))?;
+                Ok(json!({
+                    "action": "verify-sig",
+                    "path": path,
+                    "signature_file": envelope_path.display().to_string(),
+                    "ok": verdict.holds(),
+                    "verdict": verdict,
+                    "envelope": {
+                        "agent": envelope.agent,
+                        "signer_fp": envelope.signer_fp,
+                        "sha256": envelope.sha256,
+                        "signed_at": at(envelope.at_ms),
+                    },
+                }))
+            }
+
             other => Err(AlephError::tool(format!(
                 "action must be one of list, show, keygen, rotate, revoke, ledger, verify, \
-                 export — got '{other}'"
+                 export, sign, verify-sig — got '{other}'"
             ))),
         }
     }
@@ -408,6 +555,8 @@ mod tests {
             action: action.to_string(),
             agent: None,
             limit: None,
+            path: None,
+            sig: None,
         }
     }
 
@@ -456,7 +605,16 @@ mod tests {
         // hurry. Anchored at the start of a line so a passing mention inside
         // prose cannot satisfy it.
         for action in [
-            "list", "show", "keygen", "rotate", "revoke", "ledger", "verify", "export",
+            "list",
+            "show",
+            "keygen",
+            "rotate",
+            "revoke",
+            "ledger",
+            "verify",
+            "export",
+            "sign",
+            "verify-sig",
         ] {
             assert!(
                 entry

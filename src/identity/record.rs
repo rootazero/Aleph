@@ -34,6 +34,19 @@ pub enum LedgerAction {
     IdentityRotated,
     /// An agent's identity was revoked.
     IdentityRevoked,
+    /// An agent signed an external artifact (a patch, a report, a release
+    /// candidate) with its active key. The signature envelope lives next to
+    /// the artifact (`<path>.aleph-sig.json`); this row is the chain's own
+    /// account that the signing happened, carrying the artifact's SHA-256 in
+    /// `args_fp`.
+    ///
+    /// **Wire-compat note:** a binary predating this variant cannot parse a
+    /// row carrying `"artifact_signed"` — `row_to_record` treats an unknown
+    /// action string as a hard error, never a lenient default. That is
+    /// acceptable within a version: downgrades read every chain written
+    /// before this variant existed, and only chains that contain a signing
+    /// record refuse to load. Reading old chains is unaffected.
+    ArtifactSigned,
 }
 
 impl LedgerAction {
@@ -49,6 +62,7 @@ impl LedgerAction {
             Self::IdentityCreated => "identity_created",
             Self::IdentityRotated => "identity_rotated",
             Self::IdentityRevoked => "identity_revoked",
+            Self::ArtifactSigned => "artifact_signed",
         }
     }
 
@@ -60,6 +74,7 @@ impl LedgerAction {
         Self::IdentityCreated,
         Self::IdentityRotated,
         Self::IdentityRevoked,
+        Self::ArtifactSigned,
     ];
 }
 

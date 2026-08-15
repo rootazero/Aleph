@@ -16,7 +16,9 @@
 use std::error::Error;
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
-use alephcore::identity::{AgentKeystore, AgentLedger, ExportPins, HeadPin, PinnedHead};
+use alephcore::identity::{
+    AgentKeystore, AgentLedger, ArtifactVerdict, ExportPins, HeadPin, PinnedHead,
+};
 use alephcore::sync_primitives::Arc;
 use alephcore::utils::paths;
 
@@ -88,6 +90,25 @@ fn verify_exported_file(
     );
     println!("head       {}", head_pin_arg(&report));
     println!("keys       {}", report.keys.join(", "));
+    // The document's own envelope, said out loud in every case — the unsigned
+    // case most of all, because a report that only mentions a signature when
+    // one exists teaches the reader not to miss it when it does not.
+    match report.signature {
+        Some(true) => println!(
+            "signature  OK — ed25519 by {}",
+            doc.signature.as_ref().map_or("?", |s| s.signer_fp.as_str())
+        ),
+        Some(false) => println!(
+            "signature  FAILED — the document's own signature does not verify: the content \
+             was altered after signing, or the envelope names a key the document does not \
+             carry"
+        ),
+        None => println!(
+            "signature  none — this document is UNSIGNED (exported before signing existed, \
+             or the agent's identity row was gone). Its content could have been rewritten \
+             by anyone who held the file; only the pins below give it weight"
+        ),
+    }
     match report.root_pinned {
         Some(true) => println!("root pin   OK — the chain opens under a pinned key"),
         Some(false) => println!(
@@ -160,6 +181,65 @@ fn verify_exported_file(
     Ok(())
 }
 
+/// Check an artifact against its signature envelope.
+///
+/// Opens `security.db` for **public keys only** — no vault, no token, no
+/// ledger: verification never needs a private key, and requiring the vault
+/// here would put the one secret an auditor should not need onto the exact
+/// path whose whole point is not to trust this machine's secrets.
+fn verify_artifact_file(
+    path: &str,
+    sig: Option<&str>,
+    agent: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    let db = paths::get_security_db_path()
+        .map_err(|e| format!("Failed to resolve security DB path: {e}"))?;
+    let store =
+        SecurityStore::open(&db).map_err(|e| format!("Failed to open security store: {e}"))?;
+
+    let artifact = std::path::Path::new(path);
+    let envelope_path = sig.map_or_else(
+        || alephcore::identity::envelope_path(artifact),
+        std::path::PathBuf::from,
+    );
+    let envelope = alephcore::identity::read_envelope(&envelope_path)?;
+    let verdict = alephcore::identity::verify_artifact(&store, artifact, &envelope, agent)?;
+
+    println!("artifact   {path}");
+    println!("envelope   {}", envelope_path.display());
+    println!(
+        "claimed    agent {} under key {}",
+        envelope.agent, envelope.signer_fp
+    );
+    match &verdict {
+        ArtifactVerdict::Valid => {
+            println!("result     OK — the bytes match the signed hash and the signature verifies")
+        }
+        ArtifactVerdict::HashMismatch { signed, actual } => println!(
+            "result     FAILED — the file was changed after signing (signed sha256 {signed}, \
+             current {actual})"
+        ),
+        ArtifactVerdict::BadSignature => {
+            println!("result     FAILED — the signature does not verify under the key it names")
+        }
+        ArtifactVerdict::UnknownSigner { fingerprint } => println!(
+            "result     FAILED — {fingerprint} is not a key this installation holds. Retired \
+             and revoked keys still verify; this one was deleted, or minted elsewhere"
+        ),
+        ArtifactVerdict::AgentMismatch { claimed, key_owner } => println!(
+            "result     FAILED — the envelope claims {claimed}, but the signing key belongs \
+             to {key_owner}"
+        ),
+        ArtifactVerdict::WrongAgent { expected, claimed } => {
+            println!("result     FAILED — expected {expected}, but the envelope claims {claimed}")
+        }
+    }
+    if !verdict.holds() {
+        return Err("artifact verification failed".into());
+    }
+    Ok(())
+}
+
 pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Error>> {
     // The one path that must not touch local state. Dispatched before
     // `open_ledger` so it genuinely needs no database and no vault.
@@ -175,6 +255,17 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
             head: expect_head.as_deref().map(PinnedHead::parse).transpose()?,
         };
         return verify_exported_file(path, &pins);
+    }
+
+    // Public keys only — dispatched before `open_ledger` so it never requires
+    // the vault.
+    if let IdentityAction::VerifyArtifact {
+        ref path,
+        ref sig,
+        ref agent,
+    } = action
+    {
+        return verify_artifact_file(path, sig.as_deref(), agent.as_deref());
     }
 
     let ledger = open_ledger()?;
@@ -262,6 +353,15 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
                 report.root_fingerprint.as_deref().unwrap_or("-"),
                 head_pin_arg(&report)
             );
+            // An orphan chain has no key to sign with. Said on BOTH branches,
+            // to stderr, for the same reason the advice is: piping the
+            // document somewhere must not hide that it is unsigned.
+            if doc.signature.is_none() {
+                eprintln!(
+                    "note: this export is UNSIGNED — the agent has no identity row to sign \
+                     with, so the two pinned values are its only integrity anchors"
+                );
+            }
             match out {
                 Some(path) => {
                     std::fs::write(&path, body).map_err(|e| format!("cannot write {path}: {e}"))?;
@@ -345,6 +445,10 @@ pub fn handle_identity_command(action: IdentityAction) -> Result<(), Box<dyn Err
                 return Err("ledger verification failed".into());
             }
         }
+
+        // Dispatched before `open_ledger` above — it needs public keys only,
+        // never the vault.
+        IdentityAction::VerifyArtifact { .. } => {}
     }
     Ok(())
 }

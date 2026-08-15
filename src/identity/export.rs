@@ -45,6 +45,28 @@
 //!
 //! Stated plainly because the alternative is an export that reads like proof
 //! and is not one.
+//!
+//! ## The document's own signature
+//!
+//! Pins are values copied off-box by a diligent operator; nothing forced that
+//! to happen, and until it does the document carried no integrity of its own.
+//! So the document now also carries a signature over itself
+//! ([`ExportSignature`]), made by the agent's active key at export time —
+//! buzz's ref-state events are signed for the same reason. It proves the
+//! document's *content* has not been altered since a process holding the
+//! agent's private key emitted it: edit any record, key or anchor and the
+//! envelope no longer verifies.
+//!
+//! It does **not** replace the pins, and the report keeps the two verdicts
+//! separate. Whoever owns the machine holds the private key, so a local
+//! adversary can re-sign a fabricated document — the envelope is
+//! tamper-evidence for the document *in transit*, not trust in its origin.
+//! What it adds over an unsigned export is that forgery now requires the
+//! private key, not just write access to the file; combined with a pinned root
+//! fingerprint, an off-box auditor can reject a fabricated chain without
+//! trusting anything but the pin. And an unsigned document is not an error:
+//! exports written before signing existed still verify, with the absence
+//! reported plainly.
 
 use std::collections::HashMap;
 
@@ -61,6 +83,18 @@ use super::verify::{
 /// [`verify_export`] refuses anything else rather than guessing.
 pub const EXPORT_FORMAT: &str = "aleph-agent-chain-v1";
 
+/// Domain separator leading the export-signature preimage, in the style of
+/// [`super::hash`]'s `DOMAIN`: a signature made here must never verify against
+/// a coincidentally-identical byte run produced by another subsystem. Bump the
+/// suffix only alongside a format migration — changing it invalidates every
+/// signed export in flight.
+const EXPORT_SIGNATURE_DOMAIN: &[u8] = b"aleph-agent-chain-export-v1";
+
+/// The only signature scheme this module emits and accepts. Named in the
+/// document so a second scheme later is an explicit format decision, not a
+/// silent reinterpretation of existing bytes.
+const EXPORT_SIGNATURE_SCHEME: &str = "ed25519";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
     #[error("not an Aleph agent chain export (format = {0:?}, expected {EXPORT_FORMAT:?})")]
@@ -71,6 +105,8 @@ pub enum ExportError {
     Malformed { field: String, detail: String },
     #[error("a pinned head must be written as <seq>:<hash>, e.g. 42:9f3c… — got {0:?}")]
     BadHeadPin(String),
+    #[error("{0}")]
+    Key(#[from] KeyError),
 }
 
 /// A chain head taken off-box from a previous export: "at sequence N the chain
@@ -285,6 +321,26 @@ impl ExportedRecord {
     }
 }
 
+/// The document's signature over itself — see the module doc.
+///
+/// Covers the canonical JSON of the document **with this field removed**
+/// ([`export_preimage`]), so the envelope never has to sign its own bytes.
+/// `default` + `skip_serializing_if` keeps documents exported before signing
+/// existed parseable — they land as `None` and verify with the same verdicts
+/// they always did, the absence reported rather than smoothed over.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportSignature {
+    /// Always [`EXPORT_SIGNATURE_SCHEME`] today; anything else is malformed,
+    /// not a negotiation.
+    pub scheme: String,
+    /// Fingerprint of the agent's active key at export time. Resolved against
+    /// the keys embedded in the document — a fingerprint the document does not
+    /// carry cannot verify.
+    pub signer_fp: String,
+    /// Ed25519 signature over the preimage, hex.
+    pub sig: String,
+}
+
 /// One agent's chain, its keys and its anchor, in a form that needs nothing
 /// from this installation to check.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +373,36 @@ pub struct ChainExport {
     /// document because a chain says nothing about records that were never
     /// written, so a clean verdict must never be read alone.
     pub failed_appends: u64,
+    /// The document's signature over everything above. `None` for documents
+    /// exported before signing existed and for chains whose identity row is
+    /// gone (there is no active key to sign with, and minting one at export
+    /// time would recreate the very row whose deletion is the attack).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<ExportSignature>,
+}
+
+/// The bytes the export signature commits to: the domain tag, then the
+/// canonical JSON of the document with the `signature` field removed.
+///
+/// Canonical here means *parse, drop the envelope, re-serialize*: this
+/// workspace's `serde_json` has no `preserve_order`, so the map is a BTreeMap
+/// and the compact `to_vec` of a parsed document is byte-deterministic
+/// regardless of the file's key order or whitespace. The signature therefore
+/// covers the document's **content**, not its formatting — a re-prettified or
+/// key-reordered file still verifies, and only a changed value moves the
+/// preimage.
+fn export_preimage(doc: &ChainExport) -> Result<Vec<u8>, ExportError> {
+    let mut value = serde_json::to_value(doc)
+        .map_err(|e| ExportError::malformed("signature", format!("cannot render: {e}")))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("signature");
+    }
+    let canonical = serde_json::to_vec(&value)
+        .map_err(|e| ExportError::malformed("signature", format!("cannot render: {e}")))?;
+    let mut preimage = Vec::with_capacity(EXPORT_SIGNATURE_DOMAIN.len() + canonical.len());
+    preimage.extend_from_slice(EXPORT_SIGNATURE_DOMAIN);
+    preimage.extend_from_slice(&canonical);
+    Ok(preimage)
 }
 
 /// Build the export for one agent.
@@ -325,15 +411,28 @@ pub struct ChainExport {
 /// `IdentityCreated` are what let a verifier see where the chain began and
 /// which key it began under, and a segment starting mid-chain can prove
 /// neither.
-pub fn export_chain(ledger: &AgentLedger, agent_id: &str) -> Result<ChainExport, KeyError> {
+///
+/// The document is signed with the agent's active key when there is one. An
+/// orphan chain — records but no identity row — exports with
+/// `signature: None`: there is no active key to name, and resolving one
+/// through `signing_identity` would **mint a fresh identity row**, recreating
+/// at export time the very row whose deletion is the tamper the export exists
+/// to reveal. A signing failure (vault unreadable, key material gone) fails
+/// the export outright rather than silently degrading it to unsigned — the
+/// difference between "cannot sign" and "nothing to sign with" is exactly the
+/// kind of fact that must not be laundered.
+pub fn export_chain(ledger: &AgentLedger, agent_id: &str) -> Result<ChainExport, ExportError> {
     let keys = ledger.keys();
     let identity = keys.identity(agent_id)?;
-    let records = keys.store().ledger_chain(agent_id)?;
+    let records = keys
+        .store()
+        .ledger_chain(agent_id)
+        .map_err(KeyError::from)?;
     if identity.is_none() && records.is_empty() {
-        return Err(KeyError::UnknownAgent(agent_id.to_string()));
+        return Err(KeyError::UnknownAgent(agent_id.to_string()).into());
     }
 
-    Ok(ChainExport {
+    let mut doc = ChainExport {
         format: EXPORT_FORMAT.to_string(),
         agent_id: agent_id.to_string(),
         exported_at_ms: crate::session::events::now_ms(),
@@ -356,7 +455,21 @@ pub fn export_chain(ledger: &AgentLedger, agent_id: &str) -> Result<ChainExport,
             .collect(),
         records: records.iter().map(ExportedRecord::from_record).collect(),
         failed_appends: ledger.lost(),
-    })
+        signature: None,
+    };
+
+    if let Some(identity) = &identity {
+        // A revoked agent signs with its retired key: `sign` loads by
+        // fingerprint and retired keys stay decryptable, which is the point of
+        // keeping them.
+        let sig = keys.sign(&identity.active_fingerprint, &export_preimage(&doc)?)?;
+        doc.signature = Some(ExportSignature {
+            scheme: EXPORT_SIGNATURE_SCHEME.to_string(),
+            signer_fp: identity.active_fingerprint.clone(),
+            sig: hex::encode(sig),
+        });
+    }
+    Ok(doc)
 }
 
 /// Public keys resolved from a document instead of from `security.db`.
@@ -436,6 +549,24 @@ pub struct ExportReport {
     /// Carried through from the document — records lost before they were ever
     /// written are invisible to every chain check.
     pub failed_appends: u64,
+    /// The verdict on the document's own signature envelope:
+    ///
+    /// * `None` — the document is **unsigned** (everything exported before
+    ///   signing existed, and every orphan-chain export). `ok` tolerates this
+    ///   for backward compatibility, but the absence is stated here rather
+    ///   than smoothed over, and the CLI prints it.
+    /// * `Some(true)` — an envelope was present and verified against a key the
+    ///   document itself carries.
+    /// * `Some(false)` — an envelope was present and did NOT verify (bad
+    ///   signature, or a signer fingerprint the document does not carry). This
+    ///   flips `ok` to false.
+    ///
+    /// Deliberately a field of the report rather than a [`ChainFault`]: faults
+    /// describe chain rows; this describes the wrapper around them, and
+    /// shoehorning it in would fault a perfectly intact chain carried in a
+    /// tampered envelope. Serialized even when `None` — an absent key would
+    /// read, to whoever scans the JSON, like a check that was not run.
+    pub signature: Option<bool>,
 }
 
 impl ExportReport {
@@ -505,11 +636,22 @@ pub fn verify_export(doc: &ChainExport, pins: &ExportPins) -> Result<ExportRepor
     });
     let head_pin = pins.head.as_ref().map(|h| HeadPin::check(&rows, h));
 
+    // The document's own envelope, checked against the keys it carries — the
+    // same `check_against` the row walk uses, so "valid" means one thing on
+    // every surface. A signer the document does not carry is `Some(false)`:
+    // off-box there is no way to learn whose key it was, which is precisely
+    // what `Signer::Unknown` already means for rows.
+    let signature = match &doc.signature {
+        None => None,
+        Some(envelope) => Some(check_envelope(doc, envelope, &keyring)?),
+    };
+
     Ok(ExportReport {
         agent_id: doc.agent_id.clone(),
         ok: faults.is_empty()
             && root_pinned != Some(false)
-            && head_pin.as_ref().is_none_or(HeadPin::holds),
+            && head_pin.as_ref().is_none_or(HeadPin::holds)
+            && signature != Some(false),
         records: rows.len(),
         first_seq: rows.first().map_or(0, |r| r.seq),
         last_seq: rows.last().map_or(0, |r| r.seq),
@@ -522,5 +664,198 @@ pub fn verify_export(doc: &ChainExport, pins: &ExportPins) -> Result<ExportRepor
         head_pin,
         revoked_at: doc.revoked_at,
         failed_appends: doc.failed_appends,
+        signature,
     })
+}
+
+/// Verify the document's signature envelope against its own embedded keys.
+///
+/// Malformed hex or an unknown scheme is an [`ExportError`], not a `false`:
+/// those say the document cannot be read as written, whereas `false` says it
+/// was read and the signature does not cover it.
+fn check_envelope(
+    doc: &ChainExport,
+    envelope: &ExportSignature,
+    keyring: &ExportKeyring,
+) -> Result<bool, ExportError> {
+    if envelope.scheme != EXPORT_SIGNATURE_SCHEME {
+        return Err(ExportError::malformed(
+            "signature.scheme",
+            format!(
+                "{:?} (expected {EXPORT_SIGNATURE_SCHEME:?})",
+                envelope.scheme
+            ),
+        ));
+    }
+    let sig = hex::decode(&envelope.sig).map_err(|e| ExportError::malformed("signature.sig", e))?;
+    let preimage = export_preimage(doc)?;
+    Ok(keyring
+        .keys
+        .get(&envelope.signer_fp)
+        .is_some_and(|pk| matches!(check_against(pk, &preimage, &sig), Signer::Valid)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::security::shared_token::SharedTokenManager;
+    use crate::gateway::security::store::SecurityStore;
+    use crate::identity::keystore::AgentKeystore;
+    use crate::identity::record::{LedgerOutcome, NewRecord};
+    use crate::sync_primitives::Arc;
+    use tempfile::TempDir;
+
+    const NO_PINS: ExportPins = ExportPins {
+        roots: Vec::new(),
+        head: None,
+    };
+
+    fn ledger() -> (AgentLedger, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            dir.path().join("t.vault"),
+        ));
+        let _ = vault.generate_token();
+        (
+            AgentLedger::new(Arc::new(AgentKeystore::new(store, vault))),
+            dir,
+        )
+    }
+
+    fn append(l: &AgentLedger, agent: &str, target: &str) {
+        l.append(&NewRecord {
+            agent_id: agent.to_string(),
+            action: LedgerAction::ToolCall,
+            target: target.to_string(),
+            outcome: LedgerOutcome::Ok,
+            args_fp: Some("fp".into()),
+            detail: format!("{target}: did a thing"),
+            principal: None,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_fresh_export_is_signed_and_the_signature_verifies() {
+        let (l, _d) = ledger();
+        append(&l, "main", "bash");
+        let doc = export_chain(&l, "main").unwrap();
+        let envelope = doc.signature.as_ref().expect("exports are signed now");
+        assert_eq!(envelope.scheme, EXPORT_SIGNATURE_SCHEME);
+        assert_eq!(
+            envelope.signer_fp, doc.records[0].signer_fp,
+            "signed by the agent's (only) key"
+        );
+
+        let report = verify_export(&doc, &NO_PINS).unwrap();
+        assert_eq!(report.signature, Some(true));
+        assert!(report.ok, "{:?}", report.faults);
+    }
+
+    #[test]
+    fn a_bit_flipped_signature_fails_the_report_without_faulting_the_chain() {
+        let (l, _d) = ledger();
+        append(&l, "main", "bash");
+        let mut doc = export_chain(&l, "main").unwrap();
+        let envelope = doc.signature.as_mut().unwrap();
+        // Flip one hex character of the signature.
+        let first = envelope.sig.remove(0);
+        envelope.sig.insert(0, if first == '0' { '1' } else { '0' });
+
+        let report = verify_export(&doc, &NO_PINS).unwrap();
+        assert_eq!(report.signature, Some(false));
+        assert!(!report.ok, "a bad envelope must flip the verdict");
+        assert!(
+            report.faults.is_empty(),
+            "the chain itself is untouched — the envelope is not a ChainFault"
+        );
+    }
+
+    #[test]
+    fn editing_any_row_breaks_the_envelope_too() {
+        // The envelope's job: document-level tampering is caught even by a
+        // reader who never walks the chain.
+        let (l, _d) = ledger();
+        append(&l, "main", "bash");
+        let mut doc = export_chain(&l, "main").unwrap();
+        doc.records[1].target = "harmless".into();
+
+        let report = verify_export(&doc, &NO_PINS).unwrap();
+        assert_eq!(report.signature, Some(false));
+        assert!(!report.ok);
+        assert!(report.faults.contains(&ChainFault::HashMismatch { seq: 2 }));
+    }
+
+    #[test]
+    fn an_envelope_naming_a_key_the_document_does_not_carry_fails() {
+        let (l, _d) = ledger();
+        append(&l, "main", "bash");
+        let mut doc = export_chain(&l, "main").unwrap();
+        doc.signature.as_mut().unwrap().signer_fp = "0".repeat(16);
+
+        let report = verify_export(&doc, &NO_PINS).unwrap();
+        assert_eq!(report.signature, Some(false));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn an_unsigned_legacy_document_still_verifies_with_the_absence_reported() {
+        // Backward compatibility, asserted by deleting the key from the JSON
+        // rather than by trusting the reasoning: a document exported before
+        // signing existed is simply a document without the field.
+        let (l, _d) = ledger();
+        append(&l, "main", "bash");
+        let doc = export_chain(&l, "main").unwrap();
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value.as_object_mut().unwrap().remove("signature");
+        let legacy: ChainExport = serde_json::from_value(value).unwrap();
+
+        let report = verify_export(&legacy, &NO_PINS).unwrap();
+        assert_eq!(
+            report.signature, None,
+            "absence must be reported, not hidden"
+        );
+        assert!(report.ok, "unsigned is not a fault: {:?}", report.faults);
+    }
+
+    #[test]
+    fn an_orphan_chain_exports_unsigned() {
+        // Records but no identity row: there is no active key to sign with,
+        // and minting one here would recreate the row whose deletion is the
+        // attack. The export must say "unsigned", plainly.
+        let (l, _d) = ledger();
+        append(&l, "main", "bash");
+        {
+            let conn = l.keys().store().conn.lock().unwrap();
+            conn.execute("DELETE FROM agent_identities WHERE agent_id='main'", [])
+                .unwrap();
+        }
+
+        let doc = export_chain(&l, "main").unwrap();
+        assert!(doc.signature.is_none());
+        assert!(doc.identity_row_missing);
+
+        let report = verify_export(&doc, &NO_PINS).unwrap();
+        assert_eq!(report.signature, None);
+        assert!(!report.ok, "the missing identity row is still faulted");
+        assert!(report.faults.contains(&ChainFault::IdentityMissing));
+    }
+
+    #[test]
+    fn reformatting_the_json_does_not_break_the_envelope() {
+        // The signature covers the document's canonical CONTENT, not the
+        // file's bytes: pretty-printing and key reordering must survive, or
+        // every hand-off through an editor would read as tampering.
+        let (l, _d) = ledger();
+        append(&l, "main", "bash");
+        let doc = export_chain(&l, "main").unwrap();
+        let pretty = serde_json::to_string_pretty(&doc).unwrap();
+        let parsed: ChainExport = serde_json::from_str(&pretty).unwrap();
+
+        let report = verify_export(&parsed, &NO_PINS).unwrap();
+        assert_eq!(report.signature, Some(true));
+        assert!(report.ok, "{:?}", report.faults);
+    }
 }

@@ -8,7 +8,7 @@
 
 ## 1. 一句话
 
-每个 agent 持有自己的 Ed25519 密钥对；它做的每一次**变更类工具调用**、每一次**被拒**、每一次**审批裁决**，都追加进**它自己的**哈希链并由**它自己的密钥签名**。`agent_identity` 工具与 `aleph-server identity` CLI 负责读与验。
+每个 agent 持有自己的 Ed25519 密钥对；它做的每一次**变更类工具调用**、每一次**被拒**（含子代理 allowlist 在咽喉之上挡下的）、每一次**审批裁决**（含 sandbox 提权与路由升级），都追加进**它自己的**哈希链并由**它自己的密钥签名**。同一把钥还能给**工件**（补丁、导出、任何文件）签名。`agent_identity` 工具与 `aleph-server identity` CLI 负责读与验。
 
 ## 2. 为什么是这个形状（Gap Analysis vs buzz）
 
@@ -43,7 +43,9 @@
 | **记录里的"谁"** | 无（无签名，更无 principal） | `agent_id`（哪个身份在动）+ `principal`（哪个人在驱动），**两者都在 preimage 内** | **超越**（第五轮）。只记 agent 时，非否认对 agent 成立、对**人**不成立——共用一个 agent 的两个人在链上无法区分 |
 | agent vs human | 只差**配额**不差权限 | 两条正交轴都在：exec tier（这次调用能做什么）× `allowed_users`（这个人能扮演谁） | **超越**（第五轮起） |
 | owner attestation | NIP-OA：owner 签名证明"谁授权了这个 agent"，**作者身份不可改写** | 无 owner 密钥概念；委派的**事实**落在父链的 `ToolCall(target="subagent")` 上 | **刻意不移植**（见 §6 已知边界④：凭空造 owner 层＝零消费者抽象） |
-| git 提交签名 | `git-sign-nostr`（O_NOFOLLOW/fstat/mode 检查/Zeroizing 全套） | 无 | **刻意不移植**：独立二进制 + `gpg.x509.program` 钩子，属生态外挂，按 R3 应做 Skill/MCP 而非进 core |
+| git 提交签名 | `git-sign-nostr`（O_NOFOLLOW/fstat/mode 检查/Zeroizing 全套，OA 委托折进签名原语） | **原语层已映射**（第八轮）：`identity/artifact.rs` 通用工件签名（`sign`/`verify-sig`/`verify-artifact`），签名事件自入链（`ArtifactSigned`）；git 钩子外挂仍不移植——独立二进制 + `gpg.x509.program` 钩子，按 R3 属 Skill/MCP 而非进 core | **部分移植** |
+| 导出件自签名 | relay 自签 kind:30618 ref-state（带 pusher 的 `p` tag） | `ChainExport.signature`（第八轮）：agent 活跃钥签「去 signature 键的规范 JSON」，离站验证器验签；无签名旧文档仍可验但必须显可见 | **映射**。买到出境后防改；不替代离站钉值（造文档的机器握着私钥） |
+| 审计覆盖诚实度 | 11 个 `AuditAction` 变体**只接线 2 个**（EventCreated/MediaUploaded）；枚举存在、生产者不存在 | `LedgerAction` 8 变体**全部有生产者**；第八轮补掉两个同型盲区：子代理 allowlist 拒绝、sandbox 提权审批 | **超越**。buzz 的稀疏覆盖正是 `record.rs`「每个变体都要有真生产者」纪律的镜像教训 |
 | Nostr wire / relay 联邦 | 核心 | 无 | **刻意不移植**：Aleph 信任边界是网络边界（loopback + device tier），不是公开 relay |
 
 ## 3. 威胁模型 —— 它买到什么，买不到什么
@@ -75,6 +77,8 @@ gateway/handlers/agent.rs::build_run_request   ← 「这个人能不能扮演�
 agents/allowlist_tool_service.rs               ← 子代理身份注入（identity::as_actor）
         │  （只有它知道正在动作的 AgentDef，且它就在 Act 阶段
         │    per-call spawn 的任务里 —— 作用域必须开在这一层）
+        │  拒绝（allowlist 挡下，不到 chokepoint）→ record_allowlist_refusal
+        │    ⇒ ToolDenied 记到子代理自己的链（第八轮补的盲区）
         ▼
 tools/scoped/dispatch.rs::execute_inner        ← 唯一生产者（全库唯一进工具注册表的路径）
         │  ledger_agent_id()                    scoped actor ?? turn 的 session_key
@@ -86,6 +90,11 @@ tools/scoped/dispatch.rs::execute_inner        ← 唯一生产者（全库唯�
         │    └─ 无审批通道的 fail-closed 拒绝 → ApprovalDenied
         │         （record_gate_refusal；operator 闸与确认闸各一条，
         │           它们在 confirm_with_memory 之上返回，此前零记录）
+        ▼
+sandbox/exec_approval/gate.rs                  ← 提权/路由升级咽喉（第八轮接入）
+        │  record_gate_decision：Approved* → ApprovalGranted；Denied → ApprovalDenied；
+        │  Timeout/Unavailable 不记（"没有裁决"不是裁决——记成拒绝正是
+        │  Unavailable 变体存在要防的那句谎）
         ▼
 identity::record_action(NewRecord)             ← 有界 mpsc(1024)，send().await 背压
         │                                         （LedgerJob::Append，即发即忘）
@@ -103,12 +112,14 @@ identity::record_action(NewRecord)             ← 有界 mpsc(1024)，send().aw
         ▼
 security.db : agent_keys / agent_identities / agent_ledger / agent_ledger_health（schema v13）
         ▲
-        ├─ agent_identity 工具（R8，operator 门控）
-        ├─ aleph-server identity（只读，无 runtime 无锁，daemon 停机亦可）
-        └─ identity::export_chain → ChainExport（JSON，自包含）
+        ├─ agent_identity 工具（R8，operator 门控；sign/verify-sig 走 identity/artifact.rs，
+        │    签名事件以 ArtifactSigned 自入链）
+        ├─ aleph-server identity（只读，无 runtime 无锁，daemon 停机亦可；
+        │    verify-artifact 只开 security.db 读公钥，不碰 vault）
+        └─ identity::export_chain → ChainExport（JSON，自包含，**自签名**）
                  │
                  ▼
-           identity::verify_export（**零本地依赖**）
+           identity::verify_export（**零本地依赖**，含信封验签）
                  ▲
                  └─ aleph-server identity verify --input --pin
                     （在 open_ledger 之前分派 —— 这条路必须一步都不碰本机状态）
@@ -162,12 +173,13 @@ SHA256( "aleph-agent-ledger-v1"
 
 `verify` **报告全部** fault 而非首个即停：判断发生了什么需要损伤的**形状**，不只是存在性。
 
-两个**不是 fault** 但同样进报告的判定（它们各有一个良性成因，报成 fault 会喊狼）：
+三个**不是 fault** 但同样进报告的判定（它们各有一个良性成因，报成 fault 会喊狼）：
 
 | 字段 | 含义 | 良性成因 |
 |---|---|---|
 | `revocation_disagrees()` | `revoked_at` 列与链自己的 `IdentityRevoked` 说法不一 | 一条生命周期记录在写入前就丢了（`failed_appends` 已经计过） |
 | `head_pin`（仅离站） | 本文档相对**上一份导出**的关系：`Extends` / `Truncated` / `Diverged` | 无——`Truncated`/`Diverged` 直接进 `ok=false` |
+| `signature`（仅离站，第八轮） | 文档信封签名：`Some(true)` 验过 / `Some(false)` 验不过（**直接进 `ok=false`**）/ `None` 未签名 | `None` 的良性成因：第八轮之前的旧导出、以及孤儿链导出（没有可签身份）——两者都被**明说**，而不是安静地 ok |
 
 **`UndeclaredSigner` 判的是集合成员，不是相邻关系** —— 记录异步入队，所以一次在轮转**之前**发起的调用完全可能落在轮转记录**之后**、并由新钥签名（同 §4 的"归属的时间语义"）。要求轮转记录必须紧邻它覆盖的第一行，等于把这个竞态当成篡改报出来。判据是：链内出现过的每个 `signer_fp`，都必须是首行的签名钥、或某条 `IdentityCreated`/`IdentityRotated` 的 `target`。
 
@@ -192,8 +204,9 @@ SHA256( "aleph-agent-ledger-v1"
 4. **无 owner 层**。buzz 的 NIP-OA（owner 签名证明"谁授权了这个 agent"，作者身份永不改写）没有移植：Aleph 没有 owner 密钥概念，凭空造一个是没有消费者的抽象（YAGNI 撤回规则）。父子委派的**事实**已经落在父链上（`ToolCall(target="subagent")`，`detail` 带 `agent_type`），再加一个 `Delegation` 变体是零增量信息。
 5. **不做启动时验链**。全量验证要读遍每条链的每一行并逐行验签，那不该挂在启动路径上；而且"daemon 自己写的日志里有一行 warning"本来也不是任何人会据以行动的证据。验证属于被问到的时候——以及，对真正要紧的场景，属于**没写这些记录的那个进程**（`aleph-server identity verify`）。
 
-6. **导出的锚是随文档走的**。`ChainExport.anchor_seq` / `anchor_hash` 由产出文档的那台机器写，所以**光靠文档自身检不出尾部截断**——对手把行删掉、把锚一起改小即可，根指纹也钉不住（截断后的链仍开在同一把钥下）。解法是**钉链头**（第四轮落地）：`--expect-head <seq>:<hash>` 要求本文档在那个 seq 上有那一行、那个哈希，`Truncated` / `Diverged` 直接判 `ok=false`。**仍然是外带定值**——它证明的是"这份是我上次见到那份的延长"，而不是"这份完整"；从没导出过第一份的人拿不到这个保证。这条边界因此没有消失，只是从"无法检出"变成"必须有人在链外记住一个值"。
+6. **导出的锚是随文档走的**。`ChainExport.anchor_seq` / `anchor_hash` 由产出文档的那台机器写，所以**光靠文档自身检不出尾部截断**——对手把行删掉、把锚一起改小即可，根指纹也钉不住（截断后的链仍开在同一把钥下）。解法是**钉链头**（第四轮落地）：`--expect-head <seq>:<hash>` 要求本文档在那个 seq 上有那一行、那个哈希，`Truncated` / `Diverged` 直接判 `ok=false`。**仍然是外带定值**——它证明的是"这份是我上次见到那份的延长"，而不是"这份完整"；从没导出过第一份的人拿不到这个保证。这条边界因此没有消失，只是从"无法检出"变成"必须有人在链外记住一个值"。⚠️ 第八轮加的**文档自签名不改变这一条**：签名的是握着私钥的那台机器自己，所以对手整链伪造后照样能签出有效信封。自签名买到的是**出境之后**的防改（传输/转存中被编辑 ⇒ 验签失败）与"文档绑死在它声明的 agent 上"，买不到"这份是真的"——那仍然只有钉值能给。
 7. **不做增量/分段导出**。导出恒为整链：前缀与那条 `IdentityCreated` 正是"这条链从哪开始、开在哪把钥下"的依据，从中段起的片段两样都证明不了（并且会直接踩 `PrefixMissing`）。
+8. **`sign` 的 `path` 是调用方给的路径**（第八轮，刻意与 `export` 的固定目录策略不同）。`agent_identity` 整体 operator-gated，且签名的语义就是"给这个已存在的文件作证"，沙箱化路径只会限制正当用途而挡不住一个已经是 operator 的调用方。信封落点是 `<path>.aleph-sig.json`（0600），不写回工件本身。
 
 **已解决（勿再按旧结论行事）**：
 - ~~工具的 `DESCRIPTION` 随 schema 发给模型~~ → **它没有**（第四轮修）。`BUILTIN_TOOL_DEFINITIONS` 的手写字面量整体遮蔽了常量，而那条字面量连 `export` 都不提；第三轮写进 DESCRIPTION 的整套钉指纹说明因此一个模型都没收到。现指向常量，守卫断言在**目录那一侧**。
@@ -227,7 +240,9 @@ agent_identity(action="verify")                    # 验全部链
 agent_identity(action="ledger", agent="main", limit=50)
 agent_identity(action="show", agent="main")        # 身份 + 全部历史密钥 + 近期记录
 agent_identity(action="rotate", agent="main")      # 换钥；历史仍可验，链不重置
-agent_identity(action="export", agent="main")      # 写出自包含文档，回 path + 该钉的两个值
+agent_identity(action="export", agent="main")      # 写出自包含（且自签名）文档，回 path + 该钉的两个值
+agent_identity(action="sign", agent="main", path="/tmp/fix.patch")        # 工件签名 → <path>.aleph-sig.json，并入链
+agent_identity(action="verify-sig", path="/tmp/fix.patch")                # 验信封；可加 agent="main" 断言签名者
 ```
 
 `rotate` / `revoke` **会等**那条生命周期记录真的写进链才返回。写不进就报错——而不是回一句 `ok` 然后让新钥在一条从没声明过它的链上签下去（那会让此后每一行都 `UndeclaredSigner`，永久）。
@@ -255,6 +270,7 @@ aleph-server identity list
 aleph-server identity ledger --agent main --limit 40
 aleph-server identity verify          # 有 fault 则非零退出
 aleph-server identity export --agent main --out chain.json
+aleph-server identity verify-artifact /tmp/fix.patch [--sig <信封路径>] [--agent main]
 ```
 
 **在审计方的机器上**（没有 Aleph、没有 `security.db`、没有 vault —— 这一条在 `open_ledger` 之前分派，所以它是真的零依赖）：
@@ -268,6 +284,16 @@ aleph-server identity verify --input chain.json \
 两个钉都可以省，但输出会**每次都把省掉的那个说出来**：没有 `--pin` 就只证明了内部自洽（造文档的人也挑了里面的公钥），没有 `--expect-head` 就**检不出尾部截断**（锚是随文档走的）。写不出格式的 `--expect-head` 会被**拒绝**而不是当成没给——一个被静默读成"没钉"的钉子看起来和成功一模一样。
 
 ## 9. 熵减
+
+### 第八轮（2026-08-16）
+
+本轮没有删生产代码；熵减体现在**盲区闭合**与**没有生出第二份**：
+
+- **两处"枚举存在、生产者不存在"的同型盲区被闭合**，而不是各自长一条旁路：子代理 allowlist 拒绝复用 `tools/scoped/ledger.rs` 的同一指纹/脱敏管线（`record_allowlist_refusal` 与 `commit_refusal` 同一形状）；sandbox 提权审批挂在 `ApprovalGate` 共享咽喉上（`record_gate_decision`），与 unattended tax 同处——现在与将来的调用方都继承，不需要第三个接线的调用点。buzz 侧的教训正是这个形状的反面：11 个 `AuditAction` 只接线 2 个。
+- **验签仍然只有一处原语**。导出信封验签走 `ExportKeyring`（`SignerSource` 的既有第二个实现）；工件验签直取 `security.db` 公钥——两条路共用 `gateway/security/crypto.rs::verify_signature`，没有新增第二个"轻量校验器"。
+- **`export_chain` 的错误类型从 `KeyError` 收敛进 `ExportError`**（新增 `Key(#[from])` 变体）：签名需要序列化文档，`KeyError` 没有合适变体；三个调用方（工具/CLI/测试）同步适配。
+- **修正一段会误导后人的测试注释**：`a_denied_call_scopes_no_actor` 旧注释声称 allowlist 拒绝"由父 chokepoint 记录"——父 chokepoint 从没见过那次调用。注释现在描述真实行为。
+- **一个刻意保留的"不一致"**：导出签名失败（私钥不可用）令导出**整体失败**，只有孤儿链（没有可签身份）才降级 unsigned——"签不了"和"没身份签"混同的话，一次 vault 故障就会被读成"这条链本来就没签名"。
 
 ### 第五轮（2026-08-10）
 

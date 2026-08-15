@@ -13,7 +13,11 @@
 //!   (`tools::scoped::dispatch`). [`verify`] then answers whether the chain is
 //!   intact, and [`export`] puts that answer within reach of someone who does
 //!   not trust this machine: a self-contained document, checked by the same
-//!   walk against a root fingerprint pinned off-box.
+//!   walk against a root fingerprint pinned off-box, and signed by the agent's
+//!   own key so the document itself is tamper-evident in transit. [`artifact`]
+//!   extends the same binding to files an agent produces — a patch, a report —
+//!   whose signature envelope (`<path>.aleph-sig.json`) travels with the file
+//!   and whose signing is itself a record on the agent's chain.
 //!
 //! ## Deliberate non-goals
 //!
@@ -36,6 +40,7 @@
 //! Full model: `docs/reference/AGENT_IDENTITY.md`.
 
 pub mod actor;
+pub mod artifact;
 pub mod export;
 pub mod hash;
 pub mod keystore;
@@ -45,9 +50,13 @@ pub mod schema;
 pub mod verify;
 
 pub use actor::{as_actor, current_actor};
+pub use artifact::{
+    envelope_path, read_envelope, sign_artifact, verify_artifact, ArtifactError, ArtifactSignature,
+    ArtifactVerdict,
+};
 pub use export::{
-    export_chain, verify_export, ChainExport, ExportError, ExportPins, ExportReport, HeadPin,
-    PinnedHead,
+    export_chain, verify_export, ChainExport, ExportError, ExportPins, ExportReport,
+    ExportSignature, HeadPin, PinnedHead,
 };
 pub use keystore::{AgentIdentityRow, AgentKeyRow, AgentKeystore, KeyError};
 pub use ledger::{
