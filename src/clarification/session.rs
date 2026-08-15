@@ -486,10 +486,22 @@ impl ClarificationManager {
         true
     }
 
-    /// Drop expired entries, unblocking their waiters with a timeout result.
-    /// Returns the number of entries reaped.
+    /// Drop *dead* entries — expired OR abandoned — unblocking live waiters
+    /// with a timeout result and announcing the terminal frame for every
+    /// reaped session.
+    ///
+    /// Returns the number of entries reaped. An *abandoned* entry is one whose
+    /// parked `oneshot::Receiver` has been dropped (the run was cancelled);
+    /// the sender is closed by then, so the post-send is a no-op and the
+    /// terminal frame is `Cancelled` to match what the caller already saw on
+    /// the run side.
+    ///
+    /// The opportunistic sweep on each [`register`](Self::register) is the only
+    /// way abandoned entries are reaped in practice — they have no scheduled
+    /// caller, and a long-running gateway with many cancelled runs would
+    /// otherwise leak them in the pending map.
     pub async fn cleanup_expired(&self) -> usize {
-        let reaped: Vec<String> = {
+        let reaped: Vec<(String, ClarificationOutcome)> = {
             let mut pending = self.pending.write().await;
             let mut reaped = Vec::new();
             pending.retain(|session_key, entry| {
@@ -497,7 +509,14 @@ impl ClarificationManager {
                     if let Some(sender) = entry.sender.take() {
                         let _ = sender.send(ClarificationResult::timeout());
                     }
-                    reaped.push(session_key.clone());
+                    reaped.push((session_key.clone(), ClarificationOutcome::Expired));
+                    false
+                } else if !entry.is_live() {
+                    // Abandoned (sender closed but not past the deadline): the
+                    // run was cancelled, the receiver is gone, the send is a
+                    // no-op. Tell the client side so the card is retired.
+                    entry.sender.take();
+                    reaped.push((session_key.clone(), ClarificationOutcome::Cancelled));
                     false
                 } else {
                     true
@@ -505,8 +524,8 @@ impl ClarificationManager {
             });
             reaped
         };
-        for session_key in &reaped {
-            publish_ended(session_key, ClarificationOutcome::Expired);
+        for (session_key, outcome) in &reaped {
+            publish_ended(session_key, *outcome);
         }
         reaped.len()
     }
@@ -1039,5 +1058,36 @@ mod tests {
         let outcome = mgr.resolve("sess-i", "1").await;
         assert_eq!(outcome, ResolveOutcome::Stale);
         assert!(!outcome.consumed());
+    }
+
+    /// The opportunistic sweep on `register` is the only thing that reaps
+    /// abandoned entries. Without it, a long-running gateway would leak
+    /// entries whose run was cancelled but never reaped.
+    #[tokio::test]
+    async fn register_reaps_abandoned_entries_opportunistically() {
+        let mgr = ClarificationManager::new();
+        for i in 0..3 {
+            let rx = mgr
+                .register(
+                    format!("sess-leak-{i}"),
+                    text_request(),
+                    DEFAULT_CLARIFY_TIMEOUT,
+                    "",
+                )
+                .await;
+            drop(rx); // simulate run cancellation
+        }
+        // Re-register (any session is fine) — the sweep rides along.
+        let _rx = mgr
+            .register("sess-fresh", text_request(), DEFAULT_CLARIFY_TIMEOUT, "")
+            .await;
+        // The leaked entries are gone; only the fresh one remains.
+        for i in 0..3 {
+            assert!(
+                !mgr.has_pending(&format!("sess-leak-{i}")).await,
+                "abandoned entry {i} must be reaped"
+            );
+        }
+        assert!(mgr.has_pending("sess-fresh").await);
     }
 }
