@@ -30,6 +30,16 @@ try {
   wasmBytes = readFileSync(wasmPath);
 } catch (e) {
   console.error(`✗ cannot read panel dist in '${dir}': ${e.message}`);
+  console.error(
+    `  These four files are TRACKED build outputs, not scratch: the release\n` +
+      `  workflow embeds them verbatim (aleph-app-release.yml — "Panel WASM dist\n` +
+      `  is pre-built and committed to git — no WASM build here"), so no release\n` +
+      `  job owns a WASM toolchain and an empty dist/ ships an empty Panel.\n` +
+      `  Fix: run \`just wasm\` and commit the result.\n` +
+      `  If you meant to stop tracking dist/, that same change has to teach the\n` +
+      `  release workflow to build the WASM first — dropping the files alone is\n` +
+      `  what gated the pipeline shut at 033814185 (2026-08-13).`,
+  );
   process.exit(1);
 }
 
