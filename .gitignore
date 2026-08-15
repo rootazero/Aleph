@@ -119,6 +119,8 @@ graphify-out/
 /.claude/worktrees/
 # opencode CLI local config (per-machine, references project plugins)
 /.opencode/
+# Pi agent local state (per-machine, runtime task persistence)
+/.pi/
 
 # ==============================================================================
 # Project scratch & misc
