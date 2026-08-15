@@ -52,6 +52,14 @@ pub(in crate::commands::start) fn initialize_vault(
 
     let security_store_path =
         paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
+    // Three-layer fallback: on-disk store → in-memory store → bail.
+    // `SecurityStore::in_memory` allocates a fresh SQLite `:memory:` connection,
+    // which only fails when the process is out of file descriptors or memory —
+    // a condition no Aleph code path is expected to recover from, so we treat
+    // it as a design-by-contract invariant and surface the message rather than
+    // a generic panic. `expect` keeps the diagnostic exact (which fallback
+    // failed and why); a wrapped panic would still propagate to the same
+    // `start_server` error path.
     let security_store = Arc::new(
         alephcore::gateway::security::SecurityStore::open(&security_store_path)
             .or_else(|e| {
@@ -60,7 +68,10 @@ pub(in crate::commands::start) fn initialize_vault(
                 );
                 alephcore::gateway::security::SecurityStore::in_memory()
             })
-            .unwrap_or_else(|e| panic!("Fatal: Failed to create in-memory security store fallback: {e}")),
+            .expect(
+                "Fatal: in-memory security store fallback failed — process is out of file \
+                 descriptors or memory; Aleph cannot start without a security store",
+            ),
     );
 
     let mdns_broadcaster = match alephcore::gateway::MdnsBroadcaster::new(port, "aleph") {

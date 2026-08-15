@@ -438,6 +438,16 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     }
 }
 
+/// Render a redacted audit log of an action target.
+///
+/// The hash is purely informational — used to correlate two records of the
+/// same target across log lines without leaking the target itself. Uses
+/// [`std::collections::hash_map::DefaultHasher`], which is **stable across
+/// calls within a single process** but is not guaranteed stable across Rust
+/// versions (the underlying algorithm is documented as unspecified, and has
+/// historically been `SipHasher13`). This is acceptable: `redact_target`
+/// runs only on the log emitter's path and the hash is never persisted or
+/// compared across processes.
 fn redact_target(target: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -774,6 +784,59 @@ mod tests {
             assert!(
                 matches_expectation,
                 "{action} resolved to {from_load:?}, expected {expected:?}"
+            );
+        }
+    }
+
+    /// Drift guard for the curated default map: every `ActionType` variant
+    /// must be explicitly named in [`ConfigApprovalPolicy::default`]. An
+    /// unnamed variant falls through to `Ask` (the safe "no policy" default),
+    /// which silently weakens the curated posture if a new variant joins the
+    /// enum without an entry here. The exhaustive list below is the half of
+    /// the guard that catches additions (a new variant fails to compile
+    /// until it joins the list and the default() map in lockstep); the
+    /// membership check on the internal map catches the other half (an
+    /// entry removed from default() silently weakens the posture).
+    #[test]
+    fn curated_default_covers_every_action_type() {
+        let curated = ConfigApprovalPolicy::default();
+        for action in [
+            ActionType::BrowserNavigate,
+            ActionType::BrowserClick,
+            ActionType::BrowserType,
+            ActionType::BrowserFill,
+            ActionType::BrowserEvaluate,
+            ActionType::BrowserOpen,
+            ActionType::BrowserSelect,
+            ActionType::BrowserDialog,
+            ActionType::BrowserPressKey,
+            ActionType::BrowserScroll,
+            ActionType::BrowserHover,
+            ActionType::BrowserDrag,
+            ActionType::BrowserUpload,
+            ActionType::BrowserCookiesWrite,
+            ActionType::BrowserIdentityOverride,
+            ActionType::BrowserSessionState,
+            ActionType::HooksManage,
+            ActionType::DesktopClick,
+            ActionType::DesktopType,
+            ActionType::DesktopKeyCombo,
+            ActionType::DesktopLaunchApp,
+            ActionType::DesktopAutomation,
+            ActionType::PimWrite,
+            ActionType::MediaCapture,
+        ] {
+            // Probe the internal map directly: an omitted variant would
+            // resolve to Ask via `check`'s step 4 (no default) — the same
+            // answer an intentional "ask on sight" entry would give, so
+            // membership is the only signal that catches a removal.
+            assert!(
+                curated.config.defaults.contains_key(&action),
+                "{action:?} is missing from the curated default() map — a new \
+                 ActionType variant joined the enum without an entry here, \
+                 which silently weakens the curated posture (the missing \
+                 variant falls through to Ask, which may differ from the \
+                 posture the operator expected)."
             );
         }
     }

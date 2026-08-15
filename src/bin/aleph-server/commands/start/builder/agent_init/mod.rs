@@ -1836,8 +1836,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     );
 
     Ok(AgentHandlersResult {
-        _run_manager: run_manager
-            .unwrap_or_else(|| panic!("run_manager must be set in both real and simulated modes")),
+        // Both branches (real-execution at line ~1443 and simulated-fallback at
+        // line ~1772) assign `Some(...)` to `run_manager`; this `.expect` is
+        // a design-by-contract check, not a real error path. We use `.expect`
+        // (not `panic!`) so the diagnostic reads as "this invariant was
+        // violated" rather than "something exploded", and so the line is
+        // greppable by anyone scanning for production panics.
+        _run_manager: run_manager.expect(
+            "run_manager must be set by either the real-execution branch or the \
+             simulated-fallback branch before reaching this point",
+        ),
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
         default_provider: default_prov,

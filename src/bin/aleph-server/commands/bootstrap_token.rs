@@ -40,6 +40,18 @@ pub fn handle_bootstrap_token() -> Result<(), Box<dyn Error>> {
         .to_path_buf();
 
     if let Some(token) = read_token_from_db(&db_path, &data_dir) {
+        // Warn on stderr (NOT stdout — stdout is reserved for the shell to
+        // parse the token line, with no banner by design). The token never
+        // expires, doubles as the vault master key, and any device that
+        // receives it keeps it permanently — operators have occasionally
+        // piped this straight into a QR / URL, which the module-level
+        // docstring explicitly forbids. One reminder is cheap; the
+        // mistake is permanent.
+        eprintln!(
+            "warning: this is the shared Gateway token — it never expires and is \
+             also the secret vault's master key. Do not put it in a URL or QR; use \
+             `aleph-server pair` to authorize a device instead."
+        );
         let stdout = std::io::stdout();
         let mut handle = stdout.lock();
         writeln!(handle, "{token}")?;

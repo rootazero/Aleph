@@ -140,8 +140,9 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     // agent (`main` today) would shadow the builtin at registration time,
     // flipping it to SubAgent, surviving `resolve_spawnable` (which filters on
     // mode), and carrying the wildcard tool grant into a sub-agent the
-    // system had explicitly marked Primary. Derived at load time from
-    // `builtin_agents()` so the reserved set cannot drift.
+    // system had explicitly marked Primary. The list itself is a literal
+    // mirror of the Primary entries in `builtin_agents()`; drift is caught by
+    // `registry::builtin_primary_ids_mirror_builtin_agents`.
     for reserved in crate::agents::registry::builtin_primary_ids() {
         if fm.id == reserved {
             return Err(LoaderError::ForbiddenSystemField {
