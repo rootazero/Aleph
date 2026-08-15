@@ -596,7 +596,12 @@ mod tests {
     fn builtin_primary_ids_mirror_builtin_agents() {
         let reserved: std::collections::BTreeSet<&str> =
             builtin_primary_ids().into_iter().collect();
-        let primary_builtins: std::collections::BTreeSet<&str> = builtin_agents()
+        // Bind the vec so the `&str` references outlive the iterator chain.
+        // An inline `builtin_agents().iter()` would have the temporary Vec
+        // dropped at the end of the expression, leaving the BTreeSet holding
+        // dangling references.
+        let builtins = builtin_agents();
+        let primary_builtins: std::collections::BTreeSet<&str> = builtins
             .iter()
             .filter(|a| a.mode == AgentMode::Primary)
             .map(|a| a.id.as_str())
