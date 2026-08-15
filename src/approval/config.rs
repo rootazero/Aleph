@@ -438,6 +438,16 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     }
 }
 
+/// Render a redacted audit log of an action target.
+///
+/// The hash is purely informational — used to correlate two records of the
+/// same target across log lines without leaking the target itself. Uses
+/// [`std::collections::hash_map::DefaultHasher`], which is **stable across
+/// calls within a single process** but is not guaranteed stable across Rust
+/// versions (the underlying algorithm is documented as unspecified, and has
+/// historically been `SipHasher13`). This is acceptable: `redact_target`
+/// runs only on the log emitter's path and the hash is never persisted or
+/// compared across processes.
 fn redact_target(target: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
