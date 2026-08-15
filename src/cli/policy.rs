@@ -59,8 +59,6 @@ impl std::error::Error for LockHeldError {}
 pub enum HttpMethod {
     Get,
     Post,
-    Patch,
-    Delete,
 }
 
 impl HttpMethod {
@@ -69,8 +67,6 @@ impl HttpMethod {
         match self {
             Self::Get => reqwest::Method::GET,
             Self::Post => reqwest::Method::POST,
-            Self::Patch => reqwest::Method::PATCH,
-            Self::Delete => reqwest::Method::DELETE,
         }
     }
 }
