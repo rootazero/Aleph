@@ -96,6 +96,17 @@ struct ProcEntry {
     /// [`ProcessRegistry::attach_live`] runs, and dropped again the moment the
     /// entry leaves `Running` (see the module docs).
     live: Option<Arc<LiveTail>>,
+    /// Whether the model has already collected this job's terminal result
+    /// through a `poll` / `wait`.
+    ///
+    /// Read by the proactive completion announcer
+    /// (`gateway::process_announce`) before it spends a whole parent turn
+    /// delivering a result the model already folded in — the same job
+    /// `BackgroundAgentTracker::consumed` does for background sub-agents. Set
+    /// by [`poll`](ProcessRegistry::poll) on a terminal read, which is also the
+    /// read `wait` returns through, so both faces stamp it without a second
+    /// call site to forget.
+    reported: bool,
 }
 
 impl ProcEntry {
@@ -279,6 +290,7 @@ impl ProcessRegistry {
                     abort,
                     state: ProcState::Running,
                     live: None,
+                    reported: false,
                 },
             );
             (id, preview)
@@ -322,11 +334,22 @@ impl ProcessRegistry {
 
     /// Record a task's final output. No-op if the entry was already killed or
     /// evicted — a `Killed` verdict wins over a late natural completion.
-    pub fn complete(&self, id: u64, output: CodeExecOutput) {
+    ///
+    /// Returns whether **this** call performed the `Running → Done` transition.
+    /// The caller needs the effect, not the call: a late completion landing
+    /// after a `kill` leaves no trace here, and announcing it would tell the
+    /// session a job finished that it had already stopped. The registry
+    /// deliberately does not broadcast that itself — it holds no bus and no
+    /// session key (its owner label is a serialized `SessionId`, not an
+    /// announce-addressable one) — so it reports the transition and lets the
+    /// spawner, which holds both, decide.
+    pub fn complete(&self, id: u64, output: CodeExecOutput) -> bool {
+        let mut landed = false;
         let journaled = {
             let mut procs = self.lock();
             match procs.get_mut(&id) {
                 Some(entry) if matches!(entry.state, ProcState::Running) => {
+                    landed = true;
                     // The journal's copy is taken here, under the same lock that
                     // decides the transition, so a racing `kill` cannot make the
                     // disk say "completed" while memory says "killed". Only paid
@@ -359,24 +382,47 @@ impl ProcessRegistry {
         }
         // Wake any `wait`ers so they re-check (and free a per-session slot).
         self.completion.notify_waiters();
+        landed
     }
 
     /// Fetch a process's status / output. Only succeeds for entries owned by
     /// `caller` — a mismatch is reported as `NotFound` to avoid leaking the
     /// existence of another session's processes.
+    ///
+    /// A terminal read stamps [`reported`](ProcEntry::reported): from here on
+    /// the model has the result, so the proactive announcer must not spend a
+    /// parent turn re-delivering it. `wait` returns through this same read, so
+    /// both collecting faces stamp it.
     pub fn poll(&self, id: u64, caller: Option<&str>) -> PollOutcome {
-        let procs = self.lock();
-        match procs.get(&id) {
-            Some(entry) if owns(entry, caller) => match &entry.state {
-                ProcState::Running => PollOutcome::Running {
-                    elapsed_ms: elapsed_ms(entry.started),
-                    partial: entry.live.as_ref().map(|t| t.snapshot()),
-                },
-                ProcState::Done(out) => PollOutcome::Done(out.clone()),
-                ProcState::Killed => PollOutcome::Killed,
+        let mut procs = self.lock();
+        let Some(entry) = procs.get_mut(&id).filter(|e| owns(e, caller)) else {
+            return PollOutcome::NotFound;
+        };
+        match &entry.state {
+            ProcState::Running => PollOutcome::Running {
+                elapsed_ms: elapsed_ms(entry.started),
+                partial: entry.live.as_ref().map(|t| t.snapshot()),
             },
-            _ => PollOutcome::NotFound,
+            ProcState::Done(out) => {
+                let out = out.clone();
+                entry.reported = true;
+                PollOutcome::Done(out)
+            }
+            ProcState::Killed => {
+                entry.reported = true;
+                PollOutcome::Killed
+            }
         }
+    }
+
+    /// Whether the model already collected this job's terminal result.
+    ///
+    /// The announcer's dedup predicate. `false` for unknown / still-running /
+    /// evicted ids — nothing to suppress, and the fail direction is a
+    /// duplicate notice rather than a silently withheld one.
+    #[must_use]
+    pub fn is_reported(&self, id: u64) -> bool {
+        self.lock().get(&id).is_some_and(|e| e.reported)
     }
 
     /// Abort a running process. Dropping the task fires `kill_on_drop` on the
@@ -726,11 +772,109 @@ mod tests {
         let reg = ProcessRegistry::new();
         let id = unwrap_id(reg.register_running("sleep 9", None, live_handle().await));
         assert!(matches!(reg.kill(id, None), KillOutcome::Killed));
-        // A late natural completion must NOT overwrite the Killed verdict.
-        reg.complete(id, dummy_output(0, "late"));
+        // A late natural completion must NOT overwrite the Killed verdict, and
+        // must SAY it changed nothing: the announce hangs off that answer, and
+        // a completion that lost to a kill has no news in it.
+        assert!(
+            !reg.complete(id, dummy_output(0, "late")),
+            "a completion that lost to a kill did not transition anything"
+        );
         assert!(matches!(reg.poll(id, None), PollOutcome::Killed));
         // Second kill is a no-op.
         assert!(matches!(reg.kill(id, None), KillOutcome::AlreadyFinished));
+    }
+
+    /// `complete` reports the **effect**, not the call. The announce producer
+    /// guards on this: an unknown or already-settled id must not put a
+    /// completion notice on the bus.
+    #[tokio::test]
+    async fn complete_reports_whether_the_transition_landed() {
+        let reg = ProcessRegistry::new();
+        let id = unwrap_id(reg.register_running("true", None, live_handle().await));
+        assert!(
+            reg.complete(id, dummy_output(0, "ok")),
+            "the first completion performs the Running → Done transition"
+        );
+        assert!(
+            !reg.complete(id, dummy_output(0, "again")),
+            "a second completion changes nothing"
+        );
+        assert!(
+            !reg.complete(9_999_999, dummy_output(0, "ghost")),
+            "an id the registry never issued transitions nothing"
+        );
+    }
+
+    /// The announce dedup: once the model has collected a result itself, a
+    /// proactive notice would spend a whole parent turn re-stating what it has
+    /// already folded in. `poll` is where that is stamped, and `wait` returns
+    /// through the same read.
+    #[tokio::test]
+    async fn a_terminal_read_marks_the_job_reported() {
+        let reg = ProcessRegistry::new();
+        let handle = live_handle().await;
+        let id = unwrap_id(reg.register_running("cargo build", Some("s".into()), handle));
+
+        // Mid-run polls are not collection — the result does not exist yet.
+        assert!(matches!(
+            reg.poll(id, Some("s")),
+            PollOutcome::Running { .. }
+        ));
+        assert!(!reg.is_reported(id), "a running job has nothing to report");
+
+        reg.complete(id, dummy_output(0, "done\n"));
+        assert!(
+            !reg.is_reported(id),
+            "completing is the announce's trigger, not its dedup"
+        );
+
+        // A foreign session's poll is a NotFound and must not stamp anything —
+        // otherwise one session could silence another's announce.
+        assert!(matches!(
+            reg.poll(id, Some("intruder")),
+            PollOutcome::NotFound
+        ));
+        assert!(!reg.is_reported(id));
+
+        assert!(matches!(reg.poll(id, Some("s")), PollOutcome::Done(_)));
+        assert!(
+            reg.is_reported(id),
+            "the owner collected the result; a proactive announce is now redundant"
+        );
+    }
+
+    /// `list` is a directory, not a collection: it shows status and exit code,
+    /// never the output. Stamping it reported would let a routine `list` cancel
+    /// the announce for a result the model has not actually read.
+    #[tokio::test]
+    async fn listing_a_finished_job_does_not_count_as_collecting_it() {
+        let reg = ProcessRegistry::new();
+        let id = unwrap_id(reg.register_running("true", Some("s".into()), live_handle().await));
+        reg.complete(id, dummy_output(0, "done\n"));
+        assert_eq!(reg.list(Some("s")).len(), 1);
+        assert!(
+            !reg.is_reported(id),
+            "seeing a job in a directory is not the same as reading its output"
+        );
+    }
+
+    /// `wait` returns through `poll`, so the other collecting face stamps it
+    /// too — without a second call site anyone could forget.
+    #[tokio::test]
+    async fn a_wait_that_returns_the_output_also_marks_it_reported() {
+        let reg = Arc::new(ProcessRegistry::new());
+        let handle = live_handle().await;
+        let id = unwrap_id(reg.register_running("echo hi", Some("w".into()), handle));
+        let reg2 = reg.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            reg2.complete(id, dummy_output(0, "hi\n"));
+        });
+        assert!(matches!(
+            reg.wait(id, Some("w"), Duration::from_secs(5)).await,
+            WaitOutcome::Done(_)
+        ));
+        assert!(reg.is_reported(id));
     }
 
     #[tokio::test]

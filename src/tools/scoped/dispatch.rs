@@ -1583,7 +1583,12 @@ impl ScopedToolService {
     /// (they never reach `apply_layer_two`), so an upstream that embeds a whole
     /// HTML error page or a giant stack trace would otherwise ride into the
     /// model's context verbatim on every subsequent turn.
-    fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
+    ///
+    /// `pub(super)` for one caller: the panic containment in
+    /// `execute_with_cancel` synthesizes its `Execution` error ABOVE this
+    /// pipeline, so without reaching back in, a panic body would be the one
+    /// error text the model sees unbounded and unfenced.
+    pub(super) fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
         use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
         // Preserve the original variant so callers can keep matching on
         // `Timeout` / `Transport` / `Execution`; only the `cause` /

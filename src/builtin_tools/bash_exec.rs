@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
 use super::partial_output::{self, PartialView};
+use super::process_completion;
 use super::process_journal::{self, JobPhase, RecoveredJob};
 use super::process_registry::{
     process_registry, KillOutcome, PollOutcome, RegisterOutcome, WaitOutcome,
@@ -272,6 +273,10 @@ impl BashExecTool {
         let identity = crate::approval::current_call_identity();
         let inner = self.inner.clone();
         let preview = code_exec_args.code.clone();
+        // A second copy for the completion announce: `preview` moves into
+        // `register_running` on this task, and the notice is built inside the
+        // detached one.
+        let command_for_announce = preview.clone();
         // One tail per background job: the detached task scopes it (so the
         // drivers can tee into it) and the registry holds it (so `poll` can
         // read it) until the entry retires.
@@ -291,6 +296,11 @@ impl BashExecTool {
                 // to report against; abandon quietly.
                 Err(_) => return,
             };
+            // Cloned before `sid` moves into the exec scope below: the announce
+            // must be addressed with the captured `SessionId` itself. The
+            // registry's owner label is NOT a substitute — it is a serialized
+            // `SessionId`, which `SessionKey::from_key_string` does not read.
+            let announce_sid = sid.clone();
             // Background escapes the 180s per-tool budget wrapper (the spawn
             // call returned a process_id already), so it must NOT inherit the
             // foreground timeout clamp — a backgrounded `cargo build` may
@@ -317,7 +327,30 @@ impl BashExecTool {
             .await;
             let output = result
                 .unwrap_or_else(|e| error_output(format!("bash: background task error: {e}")));
-            reg.complete(id, output);
+            // Built before `output` moves into the registry, broadcast after —
+            // an announce-driven parent turn must find the job already `Done`
+            // when it polls, the same ordering `subagent_tool::spawn` keeps
+            // around `mark_completed`.
+            let announcement = announce_sid.as_ref().map(|_| {
+                process_completion::completion_event(
+                    id,
+                    &command_for_announce,
+                    output.exit_code,
+                    &output.stdout,
+                    &output.stderr,
+                )
+            });
+            // R5 proactive arrival: without this, a job that outlives the run
+            // that started it is only ever seen if the model happens to poll —
+            // and once that run ends, nobody looks. Guarded on the *effect*,
+            // not the call: a completion landing after a `kill` changes nothing
+            // in the registry, and announcing it would tell the session a job
+            // finished that it had already stopped. No session (CLI / direct
+            // callers) means nobody to announce to.
+            let settled_now = reg.complete(id, output);
+            if let (true, Some(sid), Some(event)) = (settled_now, announce_sid, announcement) {
+                process_completion::broadcast(&sid, event).await;
+            }
         });
 
         match registry.register_running(preview, caller, join.abort_handle()) {
@@ -355,6 +388,19 @@ impl BashExecTool {
 /// sandbox uses for its workspace key so the value is stable for a session.
 fn session_label() -> Option<String> {
     current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
+}
+
+/// Recover the owning session from a label [`session_label`] wrote.
+///
+/// Lives next to its producer because it is that function's inverse and the two
+/// are only correct together. The label is **serde JSON**, not
+/// `SessionKey::to_key_string()` — reaching for `from_key_string` here returns
+/// `None` for every row, which reads exactly like "this job had no session".
+///
+/// The live announce path never needs this: it holds the captured `SessionId`.
+/// The boot handback does — a row on disk is all a later daemon has.
+pub(crate) fn session_key_from_label(label: &str) -> Option<crate::session::service::SessionId> {
+    serde_json::from_str(label).ok()
 }
 
 /// Abort every still-running background job in the global process registry.
@@ -1478,6 +1524,220 @@ mod tests {
                 release.notify_one();
             })
             .await;
+    }
+
+    // ========================================================================
+    // R5 completion announce — the producer half
+    // ========================================================================
+
+    /// Watches the global bus for `ProcessCompleted` events.
+    ///
+    /// Attached **before** the job is spawned: the announce is broadcast from
+    /// the detached task the instant it settles, and a receiver that subscribes
+    /// afterwards sees nothing — which would make every one of these tests pass
+    /// for the wrong reason.
+    struct CompletionWatch {
+        rx: tokio::sync::broadcast::Receiver<crate::event::GlobalEvent>,
+    }
+
+    impl CompletionWatch {
+        fn attach() -> Self {
+            Self {
+                rx: crate::event::GlobalBus::global().subscribe_broadcast(),
+            }
+        }
+
+        /// Every completion announced for `id`, after draining the bus for
+        /// `grace`. Drains for the whole window rather than returning on the
+        /// first hit, because "exactly one" is the assertion that matters.
+        async fn seen_for(
+            &mut self,
+            id: u64,
+            grace: std::time::Duration,
+        ) -> Vec<(String, crate::event::ProcessCompletionEvent)> {
+            let deadline = std::time::Instant::now() + grace;
+            let mut out = Vec::new();
+            while std::time::Instant::now() < deadline {
+                // Everything else is a non-event: `Closed` is impossible (the
+                // bus holds the sender), `Lagged` only means other tests were
+                // noisy, and the elapsed timeout is just an idle tick — all
+                // three keep draining until the window is up.
+                if let Ok(Ok(ev)) =
+                    tokio::time::timeout(std::time::Duration::from_millis(20), self.rx.recv()).await
+                {
+                    if let crate::event::AlephEvent::ProcessCompleted(done) = &ev.event {
+                        if done.process_id == id {
+                            out.push((ev.source_session_id.clone(), done.clone()));
+                        }
+                    }
+                }
+            }
+            out
+        }
+    }
+
+    /// The gap this closes: a background job that finishes after the run which
+    /// started it has ended used to reach nobody. One natural completion, one
+    /// announce, addressed to the session that owns the job.
+    ///
+    /// RED without the broadcast in `spawn_background`: zero events.
+    #[tokio::test]
+    async fn a_session_scoped_job_announces_its_completion_exactly_once() {
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-announce-one");
+        let mut watch = CompletionWatch::attach();
+
+        let (id, seen) = SESSION_ID
+            .scope(session.clone(), async {
+                let tool = BashExecTool::new();
+                let spawn = tool
+                    .call(args_background("echo hi"))
+                    .await
+                    .expect("spawn succeeds");
+                let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+                let id = v["process_id"].as_u64().expect("process_id");
+                let seen = watch.seen_for(id, std::time::Duration::from_secs(2)).await;
+                (id, seen)
+            })
+            .await;
+
+        assert_eq!(
+            seen.len(),
+            1,
+            "a natural completion must announce exactly once"
+        );
+        let (announced_to, done) = &seen[0];
+        assert_eq!(
+            announced_to,
+            &session.to_key_string(),
+            "the announce must be addressed with the session key the announcer parses, \
+             not the registry's serialized owner label"
+        );
+        assert_eq!(done.process_id, id);
+        assert!(
+            done.command.contains("echo hi"),
+            "the notice names the job: {}",
+            done.command
+        );
+    }
+
+    /// A killed job is the owner's own synchronous action — its outcome is
+    /// already in that tool call's return, so announcing it would spend a whole
+    /// parent turn telling a session about a job it had just stopped. The
+    /// registry's `Killed` verdict also wins over any late natural completion,
+    /// so there is nothing to announce even if the task got that far.
+    #[tokio::test]
+    async fn a_killed_job_announces_nothing() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(TeeThenBlockSandbox {
+            release: release.clone(),
+        });
+        let tool = BashExecTool::new().with_sandbox(sandbox);
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-announce-kill");
+        let mut watch = CompletionWatch::attach();
+
+        SESSION_ID
+            .scope(session, async {
+                let spawn = tool
+                    .call(args_background("cargo build"))
+                    .await
+                    .expect("spawn succeeds");
+                let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+                let id = v["process_id"].as_u64().expect("process_id");
+
+                let killed = tool.call(args_action("kill", Some(id))).await.unwrap();
+                assert!(
+                    killed.stdout.contains("\"status\":\"killed\""),
+                    "{killed:?}"
+                );
+
+                release.notify_one();
+                let seen = watch.seen_for(id, std::time::Duration::from_secs(1)).await;
+                assert!(
+                    seen.is_empty(),
+                    "you asked for it to stop, so its outcome is not news: {seen:?}"
+                );
+            })
+            .await;
+    }
+
+    /// No session means nobody to announce to. A CLI or library caller still
+    /// gets the job, the registry entry and the poll face — it simply produces
+    /// no event, because an event scoped to nothing has no addressee.
+    #[tokio::test]
+    async fn an_unscoped_job_announces_nothing() {
+        let mut watch = CompletionWatch::attach();
+        let tool = BashExecTool::new();
+
+        let spawn = tool
+            .call(args_background("echo hi"))
+            .await
+            .expect("spawn succeeds");
+        let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+        let id = v["process_id"].as_u64().expect("process_id");
+
+        // The job really does run and settle — this is not a test that passes
+        // because nothing happened.
+        let mut settled = false;
+        for _ in 0..200 {
+            if matches!(
+                process_registry().poll(id, None),
+                PollOutcome::Done(_) | PollOutcome::Killed
+            ) {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            settled,
+            "the unscoped job must still reach a terminal state"
+        );
+
+        let seen = watch
+            .seen_for(id, std::time::Duration::from_millis(500))
+            .await;
+        assert!(seen.is_empty(), "no session, no addressee: {seen:?}");
+    }
+
+    /// The label written into the registry and the journal is serde JSON, not
+    /// `SessionKey::to_key_string()`. The boot handback is the one reader that
+    /// has nothing but the label, so the two functions have to be inverses —
+    /// and reaching for `from_key_string` there returns `None` for every row,
+    /// which reads exactly like "this job had no session".
+    #[tokio::test]
+    async fn the_owner_label_round_trips_back_to_its_session_key() {
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-label-rt");
+        let label = SESSION_ID
+            .scope(session.clone(), async { session_label() })
+            .await
+            .expect("a scoped call has a label");
+
+        assert_eq!(
+            session_key_from_label(&label),
+            Some(session.clone()),
+            "session_label and session_key_from_label must be inverses"
+        );
+        assert!(
+            crate::routing::session_key::SessionKey::from_key_string(&label).is_none(),
+            "the label is NOT a key string; pinning this is what stops the boot \
+             handback from silently deciding every recovered job is unowned"
+        );
+    }
+
+    /// Spawn args for a background job.
+    fn args_background(cmd: &str) -> BashExecArgs {
+        BashExecArgs {
+            cmd: cmd.to_string(),
+            working_dir: None,
+            timeout_seconds: None,
+            allow_network: false,
+            allow_subprocess: false,
+            extra_writable_paths: Vec::new(),
+            background: true,
+            process_action: None,
+            process_id: None,
+            justification: None,
+        }
     }
 
     /// Drive one background job (with the given explicit `timeout`) to

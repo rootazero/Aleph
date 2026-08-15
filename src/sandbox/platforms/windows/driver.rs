@@ -246,6 +246,12 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         })
     }
 
+    /// A restricted-token / AppContainer refusal surfaces as
+    /// ERROR_ACCESS_DENIED, whose formatted message is "Access is denied".
+    fn denial_signatures(&self) -> &'static [&'static str] {
+        &["access is denied"]
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
@@ -465,6 +471,20 @@ mod tests {
     fn windows_driver_platform() {
         let driver = WindowsSandboxDriver::new();
         assert_eq!(driver.platform(), "windows/token");
+    }
+
+    #[test]
+    fn denial_dialect_is_the_tokens_own_and_not_a_union() {
+        let sigs = WindowsSandboxDriver::new().denial_signatures();
+        assert_eq!(sigs, &["access is denied"]);
+        // Borrowing another backend's dialect would let a Windows run be
+        // reported as a denial Windows cannot emit.
+        for foreign in ["operation not permitted", "read-only file system"] {
+            assert!(
+                !sigs.contains(&foreign),
+                "{foreign} belongs to another backend"
+            );
+        }
     }
 
     #[test]

@@ -1143,6 +1143,141 @@ async fn execute_with_cancel_runs_to_completion_when_token_never_fires() {
 }
 
 // -------------------------------------------------------------------------
+// Panic containment — a panicking tool body costs one call, not the batch.
+// -------------------------------------------------------------------------
+
+/// Panics on every call, with a message distinctive enough to prove the
+/// payload survived the catch rather than being replaced by a placeholder.
+struct PanickingTool;
+
+#[async_trait::async_trait]
+impl LoopTool for PanickingTool {
+    fn name(&self) -> &str {
+        "panicker"
+    }
+    fn description(&self) -> &str {
+        "panics"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        panic!("tool body exploded: {}", 42);
+    }
+}
+
+/// Sleeps before succeeding, so a batch sibling is genuinely in flight (not
+/// merely queued) at the moment the panicking call unwinds, and flips a flag
+/// on completion — a dropped future never reaches it.
+struct SlowSiblingTool(StdArc<std::sync::atomic::AtomicBool>);
+
+#[async_trait::async_trait]
+impl LoopTool for SlowSiblingTool {
+    fn name(&self) -> &str {
+        "sibling"
+    }
+    fn description(&self) -> &str {
+        "completes after a yield"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.0.store(true, Ordering::SeqCst);
+        LoopToolResult::Success {
+            output: json!({ "sibling": "done" }),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_panicking_tool_body_becomes_an_attributed_per_call_error() {
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(PanickingTool));
+    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new());
+
+    let err = svc
+        .execute("panicker", json!({}))
+        .await
+        .expect_err("a panicking tool body must resolve to an error, not unwind the caller");
+
+    match &err {
+        ToolError::Execution { name, cause } => {
+            assert_eq!(
+                name, "panicker",
+                "the error must name the tool that panicked"
+            );
+            assert!(
+                cause.contains("tool panicked"),
+                "cause must say a panic happened, got: {cause}"
+            );
+            assert!(
+                cause.contains("tool body exploded: 42"),
+                "cause must carry the panic payload, got: {cause}"
+            );
+            // The synthesized error is built above `execute_inner`, so it has
+            // to reach back into the same sanitizer; both fence halves prove
+            // it did (a panic body is untrusted, unbounded text).
+            assert!(
+                cause.contains(crate::security::content_sanitizer::FENCE_OPEN_PREFIX)
+                    && cause.contains(crate::security::content_sanitizer::FENCE_CLOSE_PREFIX),
+                "panic body must be fenced like every other tool error, got: {cause}"
+            );
+        }
+        other => panic!("expected ToolError::Execution, got: {other:?}"),
+    }
+    // Deterministic panics must not be respun into a second panic.
+    assert!(!err.is_retryable(), "a panic is not a transient failure");
+}
+
+#[tokio::test]
+async fn a_panicking_call_does_not_take_its_batch_siblings_down() {
+    use futures::StreamExt;
+
+    // Mirrors the Act phase: several tool futures polled by ONE task via
+    // `stream::iter(..).buffer_unordered(n)`. Without containment the unwind
+    // escapes that task and drop-cancels every sibling with it.
+    let sibling_finished = StdArc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(SlowSiblingTool(sibling_finished.clone())));
+    r.register(Box::new(PanickingTool));
+    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new());
+
+    // Sibling first so it is parked on its sleep when the panic fires.
+    let calls = vec![
+        svc.execute_with_cancel("sibling", json!({}), CancellationToken::new()),
+        svc.execute_with_cancel("panicker", json!({}), CancellationToken::new()),
+    ];
+    let results: Vec<_> = futures::stream::iter(calls)
+        .buffer_unordered(2)
+        .collect()
+        .await;
+
+    assert_eq!(results.len(), 2, "both calls must report an outcome");
+    assert!(
+        sibling_finished.load(Ordering::SeqCst),
+        "the sibling was dropped mid-flight instead of running to completion"
+    );
+    assert!(
+        results.iter().any(|r| r.is_ok()),
+        "the sibling's success must survive the panicking call"
+    );
+    assert!(
+        results.iter().any(|r| matches!(
+            r, Err(ToolError::Execution { name, .. }) if name == "panicker"
+        )),
+        "the panicking call must surface as its own attributed failure"
+    );
+}
+
+// -------------------------------------------------------------------------
 // Per-tool confirmation gate — `LoopTool::requires_confirmation()` honored
 // by the dispatch gate.
 // -------------------------------------------------------------------------

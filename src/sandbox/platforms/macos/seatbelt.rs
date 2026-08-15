@@ -914,6 +914,15 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
         })
     }
 
+    /// Seatbelt reports every SBPL refusal to the process as EPERM, so what
+    /// reaches stderr is that errno's `strerror` text. File, network and
+    /// `process-fork` denials are indistinguishable at this layer — which is
+    /// why the consumer names all three escalation parameters rather than
+    /// picking one.
+    fn denial_signatures(&self) -> &'static [&'static str] {
+        &["operation not permitted"]
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
@@ -984,6 +993,20 @@ mod tests {
     fn seatbelt_driver_platform() {
         let driver = SeatbeltDriver::new();
         assert_eq!(driver.platform(), "macos/seatbelt");
+    }
+
+    #[test]
+    fn denial_dialect_is_seatbelts_own_and_not_a_union() {
+        let sigs = SeatbeltDriver::new().denial_signatures();
+        assert_eq!(sigs, &["operation not permitted"]);
+        // Borrowing another backend's dialect would let a macOS run be
+        // reported as a denial macOS cannot emit.
+        for foreign in ["read-only file system", "access is denied"] {
+            assert!(
+                !sigs.contains(&foreign),
+                "{foreign} belongs to another backend"
+            );
+        }
     }
 
     #[test]

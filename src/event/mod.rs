@@ -31,6 +31,8 @@ pub use types::{
     InputEvent,
     // Loop control
     LoopState,
+    // Background `bash` jobs
+    ProcessCompletionEvent,
     SessionDiff,
     // Session events
     SessionInfo,

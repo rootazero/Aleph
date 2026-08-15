@@ -55,6 +55,9 @@ pub enum EventType {
     SubAgentCompleted,
     SubAgentTreeUpdate,
 
+    // Background `bash` jobs
+    ProcessCompleted,
+
     // AI response
     AiResponseGenerated,
 
@@ -102,6 +105,9 @@ pub enum AlephEvent {
     /// panel's background sub-agent tree view via the gateway relay. Pure
     /// observability; carries no reasoning (R4/R10).
     SubAgentTreeUpdate(aleph_protocol::subagent_tree::SubagentTreeEvent),
+
+    // Background `bash` job events
+    ProcessCompleted(ProcessCompletionEvent),
 
     // AI response events
     AiResponseGenerated(AiResponse),
@@ -170,6 +176,7 @@ impl AlephEvent {
             Self::SessionCompacted(_) => EventType::SessionCompacted,
             Self::SubAgentCompleted(_) => EventType::SubAgentCompleted,
             Self::SubAgentTreeUpdate(_) => EventType::SubAgentTreeUpdate,
+            Self::ProcessCompleted(_) => EventType::ProcessCompleted,
             Self::AiResponseGenerated(_) => EventType::AiResponseGenerated,
             Self::TeamCreated { .. } => EventType::TeamCreated,
             Self::TeamMemberAdded { .. } => EventType::TeamMemberAdded,
@@ -200,6 +207,7 @@ impl AlephEvent {
             Self::SessionCompacted(_) => "SessionCompacted",
             Self::SubAgentCompleted(_) => "SubAgentCompleted",
             Self::SubAgentTreeUpdate(_) => "SubAgentTreeUpdate",
+            Self::ProcessCompleted(_) => "ProcessCompleted",
             Self::AiResponseGenerated(_) => "AiResponseGenerated",
             Self::TeamCreated { .. } => "TeamCreated",
             Self::TeamMemberAdded { .. } => "TeamMemberAdded",
@@ -400,6 +408,40 @@ pub struct SubAgentCompletionEvent {
     /// Request ID for result correlation (optional for backwards compatibility)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+}
+
+// ============================================================================
+// Background Process Event Types
+// ============================================================================
+
+/// A background `bash` job reached a natural completion. Payload of
+/// [`AlephEvent::ProcessCompleted`].
+///
+/// Broadcast only from the detached task in `builtin_tools::bash_exec`, and only
+/// when that task's `ProcessRegistry::complete` actually performed the
+/// `Running → Done` transition. A killed job produces none: the owner asked for
+/// the stop, so its outcome is not news — the same stance
+/// `subagent_tool::spawn` takes for a cancelled child.
+///
+/// Every string here is already masked by the producer. The reader is a *later*
+/// turn whose reply may fan out to a chat channel, so redaction cannot be left
+/// to whoever renders it (§5.1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessCompletionEvent {
+    /// Registry id — the value the model passes back as `process_id`.
+    pub process_id: u64,
+    /// Masked, truncated command preview (the text `list` shows).
+    pub command: String,
+    pub exit_code: i32,
+    pub success: bool,
+    /// Masked **tail** of the finished output. Bounded on purpose: the notice
+    /// opens a model turn, and the full output stays one `poll` away.
+    pub output_tail: String,
+    /// Whether [`output_tail`](Self::output_tail) had a head cut off it. A tail
+    /// presented as the whole output is how a model concludes a build printed
+    /// nothing before its last line.
+    #[serde(default)]
+    pub output_truncated: bool,
 }
 
 // ============================================================================

@@ -89,6 +89,7 @@ pub mod partial_output;
 pub mod pdf_generate;
 pub mod permission_tool;
 pub mod pim;
+pub mod process_completion;
 pub mod process_journal;
 pub mod process_registry;
 pub mod recall_context;
@@ -139,25 +140,25 @@ pub use agent_manage::{
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
 pub use browser_tools::{
-    BrowserExecArgs, BrowserExecOutput, BrowserExecTool, BrowserClickArgs, BrowserClickOutput,
-    BrowserClickTool, BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool,
-    BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool, BrowserDialogArgs,
-    BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs, BrowserDragOutput, BrowserDragTool,
-    BrowserEmulateArgs, BrowserEmulateOutput, BrowserEmulateTool, BrowserEvaluateArgs,
-    BrowserEvaluateOutput, BrowserEvaluateTool, BrowserFillFormArgs, BrowserFillFormOutput,
-    BrowserFillFormTool, BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool,
-    BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool, BrowserNetworkArgs,
-    BrowserNetworkOutput, BrowserNetworkTool, BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool,
-    BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool, BrowserPressKeyArgs, BrowserPressKeyOutput,
-    BrowserPressKeyTool, BrowserProfileArgs, BrowserProfileOutput, BrowserProfileTool,
-    BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool, BrowserScreenshotArgs,
-    BrowserScreenshotOutput, BrowserScreenshotTool, BrowserScrollArgs, BrowserScrollOutput,
-    BrowserScrollTool, BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool,
-    BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool, BrowserSnapshotArgs,
-    BrowserSnapshotOutput, BrowserSnapshotTool, BrowserTabsArgs, BrowserTabsOutput,
-    BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput, BrowserTypeTool, BrowserUploadArgs,
-    BrowserUploadOutput, BrowserUploadTool, BrowserWaitForArgs, BrowserWaitForOutput,
-    BrowserWaitForTool,
+    BrowserClickArgs, BrowserClickOutput, BrowserClickTool, BrowserConsoleArgs,
+    BrowserConsoleOutput, BrowserConsoleTool, BrowserCookiesArgs, BrowserCookiesOutput,
+    BrowserCookiesTool, BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool, BrowserDragArgs,
+    BrowserDragOutput, BrowserDragTool, BrowserEmulateArgs, BrowserEmulateOutput,
+    BrowserEmulateTool, BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool,
+    BrowserExecArgs, BrowserExecOutput, BrowserExecTool, BrowserFillFormArgs,
+    BrowserFillFormOutput, BrowserFillFormTool, BrowserHoverArgs, BrowserHoverOutput,
+    BrowserHoverTool, BrowserNavigateArgs, BrowserNavigateOutput, BrowserNavigateTool,
+    BrowserNetworkArgs, BrowserNetworkOutput, BrowserNetworkTool, BrowserOpenArgs,
+    BrowserOpenOutput, BrowserOpenTool, BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool,
+    BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool, BrowserProfileArgs,
+    BrowserProfileOutput, BrowserProfileTool, BrowserResizeArgs, BrowserResizeOutput,
+    BrowserResizeTool, BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool,
+    BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool, BrowserSelectArgs,
+    BrowserSelectOutput, BrowserSelectTool, BrowserSessionArgs, BrowserSessionOutput,
+    BrowserSessionTool, BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool,
+    BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool, BrowserTypeArgs, BrowserTypeOutput,
+    BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool, BrowserWaitForArgs,
+    BrowserWaitForOutput, BrowserWaitForTool,
 };
 pub use channel_directory::{
     ChannelDirectoryArgs, ChannelDirectoryEntry, ChannelDirectoryOutput, ChannelDirectoryTool,

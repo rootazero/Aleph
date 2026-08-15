@@ -486,10 +486,62 @@ impl ClarificationManager {
         true
     }
 
-    /// Drop expired entries, unblocking their waiters with a timeout result.
-    /// Returns the number of entries reaped.
+    /// Retire the clarification on `session_key` **only if nobody is parked on
+    /// it any more** — its receiver is closed (the asking run was cancelled, or
+    /// hit the engine's deadline, and its whole future was dropped) or it is
+    /// already past its own deadline.
+    ///
+    /// The liveness gate is what makes this safe to fire from a drop guard,
+    /// which cannot know whether a successor `ask` has since claimed the same
+    /// key: a fresh sibling question is live, so it is never touched.
+    ///
+    /// Returns whether an entry was retired.
+    pub async fn cancel_abandoned(&self, session_key: &str) -> bool {
+        let mut pending = self.pending.write().await;
+        if pending.get(session_key).is_none_or(PendingEntry::is_live) {
+            return false;
+        }
+        let mut entry = pending
+            .remove(session_key)
+            .expect("invariant: observed under this same write lock");
+        if let Some(sender) = entry.sender.take() {
+            // A no-op for the abandoned case — the receiver is what closed —
+            // but an expired entry whose waiter is still parked is unblocked
+            // here rather than left to its own timeout.
+            let _ = sender.send(ClarificationResult::cancelled());
+        }
+        drop(pending);
+        publish_ended(session_key, ClarificationOutcome::Cancelled);
+        true
+    }
+
+    /// Whether an entry is registered for `session_key` at all — live, expired
+    /// or abandoned.
+    ///
+    /// Tests only. Production faces ask [`has_pending`](Self::has_pending),
+    /// which answers `false` for a zombie as well as for a removed entry and so
+    /// cannot witness a retirement.
+    #[cfg(test)]
+    pub(crate) async fn is_registered(&self, session_key: &str) -> bool {
+        self.pending.read().await.contains_key(session_key)
+    }
+
+    /// Drop *dead* entries — expired OR abandoned — unblocking live waiters
+    /// with a timeout result and announcing the terminal frame for every
+    /// reaped session.
+    ///
+    /// Returns the number of entries reaped. An *abandoned* entry is one whose
+    /// parked `oneshot::Receiver` has been dropped (the run was cancelled);
+    /// the sender is closed by then, so the post-send is a no-op and the
+    /// terminal frame is `Cancelled` to match what the caller already saw on
+    /// the run side.
+    ///
+    /// The opportunistic sweep on each [`register`](Self::register) is the only
+    /// way abandoned entries are reaped in practice — they have no scheduled
+    /// caller, and a long-running gateway with many cancelled runs would
+    /// otherwise leak them in the pending map.
     pub async fn cleanup_expired(&self) -> usize {
-        let reaped: Vec<String> = {
+        let reaped: Vec<(String, ClarificationOutcome)> = {
             let mut pending = self.pending.write().await;
             let mut reaped = Vec::new();
             pending.retain(|session_key, entry| {
@@ -497,7 +549,14 @@ impl ClarificationManager {
                     if let Some(sender) = entry.sender.take() {
                         let _ = sender.send(ClarificationResult::timeout());
                     }
-                    reaped.push(session_key.clone());
+                    reaped.push((session_key.clone(), ClarificationOutcome::Expired));
+                    false
+                } else if !entry.is_live() {
+                    // Abandoned (sender closed but not past the deadline): the
+                    // run was cancelled, the receiver is gone, the send is a
+                    // no-op. Tell the client side so the card is retired.
+                    entry.sender.take();
+                    reaped.push((session_key.clone(), ClarificationOutcome::Cancelled));
                     false
                 } else {
                     true
@@ -505,8 +564,8 @@ impl ClarificationManager {
             });
             reaped
         };
-        for session_key in &reaped {
-            publish_ended(session_key, ClarificationOutcome::Expired);
+        for (session_key, outcome) in &reaped {
+            publish_ended(session_key, *outcome);
         }
         reaped.len()
     }
@@ -530,6 +589,12 @@ fn normalize(reply: &str) -> &str {
 
 /// Index of the option `token` names — by 1-based number, or by
 /// case-insensitive value/label.
+///
+/// Case folding is locale-blind (`str::to_lowercase`): fine for ASCII labels
+/// and the only behaviour the rendered hint ("Reply with the number **or your
+/// answer**") promises. Locale-sensitive folding (Turkish I, German ß) would
+/// be a deliberate departure from the current expectation and is left for
+/// the caller to opt into.
 fn match_option(question: &ClarificationQuestion, token: &str) -> Option<u32> {
     let token = token.trim();
     if let Ok(n) = token.parse::<usize>() {
@@ -911,6 +976,62 @@ mod tests {
         assert!(!mgr.has_pending("sess-f").await);
     }
 
+    /// The zombie a cancelled run leaves behind: its receiver is closed, so
+    /// nothing can ever answer it and no return path of the parked tool runs to
+    /// say so. Retiring it is this method's whole job — and it must retire only
+    /// that, because an entry someone is still parked on is a live question.
+    #[tokio::test]
+    async fn cancel_abandoned_retires_only_an_entry_nobody_is_parked_on() {
+        let mgr = ClarificationManager::new();
+
+        // Nothing registered: nothing to retire.
+        assert!(!mgr.cancel_abandoned("sess-none").await);
+
+        let rx = mgr
+            .register("sess-live", text_request(), DEFAULT_CLARIFY_TIMEOUT, "")
+            .await;
+        assert!(!mgr.cancel_abandoned("sess-live").await);
+        assert!(
+            mgr.has_pending("sess-live").await,
+            "a question with a waiter parked on it must survive"
+        );
+
+        // The run was cancelled: its future, and with it the receiver, is gone.
+        drop(rx);
+        assert!(mgr.cancel_abandoned("sess-live").await);
+        assert!(
+            !mgr.is_registered("sess-live").await,
+            "the entry must be removed, not merely reported dead"
+        );
+    }
+
+    /// The re-register race: a cancelled run's guard fires after a fresh `ask`
+    /// has already claimed the same session key. Retiring by key alone would
+    /// kill the successor's question — the liveness gate is what makes the late
+    /// guard a no-op.
+    #[tokio::test]
+    async fn cancel_abandoned_never_touches_a_successor_ask() {
+        let mgr = ClarificationManager::new();
+        let dead = mgr
+            .register("sess-race", text_request(), DEFAULT_CLARIFY_TIMEOUT, "")
+            .await;
+        drop(dead);
+        let live = mgr
+            .register(
+                "sess-race",
+                two_question_request(),
+                DEFAULT_CLARIFY_TIMEOUT,
+                "",
+            )
+            .await;
+
+        assert!(!mgr.cancel_abandoned("sess-race").await);
+        assert!(mgr.has_pending("sess-race").await);
+        // The successor still answers, which its retired predecessor could not.
+        assert!(mgr.resolve("sess-race", "1").await.consumed());
+        drop(live);
+    }
+
     #[tokio::test]
     async fn cleanup_expired_times_out_stale_entries() {
         let mgr = ClarificationManager::new();
@@ -1039,5 +1160,36 @@ mod tests {
         let outcome = mgr.resolve("sess-i", "1").await;
         assert_eq!(outcome, ResolveOutcome::Stale);
         assert!(!outcome.consumed());
+    }
+
+    /// The opportunistic sweep on `register` is the only thing that reaps
+    /// abandoned entries. Without it, a long-running gateway would leak
+    /// entries whose run was cancelled but never reaped.
+    #[tokio::test]
+    async fn register_reaps_abandoned_entries_opportunistically() {
+        let mgr = ClarificationManager::new();
+        for i in 0..3 {
+            let rx = mgr
+                .register(
+                    format!("sess-leak-{i}"),
+                    text_request(),
+                    DEFAULT_CLARIFY_TIMEOUT,
+                    "",
+                )
+                .await;
+            drop(rx); // simulate run cancellation
+        }
+        // Re-register (any session is fine) — the sweep rides along.
+        let _rx = mgr
+            .register("sess-fresh", text_request(), DEFAULT_CLARIFY_TIMEOUT, "")
+            .await;
+        // The leaked entries are gone; only the fresh one remains.
+        for i in 0..3 {
+            assert!(
+                !mgr.has_pending(&format!("sess-leak-{i}")).await,
+                "abandoned entry {i} must be reaped"
+            );
+        }
+        assert!(mgr.has_pending("sess-fresh").await);
     }
 }

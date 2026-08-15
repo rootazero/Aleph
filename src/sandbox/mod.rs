@@ -38,7 +38,7 @@ pub mod workspace;
 pub mod worktree;
 
 pub use capabilities::{NetworkPolicy, SandboxCapabilities};
-pub use command::{SandboxCommand, SandboxError, SandboxOutput};
+pub use command::{SandboxCommand, SandboxDenialHint, SandboxError, SandboxOutput};
 pub use command_policy::{CommandPolicy, CommandPolicyHook};
 pub use config::SandboxConfig;
 pub use context::{current_justification, current_session};

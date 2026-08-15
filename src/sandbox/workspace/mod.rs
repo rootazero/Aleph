@@ -7,7 +7,8 @@
 //! 3. capability check: within baseline → pass; else consult granted cache then
 //!    `ApprovalGate::request_approval_for_action`
 //! 4. `OsSandboxDriverTrait::profile_for`
-//! 5. `OsSandboxDriverTrait::run`
+//! 5. `OsSandboxDriverTrait::run`, then label the result with
+//!    `SandboxDenialHint` if the driver's own denial dialect appears in stderr
 //! 6. emit `capability_ledger` tracing audit record
 //!
 //! Step 2 is **two-phase**, not one-shot. Its verdict is only as fresh as the
@@ -27,7 +28,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
-use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
+use crate::sandbox::command::{SandboxCommand, SandboxDenialHint, SandboxError, SandboxOutput};
 use crate::sandbox::dns;
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::denial_ledger;
@@ -487,6 +488,20 @@ impl Sandbox for WorkspaceSandbox {
         // declared early in the function for scope but not consumed by any
         // sub-call.
         drop(active_proxy);
+
+        // Label a possible OS-level denial while the driver that produced the
+        // bytes is still in hand — downstream every consumer holds a plain
+        // `SandboxOutput` and cannot tell which backend ran, so a denial in
+        // seatbelt's dialect would be indistinguishable from one in bwrap's.
+        // Advisory only: `SandboxDenialHint` is evidence, not a verdict, and
+        // nothing in this pipeline branches on it.
+        if let Ok(ref mut out) = output {
+            out.denial_hint = SandboxDenialHint::detect(
+                self.os_driver.platform(),
+                self.os_driver.denial_signatures(),
+                &out.stderr,
+            );
+        }
 
         // Command-output content floor (secret redaction + block-class gate +
         // invisible/bidi neutralization) before any downstream consumer touches
@@ -991,6 +1006,14 @@ mod tests {
         assert!(expected_dir.exists());
         // Driver saw both invocations.
         assert_eq!(*driver.run_count.read().await, 2);
+    }
+
+    /// `denial_signatures` is defaulted so that every existing test double —
+    /// this one included — keeps compiling and stays silent about a dialect it
+    /// has no business claiming.
+    #[test]
+    fn a_driver_that_never_overrides_the_dialect_declares_none() {
+        assert!(FakeDriver::new().denial_signatures().is_empty());
     }
 
     #[tokio::test]
@@ -2236,5 +2259,174 @@ mod scrub_integration_tests {
         let huge = "x".repeat(JUSTIFICATION_MAX_CHARS * 4);
         let cleaned = sanitize_justification(huge).expect("non-empty");
         assert_eq!(cleaned.chars().count(), JUSTIFICATION_MAX_CHARS);
+    }
+}
+
+/// Step 5's denial labelling: the only place the *active* OS driver is in
+/// hand, so the only place that can say which backend's dialect a stderr line
+/// is written in.
+#[cfg(test)]
+mod denial_dialect_tests {
+    use super::*;
+    use crate::sandbox::driver::OsSandboxProfile;
+    use crate::sandbox::exec_approval::gate::ApprovalGate;
+    use crate::sandbox::hooks::SandboxHooks;
+    use std::path::Path;
+
+    /// Emits a caller-supplied stderr under a caller-supplied dialect, so a
+    /// test can vary the backend and the bytes independently.
+    struct DialectDriver {
+        platform: &'static str,
+        signatures: &'static [&'static str],
+        stderr: &'static str,
+        exit_code: i32,
+    }
+
+    #[async_trait::async_trait]
+    impl OsSandboxDriverTrait for DialectDriver {
+        fn platform(&self) -> &'static str {
+            self.platform
+        }
+        fn is_supported(&self) -> bool {
+            true
+        }
+        fn profile_for(
+            &self,
+            _capabilities: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
+            })
+        }
+        fn denial_signatures(&self) -> &'static [&'static str] {
+            self.signatures
+        }
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            Ok(SandboxOutput {
+                stderr: self.stderr.as_bytes().to_vec(),
+                exit_code: Some(self.exit_code),
+                duration_ms: 1,
+                ..Default::default()
+            })
+        }
+    }
+
+    fn sandbox_with(
+        tmp: &tempfile::TempDir,
+        driver: Arc<dyn OsSandboxDriverTrait>,
+    ) -> WorkspaceSandbox {
+        WorkspaceSandbox::new(
+            tmp.path().to_path_buf(),
+            driver,
+            Arc::new(ApprovalGate::new(None)),
+            SandboxHooks::new(),
+        )
+    }
+
+    fn mk_cmd(label: &str) -> SandboxCommand {
+        SandboxCommand {
+            session_id: crate::routing::session_key::SessionKey::ephemeral(label),
+            program: "echo".into(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: SandboxCapabilities::strict(),
+            timeout: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn matching_stderr_is_labelled_with_the_running_backend() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = sandbox_with(
+            &tmp,
+            Arc::new(DialectDriver {
+                platform: "macos/seatbelt",
+                signatures: &["operation not permitted"],
+                stderr: "open: /etc/hosts: Operation not permitted\n",
+                exit_code: 1,
+            }),
+        );
+        let out = sandbox.execute(mk_cmd("denial-match")).await.expect("run");
+        let hint = out.denial_hint.expect("seatbelt dialect must be labelled");
+        assert_eq!(hint.platform, "macos/seatbelt");
+        assert_eq!(hint.signature, "operation not permitted");
+    }
+
+    #[tokio::test]
+    async fn a_foreign_dialect_is_not_claimed() {
+        // bwrap's EROFS text under the seatbelt driver. A cross-backend union
+        // of signatures would report a denial macOS cannot emit.
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = sandbox_with(
+            &tmp,
+            Arc::new(DialectDriver {
+                platform: "macos/seatbelt",
+                signatures: &["operation not permitted"],
+                stderr: "touch: /x: Read-only file system\n",
+                exit_code: 1,
+            }),
+        );
+        let out = sandbox
+            .execute(mk_cmd("denial-foreign"))
+            .await
+            .expect("run");
+        assert!(out.denial_hint.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_driver_that_declares_no_dialect_stays_silent() {
+        // The shape every test double and every not-yet-characterised backend
+        // has: stderr another backend would match, and nothing claimed.
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = sandbox_with(
+            &tmp,
+            Arc::new(DialectDriver {
+                platform: "no-dialect",
+                signatures: &[],
+                stderr: "open: /etc/hosts: Operation not permitted\n",
+                exit_code: 1,
+            }),
+        );
+        let out = sandbox.execute(mk_cmd("denial-silent")).await.expect("run");
+        assert!(out.denial_hint.is_none());
+    }
+
+    #[tokio::test]
+    async fn labelling_does_not_depend_on_the_exit_code() {
+        // The hint records a machine fact about stderr; whether it is worth
+        // telling the model is the consumer's call (`denial_advisory` gates on
+        // a non-zero exit). Splitting them here keeps this layer from having
+        // an opinion it cannot justify.
+        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = sandbox_with(
+            &tmp,
+            Arc::new(DialectDriver {
+                platform: "linux/bwrap",
+                signatures: &["permission denied", "read-only file system"],
+                stderr: "warn: probe hit Read-only file system, continuing\n",
+                exit_code: 0,
+            }),
+        );
+        let out = sandbox.execute(mk_cmd("denial-exit0")).await.expect("run");
+        assert_eq!(
+            out.denial_hint.map(|h| h.signature),
+            Some("read-only file system".to_string())
+        );
     }
 }

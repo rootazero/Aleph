@@ -82,7 +82,16 @@ fn checkout_pinned(repo: &git2::Repository, rev: &str) -> Result<(), git2::Error
 
 fn update_existing_repo(repo: &git2::Repository) -> Result<(), git2::Error> {
     let mut remote = repo.find_remote("origin")?;
-    remote.fetch(&["main"], None, None)?;
+    // `refs/heads/main:refs/remotes/origin/main` is the canonical refspec —
+    // older libgit2 versions silently accept the bare `"main"` and newer ones
+    // reject it as malformed OR, worse, interpret it as a write-back to the
+    // local branch. Naming both ends keeps the fetch deterministic across
+    // versions and pins the destination the reset below reads from.
+    remote.fetch(
+        &["refs/heads/main:refs/remotes/origin/main"],
+        None,
+        None,
+    )?;
     let fetch_head = repo.find_reference("FETCH_HEAD")?;
     let target = repo.reference_to_annotated_commit(&fetch_head)?.id();
     let obj = repo.find_object(target, None)?;

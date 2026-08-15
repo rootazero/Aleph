@@ -3,6 +3,7 @@
 //! Location: `~/.aleph/skills/manifest.json`
 
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use tracing::{debug, warn};
@@ -66,16 +67,48 @@ impl InstallRegistry {
     }
 
     /// Save manifest to disk.
+    ///
+    /// Atomic: write to a process-unique temp file via `create_new(true)` so two
+    /// parallel writers cannot collide on the tmp path, then atomically rename
+    /// onto the destination. On Windows the rename of an existing file is
+    /// rejected (`AlreadyExists`); the trailing remove-then-rename covers that
+    /// case. POSIX rename replaces atomically, so the retry never fires there.
     pub fn save(&self, skills_dir: &Path) -> std::io::Result<()> {
+        use std::io::Write;
         let path = skills_dir.join("manifest.json");
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         let tmp_path = path.with_extension("tmp");
-        std::fs::write(&tmp_path, content)?;
+        // `create_new(true)` refuses on a pre-existing tmp file, so the writer
+        // gets a unique-by-construction handle even when two startups race.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(content.as_bytes()) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(e);
+                }
+            }
+            Err(e) => {
+                // A concurrent writer is mid-save. Refuse rather than clobber
+                // its tmp; the next save will pick a fresh name.
+                return Err(e);
+            }
+        }
         if let Err(e) = std::fs::rename(&tmp_path, &path) {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
-                std::fs::remove_file(&path)?;
-                std::fs::rename(&tmp_path, &path)?;
+                if let Err(rm) = std::fs::remove_file(&path) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(rm);
+                }
+                if let Err(e) = std::fs::rename(&tmp_path, &path) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(e);
+                }
             } else {
+                let _ = std::fs::remove_file(&tmp_path);
                 return Err(e);
             }
         }
@@ -97,19 +130,57 @@ impl InstallRegistry {
     /// - Manifest entries without directories → remove
     ///
     /// Returns `Err` if the skills directory could not be read (caller should
-    /// avoid saving a potentially stale manifest).
+    /// avoid saving a potentially stale manifest). Per-entry errors during the
+    /// `read_dir` iteration are counted and logged: silently dropping them
+    /// would let a race-on-unlink or a permissions glitch on a subdir classify
+    /// the affected entry as "removed" and remove it from the manifest on the
+    /// next save — a quiet loss of provenance.
     pub fn reconcile(&mut self, skills_dir: &Path) -> std::io::Result<()> {
         // Find directories on disk
         let entries = std::fs::read_dir(skills_dir)?;
+        // A `Cell` because the two closures below both need to bump the
+        // counter; ordinary `&mut` would double-borrow through the iterator
+        // chain. The closure body is single-threaded by construction.
+        let skip_count: Cell<u32> = Cell::new(0);
         let on_disk: HashSet<String> = entries
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(e) => Some(e),
+                Err(err) => {
+                    skip_count.set(skip_count.get() + 1);
+                    tracing::warn!(
+                        error = %err,
+                        dir = %skills_dir.display(),
+                        "read_dir entry error during reconcile (will be treated as absent)"
+                    );
+                    None
+                }
+            })
             .filter(|e| {
                 // Use symlink_metadata so we don't follow symlinks — a symlink
                 // pointing outside the skills dir should not be treated as a skill.
-                e.path().symlink_metadata().is_ok_and(|m| m.is_dir())
+                match e.path().symlink_metadata() {
+                    Ok(m) => m.is_dir(),
+                    Err(err) => {
+                        skip_count.set(skip_count.get() + 1);
+                        tracing::warn!(
+                            error = %err,
+                            path = %e.path().display(),
+                            "symlink_metadata error during reconcile (will be treated as absent)"
+                        );
+                        false
+                    }
+                }
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
+        let skipped = skip_count.get();
+        if skipped > 0 {
+            tracing::warn!(
+                skipped = skipped,
+                dir = %skills_dir.display(),
+                "reconcile: skipped entries due to errors; their manifest entries will be reaped"
+            );
+        }
 
         // Add missing directories as Local
         for name in &on_disk {

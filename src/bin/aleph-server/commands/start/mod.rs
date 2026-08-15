@@ -1358,6 +1358,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.agent_registry.clone(),
     ) {
         alephcore::gateway::subagent_announce::spawn_subagent_announce(
+            announce_adapter.clone(),
+            announce_registry.clone(),
+            server.event_bus().clone(),
+        )
+        .await;
+        // The same proactive arrival for the other kind of work that outlives
+        // the run which started it: a finished background `bash` job. Both
+        // announcers share one delivery ladder
+        // (`gateway::announce_delivery`); what differs is the event and the
+        // notice.
+        alephcore::gateway::process_announce::spawn_process_announce(
             announce_adapter,
             announce_registry,
             server.event_bus().clone(),
@@ -1388,14 +1399,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Same reconcile for background `bash` jobs, whose registry is likewise
-    // pure process memory. This one has NO ordering requirement against the
-    // announcer above: it only writes tombstones and broadcasts nothing, so
-    // there is no subscriber to be missing — the rows simply answer the next
-    // time the model polls. Fail-soft the same way: a missing data dir costs
-    // the durability, not the boot.
+    // pure process memory. MUST stay after the process announcer above, for the
+    // reason the sub-agent block gives: it hands back completions the previous
+    // daemon finished but never announced, and a broadcast with no subscriber
+    // is a promise withdrawn in silence (§9 — reconcile *after* subscribing).
+    // The tombstone half has no such requirement and never did. Fail-soft the
+    // same way: a missing data dir costs the durability, not the boot.
     match alephcore::utils::paths::get_background_processes_dir() {
         Ok(dir) => {
-            let interrupted = alephcore::builtin_tools::process_journal::init_and_reconcile(dir);
+            let interrupted =
+                alephcore::builtin_tools::process_journal::init_and_announce(dir).await;
             if interrupted > 0 {
                 tracing::info!(
                     interrupted,

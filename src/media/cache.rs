@@ -124,7 +124,7 @@ impl MediaCache {
         let dir = ensure_session_dir(session_id).await?;
         let filename = unique_filename(id, filename);
         let path = dir.join(filename);
-        tokio::fs::write(&path, data).await?;
+        write_private(&path, data).await?;
         debug!(path = %path.display(), "cached inline attachment");
         Ok(CachedMedia {
             local_path: path,
@@ -183,7 +183,7 @@ impl MediaCache {
         let filename = unique_filename(id, filename);
         let path = dir.join(&filename);
         let total_size = response.body.len() as u64;
-        tokio::fs::write(&path, response.body).await?;
+        write_private(&path, &response.body).await?;
 
         debug!(path = %path.display(), size = total_size, "downloaded attachment from URL");
         Ok(CachedMedia {
@@ -201,7 +201,7 @@ impl MediaCache {
 
     /// Remove all cached files for a session.
     pub fn cleanup_session(session_id: &str) -> Result<(), CacheError> {
-        let dir = session_dir(session_id);
+        let dir = session_dir(session_id)?;
         if dir.exists() {
             std::fs::remove_dir_all(&dir)?;
             debug!(session_id, "cleaned up media cache");
@@ -214,7 +214,15 @@ impl MediaCache {
     /// Uses the `.created_at` marker file written at session creation time
     /// to determine age, falling back to directory `modified` time.
     pub fn cleanup_stale() {
-        let base = base_dir();
+        // A refused root is worth saying out loud: the sweep is fire-and-forget,
+        // so silence here is indistinguishable from "nothing to clean".
+        let base = match base_dir() {
+            Ok(base) => base,
+            Err(e) => {
+                warn!(error = %e, "media cache root unusable — skipping stale sweep");
+                return;
+            }
+        };
         let entries = match std::fs::read_dir(&base) {
             Ok(e) => e,
             Err(_) => return, // dir doesn't exist yet — nothing to clean
@@ -479,12 +487,29 @@ impl Default for MediaCache {
     }
 }
 
-/// Base directory: `<temp_dir>/aleph/media`
-fn base_dir() -> PathBuf {
-    std::env::temp_dir().join("aleph").join("media")
+/// Base directory: `<private_temp_root>/media`
+///
+/// Inbound attachment bytes are exactly the content a shared host must not
+/// leak, so the tree hangs off [`crate::utils::paths::private_temp_root`] (an
+/// owner-only `<temp_dir>/aleph-<uid>`) rather than a fixed, world-listable
+/// `<temp_dir>/aleph`. It stays *under* `temp_dir()`, which is what keeps
+/// [`MediaCache::safe_local_media_path`] accepting these files on the way back
+/// out.
+///
+/// A tree an older build left under `<temp_dir>/aleph/media` is not migrated
+/// and no longer swept — nothing writes there any more, and it is exactly the
+/// path another account may already have claimed. It ages out with the host's
+/// own temp cleaning.
+///
+/// # Errors
+///
+/// Propagates the root's refusal when another account owns or can reach it —
+/// the one case where writing an attachment here would hand it over.
+fn base_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(crate::utils::paths::private_temp_root()?.join("media"))
 }
 
-/// Per-session directory: `<temp_dir>/aleph/media/<encoded_session_id>`
+/// Per-session directory: `<private_temp_root>/media/<encoded_session_id>`
 ///
 /// `session_id` is a raw session key such as `agent:main:main`. Joining it
 /// verbatim made `create_dir_all` fail on Windows, where `:` is illegal in a
@@ -492,24 +517,56 @@ fn base_dir() -> PathBuf {
 /// both agree on how a session key becomes one directory name.
 ///
 /// Directories created under the old raw naming are still swept by
-/// [`MediaCache::cleanup_stale`], which walks the base dir by age and never
-/// interprets the names.
-fn session_dir(session_id: &str) -> PathBuf {
-    base_dir().join(crate::artifacts::encode_session_key(session_id))
+/// [`MediaCache::cleanup_stale`], which walks the *current* base dir by age and
+/// never interprets the names — see [`base_dir`] for the pre-move tree, which
+/// has no sweeper at all.
+fn session_dir(session_id: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(base_dir()?.join(crate::artifacts::encode_session_key(session_id)))
 }
 
 /// Ensure session directory exists and write a `.created_at` marker
 /// (only on first creation) so `cleanup_stale` can use a stable timestamp.
 async fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error> {
-    let dir = session_dir(session_id);
+    let dir = session_dir(session_id)?;
     let marker = dir.join(".created_at");
     // create_dir_all is idempotent — avoids TOCTOU between exists() check and creation.
     tokio::fs::create_dir_all(&dir).await?;
     if !tokio::fs::try_exists(&marker).await.unwrap_or(false) {
-        // Best-effort marker — if it fails, cleanup_stale falls back to mtime
-        let _ = tokio::fs::write(&marker, "").await;
+        // Best-effort marker — if it fails, cleanup_stale falls back to mtime.
+        // Owner-only like every other file here, so "what mode is this?" has one
+        // answer for the whole tree.
+        let _ = write_private(&marker, b"").await;
     }
     Ok(dir)
+}
+
+/// Write attachment bytes to a fresh owner-only file.
+///
+/// The 0700 root already keeps other accounts out of the tree; this is the
+/// per-file half of the same discipline — the mode every file the repo treats
+/// as sensitive carries (`secrets::vault`, `config::save`, the node identity)
+/// — so a later relaxation of the root's mode does not silently expose
+/// everything under it. Created *at* that mode rather than chmod-ed after the
+/// write, which is the 0644 window the others still have.
+///
+/// Deliberately create-and-truncate rather than an exclusive create: resolving
+/// the same attachment id twice must keep overwriting, as `tokio::fs::write`
+/// did. Nothing is won by exclusivity inside a directory no other account can
+/// open.
+async fn write_private(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        // Inherent on tokio's OpenOptions — no `OpenOptionsExt` import needed.
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).await?;
+    file.write_all(bytes).await?;
+    // tokio's File buffers; a dropped handle can lose the tail.
+    file.flush().await
 }
 
 /// Build a collision-free temp filename by prefixing the (sanitized) attachment
@@ -612,7 +669,7 @@ mod tests {
     fn session_dir_encodes_characters_illegal_on_windows() {
         // Session keys look like `agent:main:main`. A raw join put a `:` into a
         // path component, which `create_dir_all` rejects on Windows.
-        let dir = session_dir("agent:main:main");
+        let dir = session_dir("agent:main:main").expect("session dir resolves");
         let component = dir
             .file_name()
             .and_then(|n| n.to_str())
@@ -668,6 +725,35 @@ mod tests {
             .expect("file inside the temp root must be attached");
         assert!(att.path.is_some());
         let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    /// Inbound attachment bytes land owner-only, and the tree they land in is
+    /// the private root — not the world-listable `<temp_dir>/aleph` this cache
+    /// used to write to on a shared Linux host.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cached_attachment_bytes_are_owner_only_inside_the_private_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let cache = MediaCache::new();
+        let mut att = empty_attachment();
+        att.data = Some(vec![7, 7, 7]);
+
+        let session_id = "test-inline-permissions";
+        let cached = cache.resolve(&att, session_id).await.unwrap();
+
+        let root = crate::utils::paths::private_temp_root().expect("private root resolves");
+        assert!(
+            cached.local_path.starts_with(&root),
+            "{} escaped the private root {}",
+            cached.local_path.display(),
+            root.display()
+        );
+        let meta = tokio::fs::metadata(&cached.local_path).await.unwrap();
+        let mode = meta.permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o600, "attachment bytes must be owner-only");
+
+        let _ = MediaCache::cleanup_session(session_id);
     }
 
     /// Helper to build a minimal Attachment with all sources None.
@@ -734,7 +820,7 @@ mod tests {
         let cache = MediaCache::new();
 
         // Create a temp file to use as "local path"
-        let dir = session_dir("test-media-item-local");
+        let dir = session_dir("test-media-item-local").expect("session dir resolves");
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let local_file = dir.join("test.png");
         tokio::fs::write(&local_file, b"fake png data")

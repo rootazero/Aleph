@@ -142,6 +142,19 @@ const RECORD_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// daemon ran" hand back the same amount of text.
 const OUTPUT_TAIL_BYTES: usize = 8 * 1024;
 
+/// How recently a settled-but-unannounced job must have ended for the boot
+/// handback to still deliver its notice.
+///
+/// The notice opens a real model turn, so its value decays: "your build
+/// finished" is worth a turn minutes later and is noise a day later, when the
+/// row is still readable through `poll` / `list` anyway. The window also bounds
+/// the one-off cost of the `announced` flag being `#[serde(default)]` — without
+/// it, the first boot after this field shipped would announce every completed
+/// job inside the whole 7-day retention window. Rows older than this are left
+/// **unstamped**: claiming they were announced would be a lie, and the age test
+/// only ever gets truer, so they cannot come round again.
+const ANNOUNCE_HANDBACK_MAX_AGE_MS: u64 = 60 * 60 * 1000;
+
 /// Hard cap on one appended trail line.
 const MAX_LINE_CHARS: usize = 4_000;
 
@@ -174,6 +187,16 @@ static INDEX: LazyLock<Mutex<HashMap<u64, JobRecord>>> =
 /// persistence is off, which makes [`id_floor`] answer `1` — the pre-existing
 /// allocator start).
 static RESERVED_THROUGH: LazyLock<Mutex<u64>> = LazyLock::new(|| Mutex::new(0));
+
+/// Rows [`init_and_reconcile`] found settled-but-unannounced, waiting for
+/// [`take_undelivered_settled`] to drain them.
+///
+/// A stash rather than a return value because `init_and_reconcile` is sync and
+/// is called directly by tests and by any embedding that wants durability
+/// without a bus, while the handback needs an async broadcast. Draining is
+/// destructive, so the rows can only be delivered once per boot however many
+/// callers there are.
+static UNDELIVERED: LazyLock<Mutex<Vec<JobRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// Lifecycle phase of a journaled background job.
 ///
@@ -263,6 +286,22 @@ pub struct JobRecord {
     /// row must keep loading, it simply has no capture to offer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_file: Option<String>,
+    /// Whether the owning session was ever *told* this job finished.
+    ///
+    /// `phase` answers "did it finish"; this answers "does anyone know". The
+    /// gap between them is a real window: `bash_exec` broadcasts the completion
+    /// after the row is settled, and `gateway::process_announce` retries at
+    /// 0/30/120s while the session is busy. A daemon that dies inside those two
+    /// and a half minutes leaves a `Settled` row nobody was told about, and the
+    /// promise the spawn receipt makes is withdrawn in silence with the result
+    /// sitting on disk. [`take_undelivered_settled`] is the reader.
+    ///
+    /// `#[serde(default)]` makes every pre-existing row read as *not*
+    /// announced, which is the fail-safe direction (duplicate-visible beats
+    /// loss-silent); the boot handback's freshness window keeps that from
+    /// turning an upgrade into a week of stale notices.
+    #[serde(default)]
+    pub announced: bool,
 }
 
 impl JobRecord {
@@ -316,10 +355,14 @@ pub struct RecoveredJob {
 /// written over it (never deleted): a record that only ever says "finished"
 /// cannot distinguish "never ran" from "ran and the write was lost".
 ///
-/// Unlike the sub-agent reconcile, this writes tombstones and **broadcasts
-/// nothing** — there is no proactive turn to drive, the rows are simply there
-/// the next time the model polls. It therefore has no ordering dependency on
-/// any event subscriber.
+/// This function itself **broadcasts nothing** — an interrupted row drives no
+/// proactive turn, it is simply there the next time the model polls, so this
+/// half has no ordering dependency on any event subscriber. It does claim the
+/// second recovered population on the way past: a row that reached `Settled`
+/// with `announced` still false is a completion whose notice died with the
+/// previous daemon, and [`take_undelivered_settled`] hands those to
+/// [`init_and_announce`], which is the half that does have an ordering
+/// dependency.
 ///
 /// Idempotent. Returns 0 when the directory cannot be created — persistence
 /// stays off rather than failing boot (P7).
@@ -332,6 +375,7 @@ pub fn init_and_reconcile(dir: PathBuf) -> usize {
     let now = now_ms();
     let mut index: HashMap<u64, JobRecord> = HashMap::new();
     let mut tombstoned = 0usize;
+    let mut undelivered: Vec<JobRecord> = Vec::new();
     // Every id the journal has ever *shown*, retention-swept rows included:
     // their ids were handed out, so they must not come round again.
     //
@@ -366,6 +410,18 @@ pub fn init_and_reconcile(dir: PathBuf) -> usize {
             write_state(&dir, &tombstone);
             tombstoned += 1;
             index.insert(tombstone.id, tombstone);
+        } else if is_undelivered_completion(&record, now) {
+            // Finished naturally, and the notice promised at spawn died with
+            // the previous daemon. Stamp it delivered in this same pass —
+            // otherwise a second restart before the parent turn lands repeats
+            // it forever — and stash it for the async handback.
+            let delivered = JobRecord {
+                announced: true,
+                ..record
+            };
+            write_state(&dir, &delivered);
+            undelivered.push(delivered.clone());
+            index.insert(delivered.id, delivered);
         } else {
             index.insert(record.id, record);
         }
@@ -379,6 +435,7 @@ pub fn init_and_reconcile(dir: PathBuf) -> usize {
     *store_lock() = Some(dir);
     *index_lock() = index;
     *reserved_lock() = reserved;
+    *undelivered_lock() = undelivered;
 
     // Seeded here rather than at the boot call site so no future boot path can
     // enable the journal and forget the allocator — a resurrected row and a
@@ -397,10 +454,93 @@ pub fn init_and_reconcile(dir: PathBuf) -> usize {
     tombstoned
 }
 
+/// Boot entry point: reconcile, then hand back the completions the previous
+/// daemon finished but never announced. Returns the tombstone count
+/// [`init_and_reconcile`] returns.
+///
+/// **Ordering:** this broadcasts, so it must run *after* the completion
+/// announcer has subscribed (§9 — reconcile after subscribing). The tombstone
+/// half has no such requirement and never did; the handback half does, and the
+/// two travel together on purpose so no boot path can take one without the
+/// other.
+///
+/// One event per job rather than one per session, unlike the sub-agent orphan
+/// sweep: that one groups because a crash orphans a whole fan-out at once,
+/// while this population is bounded by [`ANNOUNCE_HANDBACK_MAX_AGE_MS`] and by
+/// the per-session running cap — the jobs that settled in the couple of minutes
+/// a daemon spent dying inside the retry ladder.
+pub async fn init_and_announce(dir: PathBuf) -> usize {
+    let tombstoned = init_and_reconcile(dir);
+    for job in take_undelivered_settled() {
+        let Some(session) = super::bash_exec::session_key_from_label(&job.record.owner) else {
+            tracing::debug!(
+                id = job.record.id,
+                "process_journal: recovered completion has no addressable session; it stays poll-only"
+            );
+            continue;
+        };
+        let event = super::process_completion::recovered_completion_event(
+            job.record.id,
+            &job.record.command,
+            job.record.exit_code.unwrap_or_default(),
+            &job.recorded_output,
+        );
+        tracing::info!(
+            id = job.record.id,
+            "process_journal: announcing a background job that finished before the previous daemon stopped"
+        );
+        super::process_completion::broadcast(&session, event).await;
+    }
+    tombstoned
+}
+
 /// Lowest id a fresh registry may hand out: one past everything ever reserved.
 /// `1` while persistence is off, i.e. the allocator's historical start.
 pub(crate) fn id_floor() -> u64 {
     reserved_lock().saturating_add(1)
+}
+
+/// Does this row describe a completion the owning session was never told about,
+/// recently enough that telling it now is news rather than history?
+///
+/// Three conditions, and each excludes a different population:
+///
+/// * `Settled` — an `Interrupted` row is a statement about the *previous
+///   daemon*, and this module deliberately makes no claim about whether that
+///   job's OS process is still alive; announcing "it was interrupted, liveness
+///   unknown" would spend a turn on a verdict nobody reached. Those rows stay
+///   poll-able, which is the recorded decision.
+/// * `outcome == completed` — a killed job is the owner's own action, so its
+///   outcome is not news (the same stance `subagent_tool::spawn` takes for a
+///   cancelled child). Without this test every `kill` would queue an announce
+///   for the next boot, since nothing ever stamps those rows announced.
+/// * fresh — see [`ANNOUNCE_HANDBACK_MAX_AGE_MS`].
+fn is_undelivered_completion(record: &JobRecord, now: u64) -> bool {
+    record.phase == JobPhase::Settled
+        && !record.announced
+        && record.outcome.as_deref() == Some(Verdict::Completed.label())
+        && record
+            .ended_ms
+            .is_some_and(|t| now.saturating_sub(t) <= ANNOUNCE_HANDBACK_MAX_AGE_MS)
+}
+
+/// Drain the completions [`init_and_reconcile`] found undelivered, hydrated
+/// with whatever output was recorded for them.
+///
+/// Destructive: the rows are already stamped `announced` on disk, so this is
+/// the one chance to deliver them in this process. Empty for every boot that
+/// had nothing to hand back, which is the overwhelming majority.
+pub(crate) fn take_undelivered_settled() -> Vec<RecoveredJob> {
+    let Some(dir) = store_dir() else {
+        return Vec::new();
+    };
+    let records = std::mem::take(&mut *undelivered_lock());
+    let mut out: Vec<RecoveredJob> = records
+        .into_iter()
+        .map(|record| hydrate(&dir, record))
+        .collect();
+    out.sort_by_key(|r| std::cmp::Reverse(r.record.started_ms));
+    out
 }
 
 // ============================================================================
@@ -490,6 +630,7 @@ pub(crate) fn record_spawn(id: u64, command: &str, owner: Option<&str>) {
         exit_code: None,
         output_file: Some(OUTPUT_FILE.to_string()),
         partial_file: Some(PARTIAL_FILE.to_string()),
+        announced: false,
     };
     write_state(&dir, &record);
     index_lock().insert(id, record);
@@ -637,6 +778,30 @@ pub(crate) fn record_settled(
     write_state(&dir, &record);
 }
 
+/// Stamp "the owning session was told about this job".
+///
+/// Written by the announcer's success arm (and by the boot handback, in the
+/// same pass that hands a row over). Without it, a restart inside the retry
+/// ladder re-delivers a notice the session already received — forever, since
+/// nothing else ever clears the condition.
+///
+/// No-op for an id this process never journaled.
+pub(crate) fn record_announced(id: u64) {
+    let Some(dir) = store_dir() else { return };
+    let record = {
+        let mut index = index_lock();
+        let Some(record) = index.get_mut(&id) else {
+            return;
+        };
+        if record.announced {
+            return;
+        }
+        record.announced = true;
+        record.clone()
+    };
+    write_state(&dir, &record);
+}
+
 // ============================================================================
 // Read path (called by the bash tool's not-found / directory faces)
 // ============================================================================
@@ -707,6 +872,10 @@ fn index_lock() -> MutexGuard<'static, HashMap<u64, JobRecord>> {
 
 fn reserved_lock() -> MutexGuard<'static, u64> {
     RESERVED_THROUGH.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn undelivered_lock() -> MutexGuard<'static, Vec<JobRecord>> {
+    UNDELIVERED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn store_dir() -> Option<PathBuf> {
@@ -1006,6 +1175,7 @@ pub(crate) fn enable_for_test(dir: PathBuf) {
     *store_lock() = Some(dir);
     index_lock().clear();
     *reserved_lock() = 0;
+    undelivered_lock().clear();
 }
 
 /// Test-only: turn persistence back off so unrelated tests keep their zero-I/O
@@ -1015,6 +1185,7 @@ pub(crate) fn disable_for_test() {
     *store_lock() = None;
     index_lock().clear();
     *reserved_lock() = 0;
+    undelivered_lock().clear();
 }
 
 #[cfg(test)]
@@ -1064,6 +1235,160 @@ mod tests {
             again.record.ended_ms, found.record.ended_ms,
             "a tombstoned row must not be re-stamped on every later boot"
         );
+        disable_for_test();
+    }
+
+    // ========================================================================
+    // The `announced` stamp and the boot handback
+    // ========================================================================
+
+    /// Write a terminal row directly, so a test can choose its age and verdict
+    /// — the two things the handback filter reads and neither of which the
+    /// normal write path lets you pick.
+    fn seed_settled(dir: &std::path::Path, id: u64, outcome: &str, ended_ms: u64) {
+        write_state(
+            dir,
+            &JobRecord {
+                id,
+                owner: OWNER.to_string(),
+                command: "cargo build".to_string(),
+                started_ms: ended_ms.saturating_sub(1_000),
+                phase: JobPhase::Settled,
+                ended_ms: Some(ended_ms),
+                outcome: Some(outcome.to_string()),
+                exit_code: Some(0),
+                output_file: Some(OUTPUT_FILE.to_string()),
+                partial_file: Some(PARTIAL_FILE.to_string()),
+                announced: false,
+            },
+        );
+    }
+
+    /// The promise the spawn receipt makes is "you will hear when it finishes".
+    /// A daemon that dies inside the announcer's 0/30/120s ladder leaves a
+    /// `Settled` row nobody was told about, and before the `announced` field
+    /// that promise was withdrawn in silence with the answer sitting on disk.
+    ///
+    /// RED without the handback arm in `init_and_reconcile`: nothing is claimed.
+    #[test]
+    fn a_completion_that_was_never_announced_is_handed_back_once() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        seed_settled(tmp.path(), 21, "completed", now_ms());
+
+        init_and_reconcile(tmp.path().to_path_buf());
+        let handed = take_undelivered_settled();
+        assert_eq!(handed.len(), 1, "the undelivered completion must come back");
+        assert_eq!(handed[0].record.id, 21);
+
+        // Draining is destructive within a boot...
+        assert!(
+            take_undelivered_settled().is_empty(),
+            "one delivery per boot, however many callers ask"
+        );
+        // ...and the stamp landed on disk, so the NEXT boot stays quiet. A
+        // handback that repeated forever would be worse than the silence it
+        // replaced.
+        disable_for_test();
+        init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            take_undelivered_settled().is_empty(),
+            "a restart must not re-announce a completion it already handed back"
+        );
+        assert!(lookup(21, Some(OWNER)).expect("row").record.announced);
+        disable_for_test();
+    }
+
+    /// The stamp the announcer's success arm writes: from there on the session
+    /// knows, and no later boot may say it again.
+    #[test]
+    fn record_announced_survives_a_restart() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_spawn(22, "make", Some(OWNER));
+        record_settled(22, Verdict::Completed, Some(0), "done\n", "");
+        assert!(!lookup(22, Some(OWNER)).expect("row").record.announced);
+        record_announced(22);
+        assert!(lookup(22, Some(OWNER)).expect("row").record.announced);
+        disable_for_test();
+
+        init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            lookup(22, Some(OWNER)).expect("row").record.announced,
+            "the stamp is durable or it is useless"
+        );
+        assert!(take_undelivered_settled().is_empty());
+        disable_for_test();
+    }
+
+    /// A killed job is the owner's own action, so its outcome is not news.
+    /// Nothing ever stamps those rows announced, so without the verdict test
+    /// every `kill` would queue an announce for the next boot — forever.
+    #[test]
+    fn a_killed_job_is_never_handed_back() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        seed_settled(tmp.path(), 23, "killed", now_ms());
+
+        init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            take_undelivered_settled().is_empty(),
+            "you asked for it to stop; a restart does not make that news"
+        );
+        assert!(
+            !lookup(23, Some(OWNER)).expect("row").record.announced,
+            "and it must not be stamped either — claiming it was announced \
+             would be a lie about a notice nobody sent"
+        );
+        disable_for_test();
+    }
+
+    /// "Your build finished" is worth a model turn minutes later and is noise a
+    /// day later, when the row is still readable through `poll` anyway. The age
+    /// test also bounds the one-off cost of `announced` defaulting to false:
+    /// without it, the first boot after this field shipped would announce every
+    /// completed job inside the whole retention window.
+    ///
+    /// Stale rows are deliberately left UNSTAMPED — the age test only ever gets
+    /// truer, so they cannot come round again, and stamping them would record a
+    /// notice that was never sent.
+    #[test]
+    fn a_stale_completion_is_left_alone_rather_than_announced_or_falsely_stamped() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        let long_ago = now_ms() - ANNOUNCE_HANDBACK_MAX_AGE_MS - 60_000;
+        seed_settled(tmp.path(), 24, "completed", long_ago);
+
+        init_and_reconcile(tmp.path().to_path_buf());
+        assert!(
+            take_undelivered_settled().is_empty(),
+            "yesterday is not news"
+        );
+        let row = lookup(24, Some(OWNER)).expect("the row is still readable");
+        assert!(!row.record.announced);
+        assert_eq!(row.record.phase, JobPhase::Settled, "and still poll-able");
+        disable_for_test();
+    }
+
+    /// An interrupted row makes no claim about whether its OS process is still
+    /// alive — this module records no pid and does not probe. Announcing
+    /// "interrupted, liveness unknown" would spend a turn on a verdict nobody
+    /// reached, so those rows stay poll-only, which is the recorded decision.
+    #[test]
+    fn an_interrupted_job_is_not_handed_back() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_spawn(25, "cargo build", Some(OWNER));
+        disable_for_test();
+
+        init_and_reconcile(tmp.path().to_path_buf());
+        assert_eq!(
+            lookup(25, Some(OWNER)).expect("row").record.phase,
+            JobPhase::Interrupted
+        );
+        assert!(take_undelivered_settled().is_empty());
         disable_for_test();
     }
 
