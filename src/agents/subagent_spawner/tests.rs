@@ -373,8 +373,6 @@ mod tests {
     // -- Fake RawMemoryStore (used by the G2 emit test) -------------------
 
     /// In-memory `RawMemoryStore` capturing every insert for assertions.
-    /// Mirrors the pattern in `a2a::sub_agent::spec1_tests::FakeWriter` and
-    /// `components::session_compactor::tests::pre_compress_tests::FakeWriter`.
     #[derive(Default)]
     struct FakeWriter(tokio::sync::Mutex<Vec<crate::memory::store::raw_memory::RawMemory>>);
 
