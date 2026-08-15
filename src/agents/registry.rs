@@ -344,8 +344,15 @@ fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
 /// loader consults this list at parse time so a user/project `<id>.md`
 /// cannot shadow a builtin Primary agent — flipping it to SubAgent via the
 /// loader's mode coercion and surviving `resolve_spawnable`'s mode filter
-/// (see `agents::loader` reserved-id check). Derived from `builtin_agents()`
-/// so the set cannot drift from the actual builtin list.
+/// (see `agents::loader` reserved-id check).
+///
+/// The list is a **literal mirror** of the `AgentMode::Primary` entries in
+/// [`builtin_agents`]: a runtime derivation would need `static` storage of
+/// owned strings (the `AgentDef.id` values come back as `String`), which
+/// the `&'static str` return type rules out. The drift guard lives at
+/// [`builtin_primary_ids_mirror_builtin_agents`]: adding a new Primary
+/// builtin without joining this list fails the build rather than silently
+/// letting a disk overlay hijack the new id.
 #[must_use]
 pub fn builtin_primary_ids() -> Vec<&'static str> {
     // The list is a literal because the underlying `AgentDef.id` strings are
@@ -569,6 +576,36 @@ mod tests {
         assert!(
             agents.iter().all(|a| a.id != "store"),
             "store agent must be retired"
+        );
+    }
+
+    /// Drift guard for [`builtin_primary_ids`] — the list is a literal mirror
+    /// of the `AgentMode::Primary` entries in [`builtin_agents`], not derived.
+    /// Adding a new Primary builtin without joining this list would silently
+    /// let a user/project `<id>.md` shadow the new id (the loader only
+    /// refuses ids in `builtin_primary_ids`). The two lists must agree on
+    /// every Primary id, in both directions:
+    ///
+    ///   * every Primary builtin id MUST appear in `builtin_primary_ids`
+    ///     (otherwise the loader's mode coercion flips it to SubAgent and
+    ///     `resolve_spawnable`'s gate never sees the shadowing attempt);
+    ///   * every entry in `builtin_primary_ids` MUST be a Primary builtin
+    ///     (otherwise a stale id is reserved against an agent that no longer
+    ///     exists — the loader rejects a legitimate `<id>.md` for nothing).
+    #[test]
+    fn builtin_primary_ids_mirror_builtin_agents() {
+        let reserved: std::collections::BTreeSet<&str> =
+            builtin_primary_ids().into_iter().collect();
+        let primary_builtins: std::collections::BTreeSet<&str> = builtin_agents()
+            .iter()
+            .filter(|a| a.mode == AgentMode::Primary)
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(
+            reserved, primary_builtins,
+            "every Primary builtin id must be in `builtin_primary_ids` and vice versa — \
+             a new Primary builtin needs both list updates, and a retired Primary \
+             builtin needs both list removals"
         );
     }
 
