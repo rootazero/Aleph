@@ -12,7 +12,7 @@ use crate::cli::GatewayAction;
 pub async fn handle_gateway_command(
     action: GatewayAction,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use aleph_client::{print_json, GatewayClient};
+    use aleph_client::GatewayClient;
 
     // Spec C Task 19: NoLock policy marker.
     alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
@@ -30,7 +30,9 @@ pub async fn handle_gateway_command(
                 params.map(|p| serde_json::from_str(&p)).transpose()?;
 
             let result: serde_json::Value = client.call_raw(&method, params_value).await?;
-            print_json(&result)?;
+            // Inlined after shared/client dropped its output module (5142efe3b):
+            // this bin arm was the module's sole production consumer.
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
 
