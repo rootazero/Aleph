@@ -151,13 +151,15 @@ mod tests {
     fn test_detect_bearer_lowercase() {
         // RFC 7235: the Bearer scheme is case-insensitive. `bearer`
         // (lowercase) was previously missed.
-        let matches = rule().detect("Authorization: bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsInRp");
+        let matches =
+            rule().detect("Authorization: bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsInRp");
         assert_eq!(matches.len(), 1, "lowercase bearer must be detected");
     }
 
     #[test]
     fn test_detect_bearer_uppercase() {
-        let matches = rule().detect("Authorization: BEARER eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsInRp");
+        let matches =
+            rule().detect("Authorization: BEARER eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsInRp");
         assert_eq!(matches.len(), 1, "uppercase bearer must be detected");
     }
 
