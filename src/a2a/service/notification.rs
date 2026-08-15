@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::a2a::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+use crate::a2a::domain::{A2AError, TaskStatusUpdateEvent};
 use crate::a2a::port::A2AResult;
 use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::sync_primitives::AsyncRwLock;
@@ -123,27 +123,6 @@ impl NotificationService {
                     &config,
                     &serde_json::json!({
                         "type": "status-update",
-                        "data": event,
-                    }),
-                )
-                .await;
-            }
-        }
-    }
-
-    /// Send push notification for an artifact update
-    pub async fn notify_artifact_update(&self, task_id: &str, event: &TaskArtifactUpdateEvent) {
-        let config = {
-            let configs = self.configs.read().await;
-            configs.get(task_id).cloned()
-        };
-
-        if let Some(config) = config {
-            if config.events.is_empty() || config.events.iter().any(|e| e == "artifact-update") {
-                self.send_webhook(
-                    &config,
-                    &serde_json::json!({
-                        "type": "artifact-update",
                         "data": event,
                     }),
                 )
