@@ -94,7 +94,16 @@ spec §8 pipeline:
 5. **Run** — `os_driver.run(program, args, env, stdin, cwd, profile, timeout,
    max_output_bytes)`. Default timeout 60s, default output budget 1 MB (split
    stdout + stderr). Both override-able on the `WorkspaceSandbox` via
-   `with_timeout` / `with_max_output_bytes`.
+   `with_timeout` / `with_max_output_bytes`. Immediately after the run (before
+   scrub), stderr is matched against the *running* backend's own denial
+   dialect (`OsSandboxDriverTrait::denial_signatures`, defaulted `&[]`) and a
+   hit is carried as `SandboxOutput.denial_hint` — `code_exec` renders it as
+   one conservative advisory pointing at `extra_writable_paths` /
+   `allow_network` / `allow_subprocess`, so an OS-level denial stops reading
+   as an anonymous nonzero exit (2026-08-15; per-backend signatures only,
+   never a cross-backend union — Linux deliberately lists only the two
+   filesystem signatures until a network denial is observed on a real bwrap
+   run).
 6. **Audit** — emit a `tracing::info!(target: "capability_ledger", …)` record
    carrying `session_id`, `program`, `caps`, `exit_code`, `signal`,
    `duration_ms`. This is the capability-ledger hook; downstream tracing
