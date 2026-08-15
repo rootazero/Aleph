@@ -2901,6 +2901,151 @@ async fn check_status_reports_a_restart_orphan_instead_of_an_unknown_id() {
     );
 }
 
+/// Spawn one background child through the model-facing surface and hand back
+/// the `request_id` the model would get.
+async fn spawn_background_child(tool: &SubagentTool, cancel: CancellationToken) -> String {
+    match tool
+        .execute(json!({ "task": "bg", "run_in_background": true }), cancel)
+        .await
+    {
+        ToolResult::Success { output } => output["request_id"]
+            .as_str()
+            .expect("a background spawn returns a request_id")
+            .to_string(),
+        other => unreachable!("expected a background spawn, got {other:?}"),
+    }
+}
+
+/// A cancelled background child must not be announced. `SubAgentCompleted`
+/// drives a whole fresh parent turn (`gateway::subagent_announce`) whose prompt
+/// tells the model to "take any follow-up actions the original task implies" —
+/// on the very session whose run was just stopped. Only the model-issued
+/// `subagent(cancel)` face suppressed that (via `mark_consumed`); every other
+/// producer of a cancelled child — the user's stop / `chat.abort` walk through
+/// `cancel_session`, the busy lane's Interrupt mode, plain run-token
+/// propagation — reached the settle site un-suppressed.
+///
+/// Two arms in one fixture on purpose: the completed child is the control, so
+/// "no announce" cannot pass merely because the broadcast path is inert here.
+///
+/// The suppressed child is stamped `announced` on disk as well. `Settled &&
+/// !announced` is precisely what the boot reconcile hands back as an
+/// undelivered completion, so without the stamp the next restart announces
+/// exactly what this suppresses.
+#[tokio::test]
+async fn a_cancelled_background_child_is_not_announced_and_is_stamped_on_disk() {
+    use crate::agents::background_persistence as bp;
+    use crate::event::{AlephEvent, EventFilter, EventType, GlobalBus};
+
+    // The sidecar root is process-global, so hold the same gate the module's
+    // own tests take before pointing it anywhere.
+    let _gate = bp::test_gate();
+    let tmp = tempfile::tempdir().unwrap();
+    bp::enable_for_test(tmp.path().to_path_buf());
+
+    // The bus is process-global too: record only the ids this test spawns.
+    let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let subscription = GlobalBus::global()
+        .subscribe_async(
+            EventFilter::new(vec![EventType::SubAgentCompleted]),
+            move |event| {
+                if let AlephEvent::SubAgentCompleted(result) = &event.event {
+                    if let Some(rid) = result.request_id.clone() {
+                        sink.lock().unwrap_or_else(|e| e.into_inner()).push(rid);
+                    }
+                }
+            },
+        )
+        .await;
+
+    let tracker = make_tracker();
+    let tool = SubagentTool::new(
+        Arc::new(MockAiProvider) as Arc<dyn AiProvider>,
+        crate::harness::chain_context::ChainContext::new(),
+        make_registry(),
+        tracker.clone(),
+        in_mem_session(),
+        Arc::new(NoopTestToolService),
+    )
+    // Unique per run: this key binds the session-global fan-out semaphore, and
+    // it is the session the announce would be addressed to.
+    .with_parent_session_id(format!("s-stop-{}", uuid::Uuid::new_v4()));
+
+    // Already fired when the tool spawns — the state run-token propagation
+    // leaves behind for a child of a run the user stopped.
+    let fired = CancellationToken::new();
+    fired.cancel();
+    let cancelled_rid = spawn_background_child(&tool, fired).await;
+    let completed_rid = spawn_background_child(&tool, CancellationToken::new()).await;
+
+    // Both children settle (bounded).
+    for _ in 0..500 {
+        let still_running = tracker
+            .list_running(None)
+            .iter()
+            .any(|(id, _, _)| id == &cancelled_rid || id == &completed_rid);
+        if !still_running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // Subscriber callbacks are dispatched on spawned tasks, so give the control
+    // arm's announce a bounded window to arrive.
+    for _ in 0..500 {
+        let arrived = seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&completed_rid);
+        if arrived {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    // Read everything, then put both globals back before asserting.
+    let announced_ids = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let cancelled_record = bp::lookup(&cancelled_rid, None).map(|r| r.record);
+    let completed_record = bp::lookup(&completed_rid, None).map(|r| r.record);
+    GlobalBus::global().unsubscribe(&subscription).await;
+    bp::disable_for_test();
+
+    assert!(
+        announced_ids.contains(&completed_rid),
+        "control: an ordinary completion must still announce, or this fixture proves nothing \
+         (ids seen: {announced_ids:?})"
+    );
+    assert!(
+        !announced_ids.contains(&cancelled_rid),
+        "a cancelled child must not announce: that announce spends a fresh parent turn on the \
+         session the user just stopped (ids seen: {announced_ids:?})"
+    );
+
+    let cancelled_record = cancelled_record.expect("the cancelled child left a sidecar record");
+    assert_eq!(
+        cancelled_record.outcome.as_deref(),
+        Some("cancelled"),
+        "fixture check: this arm must really settle as Cancelled, or the silence above proves \
+         nothing about cancellation"
+    );
+    assert!(
+        cancelled_record.announced,
+        "a suppressed announce must be stamped announced, or the next boot's reconcile hands the \
+         same completion back and delivers it after all"
+    );
+    let completed_record = completed_record.expect("the completed child left a sidecar record");
+    assert_eq!(
+        completed_record.outcome.as_deref(),
+        Some("completed"),
+        "control: the other arm must settle normally"
+    );
+    assert!(
+        !completed_record.announced,
+        "the stamp belongs to the suppression, not to every settle: an announced completion is \
+         stamped by the announce path when it lands"
+    );
+}
+
 /// W27 — the operator's cap must actually reach the semaphore a run fans out
 /// through. Asserted on `available_permits` of a freshly built tool: dropping
 /// the `types::max_concurrent_subagents()` read from `SubagentTool::new` leaves

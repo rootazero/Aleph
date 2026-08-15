@@ -78,6 +78,41 @@ impl Config {
     /// ```
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
+        let (config, dead_keys) = Self::load_from_file_reporting_dead_keys(path)?;
+        for key in &dead_keys {
+            warn!(
+                path = %path.display(),
+                key = %key,
+                "Config key reaches no code: it parses and is then discarded. \
+                 Check the section it belongs under, or delete it."
+            );
+        }
+        Ok(config)
+    }
+
+    /// Load configuration from a TOML file, and report which of its keys
+    /// reached no code.
+    ///
+    /// The second element lists dotted key paths that parsed and were then
+    /// discarded — a misplaced section (`[browser]` rather than
+    /// `[general.browser]`), a typo, or a knob retired without an entry in
+    /// `config::dead_keys`. It is deliberately not an error: `Config`
+    /// tolerates unknown keys so that an old file still boots, and this only
+    /// makes that tolerance visible.
+    ///
+    /// [`Self::load_from_file`] wraps this and logs the paths. Doctor's
+    /// `core/config-parse` check calls this one directly, so its finding and
+    /// the log line come from the same scan rather than two copies of "what
+    /// counts as dead".
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::load_from_file`] — a missing, unreadable, unparseable
+    /// or invalid config file.
+    pub fn load_from_file_reporting_dead_keys<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<(Self, Vec<String>)> {
+        let path = path.as_ref();
 
         debug!(path = %path.display(), "Attempting to load config from file");
 
@@ -126,15 +161,19 @@ impl Config {
         let migrated = migrated_contents != contents;
         let contents = migrated_contents;
 
-        // Parse TOML
-        let mut config: Self = toml::from_str(&contents).map_err(|e| {
-            error!(path = %path.display(), error = %e, "Failed to parse config TOML");
-            AlephError::invalid_config(format!(
-                "Failed to parse config file {}: {}",
-                path.display(),
-                e
-            ))
-        })?;
+        // Parse TOML. Routed through `dead_keys` rather than `toml::from_str`
+        // so that the keys serde discards are named instead of vanishing —
+        // `Config` does not `deny_unknown_fields`, so a misplaced section
+        // parses exactly like a working one.
+        let (mut config, dead_keys): (Self, Vec<String>) =
+            crate::config::dead_keys::deserialize_reporting_dead_keys(&contents).map_err(|e| {
+                error!(path = %path.display(), error = %e, "Failed to parse config TOML");
+                AlephError::invalid_config(format!(
+                    "Failed to parse config file {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
 
         // Bridge: `[security.ssrf]` is the user-facing TOML path (managed by
         // the Panel security_config admin), but `WebFetchTool` reads from
@@ -205,7 +244,7 @@ impl Config {
             "Config loaded and validated successfully"
         );
 
-        Ok(config)
+        Ok((config, dead_keys))
     }
 
     /// Load configuration from this process's effective path — the `--config`
@@ -341,6 +380,82 @@ impl Config {
                 })
                 .collect();
         }
+    }
+}
+
+#[cfg(test)]
+mod dead_key_tests {
+    use super::*;
+
+    fn dead_keys_of(toml_str: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, toml_str).expect("write");
+        Config::load_from_file_reporting_dead_keys(&path)
+            .expect("load")
+            .1
+    }
+
+    /// The class this scan exists for. `[general.browser]` is the section the
+    /// code reads; a `[browser]` block parses, saves, and is read by nobody.
+    #[test]
+    fn a_misplaced_section_is_reported_as_dead() {
+        let dead = dead_keys_of("[browser.profiles.work]\nheadless = true\n");
+        assert_eq!(dead, vec!["browser".to_string()]);
+    }
+
+    #[test]
+    fn the_section_under_its_real_parent_is_not_reported() {
+        assert!(dead_keys_of("[general.browser.profiles.work]\nheadless = true\n").is_empty());
+    }
+
+    /// Everything `Config` writes, `Config` must read back. This is the guard
+    /// against the allowlist being *incomplete* for sections `Config` owns:
+    /// a rename on one side of a serde attribute would show up here as a dead
+    /// key rather than as a setting that quietly stops applying.
+    #[test]
+    fn a_default_config_round_trips_with_nothing_dead() {
+        let serialized = toml::to_string(&Config::default()).expect("serialize default config");
+        let dead = dead_keys_of(&serialized);
+        assert!(
+            dead.is_empty(),
+            "config Aleph wrote itself must be entirely readable by Aleph, dead: {dead:?}"
+        );
+    }
+
+    /// `[gateway]` is live config, parsed out of this same file by
+    /// `GatewayConfig::load_default`. Reporting it would cry wolf on every
+    /// deployment that configured a host or port.
+    #[test]
+    fn the_gateway_section_is_not_reported_dead() {
+        assert!(dead_keys_of("[gateway]\nhost = \"0.0.0.0\"\nport = 18790\n").is_empty());
+    }
+
+    /// `[security.ssrf]` is invisible to serde — `ShellSecurityConfig` has no
+    /// `ssrf` field — and honoured by the raw-TOML bridge above.
+    #[test]
+    fn the_security_ssrf_bridge_section_is_not_reported_dead() {
+        let dead = dead_keys_of("[security.ssrf]\nallowed_hosts = [\"api.example.com\"]\n");
+        assert!(
+            dead.is_empty(),
+            "bridge-consumed section reported: {dead:?}"
+        );
+    }
+
+    #[test]
+    fn a_retired_key_is_not_reported_dead() {
+        assert!(dead_keys_of("[desktop.presence]\nenabled = true\n").is_empty());
+        assert!(dead_keys_of("[agent.subagents]\nallow_agents = [\"x\"]\n").is_empty());
+    }
+
+    /// The compat stance is the point: naming a dead key must never turn an
+    /// old config into a daemon that will not start.
+    #[test]
+    fn a_dead_key_never_makes_the_load_fail() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "nonsense_key = 3\n\n[browser]\nheadless = true\n").expect("write");
+        assert!(Config::load_from_file(&path).is_ok());
     }
 }
 

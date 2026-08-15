@@ -202,14 +202,6 @@ fn sample_of_every_kind() -> Vec<(&'static str, SessionEvent)> {
                 at: 0,
             },
         ),
-        (
-            "TurnEnded",
-            SessionEvent::TurnEnded {
-                turn_id: t,
-                outcome: crate::session::events::TurnOutcome::Completed,
-                at: 0,
-            },
-        ),
         ("UserMessage", user(t, "u").event),
         ("AssistantMessage", assistant(t, "a").event),
         (
@@ -305,7 +297,7 @@ fn sample_of_every_kind() -> Vec<(&'static str, SessionEvent)> {
             "Error",
             SessionEvent::Error {
                 turn_id: None,
-                kind: crate::session::events::ErrorKind::Harness,
+                kind: crate::session::events::ErrorKind::Guardrail,
                 message: "m".into(),
                 recoverable: false,
                 at: 0,

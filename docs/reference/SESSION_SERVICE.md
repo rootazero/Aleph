@@ -39,9 +39,14 @@ Plus two supporting indexes (`idx_session_events_session_turn`, `idx_session_eve
 
 ## Event schema
 
-See `src/session/events.rs::SessionEvent` (`#[non_exhaustive]` enum). Variants cover session lifecycle, turn boundaries, messages, LLM interaction, tool calls, subagent delegation, budget/compaction, and errors. Helper types: `EventSeq`, `TurnId`, `MessageContent`, `ToolOutput`, `TurnOutcome`, `TurnTrigger`, `ApprovalSource`, `ErrorKind`, `Timestamp`.
+See `src/session/events.rs::SessionEvent` (`#[non_exhaustive]` enum). Variants cover session lifecycle, turn boundaries, messages, LLM interaction, tool calls, subagent delegation, budget/compaction, and errors. Helper types: `EventSeq`, `TurnId`, `MessageContent`, `ToolOutput`, `TurnTrigger`, `ApprovalSource`, `ErrorKind`, `Timestamp`.
 
-A read-side projection helper `src/session/projection.rs::project_messages` turns an event range into `Vec<ProjectedMessage>` for consumers that want a classic message-history view rather than raw events.
+Two rules keep this list honest, both learned the same way:
+
+- **A variant with no producer is a claim the enum cannot honour** (`ApprovalSource::Autoconfirm`'s own doc). `TurnOutcome` and `SessionEvent::TurnEnded` were removed on those grounds — nothing ever constructed them in any build, so nothing could read one back, while the sentence below documented a crash-recovery contract on top of them for as long as they existed.
+- `ErrorKind` is therefore **not open vocabulary**: it carries only kinds that a producer actually emits (today `Guardrail`, from the input-block receipt). A new kind lands in the same commit as the code that writes it.
+
+A read-side projection helper `src/session/projection.rs::project_row` turns one event into at most one message-shaped row (`ProjectedRow`), for consumers that want a classic message-history view rather than raw events. It is what `MessageProjector` materialises into the `messages` table, so an event that projects to `None` is an event `chat.history` will never serve.
 
 ## Soft retirement (`retired_at`)
 
@@ -63,7 +68,9 @@ The asymmetry is the point. Clearing is erasure: leaving the content searchable 
 3. Write a `SessionWoken { prior_head }` event into the log.
 4. Return a new `SessionHandle`.
 
-A Harness that crashed mid-turn will surface as a `TurnStarted` with no matching `TurnEnded` — the replacement Harness decides whether to retry, abandon, or close the turn with an `Error` event. The crash-recovery path has an integration test (`tests/session_wake_recovery.rs`).
+Crash recovery reads the **run** markers, not the turn markers: a run that never finished surfaces as one or more trailing `RunStarted` events with no `RunFinished` after the last of them, which `gateway::resume_coordinator::classify_markers` counts (the count doubles as the crash-loop attempt counter). `ResumeCoordinator` then repairs the boundary — a synthetic `ToolError` per dangling tool call — and re-triggers each surviving candidate.
+
+There is deliberately no `TurnEnded` marker to pair with `TurnStarted`; a turn ends when the next one opens or when the run does. An earlier version of this section described the crash predicate in terms of that pair, which no code ever emitted, so every turn matched "crashed mid-turn" — and cited an integration test (`tests/session_wake_recovery.rs`) that does not exist. Both are gone.
 
 ## Gateway RPC relationship
 

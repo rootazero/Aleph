@@ -208,6 +208,7 @@ pub fn scope_for_role(role: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::gateway::event_visibility::{session_identity_of, SessionIdentity};
+    use crate::gateway::source_census;
 
     #[test]
     fn test_unguarded_event_allowed_for_all() {
@@ -496,26 +497,6 @@ mod tests {
         }
     }
 
-    /// Scrape the topic literal out of every `TopicEvent::new("…", …)` call in
-    /// `src`, skipping calls whose first argument is a composed expression
-    /// rather than a literal. Only the production half is scanned — the caller
-    /// splits on `#[cfg(test)]` first.
-    fn published_topic_literals(src: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        for seg in src.split("TopicEvent::new(").skip(1) {
-            let Some(open) = seg.find('"') else { continue };
-            if !seg[..open].chars().all(char::is_whitespace) {
-                continue; // composed topic (`&topic`, `format!(…)`) — nothing to scrape
-            }
-            let rest = &seg[open + 1..];
-            let Some(close) = rest.find('"') else {
-                continue;
-            };
-            out.push(rest[..close].to_string());
-        }
-        out
-    }
-
     /// SOURCE-level pin: every `node.*` topic the center actually publishes
     /// must be refused to a member.
     ///
@@ -531,12 +512,8 @@ mod tests {
     fn every_node_topic_the_center_publishes_is_refused_to_a_member() {
         // Production half only: handler.rs's own test module publishes topics
         // that no client ever sees.
-        let production = include_str!("server/handler.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields at least one segment")
-            .to_string();
-        let topics = published_topic_literals(&production);
+        let production = source_census::production_prefix(include_str!("server/handler.rs"));
+        let topics = source_census::topic_event_literals(&production);
         assert!(
             !topics.is_empty(),
             "the scanner matched no `TopicEvent::new(\"…\"` call in \

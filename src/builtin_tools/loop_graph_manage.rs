@@ -1207,13 +1207,26 @@ fn render_diff_line(d: &crate::loop_graph::TopologyDiff) -> String {
         D::Modified { id, changed_fields } => {
             format!("~ 节点 {id}（改动字段: {}）", changed_fields.join(", "))
         }
-        D::EdgeAdded { from_id, to_id, edge_kind } => {
+        D::EdgeAdded {
+            from_id,
+            to_id,
+            edge_kind,
+        } => {
             format!("+ 边 {from_id} -[{}]-> {to_id}", edge_kind.as_str())
         }
-        D::EdgeRemoved { from_id, to_id, edge_kind } => {
+        D::EdgeRemoved {
+            from_id,
+            to_id,
+            edge_kind,
+        } => {
             format!("- 边 {from_id} -[{}]-> {to_id}", edge_kind.as_str())
         }
-        D::EdgeModified { from_id, to_id, edge_kind, changed_fields } => format!(
+        D::EdgeModified {
+            from_id,
+            to_id,
+            edge_kind,
+            changed_fields,
+        } => format!(
             "~ 边 {from_id} -[{}]-> {to_id}（改动字段: {}）",
             edge_kind.as_str(),
             changed_fields.join(", ")
@@ -1619,10 +1632,13 @@ mod tests {
         let bus = crate::loop_graph::event_bus().expect("bus installed");
         let mut rx = bus.subscribe();
 
-        let unique = format!("goal:ev-{:x}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos());
+        let unique = format!(
+            "goal:ev-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         let (_d, t) = tool();
         let mut a = args(LoopGraphAction::Node);
         a.id = Some(unique.clone());
@@ -1643,15 +1659,17 @@ mod tests {
                 _ => break false,
             }
         };
-        assert!(found, "NodeUpserted for {unique} must arrive on the global bus");
+        assert!(
+            found,
+            "NodeUpserted for {unique} must arrive on the global bus"
+        );
     }
 
     fn tool_with_snapshots() -> (tempfile::TempDir, LoopGraphTool) {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(LoopGraphStore::open(&dir.path().join("g.db")).unwrap());
-        let snaps = Arc::new(
-            crate::loop_graph::SnapshotStore::open(&dir.path().join("s.db")).unwrap(),
-        );
+        let snaps =
+            Arc::new(crate::loop_graph::SnapshotStore::open(&dir.path().join("s.db")).unwrap());
         (dir, LoopGraphTool::new(store).with_snapshot_store(snaps))
     }
 

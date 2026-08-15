@@ -39,6 +39,55 @@ pub struct SandboxOutput {
     #[serde(default)]
     pub stderr_truncated_bytes: u64,
     pub duration_ms: u64,
+    /// Set when the OS backend's own denial dialect appeared in `stderr` —
+    /// see [`SandboxDenialHint`]. `None` on every path that runs without an
+    /// OS driver (`WorktreeSandbox`, `NoopSandbox`) and under every backend
+    /// that declares no dialect.
+    #[serde(default)]
+    pub denial_hint: Option<SandboxDenialHint>,
+}
+
+/// Evidence that the OS sandbox — rather than the command's own logic — may
+/// have refused an effect: the running backend's denial dialect appeared in
+/// stderr.
+///
+/// Recorded by `WorkspaceSandbox` right after the OS driver returns, because
+/// that is the only place the *active* driver is in hand: every consumer
+/// downstream holds a plain [`SandboxOutput`] and cannot tell which backend
+/// produced the bytes.
+///
+/// This is a substring match, not a verdict. An application's own refusal (an
+/// `ssh` publickey rejection, a `sudo` prompt) is byte-identical to a Landlock
+/// one, so consumers must phrase it as a possibility and never as a cause.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxDenialHint {
+    /// `OsSandboxDriverTrait::platform()` of the driver that ran the command.
+    pub platform: String,
+    /// The entry from that backend's `denial_signatures()` that matched,
+    /// verbatim — evidence a consumer can quote rather than paraphrase.
+    pub signature: String,
+}
+
+impl SandboxDenialHint {
+    /// Match `stderr` against one backend's denial dialect, case-insensitively.
+    ///
+    /// `signatures` must come from the driver that actually ran the command: a
+    /// union across backends would claim a denial in a dialect the running
+    /// backend cannot emit.
+    #[must_use]
+    pub fn detect(platform: &str, signatures: &[&'static str], stderr: &[u8]) -> Option<Self> {
+        if signatures.is_empty() {
+            return None;
+        }
+        let haystack = String::from_utf8_lossy(stderr).to_lowercase();
+        signatures
+            .iter()
+            .find(|sig| haystack.contains(&sig.to_lowercase()))
+            .map(|sig| Self {
+                platform: platform.to_string(),
+                signature: (*sig).to_string(),
+            })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -93,4 +142,69 @@ pub enum SandboxError {
 
     #[error("{0}")]
     Other(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEATBELT: &[&str] = &["operation not permitted"];
+
+    #[test]
+    fn detect_quotes_the_signature_that_matched() {
+        let hint = SandboxDenialHint::detect(
+            "macos/seatbelt",
+            SEATBELT,
+            b"open: /etc/hosts: Operation not permitted\n",
+        )
+        .expect("seatbelt dialect present in stderr");
+        assert_eq!(hint.platform, "macos/seatbelt");
+        // Verbatim from the signature table, not from the stderr casing — the
+        // consumer quotes a declared dialect entry, not whatever the OS typed.
+        assert_eq!(hint.signature, "operation not permitted");
+    }
+
+    #[test]
+    fn detect_is_silent_when_the_backend_declares_no_dialect() {
+        // The defaulted `denial_signatures()` returns `&[]`; a driver that has
+        // not declared a dialect must stay silent even on stderr that another
+        // backend would have matched. This is the "never a union" invariant
+        // enforced at the matcher rather than only at the call site.
+        assert!(SandboxDenialHint::detect(
+            "fake",
+            &[],
+            b"open: /etc/hosts: Operation not permitted\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn detect_is_silent_on_a_foreign_dialect() {
+        // bwrap's EROFS text under a seatbelt signature table: no match. A
+        // union table would have reported a denial macOS never emits.
+        assert!(SandboxDenialHint::detect(
+            "macos/seatbelt",
+            SEATBELT,
+            b"touch: Read-only file system"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn detect_survives_non_utf8_stderr() {
+        let mut stderr = vec![0xff, 0xfe];
+        stderr.extend_from_slice(b" bash: fork: Operation not permitted");
+        assert!(SandboxDenialHint::detect("macos/seatbelt", SEATBELT, &stderr).is_some());
+    }
+
+    #[test]
+    fn denial_hint_defaults_to_absent_on_older_records() {
+        // `SandboxOutput` is persisted; a record written before this field
+        // existed must still deserialize.
+        let out: SandboxOutput = serde_json::from_str(
+            r#"{"stdout":[],"stderr":[],"exit_code":0,"signal":null,"truncated":false,"duration_ms":1}"#,
+        )
+        .expect("legacy record deserializes");
+        assert!(out.denial_hint.is_none());
+    }
 }

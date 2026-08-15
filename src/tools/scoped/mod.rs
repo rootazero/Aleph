@@ -329,6 +329,8 @@ impl ToolService for ScopedToolService {
         input: Value,
         cancel: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
         use tracing::Instrument;
 
         // Per-call span mirrors opencode's `Effect.withSpan("Tool.execute", …)`.
@@ -371,7 +373,50 @@ impl ToolService for ScopedToolService {
                 None => self.execute_inner(name, input, cancel).await,
             }
         };
-        fut.instrument(span).await
+
+        // Contain a panic raised anywhere below this seam — gate chain, hook
+        // stages, tool body — to the call that raised it. The Act phase polls
+        // tool futures inline (`stream::iter(..).buffer_unordered`), with no
+        // per-call task, so an escaping unwind kills the harness task: every
+        // in-flight sibling is drop-cancelled and the run dies with a generic
+        // "completion dropped" receipt naming neither the tool nor the panic.
+        // Caught here — below every gate, above the harness — a panic
+        // costs one call: siblings run on and the model gets an attributed
+        // error it can route around. `Execution` is deliberately non-retryable
+        // (`is_retryable`): a deterministic panic re-panics on a respin.
+        //
+        // `AssertUnwindSafe` is required because the captured `self` (registry
+        // handle, hook executor, approval channels) is not `UnwindSafe`. It is
+        // sound under the repo-wide poisoned-lock policy — lock sites recover
+        // with `unwrap_or_else(|e| e.into_inner())` — so a lock the panicking
+        // tool held is still usable by the next call.
+        //
+        // The unwind jumps over this call's post-hooks, ledger entry and
+        // artifact harvest; that is the price of catching at the outermost
+        // seam rather than putting a catch inside every gate stage.
+        match AssertUnwindSafe(fut.instrument(span)).catch_unwind().await {
+            Ok(result) => result,
+            Err(payload) => {
+                let cause = crate::utils::panic_payload::panic_message(&*payload);
+                tracing::error!(
+                    tool = %name,
+                    panic = %cause,
+                    "panic in tool dispatch; contained to this call"
+                );
+                // Through the same sanitizer every other tool error takes:
+                // synthesizing the error out here skips `execute_inner`'s
+                // pipeline, and a panic body is untrusted, unbounded text
+                // (a failed `assert_eq!` prints both operands) that would
+                // otherwise ride into context verbatim on every later turn.
+                Err(Self::sanitize_tool_error(
+                    name,
+                    ToolError::Execution {
+                        name: name.to_string(),
+                        cause: format!("tool panicked: {cause}"),
+                    },
+                ))
+            }
+        }
     }
 
     async fn call_concurrency_claim(

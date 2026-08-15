@@ -21,7 +21,7 @@ pub mod tool_trace;
 pub use actor::{ActorCommand, SessionActor};
 pub use events::{
     ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent, SessionEventRecord,
-    Timestamp, ToolOutput, TurnId, TurnOutcome, TurnTrigger,
+    Timestamp, ToolOutput, TurnId, TurnTrigger,
 };
 pub use in_process::InProcessActorSessionService;
 pub use projection::project_row;

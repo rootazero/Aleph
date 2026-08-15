@@ -967,6 +967,7 @@ mod tests {
     };
     use crate::gateway::security::store::OWNER_USER_ID;
     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::gateway::source_census;
     use crate::gateway::{ChannelId, ChannelStatus};
     use crate::providers::health::ModelInfo;
     use tempfile::TempDir;
@@ -1979,22 +1980,15 @@ mod tests {
     #[test]
     fn the_voice_delta_topic_is_classified_at_its_producer() {
         const RELAY: &str = include_str!("voice/streaming/relay.rs");
-        let production = RELAY.split("#[cfg(test)]").next().unwrap_or(RELAY);
-
-        let topics: Vec<&str> = production
-            .match_indices("TopicEvent::new(\"")
-            .filter_map(|(i, _)| {
-                let rest = &production[i + "TopicEvent::new(\"".len()..];
-                rest.find('"').map(|end| &rest[..end])
-            })
-            .collect();
+        let production = source_census::production_prefix(RELAY);
+        let topics = source_census::topic_event_literals(&production);
 
         assert!(
             !topics.is_empty(),
             "relay.rs publishes no TopicEvent — the scanner stopped matching \
              the call shape, so this pin has quietly become vacuous"
         );
-        for topic in topics {
+        for topic in &topics {
             let owned = serde_json::json!({ "owner_user_id": "u-alice" });
             assert_eq!(
                 session_identity_of(topic, Some(&owned)),
