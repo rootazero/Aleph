@@ -201,7 +201,7 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     (
         "gpt-5.5",
         ModelCapabilities {
-            context_window: 1_000_000,
+            context_window: 1_050_000,
             max_output_tokens: 128_000,
             supports_vision: true,
             supports_tools: true,
@@ -229,9 +229,14 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     (
+        // 1.05M, not the 272K this carried: models.dev (2026-08-15) reports
+        // the full window for the 5.4 line. 272K is the *pricing-tier*
+        // threshold (see `pricing::TIER_TABLE`), not the context limit — pi
+        // caps its own catalog there to keep requests in the cheap tier,
+        // which is a billing choice, not a window fact.
         "gpt-5.4",
         ModelCapabilities {
-            context_window: 272_000,
+            context_window: 1_050_000,
             max_output_tokens: 128_000,
             supports_vision: true,
             supports_tools: true,
@@ -249,9 +254,31 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
         },
     ),
     (
+        // 400K windows (models.dev openai, 2026-08-15); without these rows
+        // both fell through to the `gpt-5` row's old 272K.
+        "gpt-5.2",
+        ModelCapabilities {
+            context_window: 400_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "gpt-5.1",
+        ModelCapabilities {
+            context_window: 400_000,
+            max_output_tokens: 128_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
         "gpt-5",
         ModelCapabilities {
-            context_window: 272_000,
+            context_window: 400_000,
             max_output_tokens: 128_000,
             supports_vision: true,
             supports_tools: true,
@@ -296,6 +323,19 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_vision: true,
             supports_tools: true,
             supports_reasoning: true,
+        },
+    ),
+    (
+        // GPT-4.1 family (models.dev openai, 2026-08-15): ~1M window, sees
+        // images. Without this row every 4.1 id fell through to the `gpt-4`
+        // row below — a 128K window (8x early compression) and no vision.
+        "gpt-4.1",
+        ModelCapabilities {
+            context_window: 1_047_576,
+            max_output_tokens: 32_768,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: false,
         },
     ),
     (
@@ -427,6 +467,31 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
     // suffixed prefixes precede `grok-4`, which precedes the grok-3-era
     // broad fallback.
     (
+        // Grok 4.6 / 4.5 (models.dev xai, 2026-08-15): 500K window. Without
+        // these rows both fell through to `grok-4`'s 256K. `max_output`
+        // keeps the 64K reserve, not the vendor's 500K cap — reserve ==
+        // window would collapse the usable budget (same rule as
+        // `mistral-large-latest` below).
+        "grok-4.6",
+        ModelCapabilities {
+            context_window: 500_000,
+            max_output_tokens: 64_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "grok-4.5",
+        ModelCapabilities {
+            context_window: 500_000,
+            max_output_tokens: 64_000,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
         "grok-4.3",
         ModelCapabilities {
             context_window: 1_000_000,
@@ -497,6 +562,32 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_vision: false,
             supports_tools: true,
             supports_reasoning: false,
+        },
+    ),
+    (
+        // `mistral-medium-latest` / `mistral-small-latest` — the `mistral`
+        // preset's advertised fallback rungs (models.dev mistral,
+        // 2026-08-15): 256K-class windows, both see images, both reason.
+        // Without these rows both sized at the broad row's 128K / no-vision
+        // (2x early compression on an advertised id). Same 8K reserve rule
+        // as `mistral-large-latest` above.
+        "mistral-medium-latest",
+        ModelCapabilities {
+            context_window: 262_144,
+            max_output_tokens: 8_192,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "mistral-small-latest",
+        ModelCapabilities {
+            context_window: 256_000,
+            max_output_tokens: 8_192,
+            supports_vision: true,
+            supports_tools: true,
+            supports_reasoning: true,
         },
     ),
     (
@@ -1230,7 +1321,7 @@ mod tests {
     #[test]
     fn current_generation_cross_vendor_resolves() {
         let gpt55 = capabilities_for("gpt-5.5").unwrap();
-        assert_eq!(gpt55.context_window, 1_000_000);
+        assert_eq!(gpt55.context_window, 1_050_000);
 
         let gpt54mini = capabilities_for("gpt-5.4-mini").unwrap();
         assert_eq!(gpt54mini.context_window, 400_000);
@@ -1254,6 +1345,27 @@ mod tests {
         assert_eq!(
             capabilities_for("glm-5.1").unwrap().max_output_tokens,
             128_000
+        );
+    }
+
+    #[test]
+    fn gpt_4_1_and_mistral_latest_resolve_their_own_rows() {
+        // 2026-08-15 round (vs models.dev): gpt-4.1 used to fall through to
+        // the `gpt-4` row — a 128K window (8x early compression) and no
+        // vision for a 1M-window multimodal family.
+        let gpt41 = capabilities_for("gpt-4.1").unwrap();
+        assert_eq!(gpt41.context_window, 1_047_576);
+        assert!(gpt41.supports_vision);
+        // The advertised mistral fallback rungs sized at the broad row's
+        // 128K / no-vision before their own rows existed.
+        let medium = capabilities_for("mistral-medium-latest").unwrap();
+        assert_eq!(medium.context_window, 262_144);
+        assert!(medium.supports_vision);
+        // …and the 5.4 window is 1.05M, not the 272K pricing-tier threshold
+        // it was confused with.
+        assert_eq!(
+            capabilities_for("gpt-5.4").unwrap().context_window,
+            1_050_000
         );
     }
 

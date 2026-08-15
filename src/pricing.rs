@@ -297,10 +297,34 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: None,
             },
             Rates {
+                // Pro SKU at 6x the flagship — without this row it fell
+                // through to `gpt-5.5` and billed $5/$30. (models.dev openai,
+                // 2026-08-15.) Retired per `LIFECYCLE_TABLE`; the row stays so
+                // historical runs still price. Must precede `gpt-5.5` (the
+                // prefix-shadow guard enforces it).
+                model_prefix: "gpt-5.5-pro",
+                input_per_mtok: Some(30.0),
+                output_per_mtok: Some(180.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
                 model_prefix: "gpt-5.5",
                 input_per_mtok: Some(5.0),
                 output_per_mtok: Some(30.0),
                 cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Pro SKU at 12x the base — without this row it fell through
+                // to `gpt-5.4` and billed $2.50/$15. (models.dev openai,
+                // 2026-08-15.)
+                model_prefix: "gpt-5.4-pro",
+                input_per_mtok: Some(30.0),
+                output_per_mtok: Some(180.0),
+                cache_read_per_mtok: None,
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -338,10 +362,41 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: None,
             },
             Rates {
+                // Pro SKU at 12x the 5.2 base. (models.dev openai, 2026-08-15.)
+                model_prefix: "gpt-5.2-pro",
+                input_per_mtok: Some(21.0),
+                output_per_mtok: Some(168.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Same rate as the 5.3 codex line below it in the family.
+                model_prefix: "gpt-5.2",
+                input_per_mtok: Some(1.75),
+                output_per_mtok: Some(14.0),
+                cache_read_per_mtok: Some(0.175),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // First-gen pro SKU; without this row it fell through to the
+                // broad `gpt-5` row and billed 6x low ($2.50/$15 vs $15/$120).
+                model_prefix: "gpt-5-pro",
+                input_per_mtok: Some(15.0),
+                output_per_mtok: Some(120.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // GPT-5 / 5.1 base rate (models.dev openai, 2026-08-15). The
+                // $2.50/$15 this carried was the 5.4-era rate — 2x high for
+                // the original 5.x generation.
                 model_prefix: "gpt-5",
-                input_per_mtok: Some(2.50),
-                output_per_mtok: Some(15.0),
-                cache_read_per_mtok: Some(0.25),
+                input_per_mtok: Some(1.25),
+                output_per_mtok: Some(10.0),
+                cache_read_per_mtok: Some(0.125),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -407,6 +462,34 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: None,
             },
             Rates {
+                // GPT-4.1 family (1M window, models.dev openai 2026-08-15).
+                // Without these rows every 4.1 id fell through to `gpt-4`
+                // ($30/$60) — a 15x over-estimate for 4.1, 75x for nano.
+                // nano/mini precede the family row.
+                model_prefix: "gpt-4.1-nano",
+                input_per_mtok: Some(0.10),
+                output_per_mtok: Some(0.40),
+                cache_read_per_mtok: Some(0.025),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "gpt-4.1-mini",
+                input_per_mtok: Some(0.40),
+                output_per_mtok: Some(1.60),
+                cache_read_per_mtok: Some(0.10),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "gpt-4.1",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(8.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
                 model_prefix: "gpt-4o-mini",
                 input_per_mtok: Some(0.15),
                 output_per_mtok: Some(0.60),
@@ -445,6 +528,28 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 cache_read_per_mtok: Some(0.20),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: Some(12.0),
+            },
+            Rates {
+                // Gemini 3.1 Flash-Lite (models.dev google, 2026-08-15).
+                // Without this row it fell through to the broad `gemini`
+                // catch-all at $0.075/$0.30 — 3x/5x low.
+                model_prefix: "gemini-3.1-flash-lite",
+                input_per_mtok: Some(0.25),
+                output_per_mtok: Some(1.50),
+                cache_read_per_mtok: Some(0.025),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(1.50),
+            },
+            Rates {
+                // Gemini 3.7 Flash (models.dev google, 2026-08-15) — newest
+                // flash line; without this row it priced ~5x low on the broad
+                // `gemini` row.
+                model_prefix: "gemini-3.7-flash",
+                input_per_mtok: Some(0.75),
+                output_per_mtok: Some(3.75),
+                cache_read_per_mtok: Some(0.075),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(3.75),
             },
             // The Gemini 3.x **flash** tiers are ~20x the 2.0-flash rate the
             // broad `gemini` row below carries. Without these rows every 3.x
@@ -491,10 +596,31 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 reasoning_per_mtok: Some(7.50),
             },
             Rates {
+                // Gemini 2.5 Flash-Lite / Flash (models.dev google,
+                // 2026-08-15). `gemini-2.5-flash` is the `gemini` preset's
+                // last fallback rung and previously fell through to the broad
+                // `gemini` row at $0.075/$0.30 — 4x/8x low. `-lite` precedes
+                // `-flash` (longer prefix of the same stem).
+                model_prefix: "gemini-2.5-flash-lite",
+                input_per_mtok: Some(0.10),
+                output_per_mtok: Some(0.40),
+                cache_read_per_mtok: Some(0.01),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(0.40),
+            },
+            Rates {
+                model_prefix: "gemini-2.5-flash",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(2.50),
+                cache_read_per_mtok: Some(0.03),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: Some(2.50),
+            },
+            Rates {
                 model_prefix: "gemini-2.5-pro",
                 input_per_mtok: Some(1.25),
                 output_per_mtok: Some(10.0),
-                cache_read_per_mtok: None,
+                cache_read_per_mtok: Some(0.125),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: Some(10.0),
             },
@@ -568,6 +694,25 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             // Grok 4.x generations: dotted/suffixed specifics precede the
             // `grok-4` base, which precedes the grok-3-era broad fallback.
             Rates {
+                // Grok 4.6 / 4.5 (models.dev xai, 2026-08-15). Without these
+                // rows both fell through to the broad `grok` row at
+                // $3/$15 — 1.5x/2.5x high.
+                model_prefix: "grok-4.6",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(6.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "grok-4.5",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(6.0),
+                cache_read_per_mtok: Some(0.30),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
                 model_prefix: "grok-4.3",
                 input_per_mtok: Some(1.25),
                 output_per_mtok: Some(2.50),
@@ -612,9 +757,41 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         "mistral",
         &[
             Rates {
+                // The `mistral` preset's *default* — the 2512 snapshot at
+                // $0.50/$1.50 (models.dev mistral, 2026-08-15), NOT the
+                // 2411-era $2/$6 the family row below carries. Every default
+                // run was estimated 4x high. Must precede `mistral-large`.
+                model_prefix: "mistral-large-latest",
+                input_per_mtok: Some(0.50),
+                output_per_mtok: Some(1.50),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
                 model_prefix: "mistral-large",
                 input_per_mtok: Some(2.0),
                 output_per_mtok: Some(6.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // Advertised fallback rungs of the `mistral` preset
+                // (models.dev mistral, 2026-08-15). Without these rows both
+                // fell through to the broad family row at $0.20/$0.60 —
+                // 7.5x low for medium, input-side high for small.
+                model_prefix: "mistral-medium-latest",
+                input_per_mtok: Some(1.50),
+                output_per_mtok: Some(7.50),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "mistral-small-latest",
+                input_per_mtok: Some(0.15),
+                output_per_mtok: Some(0.60),
                 cache_read_per_mtok: None,
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
@@ -655,6 +832,17 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             },
             // K2.5/K2.6/K2.7 published USD rates (platform.kimi.ai) differ from
             // the legacy family fallback below. K2.7-code shares K2.6's tier.
+            Rates {
+                // The `-highspeed` SKU is a separate 2x rate (models.dev
+                // moonshotai, 2026-08-15); without this row it billed at the
+                // `kimi-k2.7` base — half price. Must precede it.
+                model_prefix: "kimi-k2.7-code-highspeed",
+                input_per_mtok: Some(1.90),
+                output_per_mtok: Some(8.0),
+                cache_read_per_mtok: Some(0.38),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "kimi-k2.7",
                 input_per_mtok: Some(0.95),
@@ -703,6 +891,20 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "zai",
         &[
+            Rates {
+                // GLM-5.2-Fast — the Fireworks router (`glm-5p2-fast`, an
+                // advertised `fireworks` fallback rung) and Baseten's
+                // `GLM-5.2-Fast` both publish $2.10/$6.60 (models.dev
+                // fireworks-ai + baseten, 2026-08-15); without this row both
+                // billed at the direct-API $1.40/$4.40 below. Must precede
+                // `glm-5.2`.
+                model_prefix: "glm-5.2-fast",
+                input_per_mtok: Some(2.10),
+                output_per_mtok: Some(6.60),
+                cache_read_per_mtok: Some(0.21),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 // GLM-5.2 flagship (z.ai USD). Must precede glm-5 / glm-5-turbo.
                 model_prefix: "glm-5.2",
@@ -812,6 +1014,18 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 model_prefix: "minimax-m2.7-highspeed",
                 input_per_mtok: Some(0.60),
                 output_per_mtok: Some(2.40),
+                cache_read_per_mtok: Some(0.06),
+                cache_creation_per_mtok: Some(0.375),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // M2.7 (the `minimax` presets' aux) publishes cache rates the
+                // family row below does not (models.dev minimax, 2026-08-15).
+                // Same base $0.30/$1.20, so this row exists for the cache
+                // columns. Must precede `minimax-m2`.
+                model_prefix: "minimax-m2.7",
+                input_per_mtok: Some(0.30),
+                output_per_mtok: Some(1.20),
                 cache_read_per_mtok: Some(0.06),
                 cache_creation_per_mtok: Some(0.375),
                 reasoning_per_mtok: None,
@@ -930,6 +1144,17 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         "xiaomi",
         &[
             Rates {
+                // The `-ultraspeed` SKU (beta) is 3x the pro rate (models.dev
+                // xiaomi, 2026-08-15); without this row it billed at the pro
+                // rate. Must precede `mimo-v2.5-pro`, which is its prefix.
+                model_prefix: "mimo-v2.5-pro-ultraspeed",
+                input_per_mtok: Some(1.305),
+                output_per_mtok: Some(2.61),
+                cache_read_per_mtok: Some(0.0108),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
                 model_prefix: "mimo-v2.5-pro",
                 input_per_mtok: Some(0.435),
                 output_per_mtok: Some(0.87),
@@ -960,6 +1185,50 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             reasoning_per_mtok: None,
         }],
     ),
+    (
+        // Perplexity Sonar. Source: models.dev `perplexity` section
+        // (2026-08-15) — the round-3 deferral ("no accepted source") no longer
+        // holds. Longest prefixes first: bare `sonar` is a prefix of every
+        // sibling and would otherwise price them all at $1/$1. Note
+        // `sonar-reasoning` (an advertised fallback rung) has no upstream
+        // entry of its own and resolves to the `sonar` row — recorded here so
+        // the next refresh does not re-discover it.
+        "perplexity",
+        &[
+            Rates {
+                model_prefix: "sonar-reasoning-pro",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(8.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "sonar-deep-research",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(8.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "sonar-pro",
+                input_per_mtok: Some(3.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "sonar",
+                input_per_mtok: Some(1.0),
+                output_per_mtok: Some(1.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
 ];
 
 /// Long-context pricing tiers, parallel to [`PRICE_TABLE`] and keyed the same
@@ -968,7 +1237,7 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
 /// flat-priced models in [`PRICE_TABLE`] stay untouched — only the handful of
 /// models with a published >threshold premium appear here. Tiers within an
 /// entry are sorted ascending by `min_input_tokens`; the highest threshold the
-/// prompt has crossed wins. Sources are vendor pricing pages as of 2026-05.
+/// prompt has crossed wins. Sources are vendor pricing pages as of 2026-08.
 const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
     (
         "google",
@@ -983,7 +1252,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
             min_input_tokens: 200_000,
             input_per_mtok: Some(4.0),
             output_per_mtok: Some(18.0),
-            cache_read_per_mtok: None,
+            cache_read_per_mtok: Some(0.40),
             cache_creation_per_mtok: None,
             reasoning_per_mtok: Some(18.0),
         }],
@@ -996,9 +1265,167 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
             min_input_tokens: 200_000,
             input_per_mtok: Some(2.50),
             output_per_mtok: Some(15.0),
-            cache_read_per_mtok: None,
+            cache_read_per_mtok: Some(0.25),
             cache_creation_per_mtok: None,
             reasoning_per_mtok: Some(15.0),
+        }],
+    ),
+    // ── OpenAI GPT-5.4/5.5/5.6 long-context tiers (models.dev openai,
+    // 2026-08-15; recorded 2026-08-13 for this round to adopt) ─────────────
+    // Every 5.4+ flagship id has a 1.05M window with a >272K step-up. The
+    // per-tier rates are NOT multiples of a single base — sol/terra/luna each
+    // carry their own quote, so the three 5.6 rows precede the broad one.
+    (
+        "openai",
+        "gpt-5.6-terra",
+        &[PriceTier {
+            min_input_tokens: 272_000,
+            input_per_mtok: Some(4.0),
+            output_per_mtok: Some(18.0),
+            cache_read_per_mtok: Some(0.40),
+            cache_creation_per_mtok: Some(5.0),
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "openai",
+        "gpt-5.6-luna",
+        &[PriceTier {
+            min_input_tokens: 272_000,
+            input_per_mtok: Some(0.40),
+            output_per_mtok: Some(1.80),
+            cache_read_per_mtok: Some(0.04),
+            cache_creation_per_mtok: Some(0.50),
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "openai",
+        // Covers plain `gpt-5.6` and `-sol`, which share the flagship quote.
+        "gpt-5.6",
+        &[PriceTier {
+            min_input_tokens: 272_000,
+            input_per_mtok: Some(10.0),
+            output_per_mtok: Some(45.0),
+            cache_read_per_mtok: Some(1.0),
+            cache_creation_per_mtok: Some(12.50),
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "openai",
+        "gpt-5.5-pro",
+        &[PriceTier {
+            min_input_tokens: 272_000,
+            input_per_mtok: Some(60.0),
+            output_per_mtok: Some(270.0),
+            cache_read_per_mtok: None,
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "openai",
+        "gpt-5.5",
+        &[PriceTier {
+            min_input_tokens: 272_000,
+            input_per_mtok: Some(10.0),
+            output_per_mtok: Some(45.0),
+            cache_read_per_mtok: Some(1.0),
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "openai",
+        "gpt-5.4-pro",
+        &[PriceTier {
+            min_input_tokens: 272_000,
+            input_per_mtok: Some(60.0),
+            output_per_mtok: Some(270.0),
+            cache_read_per_mtok: None,
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "openai",
+        // Explicitly *not* tiered (empty slice = "flat", same convention as
+        // `claude-sonnet-4-6` below): mini/nano publish no >272K premium, and
+        // without these rows the broad `gpt-5.4` tier would reach them by
+        // prefix and double-bill every long mini/nano prompt.
+        "gpt-5.4-mini",
+        &[],
+    ),
+    (
+        "openai",
+        "gpt-5.4-nano",
+        &[],
+    ),
+    (
+        "openai",
+        "gpt-5.4",
+        &[PriceTier {
+            min_input_tokens: 272_000,
+            input_per_mtok: Some(5.0),
+            output_per_mtok: Some(22.50),
+            cache_read_per_mtok: Some(0.50),
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "minimax",
+        // MiniMax M3: prompts over 512K input tokens bill at 2x (models.dev
+        // minimax, 2026-08-15). Closes the documented under-estimate left by
+        // the 2026-08-13 base-rate correction.
+        "minimax-m3",
+        &[PriceTier {
+            min_input_tokens: 512_000,
+            input_per_mtok: Some(0.60),
+            output_per_mtok: Some(2.40),
+            cache_read_per_mtok: Some(0.12),
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "xai",
+        // Grok 4.x: prompts over 200K input tokens bill at 2x (models.dev
+        // xai, 2026-08-15). 4.6/4.5 share the $4/$12 step-up; 4.3 (the
+        // preset default) doubles its own base.
+        "grok-4.6",
+        &[PriceTier {
+            min_input_tokens: 200_000,
+            input_per_mtok: Some(4.0),
+            output_per_mtok: Some(12.0),
+            cache_read_per_mtok: Some(1.0),
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "xai",
+        "grok-4.5",
+        &[PriceTier {
+            min_input_tokens: 200_000,
+            input_per_mtok: Some(4.0),
+            output_per_mtok: Some(12.0),
+            cache_read_per_mtok: Some(0.60),
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "xai",
+        "grok-4.3",
+        &[PriceTier {
+            min_input_tokens: 200_000,
+            input_per_mtok: Some(2.50),
+            output_per_mtok: Some(5.0),
+            cache_read_per_mtok: Some(0.40),
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
         }],
     ),
     (
@@ -1427,6 +1854,8 @@ mod tests {
             ("google", "gemini-3.1-pro-preview"),
             // Pre-4.6 Sonnet 1M beta — the row the negative row above protects.
             ("anthropic", "claude-sonnet-4-5"),
+            // GPT-5.6: >272K step-up (models.dev openai, 2026-08-15).
+            ("openai", "gpt-5.6"),
         ] {
             let (long, short) = (
                 per_token(provider, model, &long_prompt),
@@ -1526,9 +1955,13 @@ mod tests {
         let kimi = rate_card("fireworks", "accounts/fireworks/models/kimi-k2p6")
             .expect("kimi-k2p6 must price");
         assert_eq!(kimi.input_per_mtok, Some(0.95));
+        // The `-fast` router is a separate 1.5x SKU (models.dev fireworks-ai,
+        // 2026-08-15) — it must NOT fall through to the direct-API `glm-5.2`
+        // rate ($1.40), which is exactly what it did before the
+        // `glm-5.2-fast` row existed.
         let glm = rate_card("fireworks", "accounts/fireworks/routers/glm-5p2-fast")
             .expect("glm-5p2-fast must price");
-        assert_eq!(glm.input_per_mtok, Some(1.40));
+        assert_eq!(glm.input_per_mtok, Some(2.10));
     }
 
     /// Gemini 3.x flash used to inherit the 2.0-flash rate from the broad
@@ -1996,12 +2429,12 @@ mod tests {
             output: 1_000_000,
             ..Default::default()
         };
-        // gpt-5.5: $5 + $30 = $35.
+        // gpt-5.5: 1M input crosses the >272K tier → $10 + $45 = $55.
         let gpt55 = estimate("openai", "gpt-5.5", &breakdown);
         assert_eq!(gpt55.status, CostStatus::Complete);
         assert!(
-            (gpt55.usd - 35.0).abs() < 1e-6,
-            "expected $35.00, got ${}",
+            (gpt55.usd - 55.0).abs() < 1e-6,
+            "expected $55.00, got ${}",
             gpt55.usd
         );
 
@@ -2009,7 +2442,7 @@ mod tests {
         let nano = rate_card("openai", "gpt-5.4-nano").expect("priced");
         assert_eq!(nano.input_per_mtok, Some(0.20));
         let broad = rate_card("openai", "gpt-5-experimental").expect("priced via fallback");
-        assert_eq!(broad.input_per_mtok, Some(2.50));
+        assert_eq!(broad.input_per_mtok, Some(1.25));
 
         // o3 base was previously Unknown; o3-mini keeps its own rate.
         let o3 = estimate(
@@ -2083,11 +2516,19 @@ mod tests {
             ..Default::default()
         };
         // grok-4.3 has the new cheap rate; legacy grok-4 keeps $3 via the
-        // broad fallback (covered by the synonym test above).
-        let grok43 = estimate("xai", "grok-4.3", &input_1m);
+        // broad fallback (covered by the synonym test above). 100K input
+        // stays below the >200K long-context tier.
+        let grok43 = estimate(
+            "xai",
+            "grok-4.3",
+            &TokenBreakdown {
+                input: 100_000,
+                ..Default::default()
+            },
+        );
         assert!(
-            (grok43.usd - 1.25).abs() < 1e-6,
-            "expected $1.25, got ${}",
+            (grok43.usd - 0.125).abs() < 1e-6,
+            "expected $0.125, got ${}",
             grok43.usd
         );
         assert_eq!(
@@ -2249,21 +2690,43 @@ mod tests {
     #[test]
     fn minimax_m3_default_is_priced() {
         // With the default advanced to M3, its canonical id must hit a rate row
-        // (previously only minimax-m2 existed -> M3 would be Unknown).
-        let input_1m = TokenBreakdown {
-            input: 1_000_000,
+        // (previously only minimax-m2 existed -> M3 would be Unknown). 100K
+        // input stays below the >512K long-context tier.
+        let input_100k = TokenBreakdown {
+            input: 100_000,
             ..Default::default()
         };
-        let est = estimate("minimax", "MiniMax-M3", &input_1m);
+        let est = estimate("minimax", "MiniMax-M3", &input_100k);
         assert_eq!(est.status, CostStatus::Complete);
         assert!(
-            (est.usd - 0.30).abs() < 1e-6,
-            "expected $0.30, got ${}",
+            (est.usd - 0.03).abs() < 1e-6,
+            "expected $0.03, got ${}",
             est.usd
+        );
+        // …and a 1M prompt crosses the >512K tier (2x).
+        let est_long = estimate(
+            "minimax",
+            "MiniMax-M3",
+            &TokenBreakdown {
+                input: 1_000_000,
+                ..Default::default()
+            },
+        );
+        assert!(
+            (est_long.usd - 0.60).abs() < 1e-6,
+            "expected $0.60 above the 512K tier, got ${}",
+            est_long.usd
         );
         // The `-highspeed` SKU is a separate row at 2x, and it must win the
         // prefix race against `minimax-m2`.
-        let hs = estimate("minimax", "MiniMax-M2.7-highspeed", &input_1m);
+        let hs = estimate(
+            "minimax",
+            "MiniMax-M2.7-highspeed",
+            &TokenBreakdown {
+                input: 1_000_000,
+                ..Default::default()
+            },
+        );
         assert!(
             (hs.usd - 0.60).abs() < 1e-6,
             "expected $0.60 for the highspeed SKU, got ${}",
@@ -2271,10 +2734,63 @@ mod tests {
         );
     }
 
+    /// 2026-08-15 round (vs models.dev): the GPT-5.4/5.5/5.6 >272K tiers must
+    /// reach exactly the models they describe — the broad `gpt-5.4` tier must
+    /// not double-bill mini/nano (negative rows), and the pro SKUs must not
+    /// fall through to their base rows.
+    #[test]
+    fn openai_long_context_tiers_hit_their_own_rows() {
+        // Negative rows: present, deliberately empty.
+        for model in ["gpt-5.4-mini", "gpt-5.4-nano"] {
+            assert_eq!(
+                lookup_tiers("openai", model).map(<[_]>::len),
+                Some(0),
+                "{model}: must be explicitly flat, not reached by the gpt-5.4 tier"
+            );
+        }
+        // Pro SKUs get their own 60/270 step-up, not the base 5.4/5.5 tier.
+        for model in ["gpt-5.4-pro", "gpt-5.5-pro"] {
+            let tiers = lookup_tiers("openai", model).unwrap();
+            assert_eq!(tiers[0].input_per_mtok, Some(60.0), "{model}");
+        }
+        // The flagship tier doubles input at >272K.
+        let tiers = lookup_tiers("openai", "gpt-5.6-sol").unwrap();
+        assert_eq!(tiers[0].min_input_tokens, 272_000);
+        assert_eq!(tiers[0].input_per_mtok, Some(10.0));
+    }
+
+    /// 2026-08-15 round (vs models.dev): Perplexity's first price rows. Bare
+    /// `sonar` is a prefix of every sibling, so the specific rows must win
+    /// the race — `sonar-pro` at $3/$15, not $1/$1.
+    #[test]
+    fn perplexity_sonar_family_prices_specific_first() {
+        let pro = rate_card("perplexity", "sonar-pro").expect("sonar-pro priced");
+        assert_eq!(pro.input_per_mtok, Some(3.0));
+        assert_eq!(pro.basis, RateBasis::Direct);
+        let reasoning = rate_card("perplexity", "sonar-reasoning-pro").expect("priced");
+        assert_eq!(reasoning.input_per_mtok, Some(2.0));
+        let base = rate_card("perplexity", "sonar").expect("sonar priced");
+        assert_eq!(base.input_per_mtok, Some(1.0));
+    }
+
+    /// 2026-08-15 round (vs models.dev): the `mistral` preset's default and
+    /// advertised fallback rungs carried the 2411-era / broad family rates —
+    /// 4x high for the default, 7.5x low for medium.
+    #[test]
+    fn mistral_latest_aliases_price_at_current_rates() {
+        let large = rate_card("mistral", "mistral-large-latest").expect("priced");
+        assert_eq!(large.input_per_mtok, Some(0.50));
+        assert_eq!(large.output_per_mtok, Some(1.50));
+        let medium = rate_card("mistral", "mistral-medium-latest").expect("priced");
+        assert_eq!(medium.input_per_mtok, Some(1.50));
+        // The 2411-era snapshots keep the legacy rate via the family row.
+        let legacy = rate_card("mistral", "mistral-large-2411").expect("priced");
+        assert_eq!(legacy.input_per_mtok, Some(2.0));
+    }
+
     #[test]
     fn lookup_tiers_only_matches_tiered_models() {
-        assert!(lookup_tiers("google", "gemini-2.5-pro").is_some());
-        // 4.6 resolves to the *negative* row — present, deliberately empty —
+        assert!(lookup_tiers("google", "gemini-2.5-pro").is_some());        // 4.6 resolves to the *negative* row — present, deliberately empty —
         // so the broad `claude-sonnet-4` beta row can never reach it.
         assert_eq!(
             lookup_tiers("anthropic", "claude-sonnet-4-6").map(<[_]>::len),
