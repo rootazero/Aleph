@@ -654,7 +654,6 @@ fn session_id_to_string(id: &SessionId) -> Result<String, SessionError> {
 const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
     match event {
         SessionEvent::TurnStarted { turn_id, .. }
-        | SessionEvent::TurnEnded { turn_id, .. }
         | SessionEvent::UserMessage { turn_id, .. }
         | SessionEvent::AssistantMessage { turn_id, .. }
         | SessionEvent::SystemMessage { turn_id, .. }
@@ -686,7 +685,6 @@ const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::RunStarted { .. } => "run_started",
         SessionEvent::RunFinished { .. } => "run_finished",
         SessionEvent::TurnStarted { .. } => "turn_started",
-        SessionEvent::TurnEnded { .. } => "turn_ended",
         SessionEvent::UserMessage { .. } => "user_message",
         SessionEvent::AssistantMessage { .. } => "assistant_message",
         SessionEvent::AssistantRunMeta { .. } => "assistant_run_meta",

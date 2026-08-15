@@ -789,7 +789,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         match outcome {
             Err(_elapsed) => Err(format!("Sub-agent timed out after {}s", req.timeout_secs)),
             Ok(Err(panic_payload)) => {
-                let msg = panic_message(&panic_payload);
+                let msg = crate::utils::panic_payload::panic_message(&*panic_payload);
                 Err(format!("sub-agent panicked: {msg}"))
             }
             Ok(Ok(Err(e))) => Err(format!("sub-agent failed: {e}")),
@@ -1186,7 +1186,6 @@ fn build_context_triple(
 fn turn_id_of(event: &SessionEvent) -> Option<crate::session::events::TurnId> {
     match event {
         SessionEvent::TurnStarted { turn_id, .. }
-        | SessionEvent::TurnEnded { turn_id, .. }
         | SessionEvent::UserMessage { turn_id, .. }
         | SessionEvent::AssistantMessage { turn_id, .. }
         | SessionEvent::AssistantRunMeta { turn_id, .. }
@@ -1213,17 +1212,6 @@ fn is_last_assistant(events: &[SessionEventRecord], target: &SessionEventRecord)
         .rev()
         .find(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
         .is_some_and(|r| r.seq == target.seq)
-}
-
-/// Pull a human-readable message out of a panic payload.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        return (*s).to_string();
-    }
-    if let Some(s) = payload.downcast_ref::<String>() {
-        return s.clone();
-    }
-    "panic (non-string payload)".to_string()
 }
 
 #[cfg(test)]

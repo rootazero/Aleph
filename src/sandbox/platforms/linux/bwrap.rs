@@ -547,6 +547,13 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         })
     }
 
+    /// Two dialects because there are two enforcement layers: landlock refuses
+    /// with EACCES ("Permission denied") and the read-only bind mounts refuse
+    /// with EROFS ("Read-only file system").
+    fn denial_signatures(&self) -> &'static [&'static str] {
+        &["permission denied", "read-only file system"]
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
@@ -734,6 +741,22 @@ mod tests {
     fn bubblewrap_driver_platform() {
         let driver = BubblewrapDriver::new();
         assert_eq!(driver.platform(), "linux/bwrap");
+    }
+
+    #[test]
+    fn denial_dialect_covers_both_enforcement_layers_and_is_not_a_union() {
+        let sigs = BubblewrapDriver::new().denial_signatures();
+        // Landlock refuses with EACCES, the read-only binds with EROFS.
+        assert!(sigs.contains(&"permission denied"));
+        assert!(sigs.contains(&"read-only file system"));
+        // Borrowing another backend's dialect would let a Linux run be
+        // reported as a denial Linux cannot emit.
+        for foreign in ["operation not permitted", "access is denied"] {
+            assert!(
+                !sigs.contains(&foreign),
+                "{foreign} belongs to another backend"
+            );
+        }
     }
 
     #[test]

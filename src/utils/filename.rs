@@ -38,8 +38,10 @@ pub(crate) const FALLBACK_FILENAME: &str = "unnamed";
 ///   record's *display* `filename` (the on-disk blob is id-addressed, so this
 ///   never names a file), and is echoed to clients in a download name.
 /// - `crate::media::cache::unique_filename` — the value becomes an *actual*
-///   path component under `<temp_dir>/aleph/media/<session>/`, prefixed with a
-///   per-item id so parallel downloads of the same display name cannot collide.
+///   path component under `<private_temp_root>/media/<session>/` (the 0700
+///   per-uid root from [`crate::utils::paths::private_temp_root`]), prefixed
+///   with a per-item id so parallel downloads of the same display name cannot
+///   collide.
 ///
 /// Deriving a filename from a *title* rather than from a path is a different
 /// concept with a different function — see `artifact_publish::slug_filename`.

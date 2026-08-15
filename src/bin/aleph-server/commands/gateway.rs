@@ -32,9 +32,10 @@ pub async fn handle_gateway_command(
             let result: serde_json::Value = client.call_raw(&method, params_value).await?;
             // Was `aleph_client::print_json`; that helper was removed when the
             // shared `output` module was dropped (`5142efe3b shared/client:
-            // drop dead output module`, no callers remained). Inline the
-            // equivalent: pretty-print the JSON value to stdout. `to_string_pretty`
-            // already terminates with `\n`, matching the removed helper's behaviour.
+            // drop dead output module`, no callers remained). This bin arm was
+            // the module's sole production consumer, so inline the equivalent
+            // rather than re-grow the shared helper. `to_string_pretty` already
+            // terminates with `\n`, matching the removed helper's behaviour.
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

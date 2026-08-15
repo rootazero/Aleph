@@ -872,6 +872,59 @@ mod tests {
         );
     }
 
+    /// The receipt has to reach the surface clients actually read.
+    ///
+    /// `chat.history` serves the `messages` projection, not the event log, so
+    /// persisting the block reason in `session_events` alone would leave a
+    /// reloading tab exactly where it was: an unanswered user message and no
+    /// explanation. Asserts the row a re-attaching client is served, not that
+    /// the projector was called.
+    #[tokio::test]
+    async fn a_refusal_receipt_is_served_to_a_reattaching_client() {
+        let temp = tempdir().unwrap();
+        let config = SessionManagerConfig {
+            db_path: temp.path().join("refusal.db"),
+            max_messages: 10_000,
+            compaction_keep: 5_000,
+            ..Default::default()
+        };
+        let manager = SessionManager::new(config).unwrap();
+        let id = SessionId::ephemeral("refusal");
+        manager.get_or_create(&id).await.unwrap();
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+
+        let tid = uuid::Uuid::new_v4();
+        project_event(&store, &id, &rec(1, user_msg(tid)), None, None).await;
+        project_event(
+            &store,
+            &id,
+            &rec(
+                2,
+                SessionEvent::Error {
+                    turn_id: Some(tid),
+                    kind: crate::session::events::ErrorKind::Guardrail,
+                    message: "blocked by pii guardrail".into(),
+                    recoverable: false,
+                    at: 0,
+                },
+            ),
+            None,
+            None,
+        )
+        .await;
+
+        let rows = store.get_history(&id, None).await.unwrap();
+        assert_eq!(rows.len(), 2, "the receipt must be a row of its own");
+        // `system` is what the Panel renders as a centred notice rather than a
+        // bubble attributed to somebody — nobody said this, the run did.
+        assert_eq!(rows[1].role, "system");
+        assert!(
+            rows[1].content.contains("blocked by pii guardrail"),
+            "the reason must survive the projection, got {:?}",
+            rows[1].content
+        );
+    }
+
     #[tokio::test]
     async fn project_event_suppresses_already_materialised_seq() {
         let temp = tempdir().unwrap();

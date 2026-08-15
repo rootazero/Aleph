@@ -53,6 +53,23 @@ pub trait OsSandboxDriverTrait: Send + Sync + 'static {
         cwd: &Path,
     ) -> Result<OsSandboxProfile, SandboxError>;
 
+    /// Substrings **this backend and only this backend** writes into a
+    /// sandboxed process's stderr when *it* refused an effect: EPERM's
+    /// "Operation not permitted" under seatbelt, EACCES / EROFS under
+    /// bwrap + landlock, "Access is denied" under a restricted token.
+    ///
+    /// Never a union across backends: a union lets a consumer report a denial
+    /// in a dialect the running backend cannot produce. Declare entries
+    /// lowercase — [`crate::sandbox::command::SandboxDenialHint::detect`]
+    /// matches case-insensitively and quotes the entry verbatim.
+    ///
+    /// Defaulted to `&[]` so a driver with no dialect to declare — every test
+    /// double, and any future backend before its dialect is observed — stays
+    /// silent instead of guessing.
+    fn denial_signatures(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,

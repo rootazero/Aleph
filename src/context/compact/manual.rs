@@ -39,6 +39,14 @@
 //! Nothing is deleted, anywhere. The Panel keeps the full scrollback and gains
 //! a visible summary row; the agent's next prompt starts from the summary.
 //!
+//! # One at a time, over a span that is still there
+//!
+//! The sequence runs inside a per-session [`CompactionBracket`], and the span it
+//! summarized is re-read before anything is written. Without the first, two
+//! `/compact`s racing from different surfaces each append a summary the other
+//! never retires; without the second, a `chat.clear` landing during the
+//! summarize await is undone by a summary of the turns it just erased.
+//!
 //! # Where the summary sits
 //!
 //! The log is append-only, so the summary lands **after** the kept tail rather
@@ -61,7 +69,7 @@ use crate::providers::AiProvider;
 use crate::session::events::{SessionEvent, SessionEventRecord};
 use crate::session::service::{SessionId, SessionService};
 use crate::session::store::SessionEventStore;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 
 /// Default token budget for the tail kept verbatim by a manual compaction —
 /// pi's `keepRecentTokens` (its default is 20 000 too).
@@ -191,6 +199,58 @@ pub fn manual_keep_tokens() -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// Operation bracket
+// ---------------------------------------------------------------------------
+
+/// Session keys with a manual compaction in flight, process-wide.
+///
+/// A `BTreeSet` rather than a `HashSet` only because `BTreeSet::new` is `const`,
+/// which keeps this a plain `static` with no lazy initialisation. It holds one
+/// entry per concurrently compacting session, so it is empty almost always.
+static IN_FLIGHT: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// RAII claim on one session's manual compaction, released on drop — including
+/// on every early return and `?` propagation in [`compact_session`].
+///
+/// Nothing else serializes this operation. Of the surfaces that reach
+/// `/compact`, only the two that run inside a lane-admitted run (the Panel slash
+/// fast path and the model's own `session_compact` call) are serialized against
+/// each other by the session's busy queue; the `session.compact` RPC — TUI
+/// `/compress`, `aleph session compact`, any WS client — rides the Mutate lane,
+/// which is a concurrency *semaphore*, not a per-session mutex.
+///
+/// Two overlapping compactions are not merely wasteful. Both read the same
+/// un-retired log, both pay the summarizer, and both append their summary
+/// *above* the other's `retire_through` boundary — so neither retires the
+/// other's, and every future prompt of that session carries two near-identical
+/// `[Context Summary]` blocks until some later compaction sweeps them up.
+struct CompactionBracket {
+    key: String,
+}
+
+impl CompactionBracket {
+    /// Claim `session_id`, or `None` when a compaction of it is already running.
+    fn try_acquire(session_id: &SessionId) -> Option<Self> {
+        let key = session_id.to_key_string();
+        let claimed = IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone());
+        claimed.then_some(Self { key })
+    }
+}
+
+impl Drop for CompactionBracket {
+    fn drop(&mut self) {
+        IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.key);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The compaction itself
 // ---------------------------------------------------------------------------
 
@@ -212,6 +272,19 @@ pub async fn compact_session(
     session_id: &SessionId,
     opts: &ManualCompactOptions,
 ) -> anyhow::Result<ManualCompactOutcome> {
+    // Claim the session before the log is read: a snapshot taken outside the
+    // bracket can already describe a log another compaction is about to retire.
+    let Some(_bracket) = CompactionBracket::try_acquire(session_id) else {
+        // Every other skip reports the live log it left alone. This is the one
+        // that never took a snapshot to count, so it reads the log once rather
+        // than reporting a fabricated zero.
+        let live = service.get_events(session_id, None, None).await?;
+        return Ok(ManualCompactOutcome::skipped(
+            live.len(),
+            "a compaction of this conversation is already in progress",
+        ));
+    };
+
     let events = service.get_events(session_id, None, None).await?;
     let keep_tokens = opts
         .keep_tokens
@@ -302,6 +375,28 @@ pub async fn compact_session(
 
     let cut_seq = events[cut - 1].seq;
     let from_seq = events[0].seq;
+
+    // The summarize above is a network call measured in seconds, and the bracket
+    // only excludes another compaction — `chat.clear` and `chat.rewind` retire
+    // live rows the whole time it runs. They go through `retire_from`, which
+    // deletes the BM25 mirror precisely so erased turns can never be recalled;
+    // appending a summary *of* that span now would hand the model the very turns
+    // the user just erased, at the head of every future prompt. So re-read the
+    // log and compact only if the summarized span is still exactly there.
+    // Growth past the cut is expected and fine — the run that asked for the
+    // compaction keeps appending while the summary is being written.
+    let live = service.get_events(session_id, None, None).await?;
+    let span_intact = live.len() >= cut
+        && live[..cut]
+            .iter()
+            .zip(&events[..cut])
+            .all(|(now, then)| now.seq == then.seq);
+    if !span_intact {
+        return Ok(ManualCompactOutcome::skipped(
+            live.len(),
+            "the conversation changed while the summary was being written",
+        ));
+    }
 
     let summary_seq = service
         .emit_event(
@@ -1057,6 +1152,227 @@ mod tests {
             80,
             "a skipped compaction must not touch the log"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The operation bracket
+    // -----------------------------------------------------------------------
+
+    /// A summarizer whose LLM call parks until the test releases it. Both
+    /// failures the bracket exists for live inside that await and nowhere else,
+    /// so holding a compaction open there is what makes them reproducible.
+    struct ParkingSummarizer {
+        /// Notified once a compaction is parked in the summarize await.
+        entered: tokio::sync::Notify,
+        /// Awaited there until the test lets the compaction finish.
+        release: tokio::sync::Notify,
+    }
+
+    impl ParkingSummarizer {
+        fn new() -> Self {
+            Self {
+                entered: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+            }
+        }
+    }
+
+    impl crate::providers::AiProvider for ParkingSummarizer {
+        fn process<'a>(
+            &'a self,
+            _payload: crate::providers::adapter::RequestPayload<'a>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.entered.notify_one();
+                self.release.notified().await;
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    "<summary>The earlier turns, condensed.</summary>".to_string(),
+                ))
+            })
+        }
+
+        fn name(&self) -> &str {
+            "parking-summarizer"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    fn parked_compactor(parked: &std::sync::Arc<ParkingSummarizer>) -> ContextCompactor {
+        ContextCompactor::new(
+            std::sync::Arc::clone(parked) as std::sync::Arc<dyn crate::providers::AiProvider>,
+            crate::context::compact::compactor::CompactorConfig::default(),
+        )
+    }
+
+    fn tail_budget_opts() -> ManualCompactOptions {
+        ManualCompactOptions {
+            instructions: None,
+            keep_tokens: Some(MIN_KEEP_TOKENS),
+        }
+    }
+
+    /// Live summaries in the log — the count that must stay at one per
+    /// `/compact` no matter how the surfaces overlap.
+    fn live_summaries(events: &[SessionEventRecord]) -> usize {
+        events
+            .iter()
+            .filter(|r| {
+                matches!(&r.event, SessionEvent::SystemMessage { content, .. }
+                    if content.starts_with(SUMMARY_MARKER))
+            })
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_second_compaction_is_refused_while_one_is_in_flight() {
+        // Nothing upstream serializes this: the `session.compact` RPC rides a
+        // concurrency semaphore, not a per-session mutex, so a TUI `/compress`
+        // and the model's own `session_compact` genuinely overlap. Both would
+        // read the same un-retired log and append a summary above the other's
+        // retire boundary — two summaries in every future prompt.
+        let (service, store, sid) = seeded_session(40).await;
+        let parked = std::sync::Arc::new(ParkingSummarizer::new());
+        let compactor = parked_compactor(&parked);
+        let opts = tail_budget_opts();
+
+        // The second entry deliberately takes the deterministic path: a
+        // regression must fail this test's assertions, not deadlock waiting on
+        // a summarizer only the first entry can release.
+        let (first, second) = tokio::join!(
+            compact_session(&service, store.as_ref(), Some(&compactor), &sid, &opts),
+            async {
+                parked.entered.notified().await;
+                let out = compact_session(&service, store.as_ref(), None, &sid, &opts).await;
+                parked.release.notify_one();
+                out
+            }
+        );
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert!(first.compacted, "{:?}", first.skipped_reason);
+        assert!(
+            !second.compacted,
+            "the overlapping compaction must be refused, not run"
+        );
+        assert!(
+            second
+                .skipped_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("already in progress")),
+            "the refusal must say why: {:?}",
+            second.skipped_reason
+        );
+
+        let after = service.get_events(&sid, None, None).await.unwrap();
+        assert_eq!(
+            live_summaries(&after),
+            1,
+            "one compaction, one live summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clear_during_the_summarize_does_not_resurrect_the_erased_turns() {
+        // `chat.clear` retires every live event and deletes the BM25 mirror
+        // precisely so the erased turns can never be handed back to the model.
+        // A compaction whose summarize was in flight must not then append a
+        // summary OF that span — it would put the erased content at the head of
+        // every future prompt, which is the one thing clear promises it cannot.
+        let (service, store, sid) = seeded_session(40).await;
+        let parked = std::sync::Arc::new(ParkingSummarizer::new());
+        let compactor = parked_compactor(&parked);
+        let opts = tail_budget_opts();
+
+        let (outcome, ()) = tokio::join!(
+            compact_session(&service, store.as_ref(), Some(&compactor), &sid, &opts),
+            async {
+                parked.entered.notified().await;
+                store.retire_from(&sid, 1).await.unwrap();
+                parked.release.notify_one();
+            }
+        );
+
+        let outcome = outcome.unwrap();
+        assert!(
+            !outcome.compacted,
+            "a span the user erased mid-summarize must not be compacted"
+        );
+        assert!(
+            outcome
+                .skipped_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("changed while the summary")),
+            "the skip must name the race: {:?}",
+            outcome.skipped_reason
+        );
+
+        let after = service.get_events(&sid, None, None).await.unwrap();
+        assert!(
+            after.is_empty(),
+            "a cleared conversation must stay cleared; {} event(s) came back",
+            after.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_bracket_is_released_when_the_compaction_returns() {
+        // A leaked claim is silent and permanent: every later `/compact` on
+        // that session answers "already in progress" for the life of the
+        // process, and the conversation just stops being compactable.
+        let (service, store, sid) = seeded_session(40).await;
+        let opts = tail_budget_opts();
+
+        let first = compact_session(&service, store.as_ref(), None, &sid, &opts)
+            .await
+            .unwrap();
+        assert!(first.compacted, "{:?}", first.skipped_reason);
+
+        let second = compact_session(&service, store.as_ref(), None, &sid, &opts)
+            .await
+            .unwrap();
+        assert!(
+            !second
+                .skipped_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("in progress"),
+            "the bracket outlived its compaction: {:?}",
+            second.skipped_reason
+        );
+    }
+
+    #[test]
+    fn a_bracket_is_per_session_not_per_process() {
+        // Two different conversations compacting at once is normal traffic —
+        // the claim must key on the session, or one user's `/compact` refuses
+        // everybody else's.
+        let a: SessionId = crate::routing::session_key::SessionKey::ephemeral("bracket-a");
+        let b: SessionId = crate::routing::session_key::SessionKey::ephemeral("bracket-b");
+
+        let held_a = CompactionBracket::try_acquire(&a).expect("first claim on A");
+        let held_b = CompactionBracket::try_acquire(&b).expect("a different session is unaffected");
+        assert!(
+            CompactionBracket::try_acquire(&a).is_none(),
+            "A is already claimed"
+        );
+
+        drop(held_a);
+        assert!(
+            CompactionBracket::try_acquire(&a).is_some(),
+            "dropping the claim frees the session"
+        );
+        drop(held_b);
     }
 
     #[test]

@@ -187,7 +187,7 @@ impl ToolResultStore {
             .join("tool_results")
             .join(root);
 
-        std::fs::create_dir_all(&base_dir)?;
+        create_private_dir(&base_dir)?;
         Ok(Self {
             inner: Arc::new(StoreInner {
                 base_dir,
@@ -272,7 +272,7 @@ impl ToolResultStore {
             sanitize_for_filename(tool_name)
         );
         let dir = self.blob_dir();
-        if let Err(e) = std::fs::create_dir_all(&dir) {
+        if let Err(e) = create_private_dir(&dir) {
             tracing::warn!(
                 dir = %dir.display(),
                 error = %e,
@@ -282,7 +282,7 @@ impl ToolResultStore {
         }
         let path = dir.join(&safe_name);
 
-        if let Err(e) = std::fs::write(&path, content) {
+        if let Err(e) = write_private_file(&path, content) {
             tracing::warn!(
                 tool_call_id = tool_call_id,
                 tool_name = tool_name,
@@ -725,6 +725,65 @@ pub fn spawn_periodic_sweeper(
             }
         }
     });
+}
+
+// =============================================================================
+// Owner-only spill files
+// =============================================================================
+//
+// Spilled blobs are the one artifact on this path that outlives the run (7-day
+// TTL) and they carry whatever `web_fetch` / `browser` / MCP captured, so they
+// get the same owner-only treatment the vault, `config.toml` and the node token
+// already get (`src/secrets/vault.rs`, `src/config/save.rs`). Windows is a
+// no-op, matching those call sites' `cfg(unix)` gate.
+
+/// Create `dir` and its parents, then clamp it to owner-only on Unix.
+///
+/// The chmod runs even when the directory already existed: `DirBuilder::mode`
+/// would only reach directories this call creates, leaving every install made
+/// before this hardening on a `0o755` root forever.
+///
+/// A chmod failure is logged rather than propagated. The blobs themselves are
+/// created `0o600` independently of this, so a filesystem without Unix
+/// permissions loses a defense-in-depth layer instead of losing every offloaded
+/// result (the caller's failure mode is "no spill at all").
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "failed to restrict tool result dir to owner-only"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Write `content` to `path`, creating it owner-only on Unix.
+///
+/// `truncate(true)` restores what the `std::fs::write` this replaced implied:
+/// a re-persist under the same call id writing *shorter* content would
+/// otherwise leave the previous blob's tail behind, and `read_file` /
+/// `ctx_search` would serve those stale bytes as current output.
+///
+/// `mode` applies only to a file this call creates; a blob left `0o644` by a
+/// pre-hardening run keeps that mode until the TTL sweep reclaims it, shielded
+/// meanwhile by the `0o700` parent.
+fn write_private_file(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)?.write_all(content.as_bytes())
 }
 
 /// Last 8 chars of a tool call id (char-safe). Call-id *prefixes* are constant
@@ -1246,5 +1305,93 @@ mod tests {
             before,
             "re-indexing the same call must replace, not append"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Owner-only spill files
+    // -------------------------------------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn spilled_blob_and_its_session_dir_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (root, base) = test_store("owner_only_spill");
+        let root = Arc::new(root);
+        let key = "agent:main:sess-perm";
+        let store = ToolResultStore::for_session(&root, key);
+
+        // Pre-create the session dir world-readable: the chmod has to reach a
+        // directory it did not create, which is the only half that protects
+        // installs that predate this hardening.
+        let dir = base.join(sanitize_for_filename(key));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let marker = store
+            .persist_if_large("call_perm", "web_fetch", &"secret ".repeat(500), 1)
+            .expect("large content is persisted");
+        let blob = marker_path(&marker);
+
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "session blob dir must be owner-only"
+        );
+        assert_eq!(
+            std::fs::metadata(&blob).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "spilled blob must be owner-only"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_private_dir_tightens_a_pre_existing_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // `ToolResultStore::new` resolves its root through `get_data_dir`, which
+        // reads a process-global env var, so the boot root is asserted at the
+        // helper both call sites now share.
+        let root = std::env::temp_dir()
+            .join("aleph_test_tool_result_store")
+            .join("private_root");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        create_private_dir(&root).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "an existing store root must be clamped, not left as created"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn re_persisting_shorter_content_leaves_no_stale_tail() {
+        // Same call id → same path. Dropping `std::fs::write`'s implicit
+        // truncate would leave the longer blob's tail for `read_file` /
+        // `ctx_search` to serve as current output.
+        let (store, _base) = test_store("respill_truncates");
+        let long = "L".repeat(4000);
+        let short = "S".repeat(400);
+
+        let first = store
+            .persist_if_large("call_same", "bash", &long, 1)
+            .expect("first spill persisted");
+        let second = store
+            .persist_if_large("call_same", "bash", &short, 1)
+            .expect("second spill persisted");
+        assert_eq!(
+            marker_path(&first),
+            marker_path(&second),
+            "precondition: the re-persist targets the same path"
+        );
+
+        let on_disk = std::fs::read_to_string(marker_path(&second)).unwrap();
+        assert_eq!(on_disk, short, "re-persist must not leave a stale tail");
     }
 }

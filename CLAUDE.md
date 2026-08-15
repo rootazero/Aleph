@@ -563,7 +563,7 @@
 | `src/tasks/cron/` `src/tasks/heartbeat/` | §4.13b（写面对账守卫 · 共用告警判据 · 停摆 job）· §4.13c（**不阻塞 tick · 投递失败即失败 · 孪生子系统对账**）· `src/tasks/shared/{alert,delivery}.rs` |
 | `src/sandbox/` | [SANDBOX.md](docs/reference/SANDBOX.md) · §3.8 · §3.15（后台执行生命周期 · 实时尾巴 · 两阶段 cwd 闸） |
 
-> **对照表已做完，别重做**：openclaw（gateway / cluster / hub / model catalog）· codex（权限模型 / Multi-agent V2）· hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz。逐项结论与"刻意不做清单"都在对应 reference 文档里。
+> **对照表已做完，别重做**：openclaw（gateway / cluster / hub / model catalog）· codex（权限模型 / Multi-agent V2）· hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz · **deepseek-harness (dsh, 2026-08-15)**（Cordis 插件架构本身不移植；10 维扫描 + 13 项对抗验证的逐项结论与 DEFER 见 FEATURE_LOCATOR §3.1 dsh 轮）。逐项结论与"刻意不做清单"都在对应 reference 文档里。
 
 ---
 

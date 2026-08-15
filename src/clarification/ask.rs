@@ -55,6 +55,7 @@
 //! questions are *all* secret still fails: there is nothing left to ask, and a
 //! parked tool with no question is a 600-second stall.
 
+use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use super::render::RenderedQuestion;
@@ -144,6 +145,78 @@ pub struct AskOutcome {
     pub withheld_secret: Vec<String>,
 }
 
+/// Retires the registry entry when a parked [`ask`] is **dropped** instead of
+/// returning.
+///
+/// A cancelled run — and a run that hits the engine's deadline — is torn down
+/// by dropping this whole future at the park below (the run-level
+/// `tokio::select!` in `execution_engine::execute`), so not one of `ask`'s
+/// return paths runs. Nothing else announces the end of the question at that
+/// moment: the entry lives on as a zombie and every already-open client keeps
+/// rendering the card, and its Enter hijack, until something unrelated happens
+/// to sweep it. The terminal frame's producer belongs next to the fact it
+/// reports, which is here.
+struct RetireOnAbandon {
+    manager: Arc<ClarificationManager>,
+    session_key: String,
+    /// Owned so [`Drop`] closes it **before** asking the manager to retire the
+    /// entry: `cancel_abandoned` decides by reading this channel's closed flag,
+    /// so retirement must not race the drop of what it reads.
+    rx: Option<oneshot::Receiver<ClarificationResult>>,
+    armed: bool,
+}
+
+impl RetireOnAbandon {
+    /// Armed from the start: the entry exists from the moment this is built,
+    /// and delivery is itself a slow await (a channel send crosses a network),
+    /// so the window it guards opens immediately.
+    fn new(
+        manager: Arc<ClarificationManager>,
+        session_key: String,
+        rx: oneshot::Receiver<ClarificationResult>,
+    ) -> Self {
+        Self {
+            manager,
+            session_key,
+            rx: Some(rx),
+            armed: true,
+        }
+    }
+
+    /// The receiver to park on — borrowed, never moved out, so [`Drop`] still
+    /// owns it (see the field docs).
+    fn receiver(&mut self) -> &mut oneshot::Receiver<ClarificationResult> {
+        self.rx.as_mut().expect("invariant: taken only by Drop")
+    }
+
+    /// Every path that returns has already retired the entry — answered or
+    /// superseded through the manager, timed out through `cleanup_expired`,
+    /// undeliverable through `cancel`.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RetireOnAbandon {
+    fn drop(&mut self) {
+        drop(self.rx.take());
+        if !self.armed {
+            return;
+        }
+        // `Drop` cannot await. Off-loading to the runtime is the same
+        // best-effort posture as publishing with no bus wired: outside a
+        // runtime there is no client holding a card either.
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let manager = Arc::clone(&self.manager);
+        let session_key = std::mem::take(&mut self.session_key);
+        handle.spawn(async move {
+            manager.cancel_abandoned(&session_key).await;
+        });
+    }
+}
+
 /// Why a secret question cannot go to `channel`, phrased for the model.
 fn secret_refusal(channel_id: &str) -> String {
     format!(
@@ -225,6 +298,9 @@ pub async fn ask(
             turn.run_id.clone(),
         )
         .await;
+    // The receiver moves into the guard: a cancelled run drops this whole
+    // future at the park below, and the guard is the only thing that runs then.
+    let mut parked = RetireOnAbandon::new(Arc::clone(&deps.clarification), session_key.clone(), rx);
 
     // Recomputed AFTER the partition, so it can only be true on a turn with no
     // third-party transport (the Panel's `gui:chat`, or a stopped channel).
@@ -256,6 +332,7 @@ pub async fn ask(
         // Neither transport can reach the user — nobody can ever answer. Drop
         // the registration rather than park on a reply that cannot arrive.
         deps.clarification.cancel(&session_key).await;
+        parked.disarm();
         return Err(AlephError::tool(
             "failed to deliver the question to the user — no channel accepted it and no Panel \
              session is attached. Continue without the answer and say what you assumed.",
@@ -272,8 +349,9 @@ pub async fn ask(
     // fires. The explicit timeout guarantees the tool never hangs even if no
     // cleanup pass reaps the registry entry. Cancellation of the run drops this
     // whole future (run-level `tokio::select!` in `execution_engine::execute`),
-    // which closes the receiver and lets `is_live` retire the entry.
-    let result = match tokio::time::timeout(DEFAULT_CLARIFY_TIMEOUT, rx).await {
+    // and `parked`'s guard is then the one that retires the entry and tells
+    // every open client the question is over.
+    let result = match tokio::time::timeout(DEFAULT_CLARIFY_TIMEOUT, parked.receiver()).await {
         Ok(Ok(result)) => result,
         // Sender dropped without sending — treat as cancelled.
         Ok(Err(_)) => ClarificationResult::cancelled(),
@@ -294,6 +372,7 @@ pub async fn ask(
             ClarificationResult::timeout()
         }
     };
+    parked.disarm();
 
     Ok(AskOutcome {
         result,
@@ -546,6 +625,49 @@ mod tests {
             .map(|a| a.question_id.as_str())
             .collect();
         assert_eq!(answers, vec!["env", "ticket"]);
+    }
+
+    /// A cancelled run is torn down by dropping the parked call, so none of
+    /// `ask`'s return paths runs and the guard is the only thing left that can
+    /// retire the registry entry. Without it the entry survives as a zombie:
+    /// every already-open client keeps rendering a question nobody can answer,
+    /// and `has_pending` cannot tell the difference — hence `is_registered`.
+    #[tokio::test]
+    async fn dropping_a_parked_ask_retires_its_entry() {
+        let d = deps_with_registered_channel().await;
+        let manager = Arc::clone(&d.clarification);
+
+        // ONE turn, and the key read off it — `SessionKey::ephemeral` mints a
+        // fresh UUID per call.
+        let turn = routable_turn();
+        let key = turn.session_key.to_string();
+        let request = ClarificationRequest::text("Which environment?");
+        let asker = tokio::spawn(TURN_CONTEXT.scope(turn, async move { ask(&d, request).await }));
+
+        let parked = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !manager.has_pending(&key).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(parked.is_ok(), "the call must park on a live question");
+
+        // Exactly what the run-level `select!` does on cancel or deadline: drop
+        // the future. Awaiting the aborted handle returns only once it is gone,
+        // so the guard has run by the time the poll below starts.
+        asker.abort();
+        let _ = asker.await;
+
+        let retired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while manager.is_registered(&key).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            retired.is_ok(),
+            "the abandoned entry must be retired, not left for the 600 s deadline"
+        );
     }
 
     /// The Panel's `gui:chat` is never in the registry, so nothing is withheld

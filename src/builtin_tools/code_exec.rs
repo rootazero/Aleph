@@ -31,7 +31,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::Result;
 use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
-use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
+use crate::sandbox::command::{SandboxCommand, SandboxDenialHint, SandboxError, SandboxOutput};
 use crate::sandbox::{current_session, Sandbox};
 use crate::tool_metadata::DEFAULT_CODE_EXEC_TIMEOUT;
 use crate::tool_output::sanitize::sanitize_command_output;
@@ -612,6 +612,31 @@ const fn signal_hint(sig: i32) -> &'static str {
     }
 }
 
+/// One conservative line linking a failed run to the sandbox that may have
+/// caused it, and to the escalation parameters this tool's schema already
+/// offers.
+///
+/// Deliberately a *possibility*: [`SandboxDenialHint`] is a substring match on
+/// the running backend's dialect, and an application's own permission error
+/// (an `ssh` publickey rejection, a `sudo` refusal) is byte-identical to a
+/// Landlock one. A zero exit says the process handled whatever it saw, so
+/// there is nothing to report.
+///
+/// Same class as the POSIX signal annotation above — a universal machine fact
+/// the model would otherwise have to guess at. It stops at the fact: which
+/// escalation to request, or whether to request one at all, stays the model's
+/// call (R7), and nothing here retries or selects a recovery (A2 / R10).
+fn denial_advisory(hint: Option<&SandboxDenialHint>, exit_code: i32) -> Option<String> {
+    if exit_code == 0 {
+        return None;
+    }
+    let hint = hint?;
+    Some(format!(
+        "Sandbox note: this command exited {exit_code} and its stderr matches the {} sandbox's own denial dialect (\"{}\"), so the sandbox may have blocked a file, network, or subprocess effect — an application's own permission error looks the same. If a wider boundary is what it needs, the escalation parameters are extra_writable_paths / allow_network / allow_subprocess plus a justification; each is approval-gated.",
+        hint.platform, hint.signature
+    ))
+}
+
 fn sandbox_result_to_output(
     result: std::result::Result<SandboxOutput, SandboxError>,
     language: String,
@@ -662,7 +687,7 @@ fn sandbox_result_to_output(
                 truncated: if out.truncated { Some(true) } else { None },
                 stdout_truncated_bytes: out.stdout_truncated_bytes,
                 stderr_truncated_bytes: out.stderr_truncated_bytes,
-                advisory: None,
+                advisory: denial_advisory(out.denial_hint.as_ref(), exit_code),
             }
         }
         Err(SandboxError::Timeout {
@@ -771,10 +796,23 @@ impl AlephTool for CodeExecTool {
         let advisory = recent_shell_advisory(&args.language, &args.code);
 
         let mut out = self.execute(args).await?;
-        if advisory.is_some() {
-            out.advisory = advisory;
-        }
+        // `execute` may already have attached a sandbox-denial label. The two
+        // notes answer different questions — what happened to THIS result vs.
+        // what this session already ran — so neither may displace the other.
+        out.advisory = merge_advisory(out.advisory.take(), advisory);
         Ok(out)
+    }
+}
+
+/// Join the tool layer's independent advisory notes into the single
+/// `advisory` field. Both survive: they are annotations about different
+/// things, and the field carrying only one of them is a silent loss.
+/// Production order — the note about this result first, the session-history
+/// note second.
+fn merge_advisory(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(format!("{first}\n{second}")),
+        (first, second) => first.or(second),
     }
 }
 
@@ -1655,6 +1693,153 @@ mod tests {
         assert_eq!(out.exit_code, 134, "SIGABRT → 128 + 6");
         assert!(out.stderr.contains("thread panicked at 'boom'"));
         assert!(out.stderr.contains("SIGABRT"));
+    }
+
+    fn seatbelt_hint() -> SandboxDenialHint {
+        SandboxDenialHint {
+            platform: "macos/seatbelt".to_string(),
+            signature: "operation not permitted".to_string(),
+        }
+    }
+
+    #[test]
+    fn denial_advisory_names_the_backend_and_every_escalation_param() {
+        let note = denial_advisory(Some(&seatbelt_hint()), 1).expect("labelled failure advises");
+        assert!(note.contains("macos/seatbelt"), "names the backend: {note}");
+        assert!(
+            note.contains("operation not permitted"),
+            "quotes the matched signature: {note}"
+        );
+        // All three, because seatbelt reports file / network / fork denials
+        // through the same errno — naming one would be a guess.
+        for param in [
+            "extra_writable_paths",
+            "allow_network",
+            "allow_subprocess",
+            "justification",
+        ] {
+            assert!(note.contains(param), "advises {param}: {note}");
+        }
+        // Conservative by construction: an application's own EACCES is
+        // byte-identical, so the line may never assert a cause.
+        assert!(
+            note.contains("may have blocked") && note.contains("looks the same"),
+            "advisory must stay a possibility: {note}"
+        );
+    }
+
+    #[test]
+    fn denial_advisory_is_silent_on_success_and_without_a_hint() {
+        // Exit 0 with a matching stderr line: the process handled whatever it
+        // saw, so there is nothing to report.
+        assert!(denial_advisory(Some(&seatbelt_hint()), 0).is_none());
+        // Failure with no hint: an ordinary non-zero exit stays unannotated.
+        assert!(denial_advisory(None, 1).is_none());
+    }
+
+    #[test]
+    fn sandbox_output_carries_the_denial_advisory_end_to_end() {
+        let out = sandbox_result_to_output(
+            Ok(SandboxOutput {
+                stderr: b"open: /etc/hosts: Operation not permitted\n".to_vec(),
+                exit_code: Some(1),
+                denial_hint: Some(seatbelt_hint()),
+                ..Default::default()
+            }),
+            "shell".to_string(),
+            60,
+        );
+        assert!(!out.success);
+        let note = out.advisory.expect("a labelled failure reaches the model");
+        assert!(note.contains("macos/seatbelt"));
+        // The raw stderr is untouched — the advisory is an annotation beside
+        // it, never a rewrite of what the command actually printed.
+        assert_eq!(out.stderr, "open: /etc/hosts: Operation not permitted\n");
+    }
+
+    #[test]
+    fn unlabelled_failure_reaches_the_model_with_no_advisory() {
+        // Every backend that declares no dialect, and every ordinary failure,
+        // must look exactly as it did before this annotation existed.
+        let out = sandbox_result_to_output(
+            Ok(SandboxOutput {
+                stderr: b"error: no such file\n".to_vec(),
+                exit_code: Some(2),
+                ..Default::default()
+            }),
+            "shell".to_string(),
+            60,
+        );
+        assert!(out.advisory.is_none());
+    }
+
+    #[test]
+    fn merge_advisory_keeps_both_notes() {
+        assert_eq!(
+            merge_advisory(Some("denial".into()), Some("repeat".into())),
+            Some("denial\nrepeat".to_string()),
+            "neither note may displace the other"
+        );
+        assert_eq!(
+            merge_advisory(Some("denial".into()), None),
+            Some("denial".to_string())
+        );
+        assert_eq!(
+            merge_advisory(None, Some("repeat".into())),
+            Some("repeat".to_string())
+        );
+        assert_eq!(merge_advisory(None, None), None);
+    }
+
+    /// The collision the merge exists for: a repeated shell command that is
+    /// ALSO sandbox-denied must come back carrying both notes. Overwriting —
+    /// the pre-fix behaviour — silently dropped the denial label for exactly
+    /// the command most likely to be retried.
+    #[tokio::test]
+    async fn repeat_advisory_does_not_clobber_the_denial_label() {
+        let session = crate::routing::session_key::SessionKey::ephemeral("code-exec-denial-merge");
+        let denied = SandboxOutput {
+            stderr: b"open: /etc/hosts: Operation not permitted\n".to_vec(),
+            exit_code: Some(1),
+            duration_ms: 3,
+            denial_hint: Some(seatbelt_hint()),
+            ..Default::default()
+        };
+        let sandbox: Arc<dyn Sandbox> = MockSandbox::new(denied);
+        SESSION_ID
+            .scope(session, async {
+                let tool = CodeExecTool::new().with_sandbox(sandbox);
+                let args = || CodeExecArgs {
+                    language: Language::Shell,
+                    code: "cat /etc/hosts".to_string(),
+                    working_dir: None,
+                    timeout_seconds: None,
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    justification: None,
+                };
+
+                let first = tool.call(args()).await.unwrap();
+                let first_note = first.advisory.expect("denial label on the first run");
+                assert!(first_note.contains("macos/seatbelt"));
+                assert!(
+                    !first_note.contains("already ran this exact command"),
+                    "first run is not a repeat: {first_note}"
+                );
+
+                let second = tool.call(args()).await.unwrap();
+                let second_note = second.advisory.expect("both notes on the repeat");
+                assert!(
+                    second_note.contains("macos/seatbelt"),
+                    "denial label survives the repeat advisory: {second_note}"
+                );
+                assert!(
+                    second_note.contains("already ran this exact command"),
+                    "repeat advisory survives the denial label: {second_note}"
+                );
+            })
+            .await;
     }
 
     #[test]
