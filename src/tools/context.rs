@@ -54,7 +54,10 @@ pub fn new_tool_context_handle() -> ToolContextHandle {
     let default_workspace = crate::utils::paths::get_config_dir()
         .map(|c| c.join("workspaces").join("main"))
         .unwrap_or_else(|_| {
-            PathBuf::from("/tmp").join(".aleph").join("workspaces").join("main")
+            PathBuf::from("/tmp")
+                .join(".aleph")
+                .join("workspaces")
+                .join("main")
         });
     let ctx = ToolContext::from_workspace(&default_workspace).unwrap_or_else(|e| {
         tracing::warn!(

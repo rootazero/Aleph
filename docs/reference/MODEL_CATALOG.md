@@ -412,6 +412,10 @@ round-3 比的是**目录数据**；这一轮比的是**人怎么挑**，因为�
 | 失败降级措辞 | 一律"保留上次的列表并说出来"，且区分 404/501（无端点）与请求失败 | `stale: true` + `DiscoveryFailureKind` 六态 + `discoverable` 位 | **Aleph 超越**（pi 的区分只在内部，UI 仍是一句话） |
 | 生成期 vs 运行期 | 同 round-3 结论 | — | 不重复 |
 
+#### 8.3c pi 的数据面（2026-08-15 数据刷新轮 delta）
+
+round-3/8.3b 比的是**机制**；本轮比的是**数字本身**。pi 的目录是生成期 hydrate（`generate-models.ts` 从 models.dev / OpenRouter / Vercel 拉取，烧进 JSON shard 随包发布 + CI 定时重生成），本轮拿它当「models.dev 的加工视图」、并另取 models.dev 原始 `api.json`（185 provider / 6293 模型）逐条复核后刷新四表。**pi 的两个生成器抉择值得记录**：① `OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS` 把 gpt-5.4/5.5/5.6 系的 `contextWindow` 压到 272K——那是**让请求默认停在便宜档的计费选择，不是窗口事实**（models.dev 原始值 1.05M）；Aleph 的窗口字段喂压缩预算，故采 1.05M、把 272K 档位留在 `TIER_TABLE`。② 弃用模型在生成期被静默滤掉（无 lifecycle 概念），所以「pi 没列」不能用作退役证据——本轮零条 lifecycle 变更。具体采纳与存疑项见 §9 的 round-5 补记与 FEATURE_LOCATOR §5.4 本轮条目。
+
 ### 8.4 RouteLLM / vLLM semantic-router / Bifrost（2026-08 round-4）
 
 三个参考项目讲的主要是**运行时路由**（§3.6 C 层），目录层可比维度比前三个项目少；逐项裁决如下。注意 `/Volumes/TBU4/Github/semantic-router` 的实际检出是 **vLLM Semantic Router**（Go + Rust candle bindings），不是 aurelio-labs 的 Python 库。
@@ -466,8 +470,8 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 
 以下是 2026-08 round-3（对标 pi）评估后**明确不做**的：
 
-- **给 cohere 补价目** — openclaw 目录里 `command-a-plus-05-2026`（现旗舰）与 `north-mini-code-1-0` 的 cost 全是 `0`＝未公布；唯一有价的 `command-a-03-2025` 已退役。加任何一行都会触发守卫 10（同 preset 内可定价性必须同质），而退役行的价没有消费者。
-- **给 perplexity 补价目** — openclaw 的 perplexity 插件没有 `modelCatalog`，无 accepted 源；凭记忆写价违反"不靠猜"。
+- **给 cohere 补价目** — openclaw 目录里 `command-a-plus-05-2026`（现旗舰）与 `north-mini-code-1-0` 的 cost 全是 `0`＝未公布；唯一有价的 `command-a-03-2025` 已退役。加任何一行都会触发守卫 10（同 preset 内可定价性必须同质），而退役行的价没有消费者。**2026-08-15 补记**：models.dev 现在给旗舰报了 $2.50/$10——「无 accepted 源」已不成立，但 `north-mini-code-1-0` 仍是 `0/0`，同质守卫依旧会红。解锁条件：fallback 链摘掉 north-mini-code（改链是另一件事），或它有价。
+- ~~**给 perplexity 补价目**~~ — **2026-08-15 数据刷新轮改判，已补**。原裁定写下时 openclaw 的 perplexity 插件没有 `modelCatalog`、models.dev 无价目；models.dev `perplexity` 节现报全族官价（`sonar` $1/$1、`sonar-pro` $3/$15、`sonar-reasoning-pro`/`sonar-deep-research` $2/$8），新 `perplexity` vendor 节已落地。⚠️ `sonar-reasoning`（广告 fallback 档）在上游**没有自己的条目**，解析到 `sonar` 行——记录在此，下轮不必重新发现。这是又一条「刻意不做的理由会过期」：复查 DEFER 时先复查它引用的外部事实。
 - **pi 的订阅端点隐含定价**（`KIMI_CODING_IMPLIED_COSTS`：用等价 API 费率回填订阅模型）— pi 估的是"订阅用量的价值"，Aleph 的费率喂 `cost_aware` 排序与 run 成本估算；把订阅端点按 API 价排序是对 operator 说谎。维持 `QUOTA_BILLED_MODELS` 显式 Unknown（§4.2）。
 - **ETag / Last-Modified 条件请求** — pi 的 `ModelsStoreEntry` 预留了这两个字段但**没有任何代码写入它们**（纯 schema 预留）；且各家 `/models` 端点基本不发 ETag。300s TTL + 单飞已覆盖实际需求。
 - **pi 的溢出检测正则库**（`utils/overflow.ts`）— 那是"这一轮请求失败了没有"的错误分类层（§2.x/§3.6 语境），不是"这个模型是什么"的目录层；如需引入应在 failover/compaction 那侧单独立项评估。
@@ -513,9 +517,9 @@ RouteLLM 可提炼的三条资产——score→threshold 决策契约、"阈值=
 - **按上游报的 `limit.output` 抬高 `max_output_tokens`** — 这个字段的实际消费者是 `derive_token_budget` 的**输出预留**（`usable = window − reserve`），而上游报的是**厂商上限**，很多家等于窗口本身。照抄 kimi-k2.6（262144/262144）、mistral-large-2512（262144/262144）、step-3.7-flash（256000/256000）会让 reserve == window，可用预算塌到 `MIN_USABLE_BUDGET`；deepseek-v4（65536 → 384000）、glm-4.7（8192 → 131072）、minimax-m2（16384 → 131072）、claude-sonnet-4-6（64000 → 128000）是同一类，只是没那么极端。**只采向下的修正**（既减少 400 风险又还回预算）。根因是一个字段被 doc（「模型一次能吐多少」）和消费者（「该给回答留多少」）各答一问——收敛它需要拆字段，是独立一件事，不该搭在数据刷新里做。
 - **按 models.dev 改 `qwen3.6-plus` / `qwen3.6-flash` 的费率** — 上游 `alibaba` 报 $0.50/$3.00 与 $0.1875/$1.125，Aleph 表里是 $0.115/$0.688 与 $0.029/$0.287（人民币价换算的量级）。**两边都可能是对的**：Aleph 的 `qwen` 预设 `base_url` 指的是 `dashscope.aliyuncs.com`（中国站），而 models.dev 另有 `alibaba-cn` 条目，说明它的 `alibaba` 大概率是国际站。同一个模型两个区两套价，改之前要先确定这条预设服务的是哪一个区——那是一次 endpoint 语义的裁定，不是一次数字修正。
 - **按 cerebras 的 40960 改 `gpt-oss` 的 max-output** — Groq 报 65536、Cerebras 报 40960，**这是宿主差异不是漂移**，而能力表是全局前缀表、说不出「在谁家上」。Aleph 现有的 65536 与 Groq 一致（`groq` 预设的默认就是它）。要表达这一维得给能力表加 provider scope（`LIFECYCLE_TABLE` 那样），成本远大于收益。
-- **退役 `grok-4-fast` / `grok-3-mini` / `moonshot-v1-*` / `kimi-latest`** — 它们都不在各自厂商的上游 roster 里，但**「上游没列」比「上游标了 deprecated」弱一档**，而本表 doc 的规则是按后者写行。唯一的旁证是 `zenmux`（一家转售商）标了 `grok-4-fast` deprecated，按规则那只够写一条 scoped 行，而 Aleph 没有 `zenmux` 预设可以 scope。更实际的理由：退役 `grok-4-fast` 会连带逼着改 `xai` 的 aux 槽（`no_preset_points_its_aux_model_at_a_retired_id`），而**改默认/aux 是本轮明确划在范围外的一类**。这四个是**候选**，需要第二个来源。
-- **改 `qwen` 的默认模型** — `qwen3-max-2026-01-23` 不在上游 `alibaba` 的 roster 里（上游有 `qwen3-max` / `qwen3.7-max` / `qwen3.8-max`），即它可能是个**已经不存在**的日期快照 id 而不只是陈旧。仍不动：范围裁定同上，且「阿里保留历史快照 id」与「这个 id 已经 404」在没有第二个来源时分不开。记在这里是为了让下一轮不必重新发现它。
-- **给 `minimax-m3` / `grok-4.3` / `gpt-5.6` 系补长上下文档位行** — 上游对这三家都报了 context tier（M3 >512K 翻倍；grok-4.3 >200K 翻倍；5.6 三档各有 >272K 档）。`TIER_TABLE` 装得下，但**新增档位是加数据不是修数字**，而本轮的范围是后者。记下确切数字供下一轮直接采用。⚠️ 顺带说明 `minimax-m3` 修正后的方向：此前是**全部**运行高估 2 倍，现在是短提示准确、>512K 低估 2 倍——净改善，但不是完全正确。
+- **退役 `grok-4-fast` / `grok-3-mini` / `moonshot-v1-*` / `kimi-latest`** — 它们都不在各自厂商的上游 roster 里，但**「上游没列」比「上游标了 deprecated」弱一档**，而本表 doc 的规则是按后者写行。唯一的旁证是 `zenmux`（一家转售商）标了 `grok-4-fast` deprecated，按规则那只够写一条 scoped 行，而 Aleph 没有 `zenmux` 预设可以 scope。更实际的理由：退役 `grok-4-fast` 会连带逼着改 `xai` 的 aux 槽（`no_preset_points_its_aux_model_at_a_retired_id`），而**改默认/aux 是本轮明确划在范围外的一类**。这四个是**候选**，需要第二个来源。**2026-08-15 复核**：models.dev xai 节依旧只列 grok-4.3/4.5/4.6/4.20-*/build-0.1，grok-4-fast 与 grok-3-mini 仍无第二来源，维持裁定；同批 xai 节新增 grok-4.5/4.6（500K 窗口、$2/$6、>200K tier $4/$12）已入行。
+- **改 `qwen` 的默认模型** — `qwen3-max-2026-01-23` 不在上游 `alibaba` 的 roster 里（上游有 `qwen3-max` / `qwen3.7-max` / `qwen3.8-max`），即它可能是个**已经不存在**的日期快照 id 而不只是陈旧。仍不动：范围裁定同上，且「阿里保留历史快照 id」与「这个 id 已经 404」在没有第二个来源时分不开。记在这里是为了让下一轮不必重新发现它。**2026-08-15 复核**：`alibaba-cn`（与预设 `dashscope.aliyuncs.com` 同区）roster 现有 `qwen3.7-max` / `qwen3.8-max` / `qwen3.7-plus` / `qwen3.7-flash`，但仍无该日期快照 id——同一来源的再次缺席不构成第二来源，维持裁定；若下一来源（如 openclaw 或厂商控制台）确认该 id 404，直接跳到 `qwen3.8-max` 并同步 fallback 链。
+- ~~**给 `minimax-m3` / `grok-4.3` / `gpt-5.6` 系补长上下文档位行**~~ — **2026-08-15 数据刷新轮已采纳**：本条当初记下的确切数字（M3 >512K→$0.60/$2.40、grok-4.3 >200K→$2.50/$5.00、gpt-5.4/5.5/5.6 系 >272K 各档）经 models.dev 原始 `tiers` 复核后全部落进 `TIER_TABLE`（含 `gpt-5.4-mini`/`nano` 两条否定行——否则广义 `gpt-5.4` 档会按前缀误吞它们双倍计费；grok-4.5/4.6 同批补档）。⚠️ 原注「minimax-m3 修正后短提示准确、>512K 低估 2 倍」至此闭合。
 
 ---
 

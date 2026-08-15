@@ -1732,7 +1732,7 @@ mod tests {
     /// runtime `summary` string states it in the response itself, which is
     /// strictly better than paying for it on every request that merely lists
     /// the tool.
-/// 2026-08-11, the third registration shape: 94,306 -> 95,333 B. As with
+    /// 2026-08-11, the third registration shape: 94,306 -> 95,333 B. As with
     /// the first half of 2026-08-10, **the increase is not new spending** — it
     /// is bytes that were already going out and were never counted. `subagent`
     /// (1,039 B) reaches the model through neither surface this ceiling summed:

@@ -106,7 +106,9 @@ impl TopologyEventBus {
     #[must_use]
     pub fn new() -> Self {
         let (tx, _rx) = broadcast::channel(BUS_CAPACITY);
-        Self { inner: Arc::new(tx) }
+        Self {
+            inner: Arc::new(tx),
+        }
     }
 
     /// Subscribe to topology events. Returns a `broadcast::Receiver`; the caller
@@ -182,8 +184,12 @@ mod tests {
         let first = rx.recv().await.expect("first event");
         let second = rx.recv().await.expect("second event");
 
-        assert!(matches!(first, TopologyEvent::NodeUpserted { ref id, .. } if id == "daemon:dreaming"));
-        assert!(matches!(second, TopologyEvent::EdgeUpserted { ref edge_kind, .. } if *edge_kind == EdgeKind::Watches));
+        assert!(
+            matches!(first, TopologyEvent::NodeUpserted { ref id, .. } if id == "daemon:dreaming")
+        );
+        assert!(
+            matches!(second, TopologyEvent::EdgeUpserted { ref edge_kind, .. } if *edge_kind == EdgeKind::Watches)
+        );
     }
 
     #[tokio::test]
@@ -203,7 +209,10 @@ mod tests {
             id: "anchor:new".into(),
             node_kind: NodeKind::Anchor,
         });
-        let ev = rx2.recv().await.expect("new subscriber sees post-subscribe events");
+        let ev = rx2
+            .recv()
+            .await
+            .expect("new subscriber sees post-subscribe events");
         assert!(matches!(ev, TopologyEvent::NodeUpserted { ref id, .. } if id == "anchor:new"));
     }
 

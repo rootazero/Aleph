@@ -25,11 +25,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use aleph_protocol::providers::{
-    CatalogResult, ProviderGetResult, ProviderListResult,
-    AuthKind, CatalogEntry, CatalogParams, CatalogView, DiscoveryFailureKind, ModelCapabilities,
-    ModelLifecycle, ModelSource, ModelStatus, ModelsRefreshParams, ModelsRefreshResult,
-    ModelsRefreshRow, OAuthStatus, ProviderConfigJson, ProviderInfo, RateBasis, RateCard,
-    RosterModel, TestResult,
+    AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView, DiscoveryFailureKind,
+    ModelCapabilities, ModelLifecycle, ModelSource, ModelStatus, ModelsRefreshParams,
+    ModelsRefreshResult, ModelsRefreshRow, OAuthStatus, ProviderConfigJson, ProviderGetResult,
+    ProviderInfo, ProviderListResult, RateBasis, RateCard, RosterModel, TestResult,
 };
 
 /// Wire form of [`crate::api::chat::ChatApi::send`]'s `model_override` —

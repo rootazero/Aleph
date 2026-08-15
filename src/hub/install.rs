@@ -239,13 +239,38 @@ fn acceptable_git_url(url: &str) -> bool {
     #[cfg(test)]
     {
         if AllowLocalGitUrl::is_set() {
-            return production_ok
-                || url.starts_with("file://")
-                || url.starts_with('/')
-                || url.starts_with("./");
+            return production_ok || url.starts_with("file://") || looks_like_local_path(url);
         }
     }
     production_ok
+}
+
+/// Whether `url` spells a local filesystem path — in *either* platform's
+/// spelling.
+///
+/// The opt-out above used to test `url.starts_with('/')`, which is the Unix
+/// spelling and only the Unix spelling. A `tempfile::tempdir()` on Windows is
+/// `C:\Users\RUNNER~1\AppData\Local\Temp\.tmpXXXX`, so the three
+/// fixture-driven `install_git_skill*` tests below were red on the Windows
+/// runner — and only there — from the day the opt-out was written. They are
+/// green on every developer machine, which is why it took a CI archaeology
+/// pass to find them.
+///
+/// A string shape rather than [`std::path::Path::is_absolute`] on purpose:
+/// `Path::new(r"C:\x").is_absolute()` is *false* on Unix, so routing through it
+/// would leave the Windows half of this predicate unverifiable on exactly the
+/// machines where it broke. As a shape test, the twin below exercises both
+/// spellings wherever it runs.
+#[cfg(test)]
+fn looks_like_local_path(url: &str) -> bool {
+    if url.starts_with('/') || url.starts_with("./") || url.starts_with(r".\") {
+        return true;
+    }
+    // `C:\…` or `C:/…` — a drive-qualified absolute path.
+    let b = url.as_bytes();
+    b.first().is_some_and(u8::is_ascii_alphabetic)
+        && b.get(1) == Some(&b':')
+        && matches!(b.get(2), Some(b'\\') | Some(b'/'))
 }
 
 /// Test-only permission to clone from a local path, scoped to one test.
@@ -626,6 +651,50 @@ mod tests {
             assert!(acceptable_git_url("/tmp/local-path"));
         }
         assert!(!acceptable_git_url("/tmp/local-path"));
+    }
+
+    /// The local-path opt-out has to recognise BOTH platforms' spellings.
+    ///
+    /// `starts_with('/')` was the whole predicate, so every fixture below —
+    /// each of which clones from a `tempfile::tempdir()` — was refused on the
+    /// Windows runner with "git_url must be https:// or git@<host>:...". Three
+    /// tests, red only there, green on every machine anyone develops on.
+    ///
+    /// Both spellings are asserted here on whichever platform runs this, and
+    /// the production accept-set is re-asserted *outside* the guard so widening
+    /// the opt-out can never quietly widen the real one.
+    #[test]
+    fn the_local_path_opt_out_speaks_both_platforms() {
+        const WIN: &str = r"C:\Users\RUNNER~1\AppData\Local\Temp\.tmpXXXX\src";
+        const WIN_FWD: &str = "C:/Users/me/Temp/src";
+        const NIX: &str = "/tmp/.tmpXXXX/src";
+
+        // Refused with no opt-out in scope — on either spelling.
+        assert!(!acceptable_git_url(WIN));
+        assert!(!acceptable_git_url(NIX));
+
+        {
+            let _allow = AllowLocalGitUrl::set();
+            assert!(acceptable_git_url(NIX), "unix tempdir path");
+            assert!(acceptable_git_url(WIN), "windows tempdir path");
+            assert!(acceptable_git_url(WIN_FWD), "windows path, forward slashes");
+            assert!(acceptable_git_url("./relative"), "relative, unix spelling");
+            assert!(
+                acceptable_git_url(r".\relative"),
+                "relative, windows spelling"
+            );
+
+            // Still not a blank cheque: a bare hostname or an unrelated scheme
+            // is refused even inside the opt-out.
+            assert!(!acceptable_git_url("gopher://evil/x"));
+            assert!(!acceptable_git_url("evil.example.com/repo.git"));
+        }
+
+        // And the guard really is scoped — production is unchanged after it.
+        assert!(!acceptable_git_url(WIN));
+        assert!(!acceptable_git_url(NIX));
+        assert!(acceptable_git_url("https://example.com/x.git"));
+        assert!(acceptable_git_url("git@example.com:x/y.git"));
     }
 
     #[test]

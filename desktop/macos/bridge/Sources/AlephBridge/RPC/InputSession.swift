@@ -857,12 +857,14 @@ actor InputSession {
         // hand back a different CFType. `as!` would crash the helper
         // subprocess — and a helper that crashes mid-RPC looks identical to
         // a refused action to the bridge client, which is exactly the
-        // failure mode this whole ladder was built to diagnose. Conditional
-        // cast + bail to `nil` lets the caller retry the rung above.
+        // failure mode this whole ladder was built to diagnose. The type-id
+        // check bails to `nil` instead, letting the caller retry the rung
+        // above. See `AxTypeCheck.swift` for why this is not spelled
+        // `pv as? AXValue`.
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posVal) == .success,
               AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeVal) == .success,
               let pv = posVal, let sv = sizeVal,
-              let pvValue = pv as? AXValue, let svValue = sv as? AXValue
+              let pvValue = asAXValue(pv), let svValue = asAXValue(sv)
         else { return nil }
         var point = CGPoint.zero
         var size = CGSize.zero

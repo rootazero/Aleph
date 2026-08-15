@@ -191,7 +191,10 @@ mod tests {
             ModelSource::Configured,
         );
         assert!(on_groq.lifecycle.is_deprecated());
-        assert_eq!(on_groq.lifecycle.successor.as_deref(), Some("openai/gpt-oss-120b"));
+        assert_eq!(
+            on_groq.lifecycle.successor.as_deref(),
+            Some("openai/gpt-oss-120b")
+        );
 
         let on_together = ModelRecord::resolve(
             "together",

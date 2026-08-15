@@ -1,8 +1,21 @@
 node_modules/
 package-lock.json
 
-# Trunk build outputs — generated JS/WASM/CSS/HTML. Nothing under dist/ is
-# tracked. The directory itself must exist at compile time (RustEmbed on
-# src/gateway/control_plane/assets.rs), and the root build.rs creates it, so
-# no sentinel file is needed to hold that requirement up.
-dist/
+# NOTE: `dist/` is deliberately NOT ignored — its four build outputs
+# (aleph_panel.js, aleph_panel_bg.wasm, index.html, tailwind.css) are TRACKED,
+# and that is load-bearing:
+#
+#   * .github/workflows/aleph-app-release.yml embeds them verbatim — read the
+#     comment above the desktop-app matrix: "Panel WASM dist is pre-built and
+#     committed to git — no WASM build here." No release job owns a WASM
+#     toolchain, so an empty dist/ ships an empty Panel.
+#   * scripts/check_panel_dist.mjs (CI `Panel dist pairing`, and `needs:` of
+#     every release build) verifies the committed js+wasm are a matched pair.
+#
+# They look exactly like the generated artifacts they are, so "these were never
+# source, never reviewed" is a true and insufficient reason to drop them: that
+# happened at 033814185 (2026-08-13) and left the release pipeline gated shut
+# for two days. If you want dist/ untracked, the same change must teach the
+# release workflow to build the WASM first — then delete this block.
+#
+# Regenerate with `just wasm` (never a js-only rebuild — see check_panel_dist).

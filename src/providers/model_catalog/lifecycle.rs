@@ -509,11 +509,15 @@ mod tests {
     fn specialised_command_a_rows_precede_the_dated_flagship_row() {
         // `command-a-` is a prefix of all three; declaration order decides.
         assert_eq!(
-            lifecycle_for(None, "command-a-reasoning-08-2025").successor.as_deref(),
+            lifecycle_for(None, "command-a-reasoning-08-2025")
+                .successor
+                .as_deref(),
             Some("command-a-plus-05-2026")
         );
         assert_eq!(
-            lifecycle_for(None, "command-a-03-2025").successor.as_deref(),
+            lifecycle_for(None, "command-a-03-2025")
+                .successor
+                .as_deref(),
             Some("command-a-plus-05-2026")
         );
         // The successor itself must not be caught by any of them.

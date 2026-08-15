@@ -183,10 +183,7 @@ mod tests {
         // server-side session loss. Misclassifying it forces an unnecessary
         // reconnect (and, on the manager, a restart cycle) for a transient
         // problem.
-        assert_eq!(
-            classify_mcp_error("broken pipe"),
-            McpErrorKind::Transient
-        );
+        assert_eq!(classify_mcp_error("broken pipe"), McpErrorKind::Transient);
         assert_eq!(
             classify_mcp_error("connection closed"),
             McpErrorKind::Transient

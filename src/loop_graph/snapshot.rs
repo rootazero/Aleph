@@ -119,9 +119,8 @@ impl SnapshotStore {
             std::fs::create_dir_all(parent)
                 .map_err(|e| AlephError::other(format!("snapshot store create_dir: {e}")))?;
         }
-        let conn = crate::utils::sqlite_open::open_sqlite_safe(path).map_err(|e| {
-            AlephError::other(format!("snapshot store open: {e}"))
-        })?;
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(path)
+            .map_err(|e| AlephError::other(format!("snapshot store open: {e}")))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS snapshots (
                  id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,12 +147,7 @@ impl SnapshotStore {
     /// Capture the current state of `agent_id`'s graph under `label`.
     /// `label` is truncated to [`LABEL_MAX_CHARS`]; pass a short, meaningful
     /// name (the audit log will reference it).
-    pub fn capture(
-        &self,
-        graph: &LoopGraphStore,
-        agent_id: &str,
-        label: &str,
-    ) -> Result<i64> {
+    pub fn capture(&self, graph: &LoopGraphStore, agent_id: &str, label: &str) -> Result<i64> {
         let label = if label.chars().count() > LABEL_MAX_CHARS {
             // Hard cap, not `truncate_text` (which appends "..." and exceeds
             // the limit by the marker length): a label is a lookup key in the
@@ -362,18 +356,51 @@ fn map_edges(s: &Snapshot) -> std::collections::BTreeMap<(&str, &str, &str), &Gr
 
 fn diff_sort_key(d: &TopologyDiff) -> (u8, String, String, String, String) {
     match d {
-        TopologyDiff::Added { id, .. } => (0, id.clone(), String::new(), String::new(), String::new()),
-        TopologyDiff::Removed { id, .. } => (1, id.clone(), String::new(), String::new(), String::new()),
-        TopologyDiff::Modified { id, .. } => (2, id.clone(), String::new(), String::new(), String::new()),
-        TopologyDiff::EdgeAdded { from_id, to_id, edge_kind, .. } => {
-            (3, from_id.clone(), to_id.clone(), edge_kind.as_str().to_string(), String::new())
+        TopologyDiff::Added { id, .. } => {
+            (0, id.clone(), String::new(), String::new(), String::new())
         }
-        TopologyDiff::EdgeRemoved { from_id, to_id, edge_kind, .. } => {
-            (4, from_id.clone(), to_id.clone(), edge_kind.as_str().to_string(), String::new())
+        TopologyDiff::Removed { id, .. } => {
+            (1, id.clone(), String::new(), String::new(), String::new())
         }
-        TopologyDiff::EdgeModified { from_id, to_id, edge_kind, .. } => {
-            (5, from_id.clone(), to_id.clone(), edge_kind.as_str().to_string(), String::new())
+        TopologyDiff::Modified { id, .. } => {
+            (2, id.clone(), String::new(), String::new(), String::new())
         }
+        TopologyDiff::EdgeAdded {
+            from_id,
+            to_id,
+            edge_kind,
+            ..
+        } => (
+            3,
+            from_id.clone(),
+            to_id.clone(),
+            edge_kind.as_str().to_string(),
+            String::new(),
+        ),
+        TopologyDiff::EdgeRemoved {
+            from_id,
+            to_id,
+            edge_kind,
+            ..
+        } => (
+            4,
+            from_id.clone(),
+            to_id.clone(),
+            edge_kind.as_str().to_string(),
+            String::new(),
+        ),
+        TopologyDiff::EdgeModified {
+            from_id,
+            to_id,
+            edge_kind,
+            ..
+        } => (
+            5,
+            from_id.clone(),
+            to_id.clone(),
+            edge_kind.as_str().to_string(),
+            String::new(),
+        ),
     }
 }
 
@@ -460,10 +487,22 @@ mod tests {
     }
 
     fn goal(session: &str) -> GraphNode {
-        GraphNode::new("main", format!("goal:{session}"), NodeKind::LoopGoal, "g", Origin::Llm)
+        GraphNode::new(
+            "main",
+            format!("goal:{session}"),
+            NodeKind::LoopGoal,
+            "g",
+            Origin::Llm,
+        )
     }
     fn daemon(name: &str) -> GraphNode {
-        GraphNode::new("main", format!("daemon:{name}"), NodeKind::Daemon, "d", Origin::Llm)
+        GraphNode::new(
+            "main",
+            format!("daemon:{name}"),
+            NodeKind::Daemon,
+            "d",
+            Origin::Llm,
+        )
     }
 
     #[test]

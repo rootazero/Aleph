@@ -93,6 +93,8 @@ graphify-out/
 # Agent-tool worktree / review scratch dirs (stray source copies + run reports)
 .claire/
 .context/
+# Pi coding-agent session/task state (per-machine, regenerated on each run)
+.pi/
 # Local third-party reference source cache
 .ref-cache/
 # rust-doctor per-crate diagnostic cache (regenerated on each scan)

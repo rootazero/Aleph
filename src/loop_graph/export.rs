@@ -136,14 +136,14 @@ fn color_for(kind: NodeKind) -> &'static str {
     match kind {
         // Hex codes deliberately picked so the colors are distinguishable in
         // both light and dark themes and don't clash with Graphviz's defaults.
-        NodeKind::Root => "#FFD580",      // warm cream
-        NodeKind::Frozen => "#B0B0B0",    // grey
-        NodeKind::Anchor => "#A6E3A1",    // green
-        NodeKind::Daemon => "#89B4FA",    // blue
-        NodeKind::LoopCron => "#89B4FA",  // blue
+        NodeKind::Root => "#FFD580",          // warm cream
+        NodeKind::Frozen => "#B0B0B0",        // grey
+        NodeKind::Anchor => "#A6E3A1",        // green
+        NodeKind::Daemon => "#89B4FA",        // blue
+        NodeKind::LoopCron => "#89B4FA",      // blue
         NodeKind::LoopHeartbeat => "#89B4FA", // blue
-        NodeKind::LoopGoal => "#F5C2E7",  // pink
-        NodeKind::Team => "#FAB387",      // orange
+        NodeKind::LoopGoal => "#F5C2E7",      // pink
+        NodeKind::Team => "#FAB387",          // orange
     }
 }
 
@@ -247,9 +247,15 @@ mod tests {
         .unwrap();
 
         let dot = to_dot(&s, "main").unwrap();
-        assert!(dot.contains("root_aleph"), "id colon must be replaced: {dot}");
+        assert!(
+            dot.contains("root_aleph"),
+            "id colon must be replaced: {dot}"
+        );
         assert!(dot.contains("goal_s1"));
-        assert!(dot.contains("watches"), "edge verb must appear as label: {dot}");
+        assert!(
+            dot.contains("watches"),
+            "edge verb must appear as label: {dot}"
+        );
         assert!(dot.contains("root_aleph -> goal_s1"));
     }
 

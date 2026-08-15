@@ -278,7 +278,34 @@ enum DeniedEntry {
 /// that is why this stays a documented shape test rather than a silent
 /// heuristic.
 fn looks_like_glob(entry: &str) -> bool {
-    entry.contains(['*', '?', '['])
+    glob_shape_subject(entry).contains(['*', '?', '['])
+}
+
+/// The part of a denylist entry the glob shape test is allowed to read.
+///
+/// Windows verbatim paths open with `\\?\` — a literal `?` that is not a
+/// wildcard, and that `std::fs::canonicalize` puts in front of *every* path it
+/// returns on that platform. [`looks_like_glob`] reading it classified every
+/// canonicalized entry as a pattern and sent it to the regex translator, which
+/// then produced an `InertGlob` that denies nothing: a deny that silently
+/// evaporated, on Windows only, for any caller that handed the list an
+/// already-canonical path. `fs_scope_rebase_cannot_bypass_deny` is the test
+/// that caught it — a rebased worktree target went from refused to `Ok`.
+///
+/// The strip is for the *classification* question alone. The entry stored for
+/// the component-wise `starts_with` in [`path_is_denied`] keeps its full
+/// spelling on purpose: a canonical input carries the prefix too, so removing
+/// it from one side of that comparison is the shape that has flipped
+/// `starts_with` from allow to deny elsewhere in this repo (see
+/// `utils::paths::display_string`, whose own conversion is deliberately
+/// *partial* and therefore not reusable here — it keeps the prefix for UNC and
+/// past-MAX_PATH paths, i.e. exactly the entries that would stay misclassified).
+///
+/// Unconditional rather than `#[cfg(windows)]`: `\\?\` prefixes no legitimate
+/// Unix path either, and keeping it cross-platform is what makes the test below
+/// run on the machine you are reading this on.
+fn glob_shape_subject(entry: &str) -> &str {
+    entry.strip_prefix(r"\\?\").unwrap_or(entry)
 }
 
 /// Compile one raw denylist entry into the form the matchers use.
@@ -1122,6 +1149,44 @@ mod tests {
             &under_dir.canonicalize().unwrap(),
             &[sub.to_string_lossy().to_string()]
         ));
+    }
+
+    /// A Windows verbatim path is a LOCATION, not a pattern.
+    ///
+    /// `std::fs::canonicalize` returns `\\?\C:\...` on Windows, so a caller that
+    /// hands the denylist an already-canonical path — which
+    /// `fs_scope_rebase_cannot_bypass_deny` does, and which is a perfectly
+    /// reasonable thing to do — used to have that entry read as a glob (the
+    /// prefix's literal `?`) and compiled to an `InertGlob` that denies
+    /// nothing. The deny evaporated in silence, on Windows only.
+    ///
+    /// Runs everywhere: the classification is a pure string test, so this pins
+    /// the behaviour on the machine you are reading it on rather than waiting
+    /// for a Windows runner to disagree.
+    #[test]
+    fn a_windows_verbatim_entry_is_a_literal_not_a_pattern() {
+        const CANONICAL: &str = r"\\?\C:\Users\me\creds\id_rsa";
+
+        assert!(
+            !looks_like_glob(CANONICAL),
+            "the `?` in the verbatim prefix is not a wildcard"
+        );
+        assert!(
+            matches!(compile_denied_entry(CANONICAL), DeniedEntry::Literal(_)),
+            "a canonical Windows entry must compile to a literal location, \
+             or the deny it encodes matches nothing"
+        );
+
+        // Stripping the prefix must not disarm the shape test for an entry
+        // that carries a real wildcard behind it.
+        assert!(
+            looks_like_glob(r"\\?\C:\Users\me\**\.env"),
+            "a genuine wildcard after the prefix is still a pattern"
+        );
+
+        // Unprefixed entries are judged exactly as before.
+        assert!(looks_like_glob("**/.env"));
+        assert!(!looks_like_glob("/home/me/.ssh"));
     }
 
     /// A pattern entry answers only the DOWNWARD question. The upward twin
