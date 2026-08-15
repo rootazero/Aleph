@@ -549,6 +549,12 @@ fn normalize(reply: &str) -> &str {
 
 /// Index of the option `token` names — by 1-based number, or by
 /// case-insensitive value/label.
+///
+/// Case folding is locale-blind (`str::to_lowercase`): fine for ASCII labels
+/// and the only behaviour the rendered hint ("Reply with the number **or your
+/// answer**") promises. Locale-sensitive folding (Turkish I, German ß) would
+/// be a deliberate departure from the current expectation and is left for
+/// the caller to opt into.
 fn match_option(question: &ClarificationQuestion, token: &str) -> Option<u32> {
     let token = token.trim();
     if let Ok(n) = token.parse::<usize>() {
