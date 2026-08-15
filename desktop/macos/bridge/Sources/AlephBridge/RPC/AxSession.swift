@@ -277,10 +277,11 @@ actor AxQuerier {
         // `kAXFocusedUIElementAttribute` is documented to return an
         // `AXUIElementRef`, but a misbehaving element can return a different
         // CFType — and `as!` would crash the helper, which the bridge client
-        // reads as a refused action. Conditional cast + bail preserves the
-        // "no focus" answer (the open `guard let el = axAttr(...)` already
-        // named it the fail-open case in its comment).
-        guard let axEl = el as? AXUIElement else { return nil }
+        // reads as a refused action. The type-id check bails to the "no focus"
+        // answer instead (the open `guard let el = axAttr(...)` already named
+        // it the fail-open case in its comment). See `AxTypeCheck.swift` for
+        // why this is not spelled `el as? AXUIElement`.
+        guard let axEl = asAXUIElement(el) else { return nil }
         var budget = WalkBudget()
         return buildElement(
             from: withTimeout(axEl),
@@ -599,13 +600,14 @@ actor AxQuerier {
         // kAXPositionAttribute/kAXSizeAttribute are documented AXValue
         // returns, but a misbehaving element can hand back a different CFType
         // and `as!` would crash the helper subprocess — which the bridge
-        // client reads as a refused action (silent rung failure). Conditional
-        // cast + bail to `nil` lets the caller report "no bounds" and the
-        // rung above retry with a different element.
+        // client reads as a refused action (silent rung failure). The type-id
+        // check bails to `nil` instead, so the caller reports "no bounds" and
+        // the rung above retries with a different element. See
+        // `AxTypeCheck.swift` for why this is not spelled `pv as? AXValue`.
         guard AXUIElementCopyAttributeValue(ax, kAXPositionAttribute as CFString, &posVal) == .success,
               AXUIElementCopyAttributeValue(ax, kAXSizeAttribute as CFString, &sizeVal) == .success,
               let pv = posVal, let sv = sizeVal,
-              let pvValue = pv as? AXValue, let svValue = sv as? AXValue
+              let pvValue = asAXValue(pv), let svValue = asAXValue(sv)
         else { return nil }
         var point = CGPoint.zero
         var size  = CGSize.zero
