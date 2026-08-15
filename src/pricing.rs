@@ -2796,7 +2796,9 @@ mod tests {
             lookup_tiers("anthropic", "claude-sonnet-4-6").map(<[_]>::len),
             Some(0)
         );
-        assert!(!lookup_tiers("anthropic", "claude-sonnet-4-5").unwrap().is_empty());
+        assert!(!lookup_tiers("anthropic", "claude-sonnet-4-5")
+            .unwrap()
+            .is_empty());
         // Flat-priced families resolve to no tier.
         assert!(lookup_tiers("anthropic", "claude-opus-4-1").is_none());
         assert!(lookup_tiers("openai", "gpt-4o").is_none());

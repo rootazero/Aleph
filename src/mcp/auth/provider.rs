@@ -535,19 +535,13 @@ fn validate_response_issuer(
 /// bound to another. Refusing the metadata pre-empts the attack before
 /// any redirect happens. A missing `issuer` means we have nothing to
 /// compare against — refusing the metadata is the safe default.
-fn validate_metadata_origins(
-    server_name: &str,
-    metadata: &OAuthServerMetadata,
-) -> Result<()> {
-    let issuer = metadata
-        .issuer
-        .as_deref()
-        .ok_or_else(|| {
-            AlephError::IoError(format!(
-                "OAuth metadata for '{server_name}' omitted the 'issuer' field; \
+fn validate_metadata_origins(server_name: &str, metadata: &OAuthServerMetadata) -> Result<()> {
+    let issuer = metadata.issuer.as_deref().ok_or_else(|| {
+        AlephError::IoError(format!(
+            "OAuth metadata for '{server_name}' omitted the 'issuer' field; \
                  refusing to register against an unverified authorization server"
-            ))
-        })?;
+        ))
+    })?;
 
     let issuer_origin = url_origin_str(issuer).ok_or_else(|| {
         AlephError::IoError(format!(
@@ -732,7 +726,9 @@ mod tests {
             grant_types_supported: vec![],
             code_challenge_methods_supported: vec![],
         };
-        let err = validate_metadata_origins("srv", &cross).unwrap_err().to_string();
+        let err = validate_metadata_origins("srv", &cross)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("evil.example.com"), "{err}");
         assert!(err.contains("authorization_endpoint"), "{err}");
 

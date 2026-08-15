@@ -129,11 +129,7 @@ impl TopologySummary {
             let _ = writeln!(out, "    {} = {}", k.as_str(), n);
         }
         let _ = writeln!(out, "  naked_loops = {}", self.naked_loop_count);
-        let _ = writeln!(
-            out,
-            "  unanchored_chains = {}",
-            self.unanchored_chain_count
-        );
+        let _ = writeln!(out, "  unanchored_chains = {}", self.unanchored_chain_count);
         out
     }
 }
@@ -157,8 +153,7 @@ impl<'a> LoopGraphInspector<'a> {
     pub fn subgraph_for(&self, node_id: &str) -> Result<Option<NodeSubgraph>> {
         let nodes = self.store.list_nodes(self.agent_id)?;
         let edges = self.store.list_edges(self.agent_id)?;
-        let by_id: HashMap<&str, &GraphNode> =
-            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let by_id: HashMap<&str, &GraphNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
         let Some(node) = by_id.get(node_id).copied().cloned() else {
             return Ok(None);
@@ -167,13 +162,21 @@ impl<'a> LoopGraphInspector<'a> {
         let incoming: Vec<(GraphEdge, GraphNode)> = edges
             .iter()
             .filter(|e| e.to_id == node_id)
-            .filter_map(|e| by_id.get(e.from_id.as_str()).map(|n| ((*e).clone(), (*n).clone())))
+            .filter_map(|e| {
+                by_id
+                    .get(e.from_id.as_str())
+                    .map(|n| ((*e).clone(), (*n).clone()))
+            })
             .collect();
 
         let outgoing: Vec<(GraphEdge, GraphNode)> = edges
             .iter()
             .filter(|e| e.from_id == node_id)
-            .filter_map(|e| by_id.get(e.to_id.as_str()).map(|n| ((*e).clone(), (*n).clone())))
+            .filter_map(|e| {
+                by_id
+                    .get(e.to_id.as_str())
+                    .map(|n| ((*e).clone(), (*n).clone()))
+            })
             .collect();
 
         // ancestors / descendants walk OwnsReference both directions, bounded.
@@ -209,9 +212,7 @@ impl<'a> LoopGraphInspector<'a> {
             .collect();
 
         // Chain anchored = some node on the ancestor chain is Root.
-        let governance_chain_anchored = ancestor_chain
-            .iter()
-            .any(|n| n.kind == NodeKind::Root);
+        let governance_chain_anchored = ancestor_chain.iter().any(|n| n.kind == NodeKind::Root);
 
         let all_roots: Vec<GraphNode> = nodes
             .iter()
@@ -348,10 +349,7 @@ impl<'a> LoopGraphInspector<'a> {
             .filter_map(|(s, c)| EdgeKind::parse(s).map(|k| (k, c)))
             .collect();
 
-        let naked_loop_count = findings
-            .iter()
-            .filter(|f| f.contains("裸奔优化环"))
-            .count();
+        let naked_loop_count = findings.iter().filter(|f| f.contains("裸奔优化环")).count();
         let unanchored_chain_count = findings
             .iter()
             .filter(|f| f.contains("治理链未锚定"))
@@ -374,8 +372,7 @@ impl<'a> LoopGraphInspector<'a> {
     pub fn loops_with_coverage(&self) -> Result<Vec<(GraphNode, Vec<GraphNode>)>> {
         let nodes = self.store.list_nodes(self.agent_id)?;
         let edges = self.store.list_edges(self.agent_id)?;
-        let by_id: HashMap<&str, &GraphNode> =
-            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let by_id: HashMap<&str, &GraphNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
         let mut out = Vec::new();
         for n in &nodes {
@@ -556,7 +553,9 @@ mod tests {
             .subgraph_for("goal:s1")
             .expect("store is healthy")
             .expect("node exists");
-        let node = sub.node.expect("subgraph_for a registered node returns Some");
+        let node = sub
+            .node
+            .expect("subgraph_for a registered node returns Some");
         assert_eq!(node.id, "goal:s1");
 
         // ancestor chain (OwnsReference up from goal:s1) hits daemon -> cron.
@@ -647,10 +646,11 @@ mod tests {
         .unwrap();
         let inspector = LoopGraphInspector::new(&s, "main");
         let impact = inspector.impact_of_removing("cron:watcher").unwrap();
-        assert!(impact
-            .would_become_naked
-            .iter()
-            .any(|id| id == "goal:s1"), "{:?}", impact.would_become_naked);
+        assert!(
+            impact.would_become_naked.iter().any(|id| id == "goal:s1"),
+            "{:?}",
+            impact.would_become_naked
+        );
         assert!(!impact.loses_acl.is_empty() || impact.loses_acl.is_empty()); // sanity
     }
 
@@ -663,10 +663,7 @@ mod tests {
         // Removing root does not make a loop naked (root isn't a watcher of
         // an optimization loop in this fixture), but it breaks the chain.
         assert!(
-            impact
-                .lint_findings
-                .iter()
-                .any(|f| f.contains("悬空边")),
+            impact.lint_findings.iter().any(|f| f.contains("悬空边")),
             "simulated state must surface dangling edges: {:?}",
             impact.lint_findings
         );
@@ -685,10 +682,7 @@ mod tests {
         // today's lint (goal:s1 is already naked in the fixture — nothing
         // watches it).
         assert!(
-            impact
-                .lint_findings
-                .iter()
-                .all(|f| !f.contains("悬空边")),
+            impact.lint_findings.iter().all(|f| !f.contains("悬空边")),
             "removing nothing must not manufacture dangling edges: {:?}",
             impact.lint_findings
         );
@@ -812,7 +806,10 @@ mod tests {
             .unwrap();
         let inspector = LoopGraphInspector::new(&store, "main");
         let result = inspector.subgraph_for("goal:s1");
-        assert!(result.is_err(), "unreadable store must error, not return None");
+        assert!(
+            result.is_err(),
+            "unreadable store must error, not return None"
+        );
     }
 
     #[test]

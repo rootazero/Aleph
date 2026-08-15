@@ -113,10 +113,7 @@ impl SkillSystem {
     }
 
     /// Reload a single skill file into the registry and rebuild the snapshot.
-    pub async fn reload_file(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<(), SkillParseError> {
+    pub async fn reload_file(&self, path: impl AsRef<Path>) -> Result<(), SkillParseError> {
         let path = path.as_ref();
         let source = guess_source(path);
         let manifest = parse_skill_file(path, source)?;

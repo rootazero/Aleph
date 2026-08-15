@@ -226,7 +226,8 @@ fn build_failure_digest(
     top_n: usize,
     truncated: bool,
 ) -> ToolFailureDigest {
-    let report = build_report_with_truncation(rows, since_unix_secs, window_seconds, top_n, truncated);
+    let report =
+        build_report_with_truncation(rows, since_unix_secs, window_seconds, top_n, truncated);
 
     let mut newest_created_at = 0i64;
     let mut samples: HashMap<&str, Vec<String>> = HashMap::new();

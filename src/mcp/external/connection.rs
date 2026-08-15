@@ -336,12 +336,7 @@ impl McpServerConnection {
         // calls `refresh_tools` again, would hit the same hang.
         const HANDSHAKE_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 
-        match tokio::time::timeout(
-            HANDSHAKE_STEP_TIMEOUT,
-            self.probe_era(&probe_meta),
-        )
-        .await
-        {
+        match tokio::time::timeout(HANDSHAKE_STEP_TIMEOUT, self.probe_era(&probe_meta)).await {
             Ok(EraProbe::Modern {
                 version,
                 discovered,

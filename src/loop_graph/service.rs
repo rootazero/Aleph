@@ -439,7 +439,7 @@ pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
-// `.flatten()`, not `?`: BOTH the store error and a genuine "not a
+    // `.flatten()`, not `?`: BOTH the store error and a genuine "not a
     // registered node" collapse to `None` here, deliberately. This is the
     // prompt-rendering path — an unreadable store must render nothing rather
     // than break the turn — and `render_session_topology_strict` above is the
