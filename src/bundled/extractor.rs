@@ -8,7 +8,16 @@ use super::manifest::{InstallRegistry, SkillEntry, SkillOrigin};
 use super::{BUNDLED_PLUGINS, BUNDLED_SKILLS, BUNDLED_VERSION};
 use include_dir::Dir;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
+
+/// Monotonic counter for unique temp filenames during bundled extraction.
+///
+/// Two threads in the same process calling `extract_dir_contents` within the
+/// same nanosecond can pick the same nanos + pid, so we add an atomic
+/// counter. The counter is process-local and wraps at 2^64 — negligible
+/// collision risk in practice.
+static EXTRACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Which official content to refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -510,12 +519,15 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
         };
         let dest = target.join(name);
         // Atomic write: write to a uniquely-named temp file, then rename.
-        // The temp name includes a nanosecond timestamp so concurrent extractors
-        // (e.g. rapid server restart) cannot collide on the same temp file.
+        // The temp name includes a nanosecond timestamp AND an atomic
+        // counter so concurrent extractors (e.g. two threads in the same
+        // process, or a rapid server restart) cannot collide on the same
+        // temp file.
         let tmp_name = format!(
-            ".{}.tmp.{}.{}",
+            ".{}.tmp.{}.{}.{}",
             name.to_string_lossy(),
             std::process::id(),
+            EXTRACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
