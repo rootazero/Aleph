@@ -66,16 +66,48 @@ impl InstallRegistry {
     }
 
     /// Save manifest to disk.
+    ///
+    /// Atomic: write to a process-unique temp file via `create_new(true)` so two
+    /// parallel writers cannot collide on the tmp path, then atomically rename
+    /// onto the destination. On Windows the rename of an existing file is
+    /// rejected (`AlreadyExists`); the trailing remove-then-rename covers that
+    /// case. POSIX rename replaces atomically, so the retry never fires there.
     pub fn save(&self, skills_dir: &Path) -> std::io::Result<()> {
+        use std::io::Write;
         let path = skills_dir.join("manifest.json");
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         let tmp_path = path.with_extension("tmp");
-        std::fs::write(&tmp_path, content)?;
+        // `create_new(true)` refuses on a pre-existing tmp file, so the writer
+        // gets a unique-by-construction handle even when two startups race.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(content.as_bytes()) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(e);
+                }
+            }
+            Err(e) => {
+                // A concurrent writer is mid-save. Refuse rather than clobber
+                // its tmp; the next save will pick a fresh name.
+                return Err(e);
+            }
+        }
         if let Err(e) = std::fs::rename(&tmp_path, &path) {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
-                std::fs::remove_file(&path)?;
-                std::fs::rename(&tmp_path, &path)?;
+                if let Err(rm) = std::fs::remove_file(&path) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(rm);
+                }
+                if let Err(e) = std::fs::rename(&tmp_path, &path) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(e);
+                }
             } else {
+                let _ = std::fs::remove_file(&tmp_path);
                 return Err(e);
             }
         }
