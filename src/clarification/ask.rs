@@ -279,8 +279,16 @@ pub async fn ask(
         Ok(Err(_)) => ClarificationResult::cancelled(),
         // Timed out — reap the stale registry entry. `cleanup_expired` rather
         // than `cancel` so the terminal frame clients receive says `expired`,
-        // matching the status returned here; the entry is past its deadline by
-        // construction (same duration, registered first).
+        // matching the status returned here.
+        //
+        // SIDE EFFECT: this is a registry-wide sweep, not a per-session reap,
+        // so other sessions' expired entries are reaped along with this one.
+        // Each reap publishes its own `ClarificationEnded` frame, so the
+        // affected clients see the right outcome for *their* request, not
+        // this `ask`'s timeout. The current entry is past its deadline by
+        // construction (same duration, registered first); any other reaped
+        // entries are unrelated stale runs that would have reaped on the
+        // next `register` anyway.
         Err(_) => {
             deps.clarification.cleanup_expired().await;
             ClarificationResult::timeout()
