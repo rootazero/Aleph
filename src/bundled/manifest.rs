@@ -3,6 +3,7 @@
 //! Location: `~/.aleph/skills/manifest.json`
 
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use tracing::{debug, warn};
@@ -137,12 +138,15 @@ impl InstallRegistry {
     pub fn reconcile(&mut self, skills_dir: &Path) -> std::io::Result<()> {
         // Find directories on disk
         let entries = std::fs::read_dir(skills_dir)?;
-        let mut skip_count: u32 = 0;
+        // A `Cell` because the two closures below both need to bump the
+        // counter; ordinary `&mut` would double-borrow through the iterator
+        // chain. The closure body is single-threaded by construction.
+        let skip_count: Cell<u32> = Cell::new(0);
         let on_disk: HashSet<String> = entries
             .filter_map(|e| match e {
                 Ok(e) => Some(e),
                 Err(err) => {
-                    skip_count += 1;
+                    skip_count.set(skip_count.get() + 1);
                     tracing::warn!(
                         error = %err,
                         dir = %skills_dir.display(),
@@ -157,7 +161,7 @@ impl InstallRegistry {
                 match e.path().symlink_metadata() {
                     Ok(m) => m.is_dir(),
                     Err(err) => {
-                        skip_count += 1;
+                        skip_count.set(skip_count.get() + 1);
                         tracing::warn!(
                             error = %err,
                             path = %e.path().display(),
@@ -169,9 +173,10 @@ impl InstallRegistry {
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        if skip_count > 0 {
+        let skipped = skip_count.get();
+        if skipped > 0 {
             tracing::warn!(
-                skipped = skip_count,
+                skipped = skipped,
                 dir = %skills_dir.display(),
                 "reconcile: skipped entries due to errors; their manifest entries will be reaped"
             );
