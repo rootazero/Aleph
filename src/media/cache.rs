@@ -615,6 +615,46 @@ mod tests {
     use super::*;
     use crate::utils::filename::{FALLBACK_FILENAME, MAX_FILENAME_CHARS};
 
+    /// The pre-move tree at `<temp_dir>/aleph/media` is deliberately NOT
+    /// migrated and deliberately NOT swept — see [`base_dir`], which gives the
+    /// reason: that fixed, world-listable name "is exactly the path another
+    /// account may already have claimed". A sweeper pointed at it would be
+    /// this process deleting under a name it does not own.
+    ///
+    /// That is a ruling, and until now it lived only in prose. Prose does not
+    /// stop the next reader from helpfully adding the migration back — the
+    /// orphaned tree looks like an oversight, which is precisely why the
+    /// decision needs a test that goes red rather than a paragraph that does
+    /// not.
+    ///
+    /// Both halves, because the ruled-out side alone would stay green if
+    /// `base_dir` stopped resolving anywhere sensible at all: first that the
+    /// tree really does hang off the owner-only root, then that it is not the
+    /// shared name.
+    #[test]
+    fn the_media_tree_hangs_off_the_private_root_and_never_the_shared_name() {
+        let base = base_dir().expect("the private scratch root must resolve");
+        let private =
+            crate::utils::paths::private_temp_root().expect("private root resolves twice alike");
+
+        assert_eq!(
+            base,
+            private.join("media"),
+            "the media tree must be the private root's own child"
+        );
+
+        // The ruled-out location. Compared component-wise (`Path::starts_with`),
+        // never as a string: `aleph-501` string-starts-with `aleph`, and a
+        // string compare here would report a violation on every Unix machine.
+        let shared = std::env::temp_dir().join("aleph");
+        assert!(
+            !base.starts_with(&shared),
+            "{} sits under the shared name {} that base_dir's own doc rules out",
+            base.display(),
+            shared.display()
+        );
+    }
+
     /// Before the two `sanitize_filename` copies converged, this half stripped
     /// directory components and *nothing else*: a control byte, a character
     /// illegal on Windows, and an unbounded length all reached the temp path

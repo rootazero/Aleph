@@ -402,6 +402,47 @@ fn the_callback_latches_the_first_safety_block_reason() {
     assert_eq!(cb.blocked_reason(), Some("blocked by pii guardrail"));
 }
 
+/// Which runs owe a durable receipt, and — the half that was only prose — which
+/// deliberately do not.
+///
+/// The receipt exists for one shape: a screened-out input ends the run `Ok`
+/// having said nothing, so the log reads byte-identically to a clean empty run
+/// and the reason survives only in a live frame that reload throws away.
+///
+/// Its documented edge is a steering message screened out MID-run, after the
+/// same run already produced assistant output. That run did answer, so it is
+/// not the silent shape the receipt cures — a ruling, not an oversight, and one
+/// that reads exactly like a missing case to the next person who finds it. It
+/// had no test; this is it.
+///
+/// Both halves together, because the edge assertion alone stays green if the
+/// receipt stops being written at all.
+#[test]
+fn the_input_block_receipt_covers_the_silent_run_and_only_that_one() {
+    use super::callback::input_block_receipt;
+    const REASON: &str = "blocked by pii guardrail";
+
+    assert_eq!(
+        input_block_receipt(Some(REASON), 0),
+        Some(REASON),
+        "a run that was screened out before it said anything owes a receipt"
+    );
+
+    assert_eq!(
+        input_block_receipt(Some(REASON), 1),
+        None,
+        "the documented edge: a run that already spoke is not the silent shape \
+         this receipt cures. Changing this is a product decision about mid-run \
+         steering, not a bug fix — the reasoning is on `input_block_receipt`."
+    );
+
+    assert_eq!(
+        input_block_receipt(None, 0),
+        None,
+        "a run that was never blocked owes nothing"
+    );
+}
+
 // -- seed_session tests --------------------------------------------------
 
 use crate::session::in_process::InProcessActorSessionService;

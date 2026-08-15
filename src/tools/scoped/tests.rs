@@ -1237,6 +1237,65 @@ async fn a_panicking_tool_body_becomes_an_attributed_per_call_error() {
     assert!(!err.is_retryable(), "a panic is not a transient failure");
 }
 
+/// The documented PRICE of catching at the outermost seam.
+///
+/// `execute_with_cancel`'s `catch_unwind` sits above `execute_inner`, so the
+/// unwind jumps over this call's post-hooks, ledger entry and artifact harvest.
+/// That is a deliberate trade — a catch inside every gate stage would be the
+/// alternative — and until now it was stated in one comment and nowhere else.
+///
+/// A cost recorded only in prose is one refactor away from being quietly paid
+/// twice or quietly repaid: someone moves the seam, and nothing goes red either
+/// way. So pin it, from both sides, because the absence half alone would stay
+/// green against a hook that was simply never wired: the SAME service, the SAME
+/// hooks, one tool that returns and one that panics.
+///
+/// Both post-hook events are registered, because the panic is above the fork
+/// between them: `AfterToolCallFailure` is the arm a reader would expect to
+/// still fire, and it does not either.
+#[tokio::test]
+#[cfg(unix)] // POSIX-only: shell hook uses sh
+async fn a_panicking_call_skips_its_post_hooks_and_a_returning_one_does_not() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let marker = dir.path().join("after.log");
+    let marker_str = marker.to_string_lossy().to_string();
+    let cmd = format!(r#"printf '%s\n' "$TOOL_NAME" >> '{marker_str}'"#);
+    let executor = Arc::new(HookExecutor::new(vec![
+        make_command_hook(HookEvent::AfterToolCall, HookKind::Observer, &cmd),
+        make_command_hook(HookEvent::AfterToolCallFailure, HookKind::Observer, &cmd),
+    ]));
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(EchoTool));
+    r.register(Box::new(PanickingTool));
+    let svc = ScopedToolService::new(Arc::new(r), BTreeSet::new())
+        .with_hook_executor(executor, "test-session");
+
+    // Presence: an ordinary call reaches its post-hook.
+    svc.execute("echo", json!({}))
+        .await
+        .expect("the echo tool succeeds");
+    let after_ok = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
+    assert_eq!(
+        after_ok.split_whitespace().collect::<Vec<_>>(),
+        vec!["echo"],
+        "a returning call must reach its post-hook, or the absence below proves nothing"
+    );
+
+    // The ruled-out side: a panicking call reaches neither post-hook event.
+    svc.execute("panicker", json!({}))
+        .await
+        .expect_err("a panicking tool body resolves to an error");
+    let after_panic = tokio::fs::read_to_string(&marker).await.unwrap_or_default();
+    assert_eq!(
+        after_panic.split_whitespace().collect::<Vec<_>>(),
+        vec!["echo"],
+        "a panicking call added a post-hook line: the unwind no longer jumps over \
+         this call's post-hooks (and with them its ledger entry and artifact \
+         harvest). If that is intended, the comment at `execute_with_cancel`'s \
+         catch_unwind is the only place this cost is written down — update it too."
+    );
+}
+
 #[tokio::test]
 async fn a_panicking_call_does_not_take_its_batch_siblings_down() {
     use futures::StreamExt;
