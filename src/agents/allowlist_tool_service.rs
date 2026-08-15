@@ -31,16 +31,31 @@ impl AllowlistToolService {
     pub fn new(inner: Arc<dyn ToolService>, agent_def: Arc<AgentDef>) -> Self {
         Self { inner, agent_def }
     }
+
+    /// Refuse a call the allowlist denies — recording it first.
+    ///
+    /// This gate sits **above** the `ScopedToolService` chokepoint, so its
+    /// refusals never passed the one place tool refusals are ledgered: a
+    /// denied sub-agent used to leave no trace on any chain, which is exactly
+    /// the gap a signed operation ledger exists to close. The record is filed
+    /// under the sub-agent's own identity (the same attribution its allowed
+    /// calls get via [`crate::identity::as_actor`]), never the parent's.
+    async fn deny(&self, name: &str, input: &Value) -> ToolError {
+        let reason = format!("agent '{}' disallows this tool", self.agent_def.id);
+        crate::tools::scoped::record_allowlist_refusal(&self.agent_def.id, name, input, &reason)
+            .await;
+        ToolError::PermissionDenied {
+            name: name.to_string(),
+            reason,
+        }
+    }
 }
 
 #[async_trait]
 impl ToolService for AllowlistToolService {
     async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError> {
         if !self.agent_def.is_tool_allowed(name) {
-            return Err(ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: format!("agent '{}' disallows this tool", self.agent_def.id),
-            });
+            return Err(self.deny(name, &input).await);
         }
         crate::identity::as_actor(&self.agent_def.id, self.inner.execute(name, input)).await
     }
@@ -55,10 +70,7 @@ impl ToolService for AllowlistToolService {
         // `PermissionDenied` error regardless of which call path the harness
         // took, then delegate to the inner cancel-aware path.
         if !self.agent_def.is_tool_allowed(name) {
-            return Err(ToolError::PermissionDenied {
-                name: name.to_string(),
-                reason: format!("agent '{}' disallows this tool", self.agent_def.id),
-            });
+            return Err(self.deny(name, &input).await);
         }
         crate::identity::as_actor(
             &self.agent_def.id,
@@ -319,9 +331,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_denied_call_scopes_no_actor() {
-        // The gate returns before delegating, so nothing is attributed — and
-        // the refusal is recorded by the parent's chokepoint under the parent,
-        // which never saw this call at all.
+        // The gate returns before delegating, so no actor scope is opened for
+        // the inner service. The refusal itself no longer vanishes: `deny`
+        // files a `ToolDenied` record under the sub-agent's own chain before
+        // returning (no ledger is installed in this test, so that call is a
+        // no-op here; the wired path is covered by the integration tests).
         let def = agent_with_allowed(vec![]);
         let svc = AllowlistToolService::new(Arc::new(ActorProbe), def);
         assert!(svc.execute("anything", json!({})).await.is_err());

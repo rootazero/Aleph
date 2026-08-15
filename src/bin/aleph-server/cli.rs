@@ -436,7 +436,7 @@ pub enum IdentityAction {
     },
     /// Write one agent's whole chain, its public keys and its anchor to a
     /// self-contained JSON document. Contains no private key and no tool
-    /// arguments.
+    /// arguments. Signed by the agent's active key when it has one.
     Export {
         /// Agent to export
         #[arg(long)]
@@ -444,6 +444,22 @@ pub enum IdentityAction {
         /// Write here instead of stdout
         #[arg(long, value_name = "FILE")]
         out: Option<String>,
+    },
+    /// Check a file against its `.aleph-sig.json` signature envelope. Exits
+    /// non-zero unless the verdict is `valid`.
+    ///
+    /// Read-only, and it needs only the public keys in security.db — never
+    /// the vault: a revoked or retired key still verifies, a deleted one
+    /// reports `unknown_signer`.
+    VerifyArtifact {
+        /// The artifact to check
+        path: String,
+        /// Read the envelope from here instead of `<path>.aleph-sig.json`
+        #[arg(long, value_name = "FILE")]
+        sig: Option<String>,
+        /// Assert who must have signed
+        #[arg(long)]
+        agent: Option<String>,
     },
 }
 

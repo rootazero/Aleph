@@ -27,6 +27,10 @@ mod ledger;
 mod progressive_disclosure;
 mod traits;
 
+// The sub-agent allowlist wrapper refuses calls *above* this chokepoint; its
+// refusals still belong on the signed ledger, in the same record shape.
+pub(crate) use ledger::record_allowlist_refusal;
+
 #[cfg(test)]
 mod tests;
 

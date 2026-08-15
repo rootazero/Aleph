@@ -188,6 +188,44 @@ impl LedgerIntent {
     }
 }
 
+/// Record a refusal decided **above** the chokepoint.
+///
+/// `AllowlistToolService` turns a sub-agent's disallowed call back before it
+/// ever reaches `ScopedToolService::execute_inner`, so the chokepoint's own
+/// refusal recording never fires for it — the attempt used to vanish from
+/// every chain, and a denied sub-agent looked exactly like an idle one. This
+/// writes the same record shape [`LedgerIntent::commit_refusal`] writes, but
+/// without a turn context: the caller names the acting agent explicitly,
+/// because the whole point of the wrapper is that the turn would attribute
+/// the call to the *parent*. `pub(crate)` for that one caller.
+pub(crate) async fn record_allowlist_refusal(
+    agent_id: &str,
+    tool: &str,
+    input: &Value,
+    reason: &str,
+) {
+    if crate::identity::global().is_none() {
+        return;
+    }
+    crate::identity::record_action(NewRecord {
+        agent_id: agent_id.to_string(),
+        principal: crate::gateway::visibility::ambient_actor(),
+        action: LedgerAction::ToolDenied,
+        target: tool.to_string(),
+        outcome: LedgerOutcome::Denied,
+        // Same fingerprint the chokepoint's refusal would carry, so a denied
+        // sub-agent call correlates with the grant/denial surfaces exactly
+        // like a denied top-level one.
+        args_fp: Some(grant_fingerprint(tool, input)),
+        detail: format!(
+            "{} — {}",
+            summarize_call(tool, input),
+            redact_and_cap(reason)
+        ),
+    })
+    .await;
+}
+
 /// Which decision an approval gate reached, for
 /// `ScopedToolService::record_approval_decision`.
 ///

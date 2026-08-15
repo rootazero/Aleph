@@ -211,6 +211,35 @@ fn a_written_file_verifies_after_a_round_trip_through_disk() {
 }
 
 #[test]
+fn a_signed_export_round_trips_through_disk_with_its_envelope_intact() {
+    // The same disk round-trip as above, now asserting the document's own
+    // signature survives it: the envelope covers the document's canonical
+    // content, so the pretty-printed file the CLI writes must still verify.
+    let f = Fixture::new();
+    f.append("main", "t");
+    let doc = export_chain(&f.ledger, "main").unwrap();
+    assert!(doc.signature.is_some(), "exports are signed now");
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("chain.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+
+    let parsed: ChainExport =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let report = verify_export(&parsed, &NO_PINS).unwrap();
+    assert_eq!(report.signature, Some(true));
+    assert!(report.ok, "{:?}", report.faults);
+
+    // …and a file edited in transit fails on the envelope, before any pin or
+    // chain walk is even consulted.
+    let mut forged = parsed.clone();
+    forged.records[0].detail = "rewritten".into();
+    let report = verify_export(&forged, &NO_PINS).unwrap();
+    assert_eq!(report.signature, Some(false));
+    assert!(!report.ok);
+}
+
+#[test]
 fn the_private_key_never_leaves() {
     let f = Fixture::new();
     f.append("main", "bash");
@@ -411,6 +440,18 @@ fn a_truncated_tail_is_invisible_without_a_head_pin_and_caught_with_one() {
     cut.anchor_seq = last.seq;
     cut.anchor_hash = Some(last.hash.clone());
 
+    // First detection layer, new with the signed envelope: the edit breaks the
+    // document's own signature, and a verifier that checks nothing else still
+    // rejects it.
+    let tampered = verify_export(&cut, &NO_PINS).unwrap();
+    assert_eq!(tampered.signature, Some(false));
+    assert!(!tampered.ok);
+
+    // But the envelope is only as strong as the private key's secrecy, and the
+    // key lives on the machine being audited — so the adversary to design
+    // against strips (or re-signs) it. What remains is the original bound:
+    // internally consistent, and invisible without a head pin.
+    cut.signature = None;
     assert!(
         verify_export(&cut, &NO_PINS).unwrap().ok,
         "internally consistent with a matching anchor — that is exactly the problem"
