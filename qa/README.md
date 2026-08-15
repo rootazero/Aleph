@@ -25,6 +25,10 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh pdf      # pdf_generate's browser engine, CLI off PATH
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
+
+./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
+./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
+./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run
 ```
 
 `browser_managed` needs **no mock provider** in every scenario but
@@ -106,6 +110,73 @@ Each run creates its own scratch `HOME` / `ALEPH_HOME` and deletes it on exit.
 Nothing touches your real `~/.aleph` — which matters more than convenience: two
 processes on one vault is a documented way to lose vault data
 (`PROCESS_MANAGEMENT.md`).
+
+## `announce` — and the wall it hit on its first run
+
+The background-`bash` completion announce is a *runtime* claim a unit test
+cannot reach: a job that finishes AFTER its run ended used to finish into an
+empty room. The cure spends a provider turn nobody's client asked for, so the
+oracle is the mock's `observations.jsonl` — a request whose conversation carries
+`[system] Background process N finished`, arriving after `run_finished`.
+
+**On real hardware the announce mechanism works.** The session log of the first
+run shows exactly the claimed shape: `run_finished` for the spawning run, then a
+`user_message` carrying the notice, then a **second `run_started`**. Nobody's
+client sent that message.
+
+**And the same run found something bigger, which is why all three scenarios
+currently fail at their control step.** `bash` never executed at all:
+
+> `exit_code: -1`, `stderr: "Capability denied: cwd outside workspace root"`
+
+Two subsystems answer *"where does this session work"*, and they never agree:
+
+* `tools/adapters/registry_adapter.rs::execute` injects `default_working_dir`
+  into every `bash` / `code_exec` call that omits `working_dir`
+  (`WORKING_DIR_TOOLS`). Its value is `effective_workspace`
+  (`gateway/execution_engine/run_loop/inner.rs`) — the **agent** workspace,
+  defaulting to `~/.aleph/workspaces/<agent_id>` (`agent_instance.rs:63`).
+* `sandbox/workspace/mod.rs::for_session` puts the session's cwd at
+  `~/.aleph/workspaces/<sha256(session_id_json)[..16]>` and refuses any cwd
+  outside it.
+
+A 32-hex directory name is never an agent id, so the injected path is always
+outside. Verified on the observed run: the session dir was
+`2f5185e22a04f821e25984a77d161ac3`, which is exactly
+`sha256('{"type":"main","agent_id":"main","main_key":"main","epoch":1}')[:32]`,
+while the agent workspace was `workspaces/main`. Sandbox `enabled = true` is
+the generated default; nothing in the fixture turned it on.
+
+Passing **no** `working_dir` would have been fine — `cwd: None` takes the branch
+that skips the containment check and lands in the session workspace. It is the
+injection that manufactures the violation, and the refusal then reads like a
+sandbox policy decision rather than like a wiring bug. That is why four rounds
+of unit tests missed it: every unit test either drives the sandbox directly (no
+adapter, no injection) or drives the adapter with a fake sandbox (injection, no
+containment check). Only a real run puts both halves in the same process.
+
+### Why this fixture asserts a control first
+
+Its first version did not, and the first run was unreadable: the background job
+came back "failed with exit code -1" and there was no way to tell *the
+background path is broken* from *bash cannot run here at all*. Every plan now
+opens with a foreground `bash` probe in the same process, and the driver refuses
+to evaluate any announce claim until that probe's output has reached the model.
+On failure it prints the diagnosis above rather than a bare `[FAIL]`.
+
+Two more traps this scenario paid for:
+
+**`session_events.session_id` is not the `session_key` `chat.send` returns.**
+The column holds a serialized `SessionId` JSON blob
+(`{"type":"main","agent_id":"main",...}`); the RPC returns `agent:main:main:s1`.
+Scoping `SessionLog` by the latter matches nothing, so every `wait_for` times
+out reporting "the run never finished" about a run that finished in 80 ms.
+
+**"The last user message" is never the announce.** The harness appends a
+`<system-reminder>` as its own user message, so the newest user text is that
+reminder on every single turn. The first oracle read it and reported
+`announce=no` for a request that was carrying the announce three messages up.
+Membership questions go to the whole request, not to one message.
 
 ## Why a mock provider rather than a real one
 
