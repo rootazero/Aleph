@@ -129,19 +129,53 @@ impl InstallRegistry {
     /// - Manifest entries without directories → remove
     ///
     /// Returns `Err` if the skills directory could not be read (caller should
-    /// avoid saving a potentially stale manifest).
+    /// avoid saving a potentially stale manifest). Per-entry errors during the
+    /// `read_dir` iteration are counted and logged: silently dropping them
+    /// would let a race-on-unlink or a permissions glitch on a subdir classify
+    /// the affected entry as "removed" and remove it from the manifest on the
+    /// next save — a quiet loss of provenance.
     pub fn reconcile(&mut self, skills_dir: &Path) -> std::io::Result<()> {
         // Find directories on disk
         let entries = std::fs::read_dir(skills_dir)?;
+        let mut skip_count: u32 = 0;
         let on_disk: HashSet<String> = entries
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(e) => Some(e),
+                Err(err) => {
+                    skip_count += 1;
+                    tracing::warn!(
+                        error = %err,
+                        dir = %skills_dir.display(),
+                        "read_dir entry error during reconcile (will be treated as absent)"
+                    );
+                    None
+                }
+            })
             .filter(|e| {
                 // Use symlink_metadata so we don't follow symlinks — a symlink
                 // pointing outside the skills dir should not be treated as a skill.
-                e.path().symlink_metadata().is_ok_and(|m| m.is_dir())
+                match e.path().symlink_metadata() {
+                    Ok(m) => m.is_dir(),
+                    Err(err) => {
+                        skip_count += 1;
+                        tracing::warn!(
+                            error = %err,
+                            path = %e.path().display(),
+                            "symlink_metadata error during reconcile (will be treated as absent)"
+                        );
+                        false
+                    }
+                }
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
+        if skip_count > 0 {
+            tracing::warn!(
+                skipped = skip_count,
+                dir = %skills_dir.display(),
+                "reconcile: skipped entries due to errors; their manifest entries will be reaped"
+            );
+        }
 
         // Add missing directories as Local
         for name in &on_disk {
