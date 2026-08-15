@@ -788,6 +788,59 @@ mod tests {
         }
     }
 
+    /// Drift guard for the curated default map: every `ActionType` variant
+    /// must be explicitly named in [`ConfigApprovalPolicy::default`]. An
+    /// unnamed variant falls through to `Ask` (the safe "no policy" default),
+    /// which silently weakens the curated posture if a new variant joins the
+    /// enum without an entry here. The exhaustive list below is the half of
+    /// the guard that catches additions (a new variant fails to compile
+    /// until it joins the list and the default() map in lockstep); the
+    /// membership check on the internal map catches the other half (an
+    /// entry removed from default() silently weakens the posture).
+    #[test]
+    fn curated_default_covers_every_action_type() {
+        let curated = ConfigApprovalPolicy::default();
+        for action in [
+            ActionType::BrowserNavigate,
+            ActionType::BrowserClick,
+            ActionType::BrowserType,
+            ActionType::BrowserFill,
+            ActionType::BrowserEvaluate,
+            ActionType::BrowserOpen,
+            ActionType::BrowserSelect,
+            ActionType::BrowserDialog,
+            ActionType::BrowserPressKey,
+            ActionType::BrowserScroll,
+            ActionType::BrowserHover,
+            ActionType::BrowserDrag,
+            ActionType::BrowserUpload,
+            ActionType::BrowserCookiesWrite,
+            ActionType::BrowserIdentityOverride,
+            ActionType::BrowserSessionState,
+            ActionType::HooksManage,
+            ActionType::DesktopClick,
+            ActionType::DesktopType,
+            ActionType::DesktopKeyCombo,
+            ActionType::DesktopLaunchApp,
+            ActionType::DesktopAutomation,
+            ActionType::PimWrite,
+            ActionType::MediaCapture,
+        ] {
+            // Probe the internal map directly: an omitted variant would
+            // resolve to Ask via `check`'s step 4 (no default) — the same
+            // answer an intentional "ask on sight" entry would give, so
+            // membership is the only signal that catches a removal.
+            assert!(
+                curated.config.defaults.contains_key(&action),
+                "{action:?} is missing from the curated default() map — a new \
+                 ActionType variant joined the enum without an entry here, \
+                 which silently weakens the curated posture (the missing \
+                 variant falls through to Ask, which may differ from the \
+                 posture the operator expected)."
+            );
+        }
+    }
+
     /// Splitting an `ActionType` in two must not loosen a policy file written
     /// against the old name.
     ///
