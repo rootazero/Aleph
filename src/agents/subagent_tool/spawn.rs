@@ -275,6 +275,14 @@ impl SubagentTool {
                 reg.dispatch_on_delegation(&ctx).await;
             }
 
+            // The tracker's single-source classifier, so live + cold-start
+            // lifecycles never diverge. Computed here rather than beside its
+            // `Settled` emit below because the announce gate reads it too, and
+            // the two must not disagree about what "cancelled" means.
+            let tree_lifecycle =
+                crate::agents::background_tracker::lifecycle_from_outcome(&outcome);
+            let cancelled = tree_lifecycle == NodeLifecycle::Cancelled;
+
             // R5 announce: build the completion event before `outcome` moves
             // into the tracker. Broadcast AFTER `mark_completed` so an
             // announce-triggered parent turn already observes the completed
@@ -282,7 +290,19 @@ impl SubagentTool {
             // Skipped when no parent session is wired (CLI / direct callers)
             // — there is no session to announce into. Zero subscribers is
             // safe (library tests).
-            let announce = announce_session_id.map(|sid| {
+            //
+            // Also skipped for a cancelled child, whichever authority fired the
+            // token (user stop / `chat.abort` via `cancel_session`, the busy
+            // lane's Interrupt mode, the model's own `subagent(cancel)`, or
+            // plain run-token propagation): the parent asked for the stop, so
+            // announcing would spend a fresh turn on the session that was just
+            // stopped, telling it to "take any follow-up actions the original
+            // task implies". This is the promise `loop_tool`'s cancel note
+            // already makes to the model ("you asked for it to stop, so its
+            // outcome is not news") held for every producer, not just that one.
+            // Suppression is exact-match only (`lifecycle_from_outcome`): a
+            // timeout or a genuine failure is still news.
+            let announce = announce_session_id.filter(|_| !cancelled).map(|sid| {
                 let (success, summary, error) = match &outcome {
                     CompletedOutcome::Ok { final_text, .. } => (true, final_text.clone(), None),
                     CompletedOutcome::Err(e) => (false, String::new(), Some(e.clone())),
@@ -298,10 +318,7 @@ impl SubagentTool {
                 (sid, result)
             });
             // Phase 1 — emit Settled (typed lifecycle + metrics) before the
-            // outcome moves into the tracker. Reuses the tracker's single-source
-            // classifier so live + cold-start lifecycles never diverge.
-            let tree_lifecycle =
-                crate::agents::background_tracker::lifecycle_from_outcome(&outcome);
+            // outcome moves into the tracker.
             let (settled_iters, settled_tools, settled_tokens) = match &outcome {
                 CompletedOutcome::Ok {
                     iterations,
@@ -346,6 +363,14 @@ impl SubagentTool {
                     ),
                 };
                 crate::agents::background_persistence::record_settled(&rid, label, &final_text);
+                if cancelled {
+                    // Suppressing the announce above is only half of it: a
+                    // `Settled` record nobody was ever told about is exactly
+                    // what the boot reconcile hands back as an undelivered
+                    // completion, so without this stamp the next restart
+                    // announces the child we just decided to stay quiet about.
+                    crate::agents::background_persistence::record_announced(&rid);
+                }
             }
             tracker.mark_completed(&rid, outcome);
             // Terminate the per-call cancel bridge watcher now the child run is

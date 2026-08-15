@@ -481,9 +481,13 @@ struct VirtualFsSandbox {
 impl VirtualFsSandbox {
     /// Create a new `VirtualFs` sandbox
     fn new(tool_name: &str) -> Result<Self> {
-        // Create root sandbox directory with unique name
-        let root_dir = std::env::temp_dir().join(format!(
-            "aleph-virtualfs-{}-{}",
+        // Create root sandbox directory with unique name, under the owner-only
+        // scratch root rather than the bare temp dir: the redirected HOME below
+        // is where the skill writes, and on a shared Linux host `/tmp` is
+        // world-listable, so whatever a skill leaves here would be readable by
+        // every local account until the drop cleanup runs.
+        let root_dir = crate::utils::paths::private_temp_root()?.join(format!(
+            "virtualfs-{}-{}",
             tool_name,
             uuid::Uuid::new_v4()
         ));
@@ -746,5 +750,31 @@ mod tests {
             env_keys.iter().any(|k| k == "no_proxy"),
             "host+network=none contract requires no_proxy env"
         );
+    }
+
+    /// The sandbox tree — including the HOME a skill is pointed at — must sit
+    /// inside the owner-only scratch root. The uuid in the name makes it
+    /// unguessable, not unreadable: under the bare temp dir every local account
+    /// could list and read it once created.
+    #[test]
+    fn virtualfs_sandbox_lives_under_the_private_scratch_root() {
+        let root = crate::utils::paths::private_temp_root().expect("private root resolves");
+        let sandbox = super::VirtualFsSandbox::new("perm-test").expect("sandbox is created");
+
+        for dir in [
+            &sandbox.root_dir,
+            &sandbox.work_dir,
+            &sandbox.home_dir,
+            &sandbox.temp_dir,
+        ] {
+            assert!(
+                dir.starts_with(&root),
+                "{} escaped the private root {}",
+                dir.display(),
+                root.display()
+            );
+            assert!(dir.is_dir(), "{} must exist", dir.display());
+        }
+        // Drop cleans the tree up.
     }
 }

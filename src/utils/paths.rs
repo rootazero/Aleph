@@ -374,6 +374,131 @@ pub fn get_background_processes_dir() -> Result<PathBuf> {
 }
 
 // ============================================================================
+// Private scratch root (shared OS temp dir)
+// ============================================================================
+
+/// The owner-only root for everything Aleph drops in the *shared* system temp
+/// dir: `<temp_dir>/aleph-<uid>` on unix, `<temp_dir>/aleph` elsewhere.
+///
+/// Two consumers today — inbound channel media ([`crate::media::cache`]) and
+/// the `VirtualFs` skill sandbox
+/// ([`crate::tools::markdown_skill::executor`]). Both used to write straight
+/// under `temp_dir()` with the process umask, which on the headless Linux
+/// server (the documented shared-host product form) means `/tmp` at mode 1777
+/// and attachment bytes at 0644: readable by every local account. A fixed name
+/// is worse than readable — it is *pre-creatable*, so another user can own the
+/// tree the model later reads from and substitute what it sees.
+///
+/// The uid in the name only keeps two accounts on one host from colliding; it
+/// is not a secret and does not stop planting. **The ownership check on every
+/// resolution is what makes planting useless**, which is why this refuses
+/// rather than warns: the caller's next act is to write bytes into what it
+/// returns.
+///
+/// The root stays *under* `temp_dir()` on purpose.
+/// `MediaCache::safe_local_media_path` gates outbound `media_send` on exactly
+/// that prefix and must keep accepting both this tree and the native
+/// camera/audio captures that land in the bare temp root — see
+/// `private_temp_root_stays_inside_the_os_temp_dir`.
+///
+/// # Errors
+///
+/// [`std::io::ErrorKind::PermissionDenied`] when the name is taken by anything
+/// other than a directory this process exclusively owns; otherwise whatever
+/// `mkdir`/`lstat` reported.
+pub(crate) fn private_temp_root() -> std::io::Result<PathBuf> {
+    #[cfg(unix)]
+    let name = {
+        // SAFETY: geteuid() always succeeds and returns the effective user ID
+        // of the calling process. It is async-signal-safe.
+        let euid = unsafe { libc::geteuid() };
+        format!("aleph-{euid}")
+    };
+    // Windows `%TEMP%` is already per-user and has no mode bits to set, so the
+    // name keeps its pre-existing spelling and the checks below are a no-op —
+    // the same shape as the vault's unix-gated 0o600 chmod.
+    #[cfg(not(unix))]
+    let name = "aleph".to_string();
+
+    ensure_private_dir(std::env::temp_dir().join(name))
+}
+
+/// Create `dir` owner-only if absent, then verify we exclusively own it.
+///
+/// Split out from [`private_temp_root`] so the refusal arms are testable: a
+/// test cannot chmod the real root without breaking every sibling test that
+/// writes under it.
+fn ensure_private_dir(dir: PathBuf) -> std::io::Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        // `create`, not `create_dir_all`: the parent is temp_dir() and already
+        // exists, and a non-recursive mkdir is the atomic "claim this name at
+        // 0700" the check below then confirms.
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+
+        // `symlink_metadata`, never `metadata`: a symlink planted at this name
+        // would otherwise report its *target's* owner and mode, which is the
+        // one stat an attacker can choose.
+        let meta = std::fs::symlink_metadata(&dir)?;
+        // SAFETY: geteuid() always succeeds and returns the effective user ID
+        // of the calling process. It is async-signal-safe.
+        let euid = unsafe { libc::geteuid() };
+        if let Some(defect) = private_root_defect(&meta, euid) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to use private scratch root {}: {defect}",
+                    dir.display()
+                ),
+            ));
+        }
+        Ok(dir)
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+}
+
+/// Why a pre-existing scratch root must not be used, if it must not be.
+///
+/// Takes the already-`lstat`ed metadata and the caller's euid rather than a
+/// path so the foreign-owner arm is reachable from a test — a test process
+/// cannot `chown` a directory to someone else.
+#[cfg(unix)]
+fn private_root_defect(meta: &std::fs::Metadata, euid: u32) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    if !meta.file_type().is_dir() {
+        return Some(format!(
+            "the name is taken by {} instead",
+            if meta.file_type().is_symlink() {
+                "a symlink"
+            } else {
+                "a file"
+            }
+        ));
+    }
+    let uid = meta.uid();
+    if uid != euid {
+        return Some(format!("owned by uid {uid}, not by this process ({euid})"));
+    }
+    let mode = meta.permissions().mode() & 0o7777;
+    if mode & 0o077 != 0 {
+        return Some(format!("mode {mode:04o} grants group or other access"));
+    }
+    None
+}
+
+// ============================================================================
 // Multi-location Skills Discovery (OpenCode Compatible)
 // ============================================================================
 
@@ -1048,6 +1173,119 @@ mod tests {
              deleted) — remove them from HOME_JOIN_PENDING_FIX so the list keeps \
              meaning what it says:\n  {}",
             stale.join("\n  ")
+        );
+    }
+
+    /// The private root must stay under `temp_dir()`.
+    ///
+    /// Not a style rule: `MediaCache::safe_local_media_path` accepts an
+    /// outbound `media_send` path only if it canonicalizes inside
+    /// `std::env::temp_dir()`, and the cache now writes its attachments here.
+    /// Move this root anywhere else and every cached attachment starts being
+    /// refused on the way out — silently, since the gate's answer is "do not
+    /// attach", not an error.
+    #[test]
+    fn private_temp_root_stays_inside_the_os_temp_dir() {
+        let root = private_temp_root().expect("private scratch root resolves");
+        assert!(
+            root.starts_with(std::env::temp_dir()),
+            "{} escaped {}",
+            root.display(),
+            std::env::temp_dir().display()
+        );
+        assert!(
+            root.is_dir(),
+            "{} must exist as a directory",
+            root.display()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_creates_an_owner_only_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let root = ensure_private_dir(tmp.path().join("aleph-0")).expect("fresh root is created");
+        let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(
+            mode, 0o700,
+            "created root must be owner-only, got {mode:04o}"
+        );
+        // Idempotent: the second resolution finds its own directory and keeps it.
+        assert_eq!(
+            ensure_private_dir(root.clone()).expect("re-resolution succeeds"),
+            root
+        );
+    }
+
+    /// A pre-existing root anyone else can reach is refused, not adopted — the
+    /// name is public, so "it was already there" says nothing about who made
+    /// it. The cases cover group-only and other-only reachability separately: a
+    /// `0o770` root is exactly as readable as a `0o701` one to whoever is on
+    /// the other side of it, and only one of the two looks obviously wrong.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_refuses_a_root_others_can_reach() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for mode in [0o755, 0o770, 0o701] {
+            let tmp = TempDir::new().unwrap();
+            let root = tmp.path().join("aleph-0");
+            std::fs::create_dir(&root).unwrap();
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(mode)).unwrap();
+
+            let err = ensure_private_dir(root)
+                .expect_err("a root others can reach must be refused, not adopted");
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+            assert!(
+                err.to_string().contains("grants group or other access"),
+                "refusal must name the defect, got: {err}"
+            );
+        }
+    }
+
+    /// The stat must be an `lstat`. A symlink planted at the name is the one
+    /// case where following it reports an owner and mode the attacker chose —
+    /// their own 0700 directory passes every other check.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_dir_refuses_a_symlink_planted_at_the_name() {
+        let tmp = TempDir::new().unwrap();
+        let elsewhere = tmp.path().join("attacker-owned");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let root = tmp.path().join("aleph-0");
+        std::os::unix::fs::symlink(&elsewhere, &root).unwrap();
+
+        let err = ensure_private_dir(root).expect_err("a symlink at the name must be refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("symlink"),
+            "refusal must name the defect, got: {err}"
+        );
+    }
+
+    /// The foreign-owner arm, which no test can reach through the filesystem:
+    /// a process cannot `chown` a directory to somebody else. Inject the euid
+    /// instead — that is why the check takes one.
+    #[cfg(unix)]
+    #[test]
+    fn private_root_defect_refuses_a_foreign_owner() {
+        let tmp = TempDir::new().unwrap();
+        let root = ensure_private_dir(tmp.path().join("aleph-0")).unwrap();
+        let meta = std::fs::symlink_metadata(&root).unwrap();
+
+        // SAFETY: geteuid() always succeeds and is async-signal-safe.
+        let euid = unsafe { libc::geteuid() };
+        assert!(
+            private_root_defect(&meta, euid).is_none(),
+            "our own 0700 directory must be accepted"
+        );
+        let defect = private_root_defect(&meta, euid.wrapping_add(1))
+            .expect("a root owned by another uid must be refused");
+        assert!(
+            defect.contains("owned by uid"),
+            "refusal must name the defect, got: {defect}"
         );
     }
 

@@ -347,6 +347,10 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 ---
 
+**第五课：对一个「everything is a plugin」的 harness 做完 10 维对照，落点依旧全在循环之外（2026-08-15，deepseek-harness/Cordis）**。dsh 是与 Aleph 立场相反的极端——模型、工具、会话、循环本身全是可热替换的插件，配 33 份子系统文档 + postmortem 库 + 包自有运行时不变量注册表。10 个维度扫描、13 项对抗验证、11 项实施之后：**`src/harness/` 增删 0 行，第五次**。落点分布再次复读第四课的结论：panic 遏制在工具派发咽喉、取消抑制在 subagent settle、压缩括号在 context 层、终局帧在 clarification、耐久回执在 orchestrator callback、死键扫描在 config/diagnostics、权限纪律在 utils/media/result_store、census 在 gateway 测试域。插件架构本身（及其 capability-seam 三角、invariant registry）被记为 DEFER——**对照的产出从来不是「把参考项目的形状搬来」，而是「它的失效知识在我们的形状里住在哪」**（dsh 的 defensive-patterns 六条里有两条直接换来了本轮的 P2 修复）。逐项见 FEATURE_LOCATOR §3.1 Round 8。
+
+---
+
 ## 9. 参考文献
 
 - 行业原文：`/Volumes/TBU4/Workspace/Agent-Harness.md`（12 模块框架，中文）

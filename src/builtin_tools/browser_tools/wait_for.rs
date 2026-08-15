@@ -208,7 +208,7 @@ impl AlephTool for BrowserWaitForTool {
         // would overflow the polling backend's `Instant + Duration` (panic) and
         // pin a tab indefinitely.
         let timeout_ms = clamp_timeout(args.timeout_ms);
-// A park owes an arm to a mid-loop steer as well as to the cancel
+        // A park owes an arm to a mid-loop steer as well as to the cancel
         // token — for up to `MAX_TIMEOUT_MS` (120 s) this wait *is* the running
         // loop's turn, so the message the user just sent (already written to
         // the session log, already reported as delivered) would sit unread

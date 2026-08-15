@@ -7,6 +7,7 @@ pub mod instance_lock;
 pub mod json_extract;
 pub mod no_window;
 pub mod one_or_many;
+pub(crate) mod panic_payload;
 pub mod path_within;
 pub mod paths;
 pub mod process_alive;

@@ -4,7 +4,7 @@
 //! `SessionManager`; during the migration it reads events from `SessionService`
 //! and projects them into the same shape here.
 
-use crate::session::events::SessionEvent;
+use crate::session::events::{ErrorKind, SessionEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectedRow {
@@ -84,6 +84,19 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
             tool_name: None,
             author_user_id: None,
         }),
+        // A refusal receipt. `system` is what makes it a centred notice rather
+        // than a bubble attributed to somebody — nobody said this, the run did.
+        // The text the user already saw live on the `RunError` frame, so this
+        // discloses nothing new; it only survives the reload.
+        //
+        // The label is matched off `kind`, not prefixed blind: a second kind
+        // must pick its own wording rather than inherit this one's.
+        SessionEvent::Error { kind, message, .. } => {
+            let label = match kind {
+                ErrorKind::Guardrail => "Input blocked",
+            };
+            Some(plain("system", format!("{label}: {message}")))
+        }
         _ => None,
     }
 }
@@ -172,5 +185,23 @@ mod tests {
             at: 3
         })
         .is_none());
+    }
+
+    /// A refusal receipt is user-facing: it becomes a `system` row carrying a
+    /// label the reader can act on, plus the reason verbatim. Without the row
+    /// the durable receipt never reaches `chat.history`, which is the only
+    /// thing a reloading client reads.
+    #[test]
+    fn project_row_labels_a_refusal_receipt_for_the_reader() {
+        let row = project_row(&SessionEvent::Error {
+            turn_id: None,
+            kind: ErrorKind::Guardrail,
+            message: "blocked by pii guardrail".into(),
+            recoverable: false,
+            at: 0,
+        })
+        .expect("a refusal receipt must be visible to the user");
+        assert_eq!(row.role, "system");
+        assert_eq!(row.text, "Input blocked: blocked by pii guardrail");
     }
 }

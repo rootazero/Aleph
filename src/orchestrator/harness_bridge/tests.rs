@@ -225,6 +225,183 @@ fn broadcast_callback_is_silent_when_no_receivers() {
     // No panic = pass.
 }
 
+// -- input-block receipt -------------------------------------------------
+
+use crate::session::events::{ErrorKind, RunOutcome, SessionEventRecord, TurnTrigger};
+
+/// The durable log a guardrail-refused run leaves behind before the receipt:
+/// a user turn, a run that started, and a run that finished `Completed`.
+/// Byte-identical to a clean empty run — which is the whole problem.
+fn blocked_run_log(turn: uuid::Uuid) -> Vec<SessionEventRecord> {
+    let ev = |seq, event| SessionEventRecord {
+        seq,
+        event,
+        created_at_ms: 0,
+    };
+    vec![
+        ev(
+            1,
+            SessionEvent::TurnStarted {
+                turn_id: turn,
+                trigger: TurnTrigger::UserMessage,
+                at: 0,
+            },
+        ),
+        ev(
+            2,
+            SessionEvent::UserMessage {
+                turn_id: turn,
+                content: msg("my card is 4111 1111 1111 1111"),
+                at: 0,
+                synthetic: false,
+                author_user_id: None,
+            },
+        ),
+        ev(
+            3,
+            SessionEvent::RunStarted {
+                run_id: "r1".into(),
+                at: 0,
+                project_root: None,
+            },
+        ),
+        ev(
+            4,
+            SessionEvent::RunFinished {
+                run_id: "r1".into(),
+                outcome: RunOutcome::Completed,
+                at: 0,
+            },
+        ),
+    ]
+}
+
+async fn error_events(
+    service: &std::sync::Arc<dyn SessionService>,
+    sid: &SessionId,
+) -> Vec<SessionEvent> {
+    service
+        .get_events(sid, None, None)
+        .await
+        .expect("read back the log")
+        .into_iter()
+        .map(|r| r.event)
+        .filter(|e| matches!(e, SessionEvent::Error { .. }))
+        .collect()
+}
+
+/// A run that said nothing because its input was refused leaves a receipt in
+/// the SSOT log, filed under the turn whose input was refused.
+///
+/// Without it the reason lives only in the live `SafetyBlock` frame, and every
+/// client that attaches later sees an unanswered user message.
+#[tokio::test]
+async fn a_refused_input_leaves_a_durable_receipt_on_the_run_it_ended() {
+    let service = fresh_service();
+    let sid = SessionKey::ephemeral("blocked-receipt");
+    let turn = uuid::Uuid::new_v4();
+    let log = blocked_run_log(turn);
+    for r in &log {
+        service
+            .emit_event(&sid, r.event.clone())
+            .await
+            .expect("seed the log");
+    }
+
+    super::callback::record_input_block(
+        service.as_ref(),
+        &sid,
+        &log,
+        Some("blocked by pii guardrail"),
+        0,
+    )
+    .await;
+
+    let errors = error_events(&service, &sid).await;
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one receipt, got {errors:?}"
+    );
+    match &errors[0] {
+        SessionEvent::Error {
+            turn_id,
+            kind,
+            message,
+            recoverable,
+            ..
+        } => {
+            assert_eq!(
+                *turn_id,
+                Some(turn),
+                "the receipt must be filed under the refused turn, not floated free"
+            );
+            assert_eq!(*kind, ErrorKind::Guardrail);
+            assert_eq!(message, "blocked by pii guardrail");
+            assert!(
+                !*recoverable,
+                "an input screen is not something the model can retry past"
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+/// `on_safety_block` is overloaded: it also fires for an output sanitize and
+/// for a blocked tool call. Both of those runs necessarily produced assistant
+/// output, and a run that spoke is not the unanswered-message shape this
+/// receipt exists to cure — writing one there would report a refusal to a user
+/// who got an answer.
+#[tokio::test]
+async fn a_run_that_produced_assistant_output_leaves_no_receipt() {
+    let service = fresh_service();
+    let sid = SessionKey::ephemeral("sanitized-run");
+    let log = blocked_run_log(uuid::Uuid::new_v4());
+
+    super::callback::record_input_block(
+        service.as_ref(),
+        &sid,
+        &log,
+        Some("output sanitized by pii"),
+        1,
+    )
+    .await;
+
+    assert!(
+        error_events(&service, &sid).await.is_empty(),
+        "a run with assistant output must not be reported as refused"
+    );
+}
+
+/// The common case: no block at all. Costs one comparison and writes nothing.
+#[tokio::test]
+async fn an_ordinary_run_leaves_no_receipt() {
+    let service = fresh_service();
+    let sid = SessionKey::ephemeral("clean-run");
+    let log = blocked_run_log(uuid::Uuid::new_v4());
+
+    super::callback::record_input_block(service.as_ref(), &sid, &log, None, 0).await;
+
+    assert!(error_events(&service, &sid).await.is_empty());
+}
+
+/// The latch is what carries the reason from the harness callback to the
+/// receipt; the live frame alone cannot, because it is gone on reload.
+///
+/// First-wins: a later cosmetic sanitize notice must not overwrite the reason a
+/// run actually stopped for.
+#[test]
+fn the_callback_latches_the_first_safety_block_reason() {
+    let (tx, _rx) = broadcast::channel::<FlowStreamEvent>(16);
+    let mut cb = super::callback::BroadcastCallback::new(tx, 200_000);
+    assert_eq!(cb.blocked_reason(), None, "a fresh run has latched nothing");
+
+    cb.on_safety_block("blocked by pii guardrail");
+    cb.on_safety_block("output sanitized by secrets");
+
+    assert_eq!(cb.blocked_reason(), Some("blocked by pii guardrail"));
+}
+
 // -- seed_session tests --------------------------------------------------
 
 use crate::session::in_process::InProcessActorSessionService;

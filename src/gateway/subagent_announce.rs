@@ -8,72 +8,57 @@
 //! `subagent.task_completed` announce flow).
 //!
 //! This module is the consuming half of the wire: `subagent_tool::spawn`
-//! broadcasts [`AlephEvent::SubAgentCompleted`] on the [`GlobalBus`] (scope =
+//! broadcasts [`AlephEvent::SubAgentCompleted`] on the `GlobalBus` (scope =
 //! parent session key), and the subscriber here drives ONE proactive turn on
-//! the parent session via the [`ExecutionAdapter`]:
+//! the parent session.
 //!
-//! - parent idle → a fresh run processes the result and reports to the user
-//!   (the reply fans out to the session's origin channel, mirroring
-//!   `handlers::agent`'s `OriginFanout` wiring);
-//! - parent mid-run → `ExecutionEngine::execute`'s busy-input path injects the
-//!   notice as steering, so the live run absorbs it at the next turn boundary
-//!   (no extra run is spawned);
-//! - parent busy elsewhere → bounded retries, then the result simply remains
-//!   poll-able via the subagent tool (the pre-announce behaviour).
-//!
-//! No reasoning happens here (R10): the harness only delivers the event; what
-//! to do with the result is decided by the parent agent's own turn.
+//! The ladder that turns "an event arrived" into "the parent saw it" — dedup,
+//! session resolution, idle→fresh-run / busy→steering, bounded retries — now
+//! lives in [`super::announce_delivery`], shared with the background `bash`
+//! announcer, which closes the identical R5 gap for the other kind of work that
+//! outlives its run. What stays here is what is actually about sub-agents: the
+//! event shape, the notice, and what "the parent already knows" means for the
+//! tracker and its durable sidecar.
 
-use std::collections::HashMap;
-
-use tracing::{debug, info, warn};
-
-use crate::event::{AlephEvent, EventFilter, EventType, GlobalBus, GlobalEvent};
+use crate::event::{AlephEvent, EventType, GlobalEvent};
 use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::announce_delivery::{self, Announcement};
 use crate::gateway::event_bus::GatewayEventBus;
-use crate::gateway::event_emitter::{EventEmitter, GatewayEventEmitter};
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use crate::gateway::execution_engine::{ExecutionError, RunRequest};
-use crate::routing::session_key::SessionKey;
 use crate::sync_primitives::Arc;
 
-/// Busy-retry schedule (seconds before each attempt). The first attempt is
-/// immediate; later ones give a busy parent time to free its run slot.
-const RETRY_DELAYS_SECS: [u64; 3] = [0, 30, 120];
+/// Where a sub-agent result remains reachable when the announce is skipped or
+/// gives up. Named in every such log line: "we gave up" without "and here is
+/// where it still is" reads as a lost result.
+const FALLBACK: &str = "result remains available via the subagent tool's list action";
 
 /// Subscribe to `SubAgentCompleted` global events and announce each completed
-/// background subagent into its parent session. Registration mirrors the
-/// `TeamNotifier` pattern in `aleph-server` startup.
+/// background subagent into its parent session.
 ///
-/// Registration is **awaited**, not spawned: boot broadcasts a
-/// `SubAgentCompleted` of its own right after this call (the restart-orphan
-/// notice from `agents::background_persistence`), and a subscriber that is
-/// merely *scheduled* is a subscriber that is not listening yet. §9 — "a
-/// mechanism that builds state from an event stream must reconcile *after*
-/// subscribing"; the reconciliation is only after this if the subscription has
-/// actually landed.
+/// Registration is **awaited**, not spawned — see
+/// [`announce_delivery::subscribe`], which owns that invariant for both
+/// announcers. Boot broadcasts a `SubAgentCompleted` of its own right after
+/// this call (the restart-orphan notice from `agents::background_persistence`),
+/// and a subscriber that is merely *scheduled* is a subscriber that is not
+/// listening yet.
 pub async fn spawn_subagent_announce(
     adapter: Arc<dyn ExecutionAdapter>,
     registry: Arc<AgentRegistry>,
     event_bus: Arc<GatewayEventBus>,
 ) {
-    // The returned id is a handle, not a guard: dropping it does not
-    // unsubscribe (see `GlobalBus::unsubscribe`), so this subscription lives
-    // for the process.
-    let _sub = GlobalBus::global()
-        .subscribe_async(
-            EventFilter::new(vec![EventType::SubAgentCompleted]),
-            move |global_event| {
-                let adapter = adapter.clone();
-                let registry = registry.clone();
-                let event_bus = event_bus.clone();
-                tokio::spawn(async move {
-                    announce_one(adapter, registry, event_bus, global_event).await;
-                });
-            },
-        )
-        .await;
-    info!("Subagent announce subscriber registered (SubAgentCompleted → parent session)");
+    announce_delivery::subscribe(
+        EventType::SubAgentCompleted,
+        "subagent",
+        move |global_event| {
+            let adapter = adapter.clone();
+            let registry = registry.clone();
+            let event_bus = event_bus.clone();
+            tokio::spawn(async move {
+                announce_one(adapter, registry, event_bus, global_event).await;
+            });
+        },
+    )
+    .await;
 }
 
 /// Deliver one completion into the parent session.
@@ -94,39 +79,6 @@ async fn announce_one(
         .request_id
         .clone()
         .unwrap_or_else(|| result.child_session_id.clone());
-
-    // Dedup with the on-demand paths: if the parent already saw this result via
-    // a `wait` or a `check_status` tool call, skip the proactive announce rather
-    // than spending a fresh parent turn re-delivering what the model has already
-    // folded in. Pure data check against the process-global tracker (the same
-    // instance the spawn/wait paths use) — no reasoning, R7/R10 clean.
-    if crate::agents::background_tracker::BackgroundAgentTracker::global().is_consumed(&request_id)
-    {
-        debug!(
-            request_id = %request_id,
-            "subagent announce: result already consumed on-demand; skipping proactive delivery"
-        );
-        return;
-    }
-
-    let Some(session_key) = SessionKey::from_key_string(&global_event.source_session_id) else {
-        debug!(
-            session = %global_event.source_session_id,
-            request_id = %request_id,
-            "subagent announce: parent session key not parseable; result stays poll-only"
-        );
-        return;
-    };
-
-    let agent_id = session_key.agent_id().to_string();
-    let Some(agent) = registry.get(&agent_id).await else {
-        warn!(
-            agent_id = %agent_id,
-            request_id = %request_id,
-            "subagent announce: parent agent not registered; result stays poll-only"
-        );
-        return;
-    };
 
     let status = if result.success {
         "succeeded"
@@ -160,102 +112,40 @@ async fn announce_one(
          request_id='{request_id}' if you need the full output.",
     );
 
-    // Mirror handlers::agent — Panel stream as base, fan the final reply out
-    // to the session's origin channel when one is bound.
-    let base: Arc<dyn EventEmitter + Send + Sync> =
-        Arc::new(GatewayEventEmitter::new(event_bus.clone()));
-    let emitter: Arc<dyn EventEmitter + Send + Sync> = match (
-        agent.origin_route(&session_key).await,
-        crate::gateway::event_emitter::origin_fanout::channel_registry(),
-    ) {
-        (Some((origin_channel, origin_conversation)), Some(channel_registry)) => Arc::new(
-            crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
-                base,
-                channel_registry,
-                origin_channel,
-                origin_conversation,
-            ),
-        ),
-        _ => base,
-    };
+    // Dedup with the on-demand paths: a result the parent already saw via a
+    // `wait` or a `check_status` must not cost a fresh turn. Read against the
+    // process-global tracker — the same instance the spawn/wait paths use — and
+    // re-read by the ladder before every retry, because the reason a parent is
+    // busy is very often that it is parked in the `wait` that consumes this
+    // exact result.
+    let dedup_id = request_id.clone();
+    let stamp_id = request_id.clone();
 
-    let mut metadata = HashMap::new();
-    metadata.insert("subagent_announce".to_string(), request_id.clone());
-
-    for delay_secs in RETRY_DELAYS_SECS {
-        if delay_secs > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-            // Re-check the dedup guard after every wait, not just once up front.
-            // The retry schedule spans over two minutes, and the reason the
-            // parent is busy is very often that it is parked in the subagent
-            // tool's own `wait` — which returns this exact result and marks it
-            // consumed. Checking only before the loop meant the announce woke
-            // up minutes later and spent a fresh parent turn re-delivering
-            // something the model had already folded in.
-            if crate::agents::background_tracker::BackgroundAgentTracker::global()
-                .is_consumed(&request_id)
-            {
-                debug!(
-                    request_id = %request_id,
-                    "subagent announce: result consumed while waiting to retry; skipping delivery"
-                );
-                return;
-            }
-        }
-
-        let request = RunRequest {
-            run_id: uuid::Uuid::new_v4().to_string(),
-            input: input.clone(),
-            session_key: session_key.clone(),
-            timeout_secs: None,
-            metadata: metadata.clone(),
-            attachments: Vec::new(),
-            pending_media: crate::gateway::media::PendingMedia::default(),
-            sandbox_override: None,
-            workspace_override: None,
-            max_iterations_override: None,
-            model_override: None,
-        };
-
-        match adapter
-            .execute(request, agent.clone(), emitter.clone())
-            .await
-        {
-            // Ok covers both "fresh announce run completed" and "absorbed by
-            // the live run as steering" — either way the parent saw it.
-            Ok(()) => {
+    announce_delivery::deliver(
+        adapter,
+        registry,
+        event_bus,
+        Announcement {
+            key: request_id,
+            metadata_key: "subagent_announce",
+            session_id: global_event.source_session_id.clone(),
+            input,
+            kind: "subagent",
+            fallback: FALLBACK,
+            already_delivered: Box::new(move || {
+                crate::agents::background_tracker::BackgroundAgentTracker::global()
+                    .is_consumed(&dedup_id)
+            }),
+            on_delivered: Box::new(move || {
                 // Durable "the parent knows". Without this stamp, a restart
-                // inside this retry ladder leaves a `Settled` sidecar record
+                // inside the retry ladder leaves a `Settled` sidecar record
                 // that the boot reconcile skips, and the announcement promised
                 // at spawn time is withdrawn in silence.
-                crate::agents::background_persistence::record_announced(&request_id);
-                debug!(
-                    request_id = %request_id,
-                    session = %global_event.source_session_id,
-                    "subagent announce delivered to parent session"
-                );
-                return;
-            }
-            Err(ExecutionError::AgentBusy(_)) => {
-                continue;
-            }
-            Err(e) => {
-                warn!(
-                    request_id = %request_id,
-                    session = %global_event.source_session_id,
-                    error = %e,
-                    "subagent announce run failed; result remains available via the subagent tool's list action"
-                );
-                return;
-            }
-        }
-    }
-
-    warn!(
-        request_id = %request_id,
-        session = %global_event.source_session_id,
-        "subagent announce: parent stayed busy through all retries; result remains available via the subagent tool's list action"
-    );
+                crate::agents::background_persistence::record_announced(&stamp_id);
+            }),
+        },
+    )
+    .await;
 }
 
 #[cfg(test)]

@@ -15,14 +15,6 @@ pub enum TurnTrigger {
     Wake,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TurnOutcome {
-    Completed,
-    Cancelled,
-    Errored { kind: ErrorKind },
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// Who authorized a gated tool call.
@@ -39,15 +31,21 @@ pub enum ApprovalSource {
     Trusted,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// What kind of failure a [`SessionEvent::Error`] receipt records.
+///
+/// Deliberately NOT open vocabulary. `Llm`, `Tool`, `Sandbox`, `Harness`,
+/// `Serialization` and `Other` were removed for the same reason
+/// [`ApprovalSource::Autoconfirm`] was: nothing constructed them, so no stored
+/// event could carry one and nothing could ever read one back. The next kind
+/// arrives in the same commit as the producer that emits it — a variant is a
+/// claim about what the log can contain, and an unproduced one is false.
 pub enum ErrorKind {
-    Llm,
-    Tool,
-    Sandbox,
-    Harness,
-    Serialization,
-    Other,
+    /// A guardrail refused the run's input. Produced by
+    /// [`crate::orchestrator::harness_bridge`] when a run finishes having
+    /// screened its input and said nothing.
+    Guardrail,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -182,17 +180,17 @@ pub enum SessionEvent {
         at: Timestamp,
     },
 
+    /// A turn opened. There is deliberately no closing `TurnEnded` marker: a
+    /// turn ends when the next one opens or when the run does, and the crash
+    /// boundary is read off the `RunStarted`/`RunFinished` pair instead
+    /// ([`crate::gateway::resume_coordinator::classify_markers`]). A
+    /// `TurnEnded` variant existed here for a long time with no producer, so
+    /// every turn matched "crashed mid-turn" and nothing could use it.
     TurnStarted {
         turn_id: TurnId,
         trigger: TurnTrigger,
         at: Timestamp,
     },
-    TurnEnded {
-        turn_id: TurnId,
-        outcome: TurnOutcome,
-        at: Timestamp,
-    },
-
     UserMessage {
         turn_id: TurnId,
         content: MessageContent,
@@ -350,6 +348,16 @@ pub enum SessionEvent {
         at: Timestamp,
     },
 
+    /// A durable receipt for a failure that produced no other trace.
+    ///
+    /// Its one producer is the input-guardrail block receipt in
+    /// [`crate::orchestrator::harness_bridge`]: a screened-out input ends the
+    /// run `Ok`, so without this the log reads as a clean empty run and every
+    /// re-attaching client (reload, second tab, room peer) sees an unanswered
+    /// user message. Projected to a `system` row by
+    /// [`crate::session::projection::project_row`] so `chat.history` serves it;
+    /// NOT prompt-bearing — the model must not be told its own refusal was
+    /// something it said.
     Error {
         turn_id: Option<TurnId>,
         kind: ErrorKind,

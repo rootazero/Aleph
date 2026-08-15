@@ -966,6 +966,20 @@ impl HarnessRunner for AgentHarnessRunner {
             }
         }
 
+        // Durable receipt for a run whose input a guardrail refused. Placed
+        // here rather than beside `RunFinished` above because the discriminator
+        // IS the run-scoped assistant count — known only once the log has been
+        // read, a read this path already performs, and only on the `Ok` branch
+        // where the receipt can apply at all.
+        callback::record_input_block(
+            self.session_service.as_ref(),
+            &session_id,
+            &records,
+            cb.blocked_reason(),
+            iterations,
+        )
+        .await;
+
         // `total_tokens` and `hit_limit` are read straight off the harness
         // after the run: the harness retains the cumulative token counter
         // and the budget-sensor flag. `total_tokens` saturates into the

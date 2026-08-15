@@ -27,6 +27,7 @@ pub mod link;
 pub mod transport;
 
 pub mod admin_api;
+pub mod announce_delivery;
 pub mod credential_planner;
 pub mod event_bus;
 pub mod event_emitter;
@@ -39,6 +40,7 @@ pub mod middleware;
 pub mod model_override;
 pub mod origin_policy;
 pub mod orphan_notice;
+pub mod process_announce;
 pub mod protocol;
 pub mod pty;
 pub mod router;
@@ -193,6 +195,10 @@ pub use webhooks::{
     create_router as create_webhook_router, SignatureFormat, WebhookEndpointConfig, WebhookError,
     WebhookHandlerState, WebhookProcessor, WebhookRequest, WebhooksConfig,
 };
+
+// Shared scanners for the source-level census pins in this directory.
+#[cfg(test)]
+mod source_census;
 
 // Property-based tests
 #[cfg(test)]

@@ -501,13 +501,17 @@ pub fn record_settled(request_id: &str, outcome: &str, final_text: &str) {
     write_state(&dir, &record);
 }
 
-/// Mark that the parent has been told about this run's completion.
+/// Mark that this run's completion is accounted for and must not be
+/// re-delivered by a later process.
 ///
-/// Called from the two chokepoints that already own that fact: the announce
-/// path's success arm, and the tracker's `mark_consumed` (the shared "the
-/// parent accounted for this" gate behind `check_status` / `wait` / `cancel`).
-/// Without it, `phase == Settled` cannot distinguish "delivered" from "the
-/// notification died with the process" — see [`PersistedRun::announced`].
+/// Called from the three chokepoints that own that fact: the announce path's
+/// success arm, the tracker's `mark_consumed` (the shared "the parent accounted
+/// for this" gate behind `check_status` / `wait` / `cancel`), and
+/// `subagent_tool::spawn`'s settle task when it suppresses the announce for a
+/// cancelled child — a completion nobody will ever be told about is
+/// indistinguishable on disk from one whose notice died in flight, and the boot
+/// reconcile would deliver it. Without this stamp, `phase == Settled` cannot
+/// tell those apart — see [`PersistedRun::announced`].
 pub fn record_announced(request_id: &str) {
     let Some(dir) = store_dir() else { return };
     let record = {

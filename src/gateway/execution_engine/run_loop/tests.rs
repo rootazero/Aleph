@@ -340,9 +340,9 @@ const RUN_REQUEST_PRODUCERS: &[(&str, &str, &str)] = &[
         "admin-gated org-level engine; carries no owner_user_id at all",
     ),
     (
-        "src/gateway/subagent_announce.rs",
+        "src/gateway/announce_delivery.rs",
         "unattributed",
-        "announcement run derived from a completed child, not from a caller",
+        "the shared announce ladder (background sub-agents and background bash jobs); an announcement run is derived from a completed unit, not from a caller — the classification `subagent_announce.rs` carried before the ladder was extracted",
     ),
     (
         "src/gateway/openai_api/completions/agent.rs",
