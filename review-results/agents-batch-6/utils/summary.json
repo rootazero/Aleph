@@ -1,0 +1,124 @@
+{
+  "batch": "agents-batch-6",
+  "module": "src/utils",
+  "title": "src/utils severed-wire audit — 7 findings (6 CUT dead scaffolding, 1 DECIDE design divergence)",
+  "date": "2026-08-16",
+  "reviewer": "static (severed-wire-audit skill)",
+  "counts": {
+    "critical": 0,
+    "high": 1,
+    "medium": 4,
+    "low": 2,
+    "total": 7
+  },
+  "by_category": {
+    "security": 0,
+    "logic": 0,
+    "architecture": 1,
+    "quality": 6
+  },
+  "by_decision": {
+    "CONNECT": 0,
+    "CUT": 6,
+    "DECIDE": 1
+  },
+  "files_reviewed": [
+    { "path": "src/utils/atomic_io.rs", "loc": 138, "findings": 1 },
+    { "path": "src/utils/atomic_write.rs", "loc": 154, "findings": 0 },
+    { "path": "src/utils/fifo_cache.rs", "loc": 66, "findings": 0 },
+    { "path": "src/utils/filename.rs", "loc": 136, "findings": 0 },
+    { "path": "src/utils/instance_lock.rs", "loc": 272, "findings": 1 },
+    { "path": "src/utils/json_extract.rs", "loc": 381, "findings": 0 },
+    { "path": "src/utils/mod.rs", "loc": 20, "findings": 0 },
+    { "path": "src/utils/no_window.rs", "loc": 51, "findings": 0 },
+    { "path": "src/utils/one_or_many.rs", "loc": 148, "findings": 1 },
+    { "path": "src/utils/panic_payload.rs", "loc": 66, "findings": 0 },
+    { "path": "src/utils/path_within.rs", "loc": 58, "findings": 0 },
+    { "path": "src/utils/paths.rs", "loc": 1594, "findings": 2 },
+    { "path": "src/utils/process_alive.rs", "loc": 146, "findings": 0 },
+    { "path": "src/utils/scratch.rs", "loc": 290, "findings": 0 },
+    { "path": "src/utils/sqlite_open.rs", "loc": 93, "findings": 0 },
+    { "path": "src/utils/text_format.rs", "loc": 270, "findings": 2 },
+    { "path": "src/utils/vault_io.rs", "loc": 88, "findings": 0 }
+  ],
+  "total_loc": 3971,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "high",
+      "category": "quality",
+      "file": "src/utils/one_or_many.rs",
+      "line": 10,
+      "title": "OneOrMany / OneOrManyIter module is dead scaffolding — zero consumers repo-wide",
+      "related": ["src/utils/mod.rs:20"],
+      "decision": "CUT",
+      "rationale": "A whole-workspace grep (all *.rs across src/, interfaces/, desktop/, shared/, tests/) finds `OneOrMany` and `OneOrManyIter` referenced ONLY inside one_or_many.rs itself (definition + unit tests) and the `pub use one_or_many::OneOrMany;` re-export in mod.rs. No config field, no handler, no caller. The module header claims it 'replaces rig::OneOrMany to remove the rig-core dependency', but the rig dependency was removed without migrating any consumer onto this replacement — the type was left orphaned. Full module (148 lines incl. serde untagged Deserialize, Default, From, iter, len, first, and the iterator type) plus the mod.rs re-export are dead weight that must be maintained, tested and kept API-compatible for no consumer. Delete the file, its tests, and the re-export. Not re-exported at crate root (grep found no lib.rs reference), so no public-API break beyond the module path."
+    },
+    {
+      "id": 2,
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/utils/text_format.rs",
+      "line": 9,
+      "title": "format_timestamp has zero callers",
+      "related": [],
+      "decision": "CUT",
+      "rationale": "Whole-workspace grep for `format_timestamp` finds only the definition. The `format_timestamp` / `format_timestamp_secs` / `format_timestamp_ms` symbols in interfaces/webchat are LOCAL private helpers (cron/helpers.rs, tasks.rs, teams/replay.rs, api/memory.rs) and are unrelated to this function. No caller, no test exercises it. Dead public helper — delete it. (The five truncate_* helpers in the same file are all live and are NOT part of this finding.)"
+    },
+    {
+      "id": 3,
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/utils/text_format.rs",
+      "line": 125,
+      "title": "escape_markdown has zero callers outside its own tests",
+      "related": [],
+      "decision": "CUT",
+      "rationale": "Whole-workspace grep for `escape_markdown` finds only the definition and its two unit tests (test_escape_markdown, test_escape_markdown_preserves_nul). No production caller escaped any markdown through this helper — every prompt/telegram path in the tree uses its own inline escaping or none. A well-tested function nobody calls is scaffolding, not a severed feature. Delete the function and its tests."
+    },
+    {
+      "id": 4,
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/utils/paths.rs",
+      "line": 242,
+      "title": "get_memory_db_path has zero callers",
+      "related": [],
+      "decision": "CUT",
+      "rationale": "Whole-workspace grep for `get_memory_db_path` finds only the definition. The memory subsystem resolves its directory through `get_note_memory_dir()` (many live callers) and the SQLite stores open via `utils::sqlite_open::open_sqlite_safe` on explicit paths; nothing reads `<config_dir>/memory/` through this helper. It is a side-effecting resolver (create_dir_all) with no reader — delete it."
+    },
+    {
+      "id": 5,
+      "severity": "medium",
+      "category": "quality",
+      "file": "src/utils/paths.rs",
+      "line": 257,
+      "title": "get_skills_dir_string is dead — its UniFFI consumer was removed",
+      "related": ["src/lib.rs:247"],
+      "decision": "CUT",
+      "rationale": "Documented 'for UniFFI export', but UniFFI was removed from the project (Cargo.toml:105 'UniFFI removed - using Gateway WebSocket architecture', no .udl files, no uniffi dependency). Whole-workspace grep finds `get_skills_dir_string` only at its definition and in the crate-root re-export `pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};` (lib.rs:247). No caller anywhere. `get_skills_dir` in the same re-export IS live, so the fix is to drop `get_skills_dir_string` from both the function and the re-export list, not the whole line."
+    },
+    {
+      "id": 6,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/utils/instance_lock.rs",
+      "line": 38,
+      "title": "InstanceLock::lock_path / holder_pid / into_file are unused public methods",
+      "related": ["src/utils/instance_lock.rs:42", "src/utils/instance_lock.rs:49"],
+      "decision": "CUT",
+      "rationale": "Grep for `.lock_path(`, `.holder_pid(`, `.into_file(` finds no caller anywhere in the workspace. `rewrite_holder_pid` (line 62) IS live (bin/aleph-server/main.rs:212, the daemonize path) and it writes `holder_pid` internally, but no one ever reads `holder_pid()` back; `lock_path()` and `into_file()` (an escape hatch returning the raw File) are likewise never called. They are speculative public API that must be kept compiling but serve no consumer. Delete the three methods; keep `rewrite_holder_pid` and the internal `holder_pid` field."
+    },
+    {
+      "id": 7,
+      "severity": "low",
+      "category": "architecture",
+      "file": "src/utils/atomic_io.rs",
+      "line": 21,
+      "title": "Two atomic-write primitives with divergent semantics (write_atomic vs atomic_write_file)",
+      "related": ["src/utils/atomic_write.rs:27"],
+      "decision": "DECIDE",
+      "rationale": "Not a severed wire (both `atomic_io::write_atomic` and `atomic_write::atomic_write_file` have many live callers), but a design smell worth surfacing per the repo's 'flag design smells' rule. The two implement the same concept (same-dir temp + fsync + rename) with a real semantic divergence: `atomic_write::atomic_write_file` preserves the destination's existing permission bits before rename (with a comment and test guarding the executable-bit case), while the sync `atomic_io::write_atomic` does not — an overwrite through it silently strips an existing file's mode (e.g. drops the exec bit from a 0755 script). Today no `write_atomic` caller targets an executable file (vault sidecars, JSON stores, pid files — all data), so it is latent, not a live bug. Decision is whether to (a) add permission preservation to `write_atomic` for parity, (b) document the divergence, or (c) consolidate the sync/async pair — a product/architecture call, not a mechanical fix."
+    }
+  ]
+}

@@ -13,10 +13,6 @@ use tokio::sync::RwLock as TokioRwLock;
 
 /// Configuration for memory context retrieval.
 pub struct MemoryContextConfig {
-    /// Maximum number of facts to retrieve.
-    pub max_facts: usize,
-    /// Minimum cosine similarity threshold.
-    pub similarity_threshold: f32,
     /// Maximum characters for the formatted output.
     pub max_output_chars: usize,
 }
@@ -24,8 +20,6 @@ pub struct MemoryContextConfig {
 impl Default for MemoryContextConfig {
     fn default() -> Self {
         Self {
-            max_facts: 5,
-            similarity_threshold: 0.3,
             max_output_chars: 8000, // ~2000 tokens
         }
     }

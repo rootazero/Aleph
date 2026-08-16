@@ -205,23 +205,15 @@ impl AlephTool for AgentDeleteTool {
                     }
                 }
 
-                // Also archive agent state directory (~/.aleph/agents/{id}/).
-                // Resolved via `discovery::aleph_home_dir()` for the same reason
-                // `create` does — `ALEPH_HOME` override parity.
-                let Some(home) = crate::discovery::aleph_home_dir().ok() else {
-                    warn!(
-                        agent_id = %args.agent_id,
-                        "Cannot determine home directory, skipping agent state archive"
-                    );
-                    return Ok(AgentDeleteOutput {
-                        deleted,
-                        message: format!(
-                            "Agent '{}' deleted but agent state could not be archived (no home directory).",
-                            args.agent_id
-                        ),
-                    });
-                };
-                let agent_state_dir = home.join("agents").join(&args.agent_id);
+                // Also archive the agent state directory. It must be resolved
+                // by the *same* function `create` provisions with: an archive
+                // that looks somewhere else finds nothing, skips silently, and
+                // still reports the agent deleted — leaving the real directory
+                // behind for the next agent of that id to inherit.
+                let agent_state_dir =
+                    crate::config::agent_manager::provisioning_roots(self.agent_manager.as_deref())
+                        .agents
+                        .join(&args.agent_id);
                 if agent_state_dir.exists() {
                     let archived_state = agent_state_dir.with_extension("archived");
                     if let Err(e) = tokio::fs::rename(&agent_state_dir, &archived_state).await {

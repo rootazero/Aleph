@@ -139,7 +139,7 @@ pub use crate::error::{AlephError, AlephException, Result};
 // Configuration (main entry points and commonly used types)
 pub use crate::config::{
     agent_manager::AgentManager,
-    agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
+    agent_resolver::{agents_root_for, workspace_root_for, AgentDefinitionResolver, ResolvedAgent},
     backup::ConfigBackup,
     guides::deploy_guides,
     patcher::ConfigPatcher,
@@ -178,7 +178,7 @@ pub use crate::thinker::{
 // =============================================================================
 
 // Unified tool traits
-pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer, AlephToolServerHandle};
+pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer};
 
 // Tool Metadata (registry)
 pub use crate::tool_metadata::{
@@ -244,7 +244,7 @@ pub use crate::providers::AiProvider;
 // =============================================================================
 
 pub use crate::metrics::StageTimer;
-pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
+pub use crate::utils::paths::get_skills_dir;
 
 // Event handler types (for backward compatibility)
 pub use crate::event_handler::{ErrorType, McpServerError, McpStartupReport, ProcessingState};

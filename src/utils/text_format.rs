@@ -2,17 +2,6 @@
 //!
 //! Common functions used by prompt assemblers across the codebase.
 
-use chrono::{DateTime, Utc};
-
-/// Format a Unix timestamp as a human-readable UTC string
-#[must_use]
-pub fn format_timestamp(timestamp: i64) -> String {
-    DateTime::<Utc>::from_timestamp(timestamp, 0).map_or_else(
-        || "Unknown".to_string(),
-        |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-    )
-}
-
 /// Truncate to at most `max_chars` CHARACTERS, appending `...` when cut.
 ///
 /// Soft cap: the result may be up to `max_chars + 3` chars, because the marker
@@ -119,23 +108,6 @@ pub fn truncate_bytes(text: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &text[..end]
-}
-
-#[must_use]
-pub fn escape_markdown(text: &str) -> String {
-    // Prefix each Markdown metacharacter with a backslash. A previous
-    // implementation used '\0' as a "no-prefix" sentinel and filtered it
-    // out afterwards, which silently dropped any literal NUL present in the
-    // input. Pushing directly avoids the sentinel collision and preserves
-    // every input character verbatim.
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if matches!(c, '[' | ']' | '(' | ')' | '*' | '_' | '`' | '\\') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 #[cfg(test)]
@@ -248,23 +220,5 @@ mod tests {
         assert!(!truncate_text(text, 8).ends_with("..."));
         // Exactly at the limit is still "under" — no ellipsis.
         assert_eq!(truncate_text(text, 4), text);
-    }
-
-    #[test]
-    fn test_escape_markdown() {
-        let text = "[link](url) *bold* _italic_";
-        let result = escape_markdown(text);
-        assert!(!result.contains("[link]"));
-        assert!(result.contains("\\["));
-        assert!(result.contains("\\*"));
-    }
-
-    #[test]
-    fn test_escape_markdown_preserves_nul() {
-        // A literal NUL must survive escaping (it was previously dropped by a
-        // '\0' sentinel used to mark "no backslash needed").
-        let text = "a\0b*c";
-        let result = escape_markdown(text);
-        assert_eq!(result, "a\0b\\*c");
     }
 }

@@ -17,7 +17,7 @@ use crate::tool_metadata::ToolHealthCache;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
 
-use super::traits::{ToolDefinitionRewriter, ToolHookDecorator};
+use super::traits::ToolDefinitionRewriter;
 use super::ScopedToolService;
 
 impl ScopedToolService {
@@ -30,7 +30,6 @@ impl ScopedToolService {
             inner,
             allowed,
             subagent_tool: None,
-            hook_decorator: None,
             hook_executor: None,
             hook_session_id: String::new(),
             approval_requester: None,
@@ -181,12 +180,6 @@ impl ScopedToolService {
     /// Attach a `SubagentTool` that will appear in listings and can be executed.
     pub fn with_subagent_tool(mut self, tool: Arc<SubagentTool>) -> Self {
         self.subagent_tool = Some(tool);
-        self
-    }
-
-    /// Attach a hook decorator for observing tool execution.
-    pub fn with_hook_decorator(mut self, hook: Arc<dyn ToolHookDecorator>) -> Self {
-        self.hook_decorator = Some(hook);
         self
     }
 

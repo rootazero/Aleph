@@ -264,8 +264,8 @@ impl ConfigApprovalPolicy {
 
     /// Return the expected path for the configuration file.
     fn config_path() -> PathBuf {
-        dirs::home_dir().map_or_else(
-            || {
+        crate::utils::paths::get_config_dir().map_or_else(
+            |_| {
                 warn!(
                     "Cannot determine home directory; approval policy will use current dir fallback"
                 );
@@ -274,7 +274,7 @@ impl ConfigApprovalPolicy {
                     .join(".aleph")
                     .join("approval-policy.json")
             },
-            |home| home.join(".aleph").join("approval-policy.json"),
+            |home| home.join("approval-policy.json"),
         )
     }
 

@@ -391,15 +391,13 @@ impl BuiltinToolRegistry {
         // Note management tool — unified CRUD for all note categories
         let note_manage_tool = if let Some(ref db) = config.memory_db {
             let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                dirs::home_dir().map_or_else(
-                    || {
-                        std::env::temp_dir()
-                            .join("aleph")
-                            .join("memory")
-                            .join("note")
-                    },
-                    |p| p.join(".aleph").join("memory").join("note"),
-                )
+                // See the twin in `constructor/mod.rs`: the home branch was
+                // either identical to the path that just failed, or wrong
+                // because it ignored `ALEPH_HOME`.
+                std::env::temp_dir()
+                    .join("aleph")
+                    .join("memory")
+                    .join("note")
             });
             let mut tool =
                 crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone())

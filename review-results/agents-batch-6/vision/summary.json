@@ -1,0 +1,84 @@
+{
+  "batch": "agents-batch-6",
+  "module": "src/vision",
+  "title": "Severed-wire audit: src/vision (producer/consumer seam parity)",
+  "date": "2026-08-16",
+  "reviewer": "static (severed-wire-audit skill)",
+  "counts": { "critical": 0, "high": 1, "medium": 0, "low": 4, "total": 5 },
+  "by_category": { "security": 0, "logic": 0, "architecture": 1, "quality": 4 },
+  "by_decision": { "CONNECT": 1, "CUT": 4, "DECIDE": 0 },
+  "files_reviewed": [
+    { "path": "src/vision/mod.rs", "loc": 504, "findings": 1 },
+    { "path": "src/vision/error.rs", "loc": 26, "findings": 1 },
+    { "path": "src/vision/provider.rs", "loc": 32, "findings": 0 },
+    { "path": "src/vision/providers/mod.rs", "loc": 7, "findings": 0 },
+    { "path": "src/vision/providers/platform_ocr.rs", "loc": 265, "findings": 1 },
+    { "path": "src/vision/types.rs", "loc": 204, "findings": 2 }
+  ],
+  "total_loc": 1038,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "high",
+      "category": "architecture",
+      "file": "src/vision/providers/platform_ocr.rs",
+      "line": 65,
+      "title": "PlatformOcrProvider (VisionPipeline) is wired to the screenshot bridge but severed from MediaProcessor's image-attachment fallback",
+      "related": [
+        "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:1187",
+        "src/media/processor.rs:226",
+        "src/executor/builtin_registry/builder/constructor/mod.rs:337",
+        "src/gateway/execution_engine/run_loop/inner.rs:548"
+      ],
+      "decision": "CONNECT",
+      "rationale": "Producer and consumer both exist and are fully implemented, only the startup wire is missing. Producer: PlatformOcrProvider::with_platform (this file, fully tested; its OCR routes through the platform screen/Swift bridge) plus VisionPipeline. Consumer: MediaProcessor::describe_image_fallback (src/media/processor.rs:226) which, when self.vision is Some, runs pipeline.understand_image over attached images and emits '[Image: <description>]'. The wire is severed at server startup: agent_init/mod.rs:1187 hardcodes 'let vision: Option<Arc<VisionPipeline>> = None;' with the comment 'VisionPipeline is not currently created at startup — pass None for now'. Read-first confirmed a LIVE caller: run_loop/inner.rs:548 calls media_processor.process(attachments, supports_vision=false, ...) for text-only models, which reaches describe_image_fallback and, because vision is None, degrades to '[Image: name — not viewable by this model]' — silently discarding the image content. The same producer is already constructed and registered for the desktop screenshot bridge at constructor/mod.rs:337, proving the provider works in production. No error path or newer mechanism covers 'describe attached image for a text-only model', so this is a genuine dark feature, not a painless severed wire. Reconnection is a small, low-coupling change: build a VisionPipeline with PlatformOcrProvider::with_platform(Arc::clone(&desktop_platform)) at startup (mirroring constructor/mod.rs) and pass Some(Arc) into MediaProcessor::new. No new coupling — MediaProcessor already accepts Option<Arc<VisionPipeline>>."
+    },
+    {
+      "id": 2,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/vision/types.rs",
+      "line": 75,
+      "title": "Rect type and its methods (new/new_unchecked/is_valid/area) are dead scaffolding with no production consumer",
+      "related": [
+        "src/vision/mod.rs:13",
+        "src/vision/providers/platform_ocr.rs:176"
+      ],
+      "decision": "CUT",
+      "rationale": "Grep for \\bRect\\b across src/ finds only the definition (types.rs:75), the re-export (mod.rs:13), and the type's own unit tests (mod.rs:397-428). No non-test construction, field read, or schema consumer anywhere. The natural consumer for a pixel Rect would be OCR bounding boxes, but convert_platform_ocr_result (platform_ocr.rs:176) deliberately drops aleph_desktop::OcrResult.lines, and the vision OcrResult has no lines field — so Rect is orphaned. It is pub + re-exported, so dead_code lints cannot flag it (form 1 the compiler is blind to). Delete Rect, its impl, and the rect_validation / rect_new_unchecked tests."
+    },
+    {
+      "id": 3,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/vision/error.rs",
+      "line": 21,
+      "title": "VisionError::UnsupportedFormat variant is defined but never constructed",
+      "related": ["src/vision/providers/platform_ocr.rs:114"],
+      "decision": "CUT",
+      "rationale": "Grep for VisionError::UnsupportedFormat across the repo returns only the definition (error.rs:21). The other UnsupportedFormat hits are MediaError (media/error.rs) and SoulLoadError (thinker/soul.rs) — different enums. Every format/size failure in the vision module is reported as ImageError (e.g. platform_ocr.rs:114 reports an unsupported URL image as ImageError). The variant is part of a #[non_exhaustive] pub enum so it compiles clean and is invisible to dead_code. No live caller and no error path that would construct it → dead variant, CUT."
+    },
+    {
+      "id": 4,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/vision/types.rs",
+      "line": 50,
+      "title": "ImageFormat::mime_type() and extension() have no non-test caller",
+      "related": ["src/vision/types.rs:60"],
+      "decision": "CUT",
+      "rationale": "Grep for .mime_type() and .extension() finds no call site in src/ outside the vision module's own unit test image_format_mime_and_extension (mod.rs:435-440). Production consumers of ImageFormat (media/processor.rs:460 image_format_from_mime, media/processors/image.rs:29 to_vision_format) only map variants to/from ImageFormat; none call mime_type() or extension(). Both methods are pub const on a pub enum, so dead_code cannot catch them. Dead API → CUT."
+    },
+    {
+      "id": 5,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/vision/mod.rs",
+      "line": 39,
+      "title": "VisionPipeline::provider_count() and capabilities() (aggregate) have no non-test caller",
+      "related": ["src/vision/mod.rs:129"],
+      "decision": "CUT",
+      "rationale": "Grep for provider_count and .capabilities() finds provider_count used only in its own unit test (mod.rs:384-392), and VisionPipeline::capabilities() used only in aggregated_capabilities (mod.rs:361,378). No production caller: VisionBridge (builtin_tools/desktop/vision_bridge.rs) and ImageMediaProvider call understand_image/ocr directly and handle Err; the per-provider trait method capabilities() is consumed internally by the pipeline loop (mod.rs:62,103,132), but the aggregate VisionPipeline::capabilities() and provider_count() are never called outside tests. Both are pub → invisible to dead_code. Dead API → CUT. (Note: the trait method VisionProvider::capabilities is NOT dead — it is consumed internally — so only the two public aggregate accessors are in scope for the cut.)"
+    }
+  ]
+}

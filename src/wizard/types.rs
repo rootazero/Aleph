@@ -36,8 +36,6 @@ pub enum StepType {
     Text,
     /// Yes/No confirmation
     Confirm,
-    /// Progress indicator
-    Progress,
 }
 
 /// Who executes this step
@@ -45,8 +43,6 @@ pub enum StepType {
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum StepExecutor {
-    /// Server executes and streams progress
-    Gateway,
     /// Client renders and collects input
     #[default]
     Client,
@@ -89,14 +85,6 @@ pub struct WizardStep {
     /// Who executes this step
     #[serde(default)]
     pub executor: StepExecutor,
-
-    /// Validation pattern (regex)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation: Option<String>,
-
-    /// Error message for validation failure
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation_error: Option<String>,
 }
 
 impl WizardStep {
@@ -112,8 +100,6 @@ impl WizardStep {
             placeholder: None,
             sensitive: false,
             executor: StepExecutor::Client,
-            validation: None,
-            validation_error: None,
         }
     }
 
@@ -150,14 +136,6 @@ impl WizardStep {
         step
     }
 
-    /// Create a progress step
-    pub fn progress(id: impl Into<String>, message: impl Into<String>) -> Self {
-        let mut step = Self::new(id, StepType::Progress);
-        step.message = Some(message.into());
-        step.executor = StepExecutor::Gateway;
-        step
-    }
-
     /// Set title
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -180,13 +158,6 @@ impl WizardStep {
     /// Set initial value
     pub fn with_initial(mut self, value: impl Into<Value>) -> Self {
         self.initial_value = Some(value.into());
-        self
-    }
-
-    /// Set validation pattern
-    pub fn with_validation(mut self, pattern: impl Into<String>, error: impl Into<String>) -> Self {
-        self.validation = Some(pattern.into());
-        self.validation_error = Some(error.into());
         self
     }
 }

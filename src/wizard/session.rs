@@ -22,9 +22,6 @@ pub enum WizardSessionError {
     #[error("Session cancelled")]
     Cancelled,
 
-    #[error("Session already done")]
-    AlreadyDone,
-
     #[error("Session not found: {session_id}")]
     SessionNotFound { session_id: String },
 

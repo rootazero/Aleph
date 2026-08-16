@@ -160,7 +160,7 @@ fn salient_cap(budget_tokens: Option<usize>) -> usize {
 
 /// Floor for [`salient_cap`]: fewer diagnostics than this and the digest stops
 /// naming the failure it exists to name.
-const MIN_SALIENT_LINES: usize = 4;
+pub const MIN_SALIENT_LINES: usize = 4;
 
 /// Reduce one string field in place. `None` (and the field untouched) when the
 /// field is too small to bother with, carries neither recognizable structure nor

@@ -48,7 +48,7 @@ const MAX_CONSECUTIVE_STOP_VETOES: u32 = 5;
 /// Byte budget for the `LAST_ASSISTANT_MESSAGE` env var handed to hooks.
 /// Char-boundary safe truncation; hooks needing the full text can read the
 /// session transcript instead.
-const LAST_MESSAGE_ENV_CAP: usize = 4096;
+pub(crate) const LAST_MESSAGE_ENV_CAP: usize = 4096;
 
 /// Internal decision extracted from a Stop-hook interceptor pass.
 #[derive(Debug, PartialEq, Eq)]

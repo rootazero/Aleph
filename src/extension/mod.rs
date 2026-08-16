@@ -136,7 +136,7 @@ pub struct ExtensionConfig {
 /// stateful object with a method-rich API (`trust`, `untrust`, `allowlist()`);
 /// operators only need the static allowlist + mode. The manager converts this
 /// DTO into the runtime policy in [`ExtensionManager::new`].
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OwnerTrustPolicyConfig {
     /// `true` → enforce the allowlist for `Workspace`/`Global` plugins.
@@ -146,15 +146,6 @@ pub struct OwnerTrustPolicyConfig {
     /// Plugin ids that may load from non-trusted origins when restrictive.
     #[serde(default)]
     pub allowlist: Vec<String>,
-}
-
-impl Default for OwnerTrustPolicyConfig {
-    fn default() -> Self {
-        Self {
-            restrictive: false,
-            allowlist: Vec::new(),
-        }
-    }
 }
 
 impl OwnerTrustPolicyConfig {

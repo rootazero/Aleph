@@ -253,32 +253,24 @@ impl ScopedToolService {
                 .check_confirmation_gate(name, &input, approved_by_operator_gate)
                 .await?;
 
-        // Fire pre-hook (legacy observational decorator).
-        if let Some(ref hook) = self.hook_decorator {
-            hook.before_execute(name, &input);
-        }
+        // Fire pre-hook (legacy observational decorator removed — extension
+        // `BeforeToolCall` interceptors below supersede it).
 
         // Extension `BeforeToolCall` interceptors. May block / deny / ask, or
         // rewrite the tool input via `update_input:`. Inert when no executor
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
-        let started = std::time::Instant::now();
         let (effective_input, mut pre_hook_contexts) = match self
             .run_before_tool_hooks(name, input.clone(), authorized)
             .await
         {
             Ok(outcome) => outcome,
             Err(err) => {
-                let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
                 if let Some(ref l) = ledger {
                     l.commit_refusal(&input, &format!("blocked by a BeforeToolCall hook: {err}"))
                         .await;
                 }
                 let rejection: Result<ToolOutput, ToolError> = Err(err);
-                if let Some(ref hook) = self.hook_decorator {
-                    hook.after_execute(name, &rejection);
-                    hook.after_execute_with_duration(name, &rejection, duration_ms);
-                }
                 return rejection;
             }
         };
@@ -380,14 +372,6 @@ impl ScopedToolService {
         // ride along on the same tool result the LLM sees next turn.
         self.run_after_tool_hooks(name, &effective_input, &mut result, pre_hook_contexts)
             .await;
-
-        let duration_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-
-        // Fire post-hooks. Both for back-compat (v1) and with-duration (v2).
-        if let Some(ref hook) = self.hook_decorator {
-            hook.after_execute(name, &result);
-            hook.after_execute_with_duration(name, &result, duration_ms);
-        }
 
         // Signed operation ledger. Recorded AFTER the after-hooks so the
         // recorded outcome is the one the model and the surfaces actually saw
@@ -1651,7 +1635,12 @@ fn clean_error_body(body: &str) -> String {
     }
     if let Some(digest) = crate::tool_output::distill::distill_output(&stripped) {
         if digest.error_count > 0 {
-            let rendered = digest.render(digest.salient.len());
+            let cap = crate::tool_output::scale_to_budget(
+                crate::tool_output::distill::MAX_SALIENT_LINES,
+                crate::tool_output::hygiene::MIN_SALIENT_LINES,
+                ERROR_BODY_MAX_CHARS,
+            );
+            let rendered = digest.render(cap);
             if rendered.chars().count() <= ERROR_BODY_MAX_CHARS {
                 return rendered;
             }

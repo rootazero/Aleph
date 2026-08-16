@@ -468,7 +468,12 @@ fn search_hint(outcome: &IndexOutcome) -> String {
 fn distill_or_truncate(text: &str, budget_tokens: usize) -> String {
     if let Some(digest) = crate::tool_output::distill::distill_output(text) {
         if digest.error_count > 0 {
-            let rendered = digest.render(digest.salient.len());
+            let cap = crate::tool_output::scale_to_budget(
+                crate::tool_output::distill::MAX_SALIENT_LINES,
+                crate::tool_output::hygiene::MIN_SALIENT_LINES,
+                budget_tokens,
+            );
+            let rendered = digest.render(cap);
             if estimate_tokens_smart(&rendered) <= budget_tokens {
                 return rendered;
             }

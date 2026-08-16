@@ -1,0 +1,44 @@
+{
+  "batch": "agents-batch-6",
+  "module": "src/tool_output",
+  "title": "severed-wire audit of src/tool_output (13 files, 5,449 LOC)",
+  "date": "2026-08-16",
+  "reviewer": "static (severed-wire-audit skill)",
+  "counts": { "critical": 0, "high": 0, "medium": 1, "low": 0, "total": 1 },
+  "by_category": { "security": 0, "logic": 1, "architecture": 0, "quality": 0 },
+  "by_decision": { "CONNECT": 1, "CUT": 0, "DECIDE": 0 },
+  "files_reviewed": [
+    { "path": "src/tool_output/mod.rs", "loc": 51, "findings": 0 },
+    { "path": "src/tool_output/compressor.rs", "loc": 907, "findings": 0 },
+    { "path": "src/tool_output/distill.rs", "loc": 520, "findings": 1 },
+    { "path": "src/tool_output/fence.rs", "loc": 117, "findings": 0 },
+    { "path": "src/tool_output/hygiene.rs", "loc": 651, "findings": 0 },
+    { "path": "src/tool_output/ingress.rs", "loc": 359, "findings": 0 },
+    { "path": "src/tool_output/sanitize.rs", "loc": 129, "findings": 0 },
+    { "path": "src/tool_output/walk.rs", "loc": 128, "findings": 0 },
+    { "path": "src/tool_output/structured/diff.rs", "loc": 478, "findings": 0 },
+    { "path": "src/tool_output/structured/json.rs", "loc": 453, "findings": 0 },
+    { "path": "src/tool_output/structured/log.rs", "loc": 488, "findings": 0 },
+    { "path": "src/tool_output/structured/mod.rs", "loc": 722, "findings": 0 },
+    { "path": "src/tool_output/structured/search.rs", "loc": 446, "findings": 0 }
+  ],
+  "total_loc": 5449,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "medium",
+      "category": "logic",
+      "file": "src/tool_output/distill.rs",
+      "line": 301,
+      "title": "OutputDigest::render(max_salient) budget hook left unthreaded at two live callers",
+      "related": [
+        "src/tools/result_processing.rs:471",
+        "src/tools/scoped/dispatch.rs:1654",
+        "src/tool_output/hygiene.rs:156",
+        "src/tools/result_processing.rs:501"
+      ],
+      "decision": "CONNECT",
+      "rationale": "render(max_salient) documents max_salient as the token-budget hook ('the caller can shrink this to honour a token budget'), and MAX_SALIENT_LINES is pub(crate) precisely so callers can scale it. hygiene.rs::salient_cap (hygiene.rs:156) and result_processing.rs::inline_error_digest (result_processing.rs:501) both now scale it via scale_to_budget — but two further LIVE production consumers still pass digest.salient.len() (i.e. no cap): distill_or_truncate (result_processing.rs:471) and clean_error_body (dispatch.rs:1654). In both, the full digest is rendered first and only afterwards measured against a token/char guard; when it overshoots, the signal-aware digest is DISCARDED and the caller falls back to head+tail truncation, which drops exactly the middle-of-stream errors the distiller exists to surface. The budget_tokens value is already in scope at distill_or_truncate (its sole parameter), so the wire is missing, not the data: a live reader that reaches for a hardcoded 'no cap' instead of the budget is the config-reader-parity severed-wire shape, and the fix is the one missing call (pass a scale_to_budget-derived cap as max_salient), not new coupling. No dead scaffolding was found anywhere in this module — all 40+ pub/pub(crate) producers have live consumers, the MCP __-separator matches, and there are no // TODO / unimplemented! / todo! stubs."
+    }
+  ]
+}

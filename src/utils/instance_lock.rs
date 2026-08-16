@@ -28,28 +28,11 @@ const HOLDER_FILENAME: &str = "aleph.lock.pid";
 pub struct InstanceLock {
     #[allow(dead_code)] // Held for OS-level lock lifetime via Drop on `File`.
     file: File,
-    path: PathBuf,
     holder_path: PathBuf,
     holder_pid: u32,
 }
 
 impl InstanceLock {
-    #[must_use]
-    pub fn lock_path(&self) -> &Path {
-        &self.path
-    }
-    #[must_use]
-    pub const fn holder_pid(&self) -> u32 {
-        self.holder_pid
-    }
-
-    /// Consume the lock and return the underlying file handle. The OS-level
-    /// fs2 lock is released only when this `File` is dropped.
-    #[must_use]
-    pub fn into_file(self) -> File {
-        self.file
-    }
-
     /// Rewrite the holder record's PID to the *current* process id.
     ///
     /// Call this after `fork()`/daemonization: the flock is held on a fd that
@@ -109,7 +92,6 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
             write_holder(&holder_path, pid)?;
             Ok(AcquireOutcome::Acquired(InstanceLock {
                 file,
-                path: lock_path,
                 holder_path,
                 holder_pid: pid,
             }))

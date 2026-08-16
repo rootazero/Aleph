@@ -113,21 +113,6 @@ fn make_registry(names: &[&'static str]) -> Arc<LoopToolRegistry> {
     Arc::new(r)
 }
 
-// Stub hook decorator that counts calls.
-struct StubHook {
-    before_count: StdArc<AtomicUsize>,
-    after_count: StdArc<AtomicUsize>,
-}
-
-impl ToolHookDecorator for StubHook {
-    fn before_execute(&self, _name: &str, _input: &Value) {
-        self.before_count.fetch_add(1, Ordering::Relaxed);
-    }
-    fn after_execute(&self, _name: &str, _output: &Result<ToolOutput, ToolError>) {
-        self.after_count.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
 // -------------------------------------------------------------------------
 // Test 1: list filters by allowed set
 // -------------------------------------------------------------------------
@@ -420,33 +405,10 @@ async fn execute_routes_to_subagent_tool_by_name() {
 }
 
 // -------------------------------------------------------------------------
-// Test 5: execute applies hook decorator (both before and after fire)
+// Test 5 (was: execute applies hook decorator) was removed with the
+// legacy `ToolHookDecorator` trait (see the audit at
+// review-results/agents-batch-6/tools/summary.json finding #3).
 // -------------------------------------------------------------------------
-#[tokio::test]
-async fn execute_applies_hook_decorator() {
-    let before = StdArc::new(AtomicUsize::new(0));
-    let after = StdArc::new(AtomicUsize::new(0));
-    let hook = Arc::new(StubHook {
-        before_count: StdArc::clone(&before),
-        after_count: StdArc::clone(&after),
-    });
-
-    let registry = make_registry(&["read_file"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_hook_decorator(hook);
-
-    let _ = svc.execute("read_file", json!({})).await;
-
-    assert_eq!(
-        before.load(Ordering::Relaxed),
-        1,
-        "before_execute must fire once"
-    );
-    assert_eq!(
-        after.load(Ordering::Relaxed),
-        1,
-        "after_execute must fire once"
-    );
-}
 
 // -------------------------------------------------------------------------
 // Test 6: describe returns from filtered set (allowed / not-allowed)

@@ -6,7 +6,7 @@
 //! underlying registry.
 //!
 //! ## Layout
-//! - [`traits`] — public extension points (`ToolDefinitionRewriter`, `ToolHookDecorator`)
+//! - [`traits`] — public extension points (`ToolDefinitionRewriter`)
 //! - [`builder`] — `new` + every `with_*` + small shape/helper utilities
 //! - [`gate_chain`] — the ordered rule chain that decides (and NAMES) what gates a call
 //! - [`dispatch`] — execute pipeline (`execute_inner` + hook seams + Layer-2 + sanitize)
@@ -36,7 +36,7 @@ mod tests;
 
 pub use deferred::DeferredTools;
 pub use progressive_disclosure::ProgressiveDisclosureRewriter;
-pub use traits::{ToolDefinitionRewriter, ToolHookDecorator};
+pub use traits::ToolDefinitionRewriter;
 
 use std::collections::BTreeSet;
 
@@ -64,7 +64,6 @@ use crate::tools::service::{to_metadata_form, ToolDefinition, ToolError, ToolSer
 /// ```text
 /// ScopedToolService::new(registry, allowed)
 ///     .with_subagent_tool(tool)
-///     .with_hook_decorator(decorator)
 /// ```
 ///
 /// `allowed` is a set of permitted tool names. Empty = allow-all.
@@ -72,7 +71,6 @@ pub struct ScopedToolService {
     pub(super) inner: Arc<LoopToolRegistry>,
     pub(super) allowed: BTreeSet<String>,
     pub(super) subagent_tool: Option<Arc<SubagentTool>>,
-    pub(super) hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
     /// Extension-shipped hook executor. Fires `BeforeToolCall` interceptors
     /// (`block/deny/ask/update_input`) and `AfterToolCall`/`AfterToolCallFailure`
     /// observers around every tool execution. `None` = no extension hooks.

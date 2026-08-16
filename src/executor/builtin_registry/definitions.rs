@@ -1904,7 +1904,7 @@ mod tests {
     /// runtime fact, unguessable, and owned by no other tool. The drift half
     /// is a process finding, not a prose license: description bytes landed
     /// without the suite that prices them.
-    ///
+///
     /// 2026-08-16, the executor audit round: 98_861 -> 102_000 B (+3,115 B
     /// of measurement, NOT new spending — the eight generation/channel/voice
     /// tools and `acp_session_control` already shipped their descriptions on
@@ -1927,6 +1927,14 @@ mod tests {
     /// `workflow:` binding cannot be guessed — nothing else in the catalog
     /// names it; (3) `loop_graph` is the sole owner of the governance
     /// vocabulary.
+    ///
+    /// 2026-08-16 (same day, sibling commit `0add2eb2c`): pdf_generate's
+    /// PATH RESOLUTION prompt strings shed `~/.aleph/output/` /
+    /// `~/.aleph/workspaces/main/output/documents` for `the run's output
+    /// dir` / `the run's default output directory`, −5 B of measurement.
+    /// The slack the audit round priced in (102_000 − 98_861 = +3,139)
+    /// covers both the +9 B workflow-graph fusion above and this −5 B
+    /// path-resolution trim, so the ceiling stays at 102_000 B.
     const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 102_000;
 
     #[test]
@@ -2545,8 +2553,10 @@ mod tests {
 
     #[test]
     fn test_all_tools_defined() {
-        let names: Vec<String> =
-            BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name.to_string()).collect();
+        let names: Vec<String> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|d| d.name.to_string())
+            .collect();
 
         // Verify core tools
         assert!(names.contains(&"search".to_string()));
@@ -2585,8 +2595,10 @@ mod tests {
 
     #[test]
     fn test_sessions_tools_defined() {
-        let names: Vec<String> =
-            BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name.to_string()).collect();
+        let names: Vec<String> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|d| d.name.to_string())
+            .collect();
 
         // Verify sessions tools are defined when gateway feature is enabled
         assert!(names.contains(&"session_list".to_string()));

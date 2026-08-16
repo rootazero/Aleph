@@ -1,0 +1,72 @@
+{
+  "batch": "agents-batch-6",
+  "module": "src/verification",
+  "title": "Severed-wire audit of src/verification — turn-level watchdog seam + stop-hook infra (well-wired, minor duplication/dead-code only)",
+  "date": "2026-08-16",
+  "reviewer": "static (severed-wire-audit skill)",
+  "counts": {"critical": 0, "high": 0, "medium": 0, "low": 4, "total": 4},
+  "by_category": {"security": 0, "logic": 0, "architecture": 1, "quality": 3},
+  "by_decision": {"CONNECT": 3, "CUT": 1, "DECIDE": 0},
+  "files_reviewed": [
+    {"path": "src/verification/mod.rs", "loc": 56, "findings": 0},
+    {"path": "src/verification/extension_stop_gate.rs", "loc": 410, "findings": 0},
+    {"path": "src/verification/mutation_evidence_verifier.rs", "loc": 142, "findings": 1},
+    {"path": "src/verification/robustness_profile.rs", "loc": 159, "findings": 1},
+    {"path": "src/verification/scratchpad_goal_verifier.rs", "loc": 254, "findings": 0},
+    {"path": "src/verification/stop_hook_verifier.rs", "loc": 86, "findings": 1},
+    {"path": "src/verification/stop_hooks.rs", "loc": 751, "findings": 0},
+    {"path": "src/verification/tool_loop_verifier.rs", "loc": 319, "findings": 0},
+    {"path": "src/verification/turn_verifier.rs", "loc": 196, "findings": 1},
+    {"path": "src/verification/tests/mod.rs", "loc": 5, "findings": 0},
+    {"path": "src/verification/tests/stop_hook_verifier.rs", "loc": 96, "findings": 0},
+    {"path": "src/verification/tests/tool_loop_verifier.rs", "loc": 331, "findings": 0},
+    {"path": "src/verification/tests/turn_verifier.rs", "loc": 85, "findings": 0}
+  ],
+  "total_loc": 2890,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/verification/turn_verifier.rs",
+      "line": 133,
+      "title": "VerifierChain::len() / is_empty() are dead public methods with zero callers repo-wide",
+      "related": ["src/verification/turn_verifier.rs:137", "src/verification/turn_verifier.rs:122"],
+      "decision": "CUT",
+      "rationale": "grep for .len() / .is_empty() on any VerifierChain returned zero callers (not even in tests). empty() is only exercised by a test; production expresses 'no verifiers wired' via Option<Arc<VerifierChain>> = None (orchestrator_init.rs + harness deps.rs), so none of these three observability constructors carries load. Read-before-write: no live caller anywhere => CUT the dead scaffolding rather than reconnect it."
+    },
+    {
+      "id": 2,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/verification/stop_hook_verifier.rs",
+      "line": 45,
+      "title": "Byte-cap 4096 is duplicated instead of sharing the canonical LAST_MESSAGE_ENV_CAP",
+      "related": ["src/verification/extension_stop_gate.rs:51"],
+      "decision": "CONNECT",
+      "rationale": "LAST_MESSAGE_ENV_CAP (extension_stop_gate.rs:51) is the canonical cap but is a private const; stop_hook_verifier.rs:45 re-hardcodes 'let cap = 4096; // mirror extension_stop_gate::LAST_MESSAGE_ENV_CAP'. Two unsynchronized copies of the same fact (the exact single-source-of-truth smell phase 5 targets): changing one truncation limit silently diverges the other, so TOML stop hooks and extension Stop hooks would truncate final_text differently. CONNECT by exposing one pub(crate) constant and referencing it from both sites."
+    },
+    {
+      "id": 3,
+      "severity": "low",
+      "category": "architecture",
+      "file": "src/verification/mutation_evidence_verifier.rs",
+      "line": 50,
+      "title": "The \"end_turn\" stop-reason literal is duplicated between the harness producer and this verifier",
+      "related": ["src/harness/agent/think.rs:936"],
+      "decision": "CONNECT",
+      "rationale": "The only stop-reason the harness ever emits is the literal \"end_turn\" (think.rs:936); MutationEvidenceVerifier compares ctx.stop_reason != Some(\"end_turn\"). Its three sibling stop-gating verifiers (StopHookVerifier, ExtensionStopHookVerifier, ScratchpadGoalVerifier) gate on stop_reason.is_some()/is_none() and are immune to drift, but this one is string-literal-coupled. If the producer string ever changes (or a second stop reason is introduced), the verify-on-stop nudge silently never fires with no compile error. CONNECT by hoisting a canonical stop-reason symbol shared by both ends."
+    },
+    {
+      "id": 4,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/verification/robustness_profile.rs",
+      "line": 39,
+      "title": "for_behavior doc omits behavior_hint/vendor_identity in the resolution path it describes",
+      "related": ["src/orchestrator/harness_bridge/behavior_resolve.rs:31"],
+      "decision": "CONNECT",
+      "rationale": "The doc (lines 39-40) states the behavior name is resolved 'via protocol_to_behavior / model_behavior_override', but the actual single source of truth is behavior_resolve::resolve_behavior, which additionally consults provider.behavior_hint() (vendor_identity -> \"strict\" for Kimi/Minimax/DeepSeek/Qwen/GLM). The omission understates the real wiring: a maintainer reading this could conclude weak-vendor self-identification does not affect the watchdog thresholds. CONNECT by re-pointing the doc at resolve_behavior."
+    }
+  ]
+}

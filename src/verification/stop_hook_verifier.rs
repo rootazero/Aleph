@@ -13,6 +13,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use crate::verification::extension_stop_gate::LAST_MESSAGE_ENV_CAP;
 use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext, StopHookHandler};
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
@@ -42,7 +43,7 @@ impl TurnVerifier for StopHookVerifier {
         }
         let hctx = StopHookContext {
             final_text: ctx.final_text.map(|s| {
-                let cap = 4096; // mirror extension_stop_gate::LAST_MESSAGE_ENV_CAP
+                let cap = LAST_MESSAGE_ENV_CAP;
                 let end = s
                     .char_indices()
                     .take(cap)

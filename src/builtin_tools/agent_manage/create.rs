@@ -238,18 +238,17 @@ impl AlephTool for AgentCreateTool {
             return Err(AgentManageError::AlreadyExists(args.id.clone()).into());
         }
 
-        // 3. Determine paths. We resolve the home via `discovery::aleph_home_dir`
-        //    so `ALEPH_HOME` overrides and `~/.aleph` discovery stay in one
-        //    place — `create.rs` previously reached into `dirs::home_dir()` and
-        //    duplicated the path layout, so a `ALEPH_HOME=/srv/aleph` boot would
-        //    have written agent dirs to `~/.aleph` while the rest of the system
-        //    read from `/srv/aleph/agents`.
-        let home = crate::discovery::aleph_home_dir().map_err(|_| AgentManageError::NoHomeDir)?;
-        let agents_state_root = home.join("agents");
-        let agent_state_dir = agents_state_root.join(&args.id);
-
-        let workspaces_dir = home.join("workspaces");
-        let workspace_path = workspaces_dir.join(&args.id);
+        // 3. Determine paths. Both roots come from `provisioning_roots`, which
+        //    is the resolved `[agents.defaults]` layout boot handed the manager
+        //    — the same one `agent_resolver` rebuilds this agent with. Two
+        //    earlier spellings each dropped a different half: `dirs::home_dir()`
+        //    ignored `ALEPH_HOME`, and `discovery::aleph_home_dir().join(..)`
+        //    fixed that but still ignored `agents_root` / `workspace_root`, so
+        //    a config that moved either one had `agent_create` writing where
+        //    nothing would read.
+        let roots = crate::config::agent_manager::provisioning_roots(self.agent_manager.as_deref());
+        let agent_state_dir = roots.agents.join(&args.id);
+        let workspace_path = roots.workspaces.join(&args.id);
 
         // 4. Compose this agent's soul (archetype + base + personalization, or a
         // verbatim system_prompt override) and write it BEFORE identity-init so
@@ -352,7 +351,7 @@ impl AlephTool for AgentCreateTool {
             workspace: workspace_path.clone(),
             model: model.clone(),
             system_prompt: args.system_prompt.clone(),
-            agent_dir: agents_state_root.join(&args.id),
+            agent_dir: agent_state_dir.clone(),
             ..Default::default()
         };
 

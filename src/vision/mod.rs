@@ -10,7 +10,7 @@ pub mod types;
 
 pub use error::VisionError;
 pub use provider::VisionProvider;
-pub use types::{ImageFormat, ImageInput, OcrResult, Rect, VisionCapabilities, VisionResult};
+pub use types::{ImageFormat, ImageInput, OcrResult, VisionCapabilities, VisionResult};
 
 /// Orchestrates multiple [`VisionProvider`] instances in a fallback chain.
 ///
@@ -32,12 +32,6 @@ impl VisionPipeline {
     /// Register a provider. Providers are tried in the order they are added.
     pub fn add_provider(&mut self, provider: Box<dyn VisionProvider>) {
         self.providers.push(provider);
-    }
-
-    /// Return the number of registered providers.
-    #[must_use]
-    pub fn provider_count(&self) -> usize {
-        self.providers.len()
     }
 
     /// Describe / answer a question about the given image.
@@ -122,18 +116,6 @@ impl VisionPipeline {
         }
 
         Err(last_err)
-    }
-
-    /// Aggregate capabilities across all registered providers.
-    #[must_use]
-    pub fn capabilities(&self) -> VisionCapabilities {
-        let mut caps = VisionCapabilities::none();
-        for p in &self.providers {
-            let pc = p.capabilities();
-            caps.image_understanding |= pc.image_understanding;
-            caps.ocr |= pc.ocr;
-        }
-        caps
     }
 }
 
@@ -353,91 +335,6 @@ mod tests {
         // ocr should use the ocr-only provider
         let ocr = pipeline.ocr(&sample_image()).await.unwrap();
         assert!(ocr.full_text.contains("[ocr-only]"));
-    }
-
-    #[test]
-    fn aggregated_capabilities() {
-        let mut pipeline = VisionPipeline::new();
-        assert_eq!(pipeline.capabilities(), VisionCapabilities::none());
-
-        pipeline.add_provider(Box::new(SuccessProvider {
-            tag: "a",
-            caps: VisionCapabilities {
-                image_understanding: true,
-                ocr: false,
-            },
-        }));
-        pipeline.add_provider(Box::new(SuccessProvider {
-            tag: "b",
-            caps: VisionCapabilities {
-                image_understanding: false,
-                ocr: true,
-            },
-        }));
-
-        let caps = pipeline.capabilities();
-        assert!(caps.image_understanding);
-        assert!(caps.ocr);
-    }
-
-    #[test]
-    fn provider_count() {
-        let mut pipeline = VisionPipeline::new();
-        assert_eq!(pipeline.provider_count(), 0);
-
-        pipeline.add_provider(Box::new(SuccessProvider {
-            tag: "a",
-            caps: VisionCapabilities::all(),
-        }));
-        assert_eq!(pipeline.provider_count(), 1);
-    }
-
-    #[test]
-    fn rect_validation() {
-        let rect = Rect::new(10.0, 20.0, 100.0, 80.0).unwrap();
-        assert_eq!(rect.x, 10.0);
-        assert_eq!(rect.y, 20.0);
-        assert_eq!(rect.width, 100.0);
-        assert_eq!(rect.height, 80.0);
-        assert!(rect.is_valid());
-        assert_eq!(rect.area(), 8000.0);
-
-        let rect = Rect::new(0.0, 0.0, -1.0, 80.0);
-        assert!(rect.is_err());
-
-        let rect = Rect::new(0.0, 0.0, 100.0, -1.0);
-        assert!(rect.is_err());
-
-        assert!(Rect::new(0.0, 0.0, f64::NAN, 80.0).is_err());
-        assert!(Rect::new(0.0, 0.0, 100.0, f64::NAN).is_err());
-        assert!(Rect::new(0.0, 0.0, f64::INFINITY, 80.0).is_err());
-        assert!(Rect::new(0.0, 0.0, 100.0, f64::NEG_INFINITY).is_err());
-
-        assert!(Rect::new(f64::NAN, 0.0, 100.0, 80.0).is_err());
-        assert!(Rect::new(0.0, f64::NAN, 100.0, 80.0).is_err());
-        assert!(Rect::new(f64::INFINITY, 0.0, 100.0, 80.0).is_err());
-        assert!(Rect::new(0.0, f64::NEG_INFINITY, 100.0, 80.0).is_err());
-    }
-
-    #[test]
-    fn rect_new_unchecked() {
-        let rect = Rect::new_unchecked(10.0, 20.0, 100.0, 80.0);
-        assert!(rect.is_valid());
-        assert_eq!(rect.area(), 8000.0);
-
-        let invalid = Rect::new_unchecked(0.0, 0.0, -10.0, 80.0);
-        assert!(!invalid.is_valid());
-        assert_eq!(invalid.area(), 0.0);
-    }
-
-    #[test]
-    fn image_format_mime_and_extension() {
-        assert_eq!(ImageFormat::Png.mime_type(), "image/png");
-        assert_eq!(ImageFormat::Png.extension(), "png");
-        assert_eq!(ImageFormat::Jpeg.mime_type(), "image/jpeg");
-        assert_eq!(ImageFormat::Jpeg.extension(), "jpeg");
-        assert_eq!(ImageFormat::WebP.mime_type(), "image/webp");
-        assert_eq!(ImageFormat::WebP.extension(), "webp");
     }
 
     #[test]

@@ -11,10 +11,11 @@ use crate::sync_primitives::Arc;
 
 /// Default persistence file path for ACP sessions.
 fn acp_sessions_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".aleph")
-        .join("data")
+    // `aleph_protocol::paths::data_dir` rather than this crate's `get_data_dir`:
+    // the loader must be able to ask where the file *would* be without bringing
+    // the directory into existence. The writer below creates it.
+    aleph_protocol::paths::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from(".").join(".aleph").join("data"))
         .join("acp_sessions.json")
 }
 

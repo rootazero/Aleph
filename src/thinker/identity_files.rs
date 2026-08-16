@@ -64,10 +64,6 @@ pub struct IdentityFile {
     pub name: &'static str,
     /// File content after truncation, or None if not found / empty.
     pub content: Option<String>,
-    /// Whether the content was truncated to fit budget.
-    pub truncated: bool,
-    /// Original byte size before truncation (0 if not found).
-    pub original_size: usize,
 }
 
 /// Collection of loaded identity files from an agent identity directory.
@@ -126,14 +122,10 @@ impl IdentityFiles {
                     files.push(IdentityFile {
                         name,
                         content: None,
-                        truncated: false,
-                        original_size: 0,
                     });
                     continue;
                 }
             };
-
-            let original_size = raw.len();
 
             // Apply per-file truncation
             let remaining_budget = config.total_max_chars.saturating_sub(total_chars);
@@ -144,25 +136,20 @@ impl IdentityFiles {
                 files.push(IdentityFile {
                     name,
                     content: None,
-                    truncated: true,
-                    original_size,
                 });
                 continue;
             }
 
-            let (content, truncated) = if raw.chars().count() > effective_limit {
-                let truncated_content = truncate_with_head_tail(raw, effective_limit, 0.7, 0.2);
-                (truncated_content, true)
+            let content = if raw.chars().count() > effective_limit {
+                truncate_with_head_tail(raw, effective_limit, 0.7, 0.2)
             } else {
-                (raw.clone(), false)
+                raw.clone()
             };
 
             total_chars += content.chars().count();
             files.push(IdentityFile {
                 name,
                 content: Some(content),
-                truncated,
-                original_size,
             });
         }
 
@@ -389,8 +376,6 @@ mod tests {
 
         for file in &ws.files {
             assert!(file.content.is_none());
-            assert!(!file.truncated);
-            assert_eq!(file.original_size, 0);
         }
     }
 
@@ -420,8 +405,6 @@ mod tests {
         let ws = IdentityFiles::load(dir.path(), &config);
 
         let soul = ws.files.iter().find(|f| f.name == "SOUL.md").unwrap();
-        assert!(soul.truncated);
-        assert_eq!(soul.original_size, 5000);
         let content = soul.content.as_ref().unwrap();
         assert!(content.len() < 5000);
         assert!(content.contains("[..."));
@@ -452,13 +435,13 @@ mod tests {
         // First file should be loaded fully (500 < per_file and < total)
         assert!(ws.get("SOUL.md").is_some());
 
-        // Some later files should be truncated or skipped
-        let skipped_or_truncated = ws
+        // Some later files should be skipped once the total budget is spent.
+        let skipped = ws
             .files
             .iter()
-            .filter(|f| f.original_size > 0 && (f.content.is_none() || f.truncated))
+            .filter(|f| f.content.is_none())
             .count();
-        assert!(skipped_or_truncated > 0, "Budget should cause truncation");
+        assert!(skipped > 0, "Budget should cause truncation");
     }
 
     #[test]

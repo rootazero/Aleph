@@ -132,3 +132,50 @@ pub struct AgentManager {
     pub agents_root: PathBuf,
     pub(super) trash_root: PathBuf,
 }
+
+/// The two roots a provisioning site creates an agent's directories under.
+///
+/// Returned together because every caller needs both and they are the same
+/// type — handing back two bare `PathBuf`s is an invitation to swap them, and
+/// swapping them writes identity files into the workspace tree, which looks
+/// like nothing at all until a restart.
+pub struct ProvisioningRoots {
+    /// Agent state / identity files (`SOUL.md`, `AGENTS.md`, …).
+    pub agents: PathBuf,
+    /// Agent workspaces (tool output, project files).
+    pub workspaces: PathBuf,
+}
+
+/// Where a provisioning site must create — or archive — an agent's directories.
+///
+/// **Not `agent_resolver::default_*_root()` directly.** Those answer "where do
+/// agents live when nothing is configured"; `[agents.defaults] agents_root /
+/// workspace_root` can move both, and `agent_resolver` — the thing that
+/// rebuilds every agent after a restart — honours them. A provisioning site
+/// that reaches for the unconfigured default writes where the resolver will
+/// not look: on the next boot the member comes back with no SOUL.md and an
+/// empty workspace, and neither half errors. Deletion is the same defect
+/// mirrored — it archives a directory nobody wrote and reports success.
+///
+/// The resolved roots are already carried by [`AgentManager`], which boot
+/// builds by applying the rule once. That cache is safe because `[agents]` is
+/// not in `reload_impact::LIVE_SECTIONS`: the section is captured at startup
+/// by contract, so a config edit cannot make these stale without a restart
+/// rebuilding them.
+///
+/// `None` — tests, embedded hosts and minimal servers that construct these
+/// tools without a manager — falls back to the unconfigured defaults, which
+/// is exactly what those callers resolved before this function existed.
+#[must_use]
+pub fn provisioning_roots(manager: Option<&AgentManager>) -> ProvisioningRoots {
+    manager.map_or_else(
+        || ProvisioningRoots {
+            agents: crate::config::agent_resolver::default_agents_root(),
+            workspaces: crate::config::agent_resolver::default_workspace_root(),
+        },
+        |m| ProvisioningRoots {
+            agents: m.agents_root.clone(),
+            workspaces: m.workspace_root.clone(),
+        },
+    )
+}

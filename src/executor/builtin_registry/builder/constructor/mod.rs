@@ -652,15 +652,15 @@ impl BuiltinToolRegistry {
             let ws_handle = search_tool.default_workspace_handle();
             let sk_handle = search_tool.default_session_key_handle();
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                dirs::home_dir().map_or_else(
-                    || {
-                        std::env::temp_dir()
-                            .join("aleph")
-                            .join("memory")
-                            .join("note")
-                    },
-                    |p| p.join(".aleph").join("memory").join("note"),
-                )
+                // No home branch: `get_note_memory_dir` fails either because
+                // there is no home (so re-deriving one cannot help) or because
+                // creating the directory failed (so re-deriving the *same*
+                // path cannot help either). The only spelling that added
+                // anything was the one that ignored `ALEPH_HOME`.
+                std::env::temp_dir()
+                    .join("aleph")
+                    .join("memory")
+                    .join("note")
             });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
                 .with_project_scoping(config.memory_project_scoped);
@@ -676,15 +676,15 @@ impl BuiltinToolRegistry {
             )
         } else if config.memory_db.is_some() {
             let note_memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                dirs::home_dir().map_or_else(
-                    || {
-                        std::env::temp_dir()
-                            .join("aleph")
-                            .join("memory")
-                            .join("note")
-                    },
-                    |p| p.join(".aleph").join("memory").join("note"),
-                )
+                // No home branch: `get_note_memory_dir` fails either because
+                // there is no home (so re-deriving one cannot help) or because
+                // creating the directory failed (so re-deriving the *same*
+                // path cannot help either). The only spelling that added
+                // anything was the one that ignored `ALEPH_HOME`.
+                std::env::temp_dir()
+                    .join("aleph")
+                    .join("memory")
+                    .join("note")
             });
             let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string())
                 .with_project_scoping(config.memory_project_scoped);

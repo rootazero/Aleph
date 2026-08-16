@@ -49,8 +49,15 @@ const SERVICE_UNAVAILABLE: i32 = -32011;
 /// Resolve the global hooks file path. Returns the path even if the
 /// file does not yet exist, so writes can create it.
 fn user_hooks_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())?;
-    Ok(home.join(".aleph/hooks.json"))
+    // `get_config_dir`, not `dirs::home_dir()`: the *reader* of this same file
+    // (`extension::hooks::user_settings::load_user_hooks`) is `ALEPH_HOME`-aware
+    // and its own comment names the failure — "a user-global layer that reads
+    // the real home under a relocated one is a silently empty layer". Writing
+    // it by hand here made this RPC the writing half of exactly that split:
+    // every hook added through the admin surface landed in a file nothing
+    // loaded, with no error on either side.
+    let home = crate::utils::paths::get_config_dir().map_err(|e| e.to_string())?;
+    Ok(home.join("hooks.json"))
 }
 
 /// Read `~/.aleph/hooks.json` as `{ "hooks": { ... } }`. A missing file
@@ -563,6 +570,30 @@ mod tests {
         // default applies rather than a literal null failing to parse.
         let no_timeout = build_hook_action(Some("echo"), None, None, None, None).unwrap();
         assert!(no_timeout.get("timeout_secs").is_none());
+    }
+
+    /// The writing half of the user-global hooks layer must land where the
+    /// reading half looks.
+    ///
+    /// `extension::hooks::user_settings::load_user_hooks` resolves
+    /// `<config_dir>/hooks.json`; this RPC resolved the real home by hand, so
+    /// under a relocated `ALEPH_HOME` every hook added through the admin
+    /// surface went into a file nothing ever loaded — with a success response
+    /// on the way out and an empty layer on the way in.
+    #[test]
+    fn the_admin_writes_the_same_hooks_file_the_loader_reads() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let written = user_hooks_path().expect("hooks path resolves");
+        let read = crate::utils::paths::get_config_dir()
+            .expect("config dir resolves")
+            .join("hooks.json");
+        assert_eq!(
+            written,
+            read,
+            "hooks.add writes {} but load_user_hooks reads {} — a silently empty layer",
+            written.display(),
+            read.display()
+        );
     }
 
     #[test]

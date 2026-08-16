@@ -234,28 +234,11 @@ pub fn legacy_home_aleph_path(relative: &str) -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".aleph").join(relative))
 }
 
-/// Get the path for the memory database directory (`SQLite`)
-///
-/// Returns: `<config_dir>/memory/`
-///
-/// Creates the directory if it doesn't exist.
-pub fn get_memory_db_path() -> Result<PathBuf> {
-    let memory_dir = get_config_dir()?.join("memory");
-    std::fs::create_dir_all(&memory_dir)
-        .map_err(|e| AlephError::config(format!("Failed to create memory directory: {e}")))?;
-    Ok(memory_dir)
-}
-
 /// Get skills directory path
 ///
 /// Returns: `<config_dir>/skills`
 pub fn get_skills_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("skills"))
-}
-
-/// Get skills directory path as String (for `UniFFI` export)
-pub fn get_skills_dir_string() -> Result<String> {
-    Ok(get_skills_dir()?.to_string_lossy().to_string())
 }
 
 /// Get runtimes directory path
@@ -846,6 +829,36 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     Ok(dirs)
 }
 
+/// The root every agent's state directory hangs off: `<config_dir>/agents`.
+///
+/// Pure lookup — nothing is created. [`get_agent_config_dir`] is the per-agent
+/// form and *does* create.
+///
+/// This exists because "where do agents live" had five answers at once
+/// (`agent_resolver::default_agents_root`, this module's per-agent form,
+/// `team::create`, `AgentInstanceConfig::default`, `GatewayConfig`), three of
+/// them spelled `dirs::home_dir().join(".aleph/agents")` and therefore blind
+/// to `ALEPH_HOME`. One derivation, delegated to, is the only shape that
+/// cannot drift — see the guard in this module's tests for why the drift is
+/// invisible on the machine that writes it.
+pub fn get_agents_dir() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join("agents"))
+}
+
+/// The root every agent workspace hangs off: `<config_dir>/workspaces`.
+///
+/// Pure lookup — nothing is created.
+///
+/// Workspaces hold runtime data (tool output, project files); identity files
+/// (SOUL.md / AGENTS.md / MEMORY.md) live under [`get_agents_dir`]. The two
+/// are siblings and are routinely confused, which is why they are stated once
+/// here rather than re-derived per subsystem — the sandbox jails into this
+/// root, so a second answer for it is a containment divergence, not a
+/// cosmetic one.
+pub fn get_workspaces_dir() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join("workspaces"))
+}
+
 /// Get the identity/config directory for a specific agent
 ///
 /// Agent capabilities (skills, plugins) and identity files are stored here.
@@ -865,7 +878,7 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
         )));
     }
 
-    let agent_dir = get_config_dir()?.join("agents").join(agent_id);
+    let agent_dir = get_agents_dir()?.join(agent_id);
 
     std::fs::create_dir_all(&agent_dir)
         .map_err(|e| AlephError::config(format!("Failed to create agent config directory: {e}")))?;
@@ -964,58 +977,22 @@ mod tests {
         (
             "src/config/agent_resolver/mod.rs",
             "resolve_user_path expands a user-written `~` prefix (real home); the \
-             file's only `.aleph` goes through get_config_dir()",
+             roots delegate to get_agents_dir()/get_workspaces_dir(), and the \
+             remaining `.aleph` is the /tmp stand-in for the no-home case",
+        ),
+        (
+            "src/bin/aleph-server/commands/service/mod.rs",
+            "launchd/systemd install paths are real-home by necessity: the \
+             daemon started at login inherits no ALEPH_HOME, so the directory \
+             created here and the one baked into the plist both have to be the \
+             one that daemon will actually resolve. The other `.aleph` matches \
+             are the `ai.aleph.server` service label, not a path",
         ),
         (
             "src/thinker/project_instructions.rs",
             "home_dir is the upward-walk boundary (real home); its `.aleph/…` \
              strings are *project*-relative directory names, not home-rooted",
         ),
-    ];
-
-    /// Files the file-level guard catches today and that are **not** exempt —
-    /// each really does hand-roll a home-rooted `.aleph` path and really does
-    /// ignore `ALEPH_HOME`. They are grandfathered so tightening the guard from
-    /// line-level to file-level could land without a repo-wide edit.
-    ///
-    /// **This list may only shrink.** Adding an entry means shipping the bug;
-    /// fix the file instead. A second assertion below fails when an entry stops
-    /// offending, so a fix cannot silently leave a stale exemption behind.
-    const HOME_JOIN_PENDING_FIX: &[(&str, &str)] = &[
-        ("src/acp/manager/persistence.rs", "acp_sessions.json"),
-        ("src/approval/config.rs", "approval-policy.json"),
-        (
-            "src/bin/aleph-server/commands/service/mod.rs",
-            "~/.aleph/logs (the LaunchAgents path beside it is correctly real-home)",
-        ),
-        ("src/builtin_tools/pdf_generate/mod.rs", "output directory"),
-        ("src/builtin_tools/skill_manage.rs", "skills directory"),
-        (
-            "src/builtin_tools/team/create.rs",
-            "agents + workspaces roots",
-        ),
-        (
-            "src/executor/builtin_registry/builder/constructor/collab_session_tools.rs",
-            "note memory directory",
-        ),
-        (
-            "src/executor/builtin_registry/builder/constructor/mod.rs",
-            "note memory directory (two sites)",
-        ),
-        ("src/gateway/agent_env/mod.rs", "agent_envs.db"),
-        (
-            "src/gateway/agent_instance.rs",
-            "default workspace + agent dir",
-        ),
-        ("src/gateway/config.rs", "default agent dir"),
-        ("src/gateway/handlers/daemon_control.rs", "log directory"),
-        ("src/gateway/handlers/hooks_admin.rs", "hooks.json"),
-        (
-            "src/gateway/handlers/markdown_skills.rs",
-            "skills directory",
-        ),
-        ("src/gateway/interfaces/wechat/config.rs", "state root"),
-        ("src/sandbox/config.rs", "workspaces root"),
     ];
 
     /// Split a source file into the lines that are real code — the guard's
@@ -1101,13 +1078,25 @@ mod tests {
     /// apart in the same file. Widening the window to the file is what makes
     /// the guard see the shape it was written for; the cost is a handful of
     /// false positives, and those get an allowlist entry stating why.
+    ///
+    /// **Zero exemptions for the bug itself.** The widening originally landed
+    /// with a 16-file `HOME_JOIN_PENDING_FIX` list of real offenders,
+    /// grandfathered so the tightening could land without a repo-wide edit.
+    /// That list is drained: `hooks.json` was being *written* to the real home
+    /// while `load_user_hooks` read `ALEPH_HOME` (a silently empty layer, the
+    /// exact failure that reader's own comment names); `skill_manage` and
+    /// `markdown_skills` were two more answers for the directory
+    /// `get_skills_dir()` owns; `team::create` provisioned members where
+    /// `agent_resolver` would not look for them; and `sandbox::config` was
+    /// handing the jail a root no other subsystem knew about. A grandfathered
+    /// list is a licence with a deadline — it needs draining, not renewing, so
+    /// the only list left is the one whose entries say why they are *not* the
+    /// bug.
     #[test]
     fn no_hand_rolled_aleph_home_outside_the_allowlist() {
         let mut offenders: Vec<String> = Vec::new();
         for (rel, text) in all_sources() {
-            if HOME_JOIN_ALLOWLIST.iter().any(|(f, _)| *f == rel)
-                || HOME_JOIN_PENDING_FIX.iter().any(|(f, _)| *f == rel)
-            {
+            if HOME_JOIN_ALLOWLIST.iter().any(|(f, _)| *f == rel) {
                 continue;
             }
             if !hand_rolls_aleph_home(&text) {
@@ -1155,13 +1144,19 @@ mod tests {
         assert!(!hand_rolls_aleph_home("let p = root.join(\".aleph\");"));
     }
 
-    /// A grandfathered exemption that no longer offends is a lie the next
-    /// reader has to disprove by hand. Fail so the fix deletes its own entry.
+    /// An exemption that no longer offends is a lie the next reader has to
+    /// disprove by hand — and worse, it is a standing licence for the next
+    /// person to reintroduce the bug in that file without the guard saying a
+    /// word. Fail so a fix deletes its own entry.
+    ///
+    /// This assertion was written for the (now drained) `HOME_JOIN_PENDING_FIX`
+    /// list; it applies to the exemptions that remain for exactly the same
+    /// reason.
     #[test]
-    fn pending_fix_list_only_shrinks() {
+    fn every_exemption_still_offends() {
         let sources = all_sources();
         let mut stale: Vec<&str> = Vec::new();
-        for (file, _) in HOME_JOIN_PENDING_FIX {
+        for (file, _) in HOME_JOIN_ALLOWLIST {
             match sources.iter().find(|(rel, _)| rel == file) {
                 Some((_, text)) if hand_rolls_aleph_home(text) => {}
                 _ => stale.push(file),
@@ -1170,9 +1165,79 @@ mod tests {
         assert!(
             stale.is_empty(),
             "these no longer hand-roll a home-rooted `.aleph` path (fixed, moved, or \
-             deleted) — remove them from HOME_JOIN_PENDING_FIX so the list keeps \
-             meaning what it says:\n  {}",
+             deleted), so their HOME_JOIN_ALLOWLIST entry now exempts a file that \
+             does not need exempting — delete the entry:\n  {}",
             stale.join("\n  ")
+        );
+    }
+
+    /// The source-level guard proves a *spelling* changed; this proves the
+    /// behaviour it stands for.
+    ///
+    /// Relocating `ALEPH_HOME` has to move every root together or it moves
+    /// none of them usefully: a subsystem left behind writes into a directory
+    /// the rest of the process never reads, and nothing errors. These are the
+    /// roots that were each resolving their own way until the exemption list
+    /// was drained — asserted here rather than in six modules so "they agree"
+    /// has one home.
+    ///
+    /// Deliberately `starts_with(get_config_dir())` and not an equality against
+    /// a literal: the claim is containment under the relocated home, and an
+    /// equality test would just restate each implementation back to itself.
+    #[test]
+    fn relocating_aleph_home_moves_every_state_root_with_it() {
+        let _home = IsolatedAlephHome::new();
+        let root = get_config_dir().expect("isolated config dir resolves");
+
+        let sandbox_root = crate::sandbox::config::SandboxConfig::default().workspace_root;
+        let agent_default = crate::gateway::agent_instance::AgentInstanceConfig::default();
+        let env_db = crate::gateway::agent_env::AgentEnvStoreConfig::default().db_path;
+
+        let roots: Vec<(&str, PathBuf)> = vec![
+            (
+                "paths::get_agents_dir",
+                get_agents_dir().expect("agents dir"),
+            ),
+            (
+                "paths::get_workspaces_dir",
+                get_workspaces_dir().expect("workspaces dir"),
+            ),
+            (
+                "paths::get_skills_dir",
+                get_skills_dir().expect("skills dir"),
+            ),
+            (
+                "agent_resolver::default_agents_root",
+                crate::config::agent_resolver::default_agents_root(),
+            ),
+            (
+                "agent_resolver::default_workspace_root",
+                crate::config::agent_resolver::default_workspace_root(),
+            ),
+            ("SandboxConfig::default().workspace_root", sandbox_root),
+            (
+                "AgentInstanceConfig::default().workspace",
+                agent_default.workspace,
+            ),
+            (
+                "AgentInstanceConfig::default().agent_dir",
+                agent_default.agent_dir,
+            ),
+            ("AgentEnvStoreConfig::default().db_path", env_db),
+        ];
+
+        let strays: Vec<String> = roots
+            .into_iter()
+            .filter(|(_, p)| !p.starts_with(&root))
+            .map(|(name, p)| format!("{name} -> {}", p.display()))
+            .collect();
+
+        assert!(
+            strays.is_empty(),
+            "ALEPH_HOME is {}, but these resolved outside it — they are reading or \
+             writing state the rest of the process cannot see:\n  {}",
+            root.display(),
+            strays.join("\n  ")
         );
     }
 
