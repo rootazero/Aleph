@@ -939,7 +939,6 @@ mod tests {
             ProfileConfig {
                 description: Some("Coding profile".to_string()),
                 model: Some("claude-sonnet".to_string()),
-                tools: vec!["git_*".to_string()],
                 ..Default::default()
             },
         );
