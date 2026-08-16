@@ -36,8 +36,11 @@ impl ModelRobustnessProfile {
         }
     }
 
-    /// Resolve a profile by model-behavior name (same name the prompt layer
-    /// resolves via `protocol_to_behavior` / `model_behavior_override`).
+    /// Resolve a profile by model-behavior name. The behavior is determined
+    /// by `orchestrator::harness_bridge::behavior_resolve::resolve_behavior`,
+    /// which folds the prompt layer's `protocol_to_behavior` /
+    /// `model_behavior_override` together with `provider.behavior_hint()`
+    /// (vendor self-identification maps weak-vendor models to `"strict"`).
     #[must_use]
     pub fn for_behavior(name: Option<&str>) -> Self {
         match name {

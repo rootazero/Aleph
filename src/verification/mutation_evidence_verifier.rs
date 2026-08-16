@@ -17,7 +17,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::sync_primitives::Mutex;
 use crate::thinker::nudges::MUTATION_EVIDENCE_NUDGE;
-use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
+use crate::verification::turn_verifier::{
+    TurnVerifier, TurnVerifyContext, VerifierVerdict, STOP_REASON_END_TURN,
+};
 
 /// Tools whose presence in the window means "files were mutated this run".
 ///
@@ -47,7 +49,7 @@ impl TurnVerifier for MutationEvidenceVerifier {
         _cancel: &CancellationToken,
     ) -> VerifierVerdict {
         // Only at the stop boundary — mid-turn belongs to ToolLoopVerifier.
-        if ctx.stop_reason != Some("end_turn") {
+        if ctx.stop_reason != Some(STOP_REASON_END_TURN) {
             return VerifierVerdict::Continue;
         }
         let last_mutation = ctx
@@ -95,7 +97,7 @@ mod tests {
             tool_calls_made: calls.len(),
             final_text: Some("done"),
             recent_tool_calls: calls,
-            stop_reason: stopping.then_some("end_turn"),
+            stop_reason: stopping.then_some(STOP_REASON_END_TURN),
             session_id: Some("s1"),
             robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
         }

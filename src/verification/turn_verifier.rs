@@ -54,6 +54,14 @@ pub struct TurnVerifyContext<'a> {
     /// `tool_calls` produced); `None` mid-turn (`tool_calls` produced and
     /// about to enter Act).
     pub stop_reason: Option<&'a str>,
+}
+
+/// Canonical `stop_reason` the harness emits when the model finishes a turn
+/// without tool calls. Used by both the producer (the harness agent loop)
+/// and [`MutationEvidenceVerifier`] (the only verifier that gates on the
+/// specific value rather than on `is_some()`), so the verifier cannot drift
+/// from the producer by a spelling change.
+pub const STOP_REASON_END_TURN: &str = "end_turn";
     /// Live session key string for the current run, when available.
     /// Pure plumbing so session-scoped watchdogs (e.g.
     /// `ScratchpadGoalVerifier`) can locate per-session state. `None`
@@ -128,14 +136,6 @@ impl VerifierChain {
     #[must_use]
     pub fn builder() -> VerifierChainBuilder {
         VerifierChainBuilder::default()
-    }
-
-    pub fn len(&self) -> usize {
-        self.verifiers.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.verifiers.is_empty()
     }
 
     pub async fn verify(
