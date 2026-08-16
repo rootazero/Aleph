@@ -1018,6 +1018,18 @@ pub(crate) static PRESETS_BY_BASE_URL: Lazy<HashMap<&'static str, &'static Provi
 pub static PRESET_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy::new(|| {
     let mut m: HashMap<&'static str, ProviderMetadata> = HashMap::with_capacity(PROFILES.len() * 2);
     for (name, preset) in PROFILES {
+        // `ProviderMetadata.notes` is documented (metadata.rs) as kept under
+        // ~80 chars; a preset description that blows past it would ship to
+        // provider pickers and tooltip UI unconstrained. Fail the lazy init
+        // loudly rather than letting a future profile drift.
+        if let Some(desc) = preset.description {
+            assert!(
+                desc.len() <= 80,
+                "preset '{name}' description is {} chars; ProviderMetadata.notes \
+                 is documented as ~80 max",
+                desc.len()
+            );
+        }
         let meta = ProviderMetadata {
             display_name: preset.display_name.unwrap_or(name),
             modalities: preset.modalities,

@@ -432,16 +432,6 @@ impl CodexAuth {
         debug!("Codex token refreshed successfully");
         Ok(())
     }
-
-    /// Ensure the token is valid, refreshing if necessary.
-    /// Returns the current access token.
-    pub async fn ensure_valid(&mut self) -> Result<&str> {
-        if self.is_expired() {
-            info!("Access token expired, attempting refresh...");
-            self.refresh().await?;
-        }
-        Ok(&self.access_token)
-    }
 }
 
 #[cfg(test)]

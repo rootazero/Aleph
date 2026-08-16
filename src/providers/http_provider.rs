@@ -7,7 +7,7 @@ use crate::error::Result;
 use crate::providers::adapter::{
     ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::message::{normalize_tool_pairs, ContentBlock, UnifiedMessage};
 use crate::providers::{AiProvider, ProviderDelta};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
 use crate::sync_primitives::Arc;
@@ -159,19 +159,28 @@ impl HttpProvider {
     fn apply_outbound_safety(
         &self,
         messages: &[UnifiedMessage],
+        platform: Option<&str>,
     ) -> std::result::Result<Vec<UnifiedMessage>, String> {
         let mut filtered_messages: Vec<UnifiedMessage> = messages.to_vec();
 
-        // PII filtering: filter each text block individually
+        // PII filtering: filter each text block individually. The per-platform
+        // exclusion/override table (`[platform_policies.X]`) is consulted too:
+        // the `runtime_guard` guardrail pipeline already applied it on the way
+        // in, so re-filtering here with only the global `is_provider_excluded`
+        // would silently re-redact a payload the operator excluded for this
+        // platform (and would ignore per-platform action overrides like
+        // `platform_policies.X.phone = warn`). `platform` is read from
+        // `payload.metadata["platform"]` — stamped by the inbound router and
+        // the Panel run path.
         if let Some(engine_lock) = crate::pii::PiiEngine::global() {
             // Poison convention: recover the inner engine instead of silently
             // skipping the PII filter when the lock is poisoned.
             let engine = engine_lock.read().unwrap_or_else(|e| e.into_inner());
-            if !engine.is_provider_excluded(&self.name) {
+            if !engine.is_platform_excluded(platform, &self.name) {
                 for msg in &mut filtered_messages {
                     for block in msg.content_blocks_mut() {
                         if let ContentBlock::Text { ref mut text, .. } = block {
-                            let result = engine.filter(text);
+                            let result = engine.filter_with_platform(text, platform);
                             if result.has_detections() {
                                 *text = result.text;
                             }
@@ -214,7 +223,12 @@ impl HttpProvider {
         payload: RequestPayload<'_>,
         sink: Option<&dyn crate::providers::DeltaSink>,
     ) -> Result<ProviderResponse> {
-        let filtered_messages = match self.apply_outbound_safety(payload.messages) {
+        let platform = payload
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("platform"))
+            .map(String::as_str);
+        let mut filtered_messages = match self.apply_outbound_safety(payload.messages, platform) {
             Ok(msgs) => msgs,
             Err(reason) => {
                 tracing::warn!(
@@ -228,6 +242,13 @@ impl HttpProvider {
                 });
             }
         };
+        // The wire-level pairing repair: compaction, truncation, session-splits,
+        // and interrupted turns can leave the history half-paired, and every
+        // provider API rejects that. `normalize_tool_pairs` is the documented
+        // single choke-point (`transform_messages`) — actually call it here, on
+        // the owned copy, before the request is built. Idempotent; the retry
+        // path below reuses the already-normalized list.
+        normalize_tool_pairs(&mut filtered_messages);
 
         match self.execute_once(&filtered_messages, &payload, sink).await {
             Err(err) if is_stale_encrypted_reasoning_error(&err) => {
@@ -476,8 +497,13 @@ impl HttpProvider {
     ) -> anyhow::Result<
         futures::stream::BoxStream<'static, anyhow::Result<crate::providers::ProviderDelta>>,
     > {
+        let platform = payload
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("platform"))
+            .map(String::as_str);
         let filtered_messages = self
-            .apply_outbound_safety(payload.messages)
+            .apply_outbound_safety(payload.messages, platform)
             .map_err(|reason| anyhow::anyhow!("Secret leak blocked: {reason}"))?;
 
         let final_payload = RequestPayload {
