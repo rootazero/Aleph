@@ -20,7 +20,10 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var_os("ALEPH_HOME");
-        let tmp = std::env::temp_dir().join(".aleph").join("log_dir_test");
+        // Keep the `.aleph` component: the assertions below read the resolved
+        // log directory and require "aleph" to appear in it.
+        let (_scratch, scratch) = crate::utils::scratch::scratch_root();
+        let tmp = scratch.join(".aleph");
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("ALEPH_HOME", &tmp);
 

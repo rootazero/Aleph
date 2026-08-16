@@ -489,8 +489,8 @@ category: preference
         }
     }
 
-    async fn build_test_dream_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
-        let temp = std::env::temp_dir().join(format!("aleph_lint_{}", uuid::Uuid::new_v4()));
+    async fn build_test_dream_ctx() -> (tempfile::TempDir, DreamContext, Arc<SqliteMemoryBackend>) {
+        let (temp_guard, temp) = crate::memory::dreaming::scratch_root();
         // Create the dir first: a nonexistent path is treated as the DB *file*
         // by SqliteMemoryBackend::new, which would make memory_dir a file and
         // break tests that mkdir note categories under it (NotADirectory).
@@ -516,12 +516,12 @@ category: preference
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
-        (ctx, store)
+        (temp_guard, ctx, store)
     }
 
     #[tokio::test]
     async fn lint_resolves_pending_links_after_target_appears() {
-        let (ctx, store) = build_test_dream_ctx().await;
+        let (_scratch, ctx, store) = build_test_dream_ctx().await;
 
         // Note A links to [[rust]] before any rust note exists → at write time
         // the resolver falls back to to_raw="rust", to_note="rust".
@@ -575,7 +575,7 @@ category: preference
 
     #[tokio::test]
     async fn lint_leaves_ambiguous_links_unresolved() {
-        let (ctx, store) = build_test_dream_ctx().await;
+        let (_scratch, ctx, store) = build_test_dream_ctx().await;
 
         // Note A links to bare [[rust]] before any rust note exists.
         store
@@ -654,7 +654,7 @@ category: preference
 
     #[tokio::test]
     async fn orphan_count_parses_isolated_insight() {
-        let temp = std::env::temp_dir().join(format!("aleph_orphan_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         let store = SqliteMemoryBackend::new(&temp).unwrap();
 
         // Cold cache (no graph recompute yet) → 0 orphans.
@@ -698,7 +698,7 @@ category: preference
 
     #[tokio::test]
     async fn lint_records_pass_to_log_when_frontmatter_fixed() {
-        let temp = std::env::temp_dir().join(format!("aleph_lintlog_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         tokio::fs::create_dir_all(temp.join("default/preference"))
             .await
             .unwrap();
@@ -742,7 +742,7 @@ category: preference
     async fn lint_skips_log_when_nothing_to_report() {
         // No notes, no orphans → a wholly-clean pass must not append a lint row,
         // keeping log.md an event timeline rather than per-cycle noise.
-        let temp = std::env::temp_dir().join(format!("aleph_lintclean_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         let ctx = ctx_with_orientation(&temp).await;
 
         NoteLintStage.execute(ctx).await.unwrap();
@@ -759,7 +759,7 @@ category: preference
 
     #[tokio::test]
     async fn lint_never_purges_tombstoned_links() {
-        let (ctx, store) = build_test_dream_ctx().await;
+        let (_scratch, ctx, store) = build_test_dream_ctx().await;
         let agent = ctx.agent_id.clone();
         // On-disk source note whose body carries [[gone]].
         let dir = ctx.indexer.memory_dir().join(&agent).join("plan");

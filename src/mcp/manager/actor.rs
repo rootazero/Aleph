@@ -1318,8 +1318,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_server_configs_returns_persisted_configs() {
-        let path = std::env::temp_dir().join(format!("aleph_mcp_cfgs_{}.json", std::process::id()));
-        let _ = tokio::fs::remove_file(&path).await;
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("configs.json");
         let (actor, handle) = McpManagerActor::new(Some(path.clone()))
             .await
             .expect("actor builds");

@@ -328,7 +328,8 @@ mod tests {
         // `Option<Arc<AgentInstance>>` remove() collapsed this case to None.
         let registry = Arc::new(AgentRegistry::new());
         let (sm, _sm_temp) = test_utils::session_store();
-        let root = tempfile::tempdir().unwrap().keep();
+        let _root_scratch = tempfile::tempdir().unwrap();
+        let root = _root_scratch.path();
         registry
             .register_config(
                 AgentInstanceConfig {

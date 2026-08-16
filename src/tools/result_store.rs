@@ -819,21 +819,21 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// Build a test store rooted in a temp directory instead of ~/.aleph/.
-    fn test_store(name: &str) -> (ToolResultStore, PathBuf) {
-        let base = std::env::temp_dir()
-            .join("aleph_test_tool_result_store")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&base);
+    /// Build a test store rooted in a scratch directory instead of ~/.aleph/.
+    ///
+    /// The guard comes back with it: it owns the tree, so it must be bound in
+    /// the caller's frame. See [`crate::utils::scratch::scratch_root`].
+    fn test_store(_name: &str) -> (tempfile::TempDir, ToolResultStore, PathBuf) {
+        let (scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore::with_dir_for_tests(base.clone());
-        (store, base)
+        (scratch, store, base)
     }
 
     /// Two session-scoped handles over one shared store — the production shape
     /// (boot installs one store; each run narrows it with `for_session`).
     fn shared_pair(name: &str) -> (Arc<ToolResultStore>, Arc<ToolResultStore>, PathBuf) {
-        let (root, base) = test_store(name);
+        let (_scratch, root, base) = test_store(name);
         let root = Arc::new(root);
         let a = ToolResultStore::for_session(&root, "agent:main:sess-a");
         let b = ToolResultStore::for_session(&root, "agent:main:sess-b");
@@ -842,7 +842,7 @@ mod tests {
 
     #[test]
     fn small_result_not_persisted() {
-        let (store, _base) = test_store("small_result_not_persisted");
+        let (_scratch, store, _base) = test_store("small_result_not_persisted");
         // threshold = 10_000 tokens; short content is well under
         let result = store.persist_if_large("call_1", "read_file", "hello world", 10_000);
         assert!(result.is_none(), "short content should not be persisted");
@@ -850,7 +850,7 @@ mod tests {
 
     #[test]
     fn large_result_persisted_and_recoverable() {
-        let (store, base) = test_store("large_result_persisted");
+        let (_scratch, store, base) = test_store("large_result_persisted");
         // Generate content that is definitely > 1 token (threshold = 1)
         let content = "a".repeat(1000);
         let result = store.persist_if_large("call_abc", "bash", &content, 1);
@@ -872,9 +872,7 @@ mod tests {
 
     #[test]
     fn cleanup_removes_directory() {
-        let base = std::env::temp_dir()
-            .join("aleph_test_tool_result_store")
-            .join("cleanup_test");
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore::with_dir_for_tests(base.clone());
         assert!(base.exists());
@@ -900,7 +898,7 @@ mod tests {
 
     #[test]
     fn purge_all_removes_blobs_and_clears_index() {
-        let (store, base) = test_store("purge_all_removes_blobs");
+        let (_scratch, store, base) = test_store("purge_all_removes_blobs");
         // Clean any residue from a prior run so the count assertions are exact.
         if let Ok(entries) = std::fs::read_dir(&base) {
             for e in entries.flatten() {
@@ -1026,13 +1024,10 @@ mod tests {
 
     use std::time::Duration;
 
-    fn sweeper_root(name: &str) -> PathBuf {
-        let base = std::env::temp_dir()
-            .join("aleph_test_tool_result_sweeper")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&base);
+    fn sweeper_root(_name: &str) -> (tempfile::TempDir, PathBuf) {
+        let (scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
-        base
+        (scratch, base)
     }
 
     /// Set mtime backwards by `secs` via `filetime` so the dir looks stale.
@@ -1053,7 +1048,7 @@ mod tests {
 
     #[test]
     fn sweep_removes_stale_dir() {
-        let root = sweeper_root("removes_stale_dir");
+        let (_scratch, root) = sweeper_root("removes_stale_dir");
         let stale = root.join("session_old");
         std::fs::create_dir_all(&stale).unwrap();
         std::fs::write(stale.join("call_1_bash.txt"), "old data").unwrap();
@@ -1067,7 +1062,7 @@ mod tests {
 
     #[test]
     fn sweep_preserves_fresh_dir() {
-        let root = sweeper_root("preserves_fresh_dir");
+        let (_scratch, root) = sweeper_root("preserves_fresh_dir");
         let fresh = root.join("session_live");
         std::fs::create_dir_all(&fresh).unwrap();
         std::fs::write(fresh.join("call_1_bash.txt"), "fresh data").unwrap();
@@ -1079,7 +1074,7 @@ mod tests {
 
     #[test]
     fn sweep_removes_empty_dir() {
-        let root = sweeper_root("removes_empty_dir");
+        let (_scratch, root) = sweeper_root("removes_empty_dir");
         let empty = root.join("session_empty");
         std::fs::create_dir_all(&empty).unwrap();
         // No files inside — empty session dir is always stale.
@@ -1092,7 +1087,7 @@ mod tests {
     fn sweep_ignores_stray_files_at_root() {
         // We never delete root-level files — only sub-directories — so a
         // user-placed README at the root survives an aggressive cutoff.
-        let root = sweeper_root("ignores_stray_files");
+        let (_scratch, root) = sweeper_root("ignores_stray_files");
         let stray = root.join("README.txt");
         std::fs::write(&stray, "do not delete").unwrap();
 
@@ -1119,7 +1114,7 @@ mod tests {
         // past the TTL, `remove_dir_all` deleted the root INCLUDING index.db
         // out from under the open index connection. Rooted correctly, an
         // all-stale sweep removes the per-session dirs and nothing else.
-        let (root_store, base) = test_store("sweep_correct_root");
+        let (_scratch, root_store, base) = test_store("sweep_correct_root");
         let root = Arc::new(root_store);
         let a = ToolResultStore::for_session(&root, "agent:main:sess-a");
         let text = "stale payload ".repeat(200);
@@ -1157,7 +1152,7 @@ mod tests {
         // Index rows used to be keyed forever: sweeping a session's blobs left
         // its rows behind, so ctx_search returned hits whose backing blobs
         // were gone and the index grew without bound.
-        let (root_store, base) = test_store("sweep_index_gc");
+        let (_scratch, root_store, base) = test_store("sweep_index_gc");
         let root = Arc::new(root_store);
         let a = ToolResultStore::for_session(&root, "agent:main:sess-a");
         let b = ToolResultStore::for_session(&root, "agent:main:sess-b");
@@ -1204,7 +1199,7 @@ mod tests {
         // verbatim. The child's read scope must therefore cover earlier epochs
         // of the same base key, or ctx_search finds nothing for exactly the
         // content the inherited markers advertise.
-        let (root, _base) = test_store("epoch_aware_search");
+        let (_scratch, root, _base) = test_store("epoch_aware_search");
         let root = Arc::new(root);
         let parent_key = crate::routing::session_key::SessionKey::Main {
             agent_id: "agent-a".to_string(),
@@ -1240,7 +1235,7 @@ mod tests {
         // (post-compaction split), the parent epoch's offloaded blobs AND index
         // rows — which the child can read via the widened scope — must ALSO be
         // purged, or a paused session can still mine pre-split content.
-        let (root, _base) = test_store("epoch_aware_purge");
+        let (_scratch, root, _base) = test_store("epoch_aware_purge");
         let root = Arc::new(root);
         let parent_key = crate::routing::session_key::SessionKey::Main {
             agent_id: "agent-a".to_string(),
@@ -1282,7 +1277,7 @@ mod tests {
         // The hit `source` is surfaced to the model as "the tool call the
         // section came from" — a bare call-id UUID says nothing. It must lead
         // with the tool name and keep an id suffix for reindex identity.
-        let (store, _base) = test_store("source_label");
+        let (_scratch, store, _base) = test_store("source_label");
         let text = "labelcheck payload ".repeat(200);
         let _ = store.index_output("toolu_01ABCDEFGH", "web_fetch", &text);
         let hits = store.search("labelcheck", 3);
@@ -1316,7 +1311,7 @@ mod tests {
     fn spilled_blob_and_its_session_dir_are_owner_only() {
         use std::os::unix::fs::PermissionsExt;
 
-        let (root, base) = test_store("owner_only_spill");
+        let (_scratch, root, base) = test_store("owner_only_spill");
         let root = Arc::new(root);
         let key = "agent:main:sess-perm";
         let store = ToolResultStore::for_session(&root, key);
@@ -1353,10 +1348,7 @@ mod tests {
         // `ToolResultStore::new` resolves its root through `get_data_dir`, which
         // reads a process-global env var, so the boot root is asserted at the
         // helper both call sites now share.
-        let root = std::env::temp_dir()
-            .join("aleph_test_tool_result_store")
-            .join("private_root");
-        let _ = std::fs::remove_dir_all(&root);
+        let (_scratch, root) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&root).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -1375,7 +1367,7 @@ mod tests {
         // Same call id → same path. Dropping `std::fs::write`'s implicit
         // truncate would leave the longer blob's tail for `read_file` /
         // `ctx_search` to serve as current output.
-        let (store, _base) = test_store("respill_truncates");
+        let (_scratch, store, _base) = test_store("respill_truncates");
         let long = "L".repeat(4000);
         let short = "S".repeat(400);
 

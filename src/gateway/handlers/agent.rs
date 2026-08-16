@@ -1903,6 +1903,10 @@ mod tests {
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
+        // A real directory the run is allowed to name — bound here so the
+        // guard removes it when the test ends.
+        let (_scratch, project_root) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&project_root).unwrap();
         let params = AgentRunParams {
             input: "work over here".to_string(),
             session_key: None,
@@ -1912,7 +1916,7 @@ mod tests {
             thinking: None,
             attachments: vec![],
             agent_id: None,
-            project_root: Some(std::env::temp_dir().display().to_string()),
+            project_root: Some(project_root.display().to_string()),
             model_override: None,
             exec_tier: None,
             mode: None,
@@ -1938,6 +1942,10 @@ mod tests {
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
+        // A real directory the run is allowed to name — bound here so the
+        // guard removes it when the test ends.
+        let (_scratch, project_root) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&project_root).unwrap();
         let params = AgentRunParams {
             input: "work over here".to_string(),
             session_key: None,
@@ -1947,7 +1955,7 @@ mod tests {
             thinking: None,
             attachments: vec![],
             agent_id: None,
-            project_root: Some(std::env::temp_dir().display().to_string()),
+            project_root: Some(project_root.display().to_string()),
             model_override: None,
             exec_tier: None,
             mode: None,
@@ -1976,6 +1984,10 @@ mod tests {
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
+        // A real directory the run is allowed to name — bound here so the
+        // guard removes it when the test ends.
+        let (_scratch, project_root) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&project_root).unwrap();
         let params = AgentRunParams {
             input: "work over here".to_string(),
             session_key: None,
@@ -1985,7 +1997,7 @@ mod tests {
             thinking: None,
             attachments: vec![],
             agent_id: None,
-            project_root: Some(std::env::temp_dir().display().to_string()),
+            project_root: Some(project_root.display().to_string()),
             model_override: None,
             exec_tier: None,
             mode: None,

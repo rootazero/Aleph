@@ -791,8 +791,8 @@ mod tests {
         }
     }
 
-    async fn build_decay_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
-        let temp = std::env::temp_dir().join(format!("aleph_decay_{}", uuid::Uuid::new_v4()));
+    async fn build_decay_ctx() -> (tempfile::TempDir, DreamContext, Arc<SqliteMemoryBackend>) {
+        let (temp_guard, temp) = crate::memory::dreaming::scratch_root();
         tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
@@ -815,7 +815,7 @@ mod tests {
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
-        (ctx, store)
+        (temp_guard, ctx, store)
     }
 
     fn decay_entry(path: &str, created_at: i64, updated_at: i64) -> NoteEntry {
@@ -835,7 +835,7 @@ mod tests {
         // `hot` is referenced by 3 other notes via full-path to_note. With the
         // old bare-filename query incoming_count was 0 and `hot` was archived;
         // with get_incoming_links_any it reads 3 and is protected.
-        let (mut ctx, store) = build_decay_ctx().await;
+        let (_scratch, mut ctx, store) = build_decay_ctx().await;
 
         // Old enough to clear the <7-day protection. `reference` is not a
         // protected category, so only the >=3-incoming rule can protect it.
@@ -895,7 +895,7 @@ mod tests {
         // links) scores well below the 0.1 reference threshold, but must be
         // protected: archiving it out of the index would make the C2.7
         // confidence floor (0.7) it relies on meaningless.
-        let (mut ctx, _store) = build_decay_ctx().await;
+        let (_scratch, mut ctx, _store) = build_decay_ctx().await;
 
         let md = KnowledgeNote {
             title: "crit".into(),
@@ -933,7 +933,7 @@ mod tests {
         // W2: a note NoteDrift flagged `stale: true` (outdated / contradicted)
         // is archived out of active retrieval even when its activity score is
         // high (freshly updated) — the flag was previously write-only.
-        let (mut ctx, _store) = build_decay_ctx().await;
+        let (_scratch, mut ctx, _store) = build_decay_ctx().await;
 
         let now = chrono::Utc::now().timestamp();
         // Updated an hour ago → high activity score, so the score-based loop
@@ -992,7 +992,7 @@ mod tests {
     async fn stale_high_severity_note_is_not_archived() {
         // Stale High/Critical notes stay indexed: the C2.7 confidence floor they
         // rely on requires them present. Only Low/Med stale notes archive.
-        let (mut ctx, _store) = build_decay_ctx().await;
+        let (_scratch, mut ctx, _store) = build_decay_ctx().await;
 
         let now = chrono::Utc::now().timestamp();
         let mut md = KnowledgeNote {
@@ -1040,7 +1040,7 @@ mod tests {
         // protection). With a shared budget of exactly one destructive edit, the
         // loop archives one and breaks, deferring the second — proving the "one
         // night cannot mass-archive the corpus" bound is live.
-        let (mut ctx, _store) = build_decay_ctx().await;
+        let (_scratch, mut ctx, _store) = build_decay_ctx().await;
         let now = chrono::Utc::now().timestamp();
         let old = now - 400 * 86400;
         let mem_dir = ctx.indexer.memory_dir().to_path_buf();

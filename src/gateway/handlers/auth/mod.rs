@@ -53,18 +53,26 @@ pub struct AuthContext {
 pub(crate) mod tests {
     use super::*;
 
-    pub(crate) fn create_test_context() -> Arc<AuthContext> {
+    /// Returns the scratch guard alongside the context. The vault is a real
+    /// file on disk, and it used to be a FIXED path in the world-writable
+    /// `/tmp`: shared by every concurrent test process and owned by nobody.
+    pub(crate) fn create_test_context() -> (tempfile::TempDir, Arc<AuthContext>) {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
         let shared_token_mgr = Arc::new(SharedTokenManager::new(
             store.clone(),
-            "/tmp/aleph_test.vault",
+            dir.join("test.vault"),
         ));
         let _ = shared_token_mgr.generate_token();
 
-        Arc::new(AuthContext {
-            shared_token_mgr,
-            security_store: store,
-            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
-        })
+        (
+            scratch,
+            Arc::new(AuthContext {
+                shared_token_mgr,
+                security_store: store,
+                node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
+            }),
+        )
     }
 }

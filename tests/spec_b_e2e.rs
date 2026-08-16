@@ -398,6 +398,10 @@ pub struct TestEnv {
     pub synthesizer: Arc<SummarySynthesizer>,
     pub assembler: Arc<dyn WorkingMemoryAssembler>,
     pub context: Arc<GatewayContext>,
+    /// The scratch tree everything above points at. Owned by the env so it goes
+    /// away with it; it used to be `mem::forget`-ed, which is one abandoned
+    /// tree per test that builds an env.
+    _scratch: tempfile::TempDir,
 }
 
 impl TestEnv {
@@ -407,9 +411,6 @@ impl TestEnv {
         let notes_dir = tmp.path().join("notes");
         std::fs::create_dir_all(&notes_dir).expect("notes dir");
         let raw_store = Arc::new(SqliteMemoryBackend::new(&db_path).expect("SqliteMemoryBackend"));
-        // Keep the tempdir alive for the lifetime of the TestEnv.
-        // We leak it deliberately — the OS will reclaim it after the test process exits.
-        std::mem::forget(tmp);
         let session_store = E2eSessionStore::new();
         let mock_llm = MockSummaryLlm::new("[default response — override with set_response]");
 
@@ -470,6 +471,7 @@ impl TestEnv {
             synthesizer,
             assembler,
             context,
+            _scratch: tmp,
         }
     }
 

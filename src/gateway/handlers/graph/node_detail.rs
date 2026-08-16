@@ -126,7 +126,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_node_detail_uses_explicit_agent_id() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         // Same id under two agents, different content_hash — proves we got alpha's row.
         let alpha = KnowledgeNote {
             content_hash: "alpha_hash".to_string(),
@@ -147,7 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_node_detail_returns_not_found_for_other_agent() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         // Note exists in alpha but we ask for beta → must be 'not found'.
         let alpha = make_note("AlphaOnly", "concept", vec![]);
         db.index_note(&alpha, "alpha", "concept").await.unwrap();
@@ -162,7 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_node_detail_falls_back_to_default_agent_when_omitted() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         // Seed: MainOnly under DEFAULT_AGENT_ID, AlphaOnly under alpha.
         // With agent_id omitted, MainOnly must be findable AND AlphaOnly must NOT.
         // This proves the fallback resolves to DEFAULT_AGENT_ID (not "any agent").
@@ -193,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_detail_lists_outgoing_with_provenance() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         let agent = crate::routing::DEFAULT_AGENT_ID;
         db.index_note(&make_note("t", "concept", vec![]), agent, "concept")
             .await
@@ -220,7 +220,7 @@ mod tests {
     async fn foreign_partition_denies_with_the_not_found_shape() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = make_db();
+        let (_scratch, db) = make_db();
         let secret = make_note("AliceSecret", "concept", vec![]);
         db.index_note(&secret, "main__u-alice", "concept")
             .await
@@ -238,7 +238,7 @@ mod tests {
         // where it genuinely never existed — any difference in the message
         // can only come from the denial itself, not from the node_id
         // appearing in the text.
-        let empty_db = make_db();
+        let (_scratch, empty_db) = make_db();
         let missing_resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
                 handle_node_detail_impl(

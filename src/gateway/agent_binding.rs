@@ -188,19 +188,25 @@ mod tests {
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
-    fn test_store() -> Arc<AgentEnvStore> {
+    fn test_store() -> (tempfile::TempDir, Arc<AgentEnvStore>) {
         let temp = tempdir().unwrap();
         let config = AgentEnvStoreConfig {
-            db_path: temp.keep().join("test.db"),
+            db_path: temp.path().join("test.db"),
             default_profile: "default".to_string(),
         };
-        Arc::new(AgentEnvStore::new(config).unwrap())
+        (temp, Arc::new(AgentEnvStore::new(config).unwrap()))
     }
 
-    async fn registry_with(ids: &[&str]) -> AgentRegistry {
+    async fn registry_with(ids: &[&str]) -> (Vec<tempfile::TempDir>, AgentRegistry) {
         let registry = AgentRegistry::new();
+        // Guards must OUTLIVE the registry they back — binding them here and
+        // returning only the registry deletes each agent's tree while the
+        // instance still points at it.
+        let mut scratch = Vec::new();
         for id in ids {
-            let root = tempdir().unwrap().keep();
+            let root_guard = tempdir().unwrap();
+            let root = root_guard.path().to_path_buf();
+            scratch.push(root_guard);
             let session_store: Arc<dyn crate::gateway::session_store::SessionStore> = Arc::new(
                 SessionManager::new(SessionManagerConfig {
                     db_path: root.join("sessions.db"),
@@ -218,13 +224,13 @@ mod tests {
                 .register(AgentInstance::new(config, session_store).expect("instance"))
                 .await;
         }
-        registry
+        (scratch, registry)
     }
 
     #[tokio::test]
     async fn bind_rejects_unknown_agent_with_available_list() {
-        let registry = registry_with(&["trader"]).await;
-        let store = test_store();
+        let (_reg_scratch, registry) = registry_with(&["trader"]).await;
+        let (_scratch, store) = test_store();
         let err = bind_channel_agent(Some(&registry), &store, None, "telegram", "ghost")
             .await
             .unwrap_err();
@@ -239,8 +245,8 @@ mod tests {
 
     #[tokio::test]
     async fn bind_rejects_empty_channel() {
-        let registry = registry_with(&["trader"]).await;
-        let store = test_store();
+        let (_reg_scratch, registry) = registry_with(&["trader"]).await;
+        let (_scratch, store) = test_store();
         let err = bind_channel_agent(Some(&registry), &store, None, "  ", "trader")
             .await
             .unwrap_err();
@@ -249,8 +255,8 @@ mod tests {
 
     #[tokio::test]
     async fn bind_persists_and_reports_previous() {
-        let registry = registry_with(&["trader", "coder"]).await;
-        let store = test_store();
+        let (_reg_scratch, registry) = registry_with(&["trader", "coder"]).await;
+        let (_scratch, store) = test_store();
 
         let first = bind_channel_agent(Some(&registry), &store, None, "telegram", "trader")
             .await
@@ -270,8 +276,8 @@ mod tests {
 
     #[tokio::test]
     async fn bind_is_idempotent_no_op() {
-        let registry = registry_with(&["trader"]).await;
-        let store = test_store();
+        let (_reg_scratch, registry) = registry_with(&["trader"]).await;
+        let (_scratch, store) = test_store();
         bind_channel_agent(Some(&registry), &store, None, "telegram", "trader")
             .await
             .unwrap();
@@ -283,8 +289,8 @@ mod tests {
 
     #[tokio::test]
     async fn unbind_returns_previous_and_clears() {
-        let registry = registry_with(&["trader"]).await;
-        let store = test_store();
+        let (_reg_scratch, registry) = registry_with(&["trader"]).await;
+        let (_scratch, store) = test_store();
         bind_channel_agent(Some(&registry), &store, None, "telegram", "trader")
             .await
             .unwrap();

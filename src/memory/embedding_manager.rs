@@ -282,9 +282,9 @@ mod tests_pending {
     use crate::memory::notes::store::NoteStore;
     use crate::memory::store::SqliteMemoryBackend;
 
-    fn make_store() -> Arc<SqliteMemoryBackend> {
-        let path = std::env::temp_dir().join(format!("aleph_emb_{}", uuid::Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    fn make_store() -> (tempfile::TempDir, Arc<SqliteMemoryBackend>) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
     }
 
     #[tokio::test]
@@ -301,7 +301,7 @@ mod tests_pending {
         let mgr = EmbeddingManager::new(EmbeddingSettings::default());
         // Note: no init(), no install_provider_for_test — active_provider is None.
         mgr.push_pending("default", "preference/a", "body a").await;
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let flushed = mgr.flush_pending(store.as_ref(), 64).await.unwrap();
         assert_eq!(flushed, 0);
         assert_eq!(
@@ -318,7 +318,7 @@ mod tests_pending {
             Arc::new(MockEmbeddingProvider::new(1024, "mock-1024"));
         mgr.install_provider_for_test(mock).await;
 
-        let store = make_store();
+        let (_scratch, store) = make_store();
         mgr.push_pending("default", "preference/a", "body a").await;
         mgr.push_pending("default", "preference/b", "body b").await;
         assert_eq!(mgr.pending_len().await, 2);

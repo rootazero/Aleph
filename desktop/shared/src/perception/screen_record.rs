@@ -1544,12 +1544,10 @@ mod tests {
 
     #[test]
     fn verify_recording_output_ok_for_nonempty_file() {
-        let dir = std::env::temp_dir().join(format!("aleph_rec_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("ok.mp4");
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("ok.mp4");
         std::fs::write(&f, b"data").unwrap();
         assert!(super::verify_recording_output(&f, false).is_ok());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1563,11 +1561,9 @@ mod tests {
         assert!(
             super::verify_recording_output(std::path::Path::new("/no/such.mp4"), false).is_err()
         );
-        let dir = std::env::temp_dir().join(format!("aleph_rec_empty_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("empty.mp4");
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("empty.mp4");
         std::fs::write(&f, b"").unwrap();
         assert!(super::verify_recording_output(&f, false).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

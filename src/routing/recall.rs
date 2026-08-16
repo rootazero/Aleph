@@ -209,10 +209,13 @@ mod tests {
         v[0] = seed;
         v
     }
-    fn temp_backend() -> SqliteMemoryBackend {
-        let dir = std::env::temp_dir().join(format!("aleph-routing-rec-{}", uuid::Uuid::new_v4()));
+    fn temp_backend() -> (tempfile::TempDir, SqliteMemoryBackend) {
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
-        SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
+        (
+            scratch,
+            SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
+        )
     }
     struct StubEmbedder {
         vec: Vec<f32>,
@@ -261,7 +264,8 @@ mod tests {
 
     #[tokio::test]
     async fn record_and_recall_share_one_embedding_key() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(0.7) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let avail: ProviderAvailability = Arc::new(|_p: &str| ProviderStatus::Available);
@@ -278,7 +282,8 @@ mod tests {
 
     #[tokio::test]
     async fn recalled_unavailable_model_is_marked() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         backend
             .record_routing_experience(&row("1", "a", "m-dead", "deadprov"), &emb(1.0), 768)
             .unwrap();
@@ -305,7 +310,8 @@ mod tests {
 
     #[tokio::test]
     async fn cold_start_returns_none() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let avail: ProviderAvailability = Arc::new(|_p: &str| ProviderStatus::Available);
@@ -323,7 +329,8 @@ mod tests {
     async fn unknown_provider_is_not_marked_unavailable() {
         // Regression: "failover" / "" / "(dynamic)" provider ids must FAIL OPEN —
         // they must never appear as [UNAVAILABLE] in the recall block.
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         backend
             .record_routing_experience(
                 &row("1", "a", "claude-3-5-sonnet", "failover"),
@@ -357,7 +364,8 @@ mod tests {
 
     #[tokio::test]
     async fn recall_block_includes_per_model_aggregate_section() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         // Two completed runs on m1 for agent "a".
         backend
             .record_routing_experience(&row("1", "a", "m1", "p"), &emb(1.0), 768)

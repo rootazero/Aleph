@@ -521,11 +521,14 @@ mod tests {
             node_id: "n-1".into(),
             center: "ws://c".into(),
         };
-        let path = std::env::temp_dir().join("aleph-node-identity-roundtrip-test.json");
+        // Guard bound here, in the frame that uses the path: dropping it
+        // removes the tree. (`alephcore::utils::scratch` is gated to the
+        // library's own tests, so this binary spells it out.)
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("identity.json");
         write_identity(&path, &id).unwrap();
         let loaded = read_identity(&path).expect("reads back");
         assert_eq!(loaded, id);
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
@@ -533,7 +536,8 @@ mod tests {
         // Pre-LAN-trust `NodeCredential` files carry an extra `bearer` field.
         // serde must drop it and keep the enrolled node_id so an upgraded
         // node does NOT re-enroll (see the `read_identity` migration note).
-        let path = std::env::temp_dir().join("aleph-node-legacy-cred-migration-test.json");
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("legacy.json");
         std::fs::write(
             &path,
             r#"{"node_id":"n-legacy","bearer":"tok:sig","center":"ws://c"}"#,
@@ -542,7 +546,6 @@ mod tests {
         let loaded = read_identity(&path).expect("legacy credential file still parses");
         assert_eq!(loaded.node_id, "n-legacy");
         assert_eq!(loaded.center, "ws://c");
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]

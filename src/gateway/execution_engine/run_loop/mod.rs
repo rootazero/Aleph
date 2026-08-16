@@ -247,32 +247,43 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Some(agent.id().to_string()),
             crate::projects::with_project_root(
                 request.workspace_override.clone(),
-                crate::tools::fs_scope::with_fs_scope(
-                    Some(fs_scope),
-                    // P1 data isolation: publish this run's owner/scope
-                    // attribution as a task-local, sibling of `originator`
-                    // below — both are derived from `request.metadata` and
-                    // must be re-seeded at every spawn boundary that carries
-                    // this request's metadata forward (see
-                    // `scope::with_scope`'s doc and `carry_policy_metadata`).
-                    with_request_scope(
-                        request,
-                        crate::tools::turn_context::with_originator(
-                            originator,
-                            crate::gateway::media::with_pending_media(
-                                Some(delivery_media),
-                                self.run_agent_loop_inner(
-                                    run_id,
-                                    request,
-                                    agent.clone(),
-                                    emitter,
-                                    deadline,
-                                    trace_task_id,
-                                    cancel_token,
-                                    extension_manager,
-                                    hook_executor.clone(),
-                                    hook_session_id.clone(),
-                                    occupancy_out,
+                // The exec-side twin of `fs_scope`, published from the SAME
+                // `override > agent workspace` value so the two layers cannot
+                // drift on "where does this run work". This is the ONLY channel
+                // by which the sandbox learns the authorised root: routing it
+                // through the tool's `working_dir` argument (as the tool
+                // adapters used to) launders a gateway-owned path through a
+                // model-writable field, and the jail — which exists to judge
+                // model-supplied paths — then refused it.
+                crate::sandbox::context::with_exec_workspace(
+                    Some(scope_workspace.clone()),
+                    crate::tools::fs_scope::with_fs_scope(
+                        Some(fs_scope),
+                        // P1 data isolation: publish this run's owner/scope
+                        // attribution as a task-local, sibling of `originator`
+                        // below — both are derived from `request.metadata` and
+                        // must be re-seeded at every spawn boundary that carries
+                        // this request's metadata forward (see
+                        // `scope::with_scope`'s doc and `carry_policy_metadata`).
+                        with_request_scope(
+                            request,
+                            crate::tools::turn_context::with_originator(
+                                originator,
+                                crate::gateway::media::with_pending_media(
+                                    Some(delivery_media),
+                                    self.run_agent_loop_inner(
+                                        run_id,
+                                        request,
+                                        agent.clone(),
+                                        emitter,
+                                        deadline,
+                                        trace_task_id,
+                                        cancel_token,
+                                        extension_manager,
+                                        hook_executor.clone(),
+                                        hook_session_id.clone(),
+                                        occupancy_out,
+                                    ),
                                 ),
                             ),
                         ),

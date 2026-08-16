@@ -1825,12 +1825,14 @@ mod tests {
         assert_ne!(work.to_key_string(), personal.to_key_string());
     }
 
-    fn env_store_with_binding(bindings: &[(&str, &str)]) -> Arc<AgentEnvStore> {
+    fn env_store_with_binding(
+        bindings: &[(&str, &str)],
+    ) -> (tempfile::TempDir, Arc<AgentEnvStore>) {
         use crate::gateway::agent_env::AgentEnvStoreConfig;
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(
             AgentEnvStore::new(AgentEnvStoreConfig {
-                db_path: temp.keep().join("env.db"),
+                db_path: temp.path().join("env.db"),
                 default_profile: "default".to_string(),
             })
             .unwrap(),
@@ -1838,7 +1840,7 @@ mod tests {
         for (channel, agent) in bindings {
             store.set_active_agent(channel, agent).unwrap();
         }
-        store
+        (temp, store)
     }
 
     fn dm_on(channel: &str) -> InboundMessage {
@@ -1872,13 +1874,14 @@ mod tests {
                 ..Default::default()
             },
         };
+        let (_env_scratch, env_store) = env_store_with_binding(&[("telegram", "trader")]);
         let router = InboundMessageRouter::new(
             Arc::new(ChannelRegistry::new()),
             Arc::new(SqlitePairingStore::in_memory().unwrap()),
             RoutingConfig::default(),
         )
         .with_route_bindings(vec![binding], SessionConfig::default(), "main")
-        .with_workspace_manager(env_store_with_binding(&[("telegram", "trader")]));
+        .with_workspace_manager(env_store);
 
         let (agent, route) = router
             .resolve_agent_id_async(&dm_on("telegram"))
@@ -1906,13 +1909,14 @@ mod tests {
                 ..Default::default()
             },
         };
+        let (_env_scratch, env_store) = env_store_with_binding(&[("discord", "trader")]);
         let router = InboundMessageRouter::new(
             Arc::new(ChannelRegistry::new()),
             Arc::new(SqlitePairingStore::in_memory().unwrap()),
             RoutingConfig::default(),
         )
         .with_route_bindings(vec![binding], SessionConfig::default(), "main")
-        .with_workspace_manager(env_store_with_binding(&[("discord", "trader")]));
+        .with_workspace_manager(env_store);
 
         let (agent, _route) = router
             .resolve_agent_id_async(&dm_on("discord"))
@@ -2015,12 +2019,18 @@ mod tests {
 
     // ── stale-binding self-heal (fail-soft on the hot path) ───────────────
 
-    async fn runtime_registry_with(ids: &[&str]) -> Arc<crate::gateway::AgentRegistry> {
+    async fn runtime_registry_with(
+        ids: &[&str],
+    ) -> (Vec<tempfile::TempDir>, Arc<crate::gateway::AgentRegistry>) {
         use crate::gateway::agent_instance::AgentInstanceConfig;
         use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
         let registry = Arc::new(crate::gateway::AgentRegistry::new());
+        // Guards must outlive the registry they back.
+        let mut scratch = Vec::new();
         for id in ids {
-            let root = tempfile::tempdir().unwrap().keep();
+            let root_guard = tempfile::tempdir().unwrap();
+            let root = root_guard.path().to_path_buf();
+            scratch.push(root_guard);
             let sm: Arc<dyn crate::gateway::session_store::SessionStore> = Arc::new(
                 SessionManager::new(SessionManagerConfig {
                     db_path: root.join("sessions.db"),
@@ -2040,7 +2050,7 @@ mod tests {
                 )
                 .await;
         }
-        registry
+        (scratch, registry)
     }
 
     /// A binding pointing at an agent missing from the runtime registry (its
@@ -2050,13 +2060,15 @@ mod tests {
     /// and the user loses the very LLM they'd need to run `agent_switch`.
     #[tokio::test]
     async fn stale_binding_falls_back_to_default() {
+        let (_env_scratch, env_store) = env_store_with_binding(&[("telegram", "deleted-agent")]);
         let mut router = InboundMessageRouter::new(
             Arc::new(ChannelRegistry::new()),
             Arc::new(SqlitePairingStore::in_memory().unwrap()),
             RoutingConfig::default(),
         )
-        .with_workspace_manager(env_store_with_binding(&[("telegram", "deleted-agent")]));
-        router.agent_registry = Some(runtime_registry_with(&["main"]).await);
+        .with_workspace_manager(env_store);
+        let (_reg_scratch, reg) = runtime_registry_with(&["main"]).await;
+        router.agent_registry = Some(reg);
 
         let (agent, _route) = router
             .resolve_agent_id_async(&dm_on("telegram"))
@@ -2083,13 +2095,15 @@ mod tests {
     /// The registry validation must not break healthy bindings.
     #[tokio::test]
     async fn valid_binding_passes_registry_validation() {
+        let (_env_scratch, env_store) = env_store_with_binding(&[("telegram", "trader")]);
         let mut router = InboundMessageRouter::new(
             Arc::new(ChannelRegistry::new()),
             Arc::new(SqlitePairingStore::in_memory().unwrap()),
             RoutingConfig::default(),
         )
-        .with_workspace_manager(env_store_with_binding(&[("telegram", "trader")]));
-        router.agent_registry = Some(runtime_registry_with(&["main", "trader"]).await);
+        .with_workspace_manager(env_store);
+        let (_reg_scratch, reg) = runtime_registry_with(&["main", "trader"]).await;
+        router.agent_registry = Some(reg);
 
         let (agent, _route) = router
             .resolve_agent_id_async(&dm_on("telegram"))

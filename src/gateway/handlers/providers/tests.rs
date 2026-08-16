@@ -8,19 +8,17 @@ use crate::sync_primitives::Arc;
 use serde_json::json;
 use tokio::sync::RwLock;
 
-fn test_vault() -> Arc<SharedTokenManager> {
+/// Returns the scratch guard alongside the vault: `SharedTokenManager` writes
+/// a real `.vault` (plus its `.vault.lock`) at the path it is given, so the
+/// directory needs an owner in the *caller's* frame. See
+/// [`crate::utils::scratch::scratch_root`].
+fn test_vault() -> (tempfile::TempDir, Arc<SharedTokenManager>) {
     let store = Arc::new(SecurityStore::in_memory().unwrap());
-    let tmp = std::env::temp_dir().join(format!(
-        "test_ai_provider_vault_{}_{}.vault",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let vault = Arc::new(SharedTokenManager::new(store, tmp));
+    let (scratch, dir) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&dir).unwrap();
+    let vault = Arc::new(SharedTokenManager::new(store, dir.join("test.vault")));
     let _ = vault.generate_token().unwrap();
-    vault
+    (scratch, vault)
 }
 
 fn config_with_provider(name: &str) -> Config {
@@ -110,6 +108,7 @@ fn test_test_result_serialize() {
 
 #[tokio::test]
 async fn test_provider_test_redacts_probe_error() {
+    let (_vault_scratch, vault_) = test_vault();
     let secret = "dXNlcjpwYXNzd29yZA==";
     let request = JsonRpcRequest::with_id(
         "providers.test",
@@ -125,7 +124,7 @@ async fn test_provider_test_redacts_probe_error() {
     let response = handle_test(
         request,
         Arc::new(RwLock::new(Config::default())),
-        test_vault(),
+        vault_.clone(),
     )
     .await;
     let result = response.result.unwrap();
@@ -137,7 +136,7 @@ async fn test_provider_test_redacts_probe_error() {
 #[tokio::test]
 async fn test_healthcheck_empty_providers() {
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
     let response = handle_healthcheck(request, config, vault).await;
     let result = response.result.unwrap();
@@ -155,7 +154,7 @@ async fn test_healthcheck_skips_disabled_without_probing() {
     let mut config = config_with_provider("openai");
     config.providers.get_mut("openai").unwrap().enabled = false;
     let config = Arc::new(RwLock::new(config));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
 
     let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
     let response = handle_healthcheck(request, config, vault).await;
@@ -184,10 +183,11 @@ async fn test_healthcheck_skips_disabled_without_probing() {
 /// needs no third field.
 #[tokio::test]
 async fn healthcheck_skips_a_preset_that_opts_out_of_probing() {
+    let (_vault_scratch, vault_) = test_vault();
     let mut config = config_with_provider("chatgpt");
     config.providers.get_mut("chatgpt").unwrap().enabled = true;
     let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
-    let response = handle_healthcheck(request, Arc::new(RwLock::new(config)), test_vault()).await;
+    let response = handle_healthcheck(request, Arc::new(RwLock::new(config)), vault_.clone()).await;
     let result = response.result.unwrap();
     let row = &result["providers"][0];
 
@@ -209,13 +209,14 @@ async fn healthcheck_skips_a_preset_that_opts_out_of_probing() {
 
 #[tokio::test]
 async fn test_healthcheck_redacts_probe_error() {
+    let (_vault_scratch, vault_) = test_vault();
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
     let mut config = config_with_provider("leaky");
     let provider = config.providers.get_mut("leaky").unwrap();
     provider.enabled = true;
     provider.protocol = Some(jwt.to_string());
     let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
-    let response = handle_healthcheck(request, Arc::new(RwLock::new(config)), test_vault()).await;
+    let response = handle_healthcheck(request, Arc::new(RwLock::new(config)), vault_.clone()).await;
     let result = response.result.unwrap();
     let error = result["providers"][0]["error"].as_str().unwrap();
     assert!(!error.contains(jwt));
@@ -245,7 +246,7 @@ fn test_provider_health_row_serialize() {
 #[tokio::test]
 async fn test_handle_list_reports_has_api_key_without_echoing_secret() {
     let config = Arc::new(RwLock::new(config_with_provider("toapis")));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     vault
         .store_secret("ai:toapis", "test-toapis-key")
         .expect("store ai provider secret");
@@ -267,7 +268,7 @@ async fn test_handle_list_reports_has_api_key_without_echoing_secret() {
 #[tokio::test]
 async fn test_handle_get_reports_has_api_key_without_echoing_secret() {
     let config = Arc::new(RwLock::new(config_with_provider("toapis")));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     vault
         .store_secret("ai:toapis", "test-toapis-key")
         .expect("store ai provider secret");
@@ -323,7 +324,7 @@ fn roster_ids(entry: &serde_json::Value) -> Vec<String> {
 #[tokio::test]
 async fn catalog_all_view_lists_every_chat_preset() {
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
     assert!(response.is_success());
     let items = items_array(&response);
@@ -350,7 +351,7 @@ async fn catalog_configured_view_filters_empty_config_to_empty() {
     crate::providers::moa::store_moa_config(None);
 
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     assert!(response.is_success());
     let items = items_array(&response);
@@ -367,7 +368,7 @@ async fn catalog_default_view_is_configured() {
     crate::providers::moa::store_moa_config(None);
 
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(None), config, vault).await;
     assert!(response.is_success());
     assert!(
@@ -388,7 +389,7 @@ async fn catalog_configured_view_returns_verified_enabled_entry() {
     cfg.verified = true;
     config.providers.insert("openai".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
 
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     let items = items_array(&response);
@@ -415,7 +416,7 @@ async fn catalog_roster_merges_curated_rungs_behind_operator_models() {
     cfg.verified = true;
     config.providers.insert("openai".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
 
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     let items = items_array(&response);
@@ -444,7 +445,7 @@ async fn catalog_roster_skips_curated_rungs_when_base_url_moved() {
     cfg.base_url = Some("https://relay.internal/v1".to_string());
     config.providers.insert("openai".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
 
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     let items = items_array(&response);
@@ -455,7 +456,7 @@ async fn catalog_roster_skips_curated_rungs_when_base_url_moved() {
 #[tokio::test]
 async fn catalog_roster_defaults_to_preset_chain_when_unconfigured() {
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
     let items = items_array(&response);
 
@@ -482,7 +483,7 @@ async fn catalog_configured_view_includes_custom_non_preset_provider() {
     cfg.verified = true;
     config.providers.insert("302ai".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
 
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     let items = items_array(&response);
@@ -507,7 +508,7 @@ async fn catalog_configured_view_hides_unverified_custom_provider() {
     cfg.verified = false;
     config.providers.insert("302ai".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
 
     let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
     let items = items_array(&response);
@@ -520,7 +521,7 @@ async fn catalog_configured_view_hides_unverified_custom_provider() {
 #[tokio::test]
 async fn catalog_entries_carry_modalities_default_model() {
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
     for item in items_array(&response) {
         assert!(item.get("id").and_then(|v| v.as_str()).is_some());
@@ -540,7 +541,7 @@ async fn catalog_unknown_view_treats_as_all() {
     crate::providers::moa::store_moa_config(None);
 
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("nonsense")), config, vault).await;
     let items = items_array(&response);
     // Unknown view → fall through to "all", returning every preset.
@@ -583,7 +584,7 @@ async fn catalog_includes_moa_pseudo_entry_when_presets_enabled() {
     crate::providers::moa::store_moa_config(Some(moa));
 
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
     let items = items_array(&response);
     let entry = items
@@ -605,7 +606,7 @@ async fn catalog_omits_moa_entry_without_moa_config() {
     crate::providers::moa::store_moa_config(None);
 
     let config = Arc::new(RwLock::new(Config::default()));
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
     let items = items_array(&response);
     assert!(
@@ -627,14 +628,7 @@ async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let prev_aleph_home = std::env::var_os("ALEPH_HOME");
-    let tmp = std::env::temp_dir().join(".aleph").join(format!(
-        "providers_test_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let (_home_scratch, tmp) = crate::utils::scratch::scratch_root();
     tokio::fs::create_dir_all(&tmp)
         .await
         .expect("create test aleph home");
@@ -647,7 +641,7 @@ async fn test_handle_update_hot_reloads_runtime_provider_protocol() {
         .insert("custom".to_string(), initial_cfg.clone());
     let config = Arc::new(RwLock::new(config));
 
-    let vault = test_vault();
+    let (_vault_scratch, vault) = test_vault();
     vault
         .store_secret("ai:custom", "test-key")
         .expect("store provider key");
@@ -794,11 +788,12 @@ fn fully_populated_roster_model() -> RosterModel {
 
 #[tokio::test]
 async fn the_catalog_response_speaks_only_the_contracts_vocabulary() {
+    let (_vault_scratch, vault_) = test_vault();
     // Over-sending is what the `workspace.get` round found: an entire internal
     // struct reached the wire, four fields of which had no writer and no
     // reader anywhere, and the parse-shaped test could not see it.
     let config = Arc::new(RwLock::new(Config::default()));
-    let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;
+    let response = handle_catalog(catalog_request(Some("all")), config, vault_.clone()).await;
     let items = items_array(&response);
     assert!(!items.is_empty(), "fixture must produce rows to inspect");
 
@@ -838,6 +833,7 @@ async fn the_catalog_response_speaks_only_the_contracts_vocabulary() {
 
 #[tokio::test]
 async fn every_catalog_row_deserialises_into_the_contract_type() {
+    let (_vault_scratch, vault_) = test_vault();
     // The other direction: a client holding only `aleph-protocol` must be able
     // to read what the server sends, including the rows built by the custom
     // and MoA arms rather than the preset arm.
@@ -848,7 +844,7 @@ async fn every_catalog_row_deserialises_into_the_contract_type() {
     config.providers.insert("my-relay".to_string(), cfg);
     let config = Arc::new(RwLock::new(config));
 
-    let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;
+    let response = handle_catalog(catalog_request(Some("all")), config, vault_.clone()).await;
     for item in items_array(&response) {
         let parsed: Result<CatalogEntry, _> = serde_json::from_value(item.clone());
         assert!(
@@ -861,11 +857,12 @@ async fn every_catalog_row_deserialises_into_the_contract_type() {
 
 #[tokio::test]
 async fn a_roster_row_carries_its_provenance_and_lifecycle() {
+    let (_vault_scratch, vault_) = test_vault();
     // The roster used to be `Vec<String>`. Projecting records down to scalars
     // deletes every other field for every renderer at once, and it happens in
     // the producer, so each renderer still looks correct. This pins the shape.
     let config = Arc::new(RwLock::new(Config::default()));
-    let response = handle_catalog(catalog_request(Some("all")), config, test_vault()).await;
+    let response = handle_catalog(catalog_request(Some("all")), config, vault_.clone()).await;
     let items = items_array(&response);
     let entry = items
         .iter()
@@ -908,11 +905,12 @@ async fn a_create_request_built_from_the_contract_type_is_accepted() {
 
 #[tokio::test]
 async fn a_models_refresh_sweep_speaks_only_the_contracts_vocabulary() {
+    let (_vault_scratch, vault_) = test_vault();
     // No provider is configured, so this exercises the empty sweep and the
     // response envelope rather than the network.
     let config = Arc::new(RwLock::new(Config::default()));
     let request = JsonRpcRequest::with_id("providers.modelsRefresh", None, json!(1));
-    let response = handle_models_refresh(request, config, test_vault()).await;
+    let response = handle_models_refresh(request, config, vault_.clone()).await;
 
     let result = response.result.expect("sweep must answer");
     let parsed: ModelsRefreshResult =
@@ -927,6 +925,7 @@ async fn a_models_refresh_sweep_speaks_only_the_contracts_vocabulary() {
 
 #[tokio::test]
 async fn a_provider_without_a_credential_gets_a_row_rather_than_silence() {
+    let (_vault_scratch, vault_) = test_vault();
     // Skipping a bad record is usually right; doing it silently is what costs.
     // Asking to refresh one provider and getting an empty array back reads as
     // "nothing happened", which is indistinguishable from success.
@@ -942,7 +941,7 @@ async fn a_provider_without_a_credential_gets_a_row_rather_than_silence() {
         Some(json!({ "provider": "openai" })),
         json!(1),
     );
-    let response = handle_models_refresh(request, config, test_vault()).await;
+    let response = handle_models_refresh(request, config, vault_.clone()).await;
     let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
         .expect("client must decode the sweep");
 
@@ -957,13 +956,14 @@ async fn a_provider_without_a_credential_gets_a_row_rather_than_silence() {
 
 /// Ask a `models_refresh` about one provider and read its row.
 async fn refresh_one(config: Config, provider: &str) -> ModelsRefreshRow {
+    let (_vault_scratch, vault_) = test_vault();
     let request = JsonRpcRequest::with_id(
         "providers.modelsRefresh",
         Some(json!({ "provider": provider })),
         json!(1),
     );
     let response =
-        handle_models_refresh(request, Arc::new(RwLock::new(config)), test_vault()).await;
+        handle_models_refresh(request, Arc::new(RwLock::new(config)), vault_.clone()).await;
     let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
         .expect("client must decode the sweep");
     parsed
@@ -994,6 +994,7 @@ async fn naming_a_disabled_provider_still_gets_an_answer() {
 
 #[tokio::test]
 async fn a_disabled_provider_stays_out_of_the_blanket_sweep() {
+    let (_vault_scratch, vault_) = test_vault();
     // The other half of the rule, so the fix above cannot quietly become "the
     // sweep dials everything".
     let mut config = Config::default();
@@ -1003,7 +1004,7 @@ async fn a_disabled_provider_stays_out_of_the_blanket_sweep() {
 
     let request = JsonRpcRequest::with_id("providers.modelsRefresh", None, json!(1));
     let response =
-        handle_models_refresh(request, Arc::new(RwLock::new(config)), test_vault()).await;
+        handle_models_refresh(request, Arc::new(RwLock::new(config)), vault_.clone()).await;
     let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
         .expect("client must decode the sweep");
     assert!(
@@ -1089,6 +1090,7 @@ async fn no_listing_endpoint_outranks_no_credential() {
 
 #[tokio::test]
 async fn the_blanket_sweep_reports_such_a_preset_instead_of_skipping_it() {
+    let (_vault_scratch, vault_) = test_vault();
     // Not silence, and not a failure: the row exists (asking about a provider
     // and getting nothing back reads as "nothing happened") and it carries the
     // one kind a client renders as *not applicable* rather than red.
@@ -1105,7 +1107,7 @@ async fn the_blanket_sweep_reports_such_a_preset_instead_of_skipping_it() {
 
     let request = JsonRpcRequest::with_id("providers.modelsRefresh", None, json!(1));
     let response =
-        handle_models_refresh(request, Arc::new(RwLock::new(config)), test_vault()).await;
+        handle_models_refresh(request, Arc::new(RwLock::new(config)), vault_.clone()).await;
     let parsed: ModelsRefreshResult = serde_json::from_value(response.result.expect("answer"))
         .expect("client must decode the sweep");
 

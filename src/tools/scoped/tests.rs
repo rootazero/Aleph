@@ -2888,13 +2888,18 @@ impl LoopTool for FailingTestRunner {
     }
 }
 
-fn hygiene_store(name: &str) -> StdArc<crate::tools::result_store::ToolResultStore> {
-    let base = std::env::temp_dir()
-        .join("aleph_test_scoped_hygiene")
-        .join(name);
-    let _ = std::fs::remove_dir_all(&base);
+fn hygiene_store(
+    _name: &str,
+) -> (
+    tempfile::TempDir,
+    StdArc<crate::tools::result_store::ToolResultStore>,
+) {
+    let (scratch, base) = crate::utils::scratch::scratch_root();
     std::fs::create_dir_all(&base).unwrap();
-    StdArc::new(crate::tools::result_store::ToolResultStore::with_dir_for_tests(base))
+    (
+        scratch,
+        StdArc::new(crate::tools::result_store::ToolResultStore::with_dir_for_tests(base)),
+    )
 }
 
 /// The round's headline behaviour, asserted where it actually has to hold.
@@ -2907,10 +2912,11 @@ fn hygiene_store(name: &str) -> StdArc<crate::tools::result_store::ToolResultSto
 /// the only available next move was to re-run the suite.
 #[tokio::test]
 async fn a_failing_test_run_reaches_the_model_as_signal_not_as_json_envelope_head() {
+    let (_scratch, hygiene) = hygiene_store("failing_test_run");
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(FailingTestRunner));
     let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
-        .with_result_store(hygiene_store("failing_test_run"));
+        .with_result_store(hygiene);
 
     let out = svc.execute("bash", json!({})).await.expect("tool succeeds");
     let text = out.value.as_str().expect("layer 2 flattens to text");
@@ -2972,10 +2978,11 @@ async fn a_small_result_is_untouched_by_ingress_hygiene() {
             }
         }
     }
+    let (_scratch, hygiene) = hygiene_store("small_untouched");
     let mut registry = LoopToolRegistry::new();
     registry.register(Box::new(Tiny));
     let svc = ScopedToolService::new(StdArc::new(registry), std::collections::BTreeSet::new())
-        .with_result_store(hygiene_store("small_untouched"));
+        .with_result_store(hygiene);
 
     let out = svc.execute("bash", json!({})).await.unwrap();
     let text = out.value.as_str().unwrap();

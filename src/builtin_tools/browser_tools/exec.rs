@@ -837,10 +837,7 @@ mod tests {
         use crate::browser::profile::BrowserSystemConfig;
         use crate::tools::result_store::ToolResultStore;
 
-        let base = std::env::temp_dir()
-            .join("aleph_test_browser_exec")
-            .join("offload");
-        let _ = std::fs::remove_dir_all(&base);
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore::with_dir_for_tests(base.clone());
         let manager = ProfileManager::new(BrowserSystemConfig::default());

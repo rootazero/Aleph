@@ -40,7 +40,8 @@ fn test_page_size_dimensions_inches() {
 #[tokio::test]
 async fn test_simple_pdf_generation() {
     let tool = PdfGenerateTool::new();
-    let temp_dir = std::env::temp_dir();
+    let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&temp_dir).unwrap();
     let output_path = temp_dir.join("test_simple.pdf");
 
     let args = PdfGenerateArgs {
@@ -63,13 +64,13 @@ async fn test_simple_pdf_generation() {
     assert_eq!(output.pages, 1);
 
     // Cleanup
-    let _ = fs::remove_file(&output_path);
 }
 
 #[tokio::test]
 async fn test_markdown_pdf_generation() {
     let tool = PdfGenerateTool::new();
-    let temp_dir = std::env::temp_dir();
+    let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&temp_dir).unwrap();
     let output_path = temp_dir.join("test_markdown.pdf");
 
     let markdown_content = r#"# Main Title
@@ -110,13 +111,13 @@ code block
     assert!(output.success);
 
     // Cleanup
-    let _ = fs::remove_file(&output_path);
 }
 
 #[tokio::test]
 async fn test_chinese_pdf_generation() {
     let tool = PdfGenerateTool::new();
-    let temp_dir = std::env::temp_dir();
+    let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&temp_dir).unwrap();
     let output_path = temp_dir.join("test_chinese.pdf");
 
     let content = "# 比特币价格报告\n\n\
@@ -152,7 +153,6 @@ async fn test_chinese_pdf_generation() {
     assert!(metadata.len() > 1000, "PDF should have substantial content");
 
     // Cleanup
-    let _ = fs::remove_file(&output_path);
 }
 
 /// The per-run `FsScope` task-local wins over the shared `ToolContextHandle`,
@@ -280,7 +280,8 @@ async fn test_browser_engine_markdown_pdf() {
     }
 
     let tool = PdfGenerateTool::new();
-    let temp_dir = std::env::temp_dir();
+    let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&temp_dir).unwrap();
     let output_path = temp_dir.join("test_browser_engine.pdf");
 
     let markdown_content = r#"# Browser Engine Test
@@ -346,14 +347,14 @@ fn main() {
     );
 
     // Cleanup
-    let _ = tokio::fs::remove_file(&output_path).await;
 }
 
 /// Test: Auto engine falls back to native when Chrome is unavailable.
 #[tokio::test]
 async fn test_auto_engine_fallback() {
     let tool = PdfGenerateTool::new();
-    let temp_dir = std::env::temp_dir();
+    let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
+    std::fs::create_dir_all(&temp_dir).unwrap();
     let output_path = temp_dir.join("test_auto_fallback.pdf");
 
     let args = PdfGenerateArgs {
@@ -377,8 +378,6 @@ async fn test_auto_engine_fallback() {
 
     let output = result.unwrap();
     assert!(output.success);
-
-    let _ = tokio::fs::remove_file(&output_path).await;
 }
 
 // ── Content format auto-detection ────────────────────────────────────────

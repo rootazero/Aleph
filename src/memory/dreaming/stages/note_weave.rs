@@ -559,8 +559,14 @@ mod tests {
         }
     }
 
-    async fn build_ctx(llm_response: &str) -> (DreamContext, Arc<SqliteMemoryBackend>) {
-        let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
+    /// Returns the scratch guard as well: dropping it deletes the tree, so it
+    /// has to outlive the `DreamContext` that indexes into it. Keeping it in
+    /// this frame would delete the directory on `return` — and the tests would
+    /// still pass, because SQLite goes on using its open fd.
+    async fn build_ctx(
+        llm_response: &str,
+    ) -> (DreamContext, Arc<SqliteMemoryBackend>, tempfile::TempDir) {
+        let (temp_guard, temp) = crate::memory::dreaming::scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
@@ -581,7 +587,7 @@ mod tests {
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
-        (ctx, store)
+        (ctx, store, temp_guard)
     }
 
     fn entry(path: &str) -> NoteEntry {
@@ -598,7 +604,7 @@ mod tests {
 
     #[tokio::test]
     async fn linked_note_is_not_treated_as_orphan() {
-        let (mut ctx, store) = build_ctx("{\"links\": []}").await;
+        let (mut ctx, store, _scratch) = build_ctx("{\"links\": []}").await;
         // a links to b → neither is an orphan.
         store
             .index_note(
@@ -649,7 +655,7 @@ mod tests {
         // Create the dir first so SqliteMemoryBackend nests memory.db *inside*
         // it (db_path.is_dir() branch) — otherwise `temp` itself becomes the DB
         // file and append_to_note can't mkdir `temp/<agent>/<cat>/`.
-        let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
@@ -734,7 +740,7 @@ mod tests {
             {"path":"learning/a","keywords":["shared-entity","alpha"]},
             {"path":"learning/b","keywords":["shared-entity","beta"]}
         ]}"#;
-        let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
@@ -813,7 +819,7 @@ mod tests {
         use crate::providers::recording_mock::RecordingMockProvider;
         // A single orphan: even with extracted keywords there is no second note
         // to pair against → pair_by_overlap yields nothing → zero woven.
-        let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
@@ -859,7 +865,7 @@ mod tests {
 
     #[tokio::test]
     async fn incoming_only_note_is_not_orphan() {
-        let (mut ctx, store) = build_ctx("{\"links\": []}").await;
+        let (mut ctx, store, _scratch) = build_ctx("{\"links\": []}").await;
         // `src` links to `target` (full-path to_note); target has no outgoing link.
         store
             .index_note(
@@ -913,7 +919,7 @@ mod tests {
             {"path":"reference/target","keywords":["shared-topic"]},
             {"path":"personal/partner","keywords":["shared-topic"]}
         ]}"#;
-        let (mut ctx, store) = build_ctx(llm).await;
+        let (mut ctx, store, _scratch) = build_ctx(llm).await;
 
         // `src` gives `target` an incoming full-path link; `src` itself is not walked.
         store
@@ -1008,7 +1014,7 @@ mod tests {
     async fn semantic_pass_is_noop_under_stub_embedder() {
         // The default test embedder reports dim 0, so the semantic fallback must
         // short-circuit to an empty link set (existing fixtures rely on this).
-        let (ctx, _store) = build_ctx("{\"links\": []}").await;
+        let (ctx, _store, _scratch) = build_ctx("{\"links\": []}").await;
         let links = semantic_orphan_links(&ctx, &["learning/a".to_string()]).await;
         assert!(links.is_empty());
     }
@@ -1025,7 +1031,7 @@ mod tests {
             {"path":"learning/alpha","keywords":["alpha-only"]},
             {"path":"learning/beta","keywords":["beta-only"]}
         ]}"#;
-        let temp = std::env::temp_dir().join(format!("aleph_weave_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
@@ -1111,7 +1117,7 @@ mod tests {
             {"path":"learning/alpha","keywords":["alpha-only"]},
             {"path":"learning/beta","keywords":["beta-only"]}
         ]}"#;
-        let (mut ctx, store) = build_ctx(llm).await;
+        let (mut ctx, store, _scratch) = build_ctx(llm).await;
         for title in ["alpha", "beta"] {
             store
                 .index_note(

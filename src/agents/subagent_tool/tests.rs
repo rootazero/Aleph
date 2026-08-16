@@ -1606,7 +1606,7 @@ async fn background_subagent_reseeds_scope_and_project_root() {
         Arc::new(NoopTestToolService),
     );
 
-    let dir = std::env::temp_dir().join("aleph-p1-scope-test");
+    let (_scratch, dir) = crate::utils::scratch::scratch_root();
     let attr = ScopeAttribution::personal("u-alice");
 
     let rid = crate::scope::with_scope(
@@ -1712,7 +1712,7 @@ async fn sync_batch_subagents_reseed_scope_and_project_root() {
         Arc::new(NoopTestToolService),
     );
 
-    let dir = std::env::temp_dir().join("aleph-w1-sync-batch-scope");
+    let (_scratch, dir) = crate::utils::scratch::scratch_root();
     let attr = ScopeAttribution::personal("u-batch");
 
     let result = crate::scope::with_scope(

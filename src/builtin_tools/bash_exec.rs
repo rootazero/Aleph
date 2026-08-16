@@ -270,6 +270,11 @@ impl BashExecTool {
         let registry = process_registry();
         let caller = session_label();
         let sid = current_session();
+        // Captured on the CALLER's task: the authorised jail root is a
+        // task-local like the rest, so reading it inside the detached task
+        // would find nothing and the job would silently run in a different
+        // directory than the foreground call that spawned it.
+        let exec_workspace = crate::sandbox::context::current_exec_workspace();
         let identity = crate::approval::current_call_identity();
         let inner = self.inner.clone();
         let preview = code_exec_args.code.clone();
@@ -307,20 +312,26 @@ impl BashExecTool {
             // legitimately run for the full 1h ceiling. `call_unclamped` runs
             // `execute` directly, bypassing the clamp in `AlephTool::call`.
             let result = crate::approval::with_call_identity(identity, async move {
-                // Task-locals do NOT cross `tokio::spawn`, so both the session
-                // scope and the live-tail scope have to be re-entered HERE, in
-                // the spawned task — entering them around `tokio::spawn` on the
-                // caller's task would leave the driver seeing neither.
+                // Task-locals do NOT cross `tokio::spawn`, so the session
+                // scope, the live-tail scope and the authorised exec workspace
+                // all have to be re-entered HERE, in the spawned task —
+                // entering them around `tokio::spawn` on the caller's task
+                // would leave the driver seeing none of them. The guard that
+                // catches a forgotten member is behavioural, not a name list:
+                // `background_lands_in_the_same_directory_as_foreground`.
                 LIVE_TAIL
                     .scope(live_for_task, async move {
-                        match sid {
-                            Some(sid) => {
-                                SESSION_ID
-                                    .scope(sid, inner.call_unclamped(code_exec_args))
-                                    .await
+                        crate::sandbox::context::with_exec_workspace(exec_workspace, async move {
+                            match sid {
+                                Some(sid) => {
+                                    SESSION_ID
+                                        .scope(sid, inner.call_unclamped(code_exec_args))
+                                        .await
+                                }
+                                None => inner.call_unclamped(code_exec_args).await,
                             }
-                            None => inner.call_unclamped(code_exec_args).await,
-                        }
+                        })
+                        .await
                     })
                     .await
             })

@@ -381,7 +381,7 @@ mod tests {
         use crate::providers::mock::MockProvider;
         use crate::sync_primitives::Arc;
 
-        let temp = std::env::temp_dir().join(format!("aleph_review_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         tokio::fs::create_dir_all(&temp).await.unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());

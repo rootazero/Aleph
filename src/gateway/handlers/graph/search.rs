@@ -120,7 +120,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_search_uses_explicit_agent_id() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         // Both agents have the SAME fact word so the FTS query alone cannot
         // distinguish them. Only an agent_id filter on the handler can. We
         // distinguish in the assertion by note title.
@@ -148,7 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_search_falls_back_to_default_agent_when_omitted() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         // Strengthened: seed both DEFAULT and alpha with a shared query word.
         // With agent_id omitted, must return ONLY default's hit, proving
         // fallback resolves to DEFAULT_AGENT_ID and does not leak across agents.
@@ -180,7 +180,7 @@ mod tests {
     /// everything a card shows. All of it is already on NoteIndexEntry.
     #[tokio::test]
     async fn search_hits_carry_full_note_row() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         let mut note = make_note_with_fact("TaggedSearchNote", "distinctivefactword");
         note.tags = vec!["rust".to_string(), "ci".to_string()];
         db.index_note(&note, "main", "concept").await.unwrap();
@@ -206,7 +206,7 @@ mod tests {
     async fn foreign_partition_search_returns_no_hits_not_the_owners_notes() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = make_db();
+        let (_scratch, db) = make_db();
         let secret = make_note_with_fact("AliceSecretNote", "distinctivesearchword");
         db.index_note(&secret, "main__u-alice", "concept")
             .await

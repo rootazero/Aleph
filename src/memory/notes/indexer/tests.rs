@@ -1,15 +1,16 @@
 use super::*;
 use crate::memory::store::SqliteMemoryBackend;
 use tempfile::TempDir;
-use uuid::Uuid;
 
 const AGENT: &str = "default";
 
-fn create_test_db() -> Arc<SqliteMemoryBackend> {
-    let temp_dir = std::env::temp_dir();
-    let db_path = temp_dir.join(format!("test_indexer_{}", Uuid::new_v4()));
+fn create_test_db() -> (tempfile::TempDir, Arc<SqliteMemoryBackend>) {
+    let (scratch, db_path) = crate::utils::scratch::scratch_root();
     // rust-doctor-disable-next-line unwrap-in-production
-    Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
+    (
+        scratch,
+        Arc::new(SqliteMemoryBackend::new(&db_path).unwrap()),
+    )
 }
 
 fn sample_md(category: &str, facts: &[&str], links: &[&str]) -> String {
@@ -44,7 +45,7 @@ async fn ensure_dirs_creates_all_categories() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db);
 
@@ -87,7 +88,7 @@ async fn write_note_embeds_on_write_only_with_embedder() {
     // Without one, the write path stays FTS-only (byte-identical old behaviour).
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     let note = KnowledgeNote {
         title: "Vectorable".to_string(),
         category: "learning".to_string(),
@@ -130,7 +131,7 @@ async fn full_rebuild_indexes_all_notes() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     // Write files into category subdirs
     let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
@@ -183,7 +184,7 @@ async fn full_rebuild_prunes_orphan_index_rows() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
     fs::write(
@@ -230,7 +231,7 @@ async fn full_rebuild_skips_unchanged() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
     let note1 = sample_md("other", &["fact one"], &[]);
@@ -257,7 +258,7 @@ async fn index_file_detects_change() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
     let path = misc_dir.join("Dynamic.md");
@@ -288,7 +289,7 @@ async fn write_note_creates_file() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db);
@@ -321,7 +322,7 @@ async fn append_to_existing_note() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
     let initial = sample_md("preference", &["fact1"], &["Link1"]);
@@ -370,7 +371,7 @@ async fn append_creates_new_note() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
@@ -405,7 +406,7 @@ async fn full_rebuild_parallel_matches_serial_results() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
     // rust-doctor-disable-next-line unwrap-in-production
@@ -442,7 +443,7 @@ async fn rename_note_cascades_wikilinks() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     // Create two notes in the same category
     let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
@@ -514,7 +515,7 @@ async fn rename_note_backfills_dangling_links_pointing_at_new_name() {
     // other note that was already dangling on it.
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
 
@@ -583,7 +584,7 @@ async fn rename_note_cascades_frontmatter_typed_relations() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
 
@@ -672,7 +673,7 @@ async fn write_note_backfills_dangling_links_in_other_notes() {
     // dangling link in another note once the note it points at is written.
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
 
@@ -1060,7 +1061,7 @@ async fn append_to_note_preserves_raw_prose_body() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db);
 
@@ -1106,7 +1107,7 @@ async fn delete_note_removes_file_index_and_is_idempotent() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db);
 
@@ -1153,7 +1154,7 @@ async fn append_relations_adds_typed_edge_and_indexes_it() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
 
@@ -1212,7 +1213,7 @@ async fn superseded_by_list_materializes_typed_edge() {
     // `surface_relations` force-surfaces the newer note. Before this fix only
     // the `relations:`-block encoding produced such an edge — the list form was
     // silently dropped, breaking the STRUCTURAL_STRONG guarantee.
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
 
     // Index the superseding (newer) note first so the edge resolves Active.
     let newer = KnowledgeNote {
@@ -1272,7 +1273,7 @@ async fn dated_body_supersession_promotes_through_index_to_force_surface_edge() 
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
     setup_category_dir(&memory_dir, AGENT, "reference").await;
@@ -1342,7 +1343,7 @@ async fn append_relations_is_noop_when_all_already_present() {
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
 
@@ -1461,7 +1462,7 @@ async fn index_file_refreshes_the_vector_for_the_bytes_it_just_indexed() {
     // too, and that is exactly the bug.
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone())
         .with_embedder(Arc::new(StubEmbedder));
@@ -1502,7 +1503,7 @@ async fn index_file_resolves_dangling_links_that_now_point_at_it() {
     // global `relink_unresolved`.
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
 
@@ -1564,7 +1565,7 @@ async fn full_rebuild_all_reconciles_every_corpus_not_just_the_default_agent() {
     // dream daemon already fans its nightly maintenance over.
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db.clone());
 
@@ -1617,7 +1618,7 @@ async fn full_rebuild_all_scaffolds_only_the_agent_it_was_asked_about() {
     // a pass whose job is to *observe* disk.
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db);
 
@@ -1654,7 +1655,7 @@ async fn full_rebuild_all_still_scaffolds_the_default_agent_on_a_fresh_install()
     // that must survive the fan-out.
     // rust-doctor-disable-next-line unwrap-in-production
     let dir = TempDir::new().unwrap();
-    let db = create_test_db();
+    let (_scratch, db) = create_test_db();
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db);
 

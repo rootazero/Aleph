@@ -15,12 +15,22 @@
 //! - [`LIVE_TAIL`] — where the platform drivers' output drain loops tee a
 //!   rolling tail of the child's stdout/stderr, so a *still-running* background
 //!   job can be observed instead of being a black box until it exits.
+//! - [`EXEC_WORKSPACE`] — the directory THIS run is authorised to work in.
+//!   Published by `run_agent_loop` from the same `override > agent workspace`
+//!   fallback that feeds the prompt's `cwd=`; read by `WorkspaceSandbox` as the
+//!   root of the per-session jail. It exists because the authorised value must
+//!   NOT reach the sandbox through the tool's `working_dir` argument: that
+//!   argument is model-writable, so a gateway-resolved path laundered through it
+//!   arrives indistinguishable from a path the model made up, and the jail —
+//!   written to judge model-supplied paths — then denies it.
 //!
 //! Every one of these is a `tokio::task_local`, which means: **the scope does
 //! not cross `tokio::spawn`**. A tool that hands work to a detached task must
 //! re-enter the scopes inside that task — see `bash_exec::spawn_background`,
-//! which re-enters `SESSION_ID` and `LIVE_TAIL` for exactly this reason.
+//! which re-enters `SESSION_ID`, `LIVE_TAIL` and `EXEC_WORKSPACE` for exactly
+//! this reason.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::task_local;
@@ -41,6 +51,19 @@ task_local! {
     /// `CARGO_TARGET_DIR` redirected) instead of the parent's shared workspace.
     /// Absent ⇒ tools use their construction-time sandbox (the common path).
     pub static SANDBOX_OVERRIDE: Arc<dyn Sandbox>;
+    /// The directory this run is authorised to execute in — the jail root
+    /// [`WorkspaceSandbox`](crate::sandbox::workspace::WorkspaceSandbox) uses
+    /// instead of its per-session hash directory.
+    ///
+    /// `Some(path)` is published run-tree-wide by `run_agent_loop`; `None` is
+    /// published *explicitly* so a nested run cannot inherit an outer run's
+    /// workspace, and absence (outside any run — cluster node file commands,
+    /// direct callers, tests) keeps the historical `workspaces/<hash(session)>`
+    /// behaviour.
+    ///
+    /// Gateway-owned by construction: nothing on the model's side of the wire
+    /// can write it. That is the whole point — see the module doc.
+    pub static EXEC_WORKSPACE: Option<PathBuf>;
     /// Rolling tail of the currently-executing child's output. Scoped by
     /// `bash`'s background spawner around the whole exec call; read by
     /// [`run_child_with_drain`](crate::sandbox::platforms::common::run_child_with_drain)
@@ -75,6 +98,30 @@ pub fn current_justification() -> Option<String> {
 pub fn current_sandbox_override() -> Option<Arc<dyn Sandbox>> {
     // rust-doctor-disable-next-line excessive-clone
     SANDBOX_OVERRIDE.try_with(|s| s.clone()).ok()
+}
+
+/// The workspace this run is authorised to execute in, if one is in scope.
+///
+/// `None` means "no run published one" — the sandbox then falls back to its
+/// per-session hash directory, which is the pre-existing behaviour for every
+/// caller outside a gateway run.
+#[must_use]
+pub fn current_exec_workspace() -> Option<PathBuf> {
+    // rust-doctor-disable-next-line excessive-clone
+    EXEC_WORKSPACE.try_with(Clone::clone).ok().flatten()
+}
+
+/// Run `fut` with `workspace` published as this run's authorised exec root.
+///
+/// Takes `Option` and always scopes, so that publishing `None` positively
+/// shadows an outer run's value rather than letting it leak inward. Mirrors
+/// [`crate::projects::with_project_root`] and `tools::fs_scope::with_fs_scope`,
+/// the two task-locals it is published beside.
+pub async fn with_exec_workspace<F>(workspace: Option<PathBuf>, fut: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    EXEC_WORKSPACE.scope(workspace, fut).await
 }
 
 /// The live output tail in scope for the current exec call, if any. `None` on

@@ -737,14 +737,15 @@ mod tests {
     use super::*;
     use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
-    use uuid::Uuid;
 
     const AGENT: &str = "default";
 
-    fn create_test_db() -> Arc<SqliteMemoryBackend> {
-        let temp_dir = std::env::temp_dir();
-        let db_path = temp_dir.join(format!("test_notes_{}", Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
+    fn create_test_db() -> (tempfile::TempDir, Arc<SqliteMemoryBackend>) {
+        let (scratch, db_path) = crate::utils::scratch::scratch_root();
+        (
+            scratch,
+            Arc::new(SqliteMemoryBackend::new(&db_path).unwrap()),
+        )
     }
 
     fn sample_note(title: &str, category: &str, links: Vec<&str>) -> KnowledgeNote {
@@ -763,7 +764,7 @@ mod tests {
 
     #[tokio::test]
     async fn indexes_and_retrieves_note() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
         let note = sample_note("Editor Preferences", "preference", vec!["Vim", "Neovim"]);
 
         db.index_note(&note, AGENT, "preference").await.unwrap();
@@ -802,7 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn index_note_normalizes_md_suffixed_title() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
         // A writer that mistakenly passes a title carrying ".md" must still
         // produce an extensionless index row (path + filename), so disk reads
         // compute "<stem>.md" rather than "<stem>.md.md".
@@ -821,7 +822,7 @@ mod tests {
 
     #[tokio::test]
     async fn stores_and_queries_links() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
 
         let note_a = sample_note("Rust", "reference", vec!["Cargo", "Clippy"]);
         let note_b = sample_note("Cargo", "reference", vec!["Rust"]);
@@ -854,7 +855,7 @@ mod tests {
 
     #[tokio::test]
     async fn co_recall_links_fill_gaps_without_clobbering_semantic_links() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
         // Index targets first so SourceA's wikilink resolves to a full path.
         let b = sample_note("TargetB", "reference", vec![]);
         let c = sample_note("TargetC", "reference", vec![]);
@@ -909,7 +910,7 @@ mod tests {
 
     #[tokio::test]
     async fn replace_mention_links_full_refresh_and_semantic_wins() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
         let a = sample_note("a", "x", vec![]);
         let b = sample_note("b", "x", vec![]);
         db.index_note(&a, AGENT, "x").await.unwrap();
@@ -951,7 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn find_by_filename_returns_paths() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
 
         let note = sample_note("rust-ownership", "reference", vec![]);
         db.index_note(&note, AGENT, "reference").await.unwrap();
@@ -962,7 +963,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_notes_scoped_by_agent() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
 
         let note_a = sample_note("NoteA", "reference", vec![]);
         let note_b = sample_note("NoteB", "reference", vec![]);
@@ -1016,7 +1017,7 @@ mod tests {
 
     #[tokio::test]
     async fn index_note_writes_resolution_provenance() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
         seed_rust_and_ghost_links(&db).await;
 
         let rows = db
@@ -1037,7 +1038,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_reads_exclude_non_active_rows() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
         seed_rust_and_ghost_links(&db).await;
 
         let snap = db.load_graph_snapshot(AGENT).await.unwrap();
@@ -1082,7 +1083,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_tombstones_inbound_and_recreate_revives() {
-        let db = create_test_db();
+        let (_scratch, db) = create_test_db();
         // b links to a.
         db.index_note(
             &note_with_body("a", "reference", "target body"),

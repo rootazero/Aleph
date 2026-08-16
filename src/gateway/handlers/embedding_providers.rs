@@ -632,11 +632,18 @@ mod tests {
     use super::*;
     use crate::gateway::protocol::JsonRpcRequest;
 
-    fn test_vault() -> Arc<SharedTokenManager> {
+    /// Returns the scratch guard alongside the vault — the manager writes a
+    /// real `.vault` (plus its lock) at the path it is handed, so the directory
+    /// needs an owner in the caller's frame.
+    fn test_vault() -> (tempfile::TempDir, Arc<SharedTokenManager>) {
         use crate::gateway::security::SecurityStore;
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let tmp = std::env::temp_dir().join(format!("test_vault_{}.vault", std::process::id()));
-        Arc::new(SharedTokenManager::new(store, tmp))
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
+        (
+            scratch,
+            Arc::new(SharedTokenManager::new(store, dir.join("test.vault"))),
+        )
     }
 
     /// Build a Config with siliconflow added and set as active
@@ -654,7 +661,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_list_empty_default() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let vault = test_vault();
+        let (_vault_scratch, vault) = test_vault();
         let request =
             JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
         let response = handle_list(request, config, vault).await;
@@ -668,7 +675,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_list_with_provider() {
         let config = Arc::new(RwLock::new(config_with_siliconflow()));
-        let vault = test_vault();
+        let (_vault_scratch, vault) = test_vault();
         let request =
             JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
         let response = handle_list(request, config, vault).await;
@@ -685,7 +692,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_found() {
         let config = Arc::new(RwLock::new(config_with_siliconflow()));
-        let vault = test_vault();
+        let (_vault_scratch, vault) = test_vault();
         let request = JsonRpcRequest::with_id(
             "embedding_providers.get",
             Some(serde_json::json!({ "id": "siliconflow" })),
@@ -701,7 +708,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_not_found() {
         let config = Arc::new(RwLock::new(Config::default()));
-        let vault = test_vault();
+        let (_vault_scratch, vault) = test_vault();
         let request = JsonRpcRequest::with_id(
             "embedding_providers.get",
             Some(serde_json::json!({ "id": "nonexistent" })),
@@ -715,7 +722,7 @@ mod tests {
     async fn test_handle_remove_rejects_active() {
         let config = Arc::new(RwLock::new(config_with_siliconflow()));
         let event_bus = Arc::new(GatewayEventBus::new());
-        let vault = test_vault();
+        let (_vault_scratch, vault) = test_vault();
         let request = JsonRpcRequest::with_id(
             "embedding_providers.remove",
             Some(serde_json::json!({ "id": "siliconflow" })),

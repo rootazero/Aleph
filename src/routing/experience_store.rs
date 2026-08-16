@@ -120,10 +120,13 @@ impl RoutingExperienceStore {
 mod tests {
     use super::*;
 
-    fn temp_backend() -> SqliteMemoryBackend {
-        let dir = std::env::temp_dir().join(format!("aleph-routing-fac-{}", uuid::Uuid::new_v4()));
+    fn temp_backend() -> (tempfile::TempDir, SqliteMemoryBackend) {
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
-        SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
+        (
+            scratch,
+            SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
+        )
     }
     fn emb(seed: f32) -> Vec<f32> {
         let mut v = vec![0.0f32; 768];
@@ -155,7 +158,8 @@ mod tests {
 
     #[tokio::test]
     async fn facade_record_then_recall_roundtrip() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder {
             dim: 768,
             vec: emb(1.0),

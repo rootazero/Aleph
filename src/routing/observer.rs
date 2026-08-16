@@ -162,10 +162,16 @@ mod tests {
         v[0] = seed;
         v
     }
-    fn temp_backend() -> crate::memory::store::sqlite::SqliteMemoryBackend {
-        let dir = std::env::temp_dir().join(format!("aleph-routing-obs-{}", uuid::Uuid::new_v4()));
+    fn temp_backend() -> (
+        tempfile::TempDir,
+        crate::memory::store::sqlite::SqliteMemoryBackend,
+    ) {
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
-        crate::memory::store::sqlite::SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
+        (
+            scratch,
+            crate::memory::store::sqlite::SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
+        )
     }
     struct StubEmbedder;
     #[async_trait::async_trait]
@@ -253,7 +259,8 @@ mod tests {
 
     #[tokio::test]
     async fn observer_records_injected_model_not_provider_usage() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn crate::memory::EmbeddingProvider> = Arc::new(StubEmbedder);
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let outcome = RoutingOutcome {

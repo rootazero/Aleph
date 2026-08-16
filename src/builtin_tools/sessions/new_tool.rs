@@ -143,18 +143,18 @@ mod tests {
     use crate::tools::AlephTool;
     use tempfile::tempdir;
 
-    fn test_session_manager() -> Arc<SessionManager> {
+    fn test_session_manager() -> (tempfile::TempDir, Arc<SessionManager>) {
         let temp = tempdir().unwrap();
         let config = SessionManagerConfig {
-            db_path: temp.keep().join("test.db"),
+            db_path: temp.path().join("test.db"),
             ..Default::default()
         };
-        Arc::new(SessionManager::new(config).unwrap())
+        (temp, Arc::new(SessionManager::new(config).unwrap()))
     }
 
     #[test]
     fn test_tool_definition() {
-        let sm = test_session_manager();
+        let (_scratch, sm) = test_session_manager();
         let tool = SessionNewTool::new(sm);
         let def = AlephTool::definition(&tool);
 
@@ -164,7 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_session_key_errors() {
-        let sm = test_session_manager();
+        let (_scratch, sm) = test_session_manager();
         let tool = SessionNewTool::new(sm);
 
         let result = tool
@@ -179,7 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_session_basic() {
-        let sm = test_session_manager();
+        let (_scratch, sm) = test_session_manager();
         let tool = SessionNewTool::new(sm);
 
         let result = tool

@@ -63,10 +63,13 @@ mod integration_tests {
         v[0] = seed;
         v
     }
-    fn temp_backend() -> SqliteMemoryBackend {
-        let dir = std::env::temp_dir().join(format!("aleph-routing-int-{}", uuid::Uuid::new_v4()));
+    fn temp_backend() -> (tempfile::TempDir, SqliteMemoryBackend) {
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
-        SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
+        (
+            scratch,
+            SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
+        )
     }
     struct StubEmbedder {
         vec: Vec<f32>,
@@ -146,7 +149,8 @@ mod integration_tests {
 
     #[tokio::test]
     async fn observer_on_trace_records_through_real_sink() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let spy = Arc::new(SpySink::default());
@@ -177,7 +181,8 @@ mod integration_tests {
 
     #[tokio::test]
     async fn observer_enriches_known_model_usd_cost() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let attribution = Arc::new(RoutingAttribution::new("run".into()));
@@ -200,7 +205,8 @@ mod integration_tests {
 
     #[tokio::test]
     async fn observer_leaves_unknown_provider_cost_none() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let attribution = Arc::new(RoutingAttribution::new("run".into()));
@@ -224,7 +230,8 @@ mod integration_tests {
 
     #[tokio::test]
     async fn parent_and_child_attribution_isolated() {
-        let backend = Arc::new(temp_backend());
+        let (_scratch, backend_inner) = temp_backend();
+        let backend = Arc::new(backend_inner);
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
 

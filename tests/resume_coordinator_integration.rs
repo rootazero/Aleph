@@ -93,9 +93,10 @@ async fn registry_with_agent(agent_id: &str) -> Arc<AgentRegistry> {
     let agent = AgentInstance::new(cfg, sm).unwrap();
     let registry = Arc::new(AgentRegistry::new());
     registry.register(agent).await;
-    // Keep `temp` alive for the test by leaking it — the dirs must outlive
-    // the registry. Acceptable in a test binary.
-    std::mem::forget(temp);
+    // The dirs must outlive the registry, which outlives this frame. Registered
+    // for removal at process exit instead of abandoned: this helper is called
+    // once per test, so `mem::forget` here left 14 trees behind every run.
+    let _ = alephcore::utils::scratch::keep_until_exit(temp);
     registry
 }
 
@@ -112,12 +113,15 @@ fn store() -> Arc<dyn SessionEventStore> {
 /// here. A test that seeds no row gets the legacy/pre-P1 shape — no row, no
 /// scope stamp, resume behaves exactly as it did before P1.
 fn sessions() -> Arc<dyn SessionStore> {
-    static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    // A `OnceLock<TempDir>` would never drop — statics don't — so the root is
+    // registered for removal at process exit instead.
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let base = ROOT
-        .get_or_init(|| tempfile::tempdir().expect("tempdir"))
-        .path()
+        .get_or_init(|| {
+            alephcore::utils::scratch::keep_until_exit(tempfile::tempdir().expect("tempdir"))
+        })
         .join(format!("sessions-{n}"));
     std::fs::create_dir_all(&base).expect("session dir");
     Arc::new(
@@ -139,8 +143,9 @@ fn shared_goal_store() -> Arc<alephcore::goal::GoalStore> {
             let dir = tempfile::tempdir().unwrap();
             let store =
                 Arc::new(alephcore::goal::GoalStore::open(&dir.path().join("goals.db")).unwrap());
-            // The db file must outlive every test in the binary.
-            std::mem::forget(dir);
+            // The db file must outlive every test in the binary — but not the
+            // binary itself.
+            let _ = alephcore::utils::scratch::keep_until_exit(dir);
             alephcore::goal::init_global(store.clone());
             store
         })

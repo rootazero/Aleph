@@ -539,24 +539,36 @@ mod tests {
         )
     }
 
-    fn test_shared_token_mgr() -> Arc<alephcore::gateway::security::SharedTokenManager> {
-        Arc::new(alephcore::gateway::security::SharedTokenManager::new(
-            test_security_store(),
-            "/tmp/aleph_test_orch.vault",
-        ))
+    /// The guard comes back with it: the vault is a real file, and this used to
+    /// be a fixed path in the world-writable `/tmp`, owned by nobody.
+    fn test_shared_token_mgr() -> (
+        tempfile::TempDir,
+        Arc<alephcore::gateway::security::SharedTokenManager>,
+    ) {
+        let scratch = tempfile::tempdir().unwrap();
+        let vault = scratch.path().join("test.vault");
+        (
+            scratch,
+            Arc::new(alephcore::gateway::security::SharedTokenManager::new(
+                test_security_store(),
+                vault,
+            )),
+        )
     }
 
     #[test]
     fn guardrails_missing_section_returns_none() {
         let cfg = Config::default();
-        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store());
+        let (_scratch, tok) = test_shared_token_mgr();
+        let r = build_guardrail_registry(&cfg, tok, test_security_store());
         assert!(r.is_none(), "missing [guardrails] should yield None");
     }
 
     #[test]
     fn guardrails_disabled_returns_none() {
         let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: false }));
-        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store());
+        let (_scratch, tok) = test_shared_token_mgr();
+        let r = build_guardrail_registry(&cfg, tok, test_security_store());
         assert!(r.is_none(), "[guardrails] enabled=false should yield None");
     }
 
@@ -568,7 +580,8 @@ mod tests {
         cfg.secrets_config
             .virtual_keys
             .insert("MY_KEY".to_string(), "real_secret".to_string());
-        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store());
+        let (_scratch, tok) = test_shared_token_mgr();
+        let r = build_guardrail_registry(&cfg, tok, test_security_store());
         assert!(
             r.is_some(),
             "non-empty secrets_config.virtual_keys should auto-enable the guardrail registry"
@@ -580,7 +593,8 @@ mod tests {
         // Async runtime required: `enabled=true` triggers `spawn_audit_drain`,
         // which calls `tokio::spawn` and panics outside a Tokio reactor.
         let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: true }));
-        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store())
+        let (_scratch, tok) = test_shared_token_mgr();
+        let r = build_guardrail_registry(&cfg, tok, test_security_store())
             .expect("enabled=true should yield Some");
         assert_eq!(r.input_count(), 1);
         assert_eq!(r.output_count(), 1);

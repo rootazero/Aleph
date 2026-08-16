@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn sweep_removes_stale_keeps_fresh() {
         // Isolated subdir so parallel tests don't interfere.
-        let dir = std::env::temp_dir().join(format!("aleph-sweep-test-{}", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
 
         let stale = dir.join("old.bin");
@@ -93,8 +93,6 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(!stale.exists(), "stale file should be swept");
         assert!(fresh.exists(), "fresh file must survive");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

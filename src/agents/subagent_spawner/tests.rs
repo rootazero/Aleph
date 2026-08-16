@@ -1408,17 +1408,22 @@ mod tests {
         }
     }
 
-    fn routing_store_for_test() -> Arc<crate::routing::RoutingExperienceStore> {
-        let dir =
-            std::env::temp_dir().join(format!("aleph-spawn-routing-{}", uuid::Uuid::new_v4()));
+    fn routing_store_for_test() -> (
+        tempfile::TempDir,
+        Arc<crate::routing::RoutingExperienceStore>,
+    ) {
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
         let backend = Arc::new(
             crate::memory::store::sqlite::SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
         );
         let embedder: Arc<dyn crate::memory::EmbeddingProvider> = Arc::new(SpawnStubEmbedder);
-        Arc::new(crate::routing::RoutingExperienceStore::new(
-            backend, embedder,
-        ))
+        (
+            scratch,
+            Arc::new(crate::routing::RoutingExperienceStore::new(
+                backend, embedder,
+            )),
+        )
     }
 
     async fn drain_routing_row(
@@ -1443,7 +1448,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_captures_routing_experience_under_child_agent_id() {
-        let store = routing_store_for_test();
+        let (_scratch, store) = routing_store_for_test();
         let provider = ScriptedProvider::new(vec![ProviderResponse::text_only("done".to_string())]);
         let mut base = make_base(provider);
         base.routing_store = Some(store.clone());
@@ -1482,7 +1487,7 @@ mod tests {
     async fn agent_runtime_threads_routing_store_to_capture() {
         use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
 
-        let store = routing_store_for_test();
+        let (_scratch, store) = routing_store_for_test();
         let provider = ScriptedProvider::new(vec![ProviderResponse::text_only("ok".to_string())]);
 
         let conn = rusqlite::Connection::open_in_memory().unwrap();

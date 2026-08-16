@@ -979,8 +979,7 @@ mod tests {
 
     #[test]
     fn persists_to_disk_and_reopens() {
-        let dir = std::env::temp_dir().join("aleph_content_index_test_disk");
-        let _ = std::fs::remove_dir_all(&dir);
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("index.db");
         {
@@ -1346,8 +1345,7 @@ mod tests {
         // An `index.db` from a build before the `session_id` column exists on
         // disk after upgrade. FTS5 cannot ALTER a virtual table, so `open` must
         // recreate it — not propagate a "no such column" error out of boot.
-        let dir = std::env::temp_dir().join("aleph_content_index_migration_test");
-        let _ = std::fs::remove_dir_all(&dir);
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("index.db");
         {

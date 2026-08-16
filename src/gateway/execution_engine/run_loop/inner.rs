@@ -191,11 +191,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // FsScope-absent fallback, where the deterministic construction-time
         // default is safer than a last-writer race. The handle stays as that
         // read-only fallback; runs no longer mutate it. (`effective_workspace`
-        // still feeds `default_working_dir` below.)
+        // itself reaches the exec layer as the `EXEC_WORKSPACE` task-local
+        // published by `run_agent_loop`, not through any tool argument.)
 
         // === Pre-compute values reusable across retry attempts ===
-
-        let default_working_dir = Some(effective_workspace.to_string_lossy().to_string());
 
         // Resolve soul for prompt building (constant across retries).
         let _ = agent.agent_dir();
@@ -756,7 +755,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
                 self.tool_registry.clone(),
                 &allowed_tools,
-                default_working_dir.clone(),
             );
 
             let mut allowed_names: std::collections::BTreeSet<String> =
@@ -1357,9 +1355,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 //   - `session_mode` is the mode that partitioned the tool
                 //     surface above (R9: behavioural half in the prompt, code
                 //     only partitions);
-                //   - `cwd` is `effective_workspace`, the same path given to the
-                //     tool adapters as `default_working_dir` — i.e. where a shell
-                //     call actually runs, and the anchor for `repo=` / `git=`.
+                //   - `cwd` is `effective_workspace`, the same path published
+                //     as `sandbox::context::EXEC_WORKSPACE` and used by
+                //     `WorkspaceSandbox` as this run's jail root — i.e. where a
+                //     shell call actually runs, and the anchor for `repo=`/`git=`.
                 envelope: crate::thinker::TurnEnvelope {
                     exec_tier: Some(exec_tier),
                     session_mode: Some(session_mode),

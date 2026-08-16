@@ -63,16 +63,15 @@ mod tests {
     use super::*;
     use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
-    use uuid::Uuid;
 
-    fn test_db() -> Arc<SqliteMemoryBackend> {
-        let path = std::env::temp_dir().join(format!("test_dedup_{}", Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    fn test_db() -> (tempfile::TempDir, Arc<SqliteMemoryBackend>) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
     }
 
     #[tokio::test]
     async fn returns_empty_when_embedding_empty() {
-        let db = test_db();
+        let (_scratch, db) = test_db();
         let res = find_similar_notes(&*db, "skill", "default", &[], 5)
             .await
             .unwrap();
@@ -81,7 +80,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_empty_when_top_n_zero() {
-        let db = test_db();
+        let (_scratch, db) = test_db();
         let res = find_similar_notes(&*db, "skill", "default", &[1.0_f32; 1024], 0)
             .await
             .unwrap();
@@ -90,7 +89,7 @@ mod tests {
 
     #[tokio::test]
     async fn filters_to_category_prefix() {
-        let db = test_db();
+        let (_scratch, db) = test_db();
         let emb = vec![1.0_f32; 1024];
         db.upsert_embedding("skill/skill-A", "default", &emb, 1024, "")
             .await
@@ -108,7 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_top_n_sorted_by_similarity() {
-        let db = test_db();
+        let (_scratch, db) = test_db();
         let exact = vec![1.0_f32; 1024];
         let mut close = vec![1.0_f32; 1024];
         close[0] = 0.9; // slightly less similar to `exact`

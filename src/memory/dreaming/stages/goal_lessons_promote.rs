@@ -186,8 +186,8 @@ mod tests {
         }
     }
 
-    async fn build_ctx() -> (DreamContext, std::path::PathBuf) {
-        let temp = std::env::temp_dir().join(format!("aleph_lessons_{}", uuid::Uuid::new_v4()));
+    async fn build_ctx() -> (tempfile::TempDir, DreamContext, std::path::PathBuf) {
+        let (temp_guard, temp) = crate::memory::dreaming::scratch_root();
         // `temp` is the shared root for BOTH the SQLite backend and the note
         // indexer. Create it as a directory first so `SqliteMemoryBackend::new`
         // nests `memory.db` inside it (its `db_path.is_dir()` branch) and
@@ -215,7 +215,7 @@ mod tests {
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
-        (ctx, temp)
+        (temp_guard, ctx, temp)
     }
 
     fn goal_store_with(goals: &[Goal]) -> (Arc<GoalStore>, tempfile::TempDir) {
@@ -229,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn promotes_lessons_into_a_note() {
-        let (ctx, _t) = build_ctx().await;
+        let (_scratch, ctx, _t) = build_ctx().await;
         let goal = Goal::new("sess-1", "Migrate auth", 0, 0)
             .with_lesson_appended("run migrations first".into(), 1);
         let (gstore, _gd) = goal_store_with(&[goal]);
@@ -243,7 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn second_run_is_idempotent() {
-        let (ctx, _t) = build_ctx().await;
+        let (_scratch, ctx, _t) = build_ctx().await;
         let goal = Goal::new("sess-1", "Migrate auth", 0, 0)
             .with_lesson_appended("run migrations first".into(), 1);
         let (gstore, _gd) = goal_store_with(&[goal]);
@@ -258,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn goal_without_lessons_is_skipped() {
-        let (ctx, _t) = build_ctx().await;
+        let (_scratch, ctx, _t) = build_ctx().await;
         let goal = Goal::new("sess-1", "no lessons yet", 0, 0);
         let (gstore, _gd) = goal_store_with(&[goal]);
         let stage = GoalLessonsPromoteStage {
@@ -273,7 +273,7 @@ mod tests {
     /// idempotent) when driven directly.
     #[tokio::test]
     async fn promote_one_writes_the_note_and_is_idempotent() {
-        let (ctx, temp) = build_ctx().await;
+        let (_scratch, ctx, temp) = build_ctx().await;
         let goal = Goal::new("sess-1", "Migrate auth", 0, 0)
             .with_lesson_appended("run migrations first".into(), 1);
 
@@ -296,7 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_goal_store_is_graceful_noop() {
-        let (ctx, _t) = build_ctx().await;
+        let (_scratch, ctx, _t) = build_ctx().await;
         let stage = GoalLessonsPromoteStage::default(); // None → global (unset in test)
         let out = stage.execute(ctx).await.unwrap();
         assert_eq!(out.report.goal_lessons_promoted, 0);

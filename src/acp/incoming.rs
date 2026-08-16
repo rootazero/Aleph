@@ -458,7 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn fs_read_returns_file_content() {
-        let dir = std::env::temp_dir().join(format!("acp_inc_read_{}", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let file = dir.join("hello.txt");
         tokio::fs::write(&file, "line1\nline2\nline3\n")
@@ -480,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn fs_read_line_window() {
-        let dir = std::env::temp_dir().join(format!("acp_inc_win_{}", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("f.txt"), "a\nb\nc\nd\ne\n")
             .await
@@ -501,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn fs_read_escape_denied() {
-        let dir = std::env::temp_dir().join(format!("acp_inc_esc_{}", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let h = handler_at(&dir, PermissionPolicy::ApproveAll);
         let out = h
@@ -519,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn fs_write_round_trips_under_approve_all() {
-        let dir = std::env::temp_dir().join(format!("acp_inc_wr_{}", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let h = handler_at(&dir, PermissionPolicy::ApproveAll);
         let out = h
@@ -538,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn fs_write_denied_under_approve_reads() {
-        let dir = std::env::temp_dir().join(format!("acp_inc_ro_{}", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let h = handler_at(&dir, PermissionPolicy::ApproveReads);
         let out = h
@@ -691,8 +691,7 @@ mod tests {
     #[tokio::test]
     async fn symlink_inside_root_round_trips() {
         use std::os::unix::fs::symlink;
-        let dir = std::env::temp_dir().join(format!("acp_sym_in_{}", unique_suffix()));
-        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("real.txt"), "inner-content\n")
             .await
@@ -750,10 +749,10 @@ mod tests {
     #[tokio::test]
     async fn symlink_outside_root_rejected() {
         use std::os::unix::fs::symlink;
-        let dir = std::env::temp_dir().join(format!("acp_sym_out_{}", unique_suffix()));
-        let outside = std::env::temp_dir().join(format!("acp_sym_out_target_{}", unique_suffix()));
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        let _ = tokio::fs::remove_dir_all(&outside).await;
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        // A SEPARATE scratch root, not a sibling under the same one: the point
+        // of the test is that `outside` is not reachable from `dir`'s root.
+        let (_scratch_outside, outside) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::create_dir_all(&outside).await.unwrap();
         tokio::fs::write(outside.join("secret.txt"), "outside-data\n")
@@ -806,8 +805,7 @@ mod tests {
     #[tokio::test]
     async fn dangling_symlink_rejected() {
         use std::os::unix::fs::symlink;
-        let dir = std::env::temp_dir().join(format!("acp_dang_{}", unique_suffix()));
-        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let bogus = format!("/definitely/does/not/exist/aleph_acp_{}", unique_suffix());
         symlink(&bogus, dir.join("dangle")).unwrap();
@@ -854,8 +852,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_file_write_normal_succeeds() {
-        let dir = std::env::temp_dir().join(format!("acp_new_{}", unique_suffix()));
-        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let h = handler_at(&dir, PermissionPolicy::ApproveAll);
@@ -883,11 +880,9 @@ mod tests {
         // path unchanged and the sanity assertion below failed the whole test on
         // every Linux runner — the case this test exists to cover was never
         // actually exercised there.
-        let base =
-            std::path::PathBuf::from("/tmp").join(format!("aleph_acp_tmp_{}", unique_suffix()));
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
         let real = base.join("real");
         let ws = base.join("link");
-        let _ = tokio::fs::remove_dir_all(&base).await;
         tokio::fs::create_dir_all(&real).await.unwrap();
         tokio::fs::symlink(&real, &ws).await.unwrap();
         tokio::fs::write(ws.join("hello.txt"), "via-tmp\n")

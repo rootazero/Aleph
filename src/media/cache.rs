@@ -748,7 +748,8 @@ mod tests {
     async fn download_media_item_allows_local_path_inside_temp_root() {
         // A file a legitimate producer wrote under the OS temp dir (where
         // camera_clip/record_audio and this cache write) must still attach.
-        let dir = std::env::temp_dir().join("aleph-media-guard-test");
+        // Still under the OS temp root — that prefix is what the guard checks.
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let path = dir.join("clip.bin");
         tokio::fs::write(&path, b"hello").await.unwrap();

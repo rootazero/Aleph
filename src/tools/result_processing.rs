@@ -630,14 +630,11 @@ mod tests {
         );
     }
 
-    fn test_store(name: &str) -> (ToolResultStore, PathBuf) {
-        let base = std::env::temp_dir()
-            .join("aleph_test_result_processing")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&base);
+    fn test_store(_name: &str) -> (tempfile::TempDir, ToolResultStore, PathBuf) {
+        let (scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore::with_dir_for_tests(base.clone());
-        (store, base)
+        (scratch, store, base)
     }
 
     // ---------------------------------------------------------------
@@ -920,7 +917,7 @@ mod tests {
 
     #[test]
     fn small_text_unchanged() {
-        let (store, _base) = test_store("small_unchanged");
+        let (_scratch, store, _base) = test_store("small_unchanged");
         let out = apply_result_budget("c1", "bash", "hello", Some(&store), Some(10_000), None);
         assert_eq!(out.text, "hello");
         assert!(out.persisted_path.is_none());
@@ -928,7 +925,7 @@ mod tests {
 
     #[test]
     fn budget_none_truncates_no_persist() {
-        let (store, base) = test_store("budget_none");
+        let (_scratch, store, base) = test_store("budget_none");
         let big = "x".repeat(60_000);
         let out = apply_result_budget("c2", "read_file", &big, Some(&store), None, None);
         assert!(
@@ -950,7 +947,7 @@ mod tests {
 
     #[test]
     fn large_text_persists_returns_marker() {
-        let (store, base) = test_store("large_persists");
+        let (_scratch, store, base) = test_store("large_persists");
         // Build text with retrievable structure so indexing produces sections.
         let big = (0..2000)
             .map(|i| format!("line {i} payload alpha beta gamma"))
@@ -1015,7 +1012,7 @@ mod tests {
     /// envelope.
     #[test]
     fn read_family_truncates_and_never_re_selects_content() {
-        let (store, _base) = test_store("budget_none_no_distill");
+        let (_scratch, store, _base) = test_store("budget_none_no_distill");
         let mut big = String::new();
         big.push_str("pub enum Error {\n");
         big.push_str("    NotFound,\n");
@@ -1052,7 +1049,7 @@ mod tests {
     /// round-trip just to see which test failed.
     #[test]
     fn reduced_content_is_inlined_above_the_recovery_marker() {
-        let (store, _base) = test_store("reduced_inline");
+        let (_scratch, store, _base) = test_store("reduced_inline");
         let mut original = String::from("$ cargo test\n");
         for i in 0..2000 {
             original.push_str(&format!("test suite::case_{i} ... ok\n"));
@@ -1096,7 +1093,7 @@ mod tests {
     /// otherwise the lines the reducer dropped would be gone for good.
     #[test]
     fn fitting_reduced_content_still_offloads_the_original() {
-        let (store, _base) = test_store("reduced_fits");
+        let (_scratch, store, _base) = test_store("reduced_fits");
         let mut original = String::new();
         for i in 0..3000 {
             original.push_str(&format!("src/lib.rs:{i}: let target = {i};\n"));
@@ -1130,7 +1127,7 @@ mod tests {
     /// exactly the marker-only shape it has always had.
     #[test]
     fn opaque_over_budget_output_is_unchanged_by_the_new_path() {
-        let (store, _base) = test_store("opaque_unchanged");
+        let (_scratch, store, _base) = test_store("opaque_unchanged");
         let big = (0..2000)
             .map(|i| format!("line {i} payload alpha beta gamma"))
             .collect::<Vec<_>>()
@@ -1145,7 +1142,7 @@ mod tests {
 
     #[test]
     fn persist_branch_prepends_inline_errors() {
-        let (store, _base) = test_store("persist_inline_errors");
+        let (_scratch, store, _base) = test_store("persist_inline_errors");
         let mut big = String::new();
         big.push_str("error: linker failed with exit code 1\n");
         big.push_str("  --> src/net.rs:10:3\n");

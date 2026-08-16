@@ -1175,7 +1175,9 @@ mod chat_cancel_gate_tests {
         }
     }
 
-    fn gateway_context(adapter: Arc<RecordingCancelAdapter>) -> Arc<GatewayContext> {
+    fn gateway_context(
+        adapter: Arc<RecordingCancelAdapter>,
+    ) -> (tempfile::TempDir, Arc<GatewayContext>) {
         let temp = tempfile::tempdir().expect("tempdir");
         let session_store: Arc<dyn SessionStore> = Arc::new(
             SqliteSessionStore::new(SqliteSessionStoreConfig {
@@ -1184,15 +1186,18 @@ mod chat_cancel_gate_tests {
             })
             .expect("session store"),
         );
-        // The tempdir must outlive the store; leaking it is confined to this
-        // test binary and keeps the fixture a one-liner at each call site.
-        std::mem::forget(temp);
-        Arc::new(GatewayContext::new(
-            session_store,
-            Arc::new(AgentRegistry::new()),
-            adapter,
-            Arc::new(AgentToAgentPolicy::permissive()),
-        ))
+        // The tempdir must outlive the store, so it goes back to the caller.
+        // It used to be `mem::forget`-ed instead, which bought a one-line call
+        // site at the price of one abandoned tree per test, forever.
+        (
+            temp,
+            Arc::new(GatewayContext::new(
+                session_store,
+                Arc::new(AgentRegistry::new()),
+                adapter,
+                Arc::new(AgentToAgentPolicy::permissive()),
+            )),
+        )
     }
 
     fn cancel_req(run_id: &str) -> JsonRpcRequest {
@@ -1267,7 +1272,7 @@ mod chat_cancel_gate_tests {
         let teams = team_store_with(&["team-owned"]).await;
         let (run_id, member_run_id, probe, _regs, _fanout) = live_fanout("team-owned");
         let adapter = Arc::new(RecordingCancelAdapter::default());
-        let ctx = gateway_context(Arc::clone(&adapter));
+        let (_scratch, ctx) = gateway_context(Arc::clone(&adapter));
 
         let resp = handle_chat_cancel(cancel_req(&run_id), ctx, teams).await;
 
@@ -1296,7 +1301,7 @@ mod chat_cancel_gate_tests {
         let teams = team_store_with(&[]).await;
         let (run_id, _member_run_id, probe, _regs, _fanout) = live_fanout("team-foreign");
         let adapter = Arc::new(RecordingCancelAdapter::default());
-        let ctx = gateway_context(Arc::clone(&adapter));
+        let (_scratch, ctx) = gateway_context(Arc::clone(&adapter));
 
         assert_eq!(
             team_of_fanout_run(&run_id).as_deref(),
@@ -1325,18 +1330,14 @@ mod chat_cancel_gate_tests {
         let (run_id, _member_run_id, _probe, _regs, _fanout) = live_fanout("team-foreign");
         let unknown = format!("fanout-{}", uuid::Uuid::new_v4());
 
-        let foreign = handle_chat_cancel(
-            cancel_req(&run_id),
-            gateway_context(Arc::new(RecordingCancelAdapter::default())),
-            team_store_with(&[]).await,
-        )
-        .await;
-        let absent = handle_chat_cancel(
-            cancel_req(&unknown),
-            gateway_context(Arc::new(RecordingCancelAdapter::default())),
-            team_store_with(&[]).await,
-        )
-        .await;
+        let (_foreign_scratch, foreign_ctx) =
+            gateway_context(Arc::new(RecordingCancelAdapter::default()));
+        let foreign =
+            handle_chat_cancel(cancel_req(&run_id), foreign_ctx, team_store_with(&[]).await).await;
+        let (_absent_scratch, absent_ctx) =
+            gateway_context(Arc::new(RecordingCancelAdapter::default()));
+        let absent =
+            handle_chat_cancel(cancel_req(&unknown), absent_ctx, team_store_with(&[]).await).await;
 
         let foreign_bytes =
             serde_json::to_string(&foreign.error.expect("refusal")).expect("serialize");

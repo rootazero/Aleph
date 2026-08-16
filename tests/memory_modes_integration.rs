@@ -98,10 +98,14 @@ fn test_assembler_config() -> AssemblerConfig {
 /// (`AlephHomeEnvGuard` is `#[cfg(test)]` and lib-internal, hence not reusable
 /// from an integration binary.)
 fn isolate_aleph_home() {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    // `OnceLock<TempDir>` never drops (statics don't), so the home is handed to
+    // the process-exit reaper rather than abandoned.
+    static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     HOME.get_or_init(|| {
-        let dir = tempdir().expect("tempdir for isolated ALEPH_HOME");
-        std::env::set_var("ALEPH_HOME", dir.path());
+        let dir = alephcore::utils::scratch::keep_until_exit(
+            tempdir().expect("tempdir for isolated ALEPH_HOME"),
+        );
+        std::env::set_var("ALEPH_HOME", &dir);
         dir
     });
 }

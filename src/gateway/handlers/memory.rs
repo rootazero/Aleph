@@ -1153,9 +1153,9 @@ mod delete_tests {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
-    fn db() -> MemoryBackend {
-        let path = std::env::temp_dir().join(format!("mem_del_test_{}", uuid::Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    fn db() -> (tempfile::TempDir, MemoryBackend) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
     }
 
     fn req(id: &str) -> JsonRpcRequest {
@@ -1171,7 +1171,7 @@ mod delete_tests {
 
     #[tokio::test]
     async fn owner_can_delete_their_own_row() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db, "r1", "main__u-alice").await;
 
         let resp = crate::gateway::caller_identity::CALLER_USER
@@ -1195,7 +1195,7 @@ mod delete_tests {
     /// oracle), and the row is left completely intact.
     #[tokio::test]
     async fn foreign_partition_delete_is_denied_row_intact() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db, "r1", "main__u-alice").await;
 
         let resp = crate::gateway::caller_identity::CALLER_USER
@@ -1209,7 +1209,7 @@ mod delete_tests {
         // against the SAME id string on a fresh, empty store, so any
         // difference can only come from the denial itself, not from the id
         // appearing in the message.
-        let empty_db = self::db();
+        let (_scratch2, empty_db) = self::db();
         let unknown_resp = crate::gateway::caller_identity::CALLER_USER
             .scope(Some("u-bob".to_string()), async {
                 handle_delete(req("r1"), empty_db).await
@@ -1236,7 +1236,7 @@ mod delete_tests {
 
     #[tokio::test]
     async fn unknown_id_reports_not_found() {
-        let db = db();
+        let (_scratch, db) = db();
         let resp = handle_delete(req("nope"), db).await;
         assert!(resp.error.is_some());
     }
@@ -1251,9 +1251,9 @@ mod search_tests {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
-    fn db() -> MemoryBackend {
-        let path = std::env::temp_dir().join(format!("mem_search_test_{}", uuid::Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    fn db() -> (tempfile::TempDir, MemoryBackend) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
     }
 
     fn req(params: serde_json::Value) -> JsonRpcRequest {
@@ -1300,7 +1300,7 @@ mod search_tests {
     /// filenames and its delete button targeted a table that does not hold them.
     #[tokio::test]
     async fn query_returns_raw_rows_never_notes() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await;
 
         let resp = handle_search(
@@ -1331,7 +1331,7 @@ mod search_tests {
 
     #[tokio::test]
     async fn empty_query_browses_all_raw_rows() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await;
 
         let resp = handle_search(
@@ -1355,7 +1355,7 @@ mod search_tests {
 
     #[tokio::test]
     async fn query_with_no_match_returns_empty_not_error() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await;
 
         let resp = handle_search(
@@ -1384,7 +1384,7 @@ mod search_tests {
     /// either.
     #[tokio::test]
     async fn total_reflects_filtered_count_not_store_count() {
-        let db = db();
+        let (_scratch, db) = db();
 
         for (i, content) in [
             "apple pie recipe",
@@ -1452,7 +1452,7 @@ mod search_tests {
     async fn foreign_partition_reads_empty_not_the_owners_rows() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = db();
+        let (_scratch, db) = db();
         let raw = RawMemory {
             id: "alice-secret".to_string(),
             content: "alice's private note".to_string(),
@@ -1506,7 +1506,7 @@ mod search_tests {
     async fn list_corrections_hides_a_foreign_partition() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = db();
+        let (_scratch, db) = db();
         let correction = RawMemory {
             id: "alice-correction".to_string(),
             content: "no, my address is 12 Privacy Lane".to_string(),
@@ -1570,9 +1570,9 @@ mod stats_tests {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
-    fn db() -> MemoryBackend {
-        let path = std::env::temp_dir().join(format!("mem_stats_test_{}", uuid::Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    fn db() -> (tempfile::TempDir, MemoryBackend) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
     }
 
     fn req(params: Option<serde_json::Value>) -> JsonRpcRequest {
@@ -1625,7 +1625,7 @@ mod stats_tests {
     /// switching agents left the numbers describing a different population.
     #[tokio::test]
     async fn scoped_stats_describe_only_that_agent() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await;
 
         let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
@@ -1638,7 +1638,7 @@ mod stats_tests {
 
     #[tokio::test]
     async fn unscoped_stats_are_global_and_disclaim_graph_counts() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await;
 
         let r = handle_stats(req(None), db).await;
@@ -1656,7 +1656,7 @@ mod stats_tests {
 
     #[tokio::test]
     async fn scoped_stats_answer_graph_counts() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await;
 
         let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "alpha" }))), db).await;
@@ -1672,7 +1672,7 @@ mod stats_tests {
     /// into "unanswerable".
     #[tokio::test]
     async fn scoped_stats_zero_notes_reports_real_zero_not_null() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await; // "gamma" is never seeded — zero notes, not an error
 
         let r = handle_stats(req(Some(serde_json::json!({ "agent_id": "gamma" }))), db).await;
@@ -1696,7 +1696,7 @@ mod stats_tests {
     async fn member_omitted_agent_id_gets_org_partition_not_whole_store() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await; // "alpha"/"beta" — neither is the org partition
         db.insert_raw_memory(&raw("r-main", "main")).await.unwrap();
         db.index_note(&note("main-note"), "main", "facts")
@@ -1720,7 +1720,7 @@ mod stats_tests {
     /// pre-P1 whole-store rollup, unchanged.
     #[tokio::test]
     async fn unrestricted_omitted_agent_id_still_gets_whole_store() {
-        let db = db();
+        let (_scratch, db) = db();
         seed(&db).await;
 
         let r = handle_stats(req(None), db).await;
@@ -1736,7 +1736,7 @@ mod stats_tests {
     async fn foreign_explicit_partition_reads_as_empty_not_the_owners_counts() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = db();
+        let (_scratch, db) = db();
         db.insert_raw_memory(&raw("r1", "main__u-alice"))
             .await
             .unwrap();
@@ -1768,9 +1768,9 @@ mod list_facts_tests {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
-    fn db() -> MemoryBackend {
-        let path = std::env::temp_dir().join(format!("mem_lf_test_{}", uuid::Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    fn db() -> (tempfile::TempDir, MemoryBackend) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
     }
 
     fn req(params: serde_json::Value) -> JsonRpcRequest {
@@ -1784,7 +1784,7 @@ mod list_facts_tests {
 
     #[tokio::test]
     async fn total_counts_the_whole_store_not_the_page() {
-        let db = db();
+        let (_scratch, db) = db();
         for i in 0..7 {
             let note = KnowledgeNote {
                 title: format!("n{i}"),
@@ -1815,7 +1815,7 @@ mod list_facts_tests {
     /// nothing to show per row beyond a filename.
     #[tokio::test]
     async fn passes_through_tags_link_count_and_updated_at() {
-        let db = db();
+        let (_scratch, db) = db();
         let mut note = KnowledgeNote {
             title: "tagged".to_string(),
             category: "facts".to_string(),
@@ -1849,7 +1849,7 @@ mod list_facts_tests {
     async fn foreign_partition_reads_empty_not_the_owners_facts() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = db();
+        let (_scratch, db) = db();
         db.index_note(
             &KnowledgeNote {
                 title: "alice-secret".to_string(),
