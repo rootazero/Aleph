@@ -1644,6 +1644,149 @@ mod tests {
         );
     }
 
+    /// A tool may not spell its description out as two separate literals.
+    ///
+    /// Nine tools carried theirs twice: a `pub const DESCRIPTION` on the
+    /// inherent impl — which `builder/core_tools.rs` hands to the registry
+    /// map — and a second literal on the `AlephTool` impl, which this catalog
+    /// references. Two of the nine had already drifted apart: `pdf_generate`
+    /// (927 B inherent vs 586 B trait) and `image_generate` (109 B vs 70 B).
+    /// Nothing failed, and nothing could: `agent_init` builds the model's tool
+    /// list from `BUILTIN_TOOL_DEFINITIONS` first and appends registry-map
+    /// entries only for names not already present, so for a catalogued tool
+    /// the trait copy is the one that ships and the inherent copy is text no
+    /// model ever reads — while still reading, to anyone editing the file,
+    /// like the description.
+    ///
+    /// `ApplyPatchTool` and `CodeExecTool` already wrote the shape this
+    /// enforces, and it is the whole fix:
+    /// `const DESCRIPTION: &'static str = Self::DESCRIPTION;`.
+    ///
+    /// Source-level for the same reason as
+    /// `no_catalog_entry_inlines_its_description`: at runtime two literals
+    /// holding equal bytes are indistinguishable from one const read twice,
+    /// and equal-today is precisely the state that decays.
+    #[test]
+    fn no_tool_declares_two_description_literals() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        files.sort();
+
+        // owner (`file::Type`) -> declarations as (is_trait_impl, is_literal)
+        let mut by_owner: std::collections::BTreeMap<String, Vec<(bool, bool)>> =
+            std::collections::BTreeMap::new();
+        let mut seen = 0usize;
+
+        for file in &files {
+            let Ok(text) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            let rel = file
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap_or(file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            // `trim_end_matches('\r')` rather than splitting on "\n": this repo
+            // is checked out CRLF on Windows, and a scanner that anchors on
+            // "\n" there matches nothing and reports green.
+            let lines: Vec<&str> = text.lines().map(|l| l.trim_end_matches('\r')).collect();
+
+            let mut current: Option<(String, bool)> = None;
+            for (i, line) in lines.iter().enumerate() {
+                let code = line.trim_start();
+                // Comments are documentation, not code: a `///` example that
+                // shows a DESCRIPTION const is not a second declaration.
+                if code.starts_with("//") || code.starts_with('*') {
+                    continue;
+                }
+                if let Some(rest) = code.strip_prefix("impl") {
+                    if rest.starts_with(' ') || rest.starts_with('<') {
+                        let rest = rest.trim_start();
+                        let rest = match rest.strip_prefix('<') {
+                            Some(generics) => match generics.find('>') {
+                                Some(end) => &generics[end + 1..],
+                                None => generics,
+                            },
+                            None => rest,
+                        };
+                        let head = rest.split('{').next().unwrap_or(rest).trim();
+                        let (ty, is_trait) = match head.split_once(" for ") {
+                            Some((_, ty)) => (ty, true),
+                            None => (head, false),
+                        };
+                        let ty = ty.split('<').next().unwrap_or(ty).trim();
+                        current = (!ty.is_empty()).then(|| (ty.to_string(), is_trait));
+                    }
+                    continue;
+                }
+                if !code.contains("const DESCRIPTION") || !code.contains('=') {
+                    // The bare `const DESCRIPTION: &'static str;` on the trait
+                    // itself declares nothing and has no value to duplicate.
+                    continue;
+                }
+                let Some((ty, is_trait)) = current.clone() else {
+                    continue;
+                };
+                // The value sits after `=` on this line, or rustfmt wrapped it
+                // onto the next one.
+                let value = code
+                    .split_once('=')
+                    .map(|(_, v)| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .or_else(|| lines.get(i + 1).map(|l| l.trim().to_string()))
+                    .unwrap_or_default();
+                let is_literal =
+                    value.starts_with('"') || value.starts_with("r\"") || value.starts_with("r#");
+                seen += 1;
+                by_owner
+                    .entry(format!("{rel}::{ty}"))
+                    .or_default()
+                    .push((is_trait, is_literal));
+            }
+        }
+
+        // Without this the check can pass by not looking — the failure mode
+        // every source-level guard here has hit at least once.
+        assert!(
+            seen > 40,
+            "the scan found only {seen} `const DESCRIPTION` declarations under src/ — it has \
+             stopped reading the tool sources, so the check below proves nothing"
+        );
+
+        let offenders: Vec<String> = by_owner
+            .into_iter()
+            .filter(|(_, decls)| {
+                decls.iter().any(|(is_trait, lit)| !is_trait && *lit)
+                    && decls.iter().any(|(is_trait, lit)| *is_trait && *lit)
+            })
+            .map(|(owner, _)| owner)
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "these tools write their description as two independent literals — an inherent \
+             `DESCRIPTION` const and a second one on the `AlephTool` impl. Only one of the two \
+             reaches the model, and the other is free to drift without any test noticing. Point \
+             the trait impl at the inherent const instead:\n    \
+             const DESCRIPTION: &'static str = Self::DESCRIPTION;\noffenders: {offenders:#?}"
+        );
+    }
+
     /// Total description bytes the builtin tool surface puts in every request.
     ///
     /// Covers `BUILTIN_TOOL_DEFINITIONS` **plus** `REGISTRY_ONLY_DESCRIPTIONS`

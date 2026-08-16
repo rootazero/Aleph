@@ -52,7 +52,8 @@ impl PdfGenerateTool {
     pub const NAME: &'static str = "pdf_generate";
 
     /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = "Generate PDF documents from text or Markdown content.\n\n\
+    pub const DESCRIPTION: &'static str =
+        "Generate PDF documents from text or Markdown content.\n\n\
 Features:\n\
 - Plain text to PDF conversion\n\
 - Markdown support (headings, paragraphs, lists, code blocks, bold, italic)\n\
@@ -62,11 +63,7 @@ PATH RESOLUTION:\n\
 - Relative paths (e.g., \"article.pdf\") → the run's output dir\n\
 - Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
 - Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
-DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs. They will be saved to the run's default output directory, which is always writable.\n\n\
-Examples:\n\
-- Simple: {\"content\": \"Hello World\", \"output_path\": \"hello.pdf\"}\n\
-- With title: {\"content\": \"Document content\", \"output_path\": \"doc.pdf\", \"title\": \"My Document\"}\n\
-- Markdown: {\"content\": \"# Heading\", \"output_path\": \"doc.pdf\", \"format\": \"markdown\"}";
+DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs.";
 
     /// Create a new PDF generation tool
     #[must_use]
@@ -163,17 +160,7 @@ impl Default for PdfGenerateTool {
 #[async_trait]
 impl AlephTool for PdfGenerateTool {
     const NAME: &'static str = "pdf_generate";
-    const DESCRIPTION: &'static str = "Generate PDF documents from text or Markdown content.\n\n\
-Features:\n\
-- Plain text to PDF conversion\n\
-- Markdown support (headings, paragraphs, lists, code blocks, bold, italic)\n\
-- Configurable page size (A4, Letter, A3, or custom)\n\
-- Adjustable font size, line spacing, and margins\n\n\
-PATH RESOLUTION:\n\
-- Relative paths (e.g., \"article.pdf\") → the run's output dir\n\
-- Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
-- Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
-DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs.";
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = PdfGenerateArgs;
     type Output = PdfGenerateOutput;

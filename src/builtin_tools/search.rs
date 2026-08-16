@@ -255,8 +255,7 @@ impl Clone for SearchTool {
 #[async_trait]
 impl AlephTool for SearchTool {
     const NAME: &'static str = "search";
-    const DESCRIPTION: &'static str =
-        "Search the internet for current information. Use for questions requiring up-to-date data.";
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = SearchArgs;
     type Output = SearchOutput;

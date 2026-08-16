@@ -791,14 +791,7 @@ impl Clone for MemorySearchTool {
 #[async_trait]
 impl AlephTool for MemorySearchTool {
     const NAME: &'static str = "memory_search";
-    const DESCRIPTION: &'static str =
-        "Search personal memory for relevant facts and conversation history. \
-        Returns both compressed facts and raw transcripts with redundancy elimination. \
-        By default searches the active workspace. Use 'workspaces' to search specific workspaces, \
-        or 'cross_workspace: true' to search all workspaces. \
-        Use 'scope' to control what is searched: 'all' (default, long-term memory only), \
-        'current_session' (only this session's compressed summaries), \
-        or 'both' (long-term memory plus current session summaries).";
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = MemorySearchArgs;
     type Output = MemorySearchOutput;

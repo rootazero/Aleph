@@ -327,7 +327,7 @@ impl Clone for SpeechGenerateTool {
 #[async_trait]
 impl AlephTool for SpeechGenerateTool {
     const NAME: &'static str = "speech_generate";
-    const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = SpeechGenerateArgs;
     type Output = SpeechGenerateOutput;

@@ -29,6 +29,8 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
 ./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run
+
+./qa/leftovers/run.sh            # converged tool DESCRIPTIONs + relocated-ALEPH_HOME hooks + [agents.defaults] roots
 ```
 
 `browser_managed` needs **no mock provider** in every scenario but
@@ -404,6 +406,28 @@ a run that genuinely was already going, so cancelling it is correct behaviour.
 That case stays unit-covered by
 `steering::tests::a_burst_of_interrupts_does_not_eat_itself`. The observed run
 was 2 cancellations for 3 arrivals at 1.2 s spacing.
+
+## Why `leftovers` configures roots it could have left unset
+
+`[agents.defaults] agents_root / workspace_root` are the two keys whose bug is
+invisible on any install that does not set them: unset, provisioning and the
+resolver both fall back to `$ALEPH_HOME/agents`, agree for the uninteresting
+reason, and the divergence only appears on a relocated layout. So the scenario
+sets both — to roots outside `$ALEPH_HOME`, not merely elsewhere inside it, so
+a sloppy `starts_with($ALEPH_HOME)` check could not pass by accident.
+
+Two of its claims are deliberately **gated on the create having happened**. A
+refusal leaves the default layout empty too, so `nothing was provisioned into
+the default layout` is a vacuous green whenever the tool did not run — which is
+exactly what the first draft of this scenario reported before
+`ALEPH_GATEWAY_TOOLS_ALLOW` let `agent_create` past the `tools.invoke`
+transport floor.
+
+The hooks half drives `hooks.add` / `hooks.reload` rather than the
+`hooks_manage` tool: the tool's `add` raises an approval this surface has no
+transport for (correct behaviour, and not the thing under test), while
+`hooks.add` is the writer that used to resolve its own home-rooted path while
+`load_user_hooks` read `ALEPH_HOME`.
 
 ## Known wiring quirk the channel scenarios work around
 
