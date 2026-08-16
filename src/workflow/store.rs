@@ -21,8 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::json_canvas_io::sanitise_name;
 use crate::error::{AlephError, Result};
+use crate::json_canvas_io::sanitise_name;
 use crate::workflow::interop::manifest::WorkflowManifest;
 
 /// File extension for stored workflow templates.

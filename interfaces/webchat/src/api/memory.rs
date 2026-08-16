@@ -1,5 +1,5 @@
-use crate::memory_graph::adapter::SearchResultDto;
 use crate::context::DashboardState;
+use crate::memory_graph::adapter::SearchResultDto;
 use serde::{Deserialize, Serialize};
 
 /// Raw memory entry (Layer 1 — one conversation record).

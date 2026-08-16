@@ -9,9 +9,9 @@ use leptos_router::NavigateOptions;
 
 use crate::api::graph::GraphApi;
 use crate::api::CompressedFact;
+use crate::context::DashboardState;
 use crate::memory_graph::category_color::category_color;
 use crate::memory_graph::markdown_excerpt::{render_excerpt, wikilink_click_target};
-use crate::context::DashboardState;
 use crate::platform::phone::shell::PhoneShell;
 use crate::state::memory::MemoryState;
 

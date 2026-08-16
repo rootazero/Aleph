@@ -1,5 +1,5 @@
-use crate::memory_graph::adapter::{GraphQueryResponse, GraphSearchResponse, NoteDetailResponse};
 use crate::context::DashboardState;
+use crate::memory_graph::adapter::{GraphQueryResponse, GraphSearchResponse, NoteDetailResponse};
 use serde_json::json;
 
 pub struct GraphApi;

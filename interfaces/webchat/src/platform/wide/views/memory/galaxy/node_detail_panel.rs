@@ -3,11 +3,11 @@ use leptos::task::spawn_local;
 use std::collections::HashMap;
 
 use crate::api::graph::GraphApi;
+use crate::context::DashboardState;
+use crate::i18n::{t, use_i18n};
 use crate::memory_graph::adapter::OutgoingLinkDto;
 use crate::memory_graph::category_color::category_color;
 use crate::memory_graph::markdown_excerpt::render_excerpt;
-use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n};
 use crate::state::memory::{MemoryState, MemoryView};
 
 /// Pre-fetched body excerpt for a single node.

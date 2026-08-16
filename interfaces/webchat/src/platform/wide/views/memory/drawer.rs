@@ -10,10 +10,10 @@ use super::provenance::ProvenanceSection;
 use super::toast::{push_toast, ToastKind, ToastSlot};
 use crate::api::graph::GraphApi;
 use crate::api::{CompressedFact, RawMemory, TraceKind};
-use crate::memory_graph::category_color::category_color;
-use crate::memory_graph::markdown_excerpt::{render_excerpt, wikilink_click_target};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use crate::memory_graph::category_color::category_color;
+use crate::memory_graph::markdown_excerpt::{render_excerpt, wikilink_click_target};
 use crate::state::memory::MemoryState;
 
 /// What the drawer is currently showing.

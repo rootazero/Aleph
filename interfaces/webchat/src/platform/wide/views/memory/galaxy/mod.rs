@@ -12,8 +12,8 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use interaction::CanvasEvent;
 use galaxy_build::{build_galaxy, compute_highlight_set, fold_to_lod};
+use interaction::CanvasEvent;
 use leptos::callback::Callback;
 
 use crate::context::DashboardState;
