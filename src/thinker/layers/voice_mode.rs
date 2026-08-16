@@ -1,5 +1,10 @@
 //! `VoiceModeLayer` — injects voice-mode guidelines when active (priority 1710).
 //!
+//! Sister files (see `crate::gateway::voice::mod` for the canonical cross-reference table):
+//! - `crate::gateway::voice::voice_mode.rs` — the session-keyed registry this layer reads.
+//! - `crate::gateway::voice::state.rs` — channel-keyed `VoiceState` (different concept; this layer does not read it).
+//! - `crate::builtin_tools::voice_tools::voice_mode_set.rs` — the LLM tool that toggles channel voice.
+//!
 //! Voice-as-Context: when the gateway marks the session as spoken (the inbound
 //! router writes it to [`voice_mode`](crate::gateway::voice::voice_mode),
 //! the harness bridge reads it into [`ResolvedContext::voice`]), this layer

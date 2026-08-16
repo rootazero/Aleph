@@ -1,3 +1,13 @@
+//! Per-channel voice mode state.
+//!
+//! Sister files (see `super::mod` for the canonical cross-reference table):
+//! - `voice_mode.rs` — session-keyed `VoiceTurnState` (different concept, confusingly similar name).
+//! - `voice_mode_set.rs` (in `builtin_tools/voice_tools/`) — the LLM tool that mutates THIS struct.
+//! - `thinker::layers::voice_mode.rs` — the prompt-layer that reads the session registry, not this one.
+//!
+//! Tracks whether voice output is enabled for a channel, which provider/voice
+//! to use, and consecutive failure count for auto-disable logic.
+
 use serde::{Deserialize, Serialize};
 
 /// Per-channel voice mode state.
