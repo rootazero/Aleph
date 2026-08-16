@@ -53,6 +53,11 @@ pub const DEFAULT_CLOSE_TAG: &str = "</memory>";
 /// is handled by the finalize-time `sanitize_llm_output` pass, not here.
 pub const DISCARD_TAG_PAIRS: &[(&str, &str)] = &[
     ("<memory-context>", "</memory-context>"),
+    // `render_markdown_v1` wraps recalled memory in `<memory>…</memory>`
+    // (slot fences like `<user_profile>` live inside it, so discarding the
+    // outer pair removes the whole block — and the inner slot fences are
+    // also echoed only inside it).
+    ("<memory>", "</memory>"),
     ("<think>", "</think>"),
     ("<thinking>", "</thinking>"),
     ("<thought>", "</thought>"),
@@ -475,6 +480,20 @@ mod tests {
             DISCARD_TAG_PAIRS[0],
             (MEMORY_CONTEXT_OPEN, MEMORY_CONTEXT_CLOSE),
             "DISCARD_TAG_PAIRS[0] drifted from the canonical <memory-context> fence"
+        );
+    }
+
+    /// Drift guard for the MarkdownV1 outer fence: `render_markdown_v1` wraps
+    /// recalled memory in `<memory>…</memory>`, so the scrubber must discard
+    /// exactly that pair or an echoed envelope leaks its recalled content.
+    /// The literal pins against the renderer's output shape without coupling
+    /// this generic scrubber to the assembler at compile time.
+    #[test]
+    fn discard_tag_pairs_memory_matches_markdown_v1_fence() {
+        assert_eq!(
+            DISCARD_TAG_PAIRS[1],
+            ("<memory>", "</memory>"),
+            "DISCARD_TAG_PAIRS[1] drifted from the render_markdown_v1 <memory> fence"
         );
     }
 }

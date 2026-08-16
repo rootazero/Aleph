@@ -22,8 +22,14 @@ pub struct EmbeddingManager {
     settings: Arc<RwLock<EmbeddingSettings>>,
     active_provider: Arc<RwLock<Option<Arc<dyn EmbeddingProvider>>>>,
     /// Pending notes awaiting asynchronous embedding.
-    /// Producers push via `push_pending`; the background flush task drains
-    /// in batches via `flush_pending` (wired in B5.2).
+    ///
+    /// Producers push via `push_pending`; the ingest tail drains via
+    /// `flush_pending`. NOTE (known gap, do not treat as wired): the
+    /// background dream stages write notes without calling `push_pending`, so
+    /// notes they create/update are NOT queued here — their vectors stay stale
+    /// until a manual `memory.reembed` migration. Wiring the dream tails is a
+    /// real follow-up; this comment previously claimed the queue was
+    /// "background-drained (B5.2)", which was never true.
     pending: Mutex<Vec<PendingItem>>,
 }
 

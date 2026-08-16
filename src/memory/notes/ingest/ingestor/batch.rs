@@ -220,11 +220,26 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         // and pass its full content (frontmatter + body) to the embedder.
         if let Some(em) = &self.embedding_manager {
             for path in &report.touched_paths {
-                let safe_path = path.replace("..", "").replace('\\', "/");
+                // `path` is "category/filename" straight from the commit
+                // report. Sanitize the filename with the same chokepoint every
+                // note writer uses (rejecting '..' outright) instead of the
+                // old lossy `replace("..", "")`, which silently mangled a
+                // title mentioning '..' and could collide two files onto one
+                // disk path. A touched path that fails validation is logged
+                // and skipped; it was already committed by `apply`.
+                let Some((category, filename)) = path.split_once('/') else {
+                    warn!(path = %path, "ingest_batch: touched path not split-able; skipping embedding push");
+                    continue;
+                };
+                let Ok(safe) = sanitize_title(filename) else {
+                    warn!(path = %path, "ingest_batch: touched path fails title sanitization; skipping embedding push");
+                    continue;
+                };
                 let file = self
                     .memory_dir
                     .join(agent_id)
-                    .join(format!("{safe_path}.md"));
+                    .join(category)
+                    .join(format!("{safe}.md"));
                 match tokio::fs::read_to_string(&file).await {
                     Ok(content) => {
                         em.push_pending(agent_id, path, &content).await;
@@ -398,6 +413,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                             note_path,
                             facts,
                             links,
+                            relations,
                             source_ids,
                             ..
                         },
@@ -411,7 +427,10 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                             note_path: target,
                             new_facts: facts,
                             new_links: links,
-                            new_relations: vec![],
+                            // Carry the Create's relations over — dropping them
+                            // silently would lose typed graph edges the LLM
+                            // explicitly produced.
+                            new_relations: relations,
                             source_ids,
                         })
                     }
