@@ -53,6 +53,9 @@ pub enum LoopGraphAction {
     /// Topology snapshots: `op="capture"` (with `label`) | `op="list"` |
     /// `op="diff"` (with `from_id`/`to_id` as snapshot ids). Audit trail.
     Snapshot,
+    /// The topology-mutation audit log (every bus event, persisted).
+    /// Read-only; `limit` caps rows, newest first.
+    Events,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -77,6 +80,7 @@ pub struct LoopGraphArgs {
     #[serde(default)]
     pub body: Option<String>,
     /// Declared pace: per_turn | hourly | nightly | weekly | monthly | free text
+    /// ("daily" 也接受，等同 nightly——存量行的遗留拼法)
     #[serde(default)]
     pub cadence: Option<String>,
     /// Provenance: human | llm (default llm). Root nodes REQUIRE human —
@@ -106,13 +110,16 @@ pub struct LoopGraphArgs {
     #[serde(default)]
     pub prompt: Option<String>,
 
-    // ── export / snapshot ──────────────────────────────────────────
+    // ── export / snapshot / events ─────────────────────────────────
     /// export: output format — "dot" (default) or "json".
     #[serde(default)]
     pub format: Option<String>,
     /// snapshot: operation — "capture" | "list" | "diff".
     #[serde(default)]
     pub op: Option<String>,
+    /// events: max rows, newest first (default 20, hard cap 200)
+    #[serde(default)]
+    pub limit: Option<u32>,
 
     // ── Internal (injected by the dispatcher, not LLM-visible) ─────
     /// Source channel id, injected from turn context. Stamped onto the cron
@@ -238,6 +245,14 @@ impl LoopGraphTool {
         Ok(wired)
     }
 
+    /// The per-node live view. This stays hand-rolled on purpose: its value
+    /// is the per-node join against the EXECUTING entities' own stores
+    /// (goal/cron/team, three-way discipline below), which
+    /// [`crate::loop_graph::LoopGraphInspector::summary`] deliberately does
+    /// not have. The AGGREGATE half (counts by kind, naked-loop tally) has
+    /// its single source in `summary()` — the two are pinned consistent by
+    /// `tests::status_counts_agree_with_inspector_summary`; do not grow a
+    /// second aggregate answer here.
     async fn render_status(&self, agent_id: &str) -> Result<String> {
         let nodes = self.store.list_nodes(agent_id)?;
         let edges = self.store.list_edges(agent_id)?;
@@ -430,7 +445,8 @@ impl AlephTool for LoopGraphTool {
         frozen rules and human root references as nodes; wire the six governance verbs \
         (watches/owns_reference/arbitrates/audits/anchored_by/feeds) as edges; render live \
         status with structural lint; install the weekly audit loop (enable_audit); preview a \
-        removal's blast radius (impact); export dot/json; capture/diff snapshots. Use when the \
+        removal's blast radius (impact); export dot/json; capture/diff snapshots; read the \
+        mutation audit log (events). Use when the \
         user says 配看守/建审计环/治理循环/loop graph, when creating a goal or cron that \
         optimizes a metric (pair it with a counter-metric watcher), or at the start of an audit \
         tick. Root nodes require origin='human' and an explicit user instruction. See skill \
@@ -648,6 +664,11 @@ impl AlephTool for LoopGraphTool {
             }
 
             LoopGraphAction::List => {
+                // Raw dump, deliberately NOT routed through the inspector:
+                // `subgraph_for` is per-node and `loops_with_coverage` drops
+                // non-optimization nodes, so neither is this action's "give me
+                // every row" semantics. The inspector is for questions ABOUT
+                // the topology; `list` is the topology itself.
                 let nodes = self.store.list_nodes(&agent_id)?;
                 let edges = self.store.list_edges(&agent_id)?;
                 Ok(LoopGraphOutput {
@@ -1065,6 +1086,15 @@ impl AlephTool for LoopGraphTool {
                         report.would_become_naked.join(", ")
                     ));
                 }
+                // Pre-existing exposure is not this removal's blast radius —
+                // report it on its own line so "会失去看守的环" stays causal.
+                if !report.already_naked.is_empty() {
+                    out.push_str(&format!(
+                        "本就无看守的环（{}，非本次移除所致）: {}\n",
+                        report.already_naked.len(),
+                        report.already_naked.join(", ")
+                    ));
+                }
                 if !report.loses_acl.is_empty() {
                     let pairs: Vec<String> = report
                         .loses_acl
@@ -1192,6 +1222,40 @@ impl AlephTool for LoopGraphTool {
                     ))),
                 }
             }
+
+            LoopGraphAction::Events => {
+                let Some(snapshots) = &self.snapshots else {
+                    return Err(AlephError::tool(
+                        "loop_graph events: snapshot store unavailable",
+                    ));
+                };
+                // Read-only: no write path, no exec_tier involvement (the
+                // argument-level gate only matches the write actions).
+                let limit = args.limit.unwrap_or(20).clamp(1, 200) as usize;
+                let inspector = crate::loop_graph::LoopGraphInspector::new(&self.store, &agent_id)
+                    .with_snapshots(snapshots);
+                let events = inspector.recent_events(limit)?;
+                if events.is_empty() {
+                    return Ok(LoopGraphOutput {
+                        message:
+                            "尚无拓扑事件。事件总线记录的每次图变更（node/link/gc 等）会落在这里。"
+                                .into(),
+                        nodes: None,
+                        edges: None,
+                        rendered: None,
+                    });
+                }
+                let mut out = String::new();
+                for e in &events {
+                    out.push_str(&format!("#{}  [{}]  {}\n", e.id, e.ts_iso, e.payload_json));
+                }
+                Ok(LoopGraphOutput {
+                    message: format!("最近 {} 条拓扑事件", events.len()),
+                    nodes: None,
+                    edges: None,
+                    rendered: Some(out),
+                })
+            }
         }
     }
 }
@@ -1295,6 +1359,7 @@ mod tests {
             prompt: None,
             format: None,
             op: None,
+            limit: None,
             __channel: None,
             __conversation_id: None,
         }
@@ -1761,5 +1826,76 @@ mod tests {
         a.op = Some("list".into());
         let err = t2.call(a).await.unwrap_err().to_string();
         assert!(err.contains("snapshot store unavailable"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn events_action_reads_the_persisted_audit_log() {
+        let (_d, t) = tool_with_snapshots();
+        // Append via the storage half directly — the persister is wired at
+        // daemon boot, not in this fixture.
+        let snaps = t.snapshots.as_ref().expect("snapshots attached");
+        snaps
+            .append_event(&crate::loop_graph::TopologyEvent::NodeUpserted {
+                agent_id: "main".into(),
+                id: "goal:s1".into(),
+                node_kind: NodeKind::LoopGoal,
+            })
+            .unwrap();
+
+        let out = t.call(args(LoopGraphAction::Events)).await.unwrap();
+        let rendered = out.rendered.unwrap();
+        assert!(rendered.contains("node_upserted"), "{rendered}");
+        assert!(rendered.contains("goal:s1"), "{rendered}");
+
+        // Limit is clamped, not passed through raw; absent snapshot store
+        // degrades gracefully.
+        let mut a = args(LoopGraphAction::Events);
+        a.limit = Some(0);
+        let out = t.call(a).await.unwrap();
+        assert!(out.rendered.is_some(), "limit clamps to 1, not 0");
+        let (_d2, t2) = tool();
+        let err = t2
+            .call(args(LoopGraphAction::Events))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("snapshot store unavailable"), "{err}");
+    }
+
+    /// `status` keeps its hand-rolled render for the live joins, but the
+    /// AGGREGATE numbers it prints must be the inspector's single source
+    /// (`summary()`), not a second opinion — this pins totals and the
+    /// naked-loop tally to agreement on the same store.
+    #[tokio::test]
+    async fn status_counts_agree_with_inspector_summary() {
+        let (_d, t) = tool();
+        seed_node(&t, "goal:s1", NodeKind::LoopGoal).await;
+        seed_node(&t, "daemon:dreaming", NodeKind::Daemon).await;
+        let mut link = args(LoopGraphAction::Link);
+        link.from_id = Some("daemon:dreaming".into());
+        link.to_id = Some("goal:s1".into());
+        link.edge = Some(EdgeKind::Audits);
+        t.call(link).await.unwrap();
+
+        let rendered = t
+            .call(args(LoopGraphAction::Status))
+            .await
+            .unwrap()
+            .rendered
+            .unwrap();
+        let summary = crate::loop_graph::LoopGraphInspector::new(&t.store, "main")
+            .summary()
+            .unwrap();
+        let total_nodes: usize = summary.node_counts_by_kind.iter().map(|(_, c)| c).sum();
+        let total_edges: usize = summary.edge_counts_by_kind.iter().map(|(_, c)| c).sum();
+        assert!(
+            rendered.contains(&format!("{total_nodes} 节点 / {total_edges} 边")),
+            "status header must carry summary's totals: {rendered}"
+        );
+        let status_naked = rendered.matches("裸奔优化环").count();
+        assert_eq!(
+            status_naked, summary.naked_loop_count,
+            "naked-loop tally must be one answer: {rendered} vs {summary:?}"
+        );
     }
 }

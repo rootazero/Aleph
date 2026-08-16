@@ -11,10 +11,11 @@
 //! Design choices:
 //! - **Read-only**: never calls `upsert_*` / `delete_*`. The store is the
 //!   writer; this is a reader.
-//! - **Bounded traversals**: walks carry an explicit `max_steps` ceiling so an
-//!   accidental cycle cannot run forever. The default equals the node count
-//!   plus one, which is exact for a finite DAG — but inspectors from
-//!   untrusted input use a hard ceiling too.
+//! - **Bounded traversals**: walks carry an explicit hard ceiling
+//!   ([`MAX_TRAVERSAL_STEPS`] = 1024, independent of node count) so an
+//!   accidental cycle errors out instead of running forever. (An earlier
+//!   draft of this comment described the bound as "node count plus one";
+//!   the implementation has always been the fixed ceiling.)
 //! - **`Result`-propagating**: a transient store error is `Err`, not
 //!   `Ok(None)`. `governing_owner` already has this discipline; the inspector
 //!   unifies it.
@@ -34,6 +35,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::error::{AlephError, Result};
+use crate::loop_graph::snapshot::{EventRecord, SnapshotStore};
 use crate::loop_graph::store::LoopGraphStore;
 use crate::loop_graph::types::{EdgeKind, GraphEdge, GraphNode, NodeKind};
 
@@ -85,9 +87,17 @@ pub struct ImpactReport {
     /// `Ok(None)` if the node does not exist, so the caller can short-circuit.
     pub removed_node: Option<GraphNode>,
     /// Nodes that would become naked (no `watches`/`audits` from a runnable
-    /// source) after the removal. Mirrors [`crate::loop_graph::store::lint`]
-    /// on the simulated post-state.
+    /// source) BECAUSE OF this removal — i.e. covered before, uncovered in
+    /// the simulated post-state. Causal, deliberately: a loop that was
+    /// already naked before the removal is NOT in this list (it is in
+    /// [`Self::already_naked`]), because counting it inflates the blast
+    /// radius and makes the tool's "会失去看守的环" line lie about what the
+    /// operator's action actually breaks.
     pub would_become_naked: Vec<String>,
+    /// Loops that are naked in the simulated post-state but were ALREADY
+    /// naked before the removal — reported separately so the pre-existing
+    /// exposure is visible without being blamed on this removal.
+    pub already_naked: Vec<String>,
     /// `OwnsReference` edges that would become unenforceable because their
     /// `from_id` is the removed node. The store already keeps these rows
     /// dangling on purpose — but the operator should know they are now
@@ -139,12 +149,36 @@ impl TopologySummary {
 pub struct LoopGraphInspector<'a> {
     store: &'a LoopGraphStore,
     agent_id: &'a str,
+    snapshots: Option<&'a SnapshotStore>,
 }
 
 impl<'a> LoopGraphInspector<'a> {
     #[must_use]
     pub const fn new(store: &'a LoopGraphStore, agent_id: &'a str) -> Self {
-        Self { store, agent_id }
+        Self {
+            store,
+            agent_id,
+            snapshots: None,
+        }
+    }
+
+    /// Attach the snapshot store (unlocks [`Self::recent_events`], the read
+    /// half of the topology-mutation audit log).
+    #[must_use]
+    pub const fn with_snapshots(mut self, snapshots: &'a SnapshotStore) -> Self {
+        self.snapshots = Some(snapshots);
+        self
+    }
+
+    /// Newest topology-mutation events, bounded. Pure delegation to
+    /// [`SnapshotStore::list_events`]; `Err` (not an empty vec) when no
+    /// snapshot store is attached, so "subsystem absent" is never confused
+    /// with "nothing happened".
+    pub fn recent_events(&self, limit: usize) -> Result<Vec<EventRecord>> {
+        let snapshots = self
+            .snapshots
+            .ok_or_else(|| AlephError::other("loop_graph inspector: no snapshot store attached"))?;
+        snapshots.list_events(limit, None)
     }
 
     /// Compute a [`NodeSubgraph`] for `node_id`. `Ok(None)` is "not a
@@ -250,13 +284,30 @@ impl<'a> LoopGraphInspector<'a> {
             .map(|n| n.id.as_str())
             .collect();
         let post_edges: Vec<&GraphEdge> = edges.iter().collect();
+        let pre_by_id: HashMap<&str, &GraphNode> =
+            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         let post_by_id: HashMap<&str, &GraphNode> = nodes
             .iter()
             .filter(|n| n.id != node_id)
             .map(|n| (n.id.as_str(), n))
             .collect();
 
+        // Coverage predicate, evaluated against a node-index: the edges are
+        // identical pre/post (drop_node does not cascade), so the ONLY thing
+        // the removal changes is whether a coverage SOURCE still exists.
+        let has_coverage = |by_id: &HashMap<&str, &GraphNode>, target: &str| -> bool {
+            post_edges.iter().any(|e| {
+                e.to_id == target
+                    && e.from_id != target
+                    && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
+                    && by_id
+                        .get(e.from_id.as_str())
+                        .is_some_and(|s| can_cover_kind(s.kind))
+            })
+        };
+
         let mut would_become_naked = Vec::new();
+        let mut already_naked = Vec::new();
         for n in &nodes {
             if n.id == node_id {
                 continue;
@@ -264,16 +315,16 @@ impl<'a> LoopGraphInspector<'a> {
             if !n.kind.is_optimization_loop() {
                 continue;
             }
-            let watched = post_edges.iter().any(|e| {
-                e.to_id == n.id
-                    && e.from_id != n.id
-                    && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
-                    && post_by_id
-                        .get(e.from_id.as_str())
-                        .is_some_and(|s| can_cover_kind(s.kind))
-            });
-            if !watched {
+            if has_coverage(&post_by_id, &n.id) {
+                continue;
+            }
+            // Naked in the post-state. Was it covered BEFORE? Only then is
+            // the removal the cause; an already-naked loop is pre-existing
+            // exposure, not blast radius.
+            if has_coverage(&pre_by_id, &n.id) {
                 would_become_naked.push(n.id.clone());
+            } else {
+                already_naked.push(n.id.clone());
             }
         }
 
@@ -305,7 +356,11 @@ impl<'a> LoopGraphInspector<'a> {
             if n.id == node_id {
                 continue;
             }
-            if would_become_naked.contains(&n.id) {
+            // The simulated lint mirrors the REAL lint on the post-state,
+            // which flags every naked loop — caused by this removal or not.
+            // (The causal split lives in `would_become_naked` /
+            // `already_naked`; this preview would under-report otherwise.)
+            if would_become_naked.contains(&n.id) || already_naked.contains(&n.id) {
                 lint_findings.push(format!(
                     "裸奔优化环: {} ('{}') 没有任何 watches/audits 入边",
                     n.id, n.label
@@ -316,14 +371,26 @@ impl<'a> LoopGraphInspector<'a> {
         Ok(ImpactReport {
             removed_node,
             would_become_naked,
+            already_naked,
             loses_acl,
             lint_findings,
         })
     }
 
-    /// Render a [`TopologySummary`]. Used by `loop_graph status` (replaces the
-    /// hand-rolled join), `governance_metrics`, and the weekly audit template's
-    /// first step.
+    /// The aggregate-count answer for the topology: node/edge counts by kind
+    /// plus the naked-loop / unanchored-chain tallies from lint.
+    ///
+    /// **Single-source direction**: this is where aggregate counts live.
+    /// `loop_graph status` does NOT consume it today — status renders
+    /// per-node live joins (goal/cron/team three-way reads of the EXECUTING
+    /// entities' own stores) that this aggregate view deliberately lacks, and
+    /// switching it over would silently drop exactly those lines; the two are
+    /// instead pinned consistent by
+    /// `loop_graph_manage::tests::status_counts_agree_with_inspector_summary`.
+    /// (An earlier draft of this doc claimed status and `governance_metrics`
+    /// already consumed `summary()` — neither did; the only production
+    /// consumer of the inspector today is the `impact` action.) If status's
+    /// aggregate half ever moves, it moves HERE, not into a second hand-roll.
     pub fn summary(&self) -> Result<TopologySummary> {
         let nodes = self.store.list_nodes(self.agent_id)?;
         let edges = self.store.list_edges(self.agent_id)?;
@@ -654,6 +721,53 @@ mod tests {
         assert!(!impact.loses_acl.is_empty() || impact.loses_acl.is_empty()); // sanity
     }
 
+    /// `would_become_naked` is CAUSAL: a loop already naked before the
+    /// removal is pre-existing exposure, not blast radius. The old predicate
+    /// counted every post-state-naked loop, so the tool's "会失去看守的环"
+    /// line blamed the removal for loops it never watched over.
+    #[test]
+    fn impact_does_not_blame_pre_existing_naked_loops_on_the_removal() {
+        let (_d, s) = store();
+        for (id, kind) in [
+            ("goal:s1", NodeKind::LoopGoal),
+            ("cron:watcher", NodeKind::LoopCron),
+            ("daemon:naked", NodeKind::Daemon),
+        ] {
+            s.upsert_node(&GraphNode::new("main", id, kind, "x", Origin::Llm))
+                .unwrap();
+        }
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "cron:watcher",
+            "goal:s1",
+            EdgeKind::Watches,
+            Origin::Llm,
+        ))
+        .unwrap();
+
+        let inspector = LoopGraphInspector::new(&s, "main");
+        let impact = inspector.impact_of_removing("cron:watcher").unwrap();
+        assert_eq!(
+            impact.would_become_naked,
+            vec!["goal:s1".to_string()],
+            "only the loop that LOSES coverage belongs here: {:?}",
+            impact.would_become_naked
+        );
+        assert_eq!(
+            impact.already_naked,
+            vec!["daemon:naked".to_string()],
+            "pre-existing exposure is reported separately: {:?}",
+            impact.already_naked
+        );
+        // The simulated lint, like the real one, still flags both.
+        let naked_findings = impact
+            .lint_findings
+            .iter()
+            .filter(|f| f.contains("裸奔优化环"))
+            .count();
+        assert_eq!(naked_findings, 2, "{:?}", impact.lint_findings);
+    }
+
     #[test]
     fn impact_of_removing_a_root_breaks_chain_anchoring() {
         let (_d, s) = store();
@@ -844,5 +958,31 @@ mod tests {
         // Only LoopGoal counts as an optimization loop; root and frozen do not.
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].0.id, "goal:s1");
+    }
+
+    #[test]
+    fn recent_events_delegates_to_the_snapshot_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LoopGraphStore::open(&dir.path().join("g.db")).unwrap();
+        let snaps = crate::loop_graph::SnapshotStore::open(&dir.path().join("s.db")).unwrap();
+        snaps
+            .append_event(&crate::loop_graph::TopologyEvent::GcCompleted {
+                agent_id: "main".into(),
+                removed: 2,
+                retained_acl: 1,
+            })
+            .unwrap();
+
+        // Without the store attached: Err, never a silent empty vec.
+        let bare = LoopGraphInspector::new(&s, "main");
+        assert!(
+            bare.recent_events(10).is_err(),
+            "no snapshot store attached must be an Err, not 'nothing happened'"
+        );
+
+        let inspector = LoopGraphInspector::new(&s, "main").with_snapshots(&snaps);
+        let rows = inspector.recent_events(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, "gc_completed");
     }
 }
