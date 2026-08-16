@@ -23,13 +23,13 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 ROOT = Path(__file__).resolve().parent.parent
-_TEST_MOD_RE = re.compile(r"\n\s*#\[cfg\(test\)\]")
-
-
-def strip_tests(text: str) -> str:
-    m = _TEST_MOD_RE.search(text)
-    return text[: m.start()] if m else text
+# Test code is stripped by the shared brace-matching helper: cutting at the
+# first `#[cfg(test)]` (the old inline version) discarded most of the 108 files
+# whose first such attribute is an inline helper above production code.
+from wiring_strip import strip_tests  # noqa: E402  (sibling script, not a package)
 
 
 TYPE_RE = re.compile(r"pub (?:struct|enum) (\w+)")
