@@ -81,12 +81,15 @@ pub struct InstallParams {
     pub flatten: bool,
 }
 
-/// Default skills directory (~/.aleph/skills)
+/// Default skills directory (`<config_dir>/skills`).
+///
+/// Must be the same resolution `paths::get_skills_dir()` gives, because that
+/// is what the skill loader reads — this was the third hand-rolled answer for
+/// one directory, and the two that ignored `ALEPH_HOME` installed skills where
+/// nothing looked for them.
 fn default_skills_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".aleph")
-        .join("skills")
+    crate::utils::paths::get_skills_dir()
+        .unwrap_or_else(|_| PathBuf::from(".").join(".aleph").join("skills"))
 }
 
 /// Detect source type from URL/path string

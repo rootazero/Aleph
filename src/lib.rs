@@ -139,7 +139,7 @@ pub use crate::error::{AlephError, AlephException, Result};
 // Configuration (main entry points and commonly used types)
 pub use crate::config::{
     agent_manager::AgentManager,
-    agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
+    agent_resolver::{agents_root_for, workspace_root_for, AgentDefinitionResolver, ResolvedAgent},
     backup::ConfigBackup,
     guides::deploy_guides,
     patcher::ConfigPatcher,

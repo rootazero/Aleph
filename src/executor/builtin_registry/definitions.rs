@@ -1844,7 +1844,7 @@ mod tests {
     /// runtime fact, unguessable, and owned by no other tool. The drift half
     /// is a process finding, not a prose license: description bytes landed
     /// without the suite that prices them.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_861;
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_856;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2400,8 +2400,10 @@ mod tests {
 
     #[test]
     fn test_all_tools_defined() {
-        let names: Vec<String> =
-            BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name.to_string()).collect();
+        let names: Vec<String> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|d| d.name.to_string())
+            .collect();
 
         // Verify core tools
         assert!(names.contains(&"search".to_string()));
@@ -2440,8 +2442,10 @@ mod tests {
 
     #[test]
     fn test_sessions_tools_defined() {
-        let names: Vec<String> =
-            BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name.to_string()).collect();
+        let names: Vec<String> = BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .map(|d| d.name.to_string())
+            .collect();
 
         // Verify sessions tools are defined when gateway feature is enabled
         assert!(names.contains(&"session_list".to_string()));

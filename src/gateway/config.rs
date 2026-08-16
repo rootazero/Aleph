@@ -298,7 +298,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            workspace: "~/.aleph/agents/main".to_string(),
+            workspace: default_agent_workspace(),
             model: "claude-sonnet-4-5".to_string(),
             max_loops: 100,
             max_tokens: None,
@@ -323,9 +323,11 @@ impl AgentConfig {
             system_prompt: self.system_prompt.clone(),
             tool_whitelist: self.tool_whitelist.clone(),
             tool_blacklist: self.tool_blacklist.clone(),
-            agent_dir: dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                .join(format!(".aleph/agents/{agent_id}")),
+            // `agent_resolver` owns "where do agents live" — this legacy shape
+            // is still reachable (it is what `agent_init` falls back to when a
+            // config has no `[[agents.list]]`), so a hand-rolled root here is a
+            // second answer that ignores `ALEPH_HOME`.
+            agent_dir: crate::config::agent_resolver::default_agents_root().join(agent_id),
             allowed_links: None,
             // The legacy `[agents.<id>]` schema has no `allowed_users` key (nor
             // `allowed_links`), so there is nothing to carry: unrestricted, the
@@ -472,9 +474,15 @@ impl GatewayConfig {
     /// unless `--config` pinned another one).
     ///
     /// Resolving by hand here used to make this the one loader that honoured
-    /// neither `ALEPH_HOME` (`dirs::home_dir()` ignores `$HOME` on macOS, the
-    /// same divergence the instance lock was bitten by) nor the `--config`
-    /// pin — so an isolated server could read the real user's config.
+    /// neither `ALEPH_HOME` nor the `--config` pin — so an isolated server
+    /// could read the real user's config.
+    ///
+    /// (An earlier version of this note blamed `dirs::home_dir()` for ignoring
+    /// `$HOME` on macOS. That is not true of the pinned `dirs 6.0`:
+    /// `dirs-sys` reads `HOME` first on every unix. The divergence that is
+    /// real is `ALEPH_HOME`, which `dirs` knows nothing about on any platform,
+    /// plus Windows, where `SHGetKnownFolderPath` ignores `HOME`/`USERPROFILE`
+    /// and so disagrees with `aleph_protocol::paths::home_dir` under Git Bash.)
     pub fn load_default() -> Result<Self, ConfigError> {
         let config_path = crate::config::Config::effective_path();
 
@@ -543,6 +551,20 @@ pub enum ConfigError {
 
     #[error("Invalid config: {0}")]
     Invalid(String),
+}
+
+/// Default workspace for the legacy `[agents.<id>]` shape.
+///
+/// Resolved, not the literal `"~/.aleph/agents/main"` it used to be: that
+/// string went through [`expand_path`], whose `~` correctly means the *real*
+/// home (it exists to expand paths a user typed) — so the default silently
+/// opted out of `ALEPH_HOME` while every user-supplied value behaved as
+/// documented.
+fn default_agent_workspace() -> String {
+    crate::config::agent_resolver::default_agents_root()
+        .join("main")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Expand ~ in paths

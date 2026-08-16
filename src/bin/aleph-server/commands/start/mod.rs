@@ -945,15 +945,34 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     };
 
     // Create agent manager (shared between tool config and RPC handlers).
-    // Resolve the data root through the authoritative resolver (ALEPH_HOME /
-    // $HOME) so agent workspaces/trash share the same ~/.aleph as everything
-    // else — and so an isolated test server never reaches the real one.
+    //
+    // The two agent roots go through `agent_resolver`, because that is what
+    // rebuilds every agent on the next boot: joining them onto the data root
+    // here honoured `ALEPH_HOME` but silently dropped `[agents.defaults]
+    // agents_root / workspace_root`. With either configured, this manager
+    // reconciled orphan workspaces under a tree nothing used and created the
+    // default agent's workspace beside — not inside — the one the resolver
+    // addresses. Every provisioning tool reads these roots back off the
+    // manager (`config::agent_manager::provisioning_roots`), so this is the
+    // one place the rule is applied at runtime.
+    //
+    // `trash` is deliberately not part of that: it is this manager's own
+    // scratch area, not a location `[agents.defaults]` speaks about, so it
+    // stays anchored to the data root (which does honour `ALEPH_HOME`, so an
+    // isolated test server still never reaches the real one).
     let aleph_dir = alephcore::utils::paths::get_config_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from(".aleph"));
+    let (agent_workspace_root, agent_state_root) = {
+        let defaults = &app_config.read().await.agents.defaults;
+        (
+            alephcore::workspace_root_for(defaults),
+            alephcore::agents_root_for(defaults),
+        )
+    };
     let agent_manager = Arc::new(alephcore::AgentManager::new(
         alephcore::Config::effective_path(),
-        aleph_dir.join("workspaces"),
-        aleph_dir.join("agents"),
+        agent_workspace_root,
+        agent_state_root,
         aleph_dir.join("trash"),
     ));
 

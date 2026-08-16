@@ -642,3 +642,245 @@ enabled = true
     assert!(content.contains("[memory]"));
     assert!(content.contains("enabled = true"));
 }
+
+// =============================================================================
+// Provisioning roots ↔ resolver agreement
+// =============================================================================
+
+/// Where a tool *writes* an agent must equal where the resolver *rebuilds* it.
+///
+/// These are the two halves of one agent's life: `agent_create` / `team_create`
+/// / template materialization create the directories, and on the next boot
+/// `AgentDefinitionResolver` decides where that agent's `agent_dir` and
+/// `workspace` are. The provisioning half used to restate the rule instead of
+/// applying it, and the restatement dropped `[agents.defaults] agents_root /
+/// workspace_root`: with either configured, the tool wrote one tree and the
+/// resolver addressed another. Nothing errored — the agent simply came back
+/// with no SOUL.md and an empty workspace.
+///
+/// Both roots are configured to *non-default* locations on purpose. Leaving
+/// them unset makes the two sides agree for the uninteresting reason (they
+/// both fall back to the same default), which is precisely the shape of the
+/// bug: it is invisible on any machine that never sets these keys.
+#[test]
+fn provisioning_writes_where_the_resolver_will_look() {
+    use crate::config::agent_resolver::{
+        agents_root_for, workspace_root_for, AgentDefinitionResolver,
+    };
+    use crate::config::types::agents_def::AgentDefaults;
+
+    let dir = TempDir::new().unwrap();
+    let configured_agents = dir.path().join("elsewhere").join("agent-state");
+    let configured_workspaces = dir.path().join("somewhere-else").join("ws");
+
+    let defaults = AgentDefaults {
+        agents_root: Some(configured_agents.clone()),
+        workspace_root: Some(configured_workspaces.clone()),
+        ..Default::default()
+    };
+
+    // Boot's step: apply the rule once, hand the result to the manager.
+    let config_path = dir.path().join("config.toml");
+    fs::write(&config_path, base_config()).unwrap();
+    let manager = AgentManager::new(
+        config_path,
+        workspace_root_for(&defaults),
+        agents_root_for(&defaults),
+        dir.path().join("trash"),
+    );
+
+    // A provisioning tool's step: read the roots back off the manager.
+    let roots = super::provisioning_roots(Some(&manager));
+
+    // The resolver's step, on the next boot.
+    let agent = AgentDefinition {
+        id: "member-a".to_string(),
+        ..Default::default()
+    };
+    let resolver = AgentDefinitionResolver::new();
+
+    assert_eq!(
+        roots.agents.join(&agent.id),
+        resolver.resolve_agent_dir(&agent, &defaults),
+        "agent_create/team_create write the state dir somewhere the resolver \
+         will not rebuild it from"
+    );
+    assert_eq!(
+        roots.workspaces.join(&agent.id),
+        resolver.resolve_workspace_path(&agent, &defaults),
+        "provisioning creates the workspace somewhere the resolver will not \
+         address it"
+    );
+
+    // And the configured roots really are the ones in play — if this were
+    // reading the unconfigured default the assertions above would still pass.
+    assert!(roots.agents.starts_with(&configured_agents));
+    assert!(roots.workspaces.starts_with(&configured_workspaces));
+}
+
+/// Without a manager the roots must still be the *unconfigured* defaults —
+/// the answer those callers (tests, embedded hosts, minimal servers) resolved
+/// before `provisioning_roots` existed. A `None` that silently became
+/// something else would move every one of them.
+#[test]
+fn no_manager_falls_back_to_the_unconfigured_defaults() {
+    let roots = super::provisioning_roots(None);
+    assert_eq!(
+        roots.agents,
+        crate::config::agent_resolver::default_agents_root()
+    );
+    assert_eq!(
+        roots.workspaces,
+        crate::config::agent_resolver::default_workspace_root()
+    );
+}
+
+/// Files allowed to reach `agent_resolver::default_{agents,workspace}_root()`
+/// directly instead of going through [`super::provisioning_roots`], each with
+/// the reason it is not answering the provisioning question.
+///
+/// Entries state why the *configured* roots are not the right answer there —
+/// not "fix this later". A list of known-wrong sites is a licence that expires
+/// only when someone re-reads it, which is how the sixteen entries of
+/// `utils::paths`' `HOME_JOIN_PENDING_FIX` shipped for months.
+const DIRECT_DEFAULT_ROOT_ALLOWLIST: &[(&str, &str)] = &[
+    (
+        "src/gateway/agent_instance.rs",
+        "`Default` takes no arguments, so it cannot be handed resolved roots; \
+         its two path fields have no production reader (every `..default()` \
+         site is under `#[cfg(test)]`, and the one production caller reads \
+         only `.model`)",
+    ),
+    (
+        "src/gateway/config.rs",
+        "the legacy `[agents.<id>]` schema, which predates `[agents.defaults]` \
+         and lives on `GatewayConfig` — a different struct from the app \
+         `Config` that carries the defaults",
+    ),
+    (
+        "src/memory/scratchpad/manager.rs",
+        "a per-project scratchpad keyed by project_id, not an agent directory; \
+         see that module's doc, which names the rule deliberately",
+    ),
+    (
+        "src/utils/paths.rs",
+        "the ALEPH_HOME containment test, which asserts the *unconfigured* \
+         defaults land inside a relocated home",
+    ),
+];
+
+/// Split a source file into the lines that are real code.
+///
+/// Deliberately not anchored to `\n`: this repo is checked out CRLF on
+/// Windows, where a separator written as `"\n..."` matches nothing and the
+/// scan silently covers the whole file.
+fn provisioning_code_lines(text: &str) -> impl Iterator<Item = (usize, &str)> + '_ {
+    text.lines().enumerate().filter_map(|(i, line)| {
+        let code = line.trim_start();
+        if code.starts_with("//") || code.starts_with('*') {
+            None
+        } else {
+            Some((i + 1, line))
+        }
+    })
+}
+
+fn sources_reaching_the_unconfigured_default() -> Vec<(String, Vec<String>)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    assert!(files.len() > 100, "walk found suspiciously few sources");
+
+    let mut hits = Vec::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        // The two modules that own the rule are allowed to state it.
+        if rel == "src/config/agent_resolver/mod.rs" || rel.starts_with("src/config/agent_manager/")
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        // Qualified on purpose: `sandbox/config.rs` has a *local*
+        // `default_workspace_root` for the unrelated `[sandbox] workspace_root`
+        // knob, and matching on the bare name would rope it in.
+        let sites: Vec<String> = provisioning_code_lines(&text)
+            .filter(|(_, l)| {
+                l.contains("agent_resolver::default_agents_root()")
+                    || l.contains("agent_resolver::default_workspace_root()")
+            })
+            .map(|(n, l)| format!("{rel}:{n}: {}", l.trim()))
+            .collect();
+        if !sites.is_empty() {
+            hits.push((rel, sites));
+        }
+    }
+    hits
+}
+
+/// Provisioning must not reach past the resolved roots.
+///
+/// `agent_create`, `team_create` and template materialization all create an
+/// agent's directories; `agent_delete` archives them. Every one of them once
+/// restated the layout rule instead of applying it, and each restatement
+/// dropped `[agents.defaults]`. Reaching for the *unconfigured* default is the
+/// shape of that bug, so it is what this scans for — a new provisioning site
+/// that does it has to say why in the allowlist, in front of a reviewer.
+#[test]
+fn no_provisioning_site_reaches_past_the_resolved_roots() {
+    let offenders: Vec<String> = sources_reaching_the_unconfigured_default()
+        .into_iter()
+        .filter(|(rel, _)| !DIRECT_DEFAULT_ROOT_ALLOWLIST.iter().any(|(f, _)| f == rel))
+        .map(|(_, sites)| sites.join("\n    "))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "these use the unconfigured default root instead of \
+         config::agent_manager::provisioning_roots(), so they ignore \
+         `[agents.defaults] agents_root / workspace_root` and will create or \
+         archive agent directories where AgentDefinitionResolver does not look \
+         — with no error on either side:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// An allowlist entry that no longer applies is a licence nobody asked for.
+#[test]
+fn every_direct_default_root_exemption_is_still_used() {
+    let reaching: Vec<String> = sources_reaching_the_unconfigured_default()
+        .into_iter()
+        .map(|(rel, _)| rel)
+        .collect();
+    let stale: Vec<&str> = DIRECT_DEFAULT_ROOT_ALLOWLIST
+        .iter()
+        .map(|(f, _)| *f)
+        .filter(|f| !reaching.iter().any(|r| r == f))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these no longer call the unconfigured default root (fixed, moved, or \
+         deleted) — delete their DIRECT_DEFAULT_ROOT_ALLOWLIST entry so the \
+         list keeps meaning what it says:\n  {}",
+        stale.join("\n  ")
+    );
+}

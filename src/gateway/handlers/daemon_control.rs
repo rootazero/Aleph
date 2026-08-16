@@ -121,12 +121,11 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
 /// Get the log directory path.
 ///
 /// Prefers the canonical `get_log_directory()` from the logging module,
-/// falling back to `~/.aleph/logs` if that fails.
+/// falling back to `<config_dir>/logs` if that fails.
 fn log_directory() -> PathBuf {
     get_log_directory().unwrap_or_else(|_| {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aleph")
+        crate::utils::paths::get_config_dir()
+            .unwrap_or_else(|_| PathBuf::from(".").join(".aleph"))
             .join("logs")
     })
 }
