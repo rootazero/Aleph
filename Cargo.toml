@@ -373,6 +373,22 @@ required-features = ["test-helpers"]
 # required-features the integration test compiles against the published-lib
 # surface where `scratch` is configured out, and rustc reports E0433.
 [[test]]
+name = "memory_modes_integration"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "compactor_e2e_probe"
+required-features = ["test-helpers"]
+
+# Uses `utils::scratch::reap_on_exit` to clean up probe state; that module
+# is `cfg(any(test, feature = "test-helpers"))`. Without the explicit
+# required-features the integration test compiles against the published-lib
+# surface where `scratch` is configured out, and rustc reports E0433.
+[[test]]
+name = "provider_rpc_probe"
+required-features = ["test-helpers"]
+
+[[test]]
 name = "resume_coordinator_integration"
 required-features = ["test-helpers"]
 
