@@ -1,0 +1,93 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-16",
+  "module": "src/discovery",
+  "files_scanned": [
+    "src/discovery/mod.rs",
+    "src/discovery/paths.rs",
+    "src/discovery/scanner.rs",
+    "src/discovery/types.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (grep-diff across src/ and bin/)",
+  "findings": [
+    {
+      "id": "sw-disc-1",
+      "module": "src/discovery",
+      "files": ["src/discovery/paths.rs:25", "src/discovery/paths.rs:26"],
+      "severity": "medium",
+      "form": 1,
+      "produced": "ALEPH_CONFIG_FILE / ALEPH_CONFIG_FILE_ALT (pub const)",
+      "produced_location": "src/discovery/paths.rs:25-26",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "Both pub consts point at 'aleph.jsonc'/'aleph.json', but the production config loader reads 'config.toml' via Config::default_path()/effective_path() (src/config/load.rs:27-31, src/utils/paths.rs get_config_dir). A repo-wide grep for 'aleph.jsonc'/'aleph.json' in *.rs finds only these two const definitions plus discovery's own tests (which pass the literal string, not the const) and one doc comment. The JSONC config format this constant names does not exist in the codebase — it is name-drift residue (form 5 flavor) of a dead abstraction. No live caller => CUT, not CONNECT.",
+      "proposed_change": "Delete ALEPH_CONFIG_FILE and ALEPH_CONFIG_FILE_ALT from paths.rs (they are re-exported via `pub use paths::*`, so removal shrinks public API). Verify no cfg(test) reference; the scanner tests use the raw literal 'aleph.jsonc' so they are unaffected.",
+      "risk": "Low. If any downstream crate/binary referenced these consts by fully-qualified path it would fail to compile — grep already shows zero such references across src/, bin/, and tests/.",
+      "verification": "cargo check -p alephcore && cargo test -p alephcore --lib --no-run (the --no-run pass compiles #[cfg(test)] consumers that check --lib skips).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-disc-2",
+      "module": "src/discovery",
+      "files": [
+        "src/discovery/mod.rs:83",
+        "src/discovery/scanner.rs:147",
+        "src/discovery/paths.rs:151"
+      ],
+      "severity": "medium",
+      "form": 1,
+      "produced": "DiscoveryManager::find_config_files -> DirectoryScanner::find_upward -> find_file_upward (config-file discovery chain)",
+      "produced_location": "src/discovery/mod.rs:83-85",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "find_config_files has zero callers outside src/discovery (grep across src/, bin/, tests/). It is the only production caller of DirectoryScanner::find_upward, which is the only caller of paths::find_file_upward. The three-layer chain exists solely to locate 'aleph.jsonc' config files via upward traversal — but the live config system reads ~/.aleph/config.toml through Config::effective_path(), not through discovery. This is a fully-implemented producer (4 tests exercise find_upward) whose wire is severed at the far end: dead scaffolding, not a feature to reconnect. Contrast with find_dir_upward (paths.rs:167), which IS live via get_all_directories/discover_component and must be kept.",
+      "proposed_change": "Delete DiscoveryManager::find_config_files, DirectoryScanner::find_upward, and paths::find_file_upward together with their tests. Keep find_dir_upward, find_upward (paths.rs:75, the generic upward walker), and validate_path_component — all three are load-bearing for component discovery.",
+      "risk": "Low-Medium. Must delete the whole vertical slice in one pass or the intermediate fn becomes dead_code. The scanner tests test_find_config_upward/test_find_upward_rejects_traversal will be removed too; the traversal-rejection guard they provided for the global-config branch is still independently covered by find_upward's own validation.",
+      "verification": "cargo check -p alephcore && cargo test -p alephcore --lib --no-run; grep find_file_upward/find_config_files to confirm zero remaining references.",
+      "existing_review_ref": "discovery.md line 47-48 (adjacent 'R3 surface bloat' cluster: ensure_dir zero callers / get_scan_directories no external callers — same dead-public-API class, but these exact symbols were not named)"
+    },
+    {
+      "id": "sw-disc-3",
+      "module": "src/discovery",
+      "files": ["src/discovery/scanner.rs:68"],
+      "severity": "low",
+      "form": 1,
+      "produced": "DirectoryScanner::git_root (pub getter)",
+      "produced_location": "src/discovery/scanner.rs:68-70",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "pub getter with #[must_use] exposing the scanner's git_root field. Grep for '.git_root(' shows no caller anywhere in src/, bin/, or tests/ — the field is only read internally (get_all_directories uses self.git_root.as_deref()). Public API with zero consumers is dead surface; it invites future callers that would couple to scanner internals.",
+      "proposed_change": "Delete the getter (or demote to pub(crate) if an imminent internal caller is planned; with no caller, delete).",
+      "risk": "None — removing a getter with no callers cannot break compilation.",
+      "verification": "cargo check -p alephcore.",
+      "existing_review_ref": "discovery.md line 46-48 (R3 surface bloat cluster, same class)"
+    },
+    {
+      "id": "sw-disc-4",
+      "module": "src/discovery",
+      "files": ["src/discovery/types.rs:17"],
+      "severity": "low",
+      "form": 1,
+      "produced": "DiscoverySource::Plugin (enum variant)",
+      "produced_location": "src/discovery/types.rs:17",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "DiscoverySource is a live public enum (consumed as a field type in src/extension/registry/types.rs:195,301 and src/extension/types/skills.rs:5), but grep for 'DiscoverySource::Plugin' finds zero construction and zero match arms anywhere. Only AlephGlobal, ClaudeGlobal, and Project are ever produced (scanner.rs:87,96,114,136,305). The Plugin variant is a never-produced state. Unlike the other findings it is NOT obviously deletable: it is Serialize/Deserialize and may exist as forward-compat for a future 'plugin-provided source' or to keep a serialized discriminant stable. Deleting a serialized enum variant changes a wire format (a form-5 drift risk in reverse), so this is a product/format judgment, not a mechanical CUT.",
+      "proposed_change": "Ask the human: (a) if plugin-sourced discovery is planned, document and wire the producer; (b) if not, keep the variant but mark #[doc(hidden)] / comment its reserved status, OR remove it and accept a serde discriminant shift. Recommend (b)-reserved: removing the variant renumbers Plugin's serde index if any later variant is added, a silent compat trap.",
+      "risk": "If removed blindly and a persisted DiscoverySource=Plugin value is ever deserialized, it fails or mis-assigns. Low today (nothing serializes it yet) but the cost is silent future drift.",
+      "verification": "grep -rn 'DiscoverySource::Plugin' src/ bin/ tests/ -> empty; grep -rn 'source:.*DiscoverySource' to confirm the type's live consumers read only produced variants.",
+      "existing_review_ref": null
+    }
+  ],
+  "cross_reference": {
+    "baseline": "review-results/discovery.md (main tree)",
+    "notes": [
+      "discovery.md line 33 (high: discover_plugins scans only ~/.aleph/plugins) is ALREADY RESOLVED in this worktree — the bare discover_plugins method is gone; only discover_plugins_with_extra remains and IS consumed at src/extension/mod.rs:869 with project_plugin_parents. Not severed.",
+      "discovery.md line 21/25-26 (symlink following in discover_component/scan_plugin_parent) is ALREADY RESOLVED — both now use symlink_metadata via is_existing_dir_no_follow + component_marker_file. Not severed.",
+      "discovery.md line 35 (find_git_root duplication) ALREADY RESOLVED — paths::find_git_root now delegates to crate::utils::paths::find_git_root (paths.rs:61-63).",
+      "discovery.md line 48-49 (get_scan_directories / ScanDirectory surface bloat) ALREADY RESOLVED — get_scan_directories removed, ScanDirectory demoted to pub(crate).",
+      "DiscoveryConfig.scan_claude_dirs/scan_project_dirs/max_upward_depth ARE live (read in scanner.rs:36,43,102,108,126,164,170) and constructed non-default in tests/extension_watcher_integration.rs:30-31. Not inert config (not a form-3 wire).",
+      "DiscoveryManager::aleph_home, discover_skill_dirs, discover_command_dirs, discover_agent_dirs, discover_plugins_with_extra, aleph_home_dir, aleph_agents_dir, aleph_plugins_dir, DiscoveryError, DiscoveryResult, DiscoveryConfig, DiscoveredPath are all CONSUMED by live callers (src/extension/*, src/builtin_tools/*, src/bin/aleph-server/*). Wired — not findings."
+    ]
+  }
+}

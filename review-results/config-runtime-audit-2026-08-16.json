@@ -1,0 +1,34 @@
+[
+  {
+    "id": "sw-config-rt-1",
+    "module": "src/config",
+    "files": ["presets_override.rs:151-156"],
+    "severity": "low",
+    "form": 1,
+    "produced": "OwnedGenerationPreset.provider_type",
+    "produced_location": "src/config/presets_override.rs:153",
+    "consumer_location": "none found",
+    "decision": "CUT",
+    "rationale": "`OwnedGenerationPreset.provider_type` is populated in three places — `merge_generation_preset` (presets_override.rs:215), `partial_to_generation_preset` (presets_override.rs:236), and the inline builtin-only arm of `get_merged_generation_preset` (types/generation/presets/mod.rs:173) — but is read by NO production code. The only non-construction read in the whole tree is the test at presets_override.rs:487 (`assert_eq!(merged.provider_type, \"custom\")`). The compiler proves this: the field carries `#[allow(dead_code)]` (line 152), which is the lint firing on the exact severed wire this audit targets. The sole production consumer of `get_merged_generation_preset` is `build_generation_provider_for_persistence` (gateway/handlers/generation_providers/mod.rs:58-78), which reads only `.base_url` (line 62) and `.default_model` (line 76) and returns `GenerationProviderConfig { ..config }`, keeping the caller's own `provider_type`. The owned field is therefore inert: a value computed and immediately dropped.",
+    "proposed_change": "Delete the `provider_type` field from `OwnedGenerationPreset`; remove the `#[allow(dead_code)]`; drop the field from the three construction sites in `merge_generation_preset`, `partial_to_generation_preset`, and the inline arm of `get_merged_generation_preset`. Re-check `partial_to_generation_preset`'s `provider_type.clone()?` requirement — if the gate is retained only as a validity check, re-express it without materializing the value (or drop it and let an empty `default_model` be the signal). Update presets_override.rs:487 and any test asserting the field. Grep every exported symbol of the file before deleting: `default_model` and `base_url` have live consumers and must stay.",
+    "risk": "None to runtime behaviour — the field is already dead. Risk is purely mechanical: removing it must not break the test-only read or the `Default`/`Clone` derives. No production path reads it, so no feature darkens.",
+    "verification": "`cargo test -p alephcore --lib presets_override` and `cargo test -p alephcore --lib generation` after the edit; also `cargo test -p alephcore --lib --no-run` to confirm no `#[cfg(test)]` consumer (presets_override.rs:487) was orphaned.",
+    "existing_review_ref": null
+  },
+  {
+    "id": "sw-config-rt-2",
+    "module": "src/config",
+    "files": ["reload_impact.rs:73"],
+    "severity": "low",
+    "form": 5,
+    "produced": "INERT_SECTIONS entry \"task_routing\"",
+    "produced_location": "src/config/reload_impact.rs:73",
+    "consumer_location": "none found",
+    "decision": "CUT",
+    "rationale": "`INERT_SECTIONS` is `[\"task_routing\"]`, but `task_routing` is not a field anywhere in the `Config` struct — a repo-wide grep for `task_routing`/`TaskRouting` returns only this const, the `classify` test at reload_impact.rs:156, and the `classify_verified` test at live_apply.rs:247. The `ReloadImpact::Inert` variant documents itself as \"parsed for backward compatibility but has no runtime consumer (legacy)\", yet `task_routing` is not parsed at all: serde would ignore it and `dead_keys::deserialize_reporting_dead_keys` (which correctly reports nonexistent sections at load) would flag it as a dead key, not as legacy-inert config. So `ReloadImpact::classify(\"task_routing\")` returns `Inert` and the agent relays \"该配置段为遗留段，无运行时消费者\" — a description that no longer matches reality because the section was removed from `Config` while the hand-maintained inert list kept the literal. This is name-drift between the one-end list and the (deleted) other end.",
+    "proposed_change": "Remove the `task_routing` entry from `INERT_SECTIONS`, making it an empty list (or, if another genuinely-parsed-but-inert section exists, list that instead). Update the `legacy_sections_are_inert` test (reload_impact.rs:154-159) and the `classify_verified_never_upgrades_a_non_live_section` assertion (live_apply.rs:245-249) that both hard-code `task_routing`. Note the downstream contract question for the human: with the entry gone, the `ReloadImpact::Inert` variant becomes unreachable from `classify` in production and only survives as a serialized contract variant — decide separately whether `Inert` should be kept as a sentinel or removed, since it is emitted in RPC/tool responses (`user_hint_zh`/`agent_hint` arms) and removing it changes the public enum.",
+    "risk": "Minimal. Removing the entry means `classify(\"task_routing\")` falls through to the conservative `Restart` default — which is *still* wrong for a nonexistent section but no worse than the current mislabeled `Inert`; the honest report for a nonexistent section is actually the `dead_keys` scan at load time. No runtime path depends on `task_routing` being `Inert`.",
+    "verification": "`cargo test -p alephcore --lib reload_impact` and `cargo test -p alephcore --lib live_apply` after the edit. Grep `task_routing` across `src/ bin/ interfaces/ shared/` to confirm no remaining reference outside the edited tests.",
+    "existing_review_ref": null
+  }
+]

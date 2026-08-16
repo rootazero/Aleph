@@ -1,0 +1,50 @@
+[
+  {
+    "id": "sw-exec-r-1",
+    "module": "src/executor",
+    "files": ["src/executor/builtin_registry/definitions.rs:1258"],
+    "severity": "low",
+    "form": 1,
+    "produced": "pub fn is_builtin_tool(name: &str) -> bool",
+    "produced_location": "src/executor/builtin_registry/definitions.rs:1258",
+    "consumer_location": "none found",
+    "decision": "CUT",
+    "rationale": "is_builtin_tool is a public function with #[allow(dead_code)] and zero call sites anywhere in src/, bin/, or interfaces/ — not even in tests. It is NOT re-exported from builtin_registry/mod.rs (which exports only create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS), so it is a dead abstraction reachable only within the module. The presence of #[allow(dead_code)] shows it has been dead long enough to require a lint suppression rather than a caller.",
+    "proposed_change": "Delete the function (and its #[allow(dead_code)]). It adds no value; is_builtin_tool semantics are fully subsumed by the dispatch match in tool_registry_impl.rs and by BUILTIN_TOOL_DEFINITIONS iteration where needed.",
+    "risk": "None. Not exported through the public module boundary, so no external crate can depend on it.",
+    "verification": "cargo check -p alephcore && cargo test -p alephcore --lib builtin_registry (no reference to is_builtin_tool).",
+    "existing_review_ref": "executor.md Perspective 4 last bullet (is_builtin_tool 'only used by tests')"
+  },
+  {
+    "id": "sw-exec-r-2",
+    "module": "src/executor",
+    "files": ["src/executor/builtin_registry/definitions.rs:1249", "src/executor/builtin_registry/mod.rs:22", "src/executor/mod.rs:10"],
+    "severity": "low",
+    "form": 1,
+    "produced": "pub fn get_builtin_tool_names() -> Vec<String>",
+    "produced_location": "src/executor/builtin_registry/definitions.rs:1249",
+    "consumer_location": "none found (only definitions.rs tests at lines 2398 and 2437)",
+    "decision": "CUT",
+    "rationale": "get_builtin_tool_names is public and re-exported twice (builtin_registry/mod.rs:22, executor/mod.rs:10) but has zero production callers. The two remaining call sites are test code inside definitions.rs itself. The prior executor.md review claimed agents/rig/tools.rs:68-89 were call sites; a fresh grep shows those consumers no longer exist, so the wire has since been severed and the symbol is now purely a public-seam dead end. The LLM tool list is built from BUILTIN_TOOL_DEFINITIONS + BuiltinToolRegistry::unified_tools(), not from this function, so nothing loads the wire it would provide.",
+    "proposed_change": "Delete the function or demote it to #[cfg(test)] (its only two callers are tests). Remove the two re-exports from builtin_registry/mod.rs and executor/mod.rs if deleted.",
+    "risk": "Low. If any out-of-tree consumer still calls it (unlikely, it is an internal alephcore symbol), deletion would break that consumer at compile time — acceptable and easily reversed.",
+    "verification": "cargo check -p alephcore after removal; confirm no grep hits for get_builtin_tool_names outside definitions.rs.",
+    "existing_review_ref": "executor.md Perspective 4 last bullet ('get_builtin_tool_names has zero production callers')"
+  },
+  {
+    "id": "sw-exec-r-3",
+    "module": "src/executor",
+    "files": ["src/executor/builtin_registry/definitions.rs:1296", "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs:439-480", "src/executor/builtin_registry/builder/optional_tools.rs:254-549", "src/executor/builtin_registry/builder/constructor/agent_acp_tools.rs:267"],
+    "severity": "medium",
+    "form": 6,
+    "produced": "registry-only tool descriptions (task_exit_journal, team_task_control, acp_session_control, channel_message, channel_directory, channel_outbox, local_voice, voice_mode_set, audio_generate, video_generate, speech_generate)",
+    "produced_location": "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs:480 (task_exit_journal), :455 (team_task_control), optional_tools.rs:464-549, agent_acp_tools.rs:267",
+    "consumer_location": "none found (the CATALOG_DESCRIPTION_CEILING_BYTES ratchet and its REGISTRY_ONLY_DESCRIPTIONS census do not measure them)",
+    "decision": "DECIDE",
+    "rationale": "These 11 tools have a full producer stack (struct field + dispatch arm in tool_registry_impl.rs + builder registration via tools.insert) and DO reach the model through agent_init's unified_tools() completion — so they are not severed at runtime. The severed wire is at the accounting guard: CATALOG_DESCRIPTION_CEILING_BYTES sums BUILTIN_TOOL_DEFINITIONS + REGISTRY_ONLY_DESCRIPTIONS + INJECTED + BRIDGE, and the census test every_registered_core_tool_is_accounted scans only builder/core_tools.rs reg( sites (include_str! at definitions.rs:2303). Registration in coord_team_tools.rs, optional_tools.rs, and agent_acp_tools.rs uses tools.insert (no reg( helper) and is recognized by NO census shape — a fifth registration shape the guard is blind to, exactly the failure the module doc records repeatedly ('the question is never whether the rule is right, it is how many registration shapes the guard recognises'). Consequence: several KB of per-request description bytes ship unmeasured, and the prompt-byte ratchet under-states the true surface, so future bloat in these tools is invisible.",
+    "proposed_change": "Either (a) add a fifth census table + guard (e.g. NON_CORE_REGISTRY_DESCRIPTIONS) that include_str!-scans coord_team_tools.rs / optional_tools.rs / agent_acp_tools.rs for tools.insert(\"name\" sites and asserts parity, folding their bytes into CATALOG_DESCRIPTION_CEILING_BYTES; or (b) explicitly acknowledge the gap in the ceiling doc and decide these families are acceptable to leave unmeasured. Present the trade-off: (a) is the same work the four existing shapes already paid for; (b) re-opens the silent-blob door.",
+    "risk": "No runtime or security impact today — the tools work and are advertised. The risk is the same one the module doc documents for every prior shape: a guard that certifies N-of-(N+1) shapes hands a clean bill of health to the half still unmeasured, letting prompt bytes (and with them the D4/acknowledgment contracts they carry) grow unnoticed.",
+    "verification": "cargo test -p alephcore --lib catalog_description_bytes_ratchet (currently green because the 11 tools are outside its scope); a grep-diff of tools.insert(\"...\") names across the three builder files vs the census tables would expose the delta.",
+    "existing_review_ref": "executor.md Perspective 4 last bullet (redundancy of the 4-place list has 'no enforcement')"
+  }
+]
