@@ -118,6 +118,25 @@ auto_start = true                           # 默认 true：插件加载后自�
 
 ---
 
+## 插件状态（`plugins.list` 的 `status`）
+
+| status | 含义 | 补救 |
+|--------|------|------|
+| `loaded` | 活跃，capability 对模型可见 | — |
+| `disabled` | operator 关掉了（`plugins.toml`）| `aleph plugin enable <name>` |
+| `overridden` | 同 id 被更高优先级 scope 的副本遮蔽 | `status_detail` 给出胜出路径 |
+| `error` | manifest 解析失败 | `status_detail` 给出解析错误 |
+| `blocked` | owner trust policy 拒绝了这个 origin | 把 id 加进 allowlist |
+
+> **2026-08-16 之前只有前两个是真的。** `Overridden` / `Error` 是**零生产者**的枚举变体：
+> 重名插件在 `load_all` 里被 `continue` 静默丢弃，manifest 解析失败只有一句 `debug!`，
+> 两者都**不进 registry** ⇒ 在每一个面上「装了但坏了」与「从来没装过」逐字节相同，
+> 而 operator 手里没有任何可修的东西。owner trust 拒绝同理（`skipped_by_trust` 计数器的
+> doc 声称它「Surfaced in `extensions.stat`」，实际零消费者）。
+>
+> 现在三者都有 registry 行 + `status_detail`。状态词表的单一源是
+> `aleph_protocol::plugins::PluginRuntimeStatus`。
+
 ## Runtime 模型
 
 | `[aleph] runtime` | PluginKind | 加载方式 | 适用场景 |
@@ -142,7 +161,11 @@ auto_start = true                           # 默认 true：插件加载后自�
 - 同名冲突：内置优先，插件按注册顺序（first-come wins for short name）
 - 跨 marketplace 同名：`name@marketplace` 区分
 
-**实现：** `ComponentId` struct（`src/extension/component_id.rs`）
+**实现：** 命名空间是**按面各自解析**的，没有统一的 `ComponentId` 类型——
+此前本文档点名的 `src/extension/component_id.rs` 从未存在。真实锚点：
+工具走 `ExtensionManager::resolve_active_plugin_tool`（接受短名或 `plugin_id:name`），
+skills/commands 走 `SkillRegistration` 的 `skill_type` 分流，
+MCP server id 由 `mcp_config.rs` 组成 `plugin:<id>/<server>`。
 
 ---
 
@@ -164,8 +187,29 @@ aleph plugin install <git-url>                     # 直接 URL 安装
 aleph plugin list                                  # 列出已安装
 aleph plugin update [name] [--force] [--scope ...] # 升级已装插件（省略 name 升级全部）
 aleph plugin uninstall <name>                      # 卸载
-aleph plugin enable/disable <name>                 # 启用/禁用
+aleph plugin enable/disable <name>                 # 启用/禁用（耐久，见下）
 ```
+
+> **`enable` / `disable` 的耐久载体是 `<data_dir>/plugins.toml`**（`src/extension/plugin_state.rs`），
+> 不是插件目录里的 `.disabled` 标记文件。
+>
+> 2026-08-16 之前那个标记有**四个写者、零个读者**——`discovery::scanner` 的
+> `has_plugin_manifest` 与 `scan_plugin_parent` 从不看它——所以 `aleph plugin disable X`
+> 打印成功、改变的东西活不过这个进程。handler 自己的 doc 逐字写着
+> "preventing the plugin from being discovered and loaded on next scan"，那句话是假的。
+>
+> 改用 config 文档而不是「把标记读起来」的理由有两条：标记住在插件目录里，
+> 而 `plugin update` 的原子换装与 `uninstall` 都会删掉那棵树（禁用会在升级后复活）；
+> bundled 插件可以来自只读目录，根本写不进去。形状照抄孪生子系统 `SkillsConfig`
+> （`<data_dir>/skills.toml`）——同一个问题在隔壁已经有答案时，另起一个不同的答案就是让两者漂移。
+>
+> **旧标记会被一次性迁移**：开机 `load_all` 见到 `.disabled` 就把 `enabled = false`
+> 写进 `plugins.toml` 并删除标记（保住用户此前的意图，同时收敛到单一源）。
+>
+> 被禁用的插件**仍然注册进 registry（连同它的 capability）**，只是状态为 `disabled`——
+> 下游四个消费者（工具索引 / hook 同步 / MCP transient server / `projection.rs`）
+> 一律按 `status.is_active()` 过滤。跳过 capability 注册会让运行时的重新启用
+> 翻转一个背后什么都没有的状态位。
 
 > **`plugin update` 语义**：以 marketplace 缓存为准，原子换装已安装插件目录（暂存→备份旧→换入新→删备份，失败回滚，绝不损坏现有安装）。仅当版本发生变化时才换装——两端均为 semver 时不降级，CalVer / git SHA / `local` 等非 semver 版本以"不相等即变更"判定（对齐 codex `IfVersionChanged`）；`--force` 强制重装。插件持久化数据目录 `~/.aleph/plugins/data/<id>/` 位于安装树之外，不受换装影响。
 
@@ -289,6 +333,17 @@ aleph plugin list
 | `${CLAUDE_PLUGIN_DATA}` | `~/.aleph/plugins/data/{id}/` | 持久数据目录 |
 | `${ALEPH_PLUGIN_DATA}` | 同上 | Aleph 别名 |
 
+四个变量在**同一个点**展开：`mcp_config.rs::substitute_vars`，路径单一源
+`extension::plugin_data_dir`。数据目录在插件**首次引用它**时创建（无条件创建会给每个
+装好的插件留一个空目录）。
+
+> **`_DATA` 那一对在 2026-08-16 之前没有任何生产者。** `mcp_config.rs` 上有一句注释说
+> 它们「lives in the higher-level `McpManagerConfig::env` substitution path」——那条路径
+> 全仓不存在，于是用了这个变量的插件收到的是字面量 `${ALEPH_PLUGIN_DATA}` 字符串。
+> 更难发现的是：**那句注释是全仓唯一提到这个名字的地方**，所以按名字 grep 找断线，
+> 找到的正是这个 bug 自己的不在场证明。配套还有一条测试**断言变量不该被展开**，
+> 把缺陷钉成了契约。
+
 ---
 
 ## 关键代码文件
@@ -298,7 +353,7 @@ aleph plugin list
 |------|------|
 | `manifest/cc_plugin_toml.rs` | 解析 `.claude-plugin/plugin.toml` |
 | `manifest/cc_plugin_json.rs` | 解析 `.claude-plugin/plugin.json` |
-| `manifest/auto_discover.rs` | 无 manifest 时自动发现组件 |
+| `manifest/adapters/auto_discover.rs` | 无 manifest 时自动发现组件 |
 | `manifest/mod.rs` | 统一入口，优先级调度 |
 | `manifest/types.rs` | `PluginManifest`、`AlephExtensions`、`AlephRuntime` |
 
@@ -315,17 +370,21 @@ aleph plugin list
 ### 其他
 | 文件 | 职责 |
 |------|------|
-| `component_id.rs` | `ComponentId` 命名空间标识 |
+| `projection.rs` | **唯一**的进程级投影咽喉（skill dirs / subagents / 工具索引），源码级 census 守 |
+| `plugin_state.rs` | `<data_dir>/plugins.toml` — 耐久启用态（`.disabled` 标记的替代者）|
 | `scope.rs` | Scope 路径解析 |
 | `mcp_config.rs` | 读取 `.mcp.json`，环境变量替换 |
-| `plugin_loader.rs` | 运行时加载（MCP/WASM/Static） |
+| `loader.rs` | 运行时加载（MCP/WASM/Static）|
 | `types/plugins.rs` | `PluginKind`、`PluginScope`、`PluginRecord` |
 
 ### CLI
 | 文件 | 职责 |
 |------|------|
-| `bin/aleph/cli.rs` | `Plugin`/`PluginAction`/`MarketplaceAction` 定义 |
-| `bin/aleph/commands/plugins.rs` | 所有 handler（本地执行，不走 Gateway） |
+| `interfaces/cli/src/commands/cli_args.rs` | `PluginAction`/`MarketplaceAction` 定义 |
+| `interfaces/cli/src/commands/plugins_cmd.rs` | 走 Gateway 的生命周期子命令 |
+| `interfaces/cli/src/commands/plugin_cmd.rs` | 本地开发工具（init/validate/pack/doctor）|
+| `src/bin/aleph-server/commands/plugins.rs` | `aleph-server` 内建的本地 handler |
+| **`shared/protocol/src/plugins.rs`** | **wire 契约单一源**——每个 `plugin.*` 形状 |
 
 ### Gateway
 | 文件 | 职责 |
@@ -476,6 +535,38 @@ allowlist 中。`ExtensionManager::set_owner_trust_policy(policy)` 切换策略�
 这对应 openclaw 的 `passesManifestOwnerBasePolicy` + bundled 短路。
 
 ---
+
+## 进程级投影的单一咽喉（`projection.rs`）
+
+一个插件不只活在 `PluginRegistry` 里。加载它会把它**发布**到四个活得比任何单次调用都久的面：
+
+| 投影面 | 谁读它 |
+|--------|--------|
+| `utils::paths::PLUGIN_SKILL_DIRS` | `get_all_skills_dirs` → `skill_read` / `skill_list` 的搜索集 |
+| `agents::PLUGIN_SUBAGENTS` | `AgentRegistry::resolve`（委派）+ harness 的 `<available_agents>` |
+| `SkillSystem` | 模型的 `<available_skills>` 索引 |
+| `ExtensionManager::active_plugin_tools` | 工具名索引 |
+
+这些是 **effect 不是返回值**——之后的任何一次调用都不会提醒你它们还装在那儿。
+Cordis（DeepSeek-Harness 的插件框架）解决同一问题的办法是让每次注册都成为插件 fiber
+上的 effect，一次 `dispose()` 统一回收。**Aleph 刻意不引入 fiber 运行时**
+（R10，见 HARNESS_PHILOSOPHY §2.3）；等价保证在这里更便宜也更合仓库形状：
+**一个函数从 registry 派生整套投影，每一条能改变插件激活状态的路径都调它。**
+
+它替换掉的缺陷：此前这份推导有**两个作者**，且**谓词不一致**——
+
+| | skill dirs | sub-agents |
+|---|---|---|
+| `load_all` | `list_plugins()`（**任何状态**）| `list_agents()`（**不过滤**）|
+| `set_plugin_enabled` | `list_active_plugins()` | 按 `status.is_active()` 过滤 |
+
+于是一次开机（或任何 `reload()`，文件监视器会触发）会把**被禁用、被遮蔽、加载失败**的
+插件的 skills 与 sub-agents 一并发布出去——模型读得到它们的 SKILL.md、委派得到它们的
+agent——而运行时切换用的是正确的谓词。两条路径、相反的答案，跑在每次启动上的是错的那条。
+
+谓词现在只写一遍。守卫 `projection.rs::tests::publishing_plugin_projections_has_exactly_one_author`
+是**源码级** census（运行时分不出「第二个作者」和「第一个跑了两次」），
+在别处出现 `publish_plugin_*` 调用时按文件行号红。
 
 ## 设计文档
 

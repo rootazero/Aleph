@@ -53,10 +53,16 @@
 //! - `${CLAUDE_PLUGIN_ROOT}` — absolute path to the plugin directory
 //! - `${ALEPH_PLUGIN_ROOT}` — same as above (Aleph alias)
 //!
-//! (`${ALEPH_PLUGIN_DATA}` lives in the higher-level `McpManagerConfig::env`
-//! / `McpManagerConfig::headers` substitution path, not here — those are
-//! resolved at spawn time by the manager actor so they see the
-//! post-`mcp.list` / `mcp.install` view of the user's data dir.)
+//! - `${CLAUDE_PLUGIN_DATA}` — the plugin's persistent data directory
+//! - `${ALEPH_PLUGIN_DATA}` — same as above (Aleph alias)
+//!
+//! The `_DATA` pair used to carry a comment here claiming they were expanded
+//! "in the higher-level `McpManagerConfig::env` substitution path". No such
+//! path existed anywhere in the repo, so a plugin that used the variable
+//! received the literal `${ALEPH_PLUGIN_DATA}` string — and because that
+//! comment was the only mention of the name, grepping for the wire found the
+//! bug's own alibi. Both aliases are expanded here now, and the directory is
+//! created on first reference.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -147,6 +153,22 @@ fn parse_mcp_json_content(
         serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let plugin_root = plugin_dir.to_string_lossy();
+
+    // Provision the data directory only when this manifest names it, and
+    // before substitution hands the path to a server about to be spawned. A
+    // failure to create is a `warn!`, not a hard error: refusing to load the
+    // whole server over an unwritable data dir is worse than letting it try.
+    let data_path = crate::extension::plugin_data_dir(plugin_id);
+    if references_plugin_data(content) {
+        if let Err(e) = std::fs::create_dir_all(&data_path) {
+            tracing::warn!(
+                plugin_id, path = %data_path.display(), error = %e,
+                "could not create the plugin data directory it asked for"
+            );
+        }
+    }
+    let plugin_data = data_path.to_string_lossy();
+
     let mut result = HashMap::new();
 
     for (server_name, entry) in file.mcp_servers {
@@ -175,16 +197,16 @@ fn parse_mcp_json_content(
                          (either add it or set `\"type\": \"http\"` with a `url`)"
                     )
                 })?;
-                let cmd = substitute_vars(&command, &plugin_root);
+                let cmd = substitute_vars(&command, &plugin_root, &plugin_data);
                 let args: Vec<String> = entry
                     .args
                     .iter()
-                    .map(|a| substitute_vars(a, &plugin_root))
+                    .map(|a| substitute_vars(a, &plugin_root, &plugin_data))
                     .collect();
                 let env: HashMap<String, String> = entry
                     .env
                     .iter()
-                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
+                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root, &plugin_data)))
                     .collect();
                 McpManagerConfig::stdio(&server_id, &display_name, &cmd)
                     .with_args(args)
@@ -199,11 +221,11 @@ fn parse_mcp_json_content(
                          (either add it or set `\"type\": \"stdio\"` with a `command`)"
                     )
                 })?;
-                let url = substitute_vars(&url, &plugin_root);
+                let url = substitute_vars(&url, &plugin_root, &plugin_data);
                 let headers: HashMap<String, String> = entry
                     .headers
                     .iter()
-                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
+                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root, &plugin_data)))
                     .collect();
                 let mut config = if transport == McpTransportType::Sse {
                     McpManagerConfig::sse(&server_id, &display_name, &url)
@@ -222,11 +244,25 @@ fn parse_mcp_json_content(
     Ok(result)
 }
 
-/// Substitute `${CLAUDE_PLUGIN_ROOT}` and `${ALEPH_PLUGIN_ROOT}` in a string value.
-fn substitute_vars(value: &str, plugin_root: &str) -> String {
+/// The four documented manifest variables, expanded in one place.
+///
+/// Splitting the `_ROOT` and `_DATA` pairs across two layers is what let the
+/// `_DATA` half go unimplemented while its documentation said otherwise.
+fn substitute_vars(value: &str, plugin_root: &str, plugin_data: &str) -> String {
     value
         .replace("${CLAUDE_PLUGIN_ROOT}", plugin_root)
         .replace("${ALEPH_PLUGIN_ROOT}", plugin_root)
+        .replace("${CLAUDE_PLUGIN_DATA}", plugin_data)
+        .replace("${ALEPH_PLUGIN_DATA}", plugin_data)
+}
+
+/// Whether any value in the manifest asks for the data directory.
+///
+/// Creating it unconditionally would litter `<plugins_root>/data/` with an
+/// empty directory per installed plugin; creating it only when a plugin names
+/// it keeps the tree meaningful.
+fn references_plugin_data(content: &str) -> bool {
+    content.contains("${CLAUDE_PLUGIN_DATA}") || content.contains("${ALEPH_PLUGIN_DATA}")
 }
 
 #[cfg(test)]
@@ -309,20 +345,31 @@ mod tests {
     #[test]
     fn test_substitute_vars() {
         assert_eq!(
-            substitute_vars("${ALEPH_PLUGIN_ROOT}/bin/run", "/home/user/plugins/x"),
+            substitute_vars(
+                "${ALEPH_PLUGIN_ROOT}/bin/run",
+                "/home/user/plugins/x",
+                "/data/p"
+            ),
             "/home/user/plugins/x/bin/run"
         );
         assert_eq!(
-            substitute_vars("${CLAUDE_PLUGIN_ROOT}/index.js", "/tmp/p"),
+            substitute_vars("${CLAUDE_PLUGIN_ROOT}/index.js", "/tmp/p", "/data/p"),
             "/tmp/p/index.js"
         );
         // Both in same string
         assert_eq!(
-            substitute_vars("${ALEPH_PLUGIN_ROOT}:${CLAUDE_PLUGIN_ROOT}", "/root"),
+            substitute_vars(
+                "${ALEPH_PLUGIN_ROOT}:${CLAUDE_PLUGIN_ROOT}",
+                "/root",
+                "/data/p"
+            ),
             "/root:/root"
         );
         // No vars
-        assert_eq!(substitute_vars("plain text", "/root"), "plain text");
+        assert_eq!(
+            substitute_vars("plain text", "/root", "/data/p"),
+            "plain text"
+        );
     }
 
     #[test]
@@ -381,13 +428,15 @@ mod tests {
         );
     }
 
-    /// The module doc promises `${ALEPH_PLUGIN_DATA}` is *not* expanded here —
-    /// it belongs to the manager actor's spawn-time pass, which is the only
-    /// one that sees the post-`mcp.install` view of the data dir. That
-    /// contract had no test, and the first thing to reach for it was a typo
-    /// in the test above asserting the opposite.
+    /// `${ALEPH_PLUGIN_DATA}` is expanded here, alongside its `_ROOT` twin.
+    ///
+    /// The test this replaces asserted the **opposite** — that the value was
+    /// handed onward verbatim for "the manager actor's spawn-time pass". No
+    /// such pass existed, so the assertion pinned the bug in place: a plugin
+    /// using the documented variable received the literal string. A test that
+    /// encodes a mechanism's absence as its contract is worse than no test.
     #[test]
-    fn plugin_data_var_survives_this_layer_untouched() {
+    fn plugin_data_variable_is_expanded() {
         let content = r#"{
             "mcpServers": {
                 "srv": {
@@ -399,11 +448,38 @@ mod tests {
         }"#;
 
         let result = parse_mcp_json_content(content, Path::new("/p/x"), "p").unwrap();
-        let config = result.get("plugin:p/srv").unwrap();
-        assert_eq!(
-            config.headers.get("Authorization").map(String::as_str),
-            Some("Bearer ${ALEPH_PLUGIN_DATA}/token"),
-            "this layer must hand ${{ALEPH_PLUGIN_DATA}} onward verbatim"
+        let header = result
+            .get("plugin:p/srv")
+            .unwrap()
+            .headers
+            .get("Authorization")
+            .cloned()
+            .unwrap();
+        assert!(
+            !header.contains("${ALEPH_PLUGIN_DATA}"),
+            "the variable must not reach the server as a literal: {header}"
+        );
+        let expected = format!(
+            "Bearer {}/token",
+            crate::extension::plugin_data_dir("p").display()
+        );
+        assert_eq!(header, expected);
+    }
+
+    /// The two variables are distinct: the data dir lives outside the install
+    /// tree precisely so `plugin update`'s atomic swap cannot take it with it.
+    #[test]
+    fn root_and_data_are_distinct_substitutions() {
+        let out = substitute_vars(
+            "${ALEPH_PLUGIN_ROOT}|${CLAUDE_PLUGIN_DATA}",
+            "/install/p",
+            "/data/p",
+        );
+        assert_eq!(out, "/install/p|/data/p");
+        assert!(
+            !crate::extension::plugin_data_dir("p")
+                .starts_with(crate::extension::default_plugins_dir().join("p")),
+            "the data dir must not sit inside the install dir"
         );
     }
 

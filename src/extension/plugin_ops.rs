@@ -293,6 +293,7 @@ impl ExtensionManager {
                 hooks_count: record.hook_count,
                 mcp_servers_count: record.mcp_server_count,
                 tools_count: record.tool_names.len(),
+                kind: record.kind.as_str().to_string(),
                 status: record.status.label().to_string(),
                 error: record.error.clone(),
             })
@@ -315,8 +316,50 @@ impl ExtensionManager {
             .collect()
     }
 
-    /// Enable or disable a plugin and refresh runtime snapshots.
+    /// Drop a plugin's durable activation preference.
+    ///
+    /// Called on uninstall. Without it a same-id re-install silently inherits
+    /// the previous `enabled = false` and looks broken on arrival — the
+    /// "an orphan sweep will catch it later" argument only covers things that
+    /// changed name, and a same-id reinstall is never an orphan.
+    pub async fn forget_plugin_preference(&self, plugin_id: &str) {
+        let mut cfg = self.plugins_config.write().await;
+        if cfg.forget(plugin_id) {
+            if let Err(e) = cfg.save(&self.plugins_config_path).await {
+                tracing::warn!(
+                    plugin_id, error = %e,
+                    "failed to persist plugin preference removal"
+                );
+            }
+        }
+    }
+
+    /// Enable or disable a plugin: record the operator's preference durably,
+    /// then reflect it in the live registry.
+    ///
+    /// The preference is written **whether or not the in-memory registry knows
+    /// this id**. A toggle issued before `load_all` has run (or against a
+    /// plugin whose manifest currently fails to parse) still has to stick —
+    /// keying persistence off "did the registry row change?" is how a disable
+    /// becomes a no-op that reports success.
+    ///
+    /// Returns whether anything changed at all (preference or live status).
     pub async fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> bool {
+        let preference_changed = {
+            let mut cfg = self.plugins_config.write().await;
+            let changed = cfg.set_enabled(plugin_id, enabled);
+            if changed {
+                if let Err(e) = cfg.save(&self.plugins_config_path).await {
+                    tracing::warn!(
+                        plugin_id, error = %e,
+                        "failed to persist plugin activation preference; \
+                         it will not survive a restart"
+                    );
+                }
+            }
+            changed
+        };
+
         let changed = {
             let mut registry = self.plugin_registry.write().await;
             if enabled {
@@ -330,46 +373,19 @@ impl ExtensionManager {
             if !enabled {
                 let _ = self.unload_runtime_plugin(plugin_id).await;
             }
-            self.sync_runtime_snapshots().await;
             *self.hook_executor.write().await = crate::extension::hooks::HookExecutor::empty()
                 .with_consent(crate::extension::hooks::ShellHookConsent::shared());
             self.sync_hooks_from_registry().await;
             self.sync_user_hooks().await;
 
-            let mut skill_dirs: Vec<std::path::PathBuf> = self
-                .discovery
-                .discover_skill_dirs()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|dir| dir.path)
-                .collect();
-            let (plugin_skill_dirs, plugin_subagents) = {
-                let registry = self.plugin_registry.read().await;
-                let active = |plugin_id: &str| {
-                    registry
-                        .get_plugin(plugin_id)
-                        .is_some_and(|plugin| plugin.status.is_active())
-                };
-                let skill_dirs: Vec<std::path::PathBuf> = registry
-                    .list_active_plugins()
-                    .into_iter()
-                    .map(|plugin| plugin.root_dir.join("skills"))
-                    .filter(|dir| dir.is_dir())
-                    .collect();
-                let subagents = registry
-                    .list_agents()
-                    .into_iter()
-                    .filter(|agent| active(&agent.plugin_id))
-                    .filter_map(super::plugin_agent_to_def)
-                    .collect();
-                (skill_dirs, subagents)
-            };
-            skill_dirs.extend(plugin_skill_dirs.iter().cloned());
-            crate::utils::paths::publish_plugin_skill_dirs(plugin_skill_dirs);
-            crate::agents::publish_plugin_subagents(plugin_subagents);
-            self.skill_system.init(skill_dirs).await;
+            // One derivation for every plugin-owned process-global surface.
+            // This also refreshes the active-tool index, which is why the
+            // `sync_runtime_snapshots()` call that used to sit above is gone
+            // rather than merely moved — see `projection.rs` for why the
+            // derivation may not be written twice.
+            self.republish_plugin_projections().await;
         }
 
-        changed
+        changed || preference_changed
     }
 }

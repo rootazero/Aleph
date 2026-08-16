@@ -27,7 +27,14 @@ pub struct PluginInfo {
     /// usage must render as `—` rather than `0`.
     #[serde(default)]
     pub tools_count: usize,
-    /// Runtime status label: "loaded" | "disabled" | "overridden" | "error".
+    /// Runtime kind: "static" | "mcp" | "wasm". Every client that lists
+    /// plugins wanted this column; the server never sent it, so the column
+    /// rendered a dash on every row.
+    #[serde(default)]
+    pub kind: String,
+    /// Runtime status label — see
+    /// [`aleph_protocol::plugins::PluginRuntimeStatus`], which is the wire
+    /// vocabulary this string must stay inside.
     #[serde(default)]
     pub status: String,
     /// Error message when the plugin failed to load (status == "error").
@@ -78,6 +85,16 @@ pub enum PluginKind {
 }
 
 impl PluginKind {
+    /// Stable lowercase wire label, matching the serde representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Wasm => "wasm",
+            Self::Mcp => "mcp",
+            Self::Static => "static",
+        }
+    }
+
     /// Detect plugin kind from a file path
     ///
     /// Returns `Some(kind)` if the path indicates a known plugin type,
@@ -110,6 +127,12 @@ pub enum PluginStatus {
     Overridden,
     /// Plugin failed to load with an error
     Error(String),
+    /// The owner trust policy refused this plugin's origin.
+    ///
+    /// Distinct from [`Self::Disabled`] on purpose: the remedy is an allowlist
+    /// entry, not the per-plugin toggle. Collapsing the two would point the
+    /// operator at a switch that cannot change the outcome.
+    Blocked(String),
 }
 
 impl PluginStatus {
@@ -127,6 +150,7 @@ impl PluginStatus {
             Self::Disabled => "disabled",
             Self::Overridden => "overridden",
             Self::Error(_) => "error",
+            Self::Blocked(_) => "blocked",
         }
     }
 }
@@ -148,10 +172,24 @@ pub struct LoadSummary {
     pub plugins_loaded: usize,
     /// Number of hooks loaded
     pub hooks_loaded: usize,
-    /// Number of plugins the owner trust policy refused to load. Surfaced in
-    /// `extensions.stat` so operators can spot a plugin that's installed but
-    /// not active because it wasn't on the allowlist.
+    /// Number of plugins the owner trust policy refused to load.
+    ///
+    /// The doc here used to claim this was "surfaced in `extensions.stat`".
+    /// It was not surfaced anywhere — the field had zero consumers, so a
+    /// policy refusal was invisible on every face. The refusals now carry
+    /// their own registry rows (`PluginStatus::Blocked`, listed by
+    /// `plugins.list` with the allowlist hint in `status_detail`); this
+    /// counter is the aggregate for the boot log, not the operator's only
+    /// window onto it.
     pub skipped_by_trust: usize,
+    /// Number of plugin directories that lost a same-id shadow contest to a
+    /// higher-priority scope.
+    pub shadowed: usize,
+    /// Number of plugins registered but held inactive because the operator
+    /// disabled them (`<data_dir>/plugins.toml`). Distinct from
+    /// [`Self::skipped_by_trust`]: that is a policy refusal, this is a
+    /// deliberate per-plugin toggle, and the two need different remedies.
+    pub disabled_by_operator: usize,
     /// Errors encountered during loading
     pub errors: Vec<String>,
 }
@@ -228,7 +266,11 @@ pub struct PluginRecord {
     pub origin: PluginOrigin,
     /// Current status
     pub status: PluginStatus,
-    /// Error message if status is Error
+    /// Human-readable detail for a non-`Loaded` status: the parse error, the
+    /// path that shadowed this plugin, or the policy that refused it.
+    ///
+    /// A status without a detail names a problem and no remedy, which is the
+    /// half the operator actually needs.
     pub error: Option<String>,
     /// Root directory of the plugin
     pub root_dir: PathBuf,
@@ -343,6 +385,23 @@ impl PluginRecord {
     pub fn with_error(mut self, error: String) -> Self {
         self.status = PluginStatus::Error(error.clone());
         self.error = Some(error);
+        self
+    }
+
+    /// Mark this record inactive with a stated reason.
+    ///
+    /// The reason lands in both the status (machine-readable) and
+    /// [`Self::error`] (human-readable), because every one of these outcomes
+    /// used to be expressed by *dropping the plugin from the registry* — which
+    /// renders identically to "never installed".
+    #[must_use]
+    pub fn inactive(mut self, status: PluginStatus, detail: String) -> Self {
+        debug_assert!(
+            !status.is_active(),
+            "`inactive` is for non-Loaded statuses only"
+        );
+        self.status = status;
+        self.error = Some(detail);
         self
     }
 

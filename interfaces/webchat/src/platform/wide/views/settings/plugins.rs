@@ -7,20 +7,14 @@ use serde_json::json;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n, Locale};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginInfo {
-    pub name: String,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub enabled: bool,
-    /// Invocation record from `plugins.list`. `None` when talking to a server
-    /// that predates the field — an empty cell, not a zero.
-    #[serde(default)]
-    pub usage: Option<aleph_protocol::extension_usage::UsageSummary>,
-}
+/// The list row is `aleph_protocol::plugins::PluginRow` — the same type the
+/// server builds the response from and the CLI decodes it with.
+///
+/// The hand-written DTO this replaces omitted `status` and `status_detail`, so
+/// the Panel could show a plugin as "off" but never why: refused by policy,
+/// shadowed by a higher-scope copy, and failed-to-parse all rendered as an
+/// unlit toggle, identical to a plugin the operator had simply switched off.
+pub use aleph_protocol::plugins::{PluginRow as PluginInfo, PluginRuntimeStatus};
 
 /// Load plugins list from Gateway
 fn load_plugins(
@@ -198,6 +192,11 @@ fn PluginCard(
     let plugin_name = StoredValue::new(plugin.name.clone());
 
     let usage_summary = plugin.usage.clone();
+    let status_note = match (plugin.status, plugin.status_detail.clone()) {
+        (PluginRuntimeStatus::Loaded | PluginRuntimeStatus::Disabled, _) => None,
+        (status, Some(detail)) => Some(format!("{}: {detail}", status.label())),
+        (status, None) => Some(status.label().to_string()),
+    };
     let description = if plugin.description.is_empty() {
         "No description".to_string()
     } else {
@@ -223,6 +222,13 @@ fn PluginCard(
                         <p class="text-xs text-text-secondary mt-1">
                             {description}
                         </p>
+                        // A plugin that is not `loaded` needs its reason next
+                        // to it: "off" with no explanation points the operator
+                        // at a toggle that, for a blocked or errored plugin,
+                        // cannot change the outcome.
+                        {status_note.map(|note| view! {
+                            <p class="text-xs text-warning mt-1">{note}</p>
+                        })}
                         <div class="flex items-center gap-1 mt-2 text-xs text-text-tertiary">
                             <span>"📦"</span>
                             <span>{t!(i18n, settings.plugins.git_repository)}</span>
