@@ -16,10 +16,6 @@ pub enum VisionError {
     #[error("Image decode error: {0}")]
     ImageError(String),
 
-    /// The provided image format is not supported.
-    #[error("Unsupported image format: {0}")]
-    UnsupportedFormat(String),
-
     /// No provider supports the requested capability.
     #[error("No provider supports {0}")]
     UnsupportedCapability(String),
