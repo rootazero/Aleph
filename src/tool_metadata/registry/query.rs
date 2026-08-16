@@ -2,8 +2,6 @@
 //!
 //! Methods for querying and searching tools in the registry.
 
-use crate::config::RoutingRuleConfig;
-
 use super::super::types::{ChannelType, ToolSource, UnifiedTool};
 use super::types::ToolStorage;
 
@@ -38,54 +36,6 @@ impl ToolQuery {
             .collect();
         builtins.sort_by_key(|t| t.sort_order);
         builtins
-    }
-
-    /// List preset tools for Settings UI (Flat Namespace Mode)
-    ///
-    /// Returns all non-Custom tools: Builtin + MCP + Skill + Native
-    /// These are the "preset" tools that users can't delete, sorted by priority.
-    pub async fn list_preset_tools(&self) -> Vec<UnifiedTool> {
-        let tools = self.tools.read().await;
-        let mut presets: Vec<_> = tools
-            .values()
-            .filter(|t| t.is_active && !matches!(t.source, ToolSource::Custom { .. }))
-            .cloned()
-            .collect();
-
-        // Sort by source priority: Builtin > Native > Custom > MCP > Plugin > Skill
-        presets.sort_by(|a, b| {
-            a.source
-                .display_priority()
-                .cmp(&b.source.display_priority())
-                .then(a.sort_order.cmp(&b.sort_order))
-                .then(a.name.cmp(&b.name))
-        });
-        presets
-    }
-
-    /// Generate routing rules from builtin tools
-    ///
-    /// This is the SINGLE SOURCE OF TRUTH for builtin command routing configuration.
-    /// Config module should call this instead of maintaining separate hardcoded rules.
-    ///
-    /// Returns `RoutingRuleConfig` for each builtin tool that has `routing_regex` set.
-    pub async fn get_builtin_routing_rules(&self) -> Vec<RoutingRuleConfig> {
-        let tools = self.tools.read().await;
-        tools
-            .values()
-            .filter(|t| t.is_builtin && t.routing_regex.is_some())
-            .map(|t| RoutingRuleConfig {
-                rule_type: Some("command".to_string()),
-                is_builtin: true,
-                regex: t.routing_regex.clone().unwrap_or_default(),
-                provider: Some("openai".to_string()), // Will be overridden by default_provider
-                system_prompt: t.routing_system_prompt.clone(),
-                strip_prefix: Some(t.routing_strip_prefix),
-                intent_type: t.routing_intent_type.clone(),
-                preferred_model: None,
-                icon: t.icon.clone(),
-            })
-            .collect()
     }
 
     /// List all tools for UI display (sorted by `sort_order`, then name)
@@ -358,12 +308,6 @@ impl ToolQuery {
         result
     }
 
-    /// List all tools including inactive ones
-    pub async fn list_all_with_inactive(&self) -> Vec<UnifiedTool> {
-        let tools = self.tools.read().await;
-        tools.values().cloned().collect()
-    }
-
     /// List tools by MCP server name
     pub async fn list_by_mcp_server(&self, server: &str) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
@@ -374,35 +318,6 @@ impl ToolQuery {
             })
             .cloned()
             .collect()
-    }
-
-    /// Get tool by ID
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Full tool ID (e.g., "native:search", "`mcp:fs:read_file`")
-    pub async fn get_by_id(&self, id: &str) -> Option<UnifiedTool> {
-        let tools = self.tools.read().await;
-        tools.get(id).cloned()
-    }
-
-    /// Get tool by name
-    ///
-    /// Searches for a tool by its command name (not full ID).
-    /// When multiple tools match, returns the one with the highest source
-    /// priority (deterministic: breaks ties by lexicographically smallest ID).
-    pub async fn get_by_name(&self, name: &str) -> Option<UnifiedTool> {
-        let tools = self.tools.read().await;
-        tools
-            .values()
-            .filter(|t| t.name == name || t.id.rsplit_once(':').is_some_and(|(_, n)| n == name))
-            .max_by(|a, b| {
-                a.source
-                    .priority()
-                    .cmp(&b.source.priority())
-                    .then_with(|| b.id.cmp(&a.id)) // smaller ID wins on tie
-            })
-            .cloned()
     }
 
     /// Fuzzy search tools by name or description
@@ -431,22 +346,6 @@ impl ToolQuery {
         });
 
         results
-    }
-
-    /// Filter active tools by name prefix (case-insensitive)
-    pub async fn filter_by_prefix(&self, prefix: &str) -> Vec<UnifiedTool> {
-        if prefix.is_empty() {
-            return self.list_all().await;
-        }
-        let prefix_lower = prefix.to_lowercase();
-        let tools = self.tools.read().await;
-        let mut result: Vec<_> = tools
-            .values()
-            .filter(|t| t.is_active && t.name.to_lowercase().starts_with(&prefix_lower))
-            .cloned()
-            .collect();
-        result.sort_by(|a, b| a.name.cmp(&b.name));
-        result
     }
 
     /// Get total tool count

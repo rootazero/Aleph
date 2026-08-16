@@ -25,8 +25,8 @@ pub use registry::ResolvedCommand;
 pub use registry::ToolCatalog;
 pub use registry::{HealthReason, HealthSnapshot, ProbeResult, ToolHealthCache, ToolHealthProbe};
 pub use types::{
-    ChannelType, ConflictInfo, ConflictResolution, DispatchMode, ToolCategory, ToolDefinition,
-    ToolPriority, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool,
+    ChannelType, ConflictInfo, ConflictResolution, ToolCategory, ToolDefinition, ToolPriority,
+    ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool,
 };
 
 #[cfg(all(test, feature = "loom"))]

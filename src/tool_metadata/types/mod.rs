@@ -41,8 +41,8 @@ pub use conflict::{ConflictInfo, ConflictResolution, ToolPriority, ToolSource};
 // Unified Tool
 pub use unified::UnifiedTool;
 
-// Dispatch & Channel Types
-pub use unified::{ChannelType, DispatchMode};
+// Channel Types
+pub use unified::ChannelType;
 
 // Tool Info Types (for Gateway JSON-RPC)
 pub use tool_info::ToolSourceType;

@@ -239,9 +239,6 @@ impl ConflictResolver {
                         original_name, new_name, conflict.existing_name
                     );
                 }
-                ConflictResolution::NoConflict => {
-                    // Should not happen if conflict was detected
-                }
             }
         }
 

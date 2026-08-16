@@ -2,6 +2,16 @@ use super::super::types::{ChannelType, ToolSource};
 use super::*;
 use crate::tool_metadata::types::ToolPriority;
 
+/// Fetch a single registered (active) tool by id, replacing the removed
+/// `get_by_id` for tests that inspect one tool after registration.
+async fn fetch_by_id(registry: &ToolCatalog, id: &str) -> Option<UnifiedTool> {
+    registry
+        .list_all()
+        .await
+        .into_iter()
+        .find(|t| t.id == id)
+}
+
 #[tokio::test]
 async fn test_registry_new() {
     let registry = ToolCatalog::new();
@@ -81,7 +91,7 @@ async fn test_register_skills() {
 
     assert_eq!(registry.count().await, 2);
 
-    let tool = registry.get_by_id("skill:refine-text").await;
+    let tool = fetch_by_id(&registry, "skill:refine-text").await;
     assert!(tool.is_some());
     let tool = tool.unwrap();
     assert!(matches!(tool.source, ToolSource::Skill { .. }));
@@ -116,7 +126,11 @@ async fn test_register_custom_commands() {
 
     assert_eq!(registry.count().await, 2); // Only slash commands
 
-    let translate = registry.get_by_name("translate").await;
+    let translate = registry
+        .list_all()
+        .await
+        .into_iter()
+        .find(|t| t.name == "translate");
     assert!(translate.is_some());
     assert!(matches!(
         translate.unwrap().source,
@@ -140,32 +154,6 @@ async fn test_search() {
     let results = registry.search("search").await;
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].name, "search");
-}
-
-#[tokio::test]
-async fn test_set_tool_active() {
-    let registry = ToolCatalog::new();
-
-    // Register a custom command to test
-    let rules = vec![RoutingRuleConfig {
-        regex: "^/test".to_string(),
-        provider: Some("openai".to_string()),
-        system_prompt: Some("Test assistant".to_string()),
-        ..Default::default()
-    }];
-    registry.register_custom_commands(&rules).await;
-
-    // Deactivate test command (id is `custom:{rule_index}:{name}`)
-    let updated = registry.set_tool_active("custom:0:test", false).await;
-    assert!(updated);
-
-    // Should not appear in active list
-    let all = registry.list_all().await;
-    assert!(!all.iter().any(|t| t.id == "custom:0:test"));
-
-    // Should appear in full list
-    let all_with_inactive = registry.list_all_with_inactive().await;
-    assert!(all_with_inactive.iter().any(|t| t.id == "custom:0:test"));
 }
 
 // =========================================================================
@@ -249,7 +237,7 @@ async fn test_register_with_conflict_resolution_no_conflict() {
     // No conflict, original ID used
     assert_eq!(id, "mcp:server:git");
 
-    let registered = registry.get_by_id(&id).await;
+    let registered = fetch_by_id(&registry, &id).await;
     assert!(registered.is_some());
     assert_eq!(registered.unwrap().name, "git");
 }
@@ -284,13 +272,13 @@ async fn test_register_with_conflict_resolution_new_renamed() {
     // MCP tool should be renamed (Custom has higher priority)
     assert_eq!(id, "mcp:server:search-mcp");
 
-    let registered = registry.get_by_id(&id).await.unwrap();
+    let registered = fetch_by_id(&registry, &id).await.unwrap();
     assert_eq!(registered.name, "search-mcp");
     assert_eq!(registered.original_name, Some("search".to_string()));
     assert!(registered.was_renamed);
 
     // Custom should still have original name
-    let custom = registry.get_by_id("custom:search").await.unwrap();
+    let custom = fetch_by_id(&registry, "custom:search").await.unwrap();
     assert_eq!(custom.name, "search");
     assert!(!custom.was_renamed);
 }
@@ -323,114 +311,17 @@ async fn test_register_with_conflict_resolution_existing_renamed() {
 
     // Custom tool takes the name
     assert_eq!(id, "custom:test");
-    let custom = registry.get_by_id(&id).await.unwrap();
+    let custom = fetch_by_id(&registry, &id).await.unwrap();
     assert_eq!(custom.name, "test");
     assert!(!custom.was_renamed);
 
     // MCP tool should be renamed
-    let mcp = registry.get_by_id("mcp:server:test-mcp").await;
+    let mcp = fetch_by_id(&registry, "mcp:server:test-mcp").await;
     assert!(mcp.is_some());
     let mcp = mcp.unwrap();
     assert_eq!(mcp.name, "test-mcp");
     assert_eq!(mcp.original_name, Some("test".to_string()));
     assert!(mcp.was_renamed);
-}
-
-// =========================================================================
-// Atomic Refresh Tests (Phase 3.4)
-// =========================================================================
-
-#[tokio::test]
-async fn test_refresh_atomic_replaces_all_tools() {
-    let registry = ToolCatalog::new();
-
-    // Register some initial tools
-    let rules = vec![RoutingRuleConfig {
-        regex: "^/old".to_string(),
-        provider: Some("openai".to_string()),
-        system_prompt: Some("Old command".to_string()),
-        ..Default::default()
-    }];
-    registry.register_custom_commands(&rules).await;
-    let initial_count = registry.count().await;
-    assert_eq!(initial_count, 1);
-
-    // Create new tool list
-    let new_tools = vec![
-        UnifiedTool::new(
-            "test:tool1",
-            "tool1",
-            "Test Tool 1",
-            ToolSource::Custom { rule_index: 0 },
-        ),
-        UnifiedTool::new(
-            "test:tool2",
-            "tool2",
-            "Test Tool 2",
-            ToolSource::Custom { rule_index: 1 },
-        ),
-    ];
-
-    // Atomic refresh should replace all tools
-    registry.refresh_atomic(new_tools).await;
-
-    // Should have exactly 2 tools now
-    assert_eq!(registry.count().await, 2);
-
-    // Old custom tools should be gone
-    assert!(registry.get_by_id("custom:old").await.is_none());
-
-    // New tools should exist
-    assert!(registry.get_by_id("test:tool1").await.is_some());
-    assert!(registry.get_by_id("test:tool2").await.is_some());
-}
-
-#[tokio::test]
-async fn test_refresh_atomic_empty_list() {
-    let registry = ToolCatalog::new();
-
-    // Register some tools first
-    let rules = vec![RoutingRuleConfig {
-        regex: "^/test".to_string(),
-        provider: Some("openai".to_string()),
-        system_prompt: Some("Test".to_string()),
-        ..Default::default()
-    }];
-    registry.register_custom_commands(&rules).await;
-    assert!(registry.count().await > 0);
-
-    // Refresh with empty list
-    registry.refresh_atomic(vec![]).await;
-
-    // Should have 0 tools
-    assert_eq!(registry.count().await, 0);
-}
-
-#[tokio::test]
-async fn test_refresh_atomic_preserves_tool_properties() {
-    let registry = ToolCatalog::new();
-
-    // Create tool with all properties
-    let tool = UnifiedTool::new(
-        "custom:mytool",
-        "mytool",
-        "My Tool Description",
-        ToolSource::Custom { rule_index: 0 },
-    )
-    .with_display_name("My Tool")
-    .with_icon("star.fill")
-    .with_usage("/mytool [args]")
-    .with_requires_confirmation(true);
-
-    registry.refresh_atomic(vec![tool]).await;
-
-    let retrieved = registry.get_by_id("custom:mytool").await.unwrap();
-    assert_eq!(retrieved.name, "mytool");
-    assert_eq!(retrieved.display_name, "My Tool");
-    assert_eq!(retrieved.description, "My Tool Description");
-    assert_eq!(retrieved.icon, Some("star.fill".to_string()));
-    assert_eq!(retrieved.usage, Some("/mytool [args]".to_string()));
-    assert!(retrieved.requires_confirmation);
 }
 
 // =========================================================================
@@ -567,48 +458,6 @@ async fn test_resolve_command_strips_bot_mention() {
     assert_eq!(resolved.unwrap().tool.name, "search");
 }
 
-// =========================================================================
-// Prefix Filtering Tests (Task 4)
-// =========================================================================
-
-#[tokio::test]
-async fn test_filter_by_prefix() {
-    let registry = ToolCatalog::new();
-    let rules = vec![
-        RoutingRuleConfig {
-            regex: "^/search".to_string(),
-            provider: Some("openai".to_string()),
-            system_prompt: Some("Search".to_string()),
-            ..Default::default()
-        },
-        RoutingRuleConfig {
-            regex: "^/settings".to_string(),
-            provider: Some("openai".to_string()),
-            system_prompt: Some("Settings".to_string()),
-            ..Default::default()
-        },
-        RoutingRuleConfig {
-            regex: "^/translate".to_string(),
-            provider: Some("openai".to_string()),
-            system_prompt: Some("Translate".to_string()),
-            ..Default::default()
-        },
-    ];
-    registry.register_custom_commands(&rules).await;
-
-    let results = registry.filter_by_prefix("se").await;
-    assert_eq!(results.len(), 2);
-
-    let results = registry.filter_by_prefix("SE").await;
-    assert_eq!(results.len(), 2);
-
-    let results = registry.filter_by_prefix("").await;
-    assert_eq!(results.len(), 3);
-
-    let results = registry.filter_by_prefix("xyz").await;
-    assert_eq!(results.len(), 0);
-}
-
 #[tokio::test]
 async fn test_high_risk_tool_channel_restriction() {
     let registry = ToolCatalog::new();
@@ -721,40 +570,6 @@ async fn test_resolve_alias_never_shadows_canonical_name() {
     );
 }
 
-#[tokio::test]
-async fn test_unregister_canonical_restores_existing_alias() {
-    let registry = ToolCatalog::new();
-    let a = UnifiedTool::new("custom:goto", "goto", "Go somewhere", ToolSource::Builtin)
-        .with_aliases(["go"]);
-    let a_id = registry.register_with_conflict_resolution(a).await;
-    let b = UnifiedTool::new(
-        "custom:go",
-        "go",
-        "Dynamic go",
-        ToolSource::Custom { rule_index: 0 },
-    );
-    let b_id = registry.register_with_conflict_resolution(b).await;
-
-    let resolved = registry.resolve_command("/go").await.unwrap();
-    assert_eq!(
-        resolved.tool.name, "go",
-        "canonical 'go' must beat the alias hit while active"
-    );
-
-    let goto = registry.get_by_id(&a_id).await.unwrap();
-    assert!(
-        goto.aliases.iter().any(|a| a == "go"),
-        "goto's 'go' alias must be preserved when canonical 'go' registers"
-    );
-
-    assert!(registry.set_tool_active(&b_id, false).await);
-    let resolved_after = registry.resolve_command("/go").await.unwrap();
-    assert_eq!(
-        resolved_after.tool.name, "goto",
-        "after canonical 'go' is deactivated, 'go' alias must resolve back to goto"
-    );
-}
-
 /// The same two tools must land the same way whichever order they register in.
 ///
 /// Registration-time renaming made this asymmetric: registering the alias
@@ -822,7 +637,7 @@ async fn two_tools_may_share_an_alias_and_the_loser_keeps_it_as_a_fallback() {
     let high_id = registry.register_with_conflict_resolution(high).await;
 
     for id in [&low_id, &high_id] {
-        let tool = registry.get_by_id(id).await.unwrap();
+        let tool = fetch_by_id(&registry, id).await.unwrap();
         assert!(
             !tool.was_renamed,
             "sharing an alias must not rename '{}'",
@@ -835,13 +650,6 @@ async fn two_tools_may_share_an_alias_and_the_loser_keeps_it_as_a_fallback() {
         registry.resolve_command("/n").await.unwrap().tool.name,
         "navigate",
         "the higher-priority source wins the shared alias"
-    );
-
-    assert!(registry.set_tool_active(&high_id, false).await);
-    assert_eq!(
-        registry.resolve_command("/n").await.unwrap().tool.name,
-        "take_notes",
-        "deactivating the winner must hand the alias to the other claimant"
     );
 }
 

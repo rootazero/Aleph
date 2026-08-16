@@ -12,7 +12,6 @@ use std::fmt;
 /// - **Skills**: User-configured skills (instruction injection)
 /// - **Mcp**: MCP server tools (dynamically loaded)
 /// - **Custom**: User-defined custom tools
-/// - **`GeneratedSkill`**: Auto-generated from skill evolution (Skill Compiler)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "lowercase")]
@@ -25,8 +24,6 @@ pub enum ToolCategory {
     Mcp,
     /// User-defined custom tools (via UI settings)
     Custom,
-    /// Auto-generated tools from skill evolution (Skill Compiler)
-    GeneratedSkill,
 }
 
 impl ToolCategory {
@@ -38,7 +35,6 @@ impl ToolCategory {
             Self::Skills => "Skills",
             Self::Mcp => "MCP",
             Self::Custom => "Custom",
-            Self::GeneratedSkill => "Generated",
         }
     }
 
@@ -50,7 +46,6 @@ impl ToolCategory {
             Self::Skills => "sparkles",
             Self::Mcp => "server.rack",
             Self::Custom => "slider.horizontal.3",
-            Self::GeneratedSkill => "gearshape.2.fill",
         }
     }
 }

@@ -2,10 +2,8 @@
 //!
 //! Methods for managing tool state and performing bulk operations.
 
-use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::debug;
 
-use super::super::types::UnifiedTool;
 use super::types::ToolStorage;
 
 /// State management functionality for `ToolCatalog`
@@ -19,60 +17,11 @@ impl ToolState {
         Self { tools }
     }
 
-    /// Set tool active state
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Tool ID
-    /// * `active` - Whether the tool should be active
-    ///
-    /// # Returns
-    ///
-    /// `true` if tool was found and updated, `false` otherwise
-    pub async fn set_tool_active(&self, id: &str, active: bool) -> bool {
-        let mut tools = self.tools.write().await;
-        if let Some(tool) = tools.get_mut(id) {
-            tool.is_active = active;
-            debug!("Tool '{}' active state set to {}", id, active);
-            true
-        } else {
-            false
-        }
-    }
-
     /// Clear all registered tools
     pub async fn clear(&self) {
         let mut tools = self.tools.write().await;
         tools.clear();
         debug!("Cleared all tools from registry");
-    }
-
-    /// Atomic refresh - build new `HashMap` and replace in one operation
-    ///
-    /// This method prevents the race condition where `clear()` and `register()`
-    /// have a brief window of empty tool list. Instead, we build a completely
-    /// new `HashMap` with all tools, then atomically replace the old one.
-    ///
-    /// # Arguments
-    ///
-    /// * `new_tools` - Vector of tools to register (replaces all existing)
-    ///
-    /// # Thread Safety
-    ///
-    /// This uses a single write lock operation, so UI will never see
-    /// an empty or partially populated tool list during refresh.
-    pub async fn refresh_atomic(&self, new_tools: Vec<UnifiedTool>) {
-        let new_map: HashMap<String, UnifiedTool> =
-            new_tools.into_iter().map(|t| (t.id.clone(), t)).collect();
-
-        let count = new_map.len();
-
-        // Single write lock operation - atomic replacement
-        let mut tools = self.tools.write().await;
-        *tools = new_map;
-        // Lock released here - UI immediately sees new tools, no empty window
-
-        info!("Tool registry atomically refreshed: {} tools", count);
     }
 
     /// Remove tools from a specific MCP server
