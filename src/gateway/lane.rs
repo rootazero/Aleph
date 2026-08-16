@@ -39,7 +39,7 @@ pub enum Lane {
     Query,
     /// Agent execution (agent.run, chat.send)
     Execute,
-    /// State mutations (config.patch, config.apply, config.set, memory.store, memory.delete, session.compact, session.delete)
+    /// State mutations (config.patch, memory.delete, session.compact, session.truncate, sessions.delete)
     Mutate,
     /// System management (plugins.install, plugins.uninstall, skills.install, skills.remove, logs.setLevel)
     System,
@@ -466,13 +466,10 @@ mod tests {
 
         // Mutate lane
         assert_eq!(Lane::for_method("config.patch"), Lane::Mutate);
-        assert_eq!(Lane::for_method("config.apply"), Lane::Mutate);
-        assert_eq!(Lane::for_method("config.set"), Lane::Mutate);
-        assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
         assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.compact"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.truncate"), Lane::Mutate);
-        assert_eq!(Lane::for_method("session.delete"), Lane::Mutate);
+        assert_eq!(Lane::for_method("sessions.delete"), Lane::Mutate);
 
         // System lane
         assert_eq!(Lane::for_method("plugins.install"), Lane::System);
@@ -656,9 +653,8 @@ mod tests {
         assert_eq!(Lane::for_method("agent.run"), Lane::Execute);
         assert_eq!(Lane::for_method("chat.send"), Lane::Execute);
         assert_eq!(Lane::for_method("config.patch"), Lane::Mutate);
-        assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
         assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate);
-        assert_eq!(Lane::for_method("session.delete"), Lane::Mutate);
+        assert_eq!(Lane::for_method("sessions.delete"), Lane::Mutate);
         assert_eq!(Lane::for_method("skills.remove"), Lane::System);
         assert_eq!(Lane::for_method("plugins.uninstall"), Lane::System);
         assert_eq!(Lane::for_method("skills.install"), Lane::System);
