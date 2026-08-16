@@ -841,6 +841,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // The whiteboard tool (R8 twin of `canvas.*`).
+            "canvas" => Box::pin(async move {
+                let tool = self.canvas_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("canvas not available: no CanvasStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
             "agent_create" | "agent_list" | "agent_delete" | "agent_switch" | "agent_unbind"

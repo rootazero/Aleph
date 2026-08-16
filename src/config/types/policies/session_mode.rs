@@ -110,6 +110,10 @@ const CHAT_DEFER_FAMILIES: &[&str] = &[
     "vault_store",
     "session_collaborate",
     "session_turn",
+    // The whiteboard tool: a deliberate editing surface, not a casual chat
+    // need. The `_` word boundary keeps a future `canvas_export` deferred
+    // with it; work / code keep it listed. `tool_search` promotes on demand.
+    "canvas",
 ];
 
 /// Exact tool names deferred in Chat mode — entries whose *family* must not

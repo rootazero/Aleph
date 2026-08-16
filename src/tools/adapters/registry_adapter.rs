@@ -677,6 +677,11 @@ mod tests {
             "inbox_read",
             // Output gate masquerading as a read: `notify` messages the user.
             "heartbeat_report",
+            // Read/write multiplexer (list/get vs apply/insert_*), the
+            // file_ops / workspace_manage shape: a static read-only claim
+            // would ride its write arm on the Shared claim AND exempt it
+            // from the Ask tier.
+            "canvas",
         ];
         for tool in write_tools {
             assert!(

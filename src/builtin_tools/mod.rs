@@ -33,6 +33,7 @@ pub mod automation_tool;
 pub mod bash_exec;
 // pub mod browser; — deleted; Task 13 recreates with text-first design
 pub mod browser_tools;
+pub mod canvas;
 pub mod channel_directory;
 pub mod channel_manage;
 pub mod channel_message;
@@ -160,6 +161,7 @@ pub use browser_tools::{
     BrowserTypeTool, BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool, BrowserWaitForArgs,
     BrowserWaitForOutput, BrowserWaitForTool,
 };
+pub use canvas::{CanvasTool, CanvasToolAction, CanvasToolArgs};
 pub use channel_directory::{
     ChannelDirectoryArgs, ChannelDirectoryEntry, ChannelDirectoryOutput, ChannelDirectoryTool,
 };

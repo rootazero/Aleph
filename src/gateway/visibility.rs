@@ -1043,6 +1043,14 @@ mod tests {
             "src/gateway/execution_engine/run_loop/inner.rs",
             "who-owns: directory-catalogue registration for this run's owner (room turns short-circuit above it)",
         ),
+        (
+            "src/gateway/handlers/canvas.rs",
+            "who-owns: stamps a new canvas row's owner; runs in gateway dispatch where CALLER_USER is live",
+        ),
+        (
+            "src/builtin_tools/canvas.rs",
+            "who-owns: stamps a new canvas row's owner (the projects.rs shape); every VISIBILITY question in that file goes through ambient_canvas_visible / ambient_actor",
+        ),
     ];
 
     /// Walk `src/` and return `(repo-relative path, contents)` for every `.rs`

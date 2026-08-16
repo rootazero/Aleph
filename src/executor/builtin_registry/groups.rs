@@ -76,6 +76,9 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "speech_generate",
             "media_send",
             "artifact_publish",
+            // The whiteboard tool: its register is producing content the user
+            // sees (images, html frames, slides), not managing infrastructure.
+            "canvas",
         ],
     },
     ToolCategory {

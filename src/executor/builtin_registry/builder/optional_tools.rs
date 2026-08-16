@@ -215,6 +215,19 @@ impl BuiltinToolRegistry {
             info!("Registered workspace_manage tool in BuiltinToolRegistry");
         }
 
+        // canvas — the model's face of the whiteboard (R8). Gated on the same
+        // handle the constructor builds the tool from, so schema and tool
+        // appear or stay absent together (the workspace_manage rule).
+        if config.canvas_store.is_some() {
+            reg(
+                tools,
+                "canvas",
+                crate::builtin_tools::CanvasTool::DESCRIPTION,
+                schema::<crate::builtin_tools::canvas::CanvasToolArgs>("canvas"),
+            );
+            info!("Registered canvas tool in BuiltinToolRegistry");
+        }
+
         // Vault store tool
         if vault_store_tool.is_some() {
             reg(
