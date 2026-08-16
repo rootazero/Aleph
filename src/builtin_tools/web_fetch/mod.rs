@@ -505,9 +505,7 @@ mod tests {
         // Long content should be truncated
         let long = "a".repeat(15000);
         let truncated = tool.truncate_fetched(&long);
-        assert!(
-            truncated.chars().count() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3
-        ); // +3 for "..."
+        assert!(truncated.chars().count() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3); // +3 for "..."
         assert!(truncated.ends_with("..."));
     }
 
