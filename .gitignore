@@ -148,3 +148,5 @@ examples/*
 
 # Audit prompts (used for parallel subagent reviews)
 .audit-prompt-batch*.md
+__pycache__/
+*.pyc
