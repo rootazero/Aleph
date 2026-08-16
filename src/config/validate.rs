@@ -242,8 +242,13 @@ impl Config {
                 "Validating rule"
             );
 
-            // Validate regex pattern
-            if let Err(e) = regex::Regex::new(&rule.regex) {
+            // Validate regex pattern. `bounded_builder`, not `Regex::new`:
+            // the runtime compile site (`pii::rules::custom`) enforces the
+            // 1 MiB compiled-size cap, so validating WITHOUT it would both
+            // admit a pattern the runtime then rejects and let an expansion
+            // bomb (`(a{1000}){1000}{1000}`) exhaust memory during validation
+            // itself.
+            if let Err(e) = crate::security::safe_regex::bounded_builder(&rule.regex).build() {
                 error!(
                     rule_index = idx + 1,
                     regex = %rule.regex,
