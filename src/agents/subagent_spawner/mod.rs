@@ -630,10 +630,26 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             base.default_max_iterations.unwrap_or(0),
         ));
 
+        // The cheap summarizer is built raw (`deps_builder::summary`), so
+        // without this wrap its spend emitted no `ProviderUsage` at all —
+        // invisible to the traces DB, Panel Usage and team rollups. Labelled
+        // `compactor:<agent>` so rollups can tell compression spend from turn
+        // spend. The main `llm` above is already metered (Stage J-pre);
+        // wrapping that one again would double-count.
+        // rust-doctor-disable-next-line excessive-clone
+        let metered_cheap: Option<Arc<dyn AiProvider>> =
+            base.cheap_summary_provider.as_ref().map(|cheap| {
+                Arc::new(crate::providers::MeteringProvider::new(
+                    cheap.clone(),
+                    // rust-doctor-disable-next-line excessive-clone
+                    base.trace_sink.clone(),
+                    format!("compactor:{}", req.agent_def.id),
+                )) as Arc<dyn AiProvider>
+            });
         let (context_budget, context_compactor, preflight_pipeline) = build_context_triple(
             base.context_budget_config.as_ref(),
             &llm,
-            base.cheap_summary_provider.as_ref(),
+            metered_cheap.as_ref(),
             &req.agent_def.id,
             &child_id,
         );

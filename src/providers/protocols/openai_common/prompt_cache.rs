@@ -8,7 +8,7 @@ use std::borrow::Cow;
 pub(crate) const PROMPT_CACHE_KEY_MAX_CHARS: usize = 64;
 
 /// Derive the request's `prompt_cache_key`: content-addressed from the static
-/// prefix, session-id fallback.
+/// prefix (split path) or the toolset (any path), session-id fallback.
 ///
 /// `OpenAI` prompt caching is implicit prefix caching plus a routing hint —
 /// requests sharing a `prompt_cache_key` land on the same backend, where the
@@ -28,8 +28,12 @@ pub(crate) const PROMPT_CACHE_KEY_MAX_CHARS: usize = 64;
 ///
 /// Only the *stable* parts of a split system prompt are hashed — the dynamic
 /// suffix varies per turn and would otherwise re-key (and cold-route) every
-/// request. Returns the clamped session id when the request carries neither
-/// system prompt nor tools, and `None` when there is nothing to key on.
+/// request. The legacy flat `system_prompt` (Basic assembly, subagent
+/// prompts) is NOT hashed at all: that string embeds the Dynamic layers
+/// (runtime clock, git branch, chain context, …), so hashing it re-keyed
+/// every spawn; its stable key material is the toolset, else the session id.
+/// Returns the clamped session id when the request carries neither hashable
+/// static content nor tools, and `None` when there is nothing to key on.
 pub fn derive_prompt_cache_key(payload: &RequestPayload<'_>) -> Option<String> {
     let mut hasher = Sha256::new();
     let mut has_static = false;
@@ -42,10 +46,19 @@ pub fn derive_prompt_cache_key(payload: &RequestPayload<'_>) -> Option<String> {
             }
         }
         None => {
-            if let Some(sp) = payload.system_prompt.filter(|s| !s.is_empty()) {
-                hasher.update(sp.as_bytes());
-                has_static = true;
-            }
+            // Legacy flat-string path = Basic assembly (subagent prompts).
+            // That single string embeds the Dynamic layers (runtime clock,
+            // git branch, chain context, session guide, … — ten of them ride
+            // `AssemblyPath::Basic`), so hashing it whole re-keys — and
+            // cold-routes — every spawn even though the stable bulk of the
+            // prompt is identical. We therefore do NOT hash it. Stable key
+            // material still comes from the toolset below (hashed, shared
+            // across spawns of the same agent) or the session-id fallback
+            // (stable across the spawn's own turns). The cross-session
+            // bucket-sharing rationale for content addressing is served by
+            // the split `system_blocks` path above, where only `cache: true`
+            // parts are hashed — no production caller relies on flat-string
+            // hashing for it.
         }
     }
     hasher.update([0u8]);
@@ -200,10 +213,54 @@ mod tests {
 
     #[test]
     fn different_system_prompt_different_key() {
+        // Split path: distinct stable parts address distinct buckets.
+        use crate::thinker::prompt_builder::SystemPromptPart;
         let msgs = [UnifiedMessage::user("hi")];
-        let a = RequestPayload::new(&msgs).with_system(Some("persona A"));
-        let b = RequestPayload::new(&msgs).with_system(Some("persona B"));
+        let part_a = [SystemPromptPart {
+            content: "persona A".into(),
+            cache: true,
+        }];
+        let part_b = [SystemPromptPart {
+            content: "persona B".into(),
+            cache: true,
+        }];
+        let a = RequestPayload::new(&msgs).with_system_blocks(Some(&part_a));
+        let b = RequestPayload::new(&msgs).with_system_blocks(Some(&part_b));
         assert_ne!(derive_prompt_cache_key(&a), derive_prompt_cache_key(&b));
+    }
+
+    #[test]
+    fn basic_path_cache_key_stable_across_turns() {
+        // The churn regression: Basic assembly (subagent prompts) is one flat
+        // legacy string that embeds the Dynamic layers. Two turns (or two
+        // spawns) whose prompts differ ONLY in those per-turn bytes must land
+        // on the same routing key — via the toolset hash when tools exist,
+        // else the session-id fallback.
+        let msgs = [UnifiedMessage::user("hi")];
+        let tools = [tool("alpha")];
+        let a = payload_with_session(&msgs, "child-sess-1")
+            .with_system(Some(
+                "persona X\n<environment_context>time=10:00</environment_context>",
+            ))
+            .with_tools(Some(&tools));
+        let b = payload_with_session(&msgs, "child-sess-1")
+            .with_system(Some(
+                "persona X\n<environment_context>time=11:00 branch=main</environment_context>",
+            ))
+            .with_tools(Some(&tools));
+        assert_eq!(
+            derive_prompt_cache_key(&a),
+            derive_prompt_cache_key(&b),
+            "dynamic bytes in the flat Basic prompt must not churn the key"
+        );
+
+        // Tool-less Basic prompt: stable via the session id.
+        let c =
+            payload_with_session(&msgs, "child-sess-1").with_system(Some("persona X\ntime=10:00"));
+        let d =
+            payload_with_session(&msgs, "child-sess-1").with_system(Some("persona X\ntime=11:00"));
+        assert_eq!(derive_prompt_cache_key(&c).as_deref(), Some("child-sess-1"));
+        assert_eq!(derive_prompt_cache_key(&c), derive_prompt_cache_key(&d));
     }
 
     #[test]

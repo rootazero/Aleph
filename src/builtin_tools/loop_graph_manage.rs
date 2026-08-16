@@ -66,7 +66,7 @@ pub struct LoopGraphArgs {
     // ── node / drop_node ───────────────────────────────────────────
     /// Node id, prefixed by kind: `goal:<session_id>` | `cron:<job_id>` |
     /// `heartbeat:<task_id>` | `daemon:<name>` | `team:<team_id>` |
-    /// `anchor:<slug>` | `frozen:<slug>` | `root:<slug>`
+    /// `workflow:<template_name>` | `anchor:<slug>` | `frozen:<slug>` | `root:<slug>`
     #[serde(default)]
     pub id: Option<String>,
     /// Node kind (required for `node`)
@@ -198,6 +198,7 @@ impl LoopGraphTool {
             NodeKind::LoopHeartbeat => "heartbeat:",
             NodeKind::Daemon => "daemon:",
             NodeKind::Team => "team:",
+            NodeKind::Workflow => "workflow:",
             NodeKind::Anchor => "anchor:",
             NodeKind::Frozen => "frozen:",
             NodeKind::Root => "root:",
@@ -402,6 +403,36 @@ impl LoopGraphTool {
                         }
                     }
                 }
+                NodeKind::Workflow => {
+                    let template_name = n.id.trim_start_matches("workflow:");
+                    // Same three-way discipline as the goal/cron/team arms:
+                    // "the file store answered and this template is gone" is a
+                    // finding; "I could not read it" (IO/parse error) is not —
+                    // the audit template's roll call reads exactly this line,
+                    // so one torn write must not brand a healthy node vanished.
+                    // `store::load` errors on BOTH missing and unparsable, so
+                    // existence is probed on the resolved path first (the store
+                    // sanitises the name internally, so no traversal here).
+                    let path = crate::workflow::store::resolve_path_at(
+                        &crate::workflow::store::workflow_dir(),
+                        template_name,
+                    );
+                    if path.exists() {
+                        match crate::workflow::store::load(template_name) {
+                            Ok(m) => out.push_str(&format!(
+                                "\n    live: steps={} description={}",
+                                m.steps.len(),
+                                truncate_with_marker(&m.description, 80, "…")
+                            )),
+                            Err(e) => {
+                                tracing::warn!(node = %n.id, error = %e,
+                                    "loop_graph status: workflow template unreadable — live line omitted");
+                            }
+                        }
+                    } else {
+                        out.push_str("\n    live: ⚠ target missing（workflow 模板已消失）");
+                    }
+                }
                 NodeKind::LoopHeartbeat | NodeKind::Daemon => {}
             }
             out.push('\n');
@@ -441,7 +472,7 @@ impl LoopGraphTool {
 impl AlephTool for LoopGraphTool {
     const NAME: &'static str = "loop_graph";
     const DESCRIPTION: &'static str = "Manage the loop-graph governance topology: register \
-        self-improvement loops (goal/cron/heartbeat/daemon/team), anchors (irrefutable measurements), \
+        self-improvement loops (goal/cron/heartbeat/daemon/team/workflow), anchors (irrefutable measurements), \
         frozen rules and human root references as nodes; wire the six governance verbs \
         (watches/owns_reference/arbitrates/audits/anchored_by/feeds) as edges; render live \
         status with structural lint; install the weekly audit loop (enable_audit); preview a \
@@ -622,7 +653,7 @@ impl AlephTool for LoopGraphTool {
                     // own success message says the same thing. Recommending it
                     // here would send the model to install a real cron job for
                     // a promise no action can keep.
-                    "。注意：只有 goal:/team: 目标有胜利宣称触发点，\
+                    "。注意：只有 goal:/team:/workflow: 目标有胜利宣称触发点，\
                      本目标没有终态时刻可挂，所以任何看守都只按自己的节奏跑，不会有即时评审。"
                 } else {
                     "。注意：只有 cron: 看守能被胜利宣称即时唤醒，\
@@ -1036,17 +1067,17 @@ impl AlephTool for LoopGraphTool {
                 info!(job_id = %job_id, target = %to_id, "watcher paired");
                 // `pair` always builds a `cron:` watcher, so the watcher half
                 // of the promise always holds — but the TARGET half does not.
-                // Only `goal:` and `team:` have a victory-claim call site;
-                // pairing onto `daemon:dreaming` or a `cron:` loop produces a
-                // perfectly real watcher that this sentence used to advertise
-                // as instantly reviewable, and it can never be. Same disclosure
-                // `link` makes about unpokeable watchers, mirrored onto the
-                // side that was missed.
+                // Only `goal:`, `team:` and `workflow:` have a victory-claim
+                // call site; pairing onto `daemon:dreaming` or a `cron:` loop
+                // produces a perfectly real watcher that this sentence used to
+                // advertise as instantly reviewable, and it can never be. Same
+                // disclosure `link` makes about unpokeable watchers, mirrored
+                // onto the side that was missed.
                 let trigger_line = if crate::loop_graph::service::target_has_victory_claim(&to_id) {
-                    "被看守目标的胜利宣称（goal 完成 / team 解散）还会即时触发本看守\
-                     （post-run 钩子，去抖 60s）。"
+                    "被看守目标的胜利宣称（goal 完成 / team 解散 / workflow run 终态）还会即时触发\
+                     本看守（post-run 钩子，去抖 60s）。"
                 } else {
-                    "注意：本看守只按上面的时间表跑——只有 goal:/team: 目标有胜利宣称触发点，\
+                    "注意：本看守只按上面的时间表跑——只有 goal:/team:/workflow: 目标有胜利宣称触发点，\
                      其它环没有终态时刻可挂，所以不会有即时评审。"
                 };
                 Ok(LoopGraphOutput {
@@ -1680,6 +1711,56 @@ mod tests {
         a.kind = Some(NodeKind::Team);
         a.label = Some("发版小队".into());
         assert!(t.call(a).await.is_err(), "team id must carry team: prefix");
+    }
+
+    #[tokio::test]
+    async fn workflow_node_prefix_enforced() {
+        let (_d, t) = tool();
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some("report".into());
+        a.kind = Some(NodeKind::Workflow);
+        a.label = Some("日报流水线".into());
+        assert!(
+            t.call(a).await.is_err(),
+            "workflow id must carry workflow: prefix"
+        );
+
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some("workflow:report".into());
+        a.kind = Some(NodeKind::Workflow);
+        a.label = Some("日报流水线".into());
+        assert!(t.call(a).await.is_ok());
+    }
+
+    /// The Workflow live join's three-way discipline: a node bound to a
+    /// template that does not exist on disk is a FINDING ("target missing"),
+    /// rendered deterministically. (The found / unreadable arms need a
+    /// template under `$ALEPH_HOME/workflows/` — the live join reads the
+    /// global dir, not an injected one, so those stay covered by the store's
+    /// own tests rather than a fixture that would touch the real home.)
+    #[tokio::test]
+    async fn workflow_node_missing_template_is_a_finding_not_an_error() {
+        let (_d, t) = tool();
+        // Unique name: cannot collide with a real template in any environment.
+        let unique = format!(
+            "wf-missing-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some(format!("workflow:{unique}"));
+        a.kind = Some(NodeKind::Workflow);
+        a.label = Some("失踪模板".into());
+        t.call(a).await.unwrap();
+
+        let out = t.call(args(LoopGraphAction::Status)).await.unwrap();
+        let rendered = out.rendered.unwrap();
+        assert!(
+            rendered.contains("⚠ target missing（workflow 模板已消失）"),
+            "a vanished template must be a finding the audit roll call sees: {rendered}"
+        );
     }
 
     /// End-to-end wiring: a `node` action on the tool publishes a

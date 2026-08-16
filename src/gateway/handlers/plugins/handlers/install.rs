@@ -1,7 +1,9 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::json;
 
-use super::super::types::{InstallFromZipParams, InstallParams, PluginInfoJson};
+use aleph_protocol::plugins::{PluginRow, PluginRuntimeStatus};
+
+use super::super::types::{InstallFromZipParams, InstallParams};
 use crate::extension::manifest::adapter::AdapterRegistry;
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
@@ -90,25 +92,35 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
                             .filter(|c| c.kind_name() == kind)
                             .count() as u32
                     };
-                    let info = PluginInfoJson {
+                    // `AdapterOutput` carries capabilities, not the runtime
+                    // kind — that lives in the manifest, which is where
+                    // `load_all` reads it from too. An unparseable manifest
+                    // here would already have failed `parse_dir`, so the
+                    // fallback is only for a manifest-less auto-discovered
+                    // plugin, which is `Static` by definition.
+                    let kind = crate::extension::manifest::parse_manifest_from_dir_sync(&dest_path)
+                        .map(|m| m.kind)
+                        .unwrap_or(crate::extension::PluginKind::Static);
+                    let info = PluginRow {
                         name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
                         version: output.version.unwrap_or_default(),
                         description: output.description.unwrap_or_default(),
                         enabled: true,
                         path: dest_path.to_string_lossy().to_string(),
+                        kind: kind.as_str().to_string(),
+                        status: PluginRuntimeStatus::Loaded,
+                        status_detail: None,
                         skills_count: count_kind("skill"),
                         commands_count: count_kind("command"),
                         agents_count: count_kind("agent"),
                         hooks_count: count_kind("hook"),
                         mcp_servers_count: count_kind("mcp_server"),
                         tools_count: count_kind("tool"),
-                        status: "loaded".to_string(),
                         // A plugin installed one millisecond ago has no usage
                         // record and never will have one yet. `None` here says
                         // "unknown", which is the truth; `Some(calls: 0)` would
                         // say "known never used" about something that has not
                         // had the chance.
-                        error: None,
                         usage: None,
                     };
                     JsonRpcResponse::success(request.id, json!({ "plugin": info }))

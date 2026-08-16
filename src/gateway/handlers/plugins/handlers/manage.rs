@@ -1,6 +1,8 @@
 use serde_json::json;
 
-use super::super::types::{PluginInfoJson, ToggleParams, UninstallParams};
+use aleph_protocol::plugins::{PluginListResult, PluginRow, PluginRuntimeStatus};
+
+use super::super::types::{plugin_row, ToggleParams, UninstallParams};
 use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -30,11 +32,11 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
         tracing::warn!("Failed to load extensions: {}", e);
     }
 
-    let mut plugins: Vec<PluginInfoJson> = manager
+    let mut plugins: Vec<PluginRow> = manager
         .get_plugin_info()
         .await
         .into_iter()
-        .map(PluginInfoJson::from)
+        .map(plugin_row)
         .collect();
 
     // Join the invocation record onto each row. `PluginInfo::name` IS the
@@ -54,10 +56,21 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
             {
                 row.usage = Some(aleph_protocol::extension_usage::UsageSummary::from(entry));
             }
+            debug_assert!(
+                row.status != PluginRuntimeStatus::Loaded || row.enabled,
+                "a `loaded` row must also read enabled — the two answer the \
+                 same question and clients pick whichever is handier"
+            );
         }
     }
 
-    JsonRpcResponse::success(request.id, json!({ "plugins": plugins }))
+    // Built from the shared contract type, not a `json!` literal: the envelope
+    // key is the last part of a wire shape that stays hand-copied, and two
+    // functions in the CLI once disagreed about whether it existed at all.
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(PluginListResult { plugins }).unwrap_or_else(|_| json!({})),
+    )
 }
 
 /// Uninstall a plugin
@@ -104,7 +117,7 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
 
     match std::fs::remove_dir_all(&plugin_path) {
         Ok(()) => {
-            crate::tools::usage::forget_plugin(&params.name);
+            crate::extension::plugin_state::forget_plugin_sidecars(&params.name).await;
             if let Ok(manager) = get_extension_manager() {
                 if let Err(e) = manager.reload().await {
                     tracing::warn!("Failed to refresh extensions after uninstall: {}", e);
@@ -122,8 +135,9 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Enable a plugin
 ///
-/// Removes the `.disabled` marker file from the plugin directory,
-/// allowing the plugin to be discovered and loaded on next scan.
+/// Records `enabled = true` in `<data_dir>/plugins.toml` (via
+/// `set_plugin_enabled`, the single durable writer) and brings declared
+/// autostart services up.
 pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: ToggleParams = match parse_params(&request) {
         Ok(p) => p,
@@ -149,19 +163,11 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    let disabled_marker = plugin_path.join(".disabled");
-    if disabled_marker.exists() {
-        if let Err(e) = tokio::fs::remove_file(&disabled_marker).await {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to enable plugin: {e}"),
-            );
-        }
-    }
-
-    // Sync with PluginRegistry, then bring declared autostart services up
-    // (no-op for plugins without services; idempotent otherwise).
+    // Persist the preference and sync the live registry, then bring declared
+    // autostart services up (no-op for plugins without services; idempotent
+    // otherwise). `set_plugin_enabled` owns the durable write — this handler
+    // deliberately touches no marker file, because the marker it used to write
+    // was never read by anything.
     if let Ok(manager) = get_extension_manager() {
         manager.set_plugin_enabled(&params.name, true).await;
         manager.sync_plugin_services().await;
@@ -173,8 +179,11 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Disable a plugin
 ///
-/// Creates a `.disabled` marker file in the plugin directory,
-/// preventing the plugin from being discovered and loaded on next scan.
+/// Records `enabled = false` in `<data_dir>/plugins.toml` (via
+/// `set_plugin_enabled`, the single durable writer) and tears the runtime down.
+///
+/// The preference survives a restart *and* a `plugin update` — the marker file
+/// this replaced could survive neither, and in fact was never read at all.
 pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
     let params: ToggleParams = match parse_params(&request) {
         Ok(p) => p,
@@ -200,20 +209,9 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    let disabled_marker = plugin_path.join(".disabled");
-    if !disabled_marker.exists() {
-        if let Err(e) = tokio::fs::write(&disabled_marker, "").await {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to disable plugin: {e}"),
-            );
-        }
-    }
-
-    // Sync with PluginRegistry, then tear down the runtime — a disabled
-    // plugin must not keep background services or transient MCP servers
-    // running (the `.disabled` marker only affects the next scan).
+    // Persist the preference and sync the registry, then tear down the runtime
+    // — a disabled plugin must not keep background services or transient MCP
+    // servers running for the rest of the process lifetime.
     if let Ok(manager) = get_extension_manager() {
         manager.set_plugin_enabled(&params.name, false).await;
         match manager.unload_runtime_plugin(&params.name).await {

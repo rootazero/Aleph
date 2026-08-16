@@ -24,6 +24,7 @@ mod ids;
 pub mod jsonrpc;
 pub mod paths;
 pub mod plan;
+pub mod plugins;
 pub mod providers;
 pub mod session_thread;
 pub mod subagent_tree;
@@ -38,10 +39,10 @@ pub mod workspace;
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
 pub use events::{
-    AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState, AgentTraceTextKind,
-    AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult, AgentTraceTurnMetrics,
-    AgentTraceTurnOutcome, AskUserOption, AskUserQuestion, RunSummary, StreamEvent,
-    TokenBreakdownView, ToolResult,
+    cache_hit_ratio, AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState,
+    AgentTraceTextKind, AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult,
+    AgentTraceTurnMetrics, AgentTraceTurnOutcome, AskUserOption, AskUserQuestion, RunSummary,
+    StreamEvent, TokenBreakdownView, ToolResult,
 };
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,

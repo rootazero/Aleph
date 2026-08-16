@@ -162,6 +162,18 @@ pub enum LoopTraceEvent {
     /// `[moa] save_traces = true`; persisted-only (never whitelisted onto
     /// the wire). Opaque JSON keeps the payload shape free to evolve.
     MoaTurnTrace { preset: String, payload: Value },
+    /// Prompt-cache watchdog alarm, fired once per miss-streak (rising edge)
+    /// by `MeteringProvider`. Field docs live on the protocol twin
+    /// (`aleph_protocol::AgentTraceEvent::CacheHealthDegraded`); rationale in
+    /// [`crate::thinker::prompt_builder::cache_monitor`].
+    CacheHealthDegraded {
+        scope: String,
+        streak: u32,
+        reads: u64,
+        writes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix_changed: Option<bool>,
+    },
 }
 
 /// Kind of text stream. Live incremental text travels through the
@@ -261,6 +273,28 @@ mod tests {
         assert!(json.contains(r#""agent_id":"subagent-foo""#));
         assert!(json.contains(r#""cache_creation_tokens":30"#));
         assert!(json.contains(r#""cache_read_tokens":100"#));
+    }
+
+    #[test]
+    fn cache_health_degraded_serializes_with_scope_and_streak() {
+        let event = LoopTraceEvent::CacheHealthDegraded {
+            scope: "writer\u{1f}agent:writer:main".into(),
+            streak: 3,
+            reads: 10,
+            writes: 50_000,
+            prefix_changed: Some(false),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains(r#""type":"cache_health_degraded""#));
+        assert!(json.contains(r#""streak":3"#));
+        assert!(json.contains(r#""writes":50000"#));
+        // Round-trips — task_traces stores these blobs and the doctor check
+        // re-reads them.
+        let back: LoopTraceEvent = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(
+            back,
+            LoopTraceEvent::CacheHealthDegraded { streak: 3, .. }
+        ));
     }
 
     #[test]

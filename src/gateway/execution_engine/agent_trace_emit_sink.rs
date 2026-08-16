@@ -31,6 +31,10 @@
 //! `ProviderUsage` is an explicit exception to the "internal" rule: it is the
 //! sole source of the live prompt-cache reading, and it fires once per LLM
 //! call rather than per delta, so the wire-noise argument does not apply.
+//! `CacheHealthDegraded` rides along for the same reason: it is the alarm
+//! *about* that number, fires once per miss-streak (rising edge), and was a
+//! bare log line before — the one signal in this domain that must not stay
+//! invisible.
 
 use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
@@ -72,6 +76,7 @@ pub(crate) const fn is_step_event(event: &LoopTraceEvent) -> bool {
             | LoopTraceEvent::MoaAggregating { .. }
             | LoopTraceEvent::MoaAdvisorSpend { .. }
             | LoopTraceEvent::ProviderUsage { .. }
+            | LoopTraceEvent::CacheHealthDegraded { .. }
     )
 }
 

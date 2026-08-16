@@ -340,6 +340,37 @@ impl AgentTraceToolResult {
     }
 }
 
+/// Canonical prompt-cache hit ratio: `cache_read / (input + cache_read)`.
+///
+/// **Single source for the whole system.** Core's `TokenUsage::cache_hit_ratio`
+/// delegates here, the DB rollup (`AgentUsageTotal::cache_hit_ratio`) applies
+/// the same formula in SQL, and every live UI (TUI status bar, Panel) must
+/// derive its percentage from this function rather than recomputing locally —
+/// the TUI once divided by `input + cache_creation + cache_read`, so cold
+/// starts and prefix rewrites read systematically lower there than in the
+/// Panel Usage view for the very same call.
+///
+/// Relies on the disjoint-counters invariant the protocol adapters guarantee:
+/// `input_tokens` never includes the cached portions, so the full prompt is
+/// `input + cache_read + cache_creation` and the cached share is well-defined.
+///
+/// Returns `None` when the provider did not report cache reads
+/// (`cache_read_tokens == None`) or when both prompt counters are zero.
+/// `Some(0.0)` is an observed cold miss, distinct from "not reported".
+#[must_use]
+pub fn cache_hit_ratio(input_tokens: u64, cache_read_tokens: Option<u64>) -> Option<f64> {
+    let cache_read = cache_read_tokens?;
+    if cache_read == 0 {
+        // Reported, but no hits this turn — distinguishable from "unknown".
+        return Some(0.0);
+    }
+    let total_prompt = input_tokens.saturating_add(cache_read);
+    if total_prompt == 0 {
+        return None;
+    }
+    Some(cache_read as f64 / total_prompt as f64)
+}
+
 // `Eq` dropped: `MoaAdvisorSpend.cost_usd` is `Option<f64>`, and `f64` has no
 // `Eq` impl (NaN). `PartialEq` alone covers every actual use (`assert_eq!` in
 // tests); nothing in the codebase requires `AgentTraceEvent: Eq`.
@@ -486,6 +517,26 @@ pub enum AgentTraceEvent {
         preset: String,
         payload: Value,
     },
+    /// Prompt-cache watchdog alarm: `streak` consecutive calls for one
+    /// `(agent, session)` scope re-created the cache instead of reading it
+    /// (read-dominance violated — see core's `CacheMonitor`). Fired once per
+    /// streak (rising edge; a healthy call rearms). This is the domain's only
+    /// automated alarm — it used to be a bare `warn!` log line no surface
+    /// consumed, so a churning stable prefix only ever showed up on the bill.
+    CacheHealthDegraded {
+        /// `cache_scope(agent, session)` — agent id, or `agent␟session`.
+        scope: String,
+        /// Consecutive read-dominated-violating calls at firing time.
+        streak: u32,
+        /// Last call's cache-read / cache-creation token counts.
+        reads: u64,
+        writes: u64,
+        /// Miss attribution: whether the stable-prefix bytes changed between
+        /// the previous call and the firing one. `None` on legacy blobs and
+        /// the hash-less legacy prompt path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix_changed: Option<bool>,
+    },
 }
 
 impl AgentTraceEvent {
@@ -511,6 +562,7 @@ impl AgentTraceEvent {
             Self::MoaAggregating { .. } => "moa_aggregating",
             Self::MoaAdvisorSpend { .. } => "moa_advisor_spend",
             Self::MoaTurnTrace { .. } => "moa_turn_trace",
+            Self::CacheHealthDegraded { .. } => "cache_health_degraded",
         }
     }
 }
@@ -789,6 +841,22 @@ pub struct AskUserQuestion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_hit_ratio_matches_core_rollup_formula() {
+        // read / (input + read) — the same formula `traces.rs` applies in SQL.
+        // 870 read / (100 input + 870 read) ≈ 89.7%, NOT the 87% the TUI's old
+        // `input + creation + read` denominator produced for the same call.
+        let ratio = cache_hit_ratio(100, Some(870)).expect("reported");
+        assert!((ratio - 870.0 / 970.0).abs() < 1e-9);
+        // Cold miss is a real 0%, distinct from "provider did not report".
+        assert_eq!(cache_hit_ratio(500, Some(0)), Some(0.0));
+        assert_eq!(cache_hit_ratio(500, None), None);
+        // Degenerate all-zero report carries no signal.
+        assert_eq!(cache_hit_ratio(0, Some(0)), Some(0.0));
+        // Full hit.
+        assert_eq!(cache_hit_ratio(0, Some(500)), Some(1.0));
+    }
 
     #[test]
     fn test_tool_result_success() {

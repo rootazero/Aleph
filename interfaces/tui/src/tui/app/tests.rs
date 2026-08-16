@@ -292,10 +292,57 @@ fn switch_session_drops_stale_cache_stat() {
     // cache-less provider in the new session would otherwise display it
     // forever (the stat only updates when a call reports cache activity).
     let mut state = AppState::new("s1".into(), "m".into());
-    state.cache_stat = Some((870, 1000));
+    state.cache_stat = Some(87);
 
     state.switch_session("s2");
     assert_eq!(state.cache_stat, None, "stale cache stat must not survive");
+}
+
+#[test]
+fn provider_usage_cache_stat_matches_canonical_formula() {
+    // The status bar percentage must be the canonical `read / (input + read)`
+    // from `aleph_protocol::cache_hit_ratio` — the same number the core DB
+    // rollup and Panel Usage show for the same call. Regression guard for the
+    // old local recompute (`input + creation + read` denominator), which read
+    // systematically lower on cold starts and prefix rewrites.
+    let mut state = AppState::new("s1".into(), "m".into());
+    state.apply_agent_trace_event(&AgentTraceEvent::ProviderUsage {
+        agent_id: "root".into(),
+        input_tokens: 100,
+        output_tokens: 10,
+        cache_read_tokens: Some(870),
+        cache_creation_tokens: Some(30),
+        thinking_tokens: None,
+    });
+    // 870 / (100 + 870) ≈ 89.7% → 90, NOT the 87% the old denominator gave.
+    let expected =
+        (aleph_protocol::cache_hit_ratio(100, Some(870)).unwrap() * 100.0).round() as u64;
+    assert_eq!(state.cache_stat, Some(expected));
+    assert_eq!(state.cache_stat, Some(90));
+
+    // A pure cold write (creation only) reads as 0%, not "unknown".
+    state.apply_agent_trace_event(&AgentTraceEvent::ProviderUsage {
+        agent_id: "root".into(),
+        input_tokens: 500,
+        output_tokens: 10,
+        cache_read_tokens: Some(0),
+        cache_creation_tokens: Some(500),
+        thinking_tokens: None,
+    });
+    assert_eq!(state.cache_stat, Some(0));
+
+    // A call with no cache activity at all must not clobber the stat with a
+    // misleading 0% (providers without prompt caching).
+    state.cache_stat = Some(90);
+    state.apply_agent_trace_event(&AgentTraceEvent::ProviderUsage {
+        agent_id: "root".into(),
+        input_tokens: 500,
+        output_tokens: 10,
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        thinking_tokens: None,
+    });
+    assert_eq!(state.cache_stat, Some(90));
 }
 
 #[test]

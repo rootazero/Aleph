@@ -163,6 +163,8 @@ pub enum AgentTracePresentationStatus {
     Success,
     Failed,
     Info,
+    /// Recoverable-but-noteworthy condition (e.g. cache health degraded).
+    Warning,
 }
 
 /// Formatted representation of a single trace event.
@@ -551,6 +553,27 @@ pub fn present_agent_trace_event(
                 duration_ms: None,
             })
         }
+
+        AgentTraceEvent::CacheHealthDegraded {
+            scope,
+            streak,
+            reads,
+            writes,
+            prefix_changed,
+        } => Some(AgentTracePresentation {
+            kind: event.kind().into(),
+            status: AgentTracePresentationStatus::Warning,
+            content: format!(
+                "prompt cache re-creating rather than read — {streak} consecutive calls \
+                 (last: {reads} read / {writes} created) · {scope}{}",
+                match prefix_changed {
+                    Some(true) => " · stable prefix CHANGED between calls",
+                    Some(false) => " · stable prefix unchanged (provider-side eviction?)",
+                    None => "",
+                }
+            ),
+            duration_ms: None,
+        }),
     }
 }
 

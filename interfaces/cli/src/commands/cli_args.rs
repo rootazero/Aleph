@@ -698,15 +698,16 @@ pub enum PluginAction {
         scope: String,
     },
     /// Uninstall a plugin
-    Uninstall {
-        name: String,
-        /// Scope override
-        #[arg(long)]
-        scope: Option<String>,
-        /// Keep plugin data directory
-        #[arg(long)]
-        keep_data: bool,
-    },
+    ///
+    /// Had `--scope` and `--keep-data` flags until 2026-08-16. Both were
+    /// parsed and then dropped on the floor by the dispatcher, so neither
+    /// changed anything, ever. `--scope` cannot be honoured over RPC as things
+    /// stand — the daemon serves every registered project from one process, so
+    /// "project scope" has no unambiguous referent at the handler; project- and
+    /// local-scope plugins are removed by deleting their directory in the repo.
+    /// `--keep-data` named the only behaviour there is: the data directory is
+    /// always kept (the uninstall response says where it is).
+    Uninstall { name: String },
     /// Enable a disabled plugin
     Enable { name: String },
     /// Disable a plugin

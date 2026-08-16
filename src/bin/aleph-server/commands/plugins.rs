@@ -189,7 +189,7 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
 
     match tokio::fs::remove_dir_all(&plugin_path).await {
         Ok(()) => {
-            alephcore::tools::usage::forget_plugin(name);
+            alephcore::extension::plugin_state::forget_plugin_sidecars(name).await;
             println!("Plugin uninstalled successfully.");
         }
         Err(e) => {
@@ -203,53 +203,59 @@ pub async fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::err
 
 /// Handle plugins enable command
 pub async fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::default_plugins_dir;
-
-    let plugins_dir = default_plugins_dir();
-    let plugin_path = plugins_dir.join(name);
-
-    if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
-        eprintln!("Error: Plugin not found: {name}");
-        std::process::exit(1);
-    }
-
-    // Check for disabled marker file
-    let disabled_marker = plugin_path.join(".disabled");
-    if tokio::fs::try_exists(&disabled_marker)
-        .await
-        .unwrap_or(false)
-    {
-        tokio::fs::remove_file(&disabled_marker).await?;
-        println!("Plugin enabled: {name}");
-    } else {
-        println!("Plugin is already enabled: {name}");
-    }
-
-    Ok(())
+    set_enabled_locally(name, true).await
 }
 
 /// Handle plugins disable command
 pub async fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    set_enabled_locally(name, false).await
+}
+
+/// Write the operator's activation preference for a locally-installed plugin.
+///
+/// This used to create / delete a `<plugin_dir>/.disabled` marker. That marker
+/// had four write sites and **zero readers** — neither `has_plugin_manifest`
+/// nor `scan_plugin_parent` consulted it — so `aleph plugin disable` printed
+/// success and changed nothing that outlived the process. The durable answer
+/// now lives in `<data_dir>/plugins.toml`; see
+/// `alephcore::extension::plugin_state`.
+///
+/// No-lock path (Spec C): this only touches the plugin config document, and
+/// [`PluginsConfig::save`] is an atomic temp+rename. A running daemon re-reads
+/// the file on its next `load_all`.
+async fn set_enabled_locally(name: &str, enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::default_plugins_dir;
+    use alephcore::extension::plugin_state::PluginsConfig;
 
-    let plugins_dir = default_plugins_dir();
-    let plugin_path = plugins_dir.join(name);
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
 
+    let plugin_path = default_plugins_dir().join(name);
     if !tokio::fs::try_exists(&plugin_path).await.unwrap_or(false) {
         eprintln!("Error: Plugin not found: {name}");
         std::process::exit(1);
     }
 
-    // Create disabled marker file
-    let disabled_marker = plugin_path.join(".disabled");
-    if tokio::fs::try_exists(&disabled_marker)
+    let path = PluginsConfig::default_path()?;
+    let mut config = PluginsConfig::load(&path);
+    let verb = if enabled { "enabled" } else { "disabled" };
+    if config.set_enabled(name, enabled) {
+        config.save(&path).await?;
+        println!("Plugin {verb}: {name}");
+    } else {
+        println!("Plugin is already {verb}: {name}");
+    }
+
+    // A stale marker from an older build would be migrated (and removed) by the
+    // daemon's next load; say so rather than leaving the operator to wonder why
+    // a file they can see is being ignored.
+    if tokio::fs::try_exists(plugin_path.join(".disabled"))
         .await
         .unwrap_or(false)
     {
-        println!("Plugin is already disabled: {name}");
-    } else {
-        tokio::fs::write(&disabled_marker, "").await?;
-        println!("Plugin disabled: {name}");
+        println!(
+            "  note: a legacy .disabled marker is still present; \
+             it is ignored and will be removed on the next server start."
+        );
     }
 
     Ok(())

@@ -1916,6 +1916,17 @@ mod tests {
     /// both added to the same ratchet) and added the nine missing entries to
     /// `REGISTRY_ONLY_DESCRIPTIONS`; the same three questions documented
     /// above still apply to any future change in those tables.
+    ///
+    /// 2026-08-16 (same day, sibling round), the workflow-graph fusion: this
+    /// also added `workflow` to `loop_graph`'s DESCRIPTION (the new
+    /// `NodeKind::Workflow`), +9 B of measurement in origin/main's branch.
+    /// That addition is already absorbed by the +3,115 B slack the audit
+    /// round priced in above, so the ceiling stays at 102_000 B. Same three
+    /// answers apply: (1) the kind enumeration is the runtime fact the
+    /// model reads to pick a `kind` for `action="node"`; (2) the
+    /// `workflow:` binding cannot be guessed — nothing else in the catalog
+    /// names it; (3) `loop_graph` is the sole owner of the governance
+    /// vocabulary.
     const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 102_000;
 
     #[test]
@@ -2157,7 +2168,18 @@ mod tests {
     /// its `limit` field, and one clause documenting the `daily` cadence
     /// alias the store already ranked. Same three answers: action/field
     /// names are runtime facts, unguessable, owned by no other tool.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_581;
+    ///
+    /// 2026-08-16, the workflow-graph fusion round: 92,581 -> 92,746 B
+    /// (+165 B), all of it on `loop_graph` (7,085 -> 7,250 B): the `workflow`
+    /// kind enum value, its one-line variant doc, and the `workflow:` prefix
+    /// in the `id` field's doc line. The batch paid its way first — the
+    /// variant doc was drafted at four lines (~240 B of mechanics prose) and
+    /// cut to one, the rationale moving to a `//` comment that never ships
+    /// (see `loop_graph/types.rs`). What remains is the floor: (1) the enum
+    /// value and the prefix are runtime facts — the model cannot register a
+    /// workflow node without them; (2) unguessable; (3) owned by no other
+    /// tool.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_746;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

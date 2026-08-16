@@ -492,7 +492,14 @@ mod tests {
                     continue;
                 }
                 checked += 1;
-                if !chunk.contains("forget_plugin") {
+                // Must go through the chokepoint, not a bare `forget_plugin`:
+                // a plugin owns more than one sidecar row now (its usage
+                // record *and* its durable activation preference in
+                // `plugins.toml`), and a site that remembers one and forgets
+                // the other fails silently in both directions — a same-id
+                // reinstall either inherits `enabled = false`, or arrives
+                // looking like a long-serving idle plugin.
+                if !chunk.contains("forget_plugin_sidecars") {
                     offenders.push(format!(
                         "{}: {}",
                         file.file_name().unwrap_or_default().to_string_lossy(),
@@ -509,9 +516,10 @@ mod tests {
         );
         assert!(
             offenders.is_empty(),
-            "these delete a plugin's directory without dropping its usage row, \
-             so a reinstall under the same id inherits the old call counts and \
-             idle age: {offenders:?}"
+            "these delete a plugin's directory without going through \
+             `extension::plugin_state::forget_plugin_sidecars`, so a reinstall \
+             under the same id inherits the old call counts, idle age, or \
+             disabled flag: {offenders:?}"
         );
     }
 

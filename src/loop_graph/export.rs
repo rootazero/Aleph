@@ -136,6 +136,9 @@ fn shape_for(kind: NodeKind) -> &'static str {
         NodeKind::Daemon | NodeKind::LoopCron | NodeKind::LoopHeartbeat => "box",
         NodeKind::LoopGoal => "ellipse",
         NodeKind::Team => "hexagon",
+        // A stored, re-runnable template — folder reads as "a thing on disk",
+        // distinct from the live-loop boxes and the one-shot goal ellipse.
+        NodeKind::Workflow => "folder",
     }
 }
 
@@ -151,6 +154,7 @@ fn color_for(kind: NodeKind) -> &'static str {
         NodeKind::LoopHeartbeat => "#89B4FA", // blue
         NodeKind::LoopGoal => "#F5C2E7",      // pink
         NodeKind::Team => "#FAB387",          // orange
+        NodeKind::Workflow => "#94E2D5",      // teal
     }
 }
 

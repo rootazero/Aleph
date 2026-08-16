@@ -7,6 +7,22 @@ use serde_json::Value;
 
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
+use aleph_protocol::plugins::{
+    PluginCallToolParams, PluginInstallParams, PluginListResult, PluginNameParams,
+    PluginReloadParams, PluginRuntimeStatus,
+};
+
+/// Render an empty string as a dash.
+///
+/// The server sends `""` for "the manifest did not declare this"; a bare empty
+/// cell reads as a rendering bug, and `"-"` reads as "not declared".
+fn dash_if_empty(value: &str) -> String {
+    if value.is_empty() {
+        "-".to_string()
+    } else {
+        value.to_string()
+    }
+}
 
 /// Read a local plugin zip and wrap its bytes as base64 `data` params for
 /// `plugins.installFromZip`.
@@ -66,21 +82,28 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
 
     let result: Value = client.call("plugins.list", None::<()>).await?;
 
-    let mut rows = Vec::new();
-    if let Some(plugins) = result.get("plugins").and_then(|v| v.as_array()) {
-        for p in plugins {
-            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-            let version = p.get("version").and_then(|v| v.as_str()).unwrap_or("-");
-            let status = p.get("status").and_then(|v| v.as_str()).unwrap_or("-");
-            let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("-");
-            rows.push(vec![
-                name.to_string(),
-                version.to_string(),
-                status.to_string(),
-                ptype.to_string(),
-            ]);
-        }
-    }
+    // Decoded through the shared contract, not by fishing keys out of a
+    // `Value`. The `Type` column used to read a `type` key the server has
+    // never sent, so it printed a dash on every row for as long as it existed.
+    let listing: PluginListResult = serde_json::from_value(result.clone()).unwrap_or_default();
+    let rows: Vec<Vec<String>> = listing
+        .plugins
+        .iter()
+        .map(|p| {
+            vec![
+                p.name.clone(),
+                dash_if_empty(&p.version),
+                // A non-`loaded` status is only actionable with its reason, so
+                // append it here rather than making the operator run `info`.
+                match (&p.status, &p.status_detail) {
+                    (PluginRuntimeStatus::Loaded, _) => p.status.label().to_string(),
+                    (s, Some(d)) => format!("{} ({d})", s.label()),
+                    (s, None) => s.label().to_string(),
+                },
+                dash_if_empty(&p.kind),
+            ]
+        })
+        .collect();
 
     output::print_table(&["Name", "Version", "Status", "Type"], &rows, json, &result);
 
@@ -185,7 +208,13 @@ pub async fn install(
             zip_install_params(std::path::Path::new(source))?,
         )
     } else {
-        ("plugins.install", serde_json::json!({ "url": source }))
+        (
+            "plugins.install",
+            serde_json::to_value(PluginInstallParams {
+                url: source.to_string(),
+            })
+            .unwrap_or_default(),
+        )
     };
 
     let result: Value = client.call(method, Some(params)).await?;
@@ -209,7 +238,9 @@ pub async fn uninstall(
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let params = serde_json::json!({ "name": name });
+    let params = PluginNameParams {
+        name: name.to_string(),
+    };
     let result: Value = client.call("plugins.uninstall", Some(params)).await?;
 
     if json {
@@ -226,7 +257,9 @@ pub async fn uninstall(
 pub async fn enable(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let params = serde_json::json!({ "name": name });
+    let params = PluginNameParams {
+        name: name.to_string(),
+    };
     let result: Value = client.call("plugins.enable", Some(params)).await?;
 
     if json {
@@ -248,7 +281,9 @@ pub async fn disable(
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let params = serde_json::json!({ "name": name });
+    let params = PluginNameParams {
+        name: name.to_string(),
+    };
     let result: Value = client.call("plugins.disable", Some(params)).await?;
 
     if json {
@@ -278,11 +313,16 @@ pub async fn call(
         None => Value::Null,
     };
 
-    let params = serde_json::json!({
-        "plugin": plugin,
-        "tool": tool,
-        "params": tool_params,
-    });
+    // Built from the shared contract type. The hand-written literal this
+    // replaced sent `{plugin, tool, params}` while the handler required
+    // `{pluginId, handler, args}` — three wrong key names, so **every**
+    // `aleph plugin call` since the command was written returned
+    // INVALID_PARAMS.
+    let params = PluginCallToolParams {
+        plugin_id: plugin.to_string(),
+        handler: tool.to_string(),
+        args: tool_params,
+    };
 
     let result: Value = client.call("plugins.callTool", Some(params)).await?;
 
@@ -305,7 +345,9 @@ pub async fn call(
 pub async fn update(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let params = serde_json::json!({ "name": name });
+    let params = PluginNameParams {
+        name: name.to_string(),
+    };
     let result: Value = client.call("plugin.update", Some(params)).await?;
 
     if json {
@@ -322,7 +364,9 @@ pub async fn update(server_url: &str, config: &CliConfig, name: &str, json: bool
 pub async fn reload(server_url: &str, config: &CliConfig, name: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let params = serde_json::json!({ "pluginId": name });
+    let params = PluginReloadParams {
+        plugin_id: name.to_string(),
+    };
     let result: Value = client.call("plugin.reload", Some(params)).await?;
 
     if json {
@@ -341,43 +385,35 @@ pub async fn info(server_url: &str, config: &CliConfig, name: &str, json: bool) 
 
     let result: Value = client.call("plugins.list", None::<()>).await?;
 
-    let plugin = result
-        .as_array()
-        .and_then(|plugins| {
-            plugins.iter().find(|p| {
-                p.get("name").and_then(|v| v.as_str()) == Some(name)
-                    || p.get("id").and_then(|v| v.as_str()) == Some(name)
-            })
-        })
-        .cloned();
+    // This used to call `result.as_array()` on a response the server has
+    // always sent as `{"plugins": [...]}` — so it resolved to `None` and
+    // reported *every* plugin as "not found". Two functions in this one file
+    // disagreed about the envelope; now neither of them names it.
+    let listing: PluginListResult = serde_json::from_value(result).unwrap_or_default();
+    let plugin = listing.plugins.into_iter().find(|p| p.name == name);
 
     match plugin {
         Some(p) => {
             if json {
-                output::print_json(&p);
+                output::print_json(&serde_json::to_value(&p).unwrap_or_default());
             } else {
-                let get_str =
-                    |key: &str| -> &str { p.get(key).and_then(|v| v.as_str()).unwrap_or("-") };
-                let get_count = |key: &str| -> usize {
-                    p.get(key)
-                        .and_then(|v| v.as_array())
-                        .map(std::vec::Vec::len)
-                        .or_else(|| {
-                            p.get(key)
-                                .and_then(serde_json::Value::as_u64)
-                                .map(|n| n as usize)
-                        })
-                        .unwrap_or(0)
-                };
-
-                println!("Plugin: {}", get_str("name"));
-                println!("  Version:     {}", get_str("version"));
-                println!("  Type:        {}", get_str("type"));
-                println!("  Status:      {}", get_str("status"));
-                println!("  Description: {}", get_str("description"));
-                println!("  Path:        {}", get_str("path"));
-                println!("  Tools:       {}", get_count("tools"));
-                println!("  Hooks:       {}", get_count("hooks"));
+                println!("Plugin: {}", p.name);
+                println!("  Version:     {}", dash_if_empty(&p.version));
+                println!("  Type:        {}", dash_if_empty(&p.kind));
+                println!("  Status:      {}", p.status.label());
+                if let Some(detail) = &p.status_detail {
+                    println!("  Reason:      {detail}");
+                }
+                println!("  Description: {}", dash_if_empty(&p.description));
+                println!("  Path:        {}", dash_if_empty(&p.path));
+                // These read `tools` / `hooks` before — keys the server never
+                // sent — so both printed 0 regardless of the real counts.
+                println!("  Tools:       {}", p.tools_count);
+                println!("  Skills:      {}", p.skills_count);
+                println!("  Commands:    {}", p.commands_count);
+                println!("  Agents:      {}", p.agents_count);
+                println!("  Hooks:       {}", p.hooks_count);
+                println!("  MCP servers: {}", p.mcp_servers_count);
             }
         }
         None => {
@@ -398,34 +434,92 @@ pub async fn info(server_url: &str, config: &CliConfig, name: &str, json: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_protocol::plugins::PluginRow;
+
+    /// The two tests this replaces were `assert!("my-plugin.zip".ends_with(".zip"))`
+    /// and a `json!` literal compared with itself. Both were green for the
+    /// entire period during which three of this file's commands could not
+    /// succeed even once, because neither of them touched a wire shape.
+    #[test]
+    fn call_params_map_the_cli_words_onto_the_wire_words() {
+        let params = PluginCallToolParams {
+            plugin_id: "diagnostics".into(),
+            handler: "system_health".into(),
+            args: serde_json::json!({}),
+        };
+        let wire = serde_json::to_value(&params).unwrap();
+        assert_eq!(wire["pluginId"], "diagnostics");
+        assert_eq!(wire["handler"], "system_health");
+        assert!(
+            wire.get("plugin").is_none() && wire.get("tool").is_none(),
+            "`plugin` / `tool` were the CLI's own words; the handler never accepted them"
+        );
+    }
+
+    /// `list` and `info` used to disagree about the envelope — one read
+    /// `result["plugins"]`, the other `result.as_array()`. Decoding both through
+    /// the one contract type is what makes that disagreement unrepresentable;
+    /// this pins the envelope the type describes.
+    #[test]
+    fn both_readers_agree_on_the_list_envelope() {
+        let response = serde_json::to_value(PluginListResult {
+            plugins: vec![PluginRow {
+                name: "diagnostics".into(),
+                version: "0.1.0".into(),
+                kind: "mcp".into(),
+                tools_count: 3,
+                ..PluginRow::default()
+            }],
+        })
+        .unwrap();
+
+        let decoded: PluginListResult = serde_json::from_value(response).unwrap();
+        let row = decoded.plugins.first().expect("one row");
+        assert_eq!(row.name, "diagnostics");
+        // The `Type` column read a `type` key for as long as it existed; the
+        // field is `kind` and always was empty under the old name.
+        assert_eq!(row.kind, "mcp");
+        // `info` read `tools` / `hooks` and printed 0 for both.
+        assert_eq!(row.tools_count, 3);
+    }
+
+    /// A non-`loaded` status must reach the operator with its reason attached —
+    /// "overridden" alone names a problem and no remedy.
+    #[test]
+    fn a_blocked_row_renders_its_reason() {
+        let row = PluginRow {
+            name: "sketchy".into(),
+            status: PluginRuntimeStatus::Blocked,
+            status_detail: Some("not on the allowlist".into()),
+            ..PluginRow::default()
+        };
+        let rendered = match (&row.status, &row.status_detail) {
+            (PluginRuntimeStatus::Loaded, _) => row.status.label().to_string(),
+            (st, Some(d)) => format!("{} ({d})", st.label()),
+            (st, None) => st.label().to_string(),
+        };
+        assert_eq!(rendered, "blocked (not on the allowlist)");
+    }
 
     #[test]
-    fn zip_detection() {
-        let source_zip = "my-plugin.zip";
-        let source_url = "https://example.com/plugin";
-        let source_path = "/tmp/plugin-dir";
-
-        assert!(source_zip.ends_with(".zip"));
-        assert!(!source_url.ends_with(".zip"));
-        assert!(!source_path.ends_with(".zip"));
+    fn empty_strings_render_as_a_dash_not_as_a_blank_cell() {
+        assert_eq!(dash_if_empty(""), "-");
+        assert_eq!(dash_if_empty("1.0.0"), "1.0.0");
     }
 
     #[test]
     fn github_source_parsing() {
-        // owner/repo format
         let (owner, repo, name) = parse_github_source("github:rootazero/Aleph-plugins").unwrap();
         assert_eq!(owner, "rootazero");
         assert_eq!(repo, "Aleph-plugins");
         assert!(name.is_none());
 
-        // owner/repo/plugin-name format
         let (owner, repo, name) =
             parse_github_source("github:rootazero/Aleph-plugins/diagnostics").unwrap();
         assert_eq!(owner, "rootazero");
         assert_eq!(repo, "Aleph-plugins");
         assert_eq!(name.unwrap(), "diagnostics");
 
-        // Invalid format
         assert!(parse_github_source("github:invalid").is_err());
     }
 }

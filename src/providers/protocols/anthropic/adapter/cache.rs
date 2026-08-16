@@ -23,7 +23,9 @@ use crate::providers::message::CacheControl;
 /// downstream, but the user signal is preserved for auditability).
 pub(super) fn effective_cache_retention(config: &ProviderConfig, endpoint: &str) -> CacheRetention {
     match config.cache_retention {
-        Some(CacheRetention::Long) if !endpoint.contains("api.anthropic.com") => {
+        Some(CacheRetention::Long)
+            if !crate::providers::protocols::anthropic::provider_policy::is_official_anthropic_endpoint(endpoint) =>
+        {
             // Keep the existing warning that surfaces long-TTL use on
             // third-party hosts. Marker injection still depends on the
             // endpoint's policy.capabilities.supports_cache_control (enabled

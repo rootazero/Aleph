@@ -697,7 +697,10 @@ async fn dispatch_plugin(
                 let result: serde_json::Value = client
                     .call(
                         "plugin.install",
-                        Some(serde_json::json!({ "source": source, "scope": scope })),
+                        Some(aleph_protocol::plugins::PluginInstallUnifiedParams {
+                            source,
+                            scope: Some(scope),
+                        }),
                     )
                     .await?;
                 if json {
@@ -709,7 +712,7 @@ async fn dispatch_plugin(
                 Ok(())
             }
         }
-        PluginAction::Uninstall { name, .. } => {
+        PluginAction::Uninstall { name } => {
             plugins_cmd::uninstall(server_url, config, &name, json).await
         }
         PluginAction::Enable { name } => plugins_cmd::enable(server_url, config, &name, json).await,
@@ -757,22 +760,26 @@ async fn dispatch_marketplace(
 ) -> CliResult<()> {
     use aleph_client::AlephClient;
     let (client, _events) = AlephClient::connect(server_url, config).await?;
+    // Params are serialized from the shared contract types rather than written
+    // as `json!` literals — the same rule that the rest of the plugin family
+    // now follows. A hand-copied key here is the exact shape that made
+    // `aleph plugin call` fail on every invocation it ever had.
+    use aleph_protocol::plugins::{
+        MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpdateParams,
+    };
     let (method, params) = match action {
         MarketplaceAction::Add { source } => (
             "plugin.marketplace.add",
-            serde_json::json!({ "source": source }),
+            serde_json::to_value(MarketplaceAddParams { source, name: None })?,
         ),
         MarketplaceAction::List => ("plugin.marketplace.list", serde_json::json!({})),
         MarketplaceAction::Update { name } => (
             "plugin.marketplace.update",
-            match name {
-                Some(n) => serde_json::json!({ "name": n }),
-                None => serde_json::json!({}),
-            },
+            serde_json::to_value(MarketplaceUpdateParams { name })?,
         ),
         MarketplaceAction::Remove { name } => (
             "plugin.marketplace.remove",
-            serde_json::json!({ "name": name }),
+            serde_json::to_value(MarketplaceRemoveParams { name })?,
         ),
     };
     let result: serde_json::Value = client.call(method, Some(params)).await?;

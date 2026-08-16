@@ -38,7 +38,9 @@ mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
 mod plugin_ops;
+pub mod plugin_state;
 pub mod plugin_trust;
+mod projection;
 pub mod registry;
 mod service_manager;
 mod service_ops;
@@ -99,6 +101,26 @@ struct CacheState {
 pub struct ExtensionConfig {
     /// Discovery configuration
     pub discovery: DiscoveryConfig,
+
+    /// Override for the durable plugin activation document
+    /// (`<data_dir>/plugins.toml`).
+    ///
+    /// `None` resolves the standard location. Tests set this to a temp path:
+    /// the alternative — pointing `ALEPH_HOME` somewhere else — is a
+    /// **process-global** switch, and libtest runs in parallel, so two tests
+    /// would silently fight over it.
+    pub plugins_config_path: Option<PathBuf>,
+
+    /// Extra plugin-parent directories to scan, **test-only**.
+    ///
+    /// Production plugin parents come from `ALEPH_HOME` and the project
+    /// registry, both process-global — so without this a test cannot give a
+    /// manager its own plugin tree without fighting every sibling test for the
+    /// same environment variable. Gated on `cfg(test)` so it cannot become an
+    /// undocumented production knob with no consumers (R10).
+    #[cfg(test)]
+    pub extra_plugin_parents: Vec<PathBuf>,
+
     /// Owner trust policy for plugin loading. Default is `permissive()`
     /// (legacy behaviour: every plugin loads). Setting this to `restrictive`
     /// causes `Workspace`/`Global` plugins to be gated by the supplied
@@ -204,6 +226,22 @@ pub struct ExtensionManager {
     owner_trust_policy:
         Arc<crate::sync_primitives::RwLock<crate::extension::plugin_trust::OwnerTrustPolicy>>,
 
+    /// Durable per-plugin activation state (`<data_dir>/plugins.toml`).
+    ///
+    /// The single source for "did the operator disable this plugin?". Read in
+    /// `load_all` so the answer survives a restart, written by
+    /// `set_plugin_enabled` — which every toggle face already funnels through.
+    /// See `plugin_state.rs` for why this replaced the `.disabled` marker.
+    plugins_config: Arc<RwLock<crate::extension::plugin_state::PluginsConfig>>,
+
+    /// Where [`Self::plugins_config`] is persisted. Resolved once at
+    /// construction against the same root the skill twin uses.
+    plugins_config_path: PathBuf,
+
+    /// Test-only extra plugin parents; see [`ExtensionConfig::extra_plugin_parents`].
+    #[cfg(test)]
+    extra_plugin_parents: Vec<PathBuf>,
+
     /// Live MCP manager handle, used to register plugin-owned MCP servers as
     /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
     /// is called at server boot — CLI/test paths leave it unset, so plugin MCP
@@ -298,6 +336,22 @@ impl ExtensionManager {
         let service_manager = Arc::new(RwLock::new(ServiceManager::new()));
         let adapter_registry = AdapterRegistry::with_defaults();
 
+        // Mirrors `crate::skill::SkillSystem::new`: `get_config_dir` is a pure
+        // lookup (it does not create), so constructing a manager never makes a
+        // directory as a side effect.
+        let plugins_config_path = config.plugins_config_path.clone().unwrap_or_else(|| {
+            crate::utils::paths::get_config_dir()
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "cannot resolve Aleph config dir; falling back to ./.aleph for plugin state");
+                    PathBuf::from(".aleph")
+                })
+                .join("data")
+                .join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE)
+        });
+        let plugins_config = Arc::new(RwLock::new(
+            crate::extension::plugin_state::PluginsConfig::load(&plugins_config_path),
+        ));
+
         Ok(Self {
             discovery,
             hook_executor,
@@ -323,6 +377,10 @@ impl ExtensionManager {
                     .map(OwnerTrustPolicyConfig::to_policy)
                     .unwrap_or_else(crate::extension::plugin_trust::OwnerTrustPolicy::permissive),
             )),
+            plugins_config,
+            plugins_config_path,
+            #[cfg(test)]
+            extra_plugin_parents: config.extra_plugin_parents.clone(),
         })
     }
 
@@ -524,7 +582,34 @@ impl ExtensionManager {
             for dir_path in plugin_dirs.iter().rev() {
                 match self.adapter_registry.parse_dir(dir_path) {
                     Ok(output) => {
+                        // Shadow resolution: dirs are walked highest-priority
+                        // first, so a repeat id lost. It used to be dropped
+                        // silently — indistinguishable from "not installed",
+                        // and the `Overridden` status written for exactly this
+                        // moment had zero producers. Record the loss on the
+                        // winner (the registry is keyed by id, so the loser
+                        // cannot hold a row of its own).
                         if !registered_plugin_ids.insert(output.plugin_id.clone()) {
+                            let winner = registry
+                                .get_plugin(&output.plugin_id)
+                                .map(|p| p.root_dir.display().to_string())
+                                .unwrap_or_default();
+                            tracing::info!(
+                                plugin_id = %output.plugin_id,
+                                shadowed = %dir_path.display(),
+                                winner = %winner,
+                                "plugin id already registered from a higher-priority scope"
+                            );
+                            registry.add_diagnostic(PluginDiagnostic {
+                                level: DiagnosticLevel::Warn,
+                                message: format!(
+                                    "{} is shadowed by the copy at {winner}",
+                                    dir_path.display()
+                                ),
+                                plugin_id: Some(output.plugin_id.clone()),
+                                source: Some("discovery".to_string()),
+                            });
+                            summary.shadowed += 1;
                             continue;
                         }
                         // Build plugin record from adapter output
@@ -553,8 +638,63 @@ impl ExtensionManager {
                                  (not in allowlist)"
                             );
                             summary.skipped_by_trust += 1;
+                            // Register it as Blocked rather than dropping it:
+                            // "refused by policy" and "not installed" must not
+                            // render the same, and the operator needs the id to
+                            // put on the allowlist.
+                            let origin = record.origin;
+                            registry.register_plugin(record.inactive(
+                                PluginStatus::Blocked(format!("{origin:?}")),
+                                format!(
+                                    "refused by the owner trust policy ({origin:?} origin is not \
+                                     on the allowlist); add \"{plugin_id}\" to it to load this plugin"
+                                ),
+                            ));
                             continue;
                         }
+                        // Durable activation state. `.disabled` markers written
+                        // by older builds are migrated into `plugins.toml` on
+                        // first sight and then removed, so the answer converges
+                        // to one source instead of two (the marker could not
+                        // survive `plugin update`, which swaps the whole tree).
+                        let legacy_marker = dir_path.join(".disabled");
+                        if legacy_marker.exists() {
+                            let mut cfg = self.plugins_config.write().await;
+                            if cfg.set_enabled(&plugin_id, false) {
+                                let path = self.plugins_config_path.clone();
+                                if let Err(e) = cfg.save(&path).await {
+                                    tracing::warn!(error = %e, "failed to persist migrated plugin disable");
+                                }
+                            }
+                            drop(cfg);
+                            match std::fs::remove_file(&legacy_marker) {
+                                Ok(()) => tracing::info!(
+                                    plugin_id = %plugin_id,
+                                    "migrated legacy .disabled marker into plugins.toml"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    plugin_id = %plugin_id, error = %e,
+                                    "legacy .disabled marker migrated but could not be removed"
+                                ),
+                            }
+                        }
+                        let operator_enabled =
+                            self.plugins_config.read().await.is_enabled(&plugin_id);
+                        if !operator_enabled {
+                            // Registered but not active. The record and its
+                            // capabilities are still registered — every
+                            // downstream consumer already filters on
+                            // `status.is_active()` (tool index, hook sync,
+                            // `projection.rs`), so a disabled plugin is invisible
+                            // to the model while staying listable and, crucially,
+                            // **re-enablable without a reload**: skipping
+                            // capability registration here would make
+                            // `set_plugin_enabled(id, true)` flip a status with
+                            // nothing behind it.
+                            record.status = PluginStatus::Disabled;
+                            summary.disabled_by_operator += 1;
+                        }
+
                         registry.register_plugin(record);
 
                         // Register all capabilities via CapabilityApi
@@ -576,10 +716,36 @@ impl ExtensionManager {
                         summary.plugins_loaded += 1;
                     }
                     Err(e) => {
-                        tracing::debug!("Failed to parse plugin dir {:?}: {}", dir_path, e);
+                        // A plugin whose manifest will not parse used to vanish
+                        // at `debug!` level: on every surface it looked exactly
+                        // like a plugin that was never installed, so the
+                        // operator had nothing to fix. Give it a row, an id
+                        // derived from the directory, and the parse error.
+                        let fallback_id = dir_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| dir_path.display().to_string());
+                        tracing::warn!(
+                            plugin_dir = %dir_path.display(), error = %e,
+                            "plugin manifest could not be parsed; listing it as errored"
+                        );
                         summary
                             .errors
                             .push(format!("{}: {}", dir_path.display(), e));
+                        if registered_plugin_ids.insert(fallback_id.clone()) {
+                            let record = PluginRecord::new(
+                                fallback_id,
+                                dir_path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                                PluginKind::Static,
+                                PluginOrigin::Global,
+                            )
+                            .with_root_dir(dir_path.clone())
+                            .with_error(e.to_string());
+                            registry.register_plugin(record);
+                        }
                     }
                 }
             }
@@ -598,63 +764,18 @@ impl ExtensionManager {
         // users edit these files directly; no plugin packaging required.
         self.sync_user_hooks().await;
 
-        // Initialize SkillSystem with discovered skill directories
-        let mut skill_dirs: Vec<PathBuf> = Vec::new();
-        // Skill dirs from discovery (includes ~/.aleph/skills/ where bundled + user skills live)
-        for d in self.discovery.discover_skill_dirs().unwrap_or_default() {
-            skill_dirs.push(d.path);
-        }
-
-        // Plugin-shipped skills: each loaded plugin's `<root_dir>/skills`. Bridging
-        // these into the SkillSystem is what makes plugin skills appear in the model's
-        // `<available_skills>` index — previously they were parsed into the plugin
-        // registry but never reached the index, so the model couldn't perceive them and
-        // resorted to `cat` on the raw plugin files. `guess_source` classes these
-        // paths `SkillSource::Plugin`, so they outrank Global/Bundled on collisions.
-        let plugin_skill_dirs: Vec<PathBuf> = {
-            let registry = self.plugin_registry.read().await;
-            let mut dirs = Vec::new();
-            for record in registry.list_plugins() {
-                let plugin_skills = record.root_dir.join("skills");
-                if plugin_skills.is_dir()
-                    && !skill_dirs.contains(&plugin_skills)
-                    && !dirs.contains(&plugin_skills)
-                {
-                    dirs.push(plugin_skills);
-                }
-            }
-            dirs
-        };
-        skill_dirs.extend(plugin_skill_dirs.iter().cloned());
-        // Publish the same roots so `get_all_skills_dirs` (the `skill_read` /
-        // `skill_list` tools' search set) folds them in too — the SkillSystem scan
-        // above only feeds the prompt index. This complements the static
-        // `get_plugin_skills_dirs` scan with plugin roots outside the well-known
-        // locations (e.g. `plugins/cache/<market>/<id>/skills`).
-        crate::utils::paths::publish_plugin_skill_dirs(plugin_skill_dirs);
-
-        // Plugin-shipped sub-agents: convert each plugin's registered agent into
-        // an `AgentDef` and publish them for the agent registry. Mirrors the
-        // plugin-skills publish above — the agents were parsed into the plugin
-        // registry but, until bridged here, were invisible to the model: absent
-        // from the `<available_agents>` catalog AND un-delegatable (the subagent
-        // tool's `AgentRegistry::resolve` missed them). Read lazily per-request
-        // by resolve (delegation) and the harness prompt builder (catalog), so
-        // there is no boot-ordering coupling. Lowest precedence — a builtin /
-        // user / project agent of the same id always wins.
-        let plugin_subagent_defs: Vec<crate::agents::AgentDef> = {
-            let registry = self.plugin_registry.read().await;
-            registry
-                .list_agents()
-                .into_iter()
-                .filter_map(plugin_agent_to_def)
-                .collect()
-        };
-        crate::agents::publish_plugin_subagents(plugin_subagent_defs);
-
-        self.skill_system.init(skill_dirs).await;
-
-        self.refresh_active_plugin_tools().await;
+        // Publish every plugin-owned process-global projection (skill dirs,
+        // sub-agents, tool index) from the ONE derivation that states the
+        // activation predicate — see `projection.rs`. This used to be inlined
+        // here with `list_plugins()` (every status), while `set_plugin_enabled`
+        // used `list_active_plugins()`: two authors, opposite answers, and the
+        // permissive one ran on every boot.
+        let projection = self.republish_plugin_projections().await;
+        tracing::debug!(
+            plugin_skill_dirs = projection.plugin_skill_dirs.len(),
+            plugin_subagents = projection.subagents.len(),
+            "published plugin projections"
+        );
 
         let mut cache = self.cache_state.write().await;
         cache.loaded = true;
@@ -911,6 +1032,13 @@ impl ExtensionManager {
                     .collect()
             })
             .unwrap_or_default();
+
+        #[cfg(test)]
+        let project_plugin_parents = {
+            let mut parents = project_plugin_parents;
+            parents.extend(self.extra_plugin_parents.iter().cloned());
+            parents
+        };
 
         // Collect from all discovery sources: skills, commands, agents, plugins
         let all_dirs = [
@@ -1219,6 +1347,31 @@ pub fn default_plugins_dir() -> std::path::PathBuf {
     )
 }
 
+/// Per-plugin persistent data directory: `<plugins_root>/data/<plugin_id>/`.
+///
+/// Deliberately **outside** the install tree, so `plugin update` (which swaps
+/// the install directory atomically) and `plugin uninstall` leave it alone.
+///
+/// This is the value behind the documented `${CLAUDE_PLUGIN_DATA}` /
+/// `${ALEPH_PLUGIN_DATA}` manifest variables. Until 2026-08-16 those had
+/// **no producer at all**: `mcp_config.rs` carried a comment saying they were
+/// expanded "in the higher-level `McpManagerConfig::env` substitution path",
+/// and that path did not exist — so a plugin author who used the variable got
+/// the literal string `${ALEPH_PLUGIN_DATA}` handed to their process. The
+/// comment was the only thing in the repo that mentioned it, which is why a
+/// grep for the name found the bug's own alibi and nothing else.
+#[must_use]
+pub fn plugin_data_dir(plugin_id: &str) -> std::path::PathBuf {
+    default_plugins_dir()
+        .parent()
+        .map_or_else(
+            || std::path::PathBuf::from(".aleph/plugins"),
+            std::path::Path::to_path_buf,
+        )
+        .join("data")
+        .join(plugin_id)
+}
+
 /// Reject a plugin install destination whose leaf is a symlink (including
 /// dangling ones). `git2::Repository::clone` will dereference symlinks at
 /// the leaf and clone inside the target, which lets a pre-planted symlink
@@ -1349,6 +1502,163 @@ mod tests {
             ..Default::default()
         };
         assert!(plugin_agent_to_def(&blank).is_none());
+    }
+
+    /// Build an isolated manager whose only project plugin root is `dir`, with
+    /// the durable plugin document redirected to a temp file.
+    ///
+    /// `ALEPH_HOME` is deliberately **not** touched: it is a process-global
+    /// switch and libtest runs tests in parallel, so two tests redirecting it
+    /// would silently fight. The config path is a constructor parameter for
+    /// exactly this reason.
+    async fn isolated_manager(dir: &std::path::Path) -> (ExtensionManager, PathBuf) {
+        let cfg_path = dir.join("plugins.toml");
+        let manager = ExtensionManager::new(ExtensionConfig {
+            discovery: DiscoveryConfig {
+                working_dir: dir.to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 0,
+            },
+            plugins_config_path: Some(cfg_path.clone()),
+            extra_plugin_parents: vec![dir.join("plugins")],
+        })
+        .await
+        .unwrap();
+        (manager, cfg_path)
+    }
+
+    fn write_project_plugin(root: &std::path::Path, id: &str) {
+        let plugin_dir = root.join("plugins").join(id);
+        std::fs::create_dir_all(plugin_dir.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            plugin_dir.join(".claude-plugin/plugin.toml"),
+            format!("name = \"{id}\"\nversion = \"1.0.0\"\n"),
+        )
+        .unwrap();
+    }
+
+    /// The regression this whole round exists for.
+    ///
+    /// `aleph plugin disable X` used to write a `<plugin>/.disabled` marker
+    /// that **nothing ever read** (four writers, zero readers), so the disable
+    /// lasted exactly as long as the process. This asserts the load path
+    /// consults the durable document: delete the `is_enabled` check in
+    /// `load_all` and this fails by name.
+    #[tokio::test]
+    async fn a_disabled_plugin_stays_inactive_across_a_fresh_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_project_plugin(tmp.path(), "quiet-plugin");
+        let (manager, cfg_path) = isolated_manager(tmp.path()).await;
+
+        // Control group: with no preference recorded it loads active. Without
+        // this half, "not active" could just mean "never discovered".
+        manager.load_all().await.unwrap();
+        let before = manager.get_plugin_record("quiet-plugin").await;
+        assert!(
+            before.as_ref().is_some_and(|r| r.status.is_active()),
+            "control: an untouched plugin must load active, got {:?}",
+            before.map(|r| r.status)
+        );
+
+        // Record the operator's preference the way every toggle face does.
+        assert!(manager.set_plugin_enabled("quiet-plugin", false).await);
+        assert!(
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path)
+                .is_enabled("quiet-plugin"),
+            "the preference must reach disk, not just the in-memory registry"
+        );
+
+        // A brand-new manager = the restart the marker file never survived.
+        let (restarted, _) = isolated_manager(tmp.path()).await;
+        restarted.load_all().await.unwrap();
+        let after = restarted.get_plugin_record("quiet-plugin").await;
+        assert!(
+            after.is_some(),
+            "a disabled plugin must still be listable so it can be re-enabled"
+        );
+        assert!(
+            !after.unwrap().status.is_active(),
+            "the disable did not survive the restart — is `load_all` still \
+             reading plugins.toml?"
+        );
+    }
+
+    /// A disabled plugin is registered *with* its capabilities so a runtime
+    /// re-enable has something behind it; only the active-status filter keeps
+    /// it away from the model. Skipping registration instead would make
+    /// `set_plugin_enabled(id, true)` flip a status pointing at nothing.
+    #[tokio::test]
+    async fn re_enabling_needs_no_reload() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_project_plugin(tmp.path(), "wakeable");
+        let (manager, cfg_path) = isolated_manager(tmp.path()).await;
+
+        crate::extension::plugin_state::PluginsConfig {
+            entries: [(
+                "wakeable".to_string(),
+                crate::extension::plugin_state::PluginEntryConfig {
+                    enabled: Some(false),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+        .save(&cfg_path)
+        .await
+        .unwrap();
+
+        let (manager2, _) = isolated_manager(tmp.path()).await;
+        drop(manager);
+        manager2.load_all().await.unwrap();
+        assert!(!manager2
+            .get_plugin_record("wakeable")
+            .await
+            .unwrap()
+            .status
+            .is_active());
+
+        manager2.set_plugin_enabled("wakeable", true).await;
+        assert!(
+            manager2
+                .get_plugin_record("wakeable")
+                .await
+                .unwrap()
+                .status
+                .is_active(),
+            "re-enable must take effect without a full reload"
+        );
+    }
+
+    /// A `.disabled` marker written by an older build must not be silently
+    /// ignored — the operator's intent predates this change.
+    #[tokio::test]
+    async fn a_legacy_disabled_marker_is_migrated_then_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_project_plugin(tmp.path(), "old-timer");
+        let marker = tmp.path().join("plugins/old-timer/.disabled");
+        std::fs::write(&marker, "").unwrap();
+
+        let (manager, cfg_path) = isolated_manager(tmp.path()).await;
+        manager.load_all().await.unwrap();
+
+        assert!(
+            !manager
+                .get_plugin_record("old-timer")
+                .await
+                .unwrap()
+                .status
+                .is_active(),
+            "the legacy marker's intent must be honoured on the migrating load"
+        );
+        assert!(
+            !crate::extension::plugin_state::PluginsConfig::load(&cfg_path).is_enabled("old-timer"),
+            "and be written into the durable document"
+        );
+        assert!(
+            !marker.exists(),
+            "the marker must be removed once migrated, or it is a second source"
+        );
     }
 
     #[tokio::test]

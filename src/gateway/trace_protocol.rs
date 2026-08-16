@@ -185,6 +185,19 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
             LoopTraceEvent::MoaTurnTrace { preset, payload } => {
                 Self::MoaTurnTrace { preset, payload }
             }
+            LoopTraceEvent::CacheHealthDegraded {
+                scope,
+                streak,
+                reads,
+                writes,
+                prefix_changed,
+            } => Self::CacheHealthDegraded {
+                scope,
+                streak,
+                reads,
+                writes,
+                prefix_changed,
+            },
         }
     }
 }
