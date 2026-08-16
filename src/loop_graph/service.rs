@@ -1,7 +1,9 @@
 //! Post-run governance triggers + session-facing helpers.
 //!
 //! Three mechanical consumers of the topology (zero judgment, R7-clean):
-//! - `notify_goal_settled` — at a goal's victory-claim moment, poke every
+//! - `notify_goal_settled` / `notify_team_settled` / `notify_workflow_settled`
+//!   — at a watched node's victory-claim moment (goal Complete, team disband,
+//!   workflow run fully settled via the dispatcher's settle sweep), poke every
 //!   cron watcher paired to it via a `watches` edge (debounced). Reviewing a
 //!   win at the moment it is claimed is when cheap wins get caught; the
 //!   watcher's periodic cadence still backstops.
@@ -175,17 +177,20 @@ pub fn watcher_is_pokeable(watcher_id: &str) -> bool {
 ///
 /// The other half of [`watcher_is_pokeable`], and it was missing. That one asks
 /// "can this WATCHER be woken"; this asks "does the WATCHED thing ever announce
-/// a win". Only two kinds do: a goal reaching `Complete`
-/// (`notify_goal_settled`, three call sites behind the store CAS) and a team
-/// being disbanded (`notify_team_settled`). A `cron:` / `daemon:` /
-/// `heartbeat:` / `anchor:` target has no terminal moment to hook, so a watcher
-/// paired to one only ever runs on its own cadence — exactly the fact
-/// `watcher_is_pokeable` exists to disclose, in the mirror direction. Both
-/// readers (`pair`'s success message and the prompt render) must ask BOTH
-/// questions before promising an immediate review.
+/// a win". Only three kinds do: a goal reaching `Complete`
+/// (`notify_goal_settled`, three call sites behind the store CAS), a team
+/// being disbanded (`notify_team_settled`, the `team_disband` success path),
+/// and a workflow run fully settling (`notify_workflow_settled`, called from
+/// the dispatcher's settle sweep — `teams/dispatcher/schedule/settle.rs`,
+/// the single terminal collection point for workflow runs). A `cron:` /
+/// `daemon:` / `heartbeat:` / `anchor:` target has no terminal moment to hook,
+/// so a watcher paired to one only ever runs on its own cadence — exactly the
+/// fact `watcher_is_pokeable` exists to disclose, in the mirror direction.
+/// Both readers (`pair`'s success message and the prompt render) must ask
+/// BOTH questions before promising an immediate review.
 #[must_use]
 pub fn target_has_victory_claim(node_id: &str) -> bool {
-    node_id.starts_with("goal:") || node_id.starts_with("team:")
+    node_id.starts_with("goal:") || node_id.starts_with("team:") || node_id.starts_with("workflow:")
 }
 
 /// Flatten one model-authored field into a single prompt line.
@@ -417,6 +422,20 @@ pub async fn notify_goal_settled(session: &str) -> bool {
 /// (a disband happens once), so the return is informational.
 pub async fn notify_team_settled(team_id: &str) -> bool {
     notify_node_settled(&team_node_id(team_id)).await
+}
+
+/// Workflow victory-claim entry — a run whose every step has settled is the
+/// template's "we're done" moment. Call site: the dispatcher's settle sweep
+/// (`teams/dispatcher/schedule/settle.rs::notify_settled_workflow_runs`), the
+/// single terminal collection point for workflow runs.
+///
+/// Same return contract as [`notify_goal_settled`]: `false` means watchers
+/// exist but at least one could not be poked. Unlike the goal path the caller
+/// does NOT hold a one-shot poke claim (the settle sweep's durable marker
+/// belongs to the channel push, not the poke), so here `false` is
+/// informational — the watcher's periodic cadence backstops.
+pub async fn notify_workflow_settled(template_name: &str) -> bool {
+    notify_node_settled(&workflow_node_id(template_name)).await
 }
 
 /// The id of the loop owning `goal:<session>`'s reference via an
@@ -686,6 +705,14 @@ fn goal_node_id(session: &str) -> String {
 /// Build the canonical `team:<team_id>` node id. See [`goal_node_id`].
 fn team_node_id(team_id: &str) -> String {
     format!("team:{team_id}")
+}
+
+/// Build the canonical `workflow:<template_name>` node id. See
+/// [`goal_node_id`] — same single-source reason: the settle sweep and any
+/// future reader must agree on the exact id shape, or a pairing silently
+/// misses.
+fn workflow_node_id(name: &str) -> String {
+    format!("workflow:{name}")
 }
 
 /// Will a victory claim on `target` actually reach `watcher`?
@@ -1103,6 +1130,7 @@ mod tests {
     fn prompt_only_promises_immediate_review_when_it_can_happen() {
         assert!(target_has_victory_claim("goal:s1"));
         assert!(target_has_victory_claim("team:crew"));
+        assert!(target_has_victory_claim("workflow:report"));
         for id in ["daemon:dreaming", "cron:nightly", "heartbeat:probe"] {
             assert!(
                 !target_has_victory_claim(id),
@@ -1112,6 +1140,10 @@ mod tests {
         assert!(immediate_review_reaches("cron:w", "goal:s1"));
         assert!(!immediate_review_reaches("daemon:w", "goal:s1"));
         assert!(!immediate_review_reaches("cron:w", "daemon:dreaming"));
+        // The workflow target half: wakeable cron watcher → immediate review;
+        // any other watcher kind → cadence only, same rule as every target.
+        assert!(immediate_review_reaches("cron:w", "workflow:report"));
+        assert!(!immediate_review_reaches("daemon:w", "workflow:report"));
 
         let (_dir, store) = seeded_store();
         store
@@ -1137,6 +1169,16 @@ mod tests {
             rendered.contains("不会被你的胜利宣称即时唤醒"),
             "an unpokeable watcher must not be advertised as an immediate reviewer: {rendered}"
         );
+    }
+
+    /// `notify_workflow_settled` addresses the node by the SAME id shape the
+    /// `loop_graph` tool enforces at registration (`expected_prefix` =
+    /// `workflow:`). If these two ever disagreed, a watcher paired to a
+    /// workflow would never be poked — and nothing else would notice.
+    #[test]
+    fn workflow_node_id_matches_the_tool_enforced_prefix() {
+        assert_eq!(workflow_node_id("report"), "workflow:report");
+        assert!(target_has_victory_claim(&workflow_node_id("report")));
     }
 
     #[test]

@@ -31,6 +31,7 @@ pub use events::{TopologyEvent, TopologyEventBus};
 pub use export::{to_dot, to_json};
 pub use inspector::{ImpactReport, LoopGraphInspector, NodeSubgraph, TopologySummary};
 pub use service::notify_team_settled;
+pub use service::notify_workflow_settled;
 pub use snapshot::{EventRecord, Snapshot, SnapshotStore, SnapshotSummary, TopologyDiff};
 pub use store::LoopGraphStore;
 pub use templates::AUDIT_NODE_BODY;

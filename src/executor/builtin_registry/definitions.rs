@@ -1844,7 +1844,15 @@ mod tests {
     /// runtime fact, unguessable, and owned by no other tool. The drift half
     /// is a process finding, not a prose license: description bytes landed
     /// without the suite that prices them.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_861;
+    ///
+    /// 2026-08-16, the workflow-graph fusion round: 98,861 -> 98,870 B (+9 B).
+    /// `loop_graph`'s DESCRIPTION enumerates the node kinds it registers, and
+    /// the list gained `workflow` (the new `NodeKind::Workflow`). Three
+    /// answers: (1) the kind enumeration is the runtime fact the model reads
+    /// to pick a `kind` for `action="node"`; (2) the `workflow:` binding
+    /// cannot be guessed — nothing else in the catalog names it; (3)
+    /// `loop_graph` is the sole owner of the governance vocabulary.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_870;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2085,7 +2093,18 @@ mod tests {
     /// its `limit` field, and one clause documenting the `daily` cadence
     /// alias the store already ranked. Same three answers: action/field
     /// names are runtime facts, unguessable, owned by no other tool.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_581;
+    ///
+    /// 2026-08-16, the workflow-graph fusion round: 92,581 -> 92,746 B
+    /// (+165 B), all of it on `loop_graph` (7,085 -> 7,250 B): the `workflow`
+    /// kind enum value, its one-line variant doc, and the `workflow:` prefix
+    /// in the `id` field's doc line. The batch paid its way first — the
+    /// variant doc was drafted at four lines (~240 B of mechanics prose) and
+    /// cut to one, the rationale moving to a `//` comment that never ships
+    /// (see `loop_graph/types.rs`). What remains is the floor: (1) the enum
+    /// value and the prefix are runtime facts — the model cannot register a
+    /// workflow node without them; (2) unguessable; (3) owned by no other
+    /// tool.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_746;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.
