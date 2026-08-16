@@ -44,6 +44,22 @@ pub enum CanvasError {
     Internal(String),
 }
 
+/// One library row plus the attribution the wire row deliberately omits.
+///
+/// `CanvasRow` is the client-facing projection and carries no
+/// `owner_user_id` — no renderer wants it, and sending it would be oversend
+/// (§5.21: a field must name the line that renders it). The RPC and tool
+/// faces still have to FILTER on ownership (`canvas_visible*` needs
+/// owner + project), so the listing hands them both halves and they drop
+/// the attribution after gating.
+pub struct CanvasListing {
+    /// Stamped owner; `None` reads as the legacy operator, exactly as
+    /// `visibility::owner_or_legacy` resolves it.
+    pub owner_user_id: Option<String>,
+    /// The wire projection of the same document.
+    pub row: CanvasRow,
+}
+
 /// File-backed canvas store with per-canvas write locks.
 pub struct CanvasStore {
     /// `pub(super)` for the `assets` sibling module, which extends this type
@@ -110,9 +126,21 @@ impl CanvasStore {
         }
     }
 
+    /// Enumerate the library as wire rows. Thin over [`Self::list_entries`];
+    /// callers that must visibility-filter (every RPC/tool face) use the
+    /// listing form instead — this one has already dropped the attribution
+    /// the predicate needs.
+    pub async fn list(&self) -> Vec<CanvasRow> {
+        self.list_entries()
+            .await
+            .into_iter()
+            .map(|e| e.row)
+            .collect()
+    }
+
     /// Enumerate the library. A broken row is skipped LOUDLY (named `warn!`)
     /// — never silently, and never fails the whole listing (§5.23b).
-    pub async fn list(&self) -> Vec<CanvasRow> {
+    pub async fn list_entries(&self) -> Vec<CanvasListing> {
         let mut rows = Vec::new();
         let mut entries = match tokio::fs::read_dir(&self.root).await {
             Ok(entries) => entries,
@@ -145,13 +173,16 @@ impl CanvasStore {
                             "canvas: doc.json id does not match its directory — skipping unaddressable document");
                         continue;
                     }
-                    rows.push(CanvasRow {
-                        id: doc.id,
-                        title: doc.title,
-                        revision: doc.revision,
-                        shape_count: doc.shapes.len() as u64,
-                        project_id: doc.project_id,
-                        updated_at_ms: doc.updated_at_ms,
+                    rows.push(CanvasListing {
+                        owner_user_id: doc.owner_user_id,
+                        row: CanvasRow {
+                            id: doc.id,
+                            title: doc.title,
+                            revision: doc.revision,
+                            shape_count: doc.shapes.len() as u64,
+                            project_id: doc.project_id,
+                            updated_at_ms: doc.updated_at_ms,
+                        },
                     });
                 }
                 // A canvas dir with no doc.json (crash between mkdir and
@@ -168,9 +199,10 @@ impl CanvasStore {
         }
         // read_dir order is platform noise; the library listing is stable.
         rows.sort_by(|a, b| {
-            b.updated_at_ms
-                .cmp(&a.updated_at_ms)
-                .then_with(|| a.id.cmp(&b.id))
+            b.row
+                .updated_at_ms
+                .cmp(&a.row.updated_at_ms)
+                .then_with(|| a.row.id.cmp(&b.row.id))
         });
         rows
     }

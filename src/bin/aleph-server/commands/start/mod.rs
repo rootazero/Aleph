@@ -27,14 +27,14 @@ mod builder;
 use builder::{
     initialize_channels, initialize_inbound_router, initialize_vault, load_app_config,
     register_agent_handlers, register_agents_handlers, register_artifact_handlers,
-    register_config_handlers, register_core_handlers, register_cron_handlers,
-    register_daemon_handlers, register_extensions_handlers, register_extensions_install_handlers,
-    register_fs_handlers, register_graph_handlers, register_group_chat_handlers,
-    register_heartbeat_handlers, register_identity_handlers, register_mcp_config_handlers,
-    register_mcp_handlers, register_memory_handlers, register_oauth_handlers,
-    register_projects_handlers, register_session_handlers, register_teams_handlers,
-    register_voice_capability_handlers, register_workspace_handlers, setup_config_watcher,
-    start_webchat_server,
+    register_canvas_handlers, register_config_handlers, register_core_handlers,
+    register_cron_handlers, register_daemon_handlers, register_extensions_handlers,
+    register_extensions_install_handlers, register_fs_handlers, register_graph_handlers,
+    register_group_chat_handlers, register_heartbeat_handlers, register_identity_handlers,
+    register_mcp_config_handlers, register_mcp_handlers, register_memory_handlers,
+    register_oauth_handlers, register_projects_handlers, register_session_handlers,
+    register_teams_handlers, register_voice_capability_handlers, register_workspace_handlers,
+    setup_config_watcher, start_webchat_server,
 };
 
 mod orchestrator_init;
@@ -1145,6 +1145,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     alephcore::tools::in_flight::set_global_in_flight_tool_calls(
         alephcore::tools::in_flight::InFlightToolCalls::new(),
     );
+
+    // Whiteboard canvas store (<data_dir>/canvas), event-bus-wired so every
+    // committed apply announces itself (Task 9 fills the frame). Built BEFORE
+    // agent_init so the same Arc can feed `BuiltinToolConfig` (Task 10): the
+    // tool face and the RPC face must share the one instance that owns the
+    // per-canvas locks and the bus. A root that cannot be created degrades to
+    // the phase-1 SERVICE_UNAVAILABLE placeholders instead of failing boot.
+    let canvas_store = match alephcore::utils::paths::get_canvas_root() {
+        Ok(root) => Some(Arc::new(
+            alephcore::canvas::CanvasStore::new(root).with_event_bus(event_bus.clone()),
+        )),
+        Err(e) => {
+            if !args.daemon {
+                eprintln!("Warning: canvas root unavailable: {e}. Canvas RPCs disabled.");
+            }
+            tracing::warn!(error = %e, "canvas root unavailable; canvas.* stays SERVICE_UNAVAILABLE");
+            None
+        }
+    };
+    if let Some(canvas_store) = &canvas_store {
+        register_canvas_handlers(&mut server, canvas_store, args.daemon);
+    }
 
     let agent_result = register_agent_handlers(
         &mut server,

@@ -15,4 +15,4 @@ pub mod selection;
 mod store;
 mod validate;
 
-pub use store::{CanvasError, CanvasStore};
+pub use store::{CanvasError, CanvasListing, CanvasStore};
