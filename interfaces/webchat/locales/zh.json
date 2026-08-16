@@ -353,7 +353,17 @@
     "tool_ellipse": "椭圆",
     "tool_note": "便签",
     "tool_text": "文本",
-    "tool_frame": "框架"
+    "tool_frame": "框架",
+    "decks_button": "幻灯片",
+    "decks_title": "幻灯片组",
+    "decks_empty": "还没有幻灯片组——选中框架后创建",
+    "deck_create": "用选中框架创建",
+    "deck_create_hint": "选中框架形状即可组成幻灯片",
+    "deck_default_title": "幻灯片",
+    "deck_frames": "帧",
+    "deck_play": "播放",
+    "deck_missing_frame": "框架已删除",
+    "present_exit": "退出 (Esc)"
   },
   "memory": {
     "title": "记忆库",

@@ -353,7 +353,17 @@
     "tool_ellipse": "Ellipse",
     "tool_note": "Sticky note",
     "tool_text": "Text",
-    "tool_frame": "Frame"
+    "tool_frame": "Frame",
+    "decks_button": "Slides",
+    "decks_title": "Slide decks",
+    "decks_empty": "No decks yet — select frames and create one",
+    "deck_create": "Create deck from selection",
+    "deck_create_hint": "Select Frame shapes to group them into slides",
+    "deck_default_title": "Slides",
+    "deck_frames": "frames",
+    "deck_play": "Play",
+    "deck_missing_frame": "Missing frame",
+    "present_exit": "Exit (Esc)"
   },
   "memory": {
     "title": "Memory Vault",

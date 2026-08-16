@@ -76,7 +76,7 @@ use super::shape_view::{HtmlFrameOverlay, ShapeView};
 use super::text_edit::{self, TextEditOverlay, TextEditState};
 use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
-use super::{ai, asset_ingest, export};
+use super::{ai, asset_ingest, decks, export, present};
 use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
 use crate::components::mode_sidebar::PanelMode;
@@ -115,7 +115,8 @@ pub(super) fn z_sorted_ids(shapes: &[Shape]) -> Vec<String> {
 }
 
 /// Id → shape, the lookup side of the keyed-`<For>` split (module doc).
-fn shapes_by_id(shapes: &[Shape]) -> HashMap<String, Shape> {
+/// `pub(super)`: the presentation overlay renders the same layers.
+pub(super) fn shapes_by_id(shapes: &[Shape]) -> HashMap<String, Shape> {
     shapes
         .iter()
         .map(|s| (s.id().to_string(), s.clone()))
@@ -464,6 +465,11 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     // The open text-edit session, if any (`text_edit.rs` owns its rules).
     // Scoped to the editor like the machine: it must not outlive the canvas.
     let text_editing: RwSignal<Option<TextEditState>> = RwSignal::new(None);
+    // Fullscreen deck playback: `Some(deck_id)` mounts `present::PresentOverlay`.
+    // Editor-scoped like the machine — a show must not outlive its canvas.
+    // While it is `Some`, the window key/paste handlers below stand down
+    // (the overlay owns the keyboard; an arrow key must page, not nudge).
+    let presenting: RwSignal<Option<String>> = RwSignal::new(None);
 
     let space_down = RwSignal::new(false);
     let pan_drag: RwSignal<Option<PanDrag>> = RwSignal::new(None);
@@ -581,6 +587,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let down_handle = window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
         if PanelMode::from_path(&pathname.get_untracked()) != PanelMode::Canvas {
             return;
+        }
+        if presenting.get_untracked().is_some() {
+            return; // the presentation overlay owns the keyboard
         }
         if ev.code() == "Space" {
             if focus_is_editable() {
@@ -717,6 +726,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let paste_handle = window_event_listener(paste, move |ev: web_sys::ClipboardEvent| {
         if PanelMode::from_path(&pathname.get_untracked()) != PanelMode::Canvas {
             return;
+        }
+        if presenting.get_untracked().is_some() {
+            return; // no edits land under a running show
         }
         if focus_is_editable() {
             return;
@@ -1235,7 +1247,24 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 />
                 <ai::AnnotateButton />
                 <export::ExportPngButton />
+                <decks::DecksDrawer
+                    on_commit=Callback::new(move |(redo, undo): (Vec<CanvasOp>, Vec<CanvasOp>)| {
+                        commit(redo, undo);
+                    })
+                    on_play=Callback::new(move |deck_id: String| {
+                        presenting.set(Some(deck_id));
+                    })
+                />
             </div>
+            // Fullscreen deck playback — `fixed`, so it covers the whole
+            // window regardless of where in the surface it mounts. Its root
+            // stops pointer/wheel propagation itself.
+            {move || presenting.get().map(|deck_id| view! {
+                <present::PresentOverlay
+                    deck_id=deck_id
+                    on_close=Callback::new(move |()| presenting.set(None))
+                />
+            })}
         </div>
     }
 }

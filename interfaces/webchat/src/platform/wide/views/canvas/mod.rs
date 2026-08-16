@@ -26,12 +26,14 @@
 
 mod ai;
 mod asset_ingest;
+mod decks;
 mod editor;
 mod export;
 mod freehand;
 mod id_mint;
 mod interaction;
 mod ops;
+mod present;
 mod reconcile;
 mod shape_view;
 mod text_edit;
