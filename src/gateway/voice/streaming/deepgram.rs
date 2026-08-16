@@ -209,4 +209,32 @@ mod tests {
         let mut dec = DeepgramDecoder::default();
         assert!(dec.push(&results(false, "")).is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // Empty-bytes defense pin (2026-08-16 round)
+    //
+    // The interim-empty case (`empty_transcript_interim_is_ignored`) was
+    // already covered. The two cases below exercise the alternatives-array
+    // path and the full-final-results envelope so future edits to the
+    // decoder cannot regress the defense.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn empty_final_transcript_emits_no_delta() {
+        let mut dec = DeepgramDecoder::default();
+        // `is_final: true` + empty transcript is the same shape as the
+        // interim case but on the committed path — must still produce no delta.
+        assert!(dec.push(&results(true, "")).is_none());
+    }
+
+    #[test]
+    fn empty_channel_alternatives_emits_no_delta() {
+        let mut dec = DeepgramDecoder::default();
+        let v = serde_json::json!({
+            "type": "Results",
+            "is_final": true,
+            "channel": { "alternatives": [] }
+        });
+        assert!(dec.push(&v).is_none());
+    }
 }

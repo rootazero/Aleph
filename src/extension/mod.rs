@@ -1522,6 +1522,7 @@ mod tests {
             },
             plugins_config_path: Some(cfg_path.clone()),
             extra_plugin_parents: vec![dir.join("plugins")],
+            owner_trust: None,
         })
         .await
         .unwrap();

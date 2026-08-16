@@ -449,4 +449,49 @@ mod tests {
             .unwrap();
         assert_eq!(d.interim, "你好");
     }
+
+    // -----------------------------------------------------------------------
+    // Empty-bytes defense pin (2026-08-16 round)
+    //
+    // Pins the existing defensive code against the WLK "empty bytes trigger
+    // end-of-audio" anti-pattern and serde-parse failures. These are NOT new
+    // code paths — the decoder already handles them safely — but adding the
+    // tests prevents future edits from regressing the contract.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn empty_segments_array_emits_no_delta() {
+        let mut dec = WhisperLiveDecoder::default();
+        // The decoder returns `None` when there are no segments to lock — the
+        // stream task's `if let Some(d) = dec.push(&v)` arm treats it as "no
+        // delta to publish", neither committing nor erroring.
+        let d = dec.push(&serde_json::json!({
+            "uid": "u",
+            "segments": [],
+            "is_final": true
+        }));
+        assert!(d.is_none(), "empty segments must yield no delta (no error)");
+    }
+
+    #[test]
+    fn null_envelope_emits_no_delta() {
+        let mut dec = WhisperLiveDecoder::default();
+        // serde_json::Value::Null has no `status`, `message`, or `segments`
+        // keys — the decoder's `?` on `.as_array()` returns None, which the
+        // stream task treats as "no delta to publish" (no error, no row).
+        let d = dec.push(&serde_json::Value::Null);
+        assert!(d.is_none(), "null envelope must yield no delta");
+    }
+
+    #[test]
+    fn empty_string_text_is_skipped() {
+        let mut dec = WhisperLiveDecoder::default();
+        let d = dec
+            .push(&msg(vec![
+                seg_at(0.0, "", true),    // empty completed
+                seg_at(1.0, "你好", true), // real followed by empty
+            ]))
+            .unwrap();
+        assert_eq!(d.committed, "你好");
+    }
 }
