@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::parse_params;
-use crate::command::{CommandContext, CommandParser};
+use crate::command::CommandParser;
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::{ChannelType, ToolCatalog, ToolSourceType, UnifiedTool};
 
@@ -359,55 +359,6 @@ pub struct ResolvedCommandInfo {
     pub internal_id: String,
     /// Source type: "builtin", "mcp", "skill", "custom", "plugin"
     pub source_type: String,
-}
-
-/// Command context details for the client
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-pub enum ResolvedCommandContext {
-    /// Builtin tool
-    #[serde(rename = "builtin")]
-    Builtin { tool_name: String },
-    /// MCP server tool
-    #[serde(rename = "mcp")]
-    Mcp {
-        server_name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tool_name: Option<String>,
-    },
-    /// Skill
-    #[serde(rename = "skill")]
-    Skill {
-        skill_id: String,
-        display_name: String,
-    },
-    /// Custom routing rule
-    #[serde(rename = "custom")]
-    Custom { pattern: String },
-}
-
-impl From<CommandContext> for ResolvedCommandContext {
-    fn from(ctx: CommandContext) -> Self {
-        match ctx {
-            CommandContext::Builtin { tool_name } => Self::Builtin { tool_name },
-            CommandContext::Mcp { server_name } => Self::Mcp {
-                server_name,
-                // `CommandContext::Mcp` no longer carries a per-tool name —
-                // the slash-command fast path resolved directly via the
-                // agent-loop MCP transport and never consumed it.
-                tool_name: None,
-            },
-            CommandContext::Skill {
-                skill_id,
-                display_name,
-                ..
-            } => Self::Skill {
-                skill_id,
-                display_name,
-            },
-            CommandContext::Custom { pattern, .. } => Self::Custom { pattern },
-        }
-    }
 }
 
 /// Build children list for namespace interaction responses
@@ -987,24 +938,6 @@ mod tests {
         let params: ExecuteParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.input, "/search hello");
         assert_eq!(params.session_id, Some("agent:main:main:1".to_string()));
-    }
-
-    #[test]
-    fn test_resolved_command_context_serialization() {
-        let ctx = ResolvedCommandContext::Builtin {
-            tool_name: "search".to_string(),
-        };
-        let json = serde_json::to_value(&ctx).unwrap();
-        assert_eq!(json["type"], "builtin");
-        assert_eq!(json["tool_name"], "search");
-
-        let ctx = ResolvedCommandContext::Mcp {
-            server_name: "github".to_string(),
-            tool_name: Some("list_repos".to_string()),
-        };
-        let json = serde_json::to_value(&ctx).unwrap();
-        assert_eq!(json["type"], "mcp");
-        assert_eq!(json["server_name"], "github");
     }
 
     #[test]
