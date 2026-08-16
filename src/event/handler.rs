@@ -1,60 +1,37 @@
 // Aleph/core/src/event/handler.rs
-//! Event handler trait and registry for component subscriptions.
+//! Event handler trait for component subscriptions.
+//!
+//! The previous `EventHandlerRegistry` (a `Vec<Arc<dyn EventHandler>>` plus a
+//! `start`/`stop` lifecycle) was removed in the 2026-08-16 severed-wire
+//! audit — it had no production caller. The boot path uses
+//! `GlobalBus::global().subscribe_async(filter, |ev| handler.handle(&ev.event,
+//! &ctx))` directly (see `bin/aleph-server/commands/start/mod.rs`); the
+//! registry added no behaviour the boot path wasn't already doing by hand.
+//!
+//! `EventContext` likewise lost its `bus` / `abort_signal` / `session_id`
+//! fields. The boot comment at `commands/start/mod.rs:1260` was already true:
+//! production handlers never call `ctx.bus.publish()`, and the only consumer
+//! of `abort_signal` was the registry itself.
 
-use crate::event::bus::EventBus;
 use crate::event::types::{AlephEvent, EventType};
-use crate::sync_primitives::Arc;
-use crate::sync_primitives::{AtomicBool, Ordering};
 use async_trait::async_trait;
-use tokio::sync::RwLock;
-use tracing::{debug, error, info, trace};
 
-/// Context provided to event handlers
-#[derive(Clone)]
-pub struct EventContext {
-    /// Event bus for publishing new events
-    pub bus: EventBus,
-    /// Abort signal for graceful shutdown
-    pub abort_signal: Arc<AtomicBool>,
-    /// Session ID for the current execution
-    pub session_id: Arc<RwLock<Option<String>>>,
-}
+/// Context provided to event handlers.
+///
+/// Empty in production: the previous `bus` / `abort_signal` / `session_id`
+/// fields were removed in the 2026-08-16 severed-wire audit (the boot path
+/// confirmed via inline comment that handlers never publish back through
+/// this context, and `EventHandlerRegistry` was the only consumer of the
+/// abort flag). The struct is kept because the `EventHandler` trait still
+/// carries an `&EventContext` parameter for forward compatibility.
+#[derive(Clone, Default)]
+pub struct EventContext;
 
 impl EventContext {
-    /// Create a new event context
+    /// Create a new event context.
     #[must_use]
-    pub fn new(bus: EventBus) -> Self {
-        Self {
-            bus,
-            abort_signal: Arc::new(AtomicBool::new(false)),
-            session_id: Arc::new(RwLock::new(None)),
-        }
-    }
-
-    /// Check if abort has been signaled
-    #[must_use]
-    pub fn is_aborted(&self) -> bool {
-        self.abort_signal.load(Ordering::Relaxed)
-    }
-
-    /// Signal abort
-    pub fn abort(&self) {
-        self.abort_signal.store(true, Ordering::Relaxed);
-    }
-
-    /// Reset abort signal
-    pub fn reset_abort(&self) {
-        self.abort_signal.store(false, Ordering::Relaxed);
-    }
-
-    /// Set current session ID
-    pub async fn set_session_id(&self, session_id: String) {
-        *self.session_id.write().await = Some(session_id);
-    }
-
-    /// Get current session ID
-    pub async fn get_session_id(&self) -> Option<String> {
-        self.session_id.read().await.clone()
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -62,6 +39,10 @@ impl EventContext {
 ///
 /// Components implement this trait to receive and process events.
 /// Each handler declares which events it subscribes to and how to handle them.
+///
+/// The handler is invoked by whatever subscription glue the caller wired
+/// (e.g. `GlobalBus::subscribe_async`); `handle` should be self-contained
+/// and must not assume a registry is running alongside it.
 #[async_trait]
 pub trait EventHandler: Send + Sync {
     /// Get the handler's unique name (for logging/debugging)
@@ -89,331 +70,4 @@ pub enum HandlerError {
 
     #[error("Aborted by user")]
     Aborted,
-
-    #[error("Internal error: {0}")]
-    Internal(String),
-}
-
-/// Registry for managing event handlers
-pub struct EventHandlerRegistry {
-    handlers: Vec<Arc<dyn EventHandler>>,
-    running: AtomicBool,
-}
-
-impl EventHandlerRegistry {
-    /// Create a new empty registry
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            handlers: Vec::new(),
-            running: AtomicBool::new(false),
-        }
-    }
-
-    /// Register a handler
-    pub fn register(&mut self, handler: Arc<dyn EventHandler>) {
-        info!(
-            handler_name = handler.name(),
-            subscriptions = ?handler.subscriptions(),
-            "Registering event handler"
-        );
-        self.handlers.push(handler);
-    }
-
-    /// Get the number of registered handlers
-    pub fn handler_count(&self) -> usize {
-        self.handlers.len()
-    }
-
-    /// Check if the registry is running
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::Relaxed)
-    }
-
-    /// Start all handlers listening for events
-    ///
-    /// This spawns a tokio task for each handler that listens for events
-    /// and dispatches them to the handler.
-    pub async fn start(&self, ctx: EventContext) -> Vec<tokio::task::JoinHandle<()>> {
-        if self
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            debug!("Registry already running");
-            return vec![];
-        }
-
-        info!(
-            handler_count = self.handlers.len(),
-            "Starting event handler registry"
-        );
-
-        let mut handles = Vec::new();
-
-        for handler in &self.handlers {
-            let handler = Arc::clone(handler);
-            let ctx = ctx.clone();
-            let subscriptions = handler.subscriptions();
-
-            let mut subscriber = if subscriptions.contains(&EventType::All) {
-                ctx.bus.subscribe()
-            } else {
-                ctx.bus.subscribe_filtered(subscriptions)
-            };
-
-            let handle = tokio::spawn(async move {
-                let handler_name = handler.name();
-                debug!(handler_name, "Handler event loop started");
-
-                loop {
-                    // Check abort signal
-                    if ctx.is_aborted() {
-                        debug!(handler_name, "Handler received abort signal");
-                        break;
-                    }
-
-                    match subscriber.recv().await {
-                        Ok(timestamped_event) => {
-                            trace!(
-                                handler_name,
-                                event_type = ?timestamped_event.event.event_type(),
-                                "Handler received event"
-                            );
-
-                            // Handle the event
-                            match handler.handle(&timestamped_event.event, &ctx).await {
-                                Ok(new_events) => {
-                                    // Publish any new events
-                                    for new_event in new_events {
-                                        trace!(
-                                            handler_name,
-                                            new_event_type = ?new_event.event_type(),
-                                            "Handler publishing new event"
-                                        );
-                                        ctx.bus.publish(new_event).await;
-                                    }
-                                }
-                                Err(HandlerError::Aborted) => {
-                                    debug!(handler_name, "Handler aborted");
-                                    break;
-                                }
-                                Err(e) => {
-                                    error!(
-                                        handler_name,
-                                        error = %e,
-                                        "Handler error"
-                                    );
-                                    // Continue processing other events
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                handler_name,
-                                error = %e,
-                                "Handler receive error, stopping"
-                            );
-                            break;
-                        }
-                    }
-                }
-
-                debug!(handler_name, "Handler event loop ended");
-            });
-
-            handles.push(handle);
-        }
-
-        handles
-    }
-
-    /// Stop all handlers
-    pub fn stop(&self, ctx: &EventContext) {
-        info!("Stopping event handler registry");
-        ctx.abort();
-        self.running.store(false, Ordering::SeqCst);
-    }
-}
-
-impl Default for EventHandlerRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::event::types::{InputEvent, StopReason};
-    use crate::sync_primitives::AtomicUsize;
-
-    /// Test handler that counts events
-    struct CountingHandler {
-        count: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl EventHandler for CountingHandler {
-        fn name(&self) -> &'static str {
-            "CountingHandler"
-        }
-
-        fn subscriptions(&self) -> Vec<EventType> {
-            vec![EventType::All]
-        }
-
-        async fn handle(
-            &self,
-            _event: &AlephEvent,
-            _ctx: &EventContext,
-        ) -> Result<Vec<AlephEvent>, HandlerError> {
-            self.count.fetch_add(1, Ordering::SeqCst);
-            Ok(vec![])
-        }
-    }
-
-    /// Test handler that produces new events
-    struct ProducingHandler;
-
-    #[async_trait]
-    impl EventHandler for ProducingHandler {
-        fn name(&self) -> &'static str {
-            "ProducingHandler"
-        }
-
-        fn subscriptions(&self) -> Vec<EventType> {
-            vec![EventType::InputReceived]
-        }
-
-        async fn handle(
-            &self,
-            _event: &AlephEvent,
-            _ctx: &EventContext,
-        ) -> Result<Vec<AlephEvent>, HandlerError> {
-            // Produce a LoopStop event for each input
-            Ok(vec![AlephEvent::LoopStop(StopReason::Completed)])
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handler_registration() {
-        let mut registry = EventHandlerRegistry::new();
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        registry.register(Arc::new(CountingHandler {
-            count: counter.clone(),
-        }));
-
-        assert_eq!(registry.handler_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_handler_receives_events() {
-        let bus = EventBus::new();
-        let ctx = EventContext::new(bus.clone());
-
-        let mut registry = EventHandlerRegistry::new();
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        registry.register(Arc::new(CountingHandler {
-            count: counter.clone(),
-        }));
-
-        let handles = registry.start(ctx.clone()).await;
-
-        // Give handlers time to start
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-        // Publish event
-        bus.publish(AlephEvent::InputReceived(InputEvent {
-            text: "test".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 0,
-        }))
-        .await;
-
-        // Give handler time to process
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-        // Stop and wait
-        registry.stop(&ctx);
-        for handle in handles {
-            let _ = tokio::time::timeout(tokio::time::Duration::from_millis(100), handle).await;
-        }
-
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn test_handler_produces_events() {
-        let bus = EventBus::new();
-        let ctx = EventContext::new(bus.clone());
-
-        let mut registry = EventHandlerRegistry::new();
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        // Register producing handler first, then counting handler
-        registry.register(Arc::new(ProducingHandler));
-        registry.register(Arc::new(CountingHandler {
-            count: counter.clone(),
-        }));
-
-        let handles = registry.start(ctx.clone()).await;
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-        // Publish input event
-        bus.publish(AlephEvent::InputReceived(InputEvent {
-            text: "test".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 0,
-        }))
-        .await;
-
-        // Give handlers time to process
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        registry.stop(&ctx);
-        for handle in handles {
-            let _ = tokio::time::timeout(tokio::time::Duration::from_millis(100), handle).await;
-        }
-
-        // CountingHandler should have received: InputReceived + LoopStop
-        assert!(counter.load(Ordering::SeqCst) >= 2);
-    }
-
-    #[tokio::test]
-    async fn test_event_context_abort() {
-        let bus = EventBus::new();
-        let ctx = EventContext::new(bus);
-
-        assert!(!ctx.is_aborted());
-
-        ctx.abort();
-
-        assert!(ctx.is_aborted());
-
-        ctx.reset_abort();
-
-        assert!(!ctx.is_aborted());
-    }
-
-    #[tokio::test]
-    async fn test_event_context_session_id() {
-        let bus = EventBus::new();
-        let ctx = EventContext::new(bus);
-
-        assert!(ctx.get_session_id().await.is_none());
-
-        ctx.set_session_id("session-123".to_string()).await;
-
-        assert_eq!(ctx.get_session_id().await, Some("session-123".to_string()));
-    }
 }

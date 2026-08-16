@@ -17,8 +17,7 @@
 //!
 //! // Subscribe to tool events from all agents
 //! let filter = EventFilter::new(vec![
-//!     EventType::ToolCallStarted,
-//!     EventType::ToolCallCompleted,
+//!     EventType::ProcessCompleted,
 //! ]);
 //!
 //! let sub_id = bus.subscribe(filter, |event| {
@@ -29,7 +28,6 @@
 //! bus.unsubscribe(&sub_id).await;
 //! ```
 
-use crate::event::bus::EventBus;
 use crate::event::filter::EventFilter;
 use crate::event::types::AlephEvent;
 use crate::sync_primitives::Arc;
@@ -37,7 +35,6 @@ use crate::sync_primitives::{AtomicU64, Ordering};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Weak;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace};
 
@@ -189,14 +186,12 @@ impl std::fmt::Debug for Subscription {
 ///
 /// The `GlobalBus` aggregates events from multiple Agent `EventBus` instances,
 /// enabling cross-agent event subscription. It uses a broadcast channel
-/// internally and maintains weak references to registered agent buses.
+/// internally.
 pub struct GlobalBus {
     /// Broadcast sender for global events
     sender: broadcast::Sender<GlobalEvent>,
     /// Active subscriptions indexed by ID
     subscriptions: RwLock<HashMap<SubscriptionId, Subscription>>,
-    /// Registered agent event buses (weak references to allow cleanup)
-    agent_buses: RwLock<HashMap<String, Weak<EventBus>>>,
     /// Monotonic sequence counter
     sequence: AtomicU64,
 }
@@ -215,7 +210,6 @@ impl GlobalBus {
         Self {
             sender,
             subscriptions: RwLock::new(HashMap::new()),
-            agent_buses: RwLock::new(HashMap::new()),
             sequence: AtomicU64::new(0),
         }
     }
@@ -226,33 +220,6 @@ impl GlobalBus {
     #[must_use]
     pub fn global() -> &'static Self {
         &GLOBAL_BUS
-    }
-
-    /// Register an agent's event bus.
-    ///
-    /// The `GlobalBus` maintains a weak reference to the `EventBus`,
-    /// allowing the agent to be dropped without preventing cleanup.
-    ///
-    /// # Arguments
-    ///
-    /// * `agent_id` - Unique identifier for the agent
-    /// * `bus` - The agent's `EventBus` instance
-    pub async fn register_agent(&self, agent_id: &str, bus: Arc<EventBus>) {
-        let mut buses = self.agent_buses.write().await;
-        buses.insert(agent_id.to_string(), Arc::downgrade(&bus));
-        debug!(agent_id, "Registered agent event bus");
-    }
-
-    /// Unregister an agent's event bus.
-    ///
-    /// # Arguments
-    ///
-    /// * `agent_id` - The agent ID to unregister
-    pub async fn unregister_agent(&self, agent_id: &str) {
-        let mut buses = self.agent_buses.write().await;
-        if buses.remove(agent_id).is_some() {
-            debug!(agent_id, "Unregistered agent event bus");
-        }
     }
 
     /// Broadcast an event to all matching subscribers.
@@ -384,37 +351,10 @@ impl GlobalBus {
         self.sender.subscribe()
     }
 
-    /// Get the current number of registered agents.
-    pub async fn agent_count(&self) -> usize {
-        let buses = self.agent_buses.read().await;
-        buses.len()
-    }
-
     /// Get the current number of active subscriptions.
     pub async fn subscription_count(&self) -> usize {
         let subscriptions = self.subscriptions.read().await;
         subscriptions.len()
-    }
-
-    /// Clean up stale agent references.
-    ///
-    /// Removes weak references to `EventBus` instances that have been dropped.
-    pub async fn cleanup_stale_agents(&self) {
-        let mut buses = self.agent_buses.write().await;
-        let stale_ids: Vec<String> = buses
-            .iter()
-            .filter(|(_, weak)| weak.strong_count() == 0)
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        for id in &stale_ids {
-            buses.remove(id);
-            debug!(agent_id = %id, "Cleaned up stale agent reference");
-        }
-
-        if !stale_ids.is_empty() {
-            debug!(count = stale_ids.len(), "Cleaned up stale agent references");
-        }
     }
 }
 
@@ -434,21 +374,30 @@ impl Default for GlobalBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::types::{InputEvent, StopReason};
+    use crate::event::types::{ProcessCompletionEvent, SubAgentCompletionEvent};
     use crate::event::EventType;
     use crate::sync_primitives::AtomicUsize;
 
-    fn make_input_event() -> AlephEvent {
-        AlephEvent::InputReceived(InputEvent {
-            text: "test".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 0,
+    fn make_subagent_event() -> AlephEvent {
+        AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+            agent_id: "a".into(),
+            child_session_id: "s".into(),
+            summary: "done".into(),
+            success: true,
+            error: None,
+            request_id: None,
         })
     }
 
-    fn make_loop_stop_event() -> AlephEvent {
-        AlephEvent::LoopStop(StopReason::Completed)
+    fn make_process_event() -> AlephEvent {
+        AlephEvent::ProcessCompleted(ProcessCompletionEvent {
+            process_id: 1,
+            command: "echo".into(),
+            exit_code: 0,
+            success: true,
+            output_tail: "ok".into(),
+            output_truncated: false,
+        })
     }
 
     #[test]
@@ -463,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_global_event_creation() {
-        let event = GlobalEvent::new("agent-1", "session-1", make_input_event(), 42);
+        let event = GlobalEvent::new("agent-1", "session-1", make_subagent_event(), 42);
 
         assert_eq!(event.source_agent_id, "agent-1");
         assert_eq!(event.source_session_id, "session-1");
@@ -485,29 +434,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_agent_registration() {
-        let bus = GlobalBus::new();
-        let event_bus = Arc::new(EventBus::new());
-
-        // Register agent
-        bus.register_agent("agent-1", event_bus.clone()).await;
-        assert_eq!(bus.agent_count().await, 1);
-
-        // Register another agent
-        let event_bus2 = Arc::new(EventBus::new());
-        bus.register_agent("agent-2", event_bus2).await;
-        assert_eq!(bus.agent_count().await, 2);
-
-        // Unregister
-        bus.unregister_agent("agent-1").await;
-        assert_eq!(bus.agent_count().await, 1);
-
-        // Unregister non-existent (should not panic)
-        bus.unregister_agent("agent-3").await;
-        assert_eq!(bus.agent_count().await, 1);
-    }
-
-    #[tokio::test]
     async fn test_broadcast_to_matching_subscribers() {
         let bus = GlobalBus::new();
 
@@ -515,8 +441,8 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
 
-        // Subscribe to InputReceived events
-        let filter = EventFilter::new(vec![EventType::InputReceived]);
+        // Subscribe to SubAgentCompleted events
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted]);
         let _sub_id = bus
             .subscribe_async(filter, move |_event| {
                 counter_clone.fetch_add(1, Ordering::SeqCst);
@@ -524,7 +450,7 @@ mod tests {
             .await;
 
         // Broadcast matching event
-        bus.broadcast("agent-1", "session-1", make_input_event())
+        bus.broadcast("agent-1", "session-1", make_subagent_event())
             .await;
 
         // Allow async processing
@@ -533,7 +459,7 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
 
         // Broadcast non-matching event
-        bus.broadcast("agent-1", "session-1", make_loop_stop_event())
+        bus.broadcast("agent-1", "session-1", make_process_event())
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -576,11 +502,11 @@ mod tests {
             .await;
 
         // Broadcast from agent-1
-        bus.broadcast("agent-1", "session-1", make_input_event())
+        bus.broadcast("agent-1", "session-1", make_subagent_event())
             .await;
 
         // Broadcast from agent-2 (should not match)
-        bus.broadcast("agent-2", "session-2", make_input_event())
+        bus.broadcast("agent-2", "session-2", make_subagent_event())
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -605,11 +531,11 @@ mod tests {
             .await;
 
         // Broadcast from session-1
-        bus.broadcast("agent-1", "session-1", make_input_event())
+        bus.broadcast("agent-1", "session-1", make_subagent_event())
             .await;
 
         // Broadcast from session-2 (should not match)
-        bus.broadcast("agent-1", "session-2", make_input_event())
+        bus.broadcast("agent-1", "session-2", make_subagent_event())
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -629,7 +555,7 @@ mod tests {
         let counter2_clone = counter2.clone();
 
         // Subscribe two subscribers
-        let filter1 = EventFilter::new(vec![EventType::InputReceived]);
+        let filter1 = EventFilter::new(vec![EventType::SubAgentCompleted]);
         let _sub1 = bus
             .subscribe_async(filter1, move |_event| {
                 counter1_clone.fetch_add(1, Ordering::SeqCst);
@@ -644,7 +570,7 @@ mod tests {
             .await;
 
         // Broadcast event
-        bus.broadcast("agent-1", "session-1", make_input_event())
+        bus.broadcast("agent-1", "session-1", make_subagent_event())
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -655,30 +581,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cleanup_stale_agents() {
-        let bus = GlobalBus::new();
-
-        // Create and register an agent
-        {
-            let event_bus = Arc::new(EventBus::new());
-            bus.register_agent("agent-temp", event_bus).await;
-            assert_eq!(bus.agent_count().await, 1);
-            // event_bus is dropped here
-        }
-
-        // Cleanup should remove the stale reference
-        bus.cleanup_stale_agents().await;
-        assert_eq!(bus.agent_count().await, 0);
-    }
-
-    #[tokio::test]
     async fn test_broadcast_receiver() {
         let bus = GlobalBus::new();
 
         let mut receiver = bus.subscribe_broadcast();
 
         // Broadcast event
-        bus.broadcast("agent-1", "session-1", make_input_event())
+        bus.broadcast("agent-1", "session-1", make_subagent_event())
             .await;
 
         // Receive via broadcast channel
@@ -693,7 +602,7 @@ mod tests {
 
     #[test]
     fn test_global_event_serialization() {
-        let event = GlobalEvent::new("agent-1", "session-1", make_input_event(), 123);
+        let event = GlobalEvent::new("agent-1", "session-1", make_subagent_event(), 123);
 
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("agent-1"));

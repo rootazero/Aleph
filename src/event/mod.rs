@@ -2,9 +2,12 @@
 //! Event-driven architecture for Aleph's agentic loop.
 //!
 //! This module provides:
-//! - `EventBus`: Type-safe broadcast channel for component communication
-//! - `AlephEvent`: Unified event enum for all system events
+//! - `EventBus`: Local per-instance broadcast channel (used as a context bus
+//!   for `EventHandler::handle`)
+//! - `AlephEvent`: Unified event enum — only variants with both a live
+//!   producer and a live subscriber are kept
 //! - `EventHandler`: Trait for components to subscribe and handle events
+//! - `GlobalBus`: Singleton event aggregator for cross-agent event routing
 
 mod bus;
 pub mod filter;
@@ -13,43 +16,16 @@ mod handler;
 mod types;
 
 #[cfg(test)]
-mod integration_test;
-#[cfg(test)]
 mod tests;
 
-pub use bus::{EventBus, EventBusConfig, EventBusError, EventSubscriber};
-pub use handler::{EventContext, EventHandler, EventHandlerRegistry, HandlerError};
+pub use bus::EventBus;
+pub use handler::{EventContext, EventHandler, HandlerError};
 pub use types::{
-    // AI response
-    AiResponse,
     AlephEvent,
-    CompactionInfo,
-    ErrorKind,
     EventType,
-    InputContext,
-    // Input events
-    InputEvent,
-    // Loop control
-    LoopState,
-    // Background `bash` jobs
     ProcessCompletionEvent,
-    SessionDiff,
-    // Session events
-    SessionInfo,
-    StopReason,
-    // Sub-agent events
     SubAgentCompletionEvent,
     TimestampedEvent,
-    // Token usage
-    TokenUsage,
-    ToolCallError,
-    // Tool events
-    ToolCallRequest,
-    ToolCallResult,
-    ToolCallRetry,
-    ToolCallStarted,
-    // User interaction
-    UserQuestion,
 };
 
 // Event filtering for subscription-based routing

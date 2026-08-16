@@ -1257,17 +1257,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Register TeamEventLogger on GlobalBus.
     // The handler is fire-and-forget (handle returns empty vec), so we pass a
-    // dummy EventContext — it never calls ctx.bus.publish().
+    // Register TeamEventLogger on GlobalBus. The handler never publishes back
+    // through `EventContext`, so no bus context is needed — the trait still
+    // takes `&EventContext` for forward compatibility, so we pass a default.
     if let Some(event_store) = agent_result.event_store.clone() {
         {
             use alephcore::event::{
-                EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
+                EventContext, EventFilter, EventHandler, EventType, GlobalBus,
             };
             use alephcore::teams::events::TeamEventLogger;
 
             let team_logger = Arc::new(TeamEventLogger::new(event_store));
-            let dummy_bus = EventBus::new();
-            let ctx = EventContext::new(dummy_bus);
+            let ctx = EventContext::new();
 
             tokio::spawn(async move {
                 let team_logger_clone = team_logger.clone();
@@ -1311,7 +1312,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.message_router.clone(),
     ) {
         {
-            use alephcore::event::{EventBus, EventContext, EventFilter, EventHandler, GlobalBus};
+            use alephcore::event::{EventContext, EventFilter, EventHandler, GlobalBus};
             use alephcore::teams::messages::{Aggregator, AggregatorConfig};
             use alephcore::teams::TeamNotifier;
 
@@ -1320,8 +1321,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // TeamNotifier module docs).
             let sink = Aggregator::new(msg_router, AggregatorConfig::default());
             let notifier = Arc::new(TeamNotifier::new(team_store, coord_store, sink));
-            let dummy_bus = EventBus::new();
-            let ctx = EventContext::new(dummy_bus);
+            let ctx = EventContext::new();
 
             tokio::spawn(async move {
                 // Drive the subscription from the handler's own contract so the

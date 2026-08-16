@@ -1,18 +1,12 @@
 // Aleph/core/src/event/tests/integration.rs
-//! Integration tests for the enhanced event system.
-//!
-//! These tests verify that:
-//! 1. GlobalBus receives events from multiple EventBus instances
-//! 2. EventFilter correctly filters events by session, agent, and event type
-//! 3. The complete event flow works with cross-agent communication
+//! Integration tests for the global event bus.
 
 #[cfg(test)]
 mod tests {
-    use crate::event::bus::EventBus;
     use crate::event::filter::EventFilter;
     use crate::event::global_bus::GlobalBus;
     use crate::event::types::{
-        AlephEvent, EventType, InputEvent, StopReason, TokenUsage, ToolCallResult,
+        AlephEvent, EventType, ProcessCompletionEvent, SubAgentCompletionEvent,
     };
     use crate::sync_primitives::Arc;
     use crate::sync_primitives::{AtomicUsize, Ordering};
@@ -20,6 +14,28 @@ mod tests {
     // =========================================================================
     // GlobalBus + Multiple EventBus Integration Tests
     // =========================================================================
+
+    fn make_subagent_event() -> AlephEvent {
+        AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+            agent_id: "a".into(),
+            child_session_id: "s".into(),
+            summary: "done".into(),
+            success: true,
+            error: None,
+            request_id: None,
+        })
+    }
+
+    fn make_process_event() -> AlephEvent {
+        AlephEvent::ProcessCompleted(ProcessCompletionEvent {
+            process_id: 1,
+            command: "echo".into(),
+            exit_code: 0,
+            success: true,
+            output_tail: "ok".into(),
+            output_truncated: false,
+        })
+    }
 
     #[tokio::test]
     async fn test_global_bus_aggregates_from_multiple_agents() {
@@ -50,49 +66,19 @@ mod tests {
             })
             .await;
 
-        // Create three EventBus instances connected to the same GlobalBus
-        let bus1 = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-a")
-            .with_global_bus(global_bus);
-
-        let bus2 = EventBus::new()
-            .with_agent_id("agent-2")
-            .with_session_id("session-b")
-            .with_global_bus(global_bus);
-
-        let bus3 = EventBus::new()
-            .with_agent_id("agent-3")
-            .with_session_id("session-c")
-            .with_global_bus(global_bus);
-
-        // Publish events from each bus
-        bus1.publish(AlephEvent::InputReceived(InputEvent {
-            text: "Hello from agent 1".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 1000,
-        }))
-        .await;
-
-        bus2.publish(AlephEvent::InputReceived(InputEvent {
-            text: "Hello from agent 2".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 2000,
-        }))
-        .await;
-
-        bus2.publish(AlephEvent::LoopStop(StopReason::Completed))
+        // Broadcast events from three different agents
+        global_bus
+            .broadcast("agent-1", "session-a", make_subagent_event())
             .await;
-
-        bus3.publish(AlephEvent::InputReceived(InputEvent {
-            text: "Hello from agent 3".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 3000,
-        }))
-        .await;
+        global_bus
+            .broadcast("agent-2", "session-b", make_subagent_event())
+            .await;
+        global_bus
+            .broadcast("agent-2", "session-b", make_process_event())
+            .await;
+        global_bus
+            .broadcast("agent-3", "session-c", make_subagent_event())
+            .await;
 
         // Allow async processing
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -146,26 +132,15 @@ mod tests {
             })
             .await;
 
-        // Create buses with different sessions
-        let bus_a = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-a")
-            .with_global_bus(global_bus);
-
-        let bus_b = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-b")
-            .with_global_bus(global_bus);
-
-        // Publish events
-        bus_a
-            .publish(AlephEvent::LoopStop(StopReason::Completed))
+        // Broadcast events to different sessions
+        global_bus
+            .broadcast("agent-1", "session-a", make_process_event())
             .await;
-        bus_a
-            .publish(AlephEvent::LoopStop(StopReason::Completed))
+        global_bus
+            .broadcast("agent-1", "session-a", make_process_event())
             .await;
-        bus_b
-            .publish(AlephEvent::LoopStop(StopReason::Completed))
+        global_bus
+            .broadcast("agent-1", "session-b", make_process_event())
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -178,55 +153,43 @@ mod tests {
     async fn test_global_bus_filter_by_event_type() {
         let global_bus = Box::leak(Box::new(GlobalBus::new()));
 
-        let tool_events = Arc::new(AtomicUsize::new(0));
-        let stop_events = Arc::new(AtomicUsize::new(0));
+        let subagent_events = Arc::new(AtomicUsize::new(0));
+        let process_events = Arc::new(AtomicUsize::new(0));
 
-        let tool_clone = tool_events.clone();
-        let stop_clone = stop_events.clone();
+        let subagent_clone = subagent_events.clone();
+        let process_clone = process_events.clone();
 
-        // Subscribe to tool events
-        let filter_tool = EventFilter::new(vec![EventType::ToolCallCompleted]);
-        let _sub_tool = global_bus
-            .subscribe_async(filter_tool, move |_| {
-                tool_clone.fetch_add(1, Ordering::SeqCst);
+        // Subscribe to subagent events
+        let filter_subagent = EventFilter::new(vec![EventType::SubAgentCompleted]);
+        let _sub_subagent = global_bus
+            .subscribe_async(filter_subagent, move |_| {
+                subagent_clone.fetch_add(1, Ordering::SeqCst);
             })
             .await;
 
-        // Subscribe to stop events
-        let filter_stop = EventFilter::new(vec![EventType::LoopStop]);
-        let _sub_stop = global_bus
-            .subscribe_async(filter_stop, move |_| {
-                stop_clone.fetch_add(1, Ordering::SeqCst);
+        // Subscribe to process events
+        let filter_process = EventFilter::new(vec![EventType::ProcessCompleted]);
+        let _sub_process = global_bus
+            .subscribe_async(filter_process, move |_| {
+                process_clone.fetch_add(1, Ordering::SeqCst);
             })
             .await;
 
-        let bus = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-1")
-            .with_global_bus(global_bus);
-
-        // Publish different event types
-        bus.publish(AlephEvent::ToolCallCompleted(ToolCallResult {
-            call_id: "call-1".to_string(),
-            tool: "search".to_string(),
-            input: serde_json::json!({}),
-            output: "results".to_string(),
-            started_at: 1000,
-            completed_at: 2000,
-            token_usage: TokenUsage::default(),
-            session_id: None,
-        }))
-        .await;
-
-        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
+        // Broadcast different event types
+        global_bus
+            .broadcast("agent-1", "session-1", make_subagent_event())
             .await;
-        bus.publish(AlephEvent::LoopStop(StopReason::UserAborted))
+        global_bus
+            .broadcast("agent-1", "session-1", make_process_event())
+            .await;
+        global_bus
+            .broadcast("agent-1", "session-1", make_process_event())
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        assert_eq!(tool_events.load(Ordering::SeqCst), 1);
-        assert_eq!(stop_events.load(Ordering::SeqCst), 2);
+        assert_eq!(subagent_events.load(Ordering::SeqCst), 1);
+        assert_eq!(process_events.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -236,8 +199,8 @@ mod tests {
         let matched_events = Arc::new(AtomicUsize::new(0));
         let matched_clone = matched_events.clone();
 
-        // Subscribe to LoopStop events from agent-1 in session-1
-        let filter = EventFilter::new(vec![EventType::LoopStop])
+        // Subscribe to SubAgentCompleted events from agent-1 in session-1
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
             .with_agent("agent-1")
             .with_session("session-1");
 
@@ -247,41 +210,25 @@ mod tests {
             })
             .await;
 
-        // Create buses
-        let bus_match = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-1")
-            .with_global_bus(global_bus);
-
-        let bus_wrong_agent = EventBus::new()
-            .with_agent_id("agent-2")
-            .with_session_id("session-1")
-            .with_global_bus(global_bus);
-
-        let bus_wrong_session = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-2")
-            .with_global_bus(global_bus);
-
-        // Publish events
-        bus_match
-            .publish(AlephEvent::LoopStop(StopReason::Completed))
+        // Broadcast matching event
+        global_bus
+            .broadcast("agent-1", "session-1", make_subagent_event())
             .await; // Should match
-        bus_match
-            .publish(AlephEvent::InputReceived(InputEvent {
-                // Wrong event type
-                text: "test".to_string(),
-                session_id: None,
-                context: None,
-                timestamp: 0,
-            }))
+
+        // Broadcast wrong event type
+        global_bus
+            .broadcast("agent-1", "session-1", make_process_event())
             .await;
-        bus_wrong_agent
-            .publish(AlephEvent::LoopStop(StopReason::Completed))
-            .await; // Wrong agent
-        bus_wrong_session
-            .publish(AlephEvent::LoopStop(StopReason::Completed))
-            .await; // Wrong session
+
+        // Broadcast wrong agent
+        global_bus
+            .broadcast("agent-2", "session-1", make_subagent_event())
+            .await;
+
+        // Broadcast wrong session
+        global_bus
+            .broadcast("agent-1", "session-2", make_subagent_event())
+            .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -300,8 +247,9 @@ mod tests {
         let child_completed = Arc::new(AtomicUsize::new(0));
         let child_completed_clone = child_completed.clone();
 
-        // Parent subscribes to child's session LoopStop events
-        let filter = EventFilter::new(vec![EventType::LoopStop]).with_session("child-session");
+        // Parent subscribes to child's session SubAgentCompleted events
+        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
+            .with_session("child-session");
 
         let _sub = global_bus
             .subscribe_async(filter, move |event| {
@@ -312,57 +260,13 @@ mod tests {
             .await;
 
         // Simulate child agent
-        let child_bus = EventBus::new()
-            .with_agent_id("child-agent")
-            .with_session_id("child-session")
-            .with_global_bus(global_bus);
-
-        // Child completes its work
-        child_bus
-            .publish(AlephEvent::LoopStop(StopReason::Completed))
+        global_bus
+            .broadcast("child-agent", "child-session", make_subagent_event())
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         assert_eq!(child_completed.load(Ordering::SeqCst), 1);
-    }
-
-    // =========================================================================
-    // GlobalBus Agent Registration Tests
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_agent_registration_and_cleanup() {
-        let global_bus = GlobalBus::new();
-
-        // Register some agents
-        {
-            let bus1 = Arc::new(EventBus::new());
-            let bus2 = Arc::new(EventBus::new());
-
-            global_bus.register_agent("agent-1", bus1.clone()).await;
-            global_bus.register_agent("agent-2", bus2.clone()).await;
-
-            assert_eq!(global_bus.agent_count().await, 2);
-
-            // bus1 and bus2 are dropped here
-        }
-
-        // Cleanup should remove stale references
-        global_bus.cleanup_stale_agents().await;
-        assert_eq!(global_bus.agent_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn test_unregister_agent() {
-        let global_bus = GlobalBus::new();
-
-        let bus = Arc::new(EventBus::new());
-        global_bus.register_agent("agent-1", bus).await;
-        assert_eq!(global_bus.agent_count().await, 1);
-
-        global_bus.unregister_agent("agent-1").await;
-        assert_eq!(global_bus.agent_count().await, 0);
     }
 
     // =========================================================================
@@ -374,11 +278,6 @@ mod tests {
         let global_bus = Box::leak(Box::new(GlobalBus::new()));
 
         let mut receiver = global_bus.subscribe_broadcast();
-
-        let bus = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-1")
-            .with_global_bus(global_bus);
 
         // Spawn a task to receive events
         let receive_task = tokio::spawn(async move {
@@ -392,8 +291,9 @@ mod tests {
         // Give receiver time to start
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
-        // Publish event
-        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
+        // Broadcast event
+        global_bus
+            .broadcast("agent-1", "session-1", make_subagent_event())
             .await;
 
         // Verify receiver got the event
@@ -424,14 +324,10 @@ mod tests {
             })
             .await;
 
-        let bus = EventBus::new()
-            .with_agent_id("agent-1")
-            .with_session_id("session-1")
-            .with_global_bus(global_bus);
-
         // Publish multiple events
         for _ in 0..5 {
-            bus.publish(AlephEvent::LoopStop(StopReason::Completed))
+            global_bus
+                .broadcast("agent-1", "session-1", make_subagent_event())
                 .await;
         }
 
@@ -459,8 +355,6 @@ mod tests {
             .with_session("session-1")
             .with_session("session-2");
 
-        assert!(filter.has_session_filter());
-
         let session_ids = filter.session_ids.as_ref().unwrap();
         assert!(session_ids.contains("session-1"));
         assert!(session_ids.contains("session-2"));
@@ -472,8 +366,6 @@ mod tests {
             .with_agent("agent-1")
             .with_agent("agent-2");
 
-        assert!(filter.has_agent_filter());
-
         let agent_ids = filter.agent_ids.as_ref().unwrap();
         assert!(agent_ids.contains("agent-1"));
         assert!(agent_ids.contains("agent-2"));
@@ -482,13 +374,12 @@ mod tests {
     #[test]
     fn test_event_filter_multiple_event_types() {
         let filter = EventFilter::new(vec![
-            EventType::InputReceived,
-            EventType::ToolCallStarted,
-            EventType::ToolCallCompleted,
-            EventType::LoopStop,
+            EventType::SubAgentCompleted,
+            EventType::SubAgentTreeUpdate,
+            EventType::ProcessCompleted,
+            EventType::TeamTaskAssigned,
         ]);
 
-        assert!(!filter.matches_all_types());
         assert_eq!(filter.event_types.len(), 4);
     }
 
@@ -501,7 +392,7 @@ mod tests {
         let event = crate::event::global_bus::GlobalEvent::new(
             "agent-1",
             "session-1",
-            AlephEvent::LoopStop(StopReason::Completed),
+            make_subagent_event(),
             0,
         );
 
