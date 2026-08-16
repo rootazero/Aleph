@@ -11,6 +11,13 @@ use crate::error::AlephError;
 use std::path::Path;
 use tokio::fs;
 
+/// Write UTF-8 `content` atomically to `path`. One-line forwarder to
+/// [`atomic_write_bytes`], which holds the actual implementation and its
+/// guarantees — read the doc there.
+pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephError> {
+    atomic_write_bytes(path, content.as_bytes()).await
+}
+
 /// Write `content` atomically to `path` using a temp-file-and-rename strategy.
 /// Readers either see the previous complete content or the new complete content,
 /// never a half-written file.
@@ -24,7 +31,7 @@ use tokio::fs;
 /// without this an atomic overwrite would silently strip an existing file's
 /// mode (e.g. drop the executable bit from a `0755` script). A brand-new file
 /// keeps the `0600` staging default.
-pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephError> {
+pub async fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<(), AlephError> {
     let parent = path.parent().ok_or_else(|| AlephError::ConfigError {
         message: format!("Path has no parent directory: {path:?}"),
         suggestion: None,
@@ -84,6 +91,15 @@ pub async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephEr
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn atomic_write_bytes_round_trips_binary() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("a.bin");
+        let payload = [0u8, 159, 146, 150, 255]; // not valid UTF-8
+        atomic_write_bytes(&p, &payload).await.unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), payload);
+    }
 
     #[tokio::test]
     async fn writes_content_atomically() {

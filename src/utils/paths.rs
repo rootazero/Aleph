@@ -859,6 +859,22 @@ pub fn get_workspaces_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("workspaces"))
 }
 
+/// The root every whiteboard canvas document hangs off: `<data_dir>/canvas`.
+///
+/// Creates the directory — this is a write-path helper for the canvas store
+/// (`src/canvas/`), NOT for diagnostics: a sensor must not create what it
+/// measures, so read-only surfaces need a pure lookup (the [`tool_usage_path`]
+/// shape) instead of this.
+///
+/// One function so the store's writes and every later read resolve the same
+/// directory — the same discipline as [`get_background_processes_dir`].
+pub fn get_canvas_root() -> Result<PathBuf> {
+    let dir = get_data_dir()?.join("canvas");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AlephError::config(format!("Failed to create canvas root directory: {e}")))?;
+    Ok(dir)
+}
+
 /// Get the identity/config directory for a specific agent
 ///
 /// Agent capabilities (skills, plugins) and identity files are stored here.
@@ -1308,6 +1324,24 @@ mod tests {
              writing state the rest of the process cannot see:\n  {}",
             root.display(),
             strays.join("\n  ")
+        );
+    }
+
+    /// The whiteboard store's root: one derivation, under the data dir, and
+    /// created on resolve — it is a write-path helper, so the store may rely
+    /// on the directory existing (diagnostics must not call it, §5.9).
+    #[test]
+    fn get_canvas_root_lives_under_the_data_dir_and_creates_it() {
+        let _home = IsolatedAlephHome::new();
+        let root = get_canvas_root().expect("canvas root resolves");
+        assert_eq!(
+            root,
+            get_data_dir().expect("data dir").join("canvas"),
+            "canvas root must be <data_dir>/canvas"
+        );
+        assert!(
+            root.is_dir(),
+            "get_canvas_root is a write-path helper and must create the directory"
         );
     }
 
