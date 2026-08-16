@@ -2,7 +2,6 @@
 //!
 //! Profiles define the "Physics" of a workspace:
 //! - Model binding (which AI model to use)
-//! - Tool whitelist (which tools are allowed)
 //! - Generation parameters (temperature, etc.)
 //!
 //! Profiles are static templates defined in config.toml.
@@ -27,13 +26,11 @@ use super::search::default_true;
 /// [profiles.coding]
 /// description = "Rust/Python development environment"
 /// model = "claude-3-5-sonnet"
-/// tools = ["git_*", "fs_*", "terminal"]
 /// temperature = 0.2
 ///
 /// [profiles.creative]
 /// description = "Creative writing and brainstorming"
 /// model = "gemini-1.5-pro"
-/// tools = ["search", "fs_read"]
 /// temperature = 0.9
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -46,12 +43,6 @@ pub struct ProfileConfig {
     /// If None, uses the default provider from general config
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-
-    /// Tool whitelist using glob patterns
-    /// Examples: ["git_*", "fs_*", "terminal", "search"]
-    /// If empty or None, all tools are allowed
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
 
     /// Temperature for generation (0.0 - 2.0)
     /// Lower = more deterministic, higher = more creative
@@ -90,6 +81,14 @@ pub struct ProfileConfig {
 // project/persona overlay, so wiring it would merely duplicate a working
 // channel. Same tolerance as `CacheStrategy`: the key still parses and is
 // ignored.
+//
+// `tools` (a profile-level glob whitelist of tool names) lived here and gated
+// nothing: the live tool gate is `AgentInstanceConfig.tool_whitelist`, sourced
+// from `agent.skills` via `tool_allowed_by` (agent_instance.rs), and this
+// field was never bridged into it. Its only reader was
+// `ProfileConfig::is_tool_allowed`, which had zero callers repo-wide. Removed
+// rather than wired — `agent.skills` / `AgentDef.tool_whitelist` already cover
+// the outcome. Same tolerance as above: the key still parses and is ignored.
 
 // =============================================================================
 // SmartRecallConfig
@@ -152,98 +151,6 @@ const fn default_smart_recall_max_cross_results() -> usize {
 }
 
 // =============================================================================
-// ProfileConfig Methods
-// =============================================================================
-
-impl ProfileConfig {
-    /// Check if a tool name matches the whitelist
-    ///
-    /// Uses glob-style matching:
-    /// - "git_*" matches "`git_commit`", "`git_push`", etc.
-    /// - "fs_*" matches "`fs_read`", "`fs_write`", etc.
-    /// - Exact matches like "terminal" only match "terminal"
-    ///
-    /// Returns true if:
-    /// - The whitelist is empty (all tools allowed)
-    /// - The tool name matches any pattern in the whitelist
-    pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
-        // Empty whitelist = all tools allowed
-        if self.tools.is_empty() {
-            return true;
-        }
-
-        self.tools.iter().any(|pattern| {
-            if pattern.contains('*') {
-                // Glob pattern matching
-                Self::glob_match(pattern, tool_name)
-            } else {
-                // Exact match
-                pattern == tool_name
-            }
-        })
-    }
-
-    /// Simple glob matching (supports * as wildcard anywhere in the pattern)
-    fn glob_match(pattern: &str, text: &str) -> bool {
-        // Fast paths for the common simple patterns
-        if pattern == "*" {
-            return true;
-        }
-        if !pattern.contains('*') {
-            return pattern == text;
-        }
-        if let Some(prefix) = pattern.strip_suffix('*') {
-            if !prefix.contains('*') {
-                return text.starts_with(prefix);
-            }
-        }
-        if let Some(suffix) = pattern.strip_prefix('*') {
-            if !suffix.contains('*') {
-                return text.ends_with(suffix);
-            }
-        }
-
-        // General case: split pattern by '*' and match each literal chunk in order.
-        let mut chunks = pattern.split('*');
-        let first = chunks.next().unwrap_or("");
-        let mut text = text;
-
-        // The leading chunk must match at the start.
-        if !text.starts_with(first) {
-            return false;
-        }
-        text = &text[first.len()..];
-
-        // Middle chunks must appear in order somewhere in the remaining text.
-        let mut last_chunk = "";
-        for chunk in chunks {
-            last_chunk = chunk;
-            if chunk.is_empty() {
-                continue;
-            }
-            if let Some(pos) = text.find(chunk) {
-                text = &text[pos + chunk.len()..];
-            } else {
-                return false;
-            }
-        }
-
-        // The trailing chunk must match at the end.
-        text.ends_with(last_chunk)
-    }
-
-    /// Get the effective model, falling back to a default
-    pub fn effective_model(&self, default: &str) -> String {
-        self.model.clone().unwrap_or_else(|| default.to_string())
-    }
-
-    /// Get the effective temperature
-    pub fn effective_temperature(&self) -> f32 {
-        self.temperature.unwrap_or(0.7)
-    }
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
@@ -252,91 +159,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tool_whitelist_empty() {
-        let profile = ProfileConfig::default();
-        assert!(profile.is_tool_allowed("any_tool"));
-        assert!(profile.is_tool_allowed("git_commit"));
-    }
-
-    #[test]
-    fn test_tool_whitelist_exact_match() {
-        let profile = ProfileConfig {
-            tools: vec!["terminal".to_string(), "search".to_string()],
-            ..Default::default()
-        };
-        assert!(profile.is_tool_allowed("terminal"));
-        assert!(profile.is_tool_allowed("search"));
-        assert!(!profile.is_tool_allowed("git_commit"));
-    }
-
-    #[test]
-    fn test_tool_whitelist_glob_prefix() {
-        let profile = ProfileConfig {
-            tools: vec!["git_*".to_string(), "fs_*".to_string()],
-            ..Default::default()
-        };
-        assert!(profile.is_tool_allowed("git_commit"));
-        assert!(profile.is_tool_allowed("git_push"));
-        assert!(profile.is_tool_allowed("fs_read"));
-        assert!(profile.is_tool_allowed("fs_write"));
-        assert!(!profile.is_tool_allowed("terminal"));
-        assert!(!profile.is_tool_allowed("search"));
-    }
-
-    #[test]
-    fn test_tool_whitelist_glob_suffix() {
-        let profile = ProfileConfig {
-            tools: vec!["*_read".to_string()],
-            ..Default::default()
-        };
-        assert!(profile.is_tool_allowed("fs_read"));
-        assert!(profile.is_tool_allowed("memory_read"));
-        assert!(!profile.is_tool_allowed("fs_write"));
-    }
-
-    #[test]
-    fn test_tool_whitelist_star_only() {
-        let profile = ProfileConfig {
-            tools: vec!["*".to_string()],
-            ..Default::default()
-        };
-        assert!(profile.is_tool_allowed("any_tool"));
-    }
-
-    #[test]
-    fn test_tool_whitelist_glob_embedded() {
-        let profile = ProfileConfig {
-            tools: vec!["*foo*bar*".to_string()],
-            ..Default::default()
-        };
-        assert!(profile.is_tool_allowed("prefixfoo_middlebar_suffix"));
-        assert!(profile.is_tool_allowed("fooxbar"));
-        assert!(profile.is_tool_allowed("foobar"));
-        assert!(profile.is_tool_allowed("foobarbaz"));
-        assert!(!profile.is_tool_allowed("barfoo"));
-    }
-
-    #[test]
-    fn test_effective_model() {
-        let profile = ProfileConfig::default();
-        assert_eq!(profile.effective_model("claude-default"), "claude-default");
-
-        let profile_with_model = ProfileConfig {
-            model: Some("gemini-1.5-pro".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(
-            profile_with_model.effective_model("claude-default"),
-            "gemini-1.5-pro"
-        );
-    }
-
-    #[test]
     fn test_toml_parsing() {
         let toml_str = r#"
             description = "Coding environment"
             model = "claude-3-5-sonnet"
-            tools = ["git_*", "fs_*", "terminal"]
             temperature = 0.2
             cache_strategy = "aggressive"
             history_limit = 50
@@ -345,7 +171,6 @@ mod tests {
         let profile: ProfileConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(profile.description, Some("Coding environment".to_string()));
         assert_eq!(profile.model, Some("claude-3-5-sonnet".to_string()));
-        assert_eq!(profile.tools.len(), 3);
         assert_eq!(profile.temperature, Some(0.2));
         assert_eq!(profile.history_limit, Some(50));
         // The TOML above deliberately still carries `cache_strategy` — an
@@ -402,13 +227,11 @@ mod tests {
             [coding]
             description = "Development"
             model = "claude-sonnet"
-            tools = ["git_*", "terminal"]
             temperature = 0.2
 
             [creative]
             description = "Writing"
             model = "gemini-pro"
-            tools = ["search"]
             temperature = 0.9
         "#;
 

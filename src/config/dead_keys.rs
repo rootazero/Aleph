@@ -120,6 +120,11 @@ const TOLERATED: &[Tolerated] = &[
         why: "retired — AGENTS.md is the persona overlay; see src/config/types/profile.rs",
     },
     Tolerated {
+        path: "profiles.*.tools",
+        why: "retired — the live tool gate is AgentInstanceConfig.tool_whitelist (sourced from \
+              agent.skills); see src/config/types/profile.rs",
+    },
+    Tolerated {
         path: "desktop.presence",
         why: "reporter removed 2026-08-09; see the module doc of src/config/types/desktop.rs",
     },
