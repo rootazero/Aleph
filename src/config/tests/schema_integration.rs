@@ -1,9 +1,10 @@
 //! Integration tests for the config schema system.
 //!
-//! These tests verify that all schema-related components work together correctly,
-//! including schema generation and UI hints.
+//! These tests verify schema generation works correctly. The `build_ui_hints`
+//! producer was severed in the 2026-08-16 audit (zero consumers); `config.schema`
+//! constructs the DTO directly via `ConfigUiHints::new()`.
 
-use crate::config::{build_ui_hints, generate_config_schema_json};
+use crate::config::generate_config_schema_json;
 
 #[test]
 fn test_full_schema_generation() {
@@ -41,64 +42,6 @@ fn test_schema_json_structure() {
         json.get("properties").is_some() || json.get("$ref").is_some(),
         "Schema should have properties or reference"
     );
-}
-
-#[test]
-fn test_ui_hints_coverage() {
-    // The 2026-08-12 audit confirmed the previous declarative producer had
-    // zero downstream consumers (CLI discarded the field, Panel never called
-    // `config.schema`). build_ui_hints() now returns an empty stub so the
-    // wire shape (`config.schema.ui_hints`) stays stable for any future
-    // schema-driven settings form. Re-introduce the population lists when
-    // a genuine consumer is wired.
-    let hints = build_ui_hints();
-    assert!(
-        hints.groups.is_empty(),
-        "groups is empty until re-introduced"
-    );
-    assert!(
-        hints.fields.is_empty(),
-        "fields is empty until re-introduced"
-    );
-}
-
-#[test]
-fn test_sensitive_fields_marked() {
-    // Sentinel: the old test asserted that providers.*.api_key, channels.*.token,
-    // etc. were marked sensitive. When the producer is reintroduced, the
-    // assertions move back here verbatim. For now the empty stub has no
-    // fields to be sensitive about.
-    let hints = build_ui_hints();
-    assert!(hints.fields.is_empty());
-}
-
-#[test]
-fn test_schema_and_hints_consistency() {
-    let schema = generate_config_schema_json();
-    let hints = build_ui_hints();
-
-    // Schema should be valid JSON object
-    assert!(schema.is_object(), "Schema should be a JSON object");
-
-    // The stub has no field-hint paths to validate. When the producer is
-    // reintroduced, the path-segment validation moves back here.
-    for path in hints.fields.keys() {
-        assert!(!path.is_empty(), "Path should not be empty");
-        assert!(!path.starts_with('.'), "Path should not start with '.'");
-        assert!(!path.ends_with('.'), "Path should not end with '.'");
-    }
-}
-
-#[test]
-fn test_groups_have_valid_metadata() {
-    let hints = build_ui_hints();
-    assert!(hints.groups.is_empty());
-}
-
-#[test]
-fn test_field_hints_have_valid_groups() {
-    let hints = build_ui_hints();
-    assert!(hints.fields.is_empty());
 }
 
 #[test]

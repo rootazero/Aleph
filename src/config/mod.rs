@@ -45,12 +45,10 @@ pub use reload_impact::ReloadImpact;
 // Re-export schema generation functions
 pub use schema::generate_config_schema_json;
 
-// Re-export UI hints. `build_ui_hints` is only consumed by the schema
-// integration test (`#[cfg(test)]`); the lib build doesn't see those. The
-// `#[allow]` keeps the re-export declarative for the test build while
-// silencing the lib build's dead-import warning.
-#[allow(unused_imports)]
-pub use ui_hints::{build_ui_hints, ConfigUiHints};
+// Re-export UI hints. The `build_ui_hints` producer was severed in the
+// 2026-08-16 audit (zero consumers; `config.schema` constructs the DTO
+// directly via `ConfigUiHints::new()`). Only the load-bearing DTO is exposed.
+pub use ui_hints::ConfigUiHints;
 
 // Re-export types for backward compatibility
 pub use types::*;

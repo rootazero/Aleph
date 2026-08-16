@@ -74,17 +74,3 @@ impl ConfigUiHints {
         Self::default()
     }
 }
-
-/// Build empty UI hints.
-///
-/// The 2026-08-12 audit confirmed the previous declarative producer had zero
-/// downstream consumers (CLI discarded the field, Panel never called
-/// `config.schema`). This stub is kept so the wire-shape contract is
-/// preserved while the producer is intentionally retired. Re-introduce a
-/// `definitions.rs` builder when a genuine schema-driven settings form is
-/// actually wired.
-#[allow(dead_code)] // no caller today; remove when the producer is reintroduced or the DTO drops
-#[must_use]
-pub fn build_ui_hints() -> ConfigUiHints {
-    ConfigUiHints::new()
-}
