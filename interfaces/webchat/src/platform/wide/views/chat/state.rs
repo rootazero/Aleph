@@ -558,6 +558,13 @@ pub struct ChatState {
     /// first run reports usage. Ephemeral (excluded from [`SessionSnapshot`]);
     /// it simply repopulates on the next completed turn after a tab swap.
     pub context_usage: RwSignal<Option<ContextUsage>>,
+    /// Last-call prompt-cache hit rate as a rounded percentage (0–100), set
+    /// live from `agent_trace.provider_usage` events via the canonical
+    /// `aleph_protocol::cache_hit_ratio` — the same number the TUI status bar
+    /// and the core DB rollup show. `None` until a call reports cache
+    /// activity, so providers without prompt caching never show a
+    /// misleading 0%. Ephemeral, like `context_usage`.
+    pub live_cache_pct: RwSignal<Option<u64>>,
     /// Follow-up prompts queued while a run is active. Drained one-at-a-time
     /// when the turn settles naturally (see
     /// [`shared_ui_logic::state::should_auto_drain_on_settle`]). Session-scoped
@@ -727,6 +734,7 @@ impl ChatState {
             draft: RwSignal::new(String::new()),
             stop_suppresses_next_drain: RwSignal::new(false),
             context_usage: RwSignal::new(None),
+            live_cache_pct: RwSignal::new(None),
             prompt_queue: RwSignal::new(Vec::new()),
             retry_pulse: RwSignal::new(0),
             flush_pulse: RwSignal::new(0),
@@ -1576,6 +1584,7 @@ impl ChatState {
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
         self.context_usage.set(None);
+        self.live_cache_pct.set(None);
         self.run_costs.set(std::collections::HashMap::new());
         // A fresh conversation carries no dials of its own — every one of them
         // follows the install default until the user picks otherwise.
@@ -1628,6 +1637,7 @@ impl ChatState {
         self.strip_open.set(std::collections::HashMap::new());
         self.plan.set(None);
         self.context_usage.set(None);
+        self.live_cache_pct.set(None);
         self.run_costs.set(std::collections::HashMap::new());
         self.apply_session_knobs(SessionKnobs::default());
         // agent_id is intentionally preserved

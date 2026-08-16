@@ -588,18 +588,26 @@ fn test_build_request_sets_prompt_cache_key_from_session_metadata() {
 fn test_build_request_content_addresses_prompt_cache_key_from_static_prefix() {
     // With a static prefix present, the key is content-addressed — two
     // requests with different session ids but the same system prompt share
-    // one warm routing bucket (daemon/cron cache-cold fix).
+    // one warm routing bucket (daemon/cron cache-cold fix). The split
+    // `system_blocks` shape is what production cron/daemon runs actually
+    // send (the legacy flat string embeds per-turn dynamic bytes and is
+    // deliberately NOT content-addressed — see `prompt_cache.rs`).
+    use crate::thinker::prompt_builder::SystemPromptPart;
     let protocol = OpenAiProtocol::new(Client::new());
     let msgs = [UnifiedMessage::user("Hello")];
     let mut config = ProviderConfig::test_config("gpt-4o");
     config.api_key = Some("test-key".to_string());
     config.base_url = Some("https://api.openai.com/v1".to_string());
 
+    let parts = [SystemPromptPart {
+        content: "You are Aleph.".into(),
+        cache: true,
+    }];
     let key_for_session = |session: &str| {
         let mut meta = std::collections::HashMap::new();
         meta.insert("session_id".to_string(), session.to_string());
         let payload = RequestPayload::new(&msgs)
-            .with_system(Some("You are Aleph."))
+            .with_system_blocks(Some(&parts))
             .with_metadata(Some(meta));
         let built = protocol
             .build_request(&payload, &config)

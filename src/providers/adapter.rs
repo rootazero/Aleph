@@ -430,17 +430,13 @@ impl TokenUsage {
     /// Anthropic turn whose cached prefix was smaller than its fresh input.
     #[must_use]
     pub fn cache_hit_ratio(&self) -> Option<f64> {
-        let cache_read = self.cache_read_tokens?;
-        if cache_read == 0 {
-            // Reported, but no hits this turn — distinguishable from "unknown".
-            return Some(0.0);
-        }
-        let cache_read = u64::from(cache_read);
-        let total_prompt = u64::from(self.input_tokens).saturating_add(cache_read);
-        if total_prompt == 0 {
-            return None;
-        }
-        Some(cache_read as f64 / total_prompt as f64)
+        // The formula lives in `aleph_protocol::cache_hit_ratio` — the single
+        // source every consumer (TUI status bar, Panel Usage, this method)
+        // delegates to, so no UI can drift into its own denominator.
+        aleph_protocol::cache_hit_ratio(
+            u64::from(self.input_tokens),
+            self.cache_read_tokens.map(u64::from),
+        )
     }
 
     /// Ground-truth size of the prompt actually sent over the wire (system +

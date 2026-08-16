@@ -7,8 +7,8 @@ mod builtin_registry;
 mod tool_registry;
 
 pub use builtin_registry::{
-    create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig, BuiltinToolRegistry,
-    BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES,
+    create_tool_boxed, BuiltinToolConfig, BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS,
+    TOOL_CATEGORIES,
 };
 /// The three non-catalog tool surfaces — text that ships to the model without
 /// appearing in `BUILTIN_TOOL_DEFINITIONS`: registered by the core registry

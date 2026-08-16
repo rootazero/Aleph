@@ -198,7 +198,7 @@ impl AgentDefinitionResolver {
     ///
     /// Workspace directory name is always equal to `agent_id` (1:1 binding).
     /// The `AgentDefinition.workspace` field is deprecated and ignored.
-    pub fn resolve_workspace_path(
+    pub(crate) fn resolve_workspace_path(
         &self,
         agent: &AgentDefinition,
         defaults: &AgentDefaults,
@@ -227,7 +227,11 @@ impl AgentDefinitionResolver {
     }
 
     /// Resolve the agent state directory path.
-    pub fn resolve_agent_dir(&self, agent: &AgentDefinition, defaults: &AgentDefaults) -> PathBuf {
+    pub(crate) fn resolve_agent_dir(
+        &self,
+        agent: &AgentDefinition,
+        defaults: &AgentDefaults,
+    ) -> PathBuf {
         let root = defaults
             .agents_root
             .as_ref()

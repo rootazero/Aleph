@@ -83,8 +83,6 @@ pub enum ConflictResolution {
         /// New name after renaming (with suffix)
         new_name: String,
     },
-    /// No conflict - tool can be registered with original name
-    NoConflict,
 }
 
 // =============================================================================
@@ -364,11 +362,7 @@ mod tests {
             new_name: "search-skill".to_string(),
         };
 
-        let no_conflict = ConflictResolution::NoConflict;
-
         // Verify they are distinct
         assert_ne!(rename_existing, rename_new);
-        assert_ne!(rename_existing, no_conflict);
-        assert_ne!(rename_new, no_conflict);
     }
 }

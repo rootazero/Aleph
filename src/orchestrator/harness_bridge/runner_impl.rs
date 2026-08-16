@@ -587,9 +587,26 @@ impl HarnessRunner for AgentHarnessRunner {
                 // — typically a flash-tier alias of the main provider —
                 // route the side-channel summarization call through it
                 // instead of the main LLM. None preserves legacy behavior.
+                //
+                // The cheap provider is built raw (`deps_builder::summary`),
+                // so without this wrap its spend emitted no `ProviderUsage`
+                // at all — invisible to the traces DB, the Panel Usage view
+                // and team rollups (the `accept_summary` doc names the
+                // deployment class that hid). Meter it under
+                // `compactor:<agent>` so rollups can tell compression spend
+                // from turn spend. The compactor's MAIN provider
+                // (`side_channel_llm`) is already metered above — wrapping
+                // that one again would double-count every summarization call.
                 // rust-doctor-disable-next-line excessive-clone
                 if let Some(cheap) = self.cheap_provider.clone() {
-                    compactor_inner = compactor_inner.with_cheap_provider(Some(cheap));
+                    let metered_cheap: Arc<dyn crate::providers::AiProvider> =
+                        Arc::new(crate::providers::MeteringProvider::new(
+                            cheap,
+                            // rust-doctor-disable-next-line excessive-clone
+                            trace_sink.clone(),
+                            format!("compactor:{}", spec.agent),
+                        ));
+                    compactor_inner = compactor_inner.with_cheap_provider(Some(metered_cheap));
                 }
                 let compactor = Arc::new(compactor_inner);
                 // Cheap-pass preflight: runs before the budget check so token

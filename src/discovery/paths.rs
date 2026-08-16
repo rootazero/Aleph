@@ -18,14 +18,6 @@ pub(crate) const AGENT_FILE: &str = "agent.md";
 pub(crate) const MCP_CONFIG_FILE: &str = ".mcp.json";
 
 // =============================================================================
-// Public Path Constants
-// =============================================================================
-
-/// Configuration files
-pub const ALEPH_CONFIG_FILE: &str = "aleph.jsonc";
-pub const ALEPH_CONFIG_FILE_ALT: &str = "aleph.json";
-
-// =============================================================================
 // Path Functions
 // =============================================================================
 
@@ -145,22 +137,6 @@ pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
         )));
     }
     Ok(())
-}
-
-/// Find all occurrences of a file by traversing upward.
-pub(crate) fn find_file_upward(
-    filename: &str,
-    start: &Path,
-    stop: Option<&Path>,
-    max_depth: usize,
-) -> DiscoveryResult<Vec<PathBuf>> {
-    validate_path_component(filename)?;
-    Ok(
-        find_upward(start, stop, max_depth, |dir| dir.join(filename).is_file())
-            .into_iter()
-            .map(|dir| dir.join(filename))
-            .collect(),
-    )
 }
 
 /// Find all occurrences of a directory by traversing upward.

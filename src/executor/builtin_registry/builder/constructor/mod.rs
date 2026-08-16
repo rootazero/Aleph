@@ -165,30 +165,21 @@ impl BuiltinToolRegistry {
 
         // Self-config tool (identity files + config.toml access)
         let self_config_tool = {
-            let agent_id = config
-                .current_agent_id
-                .clone()
-                .unwrap_or_else(|| "main".to_string());
+            let agent_id = "main".to_string();
             let mut tool = crate::builtin_tools::self_config::SelfConfigTool::new(agent_id)?;
             if let Some(ref cfg) = config.config {
                 tool = tool.with_config(Arc::clone(cfg));
-            }
-            if let Some(ref patcher) = config.config_patcher {
-                tool = tool.with_patcher(Arc::clone(patcher));
             }
             tool
         };
 
         // Moa-manage tool (LLM-facing MoA session activation + preset CRUD).
-        // Reuses the already-injected config + patcher handles — same
-        // construction pattern as self_config.
+        // Reuses the already-injected config handle — same construction pattern
+        // as self_config (the patcher arrives later via `set_config_patcher`).
         let moa_manage_tool = {
             let mut tool = crate::builtin_tools::moa_manage::MoaManageTool::new();
             if let Some(ref cfg) = config.config {
                 tool = tool.with_config(Arc::clone(cfg));
-            }
-            if let Some(ref patcher) = config.config_patcher {
-                tool = tool.with_patcher(Arc::clone(patcher));
             }
             tool
         };
@@ -1056,10 +1047,7 @@ impl BuiltinToolRegistry {
         ) = Self::build_agent_acp_a2a_tools(&config, &mut tools);
 
         // Pre-compute current agent ID — used by team, messaging, and session tools
-        let current_agent_id = config
-            .current_agent_id
-            .clone()
-            .unwrap_or_else(|| "main".to_string());
+        let current_agent_id = "main".to_string();
 
         // Task-coordination and team-management tools (extracted to
         // coord_team_tools.rs).
@@ -1397,8 +1385,7 @@ impl BuiltinToolRegistry {
     /// once, in `agent_init`, where no turn context exists yet. The identity
     /// baked in there is therefore always the base agent, so every correction
     /// a non-base agent recorded landed in a corpus that agent's distillation
-    /// never reads. (`BuiltinToolConfig::current_agent_id`, the field that was
-    /// meant to carry it, has no producer anywhere in the tree.)
+    /// never reads.
     pub(crate) fn build_flag_user_correction(
         db: &crate::memory::store::MemoryBackend,
         agent_id: String,

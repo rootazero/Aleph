@@ -939,7 +939,6 @@ mod tests {
             ProfileConfig {
                 description: Some("Coding profile".to_string()),
                 model: Some("claude-sonnet".to_string()),
-                tools: vec!["git_*".to_string()],
                 ..Default::default()
             },
         );
@@ -1082,7 +1081,6 @@ mod tests {
         let coding_profile = ProfileConfig {
             description: Some("Coding profile".to_string()),
             model: Some("claude-sonnet".to_string()),
-            tools: vec!["git_*".to_string()],
             temperature: Some(0.2),
             ..Default::default()
         };
@@ -1102,7 +1100,6 @@ mod tests {
         assert_eq!(active.agent_id, "project-x");
         assert_eq!(active.profile.model, Some("claude-sonnet".to_string()));
         assert_eq!(active.profile.temperature, Some(0.2));
-        assert_eq!(active.profile.tools, vec!["git_*".to_string()]);
 
         // Memory filter should be scoped to this agent
         let filter_sql = active.memory_filter.to_sql_filter();
@@ -1124,7 +1121,6 @@ mod tests {
 
         // Profile should be the default (since global agent environment uses "default" profile)
         assert!(active.profile.model.is_none());
-        assert!(active.profile.tools.is_empty());
 
         // Memory filter should be scoped to "global"
         let filter_sql = active.memory_filter.to_sql_filter();
@@ -1136,7 +1132,6 @@ mod tests {
         let active = ActiveAgentEnv::default_global();
         assert_eq!(active.agent_id, "global");
         assert!(active.profile.model.is_none());
-        assert!(active.profile.tools.is_empty());
 
         let filter_sql = active.memory_filter.to_sql_filter();
         assert_eq!(filter_sql, "agent = 'global'");

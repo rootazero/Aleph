@@ -21,7 +21,6 @@ pub(crate) struct LeakPatternDef {
 
 #[derive(Clone)]
 pub(crate) struct LeakDetectorAssets {
-    pub prefixes: Vec<&'static str>,
     pub patterns: Vec<LeakPatternDef>,
 }
 
@@ -110,26 +109,6 @@ pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
     static ASSETS: OnceLock<LeakDetectorAssets> = OnceLock::new();
     ASSETS
         .get_or_init(|| {
-            let prefixes = vec![
-                "sk-",
-                "AIza",
-                "AKIA",
-                "ghp_",
-                "gho_",
-                "ghu_",
-                "ghs_",
-                "ghr_",
-                "github_pat_",
-                "xoxb-",
-                "xoxa-",
-                "xoxp-",
-                "xoxr-",
-                "xoxs-",
-                "-----BEGIN",
-                "bearer ",
-                "Bearer ",
-            ];
-
             let patterns = vec![
                 LeakPatternDef {
                     name: "openai_key",
@@ -184,7 +163,7 @@ pub(crate) fn leak_detector_assets() -> LeakDetectorAssets {
                 },
             ];
 
-            LeakDetectorAssets { prefixes, patterns }
+            LeakDetectorAssets { patterns }
         })
         .clone()
 }

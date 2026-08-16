@@ -57,7 +57,7 @@ use types::ToolStorage;
 ///
 /// // Query tools
 /// let all = registry.list_all().await;
-/// let tool = registry.get_by_name("search").await;
+/// let tool = registry.resolve_command("/search").await;
 /// ```
 pub struct ToolCatalog {
     /// Registrar for tool registration
@@ -192,12 +192,6 @@ impl ToolCatalog {
         self.health.invalidate_all();
     }
 
-    /// Atomic refresh - build new `HashMap` and replace in one operation
-    pub async fn refresh_atomic(&self, new_tools: Vec<UnifiedTool>) {
-        self.state.refresh_atomic(new_tools).await;
-        self.health.invalidate_all();
-    }
-
     /// Remove tools from a specific MCP server
     pub async fn remove_by_mcp_server(&self, server_name: &str) -> usize {
         let n = self.state.remove_by_mcp_server(server_name).await;
@@ -205,15 +199,6 @@ impl ToolCatalog {
             self.health.invalidate_all();
         }
         n
-    }
-
-    /// Set tool active state
-    pub async fn set_tool_active(&self, id: &str, active: bool) -> bool {
-        let changed = self.state.set_tool_active(id, active).await;
-        if changed {
-            self.health.invalidate_all();
-        }
-        changed
     }
 
     // =========================================================================
@@ -228,16 +213,6 @@ impl ToolCatalog {
     /// List builtin tools only
     pub async fn list_builtin_tools(&self) -> Vec<UnifiedTool> {
         self.query.list_builtin_tools().await
-    }
-
-    /// List preset tools for Settings UI (Flat Namespace Mode)
-    pub async fn list_preset_tools(&self) -> Vec<UnifiedTool> {
-        self.query.list_preset_tools().await
-    }
-
-    /// Generate routing rules from builtin tools
-    pub async fn get_builtin_routing_rules(&self) -> Vec<RoutingRuleConfig> {
-        self.query.get_builtin_routing_rules().await
     }
 
     /// List all tools for UI display (sorted by `sort_order`, then name)
@@ -276,34 +251,14 @@ impl ToolCatalog {
         self.query.list_root_commands().await
     }
 
-    /// List all tools including inactive ones
-    pub async fn list_all_with_inactive(&self) -> Vec<UnifiedTool> {
-        self.query.list_all_with_inactive().await
-    }
-
     /// List tools by MCP server name
     pub async fn list_by_mcp_server(&self, server: &str) -> Vec<UnifiedTool> {
         self.query.list_by_mcp_server(server).await
     }
 
-    /// Get tool by ID
-    pub async fn get_by_id(&self, id: &str) -> Option<UnifiedTool> {
-        self.query.get_by_id(id).await
-    }
-
-    /// Get tool by name
-    pub async fn get_by_name(&self, name: &str) -> Option<UnifiedTool> {
-        self.query.get_by_name(name).await
-    }
-
     /// Fuzzy search tools by name or description
     pub async fn search(&self, query: &str) -> Vec<UnifiedTool> {
         self.query.search(query).await
-    }
-
-    /// Filter active tools by name prefix (case-insensitive)
-    pub async fn filter_by_prefix(&self, prefix: &str) -> Vec<UnifiedTool> {
-        self.query.filter_by_prefix(prefix).await
     }
 
     /// Get total tool count

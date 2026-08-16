@@ -1,0 +1,41 @@
+[
+  {
+    "id": "sw-config-sub-1",
+    "module": "src/config",
+    "files": [
+      "src/config/ui_hints/mod.rs:66",
+      "src/config/mod.rs:53",
+      "src/gateway/handlers/config.rs:371"
+    ],
+    "severity": "low",
+    "form": 1,
+    "produced": "build_ui_hints",
+    "produced_location": "src/config/ui_hints/mod.rs:66",
+    "consumer_location": "src/gateway/handlers/config.rs:371 (bypassed) / tests/schema_integration.rs:54 (test-only)",
+    "decision": "CUT",
+    "rationale": "The config.schema endpoint no longer calls build_ui_hints(). It constructs the response DTO directly via ConfigUiHints::new() at gateway/handlers/config.rs:371, so the producer is severed from its only production wire. The baseline review-results/config.md records 'build_ui_hints / generate_config_schema_json — gateway/handlers/config.rs:365/366' as VERIFIED WIRED; that record is now stale: generate_config_schema_json() is still called (:369) but build_ui_hints() was replaced by ConfigUiHints::new(). The producer was deliberately gutted to an empty stub (module docstring cites the 2026-08-12 static audit: zero downstream consumers — CLI discarded the field, Panel never called config.schema). No live caller exists, so per read-before-write this is dead scaffolding, not a wire to reconnect.",
+    "proposed_change": "Finish the CUT: delete build_ui_hints() and its re-export in src/config/mod.rs:53, dropping the #[allow(dead_code)] and #[allow(unused_imports)] attributes. KEEP the ConfigUiHints/GroupMeta/FieldHint DTOs — they are load-bearing (serialized as config.schema.ui_hints and referenced by ConfigSchemaResponse). Update the stale 'VERIFIED WIRED' line in review-results/config.md so the baseline no longer claims a severed producer is wired.",
+    "risk": "None to runtime. Residual risk is a future engineer reintroducing a definitions.rs builder into build_ui_hints() while the endpoint keeps calling ConfigUiHints::new() — the field would stay empty and the drift would be invisible (name-drift form 5). A compile-time tie (endpoint calls the one producer) or deleting the stub removes that trap.",
+    "verification": "cargo test -p alephcore --lib config::tests::schema_integration (currently asserts the stub is empty); after CUT, delete/rename those assertions and confirm the lib build has no dead-code/unused-import warnings.",
+    "existing_review_ref": "config.md 'Items verified as WIRED' — build_ui_hints line (now stale)"
+  },
+  {
+    "id": "sw-config-sub-2",
+    "module": "src/config",
+    "files": [
+      "src/config/agent_resolver/mod.rs:230",
+      "src/config/agent_resolver/mod.rs:248"
+    ],
+    "severity": "low",
+    "form": 1,
+    "produced": "AgentDefinitionResolver::resolve_workspace_path / resolve_agent_dir",
+    "produced_location": "src/config/agent_resolver/mod.rs:230,248",
+    "consumer_location": "src/config/agent_resolver/mod.rs:265,268 (resolve_one) — internal only",
+    "decision": "DECIDE",
+    "rationale": "Both methods are pub but have no external caller: the only production consumers are resolve_one (same module, :265/:268) plus the module's own tests. resolve_all and resolve_one are the externally-consumed surface (start/mod.rs:818, agent_init/mod.rs:1273, gateway/handlers/agents.rs:227). This is not a severed wire — the code is exercised — it is an over-public API surface that invites drift (a future external caller could bind to workspace/agent-dir resolution without the 1:1 workspace-id binding invariant being obvious).",
+    "proposed_change": "Tighten visibility to pub(crate) (or private) unless a planned cross-module caller needs them. Keep the doc comments warning about the deprecated/ignored workspace field.",
+    "risk": "Cosmetic. No functional change.",
+    "verification": "cargo check -p alephcore",
+    "existing_review_ref": null
+  }
+]

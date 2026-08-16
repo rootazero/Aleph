@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use super::{AggregateRoot, Entity, ValueObject};
+use super::{AggregateRoot, Entity};
 
 // ---------------------------------------------------------------------------
 // SkillId
@@ -121,8 +121,6 @@ impl SkillSource {
     }
 }
 
-impl ValueObject for SkillSource {}
-
 // ---------------------------------------------------------------------------
 // Os
 // ---------------------------------------------------------------------------
@@ -175,27 +173,10 @@ impl<'de> Deserialize<'de> for Os {
     }
 }
 
-impl ValueObject for Os {}
-
 /// Error returned when parsing an unknown OS string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown OS: {0}")]
 pub struct ParseOsError(String);
-
-impl ParseOsError {
-    /// Return the input string that failed to parse.
-    #[must_use]
-    pub fn input(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ParseOsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown OS: {}", self.0)
-    }
-}
-
-impl std::error::Error for ParseOsError {}
 
 impl FromStr for Os {
     type Err = ParseOsError;
@@ -231,8 +212,6 @@ pub enum PromptScope {
     /// Skill is disabled entirely.
     Disabled,
 }
-
-impl ValueObject for PromptScope {}
 
 // ---------------------------------------------------------------------------
 // EligibilitySpec
@@ -270,8 +249,6 @@ pub struct EligibilitySpec {
     pub enabled: Option<bool>,
 }
 
-impl ValueObject for EligibilitySpec {}
-
 // ---------------------------------------------------------------------------
 // InstallSpec / InstallKind
 // ---------------------------------------------------------------------------
@@ -295,8 +272,6 @@ pub enum InstallKind {
     Go,
     Download,
 }
-
-impl ValueObject for InstallKind {}
 
 impl InstallKind {
     #[must_use]
@@ -334,8 +309,6 @@ pub struct InstallSpec {
     pub url: Option<String>,
 }
 
-impl ValueObject for InstallSpec {}
-
 /// A scheduled-automation declaration carried in a skill's frontmatter
 /// (`automation:` block) — the hermes "blueprint" pattern. The skill IS the
 /// automation; the schedule is just a suggested cron job. Declaring it never
@@ -355,52 +328,9 @@ pub struct AutomationSpec {
     pub prompt: Option<String>,
 }
 
-impl ValueObject for AutomationSpec {}
-
 // ---------------------------------------------------------------------------
-// InvocationPolicy / DispatchSpec / ArgMode
+// InvocationPolicy
 // ---------------------------------------------------------------------------
-
-/// How arguments are passed to a dispatched command.
-#[deprecated(
-    since = "2026.7.21",
-    note = "No production code consumes ArgMode. The planned dispatch \
-             feature was never wired up; keep the type around for one \
-             release in case any out-of-tree skill manifest references it, \
-             then delete."
-)]
-#[allow(deprecated)]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ArgMode {
-    /// Pass the raw user input as-is.
-    #[default]
-    Raw,
-    /// Parse user input into structured arguments.
-    Parsed,
-}
-
-#[allow(deprecated)]
-impl ValueObject for ArgMode {}
-
-/// Describes how a skill dispatches to a tool/command.
-#[deprecated(
-    since = "2026.7.21",
-    note = "No production code consumes DispatchSpec. See ArgMode's deprecation \
-             note for the planned-removal timeline."
-)]
-#[allow(deprecated)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DispatchSpec {
-    /// The tool name to dispatch to.
-    pub tool_name: String,
-    /// How arguments are passed.
-    #[serde(default)]
-    pub arg_mode: ArgMode,
-}
-
-#[allow(deprecated)]
-impl ValueObject for DispatchSpec {}
 
 /// Serde helper: returns `true`.
 const fn default_true() -> bool {
@@ -408,7 +338,6 @@ const fn default_true() -> bool {
 }
 
 /// Controls how a skill can be invoked.
-#[allow(deprecated)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvocationPolicy {
     /// Whether the user can invoke this skill directly.
@@ -417,11 +346,6 @@ pub struct InvocationPolicy {
     /// Whether to prevent the model from invoking this skill.
     #[serde(default)]
     pub disable_model_invocation: bool,
-    /// Optional command dispatch configuration. Unused — kept under
-    /// `Option` so existing skill manifests that still carry the field
-    /// continue to deserialize, but the dispatch path is not wired.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command_dispatch: Option<DispatchSpec>,
 }
 
 impl Default for InvocationPolicy {
@@ -429,12 +353,9 @@ impl Default for InvocationPolicy {
         Self {
             user_invocable: true,
             disable_model_invocation: false,
-            command_dispatch: None,
         }
     }
 }
-
-impl ValueObject for InvocationPolicy {}
 
 // ---------------------------------------------------------------------------
 // SkillContent
@@ -456,8 +377,6 @@ impl SkillContent {
         &self.0
     }
 }
-
-impl ValueObject for SkillContent {}
 
 impl From<&str> for SkillContent {
     fn from(s: &str) -> Self {
@@ -854,7 +773,6 @@ mod tests {
         let policy = InvocationPolicy::default();
         assert!(policy.user_invocable);
         assert!(!policy.disable_model_invocation);
-        assert!(policy.command_dispatch.is_none());
     }
 
     #[test]

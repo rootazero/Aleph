@@ -137,6 +137,47 @@ fn turn_n_plus_1_is_a_strict_prefix_extension_of_turn_n() {
 }
 
 #[test]
+fn proxy_url_embedding_official_host_string_gets_no_ttl_or_beta() {
+    // Regression for the substring gate: `endpoint.contains("api.anthropic.com")`
+    // was satisfied by a third-party URL merely *embedding* the magic string,
+    // so such a proxy received the 1P-only 1h `ttl` key and the
+    // `extended-cache-ttl` beta header. Host parsing must see through it.
+    use crate::config::types::provider::CacheRetention;
+
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("test-key".to_string());
+    // Bedrock-family host (advertises plain cache_control support) with the
+    // official host string embedded in a query param.
+    config.base_url = Some(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/v1?upstream=api.anthropic.com".to_string(),
+    );
+    config.cache_retention = Some(CacheRetention::Long);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let parts = system_parts("time=2026-07-17T10");
+    let payload = RequestPayload::new(&msgs).with_system_blocks(Some(&parts));
+
+    let http = super::helpers::build_http(&payload, &config);
+    let body: serde_json::Value =
+        serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+
+    let raw = serde_json::to_string(&body).unwrap();
+    assert!(
+        !raw.contains("\"ttl\""),
+        "embedded official-host string must not unlock the 1h ttl key"
+    );
+    let beta = http
+        .headers()
+        .get("anthropic-beta")
+        .map(|v| v.to_str().unwrap_or_default().to_string())
+        .unwrap_or_default();
+    assert!(
+        !beta.contains("extended-cache-ttl"),
+        "embedded official-host string must not unlock the beta header, got: {beta}"
+    );
+}
+
+#[test]
 fn bedrock_long_retention_injects_markers_without_ttl_or_beta() {
     // Bedrock/Azure accept plain ephemeral markers but reject the
     // Anthropic-1P `ttl` key under strict schema validation. `Long` there

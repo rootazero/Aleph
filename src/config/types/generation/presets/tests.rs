@@ -93,7 +93,6 @@ fn test_get_preset_by_type() {
 fn test_get_merged_generation_preset_builtin_only() {
     let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
     let preset = get_merged_generation_preset("openai-dalle", "openai", &overrides).unwrap();
-    assert_eq!(preset.provider_type, "openai");
     assert_eq!(preset.default_model, "dall-e-3");
     assert_eq!(preset.base_url.as_deref(), Some("https://api.openai.com"));
 }
@@ -103,7 +102,6 @@ fn test_get_merged_generation_preset_builtin_by_type() {
     let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
     // Name doesn't match any preset, but provider_type "openai" does
     let preset = get_merged_generation_preset("my-custom-dalle", "openai", &overrides).unwrap();
-    assert_eq!(preset.provider_type, "openai");
     assert_eq!(preset.default_model, "dall-e-3");
 }
 
@@ -120,7 +118,6 @@ fn test_get_merged_generation_preset_with_override() {
     );
 
     let preset = get_merged_generation_preset("openai-dalle", "openai", &overrides).unwrap();
-    assert_eq!(preset.provider_type, "openai"); // from builtin
     assert_eq!(preset.default_model, "dall-e-4"); // overridden
     assert_eq!(preset.base_url.as_deref(), Some("https://api.openai.com")); // from builtin
 }
@@ -153,7 +150,6 @@ fn test_get_merged_generation_preset_new_provider() {
     );
 
     let preset = get_merged_generation_preset("my-video-gen", "custom-video", &overrides).unwrap();
-    assert_eq!(preset.provider_type, "custom-video");
     assert_eq!(preset.default_model, "video-v1");
     assert_eq!(
         preset.base_url.as_deref(),
@@ -221,7 +217,6 @@ fn test_get_merged_generation_preset_audio_override() {
     );
 
     let preset = get_merged_generation_preset("elevenlabs", "elevenlabs", &overrides).unwrap();
-    assert_eq!(preset.provider_type, "elevenlabs"); // from builtin
     assert_eq!(preset.default_model, "eleven_turbo_v2"); // overridden
 }
 

@@ -148,20 +148,6 @@ impl RoutingRuleConfig {
         }
     }
 
-    /// Set the intent type (builder pattern)
-    #[must_use]
-    pub fn with_intent_type(mut self, intent_type: &str) -> Self {
-        self.intent_type = Some(intent_type.to_string());
-        self
-    }
-
-    /// Set the preferred model (builder pattern)
-    #[must_use]
-    pub fn with_preferred_model(mut self, model_id: &str) -> Self {
-        self.preferred_model = Some(model_id.to_string());
-        self
-    }
-
     /// Get the effective rule type (with auto-detection)
     #[must_use]
     pub fn get_rule_type(&self) -> &str {
@@ -233,29 +219,5 @@ mod tests {
 
         let rule_none = RoutingRuleConfig::default();
         assert_eq!(rule_none.get_preferred_model(), None);
-    }
-
-    #[test]
-    fn test_builder_with_intent_type() {
-        let rule = RoutingRuleConfig::command("^/code", "anthropic", None)
-            .with_intent_type("code_generation");
-        assert_eq!(rule.get_intent_type(), "code_generation");
-    }
-
-    #[test]
-    fn test_builder_with_preferred_model() {
-        let rule = RoutingRuleConfig::command("^/code", "anthropic", None)
-            .with_preferred_model("claude-opus");
-        assert_eq!(rule.get_preferred_model(), Some("claude-opus"));
-    }
-
-    #[test]
-    fn test_builder_chain() {
-        let rule = RoutingRuleConfig::command("^/translate", "anthropic", None)
-            .with_intent_type("translation")
-            .with_preferred_model("gpt-4o");
-
-        assert_eq!(rule.get_intent_type(), "translation");
-        assert_eq!(rule.get_preferred_model(), Some("gpt-4o"));
     }
 }

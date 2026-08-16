@@ -387,8 +387,44 @@ pub(crate) fn apply_trace_event(
             }
             append_reasoning(chat, &block);
         }
+        // Live per-call cache telemetry → the composer's `cache N%` chip.
+        // Fires once per LLM call (whitelisted onto the wire by
+        // `AgentTraceEmitSink` for exactly this purpose). The percentage is
+        // the canonical `read / (input + read)` — the same number the TUI
+        // status bar and the core DB rollup show for the same call.
+        "provider_usage" => {
+            if let Some(pct) = provider_usage_pct(trace_event) {
+                chat.live_cache_pct.set(Some(pct));
+            }
+        }
         _ => {}
     }
+}
+
+/// The `cache N%` chip value from one live `provider_usage` trace event, or
+/// `None` when the call reported no cache activity (a cache-less provider
+/// must never surface a misleading 0%). The formula is the canonical
+/// `aleph_protocol::cache_hit_ratio` — `read / (input + read)`, the same
+/// number the TUI status bar and the core DB rollup show for the same call.
+/// Pure so the wire-shape contract is host-testable.
+fn provider_usage_pct(trace_event: &serde_json::Value) -> Option<u64> {
+    let read = trace_event
+        .get("cache_read_tokens")
+        .and_then(serde_json::Value::as_u64);
+    let creation = trace_event
+        .get("cache_creation_tokens")
+        .and_then(serde_json::Value::as_u64);
+    if read.unwrap_or(0) == 0 && creation.unwrap_or(0) == 0 {
+        return None;
+    }
+    let input = trace_event
+        .get("input_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    // `unwrap_or(0.0)`: a pure cold write (creation reported, read not) is a
+    // 0% call, not an unknown one.
+    let ratio = aleph_protocol::cache_hit_ratio(input, read).unwrap_or(0.0);
+    Some((ratio * 100.0).round() as u64)
 }
 
 /// Reconstruct one assistant run's chat bubbles + workspace tool payloads from
@@ -1831,5 +1867,50 @@ mod projection_tests {
         assert!(
             resolve_target(&sessions2, singleton2, "run_accepted", "run-legacy", None).is_some(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_usage_pct;
+    use serde_json::json;
+
+    #[test]
+    fn provider_usage_pct_uses_canonical_formula() {
+        // 870 / (100 + 870) ≈ 89.7% → 90 — the same number the TUI status
+        // bar and the core rollup show for this call.
+        let ev = json!({
+            "kind": "provider_usage",
+            "agent_id": "root",
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "cache_read_tokens": 870,
+            "cache_creation_tokens": 30,
+            "thinking_tokens": null
+        });
+        assert_eq!(provider_usage_pct(&ev), Some(90));
+    }
+
+    #[test]
+    fn provider_usage_pct_cold_write_is_zero_not_unknown() {
+        let ev = json!({
+            "kind": "provider_usage",
+            "input_tokens": 500,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 500
+        });
+        assert_eq!(provider_usage_pct(&ev), Some(0));
+    }
+
+    #[test]
+    fn provider_usage_pct_none_without_cache_activity() {
+        // Cache-less providers must not surface a misleading 0%.
+        let ev = json!({
+            "kind": "provider_usage",
+            "input_tokens": 500,
+            "cache_read_tokens": null,
+            "cache_creation_tokens": null
+        });
+        assert_eq!(provider_usage_pct(&ev), None);
     }
 }

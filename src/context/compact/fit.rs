@@ -41,7 +41,7 @@ fn estimate_total(messages: &[UnifiedMessage], prose_ratio: f64) -> usize {
 /// never ship, and the model loses the result with no account of it. After
 /// dropping from the front, any leading orphaned `tool_result` is still snapped
 /// away, so the surviving list never begins with an orphan.
-pub fn truncate_to_fit(
+pub(crate) fn truncate_to_fit(
     messages: &mut Vec<UnifiedMessage>,
     target_tokens: usize,
     protected_tail: usize,
@@ -109,7 +109,7 @@ fn evict_one(messages: &mut Vec<UnifiedMessage>, tail: usize) {
 /// overhead (system prompt + tool schemas) alone already meet/exceed the budget
 /// — the Plan-1b pathological case, where the caller continues anyway. Never
 /// returns an error and never hard-stops — this IS the never-break mechanism.
-pub async fn compact_to_fit(
+pub(crate) async fn compact_to_fit(
     compactor: Option<&ContextCompactor>,
     budget: &ContextBudget,
     messages: &mut Vec<UnifiedMessage>,

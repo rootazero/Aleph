@@ -238,14 +238,10 @@ mod tests {
 
     #[test]
     fn classify_verified_never_upgrades_a_non_live_section() {
-        // Restart / Inert verdicts are untouched by what did or did not apply.
+        // Restart verdicts are untouched by what did or did not apply.
         assert_eq!(
             classify_verified("providers.openai", &["route"]),
             ReloadImpact::Restart
-        );
-        assert_eq!(
-            classify_verified("task_routing", &["route"]),
-            ReloadImpact::Inert
         );
     }
 }

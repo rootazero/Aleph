@@ -445,7 +445,11 @@ mod tests {
         let analysis = action.analysis.expect("bash gets a real analysis");
         assert!(analysis.ok, "{analysis:?}");
         assert!(
-            analysis.executables().contains(&"rm"),
+            analysis
+                .segments
+                .iter()
+                .filter_map(|s| s.resolution.as_ref())
+                .any(|r| r.executable_name == "rm"),
             "the stub analysis (empty segments) is what left the operator blind"
         );
     }

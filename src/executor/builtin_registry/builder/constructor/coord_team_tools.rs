@@ -76,10 +76,7 @@ impl BuiltinToolRegistry {
                 // it doesn't depend on the agent message bus.
                 let comment = TaskCommentTool::new(
                     Arc::clone(store),
-                    config
-                        .current_agent_id
-                        .clone()
-                        .unwrap_or_else(|| "main".to_string()),
+                    current_agent_id.clone(),
                 )
                 .with_team_store(config.team_store.clone());
 

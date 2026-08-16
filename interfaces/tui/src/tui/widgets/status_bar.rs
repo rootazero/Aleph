@@ -29,11 +29,11 @@ pub struct StatusBar<'a> {
     /// event, or `None` when unknown. Rendered as a `ctx used/window` segment
     /// tinted by fill ratio.
     pub context_gauge: Option<(u32, u32)>,
-    /// Last-call prompt-cache efficiency `(cache_read, denominator)` from the
-    /// latest provider call that reported cache activity, or `None` when no
-    /// call has. Rendered as a `cache N%` segment — a sudden drop is the
-    /// live signal that a prefix bust just happened.
-    pub cache_stat: Option<(u64, u64)>,
+    /// Last-call prompt-cache hit rate as a rounded percentage (0–100), or
+    /// `None` when no call has reported cache activity. Rendered as a
+    /// `cache N%` segment — a sudden drop is the live signal that a prefix
+    /// bust just happened.
+    pub cache_stat: Option<u64>,
     /// Agent id behind `cache_stat` when it is not the session root's, so a
     /// delegated sub-agent's cold start is labelled instead of being read as
     /// the root agent's prefix breaking.
@@ -119,8 +119,7 @@ impl StatusBar<'_> {
         // a provider call has reported cache activity. Dimmed to a warning
         // tint under 50% — a low last-call rate right after a healthy streak
         // is the live symptom of a stable-prefix bust.
-        if let Some((read, denom)) = self.cache_stat.filter(|&(_, d)| d > 0) {
-            let pct = cache_hit_pct(read, denom);
+        if let Some(pct) = self.cache_stat {
             let label = match self.cache_stat_agent {
                 Some(agent) => format!(" cache {pct}% ·{agent} "),
                 None => format!(" cache {pct}% "),
@@ -207,11 +206,6 @@ fn format_context_gauge(used: u32, window: u32) -> String {
     format!("{}/{}", compact_tokens(used), compact_tokens(window))
 }
 
-/// Last-call cache hit percentage: `read / denominator`, rounded.
-fn cache_hit_pct(read: u64, denom: u64) -> u64 {
-    ((read as f64 / denom as f64) * 100.0).round() as u64
-}
-
 /// Tint the cache stat: normal at or above 50%, warning below — cold starts
 /// are expected (first call is always a write), so no red/error tier.
 fn cache_stat_color(pct: u64) -> Color {
@@ -274,15 +268,6 @@ mod tests {
         assert_eq!(context_gauge_color(10, 100), DEFAULT_THEME.status_fg);
         assert_eq!(context_gauge_color(75, 100), DEFAULT_THEME.warning);
         assert_eq!(context_gauge_color(95, 100), DEFAULT_THEME.error);
-    }
-
-    #[test]
-    fn cache_hit_pct_rounds() {
-        // read / (input + creation + read): 870 / (100 + 30 + 870) = 87%.
-        assert_eq!(cache_hit_pct(870, 1000), 87);
-        assert_eq!(cache_hit_pct(0, 500), 0);
-        assert_eq!(cache_hit_pct(500, 500), 100);
-        assert_eq!(cache_hit_pct(1, 3), 33);
     }
 
     #[test]

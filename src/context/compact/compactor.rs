@@ -1014,9 +1014,11 @@ fn estimate_tokens(text: &str) -> usize {
 /// auto-routing clones the main provider config and swaps only the model to
 /// that preset's `default_aux_model`. If the proxy does not serve that model,
 /// every summarization 404s. Boot succeeds (the config is well-formed), and
-/// this provider is wrapped by neither `FailoverProvider` nor
-/// `MeteringProvider` — so there is no failover, no `ProviderUsage`, and
-/// nothing in the billing view either. Compaction silently degrades to
+/// this provider is not wrapped by `FailoverProvider` — so there is no
+/// failover. (Its spend IS now metered: both compactor construction sites wrap
+/// the cheap summarizer in `MeteringProvider` under `compactor:<agent>`, so the
+/// failure at least shows up as zero-output spend in the billing view.)
+/// Compaction silently degrades to
 /// first-line truncation from day one, forever, with no log line, metric or
 /// doctor check naming the summarizer. The compaction circuit breaker does
 /// eventually trip, but it reports pressure, not cause.
@@ -1119,6 +1121,105 @@ mod tests {
             .map(UnifiedMessage::text_content)
             .find(|t| t.starts_with("[Context Summary]"))
             .expect("a successful compaction inserts a summary message")
+    }
+
+    /// Summarizer that returns a fixed summary WITH usage, so the metering
+    /// wrap has something to report (`MockProvider::text_only` carries
+    /// `usage: None`, and `MeteringProvider` skips usage-less responses).
+    struct UsageProvider;
+    impl crate::providers::AiProvider for UsageProvider {
+        fn process(
+            &self,
+            _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async {
+                let mut resp = crate::providers::adapter::ProviderResponse::text_only(
+                    "<summary>\ncompressed window\n</summary>".to_string(),
+                );
+                resp.usage = Some(crate::providers::adapter::TokenUsage {
+                    input_tokens: 1200,
+                    output_tokens: 80,
+                    cache_read_tokens: Some(900),
+                    cache_creation_tokens: Some(100),
+                    thinking_tokens: None,
+                    cost: None,
+                });
+                Ok(resp)
+            })
+        }
+        fn name(&self) -> &str {
+            "usage-mock"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    struct RecordingSink(crate::sync_primitives::Mutex<Vec<crate::harness::trace::LoopTraceEvent>>);
+    impl crate::harness::TraceSink for RecordingSink {
+        fn on_trace(&self, event: &crate::harness::trace::LoopTraceEvent) {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(event.clone());
+        }
+        fn flush(&self) {}
+    }
+
+    #[tokio::test]
+    async fn metered_cheap_summarizer_emits_provider_usage_labelled_compactor() {
+        // Regression for the invisible-compaction-spend gap: the cheap
+        // summarizer used to reach the compactor raw, so a compaction's token
+        // and cache consumption never became a `ProviderUsage` row — absent
+        // from the traces DB, the Panel Usage view and team rollups. Both
+        // construction sites now wrap it in `MeteringProvider` under
+        // `compactor:<agent>`; this test pins the composition the wiring
+        // relies on.
+        let sink = Arc::new(RecordingSink(
+            crate::sync_primitives::Mutex::new(Vec::new()),
+        ));
+        let metered: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(crate::providers::MeteringProvider::new(
+                Arc::new(UsageProvider),
+                Some(sink.clone() as Arc<dyn crate::harness::TraceSink>),
+                "compactor:test-agent",
+            ));
+        let compactor = ContextCompactor::new(
+            Arc::new(MockProvider::new("main provider unused")),
+            CompactorConfig::default(),
+        )
+        .with_cheap_provider(Some(metered));
+
+        let mut messages = make_messages(12);
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
+
+        let events = sink.0.lock().unwrap_or_else(|e| e.into_inner());
+        let usage_rows: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                crate::harness::trace::LoopTraceEvent::ProviderUsage {
+                    agent_id,
+                    cache_read_tokens,
+                    ..
+                } => Some((agent_id.clone(), *cache_read_tokens)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            usage_rows.len(),
+            1,
+            "one compaction through a metered summarizer = one ProviderUsage row"
+        );
+        assert_eq!(usage_rows[0].0, "compactor:test-agent");
+        assert_eq!(usage_rows[0].1, Some(900));
     }
 
     #[tokio::test]

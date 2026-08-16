@@ -1,0 +1,117 @@
+{
+  "audit": "severed-wire-audit",
+  "module": "src/executor",
+  "scope": "top-level + builder",
+  "date": "2026-08-16",
+  "baseline": "review-results/executor.md",
+  "findings": [
+    {
+      "id": "sw-exec-t-1",
+      "module": "src/executor",
+      "files": ["src/executor/builtin_registry/config.rs:89"],
+      "severity": "medium",
+      "form": 3,
+      "produced": "BuiltinToolConfig::current_session_key",
+      "produced_location": "src/executor/builtin_registry/config.rs:89",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "Fully inert config knob. Grep for `current_session_key` finds only (a) `crate::tools::turn_context::current_session_key()` — an unrelated function — and (b) `projects/store.rs` `current_session_key` — an unrelated struct field. No code reads `BuiltinToolConfig::current_session_key`, and the boot path (agent_init/mod.rs:473-535) never sets it (struct uses `..Default::default()`). Neither producer nor consumer exists.",
+      "proposed_change": "Delete the field (and its doc comment). No relocation needed — zero readers.",
+      "risk": "None. Removing a knob no one reads cannot break a wire.",
+      "verification": "grep -rn 'config.current_session_key' => zero hits; cargo test -p alephcore --lib --no-run after deletion.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-exec-t-2",
+      "module": "src/executor",
+      "files": [
+        "src/executor/builtin_registry/config.rs:24",
+        "src/executor/builtin_registry/builder/constructor/mod.rs:176",
+        "src/executor/builtin_registry/builder/constructor/mod.rs:190"
+      ],
+      "severity": "low",
+      "form": 3,
+      "produced": "BuiltinToolConfig::config_patcher",
+      "produced_location": "src/executor/builtin_registry/config.rs:24",
+      "consumer_location": "src/executor/builtin_registry/builder/constructor/mod.rs:176,190 (read) — but no producer ever populates it",
+      "decision": "CUT",
+      "rationale": "The field IS read in the constructor (self_config/moa_manage `with_patcher`), but no `BuiltinToolConfig { ... config_patcher: Some(..) }` literal exists anywhere — the boot path omits it. The live patcher is late-bound through a *different* channel: `BuiltinToolRegistry::set_config_patcher(&self)` at commands/start/mod.rs:1634, which now takes `&self` and writes the tools' `OnceLock` directly (the fix for baseline critical finding #2, already applied in this worktree). The config field is therefore a dead wire left behind after the delivery channel was rerouted.",
+      "proposed_change": "Delete `BuiltinToolConfig::config_patcher` and the two always-None `with_patcher(config.config_patcher)` branches in constructor/mod.rs. Keep `set_config_patcher`.",
+      "risk": "None at runtime — the `&self` setter still delivers the patcher. Must confirm nothing else reads the field (grep shows only constructor).",
+      "verification": "grep -rn 'config.config_patcher' => only constructor/mod.rs:176,190; after removal cargo test --no-run.",
+      "existing_review_ref": "executor.md critical #2 (set_config_patcher was a no-op via Arc::get_mut) — now resolved; this field is the residual cruft."
+    },
+    {
+      "id": "sw-exec-t-3",
+      "module": "src/executor",
+      "files": ["src/executor/builtin_registry/config.rs:87"],
+      "severity": "medium",
+      "form": 3,
+      "produced": "BuiltinToolConfig::current_agent_id",
+      "produced_location": "src/executor/builtin_registry/config.rs:87",
+      "consumer_location": "many reads with `.unwrap_or_else(|| \"main\")` — e.g. constructor/mod.rs:171-172, 499, 1170; collab_session_tools.rs; coord_team_tools.rs",
+      "decision": "DECIDE",
+      "rationale": "The field is consumed (read as a fallback) across ~20 tool constructions but has NO producer: grep for `current_agent_id:` shows only the config.rs definition and unrelated same-named fields on tool structs — no `BuiltinToolConfig { current_agent_id: Some(..) }` anywhere, so every read resolves to the `\"main\"` default. Both the config.rs doc-comment and `build_flag_user_correction` explicitly state 'nothing in the tree sets this today'. The acting identity is now resolved per-call via `builtin_tools::acting_agent::acting_agent_id`, so this field is vestigial fallback. It is a genuine severed wire, but the team has documented keeping it for out-of-turn calls — that is a product judgment, not a mechanical fix.",
+      "proposed_change": "Either (a) CUT: delete the field and centralize a `fn boot_fallback_agent_id() -> &'static str { \"main\" }`, or (b) CONNECT: have boot actually populate it from the configured default agent. Given per-call resolution already supersedes it, (a) is cleaner.",
+      "risk": "Removal touches ~20 call sites; must preserve the literal \"main\" fallback to stay byte-identical.",
+      "verification": "grep 'current_agent_id:' in BuiltinToolConfig literals => none; confirm every reader uses `.unwrap_or_else(|| \"main\")`.",
+      "existing_review_ref": "executor.md — the \"main\"-welding bug / 'current_agent_id has no producer' notes (constructor Perspective 2/3, and the config.rs inline docs)."
+    },
+    {
+      "id": "sw-exec-t-4",
+      "module": "src/executor",
+      "files": [
+        "src/executor/mod.rs:10",
+        "src/executor/builtin_registry/mod.rs:22"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "get_builtin_tool_names (pub re-export)",
+      "produced_location": "src/executor/builtin_registry/definitions.rs:1249 (def); re-exported at src/executor/mod.rs:10",
+      "consumer_location": "src/executor/builtin_registry/definitions.rs:2398,2437 (tests only)",
+      "decision": "CUT",
+      "rationale": "`get_builtin_tool_names()` has zero production callers. The only call sites are inside `#[cfg(test)] mod tests` (definitions.rs:2397 `test_all_tools_defined`, 2436 `test_sessions_tools_defined`). It is exported through two layers of `pub use` (builtin_registry/mod.rs:22 → executor/mod.rs:10). Dead pub seam.",
+      "proposed_change": "Demote to `pub(crate)` (or move the definition into the test module). Do NOT touch `create_tool_boxed`, which has a live production consumer (gateway/execution_engine/slash_command.rs:728). Also audit `is_builtin_tool` (baseline flagged it as test-only too).",
+      "risk": "None; demoting visibility leaves tests intact.",
+      "verification": "grep -rn 'get_builtin_tool_names' --include=*.rs => only definitions.rs tests + the two re-exports.",
+      "existing_review_ref": "executor.md Perspective 4 (dead pub seam: get_builtin_tool_names / create_tool_boxed / is_builtin_tool)."
+    }
+  ],
+  "verified_connected": [
+    {
+      "symbol": "BuiltinToolRegistry::with_config",
+      "produced": "src/executor/builtin_registry/builder/constructor/mod.rs:60",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:536 — the production bootstrap site invokes it. CONNECTED."
+    },
+    {
+      "symbol": "register_core_tools",
+      "produced": "src/executor/builtin_registry/builder/core_tools.rs:21",
+      "consumer": "constructor/mod.rs:1016 `Self::register_core_tools(&mut tools)`. CONNECTED."
+    },
+    {
+      "symbol": "register_optional_tools",
+      "produced": "src/executor/builtin_registry/builder/optional_tools.rs:25",
+      "consumer": "constructor/mod.rs:1017 `Self::register_optional_tools(...)`. CONNECTED."
+    },
+    {
+      "symbol": "build_agent_acp_a2a_tools / build_collab_session_tools / build_coord_team_tools",
+      "produced": "constructor/{agent_acp_tools,collab_session_tools,coord_team_tools}.rs",
+      "consumer": "constructor/mod.rs:1043, 1075, 1097. CONNECTED."
+    },
+    {
+      "symbol": "build_flag_user_correction",
+      "produced": "constructor/mod.rs:1393",
+      "consumer": "registry/tool_registry_impl.rs:389 (dispatch arm). CONNECTED."
+    },
+    {
+      "symbol": "TOOL_CATEGORIES",
+      "produced": "groups.rs:20",
+      "consumer": "gateway/handlers/agents.rs:526-528 `handle_tools_schema` serializes it for Panel UI (production). CONNECTED."
+    },
+    {
+      "symbol": "ToolRegistry trait + create_tool_boxed",
+      "produced": "tool_registry.rs / definitions.rs:976",
+      "consumer": "registry/tool_registry_impl.rs (impl); gateway/execution_engine/slash_command.rs:728. CONNECTED."
+    }
+  ]
+}

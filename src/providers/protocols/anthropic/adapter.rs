@@ -16,8 +16,8 @@ use crate::providers::anthropic::{AnthropicTool, MessagesRequest, SystemBlock, T
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::{CacheControl, EphemeralTtl};
 use crate::providers::protocols::anthropic::provider_policy::{
-    is_kimi_anthropic_base_url, normalize_kimi_coding_model_id, strip_cache_control,
-    KIMI_CODING_USER_AGENT,
+    is_kimi_anthropic_base_url, is_official_anthropic_endpoint, normalize_kimi_coding_model_id,
+    strip_cache_control, KIMI_CODING_USER_AGENT,
 };
 use crate::providers::protocols::openai_common::openai_strict_schema::flatten_tool_schema_unions;
 use crate::thinker::prompt_builder::SystemPromptPart;
@@ -640,7 +640,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // marker: still cached, never a 400.
         let extended_cache_ttl = cache_allowed
             && matches!(retention, CacheRetention::Long)
-            && endpoint.contains("api.anthropic.com");
+            && is_official_anthropic_endpoint(&endpoint);
 
         if cache_allowed {
             let cc = CacheControl::Ephemeral {

@@ -337,6 +337,7 @@ async fn recording_sink_captures_full_lifecycle() {
             LoopTraceEvent::MoaAggregating { .. } => "MoaAggregating",
             LoopTraceEvent::MoaAdvisorSpend { .. } => "MoaAdvisorSpend",
             LoopTraceEvent::MoaTurnTrace { .. } => "MoaTurnTrace",
+            LoopTraceEvent::CacheHealthDegraded { .. } => "CacheHealthDegraded",
         })
         .collect();
     // 2 turns: tool turn + final text turn. Then SessionCompleted.

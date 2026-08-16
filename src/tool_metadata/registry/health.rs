@@ -22,8 +22,7 @@
 //!   This matches hermes's "favour availability over latency" stance.
 //! * `invalidate_all()` clears the cache and bumps `generation`; the
 //!   catalog's own mutation methods (`register_with_conflict_resolution`,
-//!   `refresh_atomic`, `remove_by_mcp_server`, `set_tool_active`, …) call
-//!   it directly after changing the tool set.
+//!   `remove_by_mcp_server`, …) call it directly after changing the tool set.
 
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};

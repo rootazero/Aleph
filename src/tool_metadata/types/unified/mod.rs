@@ -15,17 +15,6 @@ use super::safety::ToolSafetyLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// How a command is dispatched when invoked by user
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum DispatchMode {
-    /// Execute directly, bypass Agent Loop (e.g., /help, /status)
-    Direct,
-    /// Inject into Agent Loop with context (e.g., /search, /translate)
-    #[default]
-    AgentLoop,
-}
-
 /// Channel types for visibility filtering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -190,12 +179,8 @@ pub struct UnifiedTool {
     pub was_renamed: bool,
 
     // =========================================================================
-    // Command Dispatch & Channel Visibility
+    // Channel Visibility
     // =========================================================================
-    /// Dispatch mode: Direct (bypass LLM) or `AgentLoop` (inject into agent)
-    #[serde(default)]
-    pub dispatch_mode: DispatchMode,
-
     /// Channels that can see this command (empty = all channels)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visible_channels: Vec<ChannelType>,
@@ -243,8 +228,7 @@ impl UnifiedTool {
             // Conflict resolution defaults
             original_name: None,
             was_renamed: false,
-            // Dispatch & visibility defaults
-            dispatch_mode: DispatchMode::default(),
+            // Visibility defaults
             visible_channels: Vec::new(),
         }
     }

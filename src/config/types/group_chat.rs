@@ -58,11 +58,6 @@ impl Default for GroupChatConfig {
 }
 
 impl GroupChatConfig {
-    /// Create a new `GroupChatConfig` with default values
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         if self.max_personas_per_session == 0 {

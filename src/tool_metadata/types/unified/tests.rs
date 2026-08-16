@@ -123,19 +123,7 @@ fn test_unified_tool_with_safety_level() {
 }
 
 #[test]
-fn test_dispatch_mode_default() {
-    let tool = UnifiedTool::new(
-        "custom:test",
-        "test",
-        "Test tool",
-        ToolSource::Custom { rule_index: 0 },
-    );
-    assert_eq!(tool.dispatch_mode, DispatchMode::AgentLoop);
-    assert!(tool.visible_channels.is_empty());
-}
-
-#[test]
-fn test_dispatch_mode_builder() {
+fn test_visible_channels_builder() {
     let tool = UnifiedTool::new("builtin:help", "help", "Show help", ToolSource::Builtin)
         .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
 

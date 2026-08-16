@@ -1,0 +1,34 @@
+[
+  {
+    "id": "sw-ctx-1",
+    "module": "src/context",
+    "files": ["compact/fit.rs:44"],
+    "severity": "low",
+    "form": 1,
+    "produced": "truncate_to_fit",
+    "produced_location": "src/context/compact/fit.rs:44",
+    "consumer_location": "none found (only sibling fit::compact_to_fit at fit.rs:160, plus in-module tests)",
+    "decision": "CUT",
+    "rationale": "pub fn truncate_to_fit has zero callers outside fit.rs. Its sole production caller is the sibling compact_to_fit in the same module; every other reference is in fit.rs's own #[cfg(test)] block. This is the same 'dead public API' class as baseline M2 (silent contract expansion): a public seam that no consumer reaches. Read-before-write confirms no live external caller across src/, bin/, interfaces/.",
+    "proposed_change": "Reduce visibility from pub fn to pub(crate) fn (or plain fn, since it is only used within fit.rs). Keep the function itself — it is load-bearing internally as compact_to_fit's deterministic floor.",
+    "risk": "None. No external crate or sibling module imports it; grep for 'truncate_to_fit' returns only fit.rs. Downgrading visibility cannot break compilation of test code (it is referenced from fit.rs tests only, which see pub(crate)/private items of their own module).",
+    "verification": "grep -rn 'truncate_to_fit' --include='*.rs' src/ bin/ interfaces/ returns only src/context/compact/fit.rs. cargo test -p alephcore --lib --no-run after the change.",
+    "existing_review_ref": null
+  },
+  {
+    "id": "sw-ctx-2",
+    "module": "src/context",
+    "files": ["compact/fit.rs:112"],
+    "severity": "low",
+    "form": 1,
+    "produced": "compact_to_fit",
+    "produced_location": "src/context/compact/fit.rs:112",
+    "consumer_location": "src/context/compact/directive.rs:50",
+    "decision": "CUT",
+    "rationale": "compact_to_fit is pub async fn with exactly one consumer, the crate-internal directive::compact_to_fit_and_note (directive.rs:50, full path crate::context::compact::fit::compact_to_fit). The wire is connected, so this is not a severed feature — but pub (vs pub(crate)) is over-broad per the AGENTS.md visibility convention ('Default private, pub(crate) for internal sharing'). Same over-broad-surface pattern the baseline M2 flagged for pressure.rs.",
+    "proposed_change": "Reduce pub async fn compact_to_fit to pub(crate) async fn. No behavioural change.",
+    "risk": "None. The only caller is in the same crate; no external consumer of alephcore reaches compact_to_fit directly (grep across src/, bin/, interfaces/ shows only directive.rs:50 as the production caller plus fit.rs tests).",
+    "verification": "grep -rn 'compact_to_fit' --include='*.rs' src/ bin/ interfaces/; cargo check -p alephcore.",
+    "existing_review_ref": "context.md M2 (same pattern, different module)"
+  }
+]

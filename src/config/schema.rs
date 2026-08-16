@@ -12,11 +12,19 @@ pub(crate) fn generate_config_schema() -> Schema {
 }
 
 /// Generate JSON Schema as a `serde_json::Value`.
+///
+/// The schema is derived from the same `Config` type the validator consumes,
+/// so a serialization failure here means the type itself is unsound: panicking
+/// is the only honest response. A "silently accept everything" sentinel (`{}`)
+/// would disable the Panel's client-side edit validation without a trace.
 pub fn generate_config_schema_json() -> serde_json::Value {
     let schema = generate_config_schema();
     serde_json::to_value(&schema).unwrap_or_else(|e| {
-        tracing::error!("Config schema serialization failed: {}", e);
-        serde_json::Value::Object(serde_json::Map::new())
+        panic!(
+            "Config schema serialization failed — the schema is generated from the \
+             same `Config` struct the validator consumes, so this is a type-system \
+             soundness failure, not a recoverable error: {e}"
+        )
     })
 }
 

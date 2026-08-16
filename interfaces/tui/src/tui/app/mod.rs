@@ -622,13 +622,15 @@ pub struct AppState {
     /// `Option` keeps the half-known state unrepresentable; the denominator is
     /// server-authoritative per model.
     pub context_gauge: Option<(u32, u32)>,
-    /// Last-call prompt-cache efficiency `(cache_read, denominator)` from the
-    /// latest `ProviderUsage` trace event that reported cache activity, where
-    /// `denominator = input + cache_creation + cache_read`. `None` until a
-    /// call reports cache tokens — providers without prompt caching never
-    /// surface a misleading 0%. Last-call (not cumulative) on purpose: a
-    /// sudden drop is what tells you a prefix bust just happened.
-    pub cache_stat: Option<(u64, u64)>,
+    /// Last-call prompt-cache hit rate as a rounded percentage (0–100), from
+    /// the latest `ProviderUsage` trace event that reported cache activity,
+    /// computed via `aleph_protocol::cache_hit_ratio` (`read / (input + read)`,
+    /// the single canonical formula shared with core and the Panel Usage
+    /// view). `None` until a call reports cache tokens — providers without
+    /// prompt caching never surface a misleading 0%. Last-call (not
+    /// cumulative) on purpose: a sudden drop is what tells you a prefix bust
+    /// just happened.
+    pub cache_stat: Option<u64>,
     /// Agent id behind `cache_stat` when it did *not* come from the session's
     /// root agent — sub-agents and MoA advisors are metered on the same trace
     /// stream, so a delegated cold start would otherwise silently overwrite

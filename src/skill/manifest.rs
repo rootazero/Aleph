@@ -195,7 +195,6 @@ pub fn parse_skill_content(
         let policy = InvocationPolicy {
             user_invocable: raw.user_invocable.unwrap_or(true),
             disable_model_invocation: raw.disable_model_invocation.unwrap_or(false),
-            command_dispatch: None,
         };
         manifest.set_invocation(policy);
     }
