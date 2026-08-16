@@ -13,8 +13,6 @@ pub enum DiscoverySource {
     ClaudeGlobal,
     /// Project-level (./.claude/ in project directory)
     Project,
-    /// Plugin-provided (from a loaded plugin)
-    Plugin,
 }
 
 /// A directory to scan for components (scanner-internal).

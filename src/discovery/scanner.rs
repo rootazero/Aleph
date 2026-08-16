@@ -3,9 +3,9 @@
 //! Implements the multi-directory scanning strategy with upward traversal.
 
 use super::paths::{
-    aleph_home_dir, claude_home_dir, find_dir_upward, find_file_upward, find_git_root,
-    validate_path_component, AGENT_FILE, ALEPH_HOME_DIR, CLAUDE_HOME_DIR, MCP_CONFIG_FILE,
-    PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE, SKILL_FILE,
+    aleph_home_dir, claude_home_dir, find_dir_upward, find_git_root, AGENT_FILE, ALEPH_HOME_DIR,
+    CLAUDE_HOME_DIR, MCP_CONFIG_FILE, PLUGINS_DIR, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE,
+    SKILL_FILE,
 };
 use super::types::{DiscoveredPath, DiscoverySource, ScanDirectory};
 use super::{DiscoveryConfig, DiscoveryError, DiscoveryResult};
@@ -61,12 +61,6 @@ impl DirectoryScanner {
             working_dir: config.working_dir.clone(),
             config: config.clone(),
         })
-    }
-
-    /// Get the git root directory
-    #[must_use]
-    pub fn git_root(&self) -> Option<&Path> {
-        self.git_root.as_deref()
     }
 
     /// Get all directories to scan, in priority order
@@ -139,45 +133,6 @@ impl DirectoryScanner {
 
         trace!("Scan directories: {:?}", dirs);
         Ok(dirs)
-    }
-
-    /// Find configuration files with upward traversal
-    ///
-    /// Returns paths in priority order (global first, project last).
-    pub fn find_upward(&self, filename: &str) -> DiscoveryResult<Vec<PathBuf>> {
-        // Validate up front so the global-config branch below can never be
-        // tricked into escaping ~/.aleph via traversal/separator components.
-        // The project branch validates inside find_file_upward, but that path
-        // is skipped when scan_project_dirs is false — guard here to stay
-        // fail-closed regardless of configuration.
-        validate_path_component(filename)?;
-
-        let mut configs = Vec::new();
-
-        // 1. Global config (lowest priority)
-        let global_config = self.aleph_home.join(filename);
-        if global_config.exists() {
-            configs.push(global_config);
-        }
-
-        // 2. Project configs (upward traversal)
-        if self.config.scan_project_dirs {
-            let stop = self.git_root.as_deref();
-            let project_configs = find_file_upward(
-                filename,
-                &self.working_dir,
-                stop,
-                self.config.max_upward_depth,
-            )?;
-
-            // Reverse so higher directories come first (lower priority)
-            for config in project_configs.into_iter().rev() {
-                configs.push(config);
-            }
-        }
-
-        trace!("Found config files for '{}': {:?}", filename, configs);
-        Ok(configs)
     }
 
     /// Discover a specific component type (skills, commands, agents, plugins)
@@ -629,74 +584,6 @@ mod tests {
             aleph_entry.priority,
             claude_entry.priority
         );
-    }
-
-    #[test]
-    fn test_scanner_find_config_upward() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-
-        // Create nested structure with configs
-        std::fs::create_dir(root.join(".git")).unwrap();
-        std::fs::create_dir_all(root.join(".aleph")).unwrap();
-        std::fs::write(root.join(".aleph/aleph.jsonc"), "{}").unwrap();
-        std::fs::create_dir_all(root.join("project/subdir")).unwrap();
-        std::fs::write(root.join("project/aleph.jsonc"), "{}").unwrap();
-
-        let config = DiscoveryConfig {
-            working_dir: root.join("project/subdir"),
-            scan_claude_dirs: false,
-            scan_project_dirs: true,
-            max_upward_depth: 10,
-        };
-
-        let scanner = DirectoryScanner {
-            aleph_home: root.join(".aleph"),
-            claude_home: None,
-            git_root: Some(root.to_path_buf()),
-            working_dir: root.join("project/subdir"),
-            config,
-        };
-
-        let configs = scanner.find_upward("aleph.jsonc").unwrap();
-
-        // Should find both configs
-        assert_eq!(configs.len(), 2);
-    }
-
-    #[test]
-    fn test_find_upward_rejects_traversal_when_project_dirs_disabled() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        std::fs::create_dir_all(root.join(".aleph")).unwrap();
-
-        let config = DiscoveryConfig {
-            working_dir: root.to_path_buf(),
-            scan_claude_dirs: false,
-            // Project branch (which validates) is skipped — the global branch
-            // must still reject traversal components on its own.
-            scan_project_dirs: false,
-            max_upward_depth: 10,
-        };
-        let scanner = DirectoryScanner {
-            aleph_home: root.join(".aleph"),
-            claude_home: None,
-            git_root: None,
-            working_dir: root.to_path_buf(),
-            config,
-        };
-
-        for bad in ["../escape.jsonc", "", "a/b.jsonc", ".."] {
-            assert!(
-                matches!(
-                    scanner.find_upward(bad),
-                    Err(DiscoveryError::InvalidPath(_))
-                ),
-                "expected InvalidPath for {bad:?}"
-            );
-        }
-        // A legitimate filename still resolves.
-        assert!(scanner.find_upward("aleph.jsonc").is_ok());
     }
 
     #[test]

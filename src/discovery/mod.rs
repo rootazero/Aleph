@@ -76,14 +76,6 @@ impl DiscoveryManager {
         aleph_home_dir()
     }
 
-    /// Find configuration files with upward traversal
-    ///
-    /// Searches from working directory up to git root or filesystem root.
-    /// Returns paths in priority order (global first, project last).
-    pub fn find_config_files(&self, filename: &str) -> DiscoveryResult<Vec<PathBuf>> {
-        self.scanner.find_upward(filename)
-    }
-
     /// Discover all skill directories
     pub fn discover_skill_dirs(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
         self.scanner.discover_component("skills")
