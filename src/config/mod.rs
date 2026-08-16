@@ -34,9 +34,6 @@ mod validate;
 // Re-export main types
 pub use structs::{ChannelInstanceConfig, Config, PluginMarketplaceEntry};
 
-// Re-export patcher types
-pub use patcher::ConfigPatcher;
-
 // Re-export reload-impact classifier (self-management SSOT) and the
 // hot-apply that makes its `Live` verdict true.
 pub use live_apply::classify_verified;

@@ -442,10 +442,7 @@ impl BuiltinToolRegistry {
 
         // Session-complete tool — requires memory_db (same guard as note_manage)
         let session_complete_tool = if let Some(ref db) = config.memory_db {
-            let agent_id = config
-                .current_agent_id
-                .clone()
-                .unwrap_or_else(|| "main".to_string());
+            let agent_id = "main".to_string();
             let mut tool = crate::builtin_tools::session_complete::SessionCompleteTool::new(
                 db.clone(),
                 agent_id,
@@ -481,10 +478,7 @@ impl BuiltinToolRegistry {
                 | crate::config::types::memory::MemoryInjectionMode::Hybrid,
         );
         let memory_reflect_tool = {
-            let agent_id = config
-                .current_agent_id
-                .clone()
-                .unwrap_or_else(|| "main".to_string());
+            let agent_id = "main".to_string();
             let tool = crate::builtin_tools::memory_reflect::MemoryReflectTool::new(agent_id);
 
             // Register tool schema only when retrieval tools are exposed

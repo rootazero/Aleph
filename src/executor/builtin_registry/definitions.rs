@@ -44,8 +44,6 @@
 //!
 //! - `BUILTIN_TOOL_DEFINITIONS` - List of all tool definitions
 //! - `create_tool_boxed()` - Create boxed tool instance for `AlephToolServer`
-//! - `get_builtin_tool_names()` - Get list of all tool names
-//! - `is_builtin_tool()` - Check if a name is a builtin tool
 
 use crate::sync_primitives::Arc;
 
@@ -1242,23 +1240,6 @@ pub fn create_tool_boxed(
     }
 }
 
-/// Get list of all builtin tool names
-///
-/// This is used for initialization and display purposes.
-#[must_use]
-pub fn get_builtin_tool_names() -> Vec<String> {
-    BUILTIN_TOOL_DEFINITIONS
-        .iter()
-        .map(|def| def.name.to_string())
-        .collect()
-}
-
-/// Check if a tool name is a builtin tool
-#[allow(dead_code)] // test-only helper
-pub fn is_builtin_tool(name: &str) -> bool {
-    BUILTIN_TOOL_DEFINITIONS.iter().any(|def| def.name == name)
-}
-
 /// Brings the trait consts named by [`REGISTRY_ONLY_DESCRIPTIONS`] into scope
 /// exactly the way `builder/core_tools.rs` has them, so the bytes measured
 /// resolve to the same const the registration passes.
@@ -2395,7 +2376,8 @@ mod tests {
 
     #[test]
     fn test_all_tools_defined() {
-        let names = get_builtin_tool_names();
+        let names: Vec<String> =
+            BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name.to_string()).collect();
 
         // Verify core tools
         assert!(names.contains(&"search".to_string()));
@@ -2434,7 +2416,8 @@ mod tests {
 
     #[test]
     fn test_sessions_tools_defined() {
-        let names = get_builtin_tool_names();
+        let names: Vec<String> =
+            BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name.to_string()).collect();
 
         // Verify sessions tools are defined when gateway feature is enabled
         assert!(names.contains(&"session_list".to_string()));
@@ -2446,21 +2429,6 @@ mod tests {
         // Sessions tools require gateway_context (dynamic creation)
         assert!(create_tool_boxed("session_list", None).is_none());
         assert!(create_tool_boxed("session_send", None).is_none());
-    }
-
-    #[test]
-    fn test_is_builtin_tool() {
-        assert!(is_builtin_tool("bash"));
-        assert!(is_builtin_tool("code_exec"));
-        assert!(is_builtin_tool("file_ops"));
-        assert!(!is_builtin_tool("unknown_tool"));
-        assert!(!is_builtin_tool("mcp:filesystem"));
-    }
-
-    #[test]
-    fn test_is_builtin_tool_sessions() {
-        assert!(is_builtin_tool("session_list"));
-        assert!(is_builtin_tool("session_send"));
     }
 
     #[test]
