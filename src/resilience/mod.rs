@@ -7,6 +7,6 @@
 pub mod database;
 pub mod types;
 
-pub use types::{AgentEvent, AgentTask, Lane, RiskLevel, TaskStatus, TaskTrace, TaskTraceInfo};
+pub use types::{AgentTask, Lane, RiskLevel, TaskStatus, TaskTrace, TaskTraceInfo};
 
-pub use database::{AgentUsageTotal, MemoryStats, StateDatabase, DEFAULT_EMBEDDING_DIM};
+pub use database::{AgentUsageTotal, StateDatabase, DEFAULT_EMBEDDING_DIM};
