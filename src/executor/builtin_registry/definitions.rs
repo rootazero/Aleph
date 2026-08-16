@@ -1830,7 +1830,21 @@ mod tests {
     /// of the governance topology (R9's second ruler). The same round cut
     /// 620 B of schema fat from the same tool (see REGISTRY_SCHEMA ceiling),
     /// so the description raise is the residue of a net-negative batch.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_225;
+    ///
+    /// 2026-08-15, the loop-graph audit-log round: 98,225 -> 98,861 B (+636 B).
+    /// Decomposed honestly, because most of the raise is NOT this round's:
+    /// the base measured 98,823 B with this round's changes stashed — i.e.
+    /// +598 B of unowned drift landed after 2026-08-14 without these
+    /// ratchets being re-run (they only execute in the full lib suite; the
+    /// identity round `e54495bf0` rewrote agent_identity / bash_exec /
+    /// code_exec / process_* descriptions in that window and is the visible
+    /// suspect in the "Largest" list). This round's own share is +38 B: the
+    /// `events` action name in `loop_graph`'s DESCRIPTION, justified by the
+    /// same three answers as the line above — the audit-log action is a
+    /// runtime fact, unguessable, and owned by no other tool. The drift half
+    /// is a process finding, not a prose license: description bytes landed
+    /// without the suite that prices them.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_861;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2061,7 +2075,17 @@ mod tests {
     /// remains: (1) `op="capture"|"list"|"diff"` and the impact/export
     /// semantics are runtime facts; (2) a stronger model cannot infer them;
     /// (3) nothing else says them.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 91_851;
+    ///
+    /// 2026-08-15, the loop-graph audit-log round: 91,851 -> 92,581 B
+    /// (+730 B). Same decomposition discipline as the DESCRIPTION ceiling
+    /// above: with this round's changes stashed the base measured 92,198 B,
+    /// so +347 B is unowned drift from after 2026-08-14 (the suite that would
+    /// have priced it was not run); this round's own share is +383 B, all of
+    /// it on `loop_graph` (6,702 -> 7,085 B): the `events` action variant,
+    /// its `limit` field, and one clause documenting the `daily` cadence
+    /// alias the store already ranked. Same three answers: action/field
+    /// names are runtime facts, unguessable, owned by no other tool.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_581;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

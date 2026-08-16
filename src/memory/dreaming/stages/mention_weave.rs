@@ -187,9 +187,8 @@ mod tests {
     /// reads note bodies via `get_notes_with_content`, itself rooted at the
     /// process-global `ALEPH_HOME`, independent of this dir). The one test
     /// below that needs real body content builds its own ctx inline instead.
-    async fn build_test_dream_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
-        let temp =
-            std::env::temp_dir().join(format!("aleph_mention_weave_{}", uuid::Uuid::new_v4()));
+    async fn build_test_dream_ctx() -> (tempfile::TempDir, DreamContext, Arc<SqliteMemoryBackend>) {
+        let (temp_guard, temp) = crate::memory::dreaming::scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let indexer = NoteIndexer::new(temp.clone(), store.clone());
         let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
@@ -211,12 +210,12 @@ mod tests {
             orientation: None,
             evolution_budget: crate::memory::dreaming::EditBudget::default(),
         };
-        (ctx, store)
+        (temp_guard, ctx, store)
     }
 
     #[tokio::test]
     async fn should_run_requires_at_least_two_notes() {
-        let (mut ctx, _store) = build_test_dream_ctx().await;
+        let (_scratch, mut ctx, _store) = build_test_dream_ctx().await;
         ctx.notes = vec![entry("a/only")];
         assert!(!MentionWeaveStage.should_run(&ctx).await);
         ctx.notes.push(entry("b/other"));
@@ -243,8 +242,7 @@ mod tests {
         }
 
         let note_dir = crate::utils::paths::get_note_memory_dir().unwrap();
-        let temp =
-            std::env::temp_dir().join(format!("aleph_mention_weave_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = crate::memory::dreaming::scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         // Indexer's memory_dir MUST resolve to the same ALEPH_HOME-rooted
         // path `get_notes_with_content` reads from, or the stage would see

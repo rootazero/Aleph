@@ -421,8 +421,10 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_background_returns_pid_and_writes_log() {
-        let dir = std::env::temp_dir();
+        // Guard bound here: dropping it removes the log the child writes into.
+        let dir = tempfile::tempdir().unwrap();
         let log_path = dir
+            .path()
             .join("aleph-script-exec-test.log")
             .to_string_lossy()
             .into_owned();

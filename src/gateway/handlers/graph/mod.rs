@@ -59,12 +59,15 @@ pub(crate) mod test_helpers {
     use crate::memory::store::sqlite::SqliteMemoryBackend;
     use crate::memory::store::MemoryBackend;
     use crate::sync_primitives::Arc;
-    use uuid::Uuid;
 
     /// Create a fresh file-backed `MemoryBackend` for testing.
-    pub fn make_db() -> MemoryBackend {
-        let path = std::env::temp_dir().join(format!("graph_handler_test_{}", Uuid::new_v4()));
-        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    ///
+    /// Returns the scratch guard alongside it: the guard owns the directory the
+    /// database lives in, so it must be bound in the *caller's* frame. See
+    /// [`crate::utils::scratch::scratch_root`].
+    pub fn make_db() -> (tempfile::TempDir, MemoryBackend) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (scratch, Arc::new(SqliteMemoryBackend::new(&path).unwrap()))
     }
 
     pub fn make_note(title: &str, category: &str, links: Vec<&str>) -> KnowledgeNote {

@@ -228,7 +228,7 @@ mod tests {
             }
         }
 
-        fn create_test_gateway_context() -> Arc<GatewayContext> {
+        fn create_test_gateway_context() -> (tempfile::TempDir, Arc<GatewayContext>) {
             let temp = tempdir().unwrap();
             let session_config = SessionManagerConfig {
                 db_path: temp.path().join("sessions.db"),
@@ -239,12 +239,13 @@ mod tests {
             let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
             let a2a_policy = Arc::new(AgentToAgentPolicy::permissive());
 
-            Arc::new(GatewayContext::new(
+            let ctx = Arc::new(GatewayContext::new(
                 session_manager,
                 agent_registry,
                 execution_adapter,
                 a2a_policy,
-            ))
+            ));
+            (temp, ctx)
         }
 
         #[tokio::test]
@@ -267,7 +268,7 @@ mod tests {
         async fn test_sessions_tools_registered_with_context() {
             // With gateway_context, sessions tools should be registered
             let _home = crate::utils::paths::IsolatedAlephHome::new();
-            let gateway_context = create_test_gateway_context();
+            let (_scratch, gateway_context) = create_test_gateway_context();
             let config = BuiltinToolConfig {
                 gateway_context: Some(gateway_context),
                 ..Default::default()
@@ -309,7 +310,7 @@ mod tests {
         async fn test_sessions_list_execution_with_context() {
             // With gateway_context, session.list should execute successfully
             let _home = crate::utils::paths::IsolatedAlephHome::new();
-            let gateway_context = create_test_gateway_context();
+            let (_scratch, gateway_context) = create_test_gateway_context();
             let config = BuiltinToolConfig {
                 gateway_context: Some(gateway_context),
                 ..Default::default()

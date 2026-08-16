@@ -22,8 +22,6 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
     description: String,
     schema: Value,
     registry: Arc<R>,
-    /// Default working directory for `bash/code_exec` tools (agent workspace)
-    default_working_dir: Arc<Option<String>>,
     /// Owning plugin id when the wrapped `UnifiedTool` declared
     /// `ToolSource::Plugin`, else `None`.
     ///
@@ -35,8 +33,22 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
     plugin_id: Option<String>,
 }
 
-/// Tools that should have `working_dir` injected when not specified by LLM
-const WORKING_DIR_TOOLS: &[&str] = &["bash", "code_exec"];
+// There is deliberately no `working_dir` injection here any more.
+//
+// This adapter used to stamp the run's effective workspace into every `bash` /
+// `code_exec` call that omitted `working_dir`. That routed a gateway-owned,
+// authorised path through the one field on the call the MODEL owns — and by the
+// time it reached `WorkspaceSandbox`, an injected path and an invented one were
+// indistinguishable. The jail, written to judge invented paths, refused it:
+// every shell call that omitted `working_dir` died with "cwd outside workspace
+// root", because a 32-hex `workspaces/<hash(session)>` directory is never an
+// agent id nor a project path.
+//
+// The authorised root now reaches the sandbox on a channel the model cannot
+// write (`sandbox::context::EXEC_WORKSPACE`, published by `run_agent_loop`), and
+// `working_dir: None` means what it says: "wherever this run works". A relative
+// `working_dir` now also means what it says — it resolves *under* that root
+// instead of being silently replaced by it.
 
 /// Builtin tools that are side-effect-free for scheduling purposes: their
 /// execution neither mutates shared state nor depends on another in-flight
@@ -459,36 +471,6 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
         tracing::debug!(tool = %self.name, args = %input, "Tool call raw arguments from LLM");
-        // Inject default working_dir for bash/code_exec if not provided by LLM
-        let input = if WORKING_DIR_TOOLS.contains(&self.name.as_str()) {
-            if let Some(dir) = self.default_working_dir.as_ref() {
-                let mut obj = match input {
-                    Value::Object(m) => m,
-                    _ => serde_json::Map::new(),
-                };
-                // Inject workspace if working_dir is missing, null, or relative
-                let should_inject = match obj.get("working_dir") {
-                    None => true,
-                    Some(v) if v.is_null() => true,
-                    Some(Value::String(s)) => {
-                        let s = s.trim();
-                        s.is_empty()
-                            || s == "."
-                            || s == "./"
-                            || !std::path::Path::new(s).is_absolute()
-                    }
-                    _ => false,
-                };
-                if should_inject {
-                    obj.insert("working_dir".to_string(), Value::String(dir.clone()));
-                }
-                Value::Object(obj)
-            } else {
-                input
-            }
-        } else {
-            input
-        };
         // opencode-parity AbortSignal: when the harness cancels this call,
         // we drop the registry-execute future. Drop semantics propagate down
         // to whatever the registry's per-tool impl is doing (kill_on_drop
@@ -527,15 +509,13 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 /// Each `UnifiedTool` becomes a `LoopTool` that delegates execution to the
 /// shared `ToolRegistry`. Only active tools are included.
 ///
-/// `default_working_dir` is injected into `bash/code_exec` tools when the LLM
-/// doesn't specify a `working_dir` (defaults to agent workspace).
+/// Where a shell call lands is NOT decided here — see the note above
+/// [`RegistryToolAdapter`] on the removed `working_dir` injection.
 pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],
-    default_working_dir: Option<String>,
 ) -> Vec<Box<dyn LoopTool>> {
     let mut adapters: Vec<Box<dyn LoopTool>> = Vec::new();
-    let default_working_dir = Arc::new(default_working_dir.clone());
 
     for tool in unified_tools {
         if !tool.is_active {
@@ -552,7 +532,6 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
             description: tool.description.clone(),
             schema,
             registry: Arc::clone(&tool_registry),
-            default_working_dir: Arc::clone(&default_working_dir),
             plugin_id: match &tool.source {
                 UnifiedToolSource::Plugin { plugin_id } => Some(plugin_id.clone()),
                 _ => None,
@@ -566,11 +545,9 @@ pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
 pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],
-    default_working_dir: Option<String>,
 ) -> LoopToolRegistry {
     let mut registry = LoopToolRegistry::new();
-    for adapter in build_tool_adapters_from_tools(tool_registry, unified_tools, default_working_dir)
-    {
+    for adapter in build_tool_adapters_from_tools(tool_registry, unified_tools) {
         registry.register(adapter);
     }
     registry
@@ -632,7 +609,7 @@ mod tests {
             make_unified_tool("memory", "Query memory"),
         ];
 
-        let registry = build_registry_from_tools(tool_registry, &tools, None);
+        let registry = build_registry_from_tools(tool_registry, &tools);
         assert_eq!(registry.len(), 2);
         assert!(registry.get("search").is_some());
         assert!(registry.get("memory").is_some());
@@ -646,7 +623,7 @@ mod tests {
         let tool_registry = Arc::new(MockRegistry { results });
         let tools = vec![make_unified_tool("search", "Search")];
 
-        let registry = build_registry_from_tools(tool_registry, &tools, None);
+        let registry = build_registry_from_tools(tool_registry, &tools);
         let result = registry
             .execute("search", json!({"q": "rust"}), CancellationToken::new())
             .await;
@@ -801,13 +778,13 @@ mod tests {
 
         // A destructive builtin self-declares confirmation through the adapter.
         let confirm_tools = vec![make_unified_tool("agent_delete", "Delete an agent")];
-        let registry = build_registry_from_tools(tool_registry.clone(), &confirm_tools, None);
+        let registry = build_registry_from_tools(tool_registry.clone(), &confirm_tools);
         let agent_delete = registry.get("agent_delete").unwrap();
         assert!(agent_delete.requires_confirmation());
 
         // A plain read-only tool does not.
         let plain_tools = vec![make_unified_tool("search", "Search")];
-        let registry = build_registry_from_tools(tool_registry, &plain_tools, None);
+        let registry = build_registry_from_tools(tool_registry, &plain_tools);
         let search = registry.get("search").unwrap();
         assert!(!search.requires_confirmation());
     }
@@ -846,13 +823,13 @@ mod tests {
 
         // A read-only tool should be concurrent-safe
         let read_tools = vec![make_unified_tool("search", "Search")];
-        let registry = build_registry_from_tools(tool_registry.clone(), &read_tools, None);
+        let registry = build_registry_from_tools(tool_registry.clone(), &read_tools);
         let search = registry.get("search").unwrap();
         assert!(search.is_concurrent_safe(&json!({})));
 
         // An exclusive tool should NOT be concurrent-safe
         let write_tools = vec![make_unified_tool("bash", "Run commands")];
-        let registry = build_registry_from_tools(tool_registry, &write_tools, None);
+        let registry = build_registry_from_tools(tool_registry, &write_tools);
         let bash = registry.get("bash").unwrap();
         assert!(!bash.is_concurrent_safe(&json!({})));
     }
@@ -865,7 +842,7 @@ mod tests {
             results: HashMap::new(),
         });
         let tools = vec![make_unified_tool("node_invoke", "Run on a node")];
-        let registry = build_registry_from_tools(tool_registry, &tools, None);
+        let registry = build_registry_from_tools(tool_registry, &tools);
         let t = registry.get("node_invoke").unwrap();
 
         let claim = |node: &str| t.concurrency_claim(&json!({"node": node, "command": "bash"}));
@@ -898,7 +875,7 @@ mod tests {
             make_unified_tool("bash", "Run commands"),
             make_unified_tool("search", "Search"),
         ];
-        let registry = build_registry_from_tools(tool_registry, &tools, None);
+        let registry = build_registry_from_tools(tool_registry, &tools);
 
         // file_ops read-only operation -> Shared (parallelizable).
         let claim = registry
@@ -1004,7 +981,7 @@ mod tests {
             make_unified_tool("a2a_agents", "Manage remote A2A agents"),
             make_unified_tool("inbox_read", "Read the team inbox"),
         ];
-        let registry = build_registry_from_tools(tool_registry, &tools, None);
+        let registry = build_registry_from_tools(tool_registry, &tools);
 
         // doctor: inspect (default) parallelizes; fix=true serializes.
         let doctor = registry.get("doctor").unwrap();
@@ -1133,7 +1110,7 @@ mod tests {
 
         let tools = vec![make_unified_tool("active", "Active tool"), inactive];
 
-        let registry = build_registry_from_tools(tool_registry, &tools, None);
+        let registry = build_registry_from_tools(tool_registry, &tools);
         assert_eq!(registry.len(), 1);
         assert!(registry.get("active").is_some());
         assert!(registry.get("disabled").is_none());

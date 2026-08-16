@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn find_latest_log_matches_dated_files() {
-        let dir = std::env::temp_dir().join(format!("aleph_log_test_{}", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         let _ = std::fs::create_dir_all(&dir);
 
         // Create a file matching real naming: aleph-server.log.2026-03-04

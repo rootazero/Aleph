@@ -67,8 +67,9 @@ pub struct RuntimeContext {
     ///
     /// Supplied by the caller via [`RuntimeContext::collect_in`], because only the
     /// caller knows it: the gateway resolves it as `workspace_override` (project
-    /// mode) else the agent's `~/.aleph/workspaces/{id}`, and feeds that same
-    /// value to the tool adapters' `default_working_dir`. Falls back to the
+    /// mode) else the agent's `~/.aleph/workspaces/{id}`, and publishes that same
+    /// value as [`EXEC_WORKSPACE`](crate::sandbox::context::EXEC_WORKSPACE), which
+    /// is the root `WorkspaceSandbox` jails shell calls to. Falls back to the
     /// daemon's process cwd only when no caller-supplied path is available.
     pub working_dir: PathBuf,
     /// Git repository root, if inside a repo (caller provides from cached git info)
@@ -101,8 +102,8 @@ impl RuntimeContext {
     /// `current_model` and `cwd` are both passed in because only the caller knows
     /// them: the router picks the model, and the gateway resolves the effective
     /// workspace (project override, else the agent workspace) — the very path it
-    /// hands the tool adapters as `default_working_dir`. Passing it here is what
-    /// makes the prompt's `cwd=` agree with where `bash` actually runs.
+    /// publishes as `EXEC_WORKSPACE` for the sandbox to jail to. Passing it here
+    /// is what makes the prompt's `cwd=` agree with where `bash` actually runs.
     ///
     /// A `cwd` that is not a directory (unmounted volume, deleted between
     /// dispatch and prompt assembly) is rejected with a warn and degraded to the

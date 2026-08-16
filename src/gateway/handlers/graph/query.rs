@@ -188,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_query_uses_explicit_agent_id() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         let (alpha_path, _beta_path) = seed_two_agents(&db).await;
 
         let req = query_request(50, Some("alpha"));
@@ -222,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_query_falls_back_to_default_agent_when_omitted() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         // Seed both default agent and a non-default agent. When agent_id is
         // omitted, the handler must return ONLY the default agent's notes —
         // proving (a) it falls back to DEFAULT_AGENT_ID, not (b) returns all
@@ -255,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_query_carries_similarity_edges_and_insights() {
-        let db = make_db();
+        let (_scratch, db) = make_db();
         let agent = crate::routing::DEFAULT_AGENT_ID;
         let a = make_note("A", "concept", vec![]);
         let b = make_note("B", "concept", vec![]);
@@ -307,7 +307,7 @@ mod tests {
     async fn foreign_partition_reads_an_empty_graph_not_the_owners_notes() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let db = make_db();
+        let (_scratch, db) = make_db();
         let secret = make_note("AliceSecret", "concept", vec![]);
         db.index_note(&secret, "main__u-alice", "concept")
             .await

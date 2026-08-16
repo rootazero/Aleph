@@ -119,41 +119,68 @@ empty room. The cure spends a provider turn nobody's client asked for, so the
 oracle is the mock's `observations.jsonl` — a request whose conversation carries
 `[system] Background process N finished`, arriving after `run_finished`.
 
-**On real hardware the announce mechanism works.** The session log of the first
-run shows exactly the claimed shape: `run_finished` for the spawning run, then a
-`user_message` carrying the notice, then a **second `run_started`**. Nobody's
-client sent that message.
+**On real hardware the announce mechanism works.** The session log shows exactly
+the claimed shape: `run_finished` for the spawning run, then a `user_message`
+carrying the notice, then a **second `run_started`**. Nobody's client sent that
+message. All three scenarios now pass on real hardware — `outlive` 7/7,
+`collected` 4/4, `midrun` 5/5.
 
-**And the same run found something bigger, which is why all three scenarios
-currently fail at their control step.** `bash` never executed at all:
+### The bigger thing the first run found (fixed 2026-08-16)
+
+The first run of this fixture never got as far as an announce claim, because
+`bash` never executed at all:
 
 > `exit_code: -1`, `stderr: "Capability denied: cwd outside workspace root"`
 
-Two subsystems answer *"where does this session work"*, and they never agree:
+Two subsystems answered *"where does this session work"*, and they never agreed:
 
-* `tools/adapters/registry_adapter.rs::execute` injects `default_working_dir`
-  into every `bash` / `code_exec` call that omits `working_dir`
-  (`WORKING_DIR_TOOLS`). Its value is `effective_workspace`
-  (`gateway/execution_engine/run_loop/inner.rs`) — the **agent** workspace,
-  defaulting to `~/.aleph/workspaces/<agent_id>` (`agent_instance.rs:63`).
-* `sandbox/workspace/mod.rs::for_session` puts the session's cwd at
-  `~/.aleph/workspaces/<sha256(session_id_json)[..16]>` and refuses any cwd
+* `tools/adapters/registry_adapter.rs::execute` injected `default_working_dir`
+  into every `bash` / `code_exec` call that omitted `working_dir`. Its value was
+  `effective_workspace` — the project override, else the **agent** workspace
+  `~/.aleph/workspaces/<agent_id>`.
+* `sandbox/workspace/mod.rs::for_session` put the session's cwd at
+  `~/.aleph/workspaces/<sha256(session_id_json)[..16]>` and refused any cwd
   outside it.
 
-A 32-hex directory name is never an agent id, so the injected path is always
-outside. Verified on the observed run: the session dir was
-`2f5185e22a04f821e25984a77d161ac3`, which is exactly
+A 32-hex directory name is never an agent id — nor a project path — so the
+injected path was always outside. Verified on the observed run: the session dir
+was `2f5185e22a04f821e25984a77d161ac3`, exactly
 `sha256('{"type":"main","agent_id":"main","main_key":"main","epoch":1}')[:32]`,
-while the agent workspace was `workspaces/main`. Sandbox `enabled = true` is
-the generated default; nothing in the fixture turned it on.
+while the agent workspace was `workspaces/main`. Sandbox `enabled = true` is the
+generated default (and disabling it swaps in a `NoopSandbox` that refuses
+everything), so this was not a fixture artefact: on a default install, every
+shell call that omitted `working_dir` was refused.
 
-Passing **no** `working_dir` would have been fine — `cwd: None` takes the branch
-that skips the containment check and lands in the session workspace. It is the
-injection that manufactures the violation, and the refusal then reads like a
-sandbox policy decision rather than like a wiring bug. That is why four rounds
-of unit tests missed it: every unit test either drives the sandbox directly (no
-adapter, no injection) or drives the adapter with a fake sandbox (injection, no
-containment check). Only a real run puts both halves in the same process.
+Four rounds of unit tests missed it because each drove one half against a
+stand-in for the other: sandbox tests build a `SandboxCommand` by hand (no tool,
+so nothing injects), tool tests run against a fake sandbox (injection, but no
+containment check). **Only a real run puts both halves in the same process** —
+which is what this fixture does, and what `tests/exec_workspace_jail.rs` now
+does hermetically.
+
+**The fix**: the authorised workspace no longer travels through the tool's
+model-writable `working_dir` argument. `run_agent_loop` publishes it on
+`sandbox::context::EXEC_WORKSPACE` — a channel nothing on the model's side can
+write — and `WorkspaceSandbox` uses it as the jail root. `working_dir: None` now
+means "wherever this run works"; a relative `working_dir` resolves *under* that
+root instead of being silently replaced by it; an absolute one outside it is
+still refused. Callers with no run in scope (cluster node file commands, direct
+callers) keep the per-session hash directory.
+
+### `getcwd` noise under `$TMPDIR` is the fixture's own, not the product's
+
+On macOS `$TMPDIR` is `/var/folders/…`, a symlink to `/private/var/…`. The
+seatbelt profile is built from the lexical path, so `bash`'s shell-init `getcwd`
+walk up the *resolved* parents is refused and every command prints
+
+> `shell-init: error retrieving current directory: getcwd: cannot access parent
+> directories: Operation not permitted`
+
+to stderr while still exiting 0 with correct stdout. Re-running the same
+scenario with `QA_ROOT` on a non-symlinked path gives an empty stderr and the
+same 7/7, which is why this is recorded as an artefact of where the fixture puts
+its scratch HOME rather than as a defect: a real `~/.aleph` is not behind a
+symlinked prefix. If you ever see it outside `$TMPDIR`, it is a different bug.
 
 ### Why this fixture asserts a control first
 

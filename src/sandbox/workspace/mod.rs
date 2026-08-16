@@ -1,7 +1,8 @@
 //! `WorkspaceSandbox` — lazy per-session workspace directory + capability enforcement.
 //!
-//! Implements the `Sandbox` trait by materializing `~/.aleph/workspaces/{hash(session_id)}/`
-//! on first exec-class call and routing commands through the 6-step pipeline:
+//! Implements the `Sandbox` trait by materializing the session's workspace
+//! directory on first exec-class call and routing commands through the 6-step
+//! pipeline:
 //! 1. resolve session workspace (lazy create dir)
 //! 2. validate cwd (None → workspace root; Some(p) must live under root)
 //! 3. capability check: within baseline → pass; else consult granted cache then
@@ -53,7 +54,7 @@ pub(crate) use proxy::ActiveProxy;
 /// Lazy per-session workspace + capability-aware sandbox implementation.
 pub struct WorkspaceSandbox {
     workspace_root: PathBuf,
-    sessions: Arc<RwLock<HashMap<SessionId, Arc<SessionWorkspace>>>>,
+    sessions: Arc<RwLock<HashMap<(SessionId, PathBuf), Arc<SessionWorkspace>>>>,
     os_driver: Arc<dyn OsSandboxDriverTrait>,
     approval_gate: Arc<ApprovalGate>,
     default_timeout: Duration,
@@ -103,21 +104,53 @@ impl WorkspaceSandbox {
         self
     }
 
+    /// The jail root for the calling context: the workspace THIS run was
+    /// authorised to work in, else this session's own scratch directory.
+    ///
+    /// A gateway run publishes its effective workspace (project override, else
+    /// the agent's `~/.aleph/workspaces/{agent_id}`) on
+    /// [`EXEC_WORKSPACE`](crate::sandbox::context::EXEC_WORKSPACE), and it is
+    /// the single answer to "where does a shell call land" — the same value the
+    /// prompt advertises as `cwd=` and `RuntimeContext.working_dir` documents.
+    /// The two used to disagree: the gateway injected its answer into the
+    /// tool's `working_dir` argument while this jail was anchored on
+    /// `workspaces/<hash(session)>`, and since a 32-hex directory is never an
+    /// agent id — nor a project path — every shell call that omitted
+    /// `working_dir` was refused "cwd outside workspace root".
+    ///
+    /// Absence keeps the historical hash directory, which is what every caller
+    /// outside a run (cluster node file commands, direct callers, tests) gets.
+    fn jail_root_for(&self, sid: &SessionId) -> PathBuf {
+        crate::sandbox::context::current_exec_workspace()
+            .unwrap_or_else(|| self.workspace_root.join(session_key_to_filename(sid)))
+    }
+
     /// Resolve the per-session workspace, creating the directory on first call.
     /// Idempotent — subsequent calls return the cached `Arc<SessionWorkspace>`.
+    ///
+    /// Keyed by `(session, root)`, not by session alone: one session can run
+    /// under different authorised roots over its life (the operator repoints
+    /// the project folder mid-conversation), and `granted_elevations` — the
+    /// cache of capability escalations a human already approved — describes a
+    /// root, not a session. Keying by session alone would hand a grant made for
+    /// project A to a command running in project B, and would also pin the
+    /// first root the session ever saw for the whole process lifetime.
     async fn for_session(&self, sid: &SessionId) -> Result<Arc<SessionWorkspace>, SandboxError> {
+        let cwd = self.jail_root_for(sid);
+        // rust-doctor-disable-next-line excessive-clone
+        let key = (sid.clone(), cwd.clone());
+
         // Fast path — already provisioned.
-        if let Some(ws) = self.sessions.read().await.get(sid).cloned() {
+        if let Some(ws) = self.sessions.read().await.get(&key).cloned() {
             return Ok(ws);
         }
 
         // Slow path — take write lock, double-check, then create.
         let mut sessions = self.sessions.write().await;
-        if let Some(ws) = sessions.get(sid).cloned() {
+        if let Some(ws) = sessions.get(&key).cloned() {
             return Ok(ws);
         }
 
-        let cwd = self.workspace_root.join(session_key_to_filename(sid));
         tokio::fs::create_dir_all(&cwd)
             .await
             .map_err(|e| SandboxError::Io(format!("create workspace dir: {e}")))?;
@@ -128,8 +161,7 @@ impl WorkspaceSandbox {
             granted_elevations: RwLock::new(HashSet::new()),
         });
         sessions.insert(
-            // rust-doctor-disable-next-line excessive-clone
-            sid.clone(),
+            key,
             // rust-doctor-disable-next-line excessive-clone
             ws.clone(),
         );
@@ -140,15 +172,26 @@ impl WorkspaceSandbox {
 #[async_trait]
 impl Sandbox for WorkspaceSandbox {
     fn summary(&self) -> Option<crate::sandbox::summary::SandboxSummary> {
-        // Static-per-process snapshot: backend mechanism + workspace parent.
+        // Backend mechanism + the root this run may actually write in.
         // Per-call capabilities can be tighter than this; the LLM only needs
         // the envelope so it understands which enforcer it's facing. The
         // `os_driver.platform()` tag is the same identifier carried into
         // logs/telemetry, making correlation easy.
+        //
+        // `writable_roots` reports the SAME root `jail_root_for` enforces, so
+        // the prompt cannot advertise a regime the runtime does not apply. In
+        // project mode the two differ by more than cosmetics: naming the
+        // `~/.aleph/workspaces` parent would tell a model working in
+        // `/Users/me/proj` that its own project is off-limits. This costs no
+        // prompt cache — `writable_roots_line` already rides the dynamic tail
+        // (`OperatingEnvelopeLayer` @1758) for exactly this per-run reason.
+        // With no run in scope the value is byte-identical to what it was.
         Some(crate::sandbox::summary::SandboxSummary {
             backend: self.os_driver.platform(),
             policy_tier: crate::sandbox::summary::PolicyTier::WorkspaceWrite.as_str(),
-            writable_roots: vec![self.workspace_root.clone()],
+            writable_roots: vec![crate::sandbox::context::current_exec_workspace()
+                // rust-doctor-disable-next-line excessive-clone
+                .unwrap_or_else(|| self.workspace_root.clone())],
             // Honest per-call default: the baseline is `strict()` (network
             // DENIED). Network is reachable only via an approval-gated
             // capability escalation, so telling the model "allowed (all hosts)"

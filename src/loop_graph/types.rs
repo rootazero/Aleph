@@ -174,8 +174,9 @@ pub struct GraphNode {
     /// description of the controlled variable / reference.
     pub body: Option<String>,
     /// Declared pace class ("per_turn" | "hourly" | "nightly" | "weekly" |
-    /// "monthly" | free text). Used by lint to flag fast loops owning slow
-    /// loops' references; free text simply opts out of that check.
+    /// "monthly" | free text; "daily" is also accepted as a legacy alias of
+    /// "nightly" — see [`cadence_rank`]). Used by lint to flag fast loops
+    /// owning slow loops' references; free text simply opts out of that check.
     pub cadence: Option<String>,
     pub origin: Origin,
     pub created_at_ms: i64,
@@ -260,6 +261,14 @@ impl GraphEdge {
 
 /// Ordered pace rank for the known cadence classes; `None` for free text
 /// (which opts out of the fast-owns-slow lint).
+///
+/// `"daily"` ranks with `"nightly"` on purpose: it is a legacy spelling
+/// production rows already carry (the vocabulary doc lists five classes, but
+/// the value is free text at write time and `daily` is the obvious sixth a
+/// model picks). Dropping it would silently opt those rows OUT of the
+/// fast-owns-slow lint — fail-open on a governance check — so the honest
+/// move is to rank it and document it, which is what `GraphNode::cadence`
+/// and the tool schema now do.
 #[must_use]
 pub(crate) fn cadence_rank(cadence: &str) -> Option<u8> {
     match cadence {

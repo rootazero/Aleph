@@ -446,10 +446,13 @@ impl SqliteMemoryBackend {
 mod tests {
     use super::*;
 
-    fn temp_backend() -> SqliteMemoryBackend {
-        let dir = std::env::temp_dir().join(format!("aleph-routing-{}", uuid::Uuid::new_v4()));
+    fn temp_backend() -> (tempfile::TempDir, SqliteMemoryBackend) {
+        let (scratch, dir) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
-        SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap()
+        (
+            scratch,
+            SqliteMemoryBackend::new(&dir.join("mem.db")).unwrap(),
+        )
     }
     fn emb(seed: f32) -> Vec<f32> {
         let mut v = vec![0.0f32; 768];
@@ -482,7 +485,7 @@ mod tests {
 
     #[test]
     fn recall_orders_by_distance_and_isolates_agents() {
-        let backend = temp_backend();
+        let (_scratch, backend) = temp_backend();
         backend
             .record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768)
             .unwrap();
@@ -507,7 +510,7 @@ mod tests {
 
     #[test]
     fn prune_keeps_newest_by_recency_not_distance() {
-        let backend = temp_backend();
+        let (_scratch, backend) = temp_backend();
         backend
             .record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768)
             .unwrap(); // nearest, oldest
@@ -529,7 +532,7 @@ mod tests {
 
     #[test]
     fn record_targets_routing_dim_table_and_not_notes() {
-        let backend = temp_backend();
+        let (_scratch, backend) = temp_backend();
         backend
             .record_routing_experience(&row("1", "a", "m1", 1), &emb(1.0), 768)
             .unwrap();
@@ -559,7 +562,7 @@ mod tests {
 
     #[test]
     fn aggregate_groups_by_model_with_raw_facts() {
-        let backend = temp_backend();
+        let (_scratch, backend) = temp_backend();
         let mut r1 = row("1", "a", "m1", 10);
         r1.iterations = 2;
         r1.tok_input = 100;
@@ -608,7 +611,7 @@ mod tests {
 
     #[test]
     fn aggregate_isolates_agents_and_handles_missing_cost() {
-        let backend = temp_backend();
+        let (_scratch, backend) = temp_backend();
         let mut ra = row("1", "a", "m1", 1);
         ra.estimated_cost = None;
         let rb = row("2", "b", "mb", 2);

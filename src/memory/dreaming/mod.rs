@@ -1672,6 +1672,12 @@ fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime),
     Ok((start, end))
 }
 
+/// Scratch directories for this subsystem's tests — see
+/// [`crate::utils::scratch::scratch_root`] for why the path is a child of the
+/// guard and why the guard must be bound by the caller.
+#[cfg(test)]
+pub(crate) use crate::utils::scratch::scratch_root;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2031,7 +2037,7 @@ mod tests {
         // a fresh daemon built from the same store reloads the persisted value
         // instead of resetting to 0 (which would let a worse-than-historical
         // cycle masquerade as a new best).
-        let temp = std::env::temp_dir().join(format!("aleph_besthealth_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
 
         // First run: no persisted value → 0.0.
@@ -2061,7 +2067,7 @@ mod tests {
         };
         // One fresh, one ~25h old (excluded), one fresh.
         let notes = vec![entry(now), entry(now - 90_000), entry(now - 100)];
-        let temp = std::env::temp_dir().join(format!("aleph_metrics_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let m = compute_raw_metrics(&notes, store.as_ref(), DEFAULT_AGENT_ID, None).await;
         assert_eq!(m.total_notes, 3);
@@ -2070,8 +2076,7 @@ mod tests {
 
     #[tokio::test]
     async fn compute_raw_metrics_folds_in_recall_signals() {
-        let temp =
-            std::env::temp_dir().join(format!("aleph_metrics_recall_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
 
         let now = now_timestamp();
@@ -2121,8 +2126,7 @@ mod tests {
 
     #[tokio::test]
     async fn compute_raw_metrics_mature_skill_cohort_excludes_fresh() {
-        let temp =
-            std::env::temp_dir().join(format!("aleph_metrics_mature_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
 
         let now = now_timestamp();
@@ -2169,7 +2173,7 @@ mod tests {
     async fn compute_raw_metrics_folds_in_prior_report_rot() {
         use crate::memory::dreaming::selector::{GateDecision, StrategySelector};
 
-        let temp = std::env::temp_dir().join(format!("aleph_metrics_rot_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let now = now_timestamp();
         let note = |path: &str| NoteIndexEntry {
@@ -2249,7 +2253,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_dream_executes_pipeline_not_stub() {
-        let temp = std::env::temp_dir().join(format!("aleph_dream_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let daemon = test_daemon(store, temp.clone());
 
@@ -2287,7 +2291,7 @@ mod tests {
     /// applied".
     #[tokio::test]
     async fn a_restarted_daemon_still_honours_a_cooldown_from_the_log() {
-        let temp = std::env::temp_dir().join(format!("aleph_dream_cd_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         // Create the note-memory dir up front: `SqliteMemoryBackend::new` only
         // treats its argument as a directory if it already exists, otherwise the
         // path becomes the DB *file* and the agent dir can never be created.
@@ -2366,7 +2370,7 @@ mod tests {
     /// to both the Panel's run history and the governance audit's activity probe.
     #[tokio::test]
     async fn run_now_persists_an_audit_row_with_its_decision() {
-        let temp = std::env::temp_dir().join(format!("aleph_dream_rn_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         std::fs::create_dir_all(&temp).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         let daemon = test_daemon(store.clone(), temp.clone());
@@ -2396,7 +2400,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_dream_skips_gracefully_without_provider() {
-        let temp = std::env::temp_dir().join(format!("aleph_dream_np_{}", uuid::Uuid::new_v4()));
+        let (_temp_guard, temp) = scratch_root();
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
         // No provider / embedder → DreamContext cannot be built; the daemon
         // must skip the pipeline gracefully rather than panic.
@@ -2420,6 +2424,13 @@ mod tests {
     /// The owned half of a project sub-cycle's dependencies. `ProjectCycleDeps`
     /// borrows all of it, so it has to outlive the call in the test's frame.
     struct ProjectFixture {
+        /// Owns the scratch tree. Dropping it deletes `dir`, so it must live in
+        /// the fixture, not in the constructor's frame — a `let _guard = ...`
+        /// there is dropped on `return`, deleting the directory before the test
+        /// has touched it. That failure is nearly invisible: SQLite holds an
+        /// open fd, so the store keeps working on an unlinked file and the test
+        /// still passes.
+        _guard: tempfile::TempDir,
         dir: PathBuf,
         store: Arc<SqliteMemoryBackend>,
         provider: Arc<dyn AiProvider>,
@@ -2433,10 +2444,14 @@ mod tests {
         /// `user_active` drives the activity checker: `true` makes every stage
         /// yield, which is how an interrupted cycle is forced deterministically.
         fn new(tag: &str, user_active: bool) -> Self {
-            let dir = std::env::temp_dir().join(format!("aleph_{tag}_{}", uuid::Uuid::new_v4()));
+            let guard = tempfile::tempdir().expect("tempdir");
+            // `tag` names the directory so a `KEEP`-style post-mortem can tell
+            // the four project fixtures apart.
+            let dir = guard.path().join(tag);
             std::fs::create_dir_all(&dir).unwrap();
             let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
             Self {
+                _guard: guard,
                 dir,
                 store,
                 provider: Arc::new(MockProvider::new("")),
@@ -2697,7 +2712,7 @@ mod tests {
     /// dreamed every night invisibly.
     #[tokio::test]
     async fn a_project_sub_cycle_lands_in_the_audit_table_under_its_namespace() {
-        let dir = std::env::temp_dir().join(format!("aleph_dream_row_{}", uuid::Uuid::new_v4()));
+        let (_dir_guard, dir) = scratch_root();
         let ns = format!("{DEFAULT_AGENT_ID}__proj-audited");
         // `list_note_corpora` discovers corpora by directory listing.
         std::fs::create_dir_all(dir.join(&ns)).unwrap();
@@ -2759,7 +2774,7 @@ mod tests {
     /// created — silently, because an untaken branch reports nothing.
     #[tokio::test]
     async fn every_corpus_family_is_maintained_under_the_default_config() {
-        let dir = std::env::temp_dir().join(format!("aleph_dream_fam_{}", uuid::Uuid::new_v4()));
+        let (_dir_guard, dir) = scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
 
@@ -2793,7 +2808,7 @@ mod tests {
     /// thing: the base agent, which ran the full pipeline itself.
     #[test]
     fn maintenance_corpora_lists_every_corpus_except_the_base() {
-        let dir = std::env::temp_dir().join(format!("aleph_dream_enum_{}", uuid::Uuid::new_v4()));
+        let (_dir_guard, dir) = scratch_root();
         for name in [
             DEFAULT_AGENT_ID,
             "main__u-alice",
@@ -2916,7 +2931,7 @@ mod tests {
             "this test is only meaningful when it disagrees with the default"
         );
 
-        let dir = std::env::temp_dir().join(format!("aleph_dream_budget_{}", uuid::Uuid::new_v4()));
+        let (_dir_guard, dir) = scratch_root();
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(SqliteMemoryBackend::new(&dir).unwrap());
 

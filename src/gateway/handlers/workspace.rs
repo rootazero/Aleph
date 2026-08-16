@@ -1707,26 +1707,33 @@ mod tests {
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
     use tempfile::tempdir;
 
-    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
+    fn test_workspace_mgr() -> (tempfile::TempDir, Arc<AgentEnvStore>) {
         let temp = tempdir().unwrap();
         let config = AgentEnvStoreConfig {
-            db_path: temp.keep().join("test.db"),
+            db_path: temp.path().join("test.db"),
             default_profile: "default".to_string(),
         };
-        Arc::new(AgentEnvStore::new(config).unwrap())
+        (temp, Arc::new(AgentEnvStore::new(config).unwrap()))
     }
 
-    fn test_session_store() -> Arc<dyn crate::gateway::session_store::SessionStore> {
+    fn test_session_store() -> (
+        tempfile::TempDir,
+        Arc<dyn crate::gateway::session_store::SessionStore>,
+    ) {
         let temp = tempdir().unwrap();
         let cfg = SessionManagerConfig {
-            db_path: temp.keep().join("sessions.db"),
+            db_path: temp.path().join("sessions.db"),
             ..Default::default()
         };
-        Arc::new(SessionManager::new(cfg).expect("session manager"))
+        (
+            temp,
+            Arc::new(SessionManager::new(cfg).expect("session manager")),
+        )
     }
 
-    fn test_instance(agent_id: &str) -> AgentInstance {
-        let root = tempdir().unwrap().keep();
+    fn test_instance(agent_id: &str) -> (tempfile::TempDir, tempfile::TempDir, AgentInstance) {
+        let root_guard = tempdir().unwrap();
+        let root = root_guard.path();
         let config = AgentInstanceConfig {
             agent_id: agent_id.to_string(),
             workspace: root.join("workspace"),
@@ -1734,13 +1741,21 @@ mod tests {
             model: "claude-sonnet-4-5".to_string(),
             ..Default::default()
         };
-        AgentInstance::new(config, test_session_store()).expect("instance")
+        let (store_guard, store) = test_session_store();
+        (
+            root_guard,
+            store_guard,
+            AgentInstance::new(config, store).expect("instance"),
+        )
     }
 
-    async fn registry_with(agent_id: &str) -> Arc<AgentRegistry> {
+    async fn registry_with(
+        agent_id: &str,
+    ) -> (tempfile::TempDir, tempfile::TempDir, Arc<AgentRegistry>) {
         let registry = Arc::new(AgentRegistry::new());
-        registry.register(test_instance(agent_id)).await;
-        registry
+        let (root_scratch, store_scratch, instance) = test_instance(agent_id);
+        registry.register(instance).await;
+        (root_scratch, store_scratch, registry)
     }
 
     fn set_agent_req(channel: &str, agent: Option<&str>) -> JsonRpcRequest {
@@ -1753,8 +1768,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_agent_rejects_ghost_when_registry_present() {
-        let wm = test_workspace_mgr();
-        let registry = registry_with("trader").await;
+        let (_scratch, wm) = test_workspace_mgr();
+        let (_root_scratch, _store_scratch, registry) = registry_with("trader").await;
         let resp = handle_set_agent(
             set_agent_req("telegram", Some("ghost")),
             Arc::clone(&wm),
@@ -1772,8 +1787,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_agent_binds_existing_agent() {
-        let wm = test_workspace_mgr();
-        let registry = registry_with("trader").await;
+        let (_scratch, wm) = test_workspace_mgr();
+        let (_root_scratch, _store_scratch, registry) = registry_with("trader").await;
         let resp = handle_set_agent(
             set_agent_req("telegram", Some("trader")),
             Arc::clone(&wm),
@@ -1792,7 +1807,7 @@ mod tests {
     async fn set_agent_skips_validation_without_registry() {
         // A minimal server with no runtime registry must not block binds
         // (graceful fallback — the prior unchecked behavior).
-        let wm = test_workspace_mgr();
+        let (_scratch, wm) = test_workspace_mgr();
         let resp = handle_set_agent(
             set_agent_req("telegram", Some("ghost")),
             Arc::clone(&wm),
@@ -1809,7 +1824,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_agent_unbind_needs_no_registry() {
-        let wm = test_workspace_mgr();
+        let (_scratch, wm) = test_workspace_mgr();
         wm.set_active_agent("telegram", "trader").unwrap();
         // Unbind (agent_id: None) never consults the registry.
         let resp =
@@ -1823,8 +1838,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_agent_reports_previous_and_no_op() {
-        let wm = test_workspace_mgr();
-        let registry = registry_with("trader").await;
+        let (_scratch, wm) = test_workspace_mgr();
+        let (_root_scratch, _store_scratch, registry) = registry_with("trader").await;
 
         let first = handle_set_agent(
             set_agent_req("telegram", Some("trader")),
@@ -1854,7 +1869,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_bindings_reports_all_channels_per_agent() {
-        let wm = test_workspace_mgr();
+        let (_scratch, wm) = test_workspace_mgr();
         // Many-to-one: two channels bound to the same agent must BOTH appear
         // (the old one-channel-per-agent map collapsed them to one).
         wm.set_active_agent("telegram", "trader").unwrap();

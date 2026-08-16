@@ -71,10 +71,14 @@ fn test_session_manager(
 /// concurrent one. That was harmless while exactly one test used the global; it
 /// stops being harmless the moment a second one does.
 fn goal_store_global() -> Arc<crate::goal::GoalStore> {
-    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    let dir = DIR.get_or_init(|| tempfile::tempdir().expect("goal store dir"));
+    // `OnceLock<TempDir>` never drops (statics don't), so the directory is
+    // registered for removal at process exit instead of abandoned.
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        crate::utils::scratch::keep_until_exit(tempfile::tempdir().expect("goal store dir"))
+    });
     crate::goal::set_global_for_test(Arc::new(
-        crate::goal::GoalStore::open(&dir.path().join("goals.db")).expect("goal store"),
+        crate::goal::GoalStore::open(&dir.join("goals.db")).expect("goal store"),
     ));
     crate::goal::global().expect("a goal store is installed")
 }

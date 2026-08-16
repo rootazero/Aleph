@@ -181,18 +181,20 @@ mod tests {
         }
     }
 
-    fn make_store() -> Arc<crate::memory::store::SqliteMemoryBackend> {
-        Arc::new(
-            crate::memory::store::SqliteMemoryBackend::new(
-                &std::env::temp_dir().join(format!("aleph_gate_{}", uuid::Uuid::new_v4())),
-            )
-            .unwrap(),
+    fn make_store() -> (
+        tempfile::TempDir,
+        Arc<crate::memory::store::SqliteMemoryBackend>,
+    ) {
+        let (scratch, path) = crate::utils::scratch::scratch_root();
+        (
+            scratch,
+            Arc::new(crate::memory::store::SqliteMemoryBackend::new(&path).unwrap()),
         )
     }
 
     #[tokio::test]
     async fn defers_low_confidence() {
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let gate = DefaultNoteWriteGate::new(store, Default::default());
         let cand = make_candidate(Severity::Low, 0.4);
         match gate.evaluate(&cand).await.unwrap() {
@@ -203,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn admits_high_confidence_low_severity() {
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let gate = DefaultNoteWriteGate::new(store, Default::default());
         let cand = make_candidate(Severity::Low, 0.9);
         match gate.evaluate(&cand).await.unwrap() {
@@ -214,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn defers_high_severity_medium_confidence() {
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let gate = DefaultNoteWriteGate::new(store, Default::default());
         let cand = make_candidate(Severity::High, 0.7);
         assert!(matches!(
@@ -225,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn bypass_review_admits_unconditionally() {
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let gate = DefaultNoteWriteGate::new(store, Default::default());
         let mut cand = make_candidate(Severity::Critical, 0.1);
         cand.bypass_review = true;
@@ -237,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_critical_defers() {
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let gate = DefaultNoteWriteGate::new(store, Default::default());
         let mut cand = make_candidate(Severity::Critical, 0.95);
         cand.action = NoteWriteAction::Delete;
@@ -251,7 +253,7 @@ mod tests {
     async fn supersede_high_severity_defers() {
         // High confidence (0.95) so neither confidence rule fires — only the
         // Supersede-of-High/Critical rule can produce this Defer.
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let gate = DefaultNoteWriteGate::new(store, Default::default());
         let mut cand = make_candidate(Severity::High, 0.95);
         cand.action = NoteWriteAction::Supersede;
@@ -263,7 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn supersede_low_severity_admits() {
-        let store = make_store();
+        let (_scratch, store) = make_store();
         let gate = DefaultNoteWriteGate::new(store, Default::default());
         let mut cand = make_candidate(Severity::Low, 0.9);
         cand.action = NoteWriteAction::Supersede;

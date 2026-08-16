@@ -311,7 +311,6 @@ mod tests {
     use super::*;
     use crate::gateway::handlers::graph::test_helpers::make_db;
     use crate::memory::notes::store::NoteStore;
-    use uuid::Uuid;
 
     fn update_note_request(node_id: &str, content: &str, agent_id: Option<&str>) -> JsonRpcRequest {
         let mut params = serde_json::json!({ "node_id": node_id, "content": content });
@@ -331,8 +330,8 @@ mod tests {
     /// `KnowledgeNote::to_markdown` reconstruction that only re-emits bullets).
     #[tokio::test]
     async fn update_note_persists_content_verbatim() {
-        let memory_dir = std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
 
         let agent = crate::routing::DEFAULT_AGENT_ID;
@@ -355,8 +354,8 @@ mod tests {
     /// A node_id without a `category/` prefix is rejected with an error.
     #[tokio::test]
     async fn update_note_rejects_node_id_without_category() {
-        let memory_dir = std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
 
         let req = update_note_request("NoCategory", "body", Some("default"));
@@ -369,8 +368,8 @@ mod tests {
 
     #[tokio::test]
     async fn rename_note_moves_file_and_reindexes() {
-        let memory_dir = std::env::temp_dir().join(format!("rename_rpc_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
         let agent = crate::routing::DEFAULT_AGENT_ID;
         // Seed a real on-disk note through the indexer write path.
@@ -406,8 +405,8 @@ mod tests {
 
     #[tokio::test]
     async fn delete_note_removes_file_and_index() {
-        let memory_dir = std::env::temp_dir().join(format!("delete_rpc_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
         let agent = crate::routing::DEFAULT_AGENT_ID;
         indexer
@@ -438,9 +437,8 @@ mod tests {
     /// or weakened rather than passing vacuously on an unrelated error.
     #[tokio::test]
     async fn rename_note_rejects_traversal_category() {
-        let memory_dir =
-            std::env::temp_dir().join(format!("rename_rpc_traversal_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
 
         let req = JsonRpcRequest {
@@ -464,9 +462,8 @@ mod tests {
     /// Same traversal guard, for `graph.delete_note`.
     #[tokio::test]
     async fn delete_note_rejects_traversal_category() {
-        let memory_dir =
-            std::env::temp_dir().join(format!("delete_rpc_traversal_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
 
         let req = JsonRpcRequest {
@@ -495,8 +492,8 @@ mod tests {
     async fn foreign_partition_update_reports_success_but_does_not_write() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let memory_dir = std::env::temp_dir().join(format!("update_deny_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db));
 
         let original = "---\ncategory: reference\ntags: []\ncreated: \"2024-01-01\"\nupdated: \"2024-01-01\"\n---\n\n- alice's real fact\n";
@@ -538,8 +535,8 @@ mod tests {
     async fn foreign_partition_delete_reports_success_but_leaves_the_note_intact() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let memory_dir = std::env::temp_dir().join(format!("delete_deny_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
 
         indexer
@@ -615,8 +612,8 @@ mod tests {
     async fn foreign_partition_rename_is_denied_with_the_not_found_shape_old_name_intact() {
         use crate::gateway::caller_identity::CALLER_USER;
 
-        let memory_dir = std::env::temp_dir().join(format!("rename_deny_{}", Uuid::new_v4()));
-        let db = make_db();
+        let (_scratch_dir, memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch, db) = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db));
 
         indexer
@@ -647,9 +644,9 @@ mod tests {
 
         // SAME (node_id, agent_id), compared against a FRESH store where it
         // genuinely never existed.
-        let empty_memory_dir =
-            std::env::temp_dir().join(format!("rename_deny_empty_{}", Uuid::new_v4()));
-        let empty_indexer = Arc::new(NoteIndexer::new(empty_memory_dir, make_db()));
+        let (_scratch_dir, empty_memory_dir) = crate::utils::scratch::scratch_root();
+        let (_scratch_empty, empty_db) = make_db();
+        let empty_indexer = Arc::new(NoteIndexer::new(empty_memory_dir, empty_db));
         let missing_resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
                 handle_rename_note_impl(rename_req(), empty_indexer).await

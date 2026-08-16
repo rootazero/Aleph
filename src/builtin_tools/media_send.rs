@@ -253,7 +253,8 @@ mod tests {
         // check applies only to remotely-fetched http(s) URLs. The path has to
         // be a real file under the temp root, because that is exactly what the
         // delivery path will demand of it.
-        let dir = std::env::temp_dir().join("aleph-media-send-accept");
+        // Still under the OS temp root, which is what the delivery path demands.
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let clip = dir.join("clip.mp4");
         tokio::fs::write(&clip, b"fake mp4").await.unwrap();

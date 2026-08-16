@@ -776,8 +776,9 @@ async fn resolve_prompt_context(
     // reading the daemon's `current_dir()`.
     //
     // `envelope.cwd` is the run's EFFECTIVE workspace — the same path the gateway
-    // gives the tool adapters as `default_working_dir`, so the advertised `cwd=`
-    // is the directory a shell call actually lands in, and `repo=` / `git=`
+    // publishes as `sandbox::context::EXEC_WORKSPACE` and the sandbox jails to,
+    // so the advertised `cwd=` is the directory a shell call actually lands in
+    // (it is enforced there, not merely advertised here), and `repo=` / `git=`
     // describe the project the model is working on rather than the daemon's own
     // checkout. `repo_root` resolution is cached per directory (no `git`
     // subprocess); the branch is re-read from `.git/HEAD` on every render so a

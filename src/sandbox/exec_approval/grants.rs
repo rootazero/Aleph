@@ -554,10 +554,16 @@ impl GrantStore {
 fn global_path() -> PathBuf {
     #[cfg(any(test, feature = "test-helpers"))]
     {
-        std::env::temp_dir().join(format!(
-            "aleph-approval-grants-test-{}.json",
-            std::process::id()
-        ))
+        // In a scratch dir registered for removal at process exit, not loose in
+        // the temp root: `GLOBAL` is a `LazyLock` and statics never drop, so
+        // nothing else can ever clean this up.
+        static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            crate::utils::scratch::keep_until_exit(
+                tempfile::tempdir().expect("grant store scratch dir"),
+            )
+        })
+        .join("grants.json")
     }
     #[cfg(not(any(test, feature = "test-helpers")))]
     {

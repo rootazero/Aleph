@@ -131,9 +131,10 @@ pub struct TurnEnvelope {
     /// The run's **effective** working directory: the project override when the
     /// user picked one, else the agent's `~/.aleph/workspaces/{id}`.
     ///
-    /// This is the same value the gateway feeds the tool adapters as
-    /// `default_working_dir`, i.e. the directory a shell tool call actually
-    /// executes in. It anchors `RuntimeContext`'s `cwd=` / `repo=` / `git=`
+    /// This is the same value the gateway publishes as
+    /// [`EXEC_WORKSPACE`](crate::sandbox::context::EXEC_WORKSPACE) — the root
+    /// `WorkspaceSandbox` jails to, i.e. the directory a shell tool call
+    /// actually executes in. It anchors `RuntimeContext`'s `cwd=` / `repo=` / `git=`
     /// segments. Before it was threaded, those three were derived from
     /// `std::env::current_dir()` — the *daemon's* directory — so the prompt
     /// advertised a path where no tool ran and, in project mode, reported the

@@ -36,11 +36,13 @@ const DEFAULT_AGENT: &str = crate::routing::DEFAULT_AGENT_ID;
 const WATCH_DEBOUNCE: Duration = Duration::from_secs(60);
 
 static CRON_TRIGGER: OnceCell<SharedCronService> = OnceCell::new();
-/// watcher job id → (when it was last poked, which node's victory it was poked
-/// for). The node half is what makes "held off by the debounce counts as
-/// reviewed" a true statement rather than a usually-true one: `link` is a
-/// first-class verb, so one watcher can legitimately cover several loops.
-static DEBOUNCE: OnceCell<Mutex<HashMap<String, (Instant, String)>>> = OnceCell::new();
+/// watcher job id → its debounce [`Stamp`] (when, for which node's victory,
+/// and whether that run ever confirmed). The node half is what makes "held
+/// off by the debounce counts as reviewed" a true statement rather than a
+/// usually-true one: `link` is a first-class verb, so one watcher can
+/// legitimately cover several loops. The state half is what keeps it true
+/// when the run the stamp names never confirmed.
+static DEBOUNCE: OnceCell<Mutex<HashMap<String, Stamp>>> = OnceCell::new();
 
 /// Install the cron handle that powers watcher pokes. Called once at boot
 /// next to `loop_graph::init_global`; absent (None / never called) the
@@ -51,15 +53,44 @@ pub fn init_cron_trigger(svc: Option<SharedCronService>) {
     }
 }
 
+/// Lifecycle of a debounce stamp. `InFlight` is written when a poke is
+/// admitted and flipped to `Done` only after `run_job` confirms — so a stamp
+/// that merely EXISTS is not yet evidence that any review happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StampState {
+    InFlight,
+    Done,
+}
+
+#[derive(Debug, Clone)]
+struct Stamp {
+    at: Instant,
+    for_node: String,
+    state: StampState,
+}
+
 /// Outcome of asking the debounce for permission to poke `watcher_job_id` on
 /// behalf of `node_id`.
+///
+/// **The invariant this enum exists to keep honest: `true` out of
+/// [`poke_one_watcher`] must mean the review was dispatched or a COMPLETED
+/// in-window run already covers this node.** A stamp whose run is still in
+/// flight is not that evidence — if it fails, [`debounce_rollback`] erases it
+/// and no review will have happened, while the settle's one-shot claim was
+/// already spent. That outcome therefore answers "not covered", and the
+/// released claim's retry lands on either the flipped `Done` stamp (covered,
+/// free) or a fresh poke.
 #[derive(Debug, PartialEq, Eq)]
 enum Debounce {
-    /// Go ahead and poke.
+    /// Go ahead and poke (an `InFlight` stamp was recorded).
     Pass,
-    /// Held off, and the run it was held off against was for THIS node — that
+    /// Held off, and a COMPLETED in-window run was taken for THIS node — that
     /// run is the review this settle wanted, so the claim is honoured.
     HeldForSameNode,
+    /// Held off against a run for THIS node that is still in flight. Not a
+    /// voucher (see the enum doc): the claim is released for retry rather
+    /// than spent against a run whose outcome is unknown.
+    HeldForSameNodeInFlight,
     /// Held off against a run taken for a DIFFERENT node. The watcher is
     /// rate-limited (correct — it is one cron job), but this node's victory was
     /// never reviewed: that run started before this win existed. Crediting it
@@ -72,17 +103,43 @@ fn debounce_pass(watcher_job_id: &str, node_id: &str) -> Debounce {
     let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     match guard.get(watcher_job_id) {
-        Some((last, for_node)) if now.duration_since(*last) < WATCH_DEBOUNCE => {
-            if for_node == node_id {
-                Debounce::HeldForSameNode
-            } else {
+        Some(stamp) if now.duration_since(stamp.at) < WATCH_DEBOUNCE => {
+            if stamp.for_node != node_id {
                 Debounce::HeldForOtherNode
+            } else {
+                match stamp.state {
+                    StampState::Done => Debounce::HeldForSameNode,
+                    StampState::InFlight => Debounce::HeldForSameNodeInFlight,
+                }
             }
         }
         _ => {
-            guard.insert(watcher_job_id.to_string(), (now, node_id.to_string()));
+            guard.insert(
+                watcher_job_id.to_string(),
+                Stamp {
+                    at: now,
+                    for_node: node_id.to_string(),
+                    state: StampState::InFlight,
+                },
+            );
             Debounce::Pass
         }
+    }
+}
+
+/// Flip the stamp [`debounce_pass`] just recorded from `InFlight` to `Done` —
+/// called only after `run_job` confirmed, which is what turns the stamp into
+/// the "a completed in-window run covers this node" evidence
+/// [`Debounce::HeldForSameNode`] credits. Keyed on `(job, node)` and a no-op
+/// for anything else: the only entry a successful poke may flip is its own.
+fn debounce_complete(watcher_job_id: &str, node_id: &str) {
+    let map = DEBOUNCE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(stamp) = guard.get_mut(watcher_job_id) else {
+        return;
+    };
+    if stamp.for_node == node_id && stamp.state == StampState::InFlight {
+        stamp.state = StampState::Done;
     }
 }
 
@@ -231,11 +288,14 @@ fn watcher_jobs_for(
 ///
 /// Returns whether the caller's one-shot settle claim was *earned*: `true`
 /// when there was nothing to poke (no graph, no watchers — the claim costs
-/// nothing and re-asking every turn would be pure noise) or when at least one
-/// watcher was actually poked. `false` says "watchers exist and none of them
-/// ran", which is the only case where holding the claim would retire the
-/// victory review for good — the caller releases it so the next observation of
-/// the same terminal row retries.
+/// nothing and re-asking every turn would be pure noise) or when EVERY paired
+/// watcher was actually poked (or covered by a completed in-window run taken
+/// for this node). `false` says at least one watcher that should have reviewed
+/// did not run — holding the claim would retire THAT watcher's review for
+/// good (the claim key `(id, completed_at_ms)` never moves again), so the
+/// caller releases it and the next observation of the same terminal row
+/// retries. An earlier draft OR-ed the per-watcher outcomes: one lucky poke
+/// kept the claim while a failed watcher's review was silently retired.
 async fn notify_node_settled(node_id: &str) -> bool {
     let Some(store) = crate::loop_graph::global() else {
         return true;
@@ -257,33 +317,59 @@ async fn notify_node_settled(node_id: &str) -> bool {
         info!(node = %node_id, "loop_graph: watchers paired but no cron trigger handle");
         return false;
     };
-    // Run every paired watcher's poke concurrently — they hold separate cron
-    // mutex slots and a settle against a goal with N watchers should not pay
-    // N × (one-cron-run latency). The debounce map is already keyed by
-    // watcher_job_id, so concurrent jobs do not race each other there; what
-    // they share is the cron trigger handle, and `Mutex::lock().await`
-    // serialises access to it cleanly per-job.
+    poke_all_watchers(cron.clone(), &watcher_jobs, node_id).await
+}
+
+/// Poke every paired watcher concurrently — they hold separate cron mutex
+/// slots and a settle against a goal with N watchers should not pay
+/// N × (one-cron-run latency). The debounce map is already keyed by
+/// watcher_job_id, so concurrent jobs do not race each other there; what they
+/// share is the cron trigger handle, and `Mutex::lock().await` serialises
+/// access to it cleanly per-job.
+///
+/// The aggregate is an AND, never an OR: the claim is earned only when every
+/// pokeable watcher ran (or was covered). One failure sinks the whole settle —
+/// that watcher's debounce stamp was already rolled back, so the retry the
+/// released claim buys re-pokes it without touching the watchers that
+/// succeeded (their completed stamps hold them off for the window).
+async fn poke_all_watchers(
+    cron: SharedCronService,
+    watcher_jobs: &[String],
+    node_id: &str,
+) -> bool {
     let results: Vec<bool> = join_all(
         watcher_jobs
             .iter()
             .map(|job_id| poke_one_watcher(cron.clone(), job_id, node_id)),
     )
     .await;
-    results.into_iter().any(|poked| poked)
+    results.into_iter().all(|poked| poked)
 }
 
 /// Poke one paired watcher for a settle on `node_id`. Encapsulated so the
 /// parent function can `join_all` over a Vec of futures.
 ///
 /// Returns `true` iff the caller can treat this poke as the review the
-/// settle was waiting on: either the run actually executed, or an earlier
-/// in-window run was already taken for THIS very node. Other debounce
-/// outcomes (held for another node, error) return `false`.
+/// settle was waiting on: either the run actually executed (its stamp flipped
+/// to `Done`), or an earlier COMPLETED in-window run was already taken for
+/// THIS very node. Every other outcome — held for another node, held for an
+/// in-flight run that has not confirmed yet, poke error — returns `false`;
+/// see the [`Debounce`] doc for the invariant.
 async fn poke_one_watcher(cron: SharedCronService, job_id: &str, node_id: &str) -> bool {
     match debounce_pass(job_id, node_id) {
-        // The run this was held off against was taken for this very node —
-        // that run IS the review this settle wanted.
+        // The completed run this was held off against was taken for this very
+        // node — that run IS the review this settle wanted.
         Debounce::HeldForSameNode => return true,
+        // A run for this node is in flight but has not confirmed. Crediting
+        // the claim against it spends a one-shot claim on a review that, if
+        // the run fails (its stamp rolls back), never happened. Release and
+        // let the retry see the outcome.
+        Debounce::HeldForSameNodeInFlight => {
+            info!(node = %node_id, watcher = %job_id,
+                "loop_graph: watcher run for this node still in flight — \
+                 settle claim released for retry");
+            return false;
+        }
         // Held off against another node's review. Rate-limit the watcher
         // (correct — one cron job), but do not credit this node's claim:
         // that run started before this win existed and cannot have seen it.
@@ -298,6 +384,7 @@ async fn poke_one_watcher(cron: SharedCronService, job_id: &str, node_id: &str) 
     let service = cron.lock().await;
     match service.run_job(job_id).await {
         Ok(()) => {
+            debounce_complete(job_id, node_id);
             info!(node = %node_id, watcher = %job_id,
                 "loop_graph: victory claim — watcher cron poked");
             true
@@ -317,9 +404,10 @@ async fn poke_one_watcher(cron: SharedCronService, job_id: &str, node_id: &str) 
 /// `Complete` arm (`builtin_tools/goal.rs` — Passive goals never reach the
 /// continuation hook).
 ///
-/// Returns `false` when watchers exist but none could be poked — the caller
-/// holding a one-shot claim must give it back (`release_settle_notify`), or
-/// this completion is never reviewed.
+/// Returns `false` when watchers exist but at least one could not be poked
+/// (or covered by a completed in-window run) — the caller holding a one-shot
+/// claim must give it back (`release_settle_notify`), or that watcher's
+/// review of this completion never happens.
 pub async fn notify_goal_settled(session: &str) -> bool {
     notify_node_settled(&goal_node_id(session)).await
 }
@@ -442,10 +530,12 @@ pub(crate) fn render_session_topology_in(
     // `.flatten()`, not `?`: BOTH the store error and a genuine "not a
     // registered node" collapse to `None` here, deliberately. This is the
     // prompt-rendering path — an unreadable store must render nothing rather
-    // than break the turn — and `render_session_topology_strict` above is the
-    // variant for callers that need to tell the two apart. (Behaviourally
-    // identical to `.ok()?` — both fold the same two `None`s — but written
-    // as `.flatten()` so the intent is named.)
+    // than break the turn. Callers that need to tell the two apart (doctor,
+    // lint, tests) want the strict variant — it lives under `#[cfg(test)]`
+    // today because tests are its only consumer; promote it the day a
+    // production caller appears. (Behaviourally identical to `.ok()?` — both
+    // fold the same two `None`s — but written as `.flatten()` so the intent
+    // is named.)
     render_session_topology_inner(store, session).ok().flatten()
 }
 
@@ -459,7 +549,12 @@ pub(crate) fn render_session_topology_in(
 /// `Result<None, Err>` shape below lets a caller that cares (doctor, lint,
 /// tests) tell "no governance row" (genuine ungoverned → None) from "could
 /// not read" (transient store failure → Err).
-#[allow(dead_code)] // retained for doctor/lint consumers per doc above; not yet wired
+///
+/// `#[cfg(test)]`, honestly: tests are its only consumer today (it used to
+/// sit in production under `#[allow(dead_code)]` "for doctor/lint, not yet
+/// wired" — an allow that had been there since the function was written).
+/// Promote it to `pub(crate)` when a real caller lands.
+#[cfg(test)]
 pub(crate) fn render_session_topology_strict(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
@@ -474,8 +569,9 @@ pub(crate) fn render_session_topology_strict(
 /// - `Ok(None)` when `goal:<session>` is not a registered node (legitimately
 ///   ungoverned; the prompt cache holds for this session).
 /// - `Ok(Some(_))` with the rendered topology bytes.
-/// - `Err(_)` only when the store could not answer — see
-///   [`render_session_topology_strict`].
+/// - `Err(_)` only when the store could not answer — the case
+///   `render_session_topology_strict` (test-only today, see above) exists to
+///   distinguish from a genuine `None`.
 fn render_session_topology_inner(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
@@ -1048,8 +1144,14 @@ mod tests {
         assert_eq!(debounce_pass("job-x", "goal:a"), Debounce::Pass);
         assert_eq!(
             debounce_pass("job-x", "goal:a"),
+            Debounce::HeldForSameNodeInFlight,
+            "second poke within the window, run unconfirmed: held, NOT yet a voucher"
+        );
+        debounce_complete("job-x", "goal:a");
+        assert_eq!(
+            debounce_pass("job-x", "goal:a"),
             Debounce::HeldForSameNode,
-            "second poke within window must be dropped"
+            "once the run confirmed, the stamp IS the review a repeat settle wanted"
         );
         assert_eq!(
             debounce_pass("job-y", "goal:a"),
@@ -1073,7 +1175,51 @@ mod tests {
         );
         assert_eq!(
             debounce_pass("job-shared", "goal:a"),
+            Debounce::HeldForSameNodeInFlight,
+            "A's own run has not confirmed yet either"
+        );
+        debounce_complete("job-shared", "goal:a");
+        assert_eq!(
+            debounce_pass("job-shared", "goal:a"),
             Debounce::HeldForSameNode
+        );
+    }
+
+    /// `debounce_complete` is keyed on `(job, node)`: flipping with the wrong
+    /// node must not turn someone else's in-flight stamp into a voucher.
+    #[test]
+    fn complete_for_a_different_node_does_not_flip_the_stamp() {
+        assert_eq!(debounce_pass("job-flip", "goal:a"), Debounce::Pass);
+        debounce_complete("job-flip", "goal:b");
+        assert_eq!(
+            debounce_pass("job-flip", "goal:a"),
+            Debounce::HeldForSameNodeInFlight,
+            "a mismatched complete must leave the stamp in flight"
+        );
+    }
+
+    /// The race the in-flight half closes: settle #1's poke is admitted
+    /// (stamp `InFlight`), its `run_job` then fails and rolls the stamp back.
+    /// A settle #2 for the SAME node landing in between must NOT be told
+    /// "covered" — the run it would be credited against is about to be erased
+    /// and no review will have happened, while #2's one-shot claim
+    /// (`(id, completed_at_ms)`, immutable thereafter) is already spent.
+    /// After the rollback the next settle pokes fresh.
+    #[test]
+    fn an_unconfirmed_run_is_not_a_review_voucher() {
+        assert_eq!(debounce_pass("job-race", "goal:a"), Debounce::Pass);
+        assert_eq!(
+            debounce_pass("job-race", "goal:a"),
+            Debounce::HeldForSameNodeInFlight,
+            "settle #2 during the flight: released for retry, not credited"
+        );
+        // The failed poke erases its stamp...
+        debounce_rollback("job-race");
+        // ...and the retry #2's released claim buys pokes immediately.
+        assert_eq!(
+            debounce_pass("job-race", "goal:a"),
+            Debounce::Pass,
+            "after rollback the retry must not be suppressed"
         );
     }
 
@@ -1084,7 +1230,7 @@ mod tests {
         assert_eq!(debounce_pass("job-rollback", "goal:a"), Debounce::Pass);
         assert_eq!(
             debounce_pass("job-rollback", "goal:a"),
-            Debounce::HeldForSameNode
+            Debounce::HeldForSameNodeInFlight
         );
         debounce_rollback("job-rollback");
         assert_eq!(
@@ -1094,5 +1240,65 @@ mod tests {
         );
         // Rolling back an unknown watcher is a no-op.
         debounce_rollback("job-never-passed");
+    }
+
+    /// A settle against a goal with TWO watchers: one pokes fine, the other's
+    /// `run_job` fails (unknown job id). The settle claim is earned only when
+    /// EVERY watcher ran — the OR aggregate this pins against kept the claim
+    /// on the strength of the lucky poke while the failed watcher's review of
+    /// an immutable claim key was retired forever. The failed watcher's stamp
+    /// is rolled back, so the retry the released claim buys can re-poke it.
+    #[tokio::test]
+    async fn settle_claim_requires_every_watcher_to_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let cron: SharedCronService = Arc::new(tokio::sync::Mutex::new(
+            crate::tasks::cron::CronService::new(crate::tasks::cron::CronConfig {
+                db_path: dir.path().join("cron.db").to_string_lossy().to_string(),
+                ..Default::default()
+            })
+            .expect("cron service"),
+        ));
+        let job = crate::tasks::cron::CronJob::new(
+            "watcher-ok",
+            "main",
+            "probe",
+            crate::tasks::cron::ScheduleKind::Cron {
+                expr: "0 30 9 * * *".to_string(),
+                tz: None,
+                stagger_ms: None,
+            },
+        );
+        let ok_id = {
+            cron.lock()
+                .await
+                .add_job(job)
+                .await
+                .expect("add watcher job")
+        };
+        let missing_id = format!(
+            "missing-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        // Mixed: one success, one failure → claim NOT earned.
+        assert!(
+            !poke_all_watchers(cron.clone(), &[ok_id.clone(), missing_id.clone()], "goal:z").await,
+            "one failed watcher must sink the whole settle"
+        );
+        // All successful → claim earned.
+        assert!(
+            poke_all_watchers(cron.clone(), std::slice::from_ref(&ok_id), "goal:z").await,
+            "every watcher poked ⇒ claim earned"
+        );
+        // The failed watcher's stamp was rolled back: a fresh poke of it is
+        // admitted (Pass), not suppressed by a window it never earned.
+        assert_eq!(
+            debounce_pass(&missing_id, "goal:z2"),
+            Debounce::Pass,
+            "rollback must free the failed watcher's window"
+        );
     }
 }

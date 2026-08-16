@@ -919,9 +919,11 @@ mod tests {
 
     #[test]
     fn test_report_channel_secret_presence_reports_flag_without_echoing_secret() {
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
         let vault = SharedTokenManager::new(
             Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
-            "/tmp/aleph_channel_secret_test.vault",
+            dir.join("test.vault"),
         );
         // A shared token must exist before the vault can encrypt/store secrets.
         vault.generate_token().unwrap();

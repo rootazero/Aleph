@@ -527,14 +527,13 @@ mod tests {
     #[test]
     fn test_resolve_attachment_path_existing() {
         // An existing file resolves to its absolute path.
-        let mut file = std::env::temp_dir();
-        file.push(format!("aleph_imsg_test_{}.bin", std::process::id()));
+        let (_scratch, dir) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("attachment.bin");
         std::fs::write(&file, b"x").unwrap();
 
         let resolved = resolve_attachment_path(&file.to_string_lossy());
         assert_eq!(resolved.as_deref(), Some(file.as_path()));
-
-        std::fs::remove_file(&file).ok();
     }
 
     #[test]

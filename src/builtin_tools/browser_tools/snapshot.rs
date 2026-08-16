@@ -188,10 +188,7 @@ mod tests {
     /// act on.
     #[test]
     fn offload_persists_the_whole_tree_redacted() {
-        let base = std::env::temp_dir()
-            .join("aleph_test_browser_snapshot")
-            .join("offload");
-        let _ = std::fs::remove_dir_all(&base);
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore::with_dir_for_tests(base.clone());
         let manager = ProfileManager::new(BrowserSystemConfig::default());

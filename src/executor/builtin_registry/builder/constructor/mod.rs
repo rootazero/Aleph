@@ -497,7 +497,8 @@ impl BuiltinToolRegistry {
             .map_err(|e| AlephError::other(format!("loop_graph store open: {e}")))?,
         );
         crate::loop_graph::init_global(loop_graph_store.clone());
-        crate::loop_graph::init_event_bus(crate::loop_graph::TopologyEventBus::new());
+        let loop_graph_bus = crate::loop_graph::TopologyEventBus::new();
+        crate::loop_graph::init_event_bus(loop_graph_bus.clone());
         // Snapshot store: the audit-trail half of the role graph. Own DB for
         // the same reason the topology DB is its own — snapshots are read for
         // human review and diffing, and must not widen the write-lock surface
@@ -510,7 +511,15 @@ impl BuiltinToolRegistry {
             )
             .map_err(|e| AlephError::other(format!("snapshot store open: {e}")))?,
         );
-        crate::loop_graph::init_snapshot_store(snapshot_store.clone());
+        // The event bus's only consumer today: append every topology mutation
+        // to the snapshot DB's `events` table, so the governance audit log
+        // survives the process that broadcast it. Spawned, not awaited — the
+        // daemon has no shutdown registry for boot tasks, so the persister
+        // shares the daemon's lifetime (see `spawn_event_persister`'s doc).
+        // Dropping the JoinHandle (here, at scope end) detaches the task; it
+        // does NOT cancel it.
+        let _persister =
+            crate::loop_graph::spawn_event_persister(loop_graph_bus, snapshot_store.clone());
         crate::loop_graph::service::init_cron_trigger(config.cron_service.clone());
         let loop_graph_tool = crate::builtin_tools::LoopGraphTool::new(loop_graph_store)
             .with_snapshot_store(snapshot_store)

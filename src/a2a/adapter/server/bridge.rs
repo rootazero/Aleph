@@ -389,7 +389,7 @@ mod tests {
     }
 
     /// Helper to create a test bridge with real TaskStore/StreamHub and mock adapter
-    async fn make_bridge(adapter: MockExecutionAdapter) -> AgentLoopBridge {
+    async fn make_bridge(adapter: MockExecutionAdapter) -> (tempfile::TempDir, AgentLoopBridge) {
         let registry = Arc::new(AgentRegistry::new());
         let temp = tempfile::tempdir().unwrap();
         let sm = test_session_manager(&temp);
@@ -402,12 +402,13 @@ mod tests {
         let instance = AgentInstance::new(config, sm).unwrap();
         registry.register(instance).await;
 
-        AgentLoopBridge::new(
+        let bridge = AgentLoopBridge::new(
             registry,
             Arc::new(adapter),
             Arc::new(TaskStore::new()),
             Arc::new(StreamHub::new()),
-        )
+        );
+        (temp, bridge)
     }
 
     /// The peer on an A2A wire is a machine. There is no channel to render an
@@ -426,7 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_success() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "Hello, agent!");
 
         let task = bridge
@@ -441,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_failure_marks_task_failed() {
-        let bridge = make_bridge(MockExecutionAdapter::failing()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::failing()).await;
         let msg = A2AMessage::text(A2ARole::User, "Do something");
 
         let task = bridge
@@ -459,7 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_empty_text_returns_error() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         // Message with no text parts
         let msg = A2AMessage {
             message_id: "m1".to_string(),
@@ -480,7 +481,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_whitespace_only_returns_error() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "   \n\t  ");
 
         let result = bridge.handle_message("task-ws", msg, None).await;
@@ -490,7 +491,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_uses_session_id_as_context() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "With session");
 
         let task = bridge
@@ -503,7 +504,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_uses_task_id_as_context_when_no_session() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "No session");
 
         let task = bridge
@@ -549,7 +550,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_stream_returns_stream() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "Stream me");
 
         let mut stream = bridge
@@ -589,7 +590,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_stream_failure_broadcasts_failed() {
-        let bridge = make_bridge(MockExecutionAdapter::failing()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::failing()).await;
         let msg = A2AMessage::text(A2ARole::User, "Will fail");
 
         let mut stream = bridge
@@ -622,7 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_stream_empty_text_returns_error() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage {
             message_id: "m1".to_string(),
             role: A2ARole::User,
@@ -642,7 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_message_stream_whitespace_only_returns_error() {
-        let bridge = make_bridge(MockExecutionAdapter::succeeding()).await;
+        let (_scratch, bridge) = make_bridge(MockExecutionAdapter::succeeding()).await;
         let msg = A2AMessage::text(A2ARole::User, "   \n\t  ");
 
         let result = bridge.handle_message_stream("task-ws", msg, None).await;

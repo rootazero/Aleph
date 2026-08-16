@@ -351,31 +351,37 @@ mod tests {
         );
     }
 
-    /// The retry path: the parent's run is busy at first, so the adapter is
-    /// hit multiple times. Two busy responses fit inside the 0+30+120 schedule
-    /// when the test overrides the first 30s and 120s sleeps (we cannot do
-    /// that in production code), so we only assert that the retry loop ran
-    /// to completion and eventually returned once the parent freed up.
+    /// The retry path, all three rungs of it: the parent is busy for the first
+    /// two attempts, so the ladder must sleep 30s, retry, sleep 120s and retry
+    /// again before the third attempt succeeds.
     ///
-    /// # Why only one retry is exercised
+    /// # Why this no longer costs two and a half minutes
     ///
-    /// The real `RETRY_DELAYS_SECS = [0, 30, 120]` spans over two minutes. To
-    /// keep the test fast we change the adapter's `busy_first` to 1, which
-    /// makes the first attempt fail and the second (after the 30s sleep)
-    /// succeed. We then assert the call count. The 30s wait is a real
-    /// wall-clock cost in CI; the alternative — injecting a clock — would
-    /// require refactoring the production code purely for testability, which
-    /// this layer rightly resists (R10 thin harness). We accept the wait.
-    #[tokio::test]
-    #[ignore = "exercises the 30s retry sleep; enable when investigating retry behavior"]
-    async fn announce_retries_on_busy_then_succeeds() {
+    /// It used to be `#[ignore]`d, and the reason recorded here was that the
+    /// only alternative was "injecting a clock — which would require
+    /// refactoring the production code purely for testability, which this
+    /// layer rightly resists (R10)". That reasoning talked itself out of a fix
+    /// that needs **no production change at all**: the ladder already sleeps on
+    /// `tokio::time::sleep`, and `start_paused` runs the whole test on tokio's
+    /// virtual clock, auto-advancing to the next deadline whenever the runtime
+    /// goes idle. Zero production lines, real sleeps, no wall clock.
+    ///
+    /// So the arm that had never actually been executed is now executed on
+    /// every `--lib` run, and it exercises the FULL `[0, 30, 120]` schedule
+    /// rather than just its first rung — under a virtual clock, the longer
+    /// ladder is free.
+    #[tokio::test(start_paused = true)]
+    async fn announce_retries_through_the_whole_busy_ladder() {
         let request_id = format!("retry-{}", uuid::Uuid::new_v4());
         seed_completed(&request_id);
 
         let (registry, _tmp) = registry_with_main_agent().await;
-        let adapter = RecordingAdapter::new(1);
+        // Busy for attempts 1 and 2 → success only on attempt 3, which is
+        // reachable only if BOTH the 30s and the 120s rung are traversed.
+        let adapter = RecordingAdapter::new(2);
         let event_bus = Arc::new(GatewayEventBus::new());
 
+        let started = tokio::time::Instant::now();
         announce_one(
             adapter.clone(),
             registry,
@@ -383,11 +389,20 @@ mod tests {
             sample_event(&request_id),
         )
         .await;
+        let virtual_elapsed = started.elapsed();
 
         assert_eq!(
             adapter.call_count(),
-            2,
-            "first attempt busy, second attempt succeeds after the 30s retry"
+            3,
+            "two busy responses must be retried, and the third attempt succeeds"
+        );
+        // The call count alone cannot tell a real ladder from one whose sleeps
+        // were deleted; the virtual clock can. 0 + 30 + 120 = 150s must have
+        // elapsed on tokio's timer even though the test takes milliseconds.
+        assert_eq!(
+            virtual_elapsed.as_secs(),
+            150,
+            "the ladder must actually wait 30s then 120s (virtual time)"
         );
     }
 

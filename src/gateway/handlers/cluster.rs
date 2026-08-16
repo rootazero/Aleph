@@ -183,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn enroll_registers_node_device_without_token() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         let req = JsonRpcRequest::with_id(
             "cluster.enroll",
             Some(serde_json::json!({"node_name": "worker-1"})),
@@ -205,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn enroll_twice_returns_the_same_node_id() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         let enroll = |name: &'static str, id: i32| {
             let ctx = ctx.clone();
             async move {
@@ -235,7 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn deregister_evicts_session_and_revokes_device() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         // Enroll mints a node device + token in security_store.
         let enroll = handle_cluster_enroll(
             JsonRpcRequest::with_id(
@@ -287,7 +287,7 @@ mod tests {
 
     #[tokio::test]
     async fn deregister_unknown_node_is_not_found() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         let resp = handle_cluster_deregister(
             JsonRpcRequest::with_id(
                 "cluster.deregister",
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn environments_list_projects_registered_nodes() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         let req = JsonRpcRequest::with_id("environments.list", None, serde_json::json!(1));
         let resp = handle_environments_list(req, ctx.clone()).await;
         assert!(resp.is_success());
@@ -340,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn environments_list_merges_enrolled_offline_nodes() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         // Enroll mints a node device (role=node) with no live session yet.
         let enroll = handle_cluster_enroll(
             JsonRpcRequest::with_id(
@@ -419,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn environments_list_orders_online_before_offline_and_by_name() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         // One enrolled-but-offline node ("a-off" — would sort first by name).
         handle_cluster_enroll(
             JsonRpcRequest::with_id(
@@ -460,7 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn deregister_reaches_enrolled_offline_node_by_name() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         let enroll = handle_cluster_enroll(
             JsonRpcRequest::with_id(
                 "cluster.enroll",
@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn deregister_offline_node_by_normalized_name() {
-        let ctx = create_test_context();
+        let (_scratch, ctx) = create_test_context();
         // Enrolled with a spaced, mixed-case name.
         let enroll = handle_cluster_enroll(
             JsonRpcRequest::with_id(
