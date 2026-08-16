@@ -1184,8 +1184,21 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     resolved.service
                 });
 
-            // VisionPipeline is not currently created at startup — pass None for now.
-            let vision: Option<Arc<alephcore::vision::VisionPipeline>> = None;
+            // Build the VisionPipeline so the image-attachment fallback in
+            // MediaProcessor::describe_image_fallback actually fires for
+            // text-only models (previously hard-coded None meant attached
+            // images degraded to "[Image: … — not viewable]"). The bare
+            // PlatformOcrProvider (no platform injected) is enough to light
+            // up the wire; the desktop-screenshot path uses the same
+            // provider with an injected platform in the builtin_registry
+            // constructor and is unaffected.
+            let vision: Option<Arc<alephcore::vision::VisionPipeline>> = {
+                let mut pipeline = alephcore::vision::VisionPipeline::new();
+                pipeline.add_provider(Box::new(
+                    alephcore::vision::providers::PlatformOcrProvider::new(),
+                ));
+                Some(Arc::new(pipeline))
+            };
 
             let media_processor = Arc::new(MediaProcessor::new(transcription, vision));
             // Clean up stale cache entries from previous runs
