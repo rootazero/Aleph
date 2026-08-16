@@ -1,0 +1,91 @@
+{
+  "batch": "agents-batch-6",
+  "module": "src/wizard",
+  "title": "Severed-wire audit: src/wizard (session wizard framework + onboarding flow)",
+  "date": "2026-08-16",
+  "reviewer": "static (severed-wire-audit skill)",
+  "counts": {"critical": 0, "high": 1, "medium": 0, "low": 4, "total": 5},
+  "by_category": {"security": 0, "logic": 1, "architecture": 1, "quality": 3},
+  "by_decision": {"CONNECT": 0, "CUT": 3, "DECIDE": 2},
+  "files_reviewed": [
+    {"path": "src/wizard/mod.rs", "loc": 16, "findings": 0},
+    {"path": "src/wizard/types.rs", "loc": 342, "findings": 2},
+    {"path": "src/wizard/session.rs", "loc": 348, "findings": 1},
+    {"path": "src/wizard/prompter.rs", "loc": 218, "findings": 1},
+    {"path": "src/wizard/flows/mod.rs", "loc": 4, "findings": 0},
+    {"path": "src/wizard/flows/onboarding.rs", "loc": 410, "findings": 1}
+  ],
+  "total_loc": 1338,
+  "findings": [
+    {
+      "id": 1,
+      "severity": "high",
+      "category": "logic",
+      "file": "src/wizard/flows/onboarding.rs",
+      "line": 346,
+      "title": "Onboarding collects OnboardingData but the data is discarded — no return channel and no config persistence",
+      "related": [
+        "src/wizard/types.rs:236",
+        "src/wizard/session.rs:51",
+        "src/wizard/flows/onboarding.rs:323"
+      ],
+      "decision": "DECIDE",
+      "rationale": "OnboardingFlow::run() builds `let mut data = OnboardingData::default()`, populates it via configure_primary/secondary/thinking/messaging (API keys, providers, models, thinking level, messaging apps), then review_and_finalize only *displays* it and drops it on the floor. The WizardFlow::run signature returns Result<(), WizardSessionError> — there is no channel for the collected data to escape. Grep confirms OnboardingData and its fields are referenced nowhere outside onboarding.rs (no consumer reads primary_api_key, messaging_apps, etc.). The inline comment at onboarding.rs:323 claims 'the caller routes them onto the live Config' but no such route exists: the boot-path factory (start/mod.rs:713) returns Box<dyn WizardFlow> whose run() returns (), and WizardNextResult (types.rs:236) has no `data` payload (the original pairing-wizard plan proposed one, but it was never carried over). Net effect: the 10-stage first-run onboarding is reachable via wizard.start but is a silent no-op — the user believes Aleph is configured and nothing is persisted. This is a genuine severed wire (producer = collected data, consumer = Config persistence, wire = missing). Reconnecting requires a design decision: (a) add a `data`/`finish_data` payload to WizardNextResult or change WizardFlow::run to return the data, and (b) decide how onboarding fields map onto the live Config (including vault placement for the API keys). Both are real coupling/product choices, hence DECIDE rather than a blind CONNECT or CUT."
+    },
+    {
+      "id": 2,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/wizard/types.rs",
+      "line": 154,
+      "title": "WizardStep::progress() and StepType::Progress / StepExecutor::Gateway are dead scaffolding (no caller)",
+      "related": [
+        "src/wizard/types.rs:40",
+        "src/wizard/types.rs:49",
+        "src/wizard/flows/onboarding.rs:322"
+      ],
+      "decision": "CUT",
+      "rationale": "Grep finds zero callers of WizardStep::progress() anywhere in the repo (only the definition). Its side effects — StepType::Progress and StepExecutor::Gateway — are likewise never constructed or matched by any live code (StepExecutor is only ever the default Client variant). The onboarding flow's own comment (onboarding.rs:322-327) confirms the progress stub was deliberately removed 'because the trait had no real client-visible progress channel', yet the builder and the two enum variants were left behind. This is form-1 dead scaffolding (producer with no consumer). CUT: delete progress(), the Progress variant, the Gateway variant (leaving StepExecutor as the still-serialized Client-only field, or collapsing it further), and the now-unused StepType::Progress test coverage. Note: these enums are #[non_exhaustive] + Serialize, so confirm no WASM/client renderer matches 'progress'/'gateway' before removing the serialized variants (none exist in this workspace)."
+    },
+    {
+      "id": 3,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/wizard/types.rs",
+      "line": 187,
+      "title": "WizardStep::with_validation() and the validation/validation_error fields are inert (no caller)",
+      "related": [
+        "src/wizard/types.rs:94"
+      ],
+      "decision": "CUT",
+      "rationale": "Grep finds zero callers of with_validation() repo-wide (only the definition at types.rs:187). The `validation` and `validation_error` fields are set by no other path, so they are always None at runtime and serialize as absent. No Rust-side consumer reads them (a hypothetical WASM client could, but none exists in this workspace). This is dead scaffolding: a builder + two fields with no producer. CUT the builder and the two fields (and the #[serde] attributes) unless a client-side renderer is planned to consume them."
+    },
+    {
+      "id": 4,
+      "severity": "low",
+      "category": "quality",
+      "file": "src/wizard/session.rs",
+      "line": 26,
+      "title": "WizardSessionError::AlreadyDone is never constructed or matched",
+      "related": [
+        "src/wizard/session.rs:16"
+      ],
+      "decision": "CUT",
+      "rationale": "Grep finds the AlreadyDone variant defined at session.rs:26 but never constructed and never matched anywhere. The terminal-state logic is handled via WizardStatus::Running sticky transitions in settle() (a later answer/next on a done session returns the terminal WizardNextResult, and the manager evicts the session), so the error variant is redundant. Its far end is covered by gateway wizard_error_code's wildcard `_ => INTERNAL_ERROR`. CUT the variant. (Enum is #[non_exhaustive], so removal is additive-safe for external consumers.)"
+    },
+    {
+      "id": 5,
+      "severity": "low",
+      "category": "architecture",
+      "file": "src/wizard/prompter.rs",
+      "line": 19,
+      "title": "WizardPrompter trait is a single-implementor abstraction never used as a bound",
+      "related": [
+        "src/wizard/prompter.rs:131",
+        "src/wizard/flows/onboarding.rs:9"
+      ],
+      "decision": "DECIDE",
+      "rationale": "WizardPrompter is defined and implemented only by RpcPrompter. It is never used as `dyn WizardPrompter` nor as a generic `<P: WizardPrompter>` bound anywhere; the only 'use' is importing it into onboarding.rs to bring the trait methods into scope so they resolve on the concrete RpcPrompter type. The polymorphic seam (trait + async_trait) therefore has no second implementor and no caller-side abstraction. This is an over-abstraction rather than a strictly severed wire — collapsing the trait into RpcPrompter's inherent impl would remove the dead seam, but the trait may be intended as a future extension point (e.g. an in-memory/test prompter). Flagged for judgment rather than auto-cut."
+    }
+  ]
+}
