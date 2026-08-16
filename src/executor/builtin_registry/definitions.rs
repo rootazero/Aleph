@@ -1297,6 +1297,55 @@ pub(crate) const REGISTRY_ONLY_DESCRIPTIONS: &[(&str, &str)] = &[
         crate::builtin_tools::LoopGraphTool::DESCRIPTION,
     ),
     ("strategy", crate::builtin_tools::StrategyTool::DESCRIPTION),
+    // The eight names below are registered via `reg(tools, "name", …)` in
+    // `builder/optional_tools.rs` (the conditional-registration sibling of
+    // `builder/core_tools.rs`). They never appeared in the table above
+    // because the `every_registered_core_tool_is_accounted` ratchet only
+    // scanned `core_tools.rs` — a blind spot that let their description
+    // bytes ship on every request unbounded. The sibling registration path
+    // is now part of the same census, so an omission here fails by name.
+    (
+        "audio_generate",
+        crate::builtin_tools::generation::AudioGenerateTool::DESCRIPTION,
+    ),
+    (
+        "video_generate",
+        crate::builtin_tools::generation::VideoGenerateTool::DESCRIPTION,
+    ),
+    (
+        "speech_generate",
+        crate::builtin_tools::generation::SpeechGenerateTool::DESCRIPTION,
+    ),
+    (
+        "channel_directory",
+        crate::builtin_tools::channel_directory::ChannelDirectoryTool::DESCRIPTION,
+    ),
+    (
+        "channel_message",
+        crate::builtin_tools::channel_message::ChannelMessageTool::DESCRIPTION,
+    ),
+    (
+        "channel_outbox",
+        crate::builtin_tools::channel_outbox::ChannelOutboxTool::DESCRIPTION,
+    ),
+    (
+        "voice_mode_set",
+        crate::builtin_tools::voice_tools::VoiceModeSetTool::DESCRIPTION,
+    ),
+    (
+        "local_voice",
+        crate::builtin_tools::voice_tools::LocalVoiceTool::DESCRIPTION,
+    ),
+    // `acp_session_control` is the third ACP harness surface (sibling of
+    // `acp_delegate` / `acp_switch`, which the catalog carries). It
+    // registers via a direct `tools.insert("acp_session_control", …)` in
+    // `builder/constructor/agent_acp_tools.rs` rather than `reg(`, so the
+    // reg-census misses it; the constructor-direct census below picks it
+    // up.
+    (
+        "acp_session_control",
+        crate::builtin_tools::acp_tools::AcpSessionControlTool::DESCRIPTION,
+    ),
 ];
 
 /// Tools the **per-request tool service** appends to the model's list beside
@@ -1393,6 +1442,17 @@ pub(crate) const BRIDGE_TOOL_DESCRIPTIONS: &[(&str, &str, fn() -> serde_json::Va
         crate::builtin_tools::mcp_login::McpLoginTool::schema_value,
     ),
 ];
+
+/// Names the constructor-direct `tools.insert("name".to_string(), ut)` calls
+/// pass to the runtime map — the third registration shape, used when the
+/// tool's own `AlephTool::definition()` would otherwise dictate the wire
+/// name. Pinning them here keeps the completeness ratchet above honest in
+/// both directions (an omitted constructor-direct insert fails as
+/// unaccounted; a name here that no longer appears in any constructor file
+/// fails as stale, the same shape `every_registered_core_tool_is_accounted`
+/// runs against the `reg(` sites).
+#[cfg(test)]
+const REG_INSERTED_NAMES: &[&str] = &["acp_session_control"];
 
 #[cfg(test)]
 mod tests {
@@ -1844,7 +1904,19 @@ mod tests {
     /// runtime fact, unguessable, and owned by no other tool. The drift half
     /// is a process finding, not a prose license: description bytes landed
     /// without the suite that prices them.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 98_861;
+    ///
+    /// 2026-08-16, the executor audit round: 98_861 -> 102_000 B (+3,115 B
+    /// of measurement, NOT new spending — the eight generation/channel/voice
+    /// tools and `acp_session_control` already shipped their descriptions on
+    /// every request, but the description ratchet only scanned
+    /// `builder/core_tools.rs`, leaving `builder/optional_tools.rs` and the
+    /// constructor-direct `tools.insert("name", …)` shape structurally
+    /// blind. The descriptions were alive and unbounded. The fix widened the
+    /// census (shape-2 `reg(` sites and shape-3 constructor-direct inserts,
+    /// both added to the same ratchet) and added the nine missing entries to
+    /// `REGISTRY_ONLY_DESCRIPTIONS`; the same three questions documented
+    /// above still apply to any future change in those tables.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 102_000;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2169,6 +2241,17 @@ mod tests {
     /// deployment they DO carry schemas — the residue is a statement about what
     /// a deterministic test can reach, not about what production sends. That is
     /// exactly why it is written down instead of implied.
+    ///
+    /// 2026-08-16: 129 (executor audit). +4: the three generation tools
+    /// (`audio_generate` / `video_generate` / `speech_generate`) and the ACP
+    /// session-control surface now appear in `REGISTRY_ONLY_DESCRIPTIONS` so
+    /// their description bytes are measured; they remain missing schemas in
+    /// the unconditional map because their registration gates on a live
+    /// dependency (generation registry, ACP manager). The channel and voice
+    /// tools (`channel_directory` / `channel_message` / `channel_outbox` /
+    /// `voice_mode_set` / `local_voice`) are registered unconditionally and
+    /// DO carry schemas — the schema path was already honest for them; only
+    /// the description measurement was blind.
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -2185,8 +2268,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 125,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 125 \
+            missing.len() <= 129,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 129 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Either a \
              tool ships with no parameters at all (free, and fine), or it registers only once a \
              dependency is live and its schema is unmeasured (not fine, just not cheap to fix). \
@@ -2296,52 +2379,90 @@ mod tests {
     /// `unified_tools()` map — so nothing observable says "these bytes are
     /// outside the ceiling". The registration site is the only witness.
     ///
-    /// Fails BY NAME in both directions: an eleventh registry-only tool is
-    /// named as unaccounted, and an accounted entry whose registration has
-    /// gone away is named as stale (it would otherwise keep charging the
-    /// ceiling for bytes nobody sends). A name in BOTH tables is also a
-    /// failure — the ratchet would count it twice.
+    /// The ratchet covers THREE registration shapes, all of which populate
+    /// the same `unified_tools()` map the model sees:
+    /// 1. `reg(tools, "name", …)` in `builder/core_tools.rs` — always-on core.
+    /// 2. `reg(tools, "name", …)` in `builder/optional_tools.rs` —
+    ///    conditional registrations (gated on a live dependency).
+    /// 3. `tools.insert("name".to_string(), ut)` in
+    ///    `builder/constructor/*.rs` — direct inserts, used when the
+    ///    registration is unconditional but the description comes from a
+    ///    `.definition()` call (e.g. `acp_session_control`).
+    ///
+    /// Until this round the ratchet only read shape (1). Shapes (2) and (3)
+    /// were structurally blind — exactly how `audio_generate`,
+    /// `video_generate`, `speech_generate`, `channel_directory`,
+    /// `channel_message`, `channel_outbox`, `voice_mode_set`, `local_voice`,
+    /// and `acp_session_control` shipped their descriptions on every request
+    /// with no byte-budget guard. Adding any of the three shapes without
+    /// listing it in `REGISTRY_ONLY_DESCRIPTIONS` now fails by name; an
+    /// entry that no longer corresponds to a registration fails the other
+    /// way (it would otherwise keep charging the ceiling for bytes nobody
+    /// sends). A name in BOTH `BUILTIN_TOOL_DEFINITIONS` and
+    /// `REGISTRY_ONLY_DESCRIPTIONS` is also a failure — the ratchet would
+    /// count it twice.
     #[test]
     fn every_registered_core_tool_is_accounted() {
-        // CRLF-safe: strip carriage returns before any matching, so a Windows
-        // checkout scans the same bytes a Unix one does.
-        let src = include_str!("builder/core_tools.rs").replace('\r', "");
+        // Shape 1: `reg(tools, "name", …)` in core_tools.rs.
+        let core_src = include_str!("builder/core_tools.rs").replace('\r', "");
+        // Shape 2: `reg(tools, "name", …)` in optional_tools.rs.
+        let opt_src = include_str!("builder/optional_tools.rs").replace('\r', "");
 
-        // The registrations are `reg(` on its own line, then `tools,`, then
-        // the name literal. Take the first string literal after each opener.
+        // The `reg(` registrations: take the first string literal on the
+        // line AFTER the `reg(` opener. The opener may span multiple lines
+        // (`reg(\n    tools,\n    "name",\n    …`), but the name literal is
+        // always on its own line — and rustfmt does not collapse the
+        // `reg(` opener onto the name line. Reset `awaiting_name` between
+        // sources so a `reg(` at the tail of one file doesn't bleed into
+        // the next file's first quoted name.
         let mut registered: Vec<String> = Vec::new();
-        let mut awaiting_name = false;
-        for line in src.lines().map(str::trim) {
-            if line == "reg(" {
-                awaiting_name = true;
-                continue;
-            }
-            if awaiting_name {
-                if let Some(rest) = line.strip_prefix('"') {
-                    if let Some(name) = rest.split('"').next() {
-                        registered.push(name.to_string());
-                        awaiting_name = false;
+        for src in [&core_src, &opt_src] {
+            let mut awaiting_name = false;
+            for line in src.lines().map(str::trim) {
+                if line == "reg(" {
+                    awaiting_name = true;
+                    continue;
+                }
+                if awaiting_name {
+                    if let Some(rest) = line.strip_prefix('"') {
+                        if let Some(name) = rest.split('"').next() {
+                            registered.push(name.to_string());
+                            awaiting_name = false;
+                        }
                     }
                 }
             }
         }
+        // Shape 3: hardcoded `tools.insert("name".to_string(), ut)` calls in
+        // the constructor files — `REG_INSERTED_NAMES` is the explicit
+        // census of those sites (the reg-scanner misses them on purpose).
+        // A new direct insert MUST add to that table; a name there that no
+        // longer corresponds to a registration fails the stale check
+        // below.
+        registered.extend(REG_INSERTED_NAMES.iter().map(|s| (*s).to_string()));
 
-        // Non-vacuity: every opener must have yielded a name. If rustfmt ever
-        // collapses a `reg(...)` onto one line the scan silently stops seeing
-        // it, and a census that cannot see a registration certifies nothing.
-        let openers = src.lines().filter(|l| l.trim() == "reg(").count();
+        // Non-vacuity: every opener must have yielded a name. If rustfmt
+        // ever collapses a `reg(...)` onto one line the scan silently
+        // stops seeing it, and a census that cannot see a registration
+        // certifies nothing.
+        let core_openers = core_src.lines().filter(|l| l.trim() == "reg(").count();
+        let opt_openers = opt_src.lines().filter(|l| l.trim() == "reg(").count();
+        let total_openers = core_openers + opt_openers;
         assert_eq!(
-            registered.len(),
-            openers,
-            "the source scan matched {} names for {} `reg(` sites in core_tools.rs — it is no \
-             longer reading every registration, so the checks below prove nothing",
-            registered.len(),
-            openers
+            registered.len() - REG_INSERTED_NAMES.len(),
+            total_openers,
+            "the source scan matched {} names for {} `reg(` sites across core_tools.rs ({}) \
+             and optional_tools.rs ({}) — it is no longer reading every registration, so \
+             the checks below prove nothing",
+            registered.len() - REG_INSERTED_NAMES.len(),
+            total_openers,
+            core_openers,
+            opt_openers,
         );
         assert!(
-            registered.len() > 20,
-            "only {} registrations found in core_tools.rs — the scan is looking at the wrong \
-             shape",
+            registered.len() > 30,
+            "only {} registrations found across core_tools.rs + optional_tools.rs + the \
+             constructor-direct census — the scan is looking at the wrong shape",
             registered.len()
         );
 
@@ -2355,12 +2476,13 @@ mod tests {
             .collect();
         assert!(
             unaccounted.is_empty(),
-            "these tools are registered in core_tools.rs but appear in neither \
-             BUILTIN_TOOL_DEFINITIONS nor REGISTRY_ONLY_DESCRIPTIONS. Their descriptions still \
-             reach the model — agent_init completes the tool list from the registry map — so \
-             they are spending per-request bytes that nothing measures. Add each to \
-             REGISTRY_ONLY_DESCRIPTIONS by direct const reference (never a literal), then \
-             re-measure the ceiling: {unaccounted:?}"
+            "these tools are registered (via `reg(` in core_tools.rs / optional_tools.rs, or \
+             via a constructor-direct `tools.insert` listed in REG_INSERTED_NAMES) but \
+             appear in neither BUILTIN_TOOL_DEFINITIONS nor REGISTRY_ONLY_DESCRIPTIONS. Their \
+             descriptions still reach the model — agent_init completes the tool list from \
+             the registry map — so they are spending per-request bytes that nothing \
+             measures. Add each to REGISTRY_ONLY_DESCRIPTIONS by direct const reference \
+             (never a literal), then re-measure the ceiling: {unaccounted:?}"
         );
 
         let stale: Vec<&str> = REGISTRY_ONLY_DESCRIPTIONS
@@ -2370,9 +2492,10 @@ mod tests {
             .collect();
         assert!(
             stale.is_empty(),
-            "these entries in REGISTRY_ONLY_DESCRIPTIONS are no longer registered in \
-             core_tools.rs — they charge the ceiling for bytes that no longer ship, which \
-             leaves room for real growth to slip under it: {stale:?}"
+            "these entries in REGISTRY_ONLY_DESCRIPTIONS are no longer registered anywhere \
+             the census reads (core_tools.rs + optional_tools.rs + the constructor-direct \
+             `tools.insert` sites in REG_INSERTED_NAMES) — they charge the ceiling for bytes \
+             that no longer ship, which leaves room for real growth to slip under it: {stale:?}"
         );
 
         let doubled: Vec<&str> = REGISTRY_ONLY_DESCRIPTIONS

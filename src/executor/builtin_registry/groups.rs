@@ -390,10 +390,7 @@ mod tests {
                 orphans.push(def.name.to_string());
             }
         }
-        for (name, _) in super::super::definitions::REGISTRY_ONLY_DESCRIPTIONS
-            .iter()
-            .copied()
-        {
+        for (name, _) in super::REGISTRY_ONLY_DESCRIPTIONS.iter().copied() {
             // REGISTRY_ONLY_DESCRIPTIONS is gated `#[cfg(test)]` so it
             // is not exported under the production binary — this test
             // needs the dev profile to compile, which is fine for a
