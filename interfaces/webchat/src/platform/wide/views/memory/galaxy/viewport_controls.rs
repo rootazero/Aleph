@@ -18,7 +18,7 @@ use leptos::ev::keydown;
 use leptos::prelude::*;
 
 use super::gl::scene::ViewportCmd;
-use crate::canvas_engine::interaction::CanvasEvent;
+use super::interaction::CanvasEvent;
 use crate::i18n::{t_string, use_i18n};
 use crate::state::hotkey::focus_is_editable;
 use crate::state::memory::{MemoryState, MemoryView};

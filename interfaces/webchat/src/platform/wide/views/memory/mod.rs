@@ -15,6 +15,7 @@ mod cards;
 pub mod data;
 mod drawer;
 mod facets;
+pub mod galaxy;
 mod loader;
 mod pager;
 mod provenance;

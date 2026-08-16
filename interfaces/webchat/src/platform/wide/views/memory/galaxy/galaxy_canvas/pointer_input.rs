@@ -23,7 +23,7 @@ use wasm_bindgen::JsCast;
 
 use super::super::gl::scene::Scene;
 use super::perf_now;
-use crate::canvas_engine::interaction::CanvasEvent;
+use super::super::interaction::CanvasEvent;
 
 /// Click threshold in CSS pixels. A pointer-up within this distance of
 /// pointer-down counts as a click; larger = drag (no selection).

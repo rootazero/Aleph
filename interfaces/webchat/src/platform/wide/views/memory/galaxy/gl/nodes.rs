@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use web_sys::{WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram, WebGlVertexArrayObject};
 
-use crate::canvas_engine::fnv1a::fnv1a_32;
+use crate::memory_graph::fnv1a::fnv1a_32;
 
 use super::context::compile_program;
 use super::math::Mat4;
@@ -154,7 +154,7 @@ impl NodeRenderer {
             let [r, g, b] = node.color;
             if lit {
                 // HDR boost so bloom picks up a glow corona.
-                let [br, bg, bb] = crate::canvas_engine::category_color::hdr_boost(node.color);
+                let [br, bg, bb] = crate::memory_graph::category_color::hdr_boost(node.color);
                 colors.extend_from_slice(&[br, bg, bb]);
             } else {
                 colors.extend_from_slice(&[

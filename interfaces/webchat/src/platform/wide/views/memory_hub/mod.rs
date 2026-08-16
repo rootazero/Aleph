@@ -6,7 +6,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
 use crate::state::memory::{parse_view_param, MemoryState, MemoryView};
-use crate::views::canvas::CanvasView;
+use crate::views::memory::galaxy::GalaxyView;
 use crate::views::memory::Memory;
 
 mod sidebar;
@@ -37,7 +37,7 @@ pub fn MemoryHub() -> impl IntoView {
                 class="absolute inset-0"
                 style:display=move || if is_graph.get() { "block" } else { "none" }
             >
-                <CanvasView />
+                <GalaxyView />
             </div>
             <div
                 class="absolute inset-0 overflow-y-auto"

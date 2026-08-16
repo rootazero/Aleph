@@ -3,9 +3,9 @@ use leptos::task::spawn_local;
 use std::collections::HashMap;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::adapter::OutgoingLinkDto;
-use crate::canvas_engine::category_color::category_color;
-use crate::canvas_engine::markdown_excerpt::render_excerpt;
+use crate::memory_graph::adapter::OutgoingLinkDto;
+use crate::memory_graph::category_color::category_color;
+use crate::memory_graph::markdown_excerpt::render_excerpt;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
 use crate::state::memory::{MemoryState, MemoryView};
@@ -397,7 +397,7 @@ fn DetailFor(
                                         style="color:var(--text-body);font-size:12px;line-height:1.55"
                                         inner_html=html
                                         on:click=move |ev| {
-                                            if let Some(t) = crate::canvas_engine::markdown_excerpt::wikilink_click_target(&ev) {
+                                            if let Some(t) = crate::memory_graph::markdown_excerpt::wikilink_click_target(&ev) {
                                                 navigate_wl(&state, &mem, t);
                                             }
                                         }

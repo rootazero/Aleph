@@ -5,7 +5,7 @@
 //! its host view. The former 2D hit-test / pan-zoom / keyboard-nav state lived
 //! in this module too but went away with the radial path.
 //!
-//! [`GalaxyCanvas`]: crate::views::canvas
+//! [`GalaxyCanvas`]: crate::views::memory::galaxy
 
 /// Pointer events the galaxy emits to the host view.
 #[derive(Debug, Clone)]

@@ -71,7 +71,7 @@ pub fn pick_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::canvas::gl::math::{Mat4, Vec3};
+    use crate::views::memory::galaxy::gl::math::{Mat4, Vec3};
 
     fn front_vp() -> Mat4 {
         Mat4::perspective(1.0, 1.0, 0.1, 1000.0).mul(&Mat4::look_at(

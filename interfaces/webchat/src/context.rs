@@ -891,7 +891,7 @@ impl DashboardState {
     /// question ("ask again", not "do not ask too early") and it is answered
     /// per page, by an `Effect` that reads `is_connected` alongside whatever
     /// else that page reloads on. See `WorkspacesView` (tracks
-    /// `include_archived`) and `canvas::CanvasView` (tracks "agent list still
+    /// `include_archived`) and `galaxy::GalaxyView` (tracks "agent list still
     /// empty", because re-running its fetch would discard the user's
     /// selection).
     ///

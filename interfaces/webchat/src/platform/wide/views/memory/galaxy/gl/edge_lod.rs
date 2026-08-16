@@ -73,8 +73,8 @@ pub fn filter(data: &GraphData, lod: f32) -> FilteredEdges {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::canvas::gl::math::Vec3;
-    use crate::views::canvas::gl::GalaxyNode;
+    use crate::views::memory::galaxy::gl::math::Vec3;
+    use crate::views::memory::galaxy::gl::GalaxyNode;
 
     /// A graph with explicit per-node link counts and explicit edges. The counts
     /// are what the floor is computed from, so tests state them outright rather

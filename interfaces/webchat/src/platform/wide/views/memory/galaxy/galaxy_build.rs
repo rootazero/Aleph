@@ -4,7 +4,7 @@
 //! is deterministic and unit-tested on the native target.
 
 use super::gl;
-use crate::canvas_engine::adapter::GraphQueryResponse;
+use crate::memory_graph::adapter::GraphQueryResponse;
 
 /// Minimum brightness scale for the oldest note — keeps stale nodes visible
 /// while newer ones glow brighter.
@@ -31,7 +31,7 @@ fn recency_scale(updated_at: Option<i64>, oldest: i64, newest: i64) -> f32 {
 /// Scene::set_graph then builds a ForceLayout over these positions and animates
 /// them to their settled state over up to MAX_SETTLE_STEPS frames.
 pub(super) fn build_galaxy(resp: &GraphQueryResponse) -> gl::GraphData {
-    use crate::canvas_engine::category_color::category_rgb;
+    use crate::memory_graph::category_color::category_rgb;
     use gl::layout3d::ForceLayout;
     use gl::{GalaxyNode, GraphData};
 
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn build_galaxy_flags_surprising_and_bridge() {
-        use crate::canvas_engine::adapter::{GraphQueryResponse, NoteLinkDto, NoteNodeDto};
+        use crate::memory_graph::adapter::{GraphQueryResponse, NoteLinkDto, NoteNodeDto};
         let node = |id: &str| NoteNodeDto {
             id: id.into(),
             name: id.into(),

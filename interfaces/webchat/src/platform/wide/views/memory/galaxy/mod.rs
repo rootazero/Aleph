@@ -1,6 +1,7 @@
 mod galaxy_build;
 mod galaxy_canvas;
 pub mod gl;
+mod interaction;
 mod node_detail_panel;
 mod overlay;
 mod viewport_controls;
@@ -11,7 +12,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::interaction::CanvasEvent;
+use interaction::CanvasEvent;
 use galaxy_build::{build_galaxy, compute_highlight_set, fold_to_lod};
 use leptos::callback::Callback;
 
@@ -27,7 +28,7 @@ use crate::api::agents::AgentsApi;
 
 #[component]
 #[must_use]
-pub fn CanvasView() -> impl IntoView {
+pub fn GalaxyView() -> impl IntoView {
     view! { <GalaxyCanvasView /> }
 }
 

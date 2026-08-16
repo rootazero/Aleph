@@ -1,7 +1,7 @@
 //! Map a free-form `category` string to a CSS color expression for the node stripe.
 //! Also provides `category_rgb` for WebGL renderers that need `[f32;3]` linear RGB.
 
-use crate::canvas_engine::fnv1a::fnv1a_32;
+use crate::memory_graph::fnv1a::fnv1a_32;
 
 /// Returns a CSS color string. Well-known categories → curated variable;
 /// anything else → deterministic `hsl(hue, 55%, 65%)`.

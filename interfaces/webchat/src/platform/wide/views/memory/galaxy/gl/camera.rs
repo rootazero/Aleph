@@ -188,7 +188,7 @@ impl OrbitCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::canvas::gl::math::Vec3;
+    use crate::views::memory::galaxy::gl::math::Vec3;
 
     #[test]
     fn zoom_clamps_distance() {

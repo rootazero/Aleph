@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use super::math::Vec3;
-use crate::canvas_engine::fnv1a::fnv1a_32;
+use crate::memory_graph::fnv1a::fnv1a_32;
 
 const REPULSION: f32 = 8000.0; // ~k_e
 const SPRING_K: f32 = 0.02; // edge stiffness

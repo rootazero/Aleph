@@ -1,7 +1,7 @@
 //! Phone Graph screen (`/memory/graph`): full-screen WebGL galaxy — reuses the
-//! desktop `CanvasView` — with a back button to the Memory menu and a floating
-//! edge-density slider. Pure presentation; `CanvasView` reads/writes
-//! `MemoryState` (R4). The slider writes `mem.fold_threshold`; CanvasView's
+//! desktop `GalaxyView` — with a back button to the Memory menu and a floating
+//! edge-density slider. Pure presentation; `GalaxyView` reads/writes
+//! `MemoryState` (R4). The slider writes `mem.fold_threshold`; GalaxyView's
 //! Fold→LOD Effect reacts (no extra wiring here).
 
 use leptos::prelude::*;
@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use crate::i18n::{t_string, use_i18n};
 use crate::platform::phone::shell::PhoneShell;
 use crate::state::memory::MemoryState;
-use crate::views::canvas::CanvasView;
+use crate::views::memory::galaxy::GalaxyView;
 
 #[component]
 #[must_use]
@@ -22,10 +22,10 @@ pub fn PhoneMemoryGraph() -> impl IntoView {
         // as a direct PhoneShell child). A definite-height flex child so the
         // WebGL canvas (`w-full h-full`) resolves its height.
         <div style="position:relative; flex:1; min-height:0; border-radius:12px; overflow:hidden;">
-            <CanvasView/>
+            <GalaxyView/>
             // Floating edge-density control — mirrors the desktop sidebar slider
-            // (sidebar.rs). Writes mem.fold_threshold; CanvasView reacts.
-            // Docked to the TOP of the canvas box: CanvasView now mounts the
+            // (sidebar.rs). Writes mem.fold_threshold; GalaxyView reacts.
+            // Docked to the TOP of the canvas box: GalaxyView now mounts the
             // viewport control cluster at bottom-left, and a full-width bottom
             // bar would sit on top of it.
             <div

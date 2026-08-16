@@ -139,7 +139,7 @@ pub fn install(state: HotkeyState) {
 /// `<input>`, a `<textarea>`, or any contenteditable host. Bare-letter
 /// hotkeys must defer to these so they don't hijack a user's keystrokes.
 ///
-/// `pub(crate)` because the memory-canvas viewport hotkeys (`views/canvas/
+/// `pub(crate)` because the memory-canvas viewport hotkeys (`views/memory/galaxy/
 /// viewport_controls.rs`) are bare keys too (`+` / `-` / `0` / `shift+1`) and
 /// reuse this exact guard rather than forking a second copy of it.
 pub(crate) fn focus_is_editable() -> bool {

@@ -11,7 +11,7 @@ use leptos::prelude::*;
 
 use super::data::{format_ts, Loadable};
 use crate::api::{CompressedFact, RawMemory};
-use crate::canvas_engine::category_color::category_color;
+use crate::memory_graph::category_color::category_color;
 use crate::components::ui::{Badge, BadgeVariant, ConfirmButton};
 use crate::i18n::{t, t_string, use_i18n};
 

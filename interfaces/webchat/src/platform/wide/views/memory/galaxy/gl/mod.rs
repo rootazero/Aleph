@@ -71,7 +71,7 @@ pub fn compute_highlight_edges(
 #[cfg(test)]
 mod highlight_tests {
     use super::*;
-    use crate::views::canvas::gl::math::Vec3;
+    use crate::views::memory::galaxy::gl::math::Vec3;
 
     fn node(id: &str) -> GalaxyNode {
         GalaxyNode {

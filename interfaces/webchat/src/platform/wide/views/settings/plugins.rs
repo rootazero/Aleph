@@ -1,7 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_i18n::I18nContext;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;

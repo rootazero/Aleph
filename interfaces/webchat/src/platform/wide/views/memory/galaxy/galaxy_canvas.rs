@@ -37,7 +37,7 @@ use wasm_bindgen::JsCast;
 use self::pointer_input::{PointerCtx, PointerTracker};
 use super::gl::scene::{Scene, ViewportCmd};
 use super::gl::GraphData;
-use crate::canvas_engine::interaction::CanvasEvent;
+use super::interaction::CanvasEvent;
 
 /// Upper bound on the device-pixel-ratio we honour. A 3x phone would quadruple
 /// the fragment cost of the bloom pipeline for no visible gain.
