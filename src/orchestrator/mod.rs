@@ -36,7 +36,7 @@ pub use flow_spec::{
     SandboxKind, SessionStrategy,
 };
 pub use harness_bridge::AgentHarnessRunner;
-pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH};
+pub use resolver::RoutingOverrides;
 pub use sandbox_factory::{
     build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder,
 };

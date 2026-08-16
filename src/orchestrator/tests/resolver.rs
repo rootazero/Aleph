@@ -169,7 +169,12 @@ fn child_strategy_falls_back_to_spec_when_request_empty() {
 }
 
 #[test]
-fn child_strategy_without_parent_errors() {
+fn child_strategy_without_parent_falls_back_to_fresh() {
+    // Regression for the preset-flow dispatch gap: explore/coder/researcher &
+    // co. declare `SessionStrategy::Child` with no static parent, and the
+    // gateway run loop passes `parent_session: None` — hard-failing on
+    // InvalidConfig made every dispatch to those flows fail. The graceful
+    // degrade is a fresh session (parent link absent).
     let input = SessionResolveInput {
         strategy: SessionStrategy::Child {
             parent_session_key: None,
@@ -178,6 +183,8 @@ fn child_strategy_without_parent_errors() {
         parent_session: None,
         fresh_key_fn: fixed_key,
     };
-    let err = resolve_session(input).unwrap_err();
-    assert!(matches!(err, FlowError::InvalidConfig(_)));
+    let r = resolve_session(input).unwrap();
+    assert_eq!(r.session_key, "fresh-abc");
+    assert_eq!(r.parent_session_key, None);
+    assert!(r.is_new);
 }

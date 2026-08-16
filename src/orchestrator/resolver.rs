@@ -101,13 +101,25 @@ pub fn resolve_session(input: SessionResolveInput) -> Result<SessionResolution, 
             let parent = input
                 .parent_session
                 .filter(|s| !s.is_empty())
-                .or(parent_session_key.filter(|s| !s.is_empty()))
-                .ok_or_else(|| {
-                    FlowError::InvalidConfig(
-                        "SessionStrategy::Child requires a non-empty parent_session at runtime"
-                            .into(),
-                    )
-                })?;
+                .or(parent_session_key.filter(|s| !s.is_empty()));
+            // Degrade gracefully instead of hard-failing: a Child flow whose
+            // parent is missing at runtime (gateway runs currently pass
+            // `parent_session: None`, and the preset flows declare Child
+            // without a static parent) must still be servable — fall back to a
+            // fresh session rather than InvalidConfig, which would make every
+            // dispatch to the flow fail. The parent link, when present, is
+            // still carried.
+            let Some(parent) = parent else {
+                tracing::debug!(
+                    strategy = "Child",
+                    "resolve_session: Child strategy with no runtime parent — falling back to Fresh"
+                );
+                return Ok(SessionResolution {
+                    session_key: (input.fresh_key_fn)(),
+                    parent_session_key: None,
+                    is_new: true,
+                });
+            };
             Ok(SessionResolution {
                 session_key: (input.fresh_key_fn)(),
                 parent_session_key: Some(parent),
