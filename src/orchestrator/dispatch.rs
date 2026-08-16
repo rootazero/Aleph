@@ -861,8 +861,7 @@ impl Orchestrator {
             tracing::debug!(
                 session_key = %session_res.session_key,
                 parent_session_key = %parent,
-                "dispatch: child session resolved; parent key is not yet persisted "
-                "(session store row is created key-only by the gateway)"
+                "dispatch: child session resolved; parent key is not yet persisted — session store row is created key-only by the gateway"
             );
         }
         {
