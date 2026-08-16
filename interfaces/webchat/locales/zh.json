@@ -336,7 +336,14 @@
     "ai_status_draft": "草稿",
     "ai_status_pending": "生成中…",
     "ai_status_done": "已完成",
-    "ai_status_failed": "失败"
+    "ai_status_failed": "失败",
+    "tool_select": "选择",
+    "tool_pan": "平移",
+    "tool_rect": "矩形",
+    "tool_ellipse": "椭圆",
+    "tool_note": "便签",
+    "tool_text": "文本",
+    "tool_frame": "框架"
   },
   "memory": {
     "title": "记忆库",

@@ -17,9 +17,20 @@
 //!   geometry — inverting against it would "restore" the moved position
 //!   (the reason this is not `ops::invert`'s job on drag commits).
 //!
-//! Creation tools (Geo/Note/Text/Frame → Task 14, Draw/Arrow → Task 15) are
-//! deliberately absent: `pointer_down` on a non-Select tool is a no-op arm
-//! those tasks fill in.
+//! # Creation tools (Geo / Note / Text / Frame)
+//!
+//! A creation drag is its own entry point ([`InteractionState::begin_create`],
+//! called by the editor when the active tool maps through [`create_kind`] —
+//! `pointer_down` itself stays Select-only): down mints the id (injected, like
+//! `duplicate_ops`) and stacks a fresh z above the document top; move previews
+//! the dragged box, spanned by the two corners in any order so a reverse drag
+//! normalizes to positive extents; up commits the shape (undo = delete) and
+//! selects it, after which the editor drops the tool back to Select. A click
+//! without a drag lands a default-sized shape centered on the point. The Text
+//! tool is the exception: it never commits here — it previews the empty shape
+//! and hands off to the text-editing overlay ([`Effect::BeginTextEdit`] with
+//! `fresh: true`), whose empty-text commit discards instead of creating
+//! (`text_edit.rs`). Draw/Arrow are Task 15.
 //!
 //! # Hit testing
 //!
@@ -27,7 +38,7 @@
 //! axis-aligned bounds, topmost = greatest `(z, id)`, the exact tie-break
 //! `editor.rs::z_sorted_ids` paints with (later-painted wins the hit).
 
-use aleph_protocol::canvas::{CanvasOp, FracIndex, Shape, ShapeCommon};
+use aleph_protocol::canvas::{CanvasOp, FracIndex, GeoForm, Shape, ShapeCommon, ShapeStyle};
 
 use crate::state::canvas::CanvasTool;
 
@@ -35,6 +46,11 @@ use crate::state::canvas::CanvasTool;
 pub(super) const MIN_RESIZE: f64 = 1.0;
 /// How far a duplicate (⌘D) lands from its source, world units.
 pub(super) const DUPLICATE_OFFSET: f64 = 16.0;
+/// Click-create default extents (world units), centered on the click point.
+const CREATE_BOX_SIZE: (f64, f64) = (200.0, 200.0);
+const CREATE_TEXT_SIZE: (f64, f64) = (240.0, 40.0);
+/// Frames default 16:9 — the slide aspect (spec §4).
+const CREATE_FRAME_SIZE: (f64, f64) = (640.0, 360.0);
 
 /// Axis-aligned bounding box, world units. `w`/`h` are always ≥ 0 — every
 /// constructor normalizes.
@@ -210,6 +226,93 @@ pub(super) fn resize_bbox(origin: Bbox, handle: Handle, world: (f64, f64)) -> Bb
     b
 }
 
+/// Which shape a creation tool drags out. `Copy` so the drag state can hold
+/// one without borrow gymnastics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CreateKind {
+    Geo(GeoForm),
+    Note,
+    Text,
+    Frame,
+}
+
+/// The creation kind for a tool, `None` for the non-creating tools
+/// (Select/Pan) and for the Task-15 tools (Draw/Arrow), which have their own
+/// gesture shapes (point accumulation, endpoint binding) rather than a box
+/// drag.
+#[must_use]
+pub(super) fn create_kind(tool: CanvasTool) -> Option<CreateKind> {
+    match tool {
+        CanvasTool::Geo(form) => Some(CreateKind::Geo(form)),
+        CanvasTool::Note => Some(CreateKind::Note),
+        CanvasTool::Text => Some(CreateKind::Text),
+        CanvasTool::Frame => Some(CreateKind::Frame),
+        CanvasTool::Select | CanvasTool::Pan | CanvasTool::Draw | CanvasTool::Arrow => None,
+    }
+}
+
+/// Default extents when a creation tool is clicked rather than dragged.
+#[must_use]
+fn default_create_size(kind: CreateKind) -> (f64, f64) {
+    match kind {
+        CreateKind::Geo(_) | CreateKind::Note => CREATE_BOX_SIZE,
+        CreateKind::Text => CREATE_TEXT_SIZE,
+        CreateKind::Frame => CREATE_FRAME_SIZE,
+    }
+}
+
+/// Neither creation axis may collapse below [`MIN_RESIZE`] — a perfectly
+/// horizontal drag must still land a visible shape.
+#[must_use]
+fn min_extent(mut b: Bbox) -> Bbox {
+    if b.w < MIN_RESIZE {
+        b.w = MIN_RESIZE;
+    }
+    if b.h < MIN_RESIZE {
+        b.h = MIN_RESIZE;
+    }
+    b
+}
+
+/// The freshly created shape for a kind: default style, empty text, no
+/// parent. `z` is minted once per gesture (at `begin_create`) so the preview
+/// upserts keep replacing the same shape instead of stacking copies.
+#[must_use]
+fn shape_for_create(kind: CreateKind, id: &str, z: &FracIndex, b: Bbox) -> Shape {
+    let common = ShapeCommon {
+        id: id.to_string(),
+        x: b.x,
+        y: b.y,
+        w: b.w,
+        h: b.h,
+        z: z.clone(),
+        parent_id: None,
+    };
+    match kind {
+        CreateKind::Geo(form) => Shape::Geo {
+            common,
+            form,
+            style: ShapeStyle::default(),
+            text: String::new(),
+        },
+        CreateKind::Note => Shape::Note {
+            common,
+            style: ShapeStyle::default(),
+            text: String::new(),
+        },
+        CreateKind::Text => Shape::Text {
+            common,
+            style: ShapeStyle::default(),
+            text: String::new(),
+        },
+        CreateKind::Frame => Shape::Frame {
+            common,
+            title: String::new(),
+            aspect_locked: false,
+        },
+    }
+}
+
 fn common_mut(shape: &mut Shape) -> &mut ShapeCommon {
     match shape {
         Shape::Geo { common, .. }
@@ -305,14 +408,35 @@ pub(super) enum Effect {
         redo: Vec<CanvasOp>,
         undo: Vec<CanvasOp>,
     },
+    /// Remove locally-previewed shapes that were never committed (an
+    /// abandoned creation drag, a discarded fresh text shape) — the editor
+    /// applies `DeleteShape` locally: no undo entry, no send. `Preview`
+    /// cannot express this (it only carries upserts), and `Commit` must not
+    /// (a rollback that lands on the undo stack would redo into existence).
+    DiscardPreview(Vec<String>),
+    /// Open the text-editing overlay over `shape`. `fresh` marks a shape
+    /// born in this gesture and never committed: an empty-text commit (or
+    /// Esc) discards it instead of writing an invisible empty shape —
+    /// `text_edit::commit_outcome` owns that rule.
+    BeginTextEdit { shape: Shape, fresh: bool },
 }
 
 /// The in-flight drag, if any. `Drawing`/`ArrowDraft` variants arrive with
-/// the creation tools (Tasks 14/15).
+/// the Draw/Arrow tools (Task 15).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(super) enum Drag {
     #[default]
     None,
+    Create {
+        kind: CreateKind,
+        /// Minted at `begin_create` — stable through the gesture, so every
+        /// preview upsert replaces the same shape.
+        id: String,
+        /// Fresh z above the document top, minted once with the id.
+        z: FracIndex,
+        origin: (f64, f64),
+        moved: bool,
+    },
     Marquee {
         origin: (f64, f64),
         current: (f64, f64),
@@ -452,6 +576,31 @@ impl InteractionState {
         Vec::new()
     }
 
+    /// Pointer down with a creation tool ([`create_kind`] `Some`). `id` is
+    /// minted by the caller (`id_mint` is wasm-only; tests inject literals),
+    /// `shapes` seeds the fresh z above the document top.
+    ///
+    /// Clears the selection — the gesture's focus is the shape being born,
+    /// and a stale outline riding over the preview would fight it visually.
+    #[must_use]
+    pub(super) fn begin_create(
+        &mut self,
+        kind: CreateKind,
+        world: (f64, f64),
+        id: String,
+        shapes: &[Shape],
+    ) -> Vec<Effect> {
+        let top = shapes.iter().map(|s| s.common().z.clone()).max();
+        self.drag = Drag::Create {
+            kind,
+            id,
+            z: FracIndex::between(top.as_ref(), None),
+            origin: world,
+            moved: false,
+        };
+        vec![Effect::SetSelection(Vec::new())]
+    }
+
     /// Pointer moved. `slop` is the click tolerance in world units (the
     /// editor passes screen-pixels ÷ zoom): a Move drag stays a click until
     /// the pointer leaves it.
@@ -464,6 +613,21 @@ impl InteractionState {
     ) -> Vec<Effect> {
         match &mut self.drag {
             Drag::None => Vec::new(),
+            Drag::Create {
+                kind,
+                id,
+                z,
+                origin,
+                moved,
+            } => {
+                let (dx, dy) = (world.0 - origin.0, world.1 - origin.1);
+                if !*moved && dx.abs() <= slop && dy.abs() <= slop {
+                    return Vec::new();
+                }
+                *moved = true;
+                let b = min_extent(Bbox::from_corners(*origin, world));
+                vec![Effect::Preview(vec![shape_for_create(*kind, id, z, b)])]
+            }
             Drag::Move {
                 start,
                 originals,
@@ -503,6 +667,43 @@ impl InteractionState {
     pub(super) fn pointer_up(&mut self, world: (f64, f64), shapes: &[Shape]) -> Vec<Effect> {
         match std::mem::take(&mut self.drag) {
             Drag::None => Vec::new(),
+            Drag::Create {
+                kind,
+                id,
+                z,
+                origin,
+                moved,
+            } => {
+                let b = if moved {
+                    min_extent(Bbox::from_corners(origin, world))
+                } else {
+                    // A click: land the default size centered on the point
+                    // that was pressed (not the release — the press is where
+                    // the user aimed).
+                    let (w, h) = default_create_size(kind);
+                    Bbox {
+                        x: origin.0 - w / 2.0,
+                        y: origin.1 - h / 2.0,
+                        w,
+                        h,
+                    }
+                };
+                let shape = shape_for_create(kind, &id, &z, b);
+                let mut effects = vec![Effect::SetSelection(vec![id.clone()])];
+                if kind == CreateKind::Text {
+                    // Handed to the text editor uncommitted: an empty text
+                    // shape is invisible, so nothing goes on the wire until
+                    // the overlay commits non-empty text (or discards).
+                    effects.push(Effect::Preview(vec![shape.clone()]));
+                    effects.push(Effect::BeginTextEdit { shape, fresh: true });
+                } else {
+                    effects.push(Effect::Commit {
+                        redo: vec![CanvasOp::UpsertShape { shape }],
+                        undo: vec![CanvasOp::DeleteShape { id }],
+                    });
+                }
+                effects
+            }
             Drag::Move {
                 start,
                 originals,
@@ -539,6 +740,15 @@ impl InteractionState {
     pub(super) fn cancel(&mut self) -> Vec<Effect> {
         match std::mem::take(&mut self.drag) {
             Drag::None => Vec::new(),
+            Drag::Create { id, moved, .. } => {
+                if moved {
+                    // The preview inserted a shape the doc never owned:
+                    // rolling back means deleting it, not restoring it.
+                    vec![Effect::DiscardPreview(vec![id])]
+                } else {
+                    Vec::new()
+                }
+            }
             Drag::Move {
                 originals, moved, ..
             } => {
@@ -1201,5 +1411,175 @@ mod tests {
             })
         );
         assert_eq!(selection_bbox(&shapes, &sel(&["ghost"])), None);
+    }
+
+    // ---- creation tools ----------------------------------------------------
+
+    #[test]
+    fn create_kind_maps_exactly_the_four_box_creation_tools() {
+        use aleph_protocol::canvas::GeoForm;
+        assert_eq!(
+            create_kind(CanvasTool::Geo(GeoForm::Ellipse)),
+            Some(CreateKind::Geo(GeoForm::Ellipse))
+        );
+        assert_eq!(create_kind(CanvasTool::Note), Some(CreateKind::Note));
+        assert_eq!(create_kind(CanvasTool::Text), Some(CreateKind::Text));
+        assert_eq!(create_kind(CanvasTool::Frame), Some(CreateKind::Frame));
+        for inert in [
+            CanvasTool::Select,
+            CanvasTool::Pan,
+            CanvasTool::Draw,
+            CanvasTool::Arrow,
+        ] {
+            assert_eq!(create_kind(inert), None, "{inert:?} is not a box-create");
+        }
+    }
+
+    #[test]
+    fn a_reverse_creation_drag_normalizes_its_bbox_and_commits_with_delete_as_undo() {
+        use aleph_protocol::canvas::GeoForm;
+        let shapes = vec![note_at("a", 0.0, 0.0, 10.0, 10.0, "V")];
+        let mut m = InteractionState::new();
+        let effects = m.begin_create(
+            CreateKind::Geo(GeoForm::Rect),
+            (100.0, 100.0),
+            "fresh".to_string(),
+            &shapes,
+        );
+        assert_eq!(
+            ids(&effects),
+            Vec::<String>::new(),
+            "starting a creation clears the selection"
+        );
+        assert!(m.is_dragging());
+
+        // Drag up-left: origin becomes the bottom-right corner.
+        let effects = m.pointer_move((20.0, 40.0), &shapes, 2.0);
+        let Some(Effect::Preview(previewed)) = effects.first() else {
+            panic!("expected a Preview, got {effects:?}");
+        };
+        let c = previewed[0].common();
+        assert_eq!(
+            (c.x, c.y, c.w, c.h),
+            (20.0, 40.0, 80.0, 60.0),
+            "a reverse drag must normalize to positive extents"
+        );
+        assert!(
+            c.z > frac("V"),
+            "the created shape must stack above the document top"
+        );
+
+        let effects = m.pointer_up((20.0, 40.0), &shapes);
+        assert_eq!(ids(&effects), sel(&["fresh"]), "the new shape is selected");
+        let Some(Effect::Commit { redo, undo }) =
+            effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
+        else {
+            panic!("expected a Commit, got {effects:?}");
+        };
+        let CanvasOp::UpsertShape { shape } = &redo[0] else {
+            panic!("creation commits an upsert");
+        };
+        assert!(matches!(
+            shape,
+            Shape::Geo {
+                form: GeoForm::Rect,
+                ..
+            }
+        ));
+        let c = shape.common();
+        assert_eq!((c.x, c.y, c.w, c.h), (20.0, 40.0, 80.0, 60.0));
+        assert_eq!(
+            undo,
+            &vec![CanvasOp::DeleteShape { id: "fresh".into() }],
+            "undoing a creation deletes it"
+        );
+        assert!(!m.is_dragging());
+    }
+
+    #[test]
+    fn a_click_with_a_creation_tool_lands_a_default_sized_shape_centered_on_the_press() {
+        let mut m = InteractionState::new();
+        let _ = m.begin_create(CreateKind::Note, (50.0, 60.0), "n".to_string(), &[]);
+        // Jitter inside the slop, then release: still a click.
+        assert!(m.pointer_move((51.0, 59.0), &[], 3.0).is_empty());
+        let effects = m.pointer_up((51.0, 59.0), &[]);
+        let Some(Effect::Commit { redo, .. }) =
+            effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
+        else {
+            panic!("expected a Commit, got {effects:?}");
+        };
+        let CanvasOp::UpsertShape { shape } = &redo[0] else {
+            panic!("creation commits an upsert");
+        };
+        let c = shape.common();
+        assert_eq!(
+            (c.x, c.y, c.w, c.h),
+            (-50.0, -40.0, 200.0, 200.0),
+            "a click lands the default box centered on the press point"
+        );
+    }
+
+    #[test]
+    fn the_text_tool_hands_off_to_the_text_editor_instead_of_committing() {
+        let mut m = InteractionState::new();
+        let _ = m.begin_create(CreateKind::Text, (10.0, 10.0), "t1".to_string(), &[]);
+        let effects = m.pointer_up((10.0, 10.0), &[]);
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::Commit { .. })),
+            "a fresh text shape must not commit before its text exists"
+        );
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::Preview(_))),
+            "the empty text shape must land locally for the overlay to sit on"
+        );
+        let Some(Effect::BeginTextEdit { shape, fresh }) = effects
+            .iter()
+            .find(|e| matches!(e, Effect::BeginTextEdit { .. }))
+        else {
+            panic!("expected BeginTextEdit, got {effects:?}");
+        };
+        assert!(matches!(shape, Shape::Text { .. }));
+        assert_eq!(shape.id(), "t1");
+        assert!(*fresh, "a tool-created text shape edits as fresh");
+    }
+
+    #[test]
+    fn esc_discards_a_creation_preview_without_committing() {
+        let mut m = InteractionState::new();
+        let _ = m.begin_create(CreateKind::Frame, (0.0, 0.0), "f1".to_string(), &[]);
+        let _ = m.pointer_move((300.0, 200.0), &[], 0.0);
+        let effects = m.cancel();
+        assert_eq!(
+            effects,
+            vec![Effect::DiscardPreview(vec!["f1".to_string()])],
+            "cancel must delete the previewed shape, not restore it"
+        );
+        assert!(!m.is_dragging());
+        // A canceled creation must not commit on a stray pointer up…
+        assert!(m.pointer_up((300.0, 200.0), &[]).is_empty());
+
+        // …and canceling before any movement has nothing to discard.
+        let mut m = InteractionState::new();
+        let _ = m.begin_create(CreateKind::Note, (0.0, 0.0), "n1".to_string(), &[]);
+        assert!(m.cancel().is_empty());
+    }
+
+    #[test]
+    fn a_zero_extent_creation_drag_is_clamped_to_a_visible_shape() {
+        let mut m = InteractionState::new();
+        let _ = m.begin_create(CreateKind::Note, (0.0, 0.0), "n1".to_string(), &[]);
+        // A perfectly horizontal drag: height would be zero.
+        let _ = m.pointer_move((50.0, 0.0), &[], 2.0);
+        let effects = m.pointer_up((50.0, 0.0), &[]);
+        let Some(Effect::Commit { redo, .. }) =
+            effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
+        else {
+            panic!("expected a Commit, got {effects:?}");
+        };
+        let CanvasOp::UpsertShape { shape } = &redo[0] else {
+            panic!("creation commits an upsert");
+        };
+        assert_eq!(shape.common().w, 50.0);
+        assert!((shape.common().h - MIN_RESIZE).abs() < f64::EPSILON);
     }
 }

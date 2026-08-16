@@ -336,7 +336,14 @@
     "ai_status_draft": "Draft",
     "ai_status_pending": "Generating…",
     "ai_status_done": "Done",
-    "ai_status_failed": "Failed"
+    "ai_status_failed": "Failed",
+    "tool_select": "Select",
+    "tool_pan": "Pan",
+    "tool_rect": "Rectangle",
+    "tool_ellipse": "Ellipse",
+    "tool_note": "Sticky note",
+    "tool_text": "Text",
+    "tool_frame": "Frame"
   },
   "memory": {
     "title": "Memory Vault",

@@ -29,6 +29,8 @@ mod id_mint;
 mod interaction;
 mod ops;
 mod shape_view;
+mod text_edit;
+mod toolbar;
 mod viewport;
 
 use aleph_protocol::canvas as canvas_proto;

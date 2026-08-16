@@ -12,9 +12,15 @@
 //!    z-ordered by [`FracIndex`], plus the marquee rectangle and the
 //!    selection outline with its eight resize handles.
 //! 3. An HTML overlay `<div>` carrying the *same* transform
-//!    (`transform-origin: 0 0`) — empty in this task; text editing (Task 14)
-//!    and sandboxed iframes (Task 16) land here. `pointer-events: none` so
-//!    the input plane below keeps receiving gestures.
+//!    (`transform-origin: 0 0`) — hosts the text-editing overlay
+//!    (`text_edit.rs`, world-positioned because the layer already is);
+//!    sandboxed iframes (Task 16) land here too. `pointer-events: none` so
+//!    the input plane below keeps receiving gestures; children that need
+//!    input (the textarea) opt back in per element.
+//!
+//!    While a text-edit session is open, the shape's text is projected out of
+//!    the SVG layer (the per-id memo maps it through `with_text(…, "")`) so
+//!    the draft exists in exactly one place — the textarea.
 //!
 //! # Who decides what
 //!
@@ -65,6 +71,8 @@ use super::id_mint;
 use super::interaction::{self, Bbox, Handle, InteractionState};
 use super::ops::{self, SendQueue, UndoStack};
 use super::shape_view::ShapeView;
+use super::text_edit::{self, TextEditOverlay, TextEditState};
+use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
 use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
@@ -107,8 +115,9 @@ fn shapes_by_id(shapes: &[Shape]) -> HashMap<String, Shape> {
 }
 
 /// Element-local pointer position → world, via the event's current target
-/// (the surface — its listeners are the only callers).
-fn world_of(ev: &web_sys::PointerEvent, camera: Camera) -> Option<(f64, f64)> {
+/// (the surface — its listeners are the only callers). Takes the MouseEvent
+/// base so the dblclick handler shares it (PointerEvent derefs into it).
+fn world_of(ev: &web_sys::MouseEvent, camera: Camera) -> Option<(f64, f64)> {
     let el = ev.current_target()?.dyn_into::<web_sys::Element>().ok()?;
     let rect = el.get_bounding_client_rect();
     Some(viewport::screen_to_world(
@@ -282,6 +291,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let queue = StoredValue::new(SendQueue::new());
     let marquee_sig: RwSignal<Option<Bbox>> = RwSignal::new(None);
     let surface_ref: NodeRef<leptos::html::Div> = NodeRef::new();
+    // The open text-edit session, if any (`text_edit.rs` owns its rules).
+    // Scoped to the editor like the machine: it must not outlive the canvas.
+    let text_editing: RwSignal<Option<TextEditState>> = RwSignal::new(None);
 
     let space_down = RwSignal::new(false);
     let pan_drag: RwSignal<Option<PanDrag>> = RwSignal::new(None);
@@ -331,6 +343,22 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     });
                 }
                 interaction::Effect::Commit { redo, undo } => commit(redo, undo),
+                interaction::Effect::DiscardPreview(ids) => {
+                    // Local removal of never-committed previews: no undo
+                    // entry, nothing on the wire.
+                    let batch: Vec<CanvasOp> = ids
+                        .into_iter()
+                        .map(|id| CanvasOp::DeleteShape { id })
+                        .collect();
+                    canvas.doc.update(|d| {
+                        if let Some(d) = d.as_mut() {
+                            ops::apply_local(d, &batch);
+                        }
+                    });
+                }
+                interaction::Effect::BeginTextEdit { shape, fresh } => {
+                    text_editing.set(Some(TextEditState { shape, fresh }));
+                }
             }
         }
     };
@@ -563,8 +591,36 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             )));
             return;
         }
-        if ev.button() != 0 || canvas.tool.get_untracked() != CanvasTool::Select {
-            // Creation tools land in Tasks 14/15.
+        if ev.button() != 0 {
+            return;
+        }
+        let tool = canvas.tool.get_untracked();
+        if let Some(kind) = interaction::create_kind(tool) {
+            ev.prevent_default();
+            let Some(world) = world_of(&ev, camera.get_untracked()) else {
+                return;
+            };
+            if let Some(el) = ev
+                .current_target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            {
+                let _ = el.set_pointer_capture(ev.pointer_id());
+            }
+            let effects = canvas.doc.with_untracked(|d| {
+                let Some(d) = d.as_ref() else {
+                    return Vec::new();
+                };
+                machine
+                    .try_update_value(|m| {
+                        m.begin_create(kind, world, id_mint::mint_shape_id(), &d.shapes)
+                    })
+                    .unwrap_or_default()
+            });
+            run_effects(effects);
+            return;
+        }
+        if tool != CanvasTool::Select {
+            // Draw/Arrow land in Task 15.
             return;
         }
         let Some(world) = world_of(&ev, camera.get_untracked()) else {
@@ -660,6 +716,38 @@ pub(super) fn CanvasEditor() -> impl IntoView {
         });
         run_effects(effects);
         sync_marquee();
+        // A finished creation gesture drops back to Select — one shape per
+        // tool pick, the tldraw convention. Cancel (Esc) deliberately keeps
+        // the tool armed: the user abandoned the drag, not the intent.
+        if interaction::create_kind(canvas.tool.get_untracked()).is_some() {
+            canvas.tool.set(CanvasTool::Select);
+        }
+    };
+    // Double-click opens the text editor on shapes that carry body text
+    // (Geo/Note/Text — `text_edit::text_of`'s rule). Select tool only: the
+    // creation tools own their clicks.
+    let on_dblclick = move |ev: web_sys::MouseEvent| {
+        if canvas.tool.get_untracked() != CanvasTool::Select {
+            return;
+        }
+        let Some(world) = world_of(&ev, camera.get_untracked()) else {
+            return;
+        };
+        let target = canvas.doc.with_untracked(|d| {
+            d.as_ref().and_then(|d| {
+                interaction::topmost_hit(&d.shapes, world)
+                    .filter(|s| text_edit::text_of(s).is_some())
+                    .cloned()
+            })
+        });
+        let Some(shape) = target else {
+            return;
+        };
+        canvas.selection.set(vec![shape.id().to_string()]);
+        text_editing.set(Some(TextEditState {
+            shape,
+            fresh: false,
+        }));
     };
     let on_pointercancel = move |ev: web_sys::PointerEvent| {
         let _ = end_pan(&ev);
@@ -715,6 +803,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             on:pointermove=on_pointermove
             on:pointerup=on_pointerup
             on:pointercancel=on_pointercancel
+            on:dblclick=on_dblclick
         >
             <svg class="absolute inset-0 w-full h-full block">
                 <g transform=move || viewport::svg_transform(camera.get())>
@@ -722,8 +811,19 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                         each=move || sorted_ids.get()
                         key=Clone::clone
                         children=move |id: String| {
-                            let shape =
-                                Memo::new(move |_| shape_map.with(|m| m.get(&id).cloned()));
+                            let shape = Memo::new(move |_| {
+                                let s = shape_map.with(|m| m.get(&id).cloned())?;
+                                // While this shape is being text-edited, its
+                                // text lives in the textarea alone (module
+                                // doc) — project it out of the SVG.
+                                let editing = text_editing
+                                    .with(|e| e.as_ref().is_some_and(|e| e.shape.id() == id));
+                                Some(if editing {
+                                    text_edit::with_text(&s, "")
+                                } else {
+                                    s
+                                })
+                            });
                             view! { <ShapeView shape=shape /> }
                         }
                     />
@@ -780,14 +880,24 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     })}
                 </g>
             </svg>
-            // HTML overlay: the same world transform. Hosts nothing yet —
-            // text editing (Task 14) and sandboxed iframes (Task 16) mount
-            // here. pointer-events:none keeps the svg surface as the input
-            // plane until a child opts back in.
+            // HTML overlay: the same world transform. Hosts the text-editing
+            // textarea (world-positioned for free); sandboxed iframes mount
+            // here in Task 16. pointer-events:none keeps the svg surface as
+            // the input plane; the textarea opts back in per element.
             <div
                 class="absolute inset-0 pointer-events-none"
                 style=move || viewport::css_transform(camera.get())
-            ></div>
+            >
+                <TextEditOverlay
+                    editing=text_editing
+                    on_commit=Callback::new(move |(redo, undo): (Vec<CanvasOp>, Vec<CanvasOp>)| {
+                        commit(redo, undo);
+                    })
+                />
+            </div>
+            // After the overlay in DOM order so it paints on top of both
+            // layers; it re-enables pointer events itself.
+            <CanvasToolbar />
         </div>
     }
 }

@@ -78,16 +78,20 @@ fn fill_css(style: &ShapeStyle) -> String {
 
 /// Body-text color: colored shapes write in their color, the default slot in
 /// the primary text token (secondary is too faint for body text).
+/// `pub(super)`: the text-editing overlay writes in the same ink so the
+/// textarea and the committed SVG text cannot disagree.
 #[must_use]
-fn text_fill(style: &ShapeStyle) -> &'static str {
+pub(super) fn text_fill(style: &ShapeStyle) -> &'static str {
     match style.color.as_str() {
         "red" | "orange" | "yellow" | "green" | "blue" | "violet" => palette_var(&style.color),
         _ => "var(--color-text-primary)",
     }
 }
 
+/// `pub(super)`: shared with the text-editing overlay (same reasoning as
+/// [`text_fill`] — one source for how big a shape's text renders).
 #[must_use]
-fn font_size_for(size: SizeKind) -> f64 {
+pub(super) fn font_size_for(size: SizeKind) -> f64 {
     match size {
         SizeKind::Small => 12.0,
         SizeKind::Medium => 16.0,
