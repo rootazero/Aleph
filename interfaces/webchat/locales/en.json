@@ -6,7 +6,8 @@
     "memory": "Memory",
     "teams": "Teams",
     "extensions": "Aleph Hub",
-    "settings": "Settings"
+    "settings": "Settings",
+    "canvas": "Canvas"
   },
   "session": {
     "healthy": "Healthy",
@@ -322,6 +323,16 @@
     "team_roster_error": "Error",
     "team_tasks_title": "Team Tasks",
     "team_unread": "New messages"
+  },
+  "canvas": {
+    "title": "Canvas",
+    "subtitle": "Infinite whiteboards you and the model draw on together",
+    "new_canvas": "New canvas",
+    "empty": "No canvases yet — create one to start",
+    "shapes": "shapes",
+    "back_to_library": "Library",
+    "editor_pending": "The canvas editor lands in the next step — this document is live and synced",
+    "phone_read_only": "Read-only on phone — open Aleph on a desktop to edit"
   },
   "memory": {
     "title": "Memory Vault",

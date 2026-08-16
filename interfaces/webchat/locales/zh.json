@@ -6,7 +6,8 @@
     "memory": "记忆",
     "teams": "团队",
     "extensions": "Aleph Hub",
-    "settings": "设置"
+    "settings": "设置",
+    "canvas": "画布"
   },
   "session": {
     "healthy": "正常",
@@ -322,6 +323,16 @@
     "team_roster_error": "错误",
     "team_tasks_title": "团队任务",
     "team_unread": "有新消息"
+  },
+  "canvas": {
+    "title": "画布",
+    "subtitle": "与模型共同绘制的无限白板",
+    "new_canvas": "新建画布",
+    "empty": "还没有画布——新建一个开始",
+    "shapes": "个形状",
+    "back_to_library": "画布库",
+    "editor_pending": "画布编辑器将在下一步到来——此文档已实时同步",
+    "phone_read_only": "手机端仅可查看——请在桌面端编辑"
   },
   "memory": {
     "title": "记忆库",

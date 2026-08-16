@@ -7,6 +7,7 @@ use leptos_router::hooks::{use_location, use_navigate};
 
 // Views
 use crate::views::agent_trace::AgentTrace;
+use crate::views::canvas::CanvasView;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::extensions::{ExtensionsView, StoreState};
@@ -35,6 +36,7 @@ use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::token_wall::TokenWall;
 use crate::context::{DashboardContext, DashboardState};
 use crate::platform::phone::agents::PhoneAgents;
+use crate::platform::phone::canvas::PhoneCanvas;
 use crate::platform::phone::chat::PhoneChat;
 use crate::platform::phone::dashboard::PhoneDashboard;
 use crate::platform::phone::extensions::PhoneExtensions;
@@ -180,6 +182,11 @@ fn AppContent() -> impl IntoView {
     // (BrowsePane) share one `category` selection. Mirrors ChatState's
     // split-column sharing (see above).
     provide_context(StoreState::new());
+
+    // Whiteboard canvas state — the library page, the editor shell and the
+    // realtime reconciler (later tasks) all read the same signals. Provided
+    // here (never by a phone screen) per the `context_ownership` guard.
+    provide_context(crate::state::canvas::CanvasState::new());
 
     // Process-wide user_id -> display_name projection (P2 Task 8) — read by
     // project-room message attribution and the roster picker. Provided once
@@ -534,6 +541,13 @@ fn MainContent() -> impl IntoView {
                 view! { <PhoneMemory /> }.into_any()
             } else {
                 view! { <MemoryHub /> }.into_any()
+            }}
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Canvas { "contents" } else { "none" }>
+            {move || if form_factor.form_factor.get() == FormFactor::Phone {
+                view! { <PhoneCanvas /> }.into_any()
+            } else {
+                view! { <CanvasView /> }.into_any()
             }}
         </div>
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
