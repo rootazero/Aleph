@@ -24,6 +24,10 @@
 //!    Task 17 reconciler; until then a whole-doc refetch is the correct,
 //!    dumber answer.
 
+mod editor;
+mod shape_view;
+mod viewport;
+
 use aleph_protocol::canvas as canvas_proto;
 use aleph_protocol::canvas::CanvasRow;
 use leptos::prelude::*;
@@ -363,9 +367,9 @@ fn LibraryRow(row: CanvasRow, pending_delete: RwSignal<Option<String>>) -> impl 
     }
 }
 
-/// The open document — a placeholder shell until the editor lands (Task 12).
-/// Shows the fetched document is real (title, shape count) and offers the way
-/// back; the SVG surface replaces the placeholder body, not this frame.
+/// The open document: header (way back, title, shape count) over the editor
+/// surface. The editor mounts only once the fetch has landed — its camera
+/// gestures and key listeners have no business existing for a spinner.
 #[component]
 fn OpenCanvasPane() -> impl IntoView {
     let canvas = expect_context::<CanvasState>();
@@ -399,13 +403,16 @@ fn OpenCanvasPane() -> impl IntoView {
                     </div>
                 })
             }}
-            <div class="flex-1 flex items-center justify-center text-sm text-text-tertiary">
-                {move || if canvas.doc.with(|d| d.is_none()) {
-                    t!(i18n, common.loading).into_any()
-                } else {
-                    t!(i18n, canvas.editor_pending).into_any()
-                }}
-            </div>
+            {move || if canvas.doc.with(|d| d.is_none()) {
+                view! {
+                    <div class="flex-1 flex items-center justify-center text-sm text-text-tertiary">
+                        {t!(i18n, common.loading)}
+                    </div>
+                }
+                .into_any()
+            } else {
+                view! { <editor::CanvasEditor /> }.into_any()
+            }}
         </div>
     }
 }

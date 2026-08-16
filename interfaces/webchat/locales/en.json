@@ -331,8 +331,12 @@
     "empty": "No canvases yet — create one to start",
     "shapes": "shapes",
     "back_to_library": "Library",
-    "editor_pending": "The canvas editor lands in the next step — this document is live and synced",
-    "phone_read_only": "Read-only on phone — open Aleph on a desktop to edit"
+    "phone_read_only": "Read-only on phone — open Aleph on a desktop to edit",
+    "html_frame": "HTML frame",
+    "ai_status_draft": "Draft",
+    "ai_status_pending": "Generating…",
+    "ai_status_done": "Done",
+    "ai_status_failed": "Failed"
   },
   "memory": {
     "title": "Memory Vault",
