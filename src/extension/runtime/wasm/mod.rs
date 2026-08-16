@@ -71,8 +71,8 @@ impl WasmRuntime {
     /// Installs a [`DenyAllSecretResolver`] as the secret resolver — the
     /// plugin can declare `http.credentials` but they will be no-ops until a
     /// caller installs a real resolver via
-    /// [`WasmCapabilityKernel::with_secret_resolver`] (e.g. through
-    /// [`Self::load_plugin_with_secrets`]).
+    /// [`WasmCapabilityKernel::with_secret_resolver`] (call
+    /// [`Self::load_plugin_with_resolver`] with `Some(resolver)` to do so).
     pub fn load_plugin(&mut self, manifest: &PluginManifest) -> Result<(), ExtensionError> {
         self.load_plugin_with_resolver(manifest, None)
     }
