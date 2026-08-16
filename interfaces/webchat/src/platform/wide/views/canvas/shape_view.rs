@@ -153,15 +153,17 @@ fn ink_stroke_width(size: SizeKind) -> f64 {
 /// stroke-width, because at the resting pressure of 0.5 the outline's
 /// half-width is a quarter of the base size ([`freehand::THINNING`] math),
 /// which keeps the on-screen weight of existing strokes unchanged.
+/// `pub(super)`: the export serializer draws the same silhouette.
 #[must_use]
-fn freehand_size(size: SizeKind) -> f64 {
+pub(super) fn freehand_size(size: SizeKind) -> f64 {
     ink_stroke_width(size) * 2.0
 }
 
 /// First `max` chars of an AI prompt, `…`-terminated — char-boundary safe
 /// (a CJK prompt sliced by bytes would panic).
+/// `pub(super)`: the export serializer excerpts the same way.
 #[must_use]
-fn prompt_excerpt(prompt: &str, max: usize) -> String {
+pub(super) fn prompt_excerpt(prompt: &str, max: usize) -> String {
     if prompt.chars().count() <= max {
         return prompt.to_string();
     }
@@ -203,8 +205,10 @@ fn arrow_anchor(b: Bbox, toward: (f64, f64)) -> (f64, f64) {
 /// end's reference point (that end's bound shape's *center*, or its stored
 /// coordinates). An end whose bound shape vanished falls back to its stored
 /// x/y — the wire contract calls them "the recomputed fallback".
+/// `pub(super)`: the export serializer resolves endpoints identically —
+/// a second geometry would let the export and the live view disagree.
 #[must_use]
-fn resolve_arrow_ends(
+pub(super) fn resolve_arrow_ends(
     shapes: &[Shape],
     start: &ArrowEnd,
     end: &ArrowEnd,
@@ -228,8 +232,9 @@ fn resolve_arrow_ends(
 /// `points=` polygon string for an arrowhead at `end`, pointing away from
 /// `start`. Empty when the arrow is degenerate (zero length) — a polygon
 /// with NaN vertices is an SVG parse error, not an invisible triangle.
+/// `pub(super)`: shared with the export serializer (same head, same math).
 #[must_use]
-fn arrow_head_points(start: (f64, f64), end: (f64, f64)) -> String {
+pub(super) fn arrow_head_points(start: (f64, f64), end: (f64, f64)) -> String {
     let (dx, dy) = (end.0 - start.0, end.1 - start.1);
     let len = (dx * dx + dy * dy).sqrt();
     if len < 1e-6 {

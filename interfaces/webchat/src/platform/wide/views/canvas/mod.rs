@@ -24,8 +24,10 @@
 //!    (matched against `CanvasState.inflight` by base revision + ops), and a
 //!    revision gap falls back to a whole-doc refetch.
 
+mod ai;
 mod asset_ingest;
 mod editor;
+mod export;
 mod freehand;
 mod id_mint;
 mod interaction;

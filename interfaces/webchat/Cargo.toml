@@ -43,6 +43,9 @@ web-sys = { version = "0.3", features = [
     "DragEvent", "DataTransfer", "Navigator", "Clipboard",
     # canvas image drop/paste — clipboard files + off-DOM decode for natural size
     "ClipboardEvent", "HtmlImageElement",
+    # canvas PNG export — download anchor (also used by transcript/home exports,
+    # which had been riding a transitive feature union until now)
+    "HtmlAnchorElement",
     # graph_canvas rAF visibility pause (async, no forced layout)
     "IntersectionObserver", "IntersectionObserverEntry",
     # graph_canvas resize without per-frame getBoundingClientRect layout reads

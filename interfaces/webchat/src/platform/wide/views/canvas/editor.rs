@@ -69,7 +69,6 @@ use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
-use super::asset_ingest;
 use super::id_mint;
 use super::interaction::{self, Bbox, Handle, InteractionState};
 use super::ops::{self, SendQueue, UndoStack};
@@ -77,6 +76,7 @@ use super::shape_view::{HtmlFrameOverlay, ShapeView};
 use super::text_edit::{self, TextEditOverlay, TextEditState};
 use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
+use super::{ai, asset_ingest, export};
 use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
 use crate::components::mode_sidebar::PanelMode;
@@ -102,7 +102,8 @@ const NUDGE_STEP_SHIFT: f64 = 10.0;
 
 /// Render order: z ascending (FracIndex is lexicographic), id as the
 /// tie-break so two shapes minted with the same index still sort stably.
-fn z_sorted_ids(shapes: &[Shape]) -> Vec<String> {
+/// `pub(super)`: the export serializer orders its layers by the same rule.
+pub(super) fn z_sorted_ids(shapes: &[Shape]) -> Vec<String> {
     let mut refs: Vec<&Shape> = shapes.iter().collect();
     refs.sort_by(|a, b| {
         a.common()
@@ -1052,6 +1053,30 @@ pub(super) fn CanvasEditor() -> impl IntoView {
         run_effects(effects);
     };
 
+    // Insert a fresh Draft AI image frame at the viewport center — the AI
+    // panel's creation affordance. Lives here rather than in `ai.rs` because
+    // only the editor holds the surface rect and camera that define "center".
+    let insert_ai_frame = Callback::new(move |()| {
+        let Some(surface) = surface_ref.get_untracked() else {
+            return;
+        };
+        let rect = surface.get_bounding_client_rect();
+        let world = viewport::screen_to_world(
+            camera.get_untracked(),
+            rect.width() / 2.0,
+            rect.height() / 2.0,
+        );
+        let minted = canvas.doc.with_untracked(|d| {
+            d.as_ref()
+                .map(|d| ai::insert_frame_ops(d, world, id_mint::mint_shape_id()))
+        });
+        let Some((redo, undo, new_id)) = minted else {
+            return;
+        };
+        commit(redo, undo);
+        canvas.selection.set(vec![new_id]);
+    });
+
     view! {
         <div
             node_ref=surface_ref
@@ -1193,6 +1218,24 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             // After the overlay in DOM order so it paints on top of both
             // layers; it re-enables pointer events itself.
             <CanvasToolbar />
+            // AI / export action cluster — screen space, top-right. Stops
+            // pointer/wheel propagation like the toolbar: a click on a
+            // button must not start a marquee underneath it.
+            <div
+                class="absolute top-4 right-4 flex flex-col items-end gap-2"
+                on:pointerdown=|ev: web_sys::PointerEvent| ev.stop_propagation()
+                on:dblclick=|ev: web_sys::MouseEvent| ev.stop_propagation()
+                on:wheel=|ev: web_sys::WheelEvent| ev.stop_propagation()
+            >
+                <ai::AiFramePanel
+                    on_commit=Callback::new(move |(redo, undo): (Vec<CanvasOp>, Vec<CanvasOp>)| {
+                        commit(redo, undo);
+                    })
+                    insert_frame=insert_ai_frame
+                />
+                <ai::AnnotateButton />
+                <export::ExportPngButton />
+            </div>
         </div>
     }
 }
