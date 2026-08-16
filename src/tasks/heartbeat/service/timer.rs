@@ -138,7 +138,7 @@ pub async fn run_heartbeat_loop(
                     }
                 };
                 let result = execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
-                writeback_one(&state, &task_id, result, &ctx).await;
+                writeback_one(&state, &task_id, result, wake_reason.is_some(), &ctx).await;
                 // Push a `StateChanged` frame so the panel (which dropped
                 // polling) refreshes the task's runtime state after each run.
                 if let Some(emitter) = &ctx.change_emitter {
@@ -508,6 +508,7 @@ async fn writeback_one(
     state: &HeartbeatServiceState,
     task_id: &str,
     tick_result: HeartbeatTickResult,
+    was_wake: bool,
     ctx: &TickContext,
 ) {
     let mut store = state.store.lock().await;
@@ -590,7 +591,10 @@ async fn writeback_one(
         let run_record = HeartbeatRunRecord {
             id: uuid::Uuid::new_v4().to_string(),
             task_id: task_id.to_string(),
-            trigger_source: "Interval".to_string(),
+            // `trigger_source` was always "Interval" even for `heartbeat.wake`
+            // runs: the wake reason reached `execute_heartbeat_tick` (it feeds
+            // the L2 prompt) but was dropped before the history write.
+            trigger_source: if was_wake { "Wake" } else { "Interval" }.to_string(),
             l1_status: tick_result.l1_status.clone(),
             l2_status: tick_result.l2_status.clone(),
             started_at: now_ms

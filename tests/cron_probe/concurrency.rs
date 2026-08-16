@@ -45,7 +45,6 @@ async fn concurrent_list_during_execution() {
         error: None,
         error_reason: None,
         delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
-        agent_used_messaging_tool: false,
         trigger_source: TriggerSource::Schedule,
         retry_hint: None,
     };
@@ -101,7 +100,6 @@ async fn update_during_execution() {
         error: None,
         error_reason: None,
         delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
-        agent_used_messaging_tool: false,
         trigger_source: TriggerSource::Schedule,
         retry_hint: None,
     };
@@ -170,7 +168,6 @@ async fn delete_during_execution() {
         error: None,
         error_reason: None,
         delivery_status: Some(alephcore::tasks::cron::config::DeliveryStatus::NotRequested),
-        agent_used_messaging_tool: false,
         trigger_source: TriggerSource::Schedule,
         retry_hint: None,
     };

@@ -513,7 +513,6 @@ mod tests {
             },
             error_reason: None,
             delivery_status: None,
-            agent_used_messaging_tool: false,
             trigger_source: TriggerSource::Schedule,
             retry_hint,
         }

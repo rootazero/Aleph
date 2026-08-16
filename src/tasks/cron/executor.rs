@@ -338,7 +338,6 @@ async fn execute_cron_job(
                 error_reason: delivery_failed
                     .then(|| ErrorReason::Transient("result delivery failed".to_string())),
                 delivery_status: Some(delivery_status),
-                agent_used_messaging_tool: false,
                 trigger_source: snapshot.trigger_source,
                 retry_hint: delivery_failed.then(|| {
                     RetryHint::transient(crate::tasks::shared::retry_hint::RetryCategory::Network)
@@ -357,7 +356,6 @@ async fn execute_cron_job(
                 error: Some("job execution timed out".to_string()),
                 error_reason: Some(ErrorReason::Transient("timeout".to_string())),
                 delivery_status: None,
-                agent_used_messaging_tool: false,
                 trigger_source: snapshot.trigger_source,
                 retry_hint: Some(classify("timeout")),
             }
@@ -378,7 +376,6 @@ async fn execute_cron_job(
                 error: Some(format!("agent busy: {msg}")),
                 error_reason: Some(ErrorReason::Transient(msg)),
                 delivery_status: None,
-                agent_used_messaging_tool: false,
                 trigger_source: snapshot.trigger_source,
                 retry_hint: Some(hint),
             }
@@ -671,7 +668,6 @@ fn make_error_result(
         error: Some(error),
         error_reason: Some(reason),
         delivery_status: None,
-        agent_used_messaging_tool: false,
         trigger_source,
         retry_hint: Some(retry_hint),
     }

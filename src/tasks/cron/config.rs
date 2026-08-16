@@ -645,7 +645,6 @@ pub struct ExecutionResult {
     pub error: Option<String>,
     pub error_reason: Option<ErrorReason>,
     pub delivery_status: Option<DeliveryStatus>,
-    pub agent_used_messaging_tool: bool,
     pub trigger_source: TriggerSource,
     /// Classification of `error` produced by [`crate::tasks::shared::retry_hint::classify`].
     /// `None` on success; `Some(RetryHint::permanent())` for a classified non-transient

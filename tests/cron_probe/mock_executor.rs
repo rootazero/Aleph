@@ -126,7 +126,6 @@ impl MockExecutor {
                             error: None,
                             error_reason: None,
                             delivery_status: Some(DeliveryStatus::NotRequested),
-                            agent_used_messaging_tool: false,
                             trigger_source: snapshot.trigger_source,
                             retry_hint: None,
                         },
@@ -139,7 +138,6 @@ impl MockExecutor {
                             error: Some(message),
                             error_reason: Some(reason.clone()),
                             delivery_status: None,
-                            agent_used_messaging_tool: false,
                             trigger_source: snapshot.trigger_source,
                             // Preserve the test intent of ErrorReason::Transient/Permanent
                             // rather than re-classifying the message text.
@@ -161,7 +159,6 @@ impl MockExecutor {
                                 error: None,
                                 error_reason: None,
                                 delivery_status: Some(DeliveryStatus::NotRequested),
-                                agent_used_messaging_tool: false,
                                 trigger_source: snapshot.trigger_source,
                                 retry_hint: None,
                             }

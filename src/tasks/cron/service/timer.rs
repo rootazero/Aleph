@@ -185,7 +185,6 @@ pub async fn on_timer_tick<C: Clock>(
                     error: Some("cron job task panicked".to_string()),
                     error_reason: None,
                     delivery_status: None,
-                    agent_used_messaging_tool: false,
                     trigger_source,
                     retry_hint: None,
                 },
@@ -290,7 +289,6 @@ mod tests {
             error: None,
             error_reason: None,
             delivery_status: None,
-            agent_used_messaging_tool: false,
             trigger_source: snapshot.trigger_source,
             retry_hint: None,
         }
