@@ -20,14 +20,14 @@ use crate::tools::AlephTool;
 pub struct SearchArgs {
     /// Search query
     pub query: String,
-    /// Max results (default 5)
-    #[serde(default = "default_limit")]
-    pub limit: usize,
+    /// Max results. Omit to use the operator's `[search].max_results`.
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
-const fn default_limit() -> usize {
-    5
-}
+/// Result count used by the registry-less legacy Tavily path, mirroring the
+/// `[search].max_results` schema default.
+const DEFAULT_MAX_RESULTS: usize = 5;
 
 /// A single search result
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -127,10 +127,12 @@ impl SearchTool {
 
         // Try SearchRegistry first (multi-provider with fallback)
         if let Some(ref registry) = self.registry {
-            let options = crate::search::SearchOptions {
-                max_results: args.limit,
-                ..Default::default()
-            };
+            // Start from the operator's `[search]` defaults (max_results /
+            // timeout_seconds); an explicit `limit` from the model still wins.
+            let mut options = registry.default_options();
+            if let Some(limit) = args.limit {
+                options.max_results = limit;
+            }
 
             match registry.search(&args.query, &options).await {
                 Ok(results) => {
@@ -162,7 +164,10 @@ impl SearchTool {
             }
         }
 
-        // Fallback: Direct Tavily API call (legacy path)
+        // Fallback: Direct Tavily API call (legacy path). No registry here, so
+        // no `[search]` block was parsed — use the same default the config
+        // schema documents.
+        let limit = args.limit.unwrap_or(DEFAULT_MAX_RESULTS);
         let api_key = self.api_key.as_ref().ok_or_else(|| {
             notify_tool_result(Self::NAME, "No search provider available", false);
             ToolError::InvalidArgs(
@@ -170,13 +175,13 @@ impl SearchTool {
             )
         })?;
 
-        info!(query = %args.query, limit = args.limit, "Executing Tavily search");
+        info!(query = %args.query, limit, "Executing Tavily search");
 
         // Build Tavily API request
         let request_body = serde_json::json!({
             "api_key": api_key,
             "query": args.query,
-            "max_results": args.limit,
+            "max_results": limit,
             "include_answer": false
         });
 
@@ -272,9 +277,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_search_args_default_limit() {
+    fn test_search_args_limit_omitted_defers_to_config() {
         let args: SearchArgs = serde_json::from_str(r#"{"query": "test"}"#).unwrap();
-        assert_eq!(args.limit, 5);
+        assert_eq!(
+            args.limit, None,
+            "an omitted limit must stay None so `[search].max_results` applies"
+        );
     }
 
     #[test]
@@ -282,7 +290,7 @@ mod tests {
         let args: SearchArgs =
             serde_json::from_str(r#"{"query": "rust programming", "limit": 10}"#).unwrap();
         assert_eq!(args.query, "rust programming");
-        assert_eq!(args.limit, 10);
+        assert_eq!(args.limit, Some(10));
     }
 
     #[test]
@@ -305,7 +313,7 @@ mod tests {
         let tool = SearchTool::new();
         let args = SearchArgs {
             query: "test query".to_string(),
-            limit: 5,
+            limit: Some(5),
         };
 
         // Use fully qualified syntax to avoid ambiguity with blanket impl

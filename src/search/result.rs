@@ -50,18 +50,6 @@ impl SearchResult {
             provider: None,
         }
     }
-
-    /// Calculate content length in bytes (snippet + `full_content`)
-    #[must_use]
-    pub fn content_length(&self) -> usize {
-        self.snippet.len() + self.full_content.as_ref().map_or(0, |c| c.len())
-    }
-
-    /// Check if result has full content
-    #[must_use]
-    pub const fn has_full_content(&self) -> bool {
-        self.full_content.is_some()
-    }
 }
 
 #[cfg(test)]
@@ -135,36 +123,5 @@ mod tests {
         let parsed: SearchResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.title, "Test");
         assert_eq!(parsed.relevance_score, Some(0.95));
-    }
-
-    #[test]
-    fn test_content_length() {
-        let mut result = SearchResult::new(
-            "Title".to_string(),
-            "https://example.com".to_string(),
-            "Short snippet".to_string(),
-        );
-
-        assert_eq!(result.content_length(), "Short snippet".len());
-
-        result.full_content = Some("Full content here".to_string());
-        assert_eq!(
-            result.content_length(),
-            "Short snippet".len() + "Full content here".len()
-        );
-    }
-
-    #[test]
-    fn test_has_full_content() {
-        let mut result = SearchResult::new(
-            "Title".to_string(),
-            "https://example.com".to_string(),
-            "Snippet".to_string(),
-        );
-
-        assert!(!result.has_full_content());
-
-        result.full_content = Some("Content".to_string());
-        assert!(result.has_full_content());
     }
 }

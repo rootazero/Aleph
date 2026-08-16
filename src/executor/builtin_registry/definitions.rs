@@ -977,10 +977,18 @@ pub fn create_tool_boxed(
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
         "search" => {
-            let tool = if let Some(cfg) = config {
-                SearchTool::with_api_key(cfg.tavily_api_key.clone())
-            } else {
-                SearchTool::new()
+            // Must mirror `builder/constructor/mod.rs:48` — a registry, when the
+            // caller has one, otherwise the direct Tavily key. The arm used to
+            // read only `tavily_api_key`, so any future production caller of
+            // this generic constructor would silently get a search tool with no
+            // SearXNG/Brave backends and no SERP fallback, indistinguishable
+            // from the real one in the tool list.
+            let tool = match config {
+                Some(cfg) => match cfg.search_registry {
+                    Some(ref registry) => SearchTool::with_registry(Arc::clone(registry)),
+                    None => SearchTool::with_api_key(cfg.tavily_api_key.clone()),
+                },
+                None => SearchTool::new(),
             };
             Some(Box::new(tool))
         }
@@ -1904,7 +1912,7 @@ mod tests {
     /// runtime fact, unguessable, and owned by no other tool. The drift half
     /// is a process finding, not a prose license: description bytes landed
     /// without the suite that prices them.
-///
+    ///
     /// 2026-08-16, the executor audit round: 98_861 -> 102_000 B (+3,115 B
     /// of measurement, NOT new spending — the eight generation/channel/voice
     /// tools and `acp_session_control` already shipped their descriptions on

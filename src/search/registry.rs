@@ -31,6 +31,17 @@ pub struct SearchRegistry {
     providers: HashMap<String, Arc<dyn SearchProvider>>,
     default_provider: String,
     fallback_providers: Vec<String>,
+    /// Operator-configured search defaults (`[search].max_results` /
+    /// `[search].timeout_seconds`), as the [`SearchOptions`] a caller should
+    /// start from. `None` for a hand-built registry, which keeps
+    /// [`SearchOptions::default`].
+    ///
+    /// Lives here because [`Self::from_config`] is the only place the `[search]`
+    /// block is read; without it the two knobs were validated, editable in the
+    /// Panel and persisted, yet nothing ever read them — the live caller
+    /// (`SearchTool::call_impl`) built `SearchOptions::default()` with its
+    /// hardcoded 5 / 10s.
+    config_defaults: Option<SearchOptions>,
     /// WebFetch-based SERP scrape fallback. Consulted only after every
     /// configured provider has failed — typically when the operator's
     /// IP has hit a simultaneous rate-limit across paid APIs. `None`
@@ -46,8 +57,17 @@ impl SearchRegistry {
             providers: HashMap::new(),
             default_provider: default_provider.into(),
             fallback_providers: Vec::new(),
+            config_defaults: None,
             web_fetch_fallback: None,
         }
+    }
+
+    /// The [`SearchOptions`] a caller should start from: the operator's
+    /// `[search]` defaults when this registry was built from config, otherwise
+    /// [`SearchOptions::default`].
+    #[must_use]
+    pub fn default_options(&self) -> SearchOptions {
+        self.config_defaults.clone().unwrap_or_default()
     }
 
     /// Install (or replace) the WebFetch-based SERP scrape fallback.
@@ -102,6 +122,11 @@ impl SearchRegistry {
         }
         // rust-doctor-disable-next-line excessive-clone
         let mut registry = Self::new(cfg.default_provider.clone());
+        registry.config_defaults = Some(SearchOptions {
+            max_results: cfg.max_results,
+            timeout_seconds: cfg.timeout_seconds,
+            ..SearchOptions::default()
+        });
         let mut any_added = false;
         for (name, backend) in &cfg.backends {
             match factories.build(name, backend) {
@@ -608,6 +633,46 @@ mod tests {
         assert!(
             registry.has_web_fetch_fallback(),
             "default web_fetch_fallback=true must arm the fallback"
+        );
+    }
+
+    #[test]
+    fn from_config_carries_operator_defaults_into_default_options() {
+        use crate::config::types::{SearchBackendConfig, SearchConfigInternal};
+        // `[search].max_results` / `.timeout_seconds` were validated, editable in
+        // the Panel and persisted, but nothing read them at runtime: the live
+        // caller built `SearchOptions::default()` (5 / 10s). Pin the wire.
+        let mut backends = HashMap::new();
+        backends.insert(
+            "ddg".to_string(),
+            SearchBackendConfig {
+                provider_type: "duckduckgo".to_string(),
+                api_key: None,
+                base_url: None,
+                engine_id: None,
+                engines: None,
+                min_request_interval_ms: None,
+                verified: false,
+            },
+        );
+        let cfg = SearchConfigInternal {
+            enabled: true,
+            default_provider: "ddg".to_string(),
+            fallback_providers: None,
+            max_results: 17,
+            timeout_seconds: 42,
+            backends,
+            web_fetch_fallback: false,
+        };
+        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        let options = registry.default_options();
+        assert_eq!(options.max_results, 17);
+        assert_eq!(options.timeout_seconds, 42);
+
+        // A hand-built registry keeps the type's own defaults.
+        assert_eq!(
+            SearchRegistry::new("mock").default_options().max_results,
+            SearchOptions::default().max_results
         );
     }
 
