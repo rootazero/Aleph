@@ -1336,6 +1336,9 @@ pub(crate) fn InputArea() -> impl IntoView {
                         </Show>
                         // Live context-window gauge (self-hides until first usage).
                         <super::context_gauge::ContextGauge />
+                        // Live last-call cache hit rate (self-hides until a
+                        // call reports cache activity).
+                        <super::context_gauge::CacheStat />
 
                         <div class="ml-auto flex items-center gap-2 flex-wrap min-w-0">
                             // Export conversation → Markdown (far right of the

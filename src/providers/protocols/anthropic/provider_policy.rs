@@ -131,6 +131,26 @@ pub fn detect_anthropic_endpoint_class(base_url: Option<&str>) -> AnthropicEndpo
     }
 }
 
+/// Exact-host check for the Anthropic 1P API.
+///
+/// Replaces the old `endpoint.contains("api.anthropic.com")` substring match:
+/// a proxy URL merely *embedding* the magic string
+/// (`https://proxy.corp/v1?upstream=api.anthropic.com`) would have been
+/// served the 1P-only 1h TTL marker and `extended-cache-ttl` beta header —
+/// which third-party hosts then reject under strict schema validation.
+/// Unparseable input is conservatively NOT official.
+#[must_use]
+pub fn is_official_anthropic_endpoint(url: &str) -> bool {
+    // Empty means "no information" here — callers pass fully built endpoint
+    // URLs — so it must not inherit `detect_anthropic_endpoint_class`'s
+    // `None/"" → Official` default.
+    !url.is_empty()
+        && matches!(
+            detect_anthropic_endpoint_class(Some(url)),
+            AnthropicEndpointClass::Official
+        )
+}
+
 fn extract_hostname(url: &str) -> Option<String> {
     let with_scheme = if url.contains("://") {
         url.to_string()
@@ -407,6 +427,28 @@ pub fn build_anthropic_policy(base_url: Option<&str>) -> AnthropicPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn official_endpoint_requires_exact_host_match() {
+        assert!(is_official_anthropic_endpoint(
+            "https://api.anthropic.com/v1/messages"
+        ));
+        // The spoof the old substring match fell for: the magic string sits
+        // in a query param / path of a third-party proxy, not the host.
+        assert!(!is_official_anthropic_endpoint(
+            "https://proxy.corp.example/v1?upstream=api.anthropic.com"
+        ));
+        assert!(!is_official_anthropic_endpoint(
+            "https://api.anthropic.com.evil.example/v1"
+        ));
+        assert!(!is_official_anthropic_endpoint(
+            "https://openrouter.ai/api/v1"
+        ));
+        // Bare host still parses; empty / garbage is conservatively not official.
+        assert!(is_official_anthropic_endpoint("api.anthropic.com"));
+        assert!(!is_official_anthropic_endpoint(""));
+        assert!(!is_official_anthropic_endpoint("not a url"));
+    }
 
     #[test]
     fn detect_official_when_base_url_is_anthropic_host() {

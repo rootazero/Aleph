@@ -81,6 +81,41 @@ pub fn ContextGauge() -> impl IntoView {
     }
 }
 
+/// Live last-call prompt-cache hit rate chip — `cache N%` beside the gauge.
+/// Renders nothing until a provider call reports cache activity. Tints
+/// warning below 50%: a sudden drop mid-session is the live symptom of a
+/// stable-prefix bust (same thresholds as the TUI status bar, and the same
+/// canonical `read / (input + read)` formula behind the number).
+#[component]
+#[must_use]
+pub fn CacheStat() -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    view! {
+        <Show when=move || chat.live_cache_pct.get().is_some()>
+            {move || {
+                let pct = chat.live_cache_pct.get()?;
+                let color = if pct < 50 {
+                    "var(--color-warning)"
+                } else {
+                    "var(--color-text-tertiary)"
+                };
+                Some(view! {
+                    <div
+                        class="flex items-center select-none"
+                        title=format!(
+                            "上一次调用的提示词缓存命中率 {pct}% · read / (input + read)（与 TUI 状态栏同口径）"
+                        )
+                    >
+                        <span class="text-[10px] tabular-nums" style=format!("color: {color}")>
+                            {format!("cache {pct}%")}
+                        </span>
+                    </div>
+                })
+            }}
+        </Show>
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

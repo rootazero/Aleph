@@ -515,7 +515,17 @@ const BUDGETED: [&str; 12] = [
 ///     `fresh_tail_count`, and it is the only caller that needs the count — which
 ///     is exactly why the count is returned by a second function rather than
 ///     forced on every caller.
-const CEILING: usize = 5089;
+///
+/// +12 (5089 → 5101): `LoopTraceEvent::CacheHealthDegraded` — the cache
+///     watchdog's rising-edge alarm riding the trace stream.
+///     Three questions: (1) **scaffolding** — a data-only event variant (5
+///     fields, zero loop logic); the detection cognition lives outside
+///     src/harness/ in `prompt_builder::cache_monitor`. (2) **Yes after a
+///     model upgrade** — provider cache accounting is a property of the
+///     provider contract, not of the model. (3) **Four real consumers** on
+///     day one: `task_traces` persistence, the TUI reasoning feed, the Panel
+///     trace tree, and the `core/cache-health` doctor check.
+const CEILING: usize = 5101;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

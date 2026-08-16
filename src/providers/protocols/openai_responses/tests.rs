@@ -311,13 +311,20 @@ fn test_prompt_cache_key_content_addressed_and_retention_gated() {
     let msgs = [UnifiedMessage::user("hi")];
 
     // With a static prefix the key is content-addressed (`pck_…`) and stable
-    // across sessions — the daemon/cron cache-cold fix.
+    // across sessions — the daemon/cron cache-cold fix. Split `system_blocks`
+    // is the production shape for that path; the legacy flat string embeds
+    // per-turn dynamic bytes and is deliberately not content-addressed.
+    use crate::thinker::prompt_builder::SystemPromptPart;
     let official = ProviderConfig::test_config("gpt-4o");
+    let parts = [SystemPromptPart {
+        content: "You are Aleph.".into(),
+        cache: true,
+    }];
     let key_for_session = |session: &str| {
         let mut meta = std::collections::HashMap::new();
         meta.insert("session_id".to_string(), session.to_string());
         let payload = RequestPayload::new(&msgs)
-            .with_system(Some("You are Aleph."))
+            .with_system_blocks(Some(&parts))
             .with_metadata(Some(meta));
         OpenAiResponsesProtocol::build_responses_request(
             &payload,

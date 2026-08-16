@@ -229,7 +229,11 @@ impl AppState {
             // history, and retried. Surface the outcome ("reactive compaction
             // rescued/exhausted") so the run does not look frozen while it
             // self-heals — mirrors the Panel's compaction notice.
-            | AgentTraceEvent::ReactiveCompactionAttempted { .. } => {
+            | AgentTraceEvent::ReactiveCompactionAttempted { .. }
+            // Cache watchdog alarm: the domain's only automated signal that a
+            // stable prefix is churning — must reach the user, not just the
+            // log. The presentation carries streak/read/write/attribution.
+            | AgentTraceEvent::CacheHealthDegraded { .. } => {
                 self.append_reasoning_entry(presentation.content.clone());
             }
             // Tool-call lifecycle is rendered by ToolStart/ToolEnd gateway events;
@@ -322,8 +326,12 @@ impl AppState {
             // Live per-call cache telemetry → status-bar cache stat. Only
             // calls that actually report cache activity update it, so
             // providers without prompt caching never surface a misleading 0%.
-            // Denominator follows the Anthropic accounting (input excludes
-            // cached reads): input + cache_creation + cache_read.
+            // The percentage comes from the single canonical formula
+            // (`aleph_protocol::cache_hit_ratio`, read / (input + read)) — the
+            // same one the core rollup and Panel Usage use. This arm used to
+            // recompute with `input + creation + read` as the denominator, so
+            // the status bar read systematically lower than the Panel for the
+            // very same call.
             AgentTraceEvent::ProviderUsage {
                 agent_id,
                 input_tokens,
@@ -340,8 +348,14 @@ impl AppState {
                 let read = u64::from(cache_read_tokens.unwrap_or(0));
                 let creation = u64::from(cache_creation_tokens.unwrap_or(0));
                 if read > 0 || creation > 0 {
-                    let denom = u64::from(*input_tokens) + creation + read;
-                    self.cache_stat = Some((read, denom));
+                    // `unwrap_or(0.0)` covers "creation reported, read not": a
+                    // pure cold write is a 0% call, not an unknown one.
+                    let ratio = aleph_protocol::cache_hit_ratio(
+                        u64::from(*input_tokens),
+                        cache_read_tokens.map(u64::from),
+                    )
+                    .unwrap_or(0.0);
+                    self.cache_stat = Some((ratio * 100.0).round() as u64);
                     // Label the reading whenever it is not the root agent's —
                     // sub-agents and MoA advisors share this stream, and their
                     // cold starts would otherwise read as the root agent's

@@ -64,6 +64,7 @@ impl MeteringProvider {
         agent_id: &str,
         provider_name: &str,
         cache_scope: &str,
+        prefix_hash: Option<u64>,
     ) {
         let Some(usage) = resp.usage.as_ref() else {
             return;
@@ -85,12 +86,17 @@ impl MeteringProvider {
         // consecutive misses (counted only once that prefix has seen real cache
         // activity) with more than three total calls triggers a warn — surfaces
         // accidental stable-prefix changes that would otherwise only show up on
-        // the bill.
-        crate::thinker::prompt_builder::cache_monitor::global_cache_monitor().record_cache_usage(
-            cache_scope,
-            usage.cache_read_tokens,
-            usage.cache_creation_tokens,
-        );
+        // the bill. On that rising edge the monitor hands back a report, which
+        // becomes a `LoopTraceEvent::CacheHealthDegraded` on the same trace
+        // stream as `ProviderUsage` — lifting the domain's only alarm out of
+        // the log and onto the TUI / Panel / doctor surfaces.
+        let degradation = crate::thinker::prompt_builder::cache_monitor::global_cache_monitor()
+            .record_cache_usage(
+                cache_scope,
+                usage.cache_read_tokens,
+                usage.cache_creation_tokens,
+                prefix_hash,
+            );
         if let Some(sink) = sink {
             sink.on_trace(&LoopTraceEvent::ProviderUsage {
                 agent_id: agent_id.to_string(),
@@ -100,6 +106,15 @@ impl MeteringProvider {
                 cache_creation_tokens: usage.cache_creation_tokens,
                 thinking_tokens: usage.thinking_tokens,
             });
+            if let Some(report) = degradation {
+                sink.on_trace(&LoopTraceEvent::CacheHealthDegraded {
+                    scope: report.scope,
+                    streak: report.streak,
+                    reads: report.reads,
+                    writes: report.writes,
+                    prefix_changed: report.prefix_changed,
+                });
+            }
         }
     }
 }
@@ -110,13 +125,14 @@ impl AiProvider for MeteringProvider {
         req: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         let scope = Self::cache_scope_of(&req, &self.agent_id);
+        let prefix_hash = crate::thinker::prompt_builder::cache_monitor::stable_prefix_hash(&req);
         let fut = self.inner.process(req);
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
         let provider_name = self.inner.name().to_string();
         Box::pin(async move {
             let resp = fut.await?;
-            Self::record_usage(&resp, &sink, &agent_id, &provider_name, &scope);
+            Self::record_usage(&resp, &sink, &agent_id, &provider_name, &scope, prefix_hash);
             Ok(resp)
         })
     }
@@ -131,13 +147,15 @@ impl AiProvider for MeteringProvider {
         // streaming metering gap: the same `ProviderUsage` pipeline now fires on
         // streamed turns instead of being skipped by the harness downcast.
         let scope = Self::cache_scope_of(&payload, &self.agent_id);
+        let prefix_hash =
+            crate::thinker::prompt_builder::cache_monitor::stable_prefix_hash(&payload);
         let fut = self.inner.execute_streaming_dyn(payload, stream_sink);
         let sink = self.sink.clone();
         let agent_id = self.agent_id.clone();
         let provider_name = self.inner.name().to_string();
         Box::pin(async move {
             let resp = fut.await?;
-            Self::record_usage(&resp, &sink, &agent_id, &provider_name, &scope);
+            Self::record_usage(&resp, &sink, &agent_id, &provider_name, &scope, prefix_hash);
             Ok(resp)
         })
     }
@@ -260,6 +278,64 @@ mod tests {
                 assert_eq!(*cache_creation_tokens, Some(20));
             }
             other => panic!("expected ProviderUsage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn degraded_streak_emits_cache_health_event_into_sink() {
+        // The alarm-effect assertion: when the watchdog's streak crosses the
+        // threshold, a `CacheHealthDegraded` event must actually reach the
+        // trace sink (→ task_traces, wire, doctor) — not just a log line.
+        // Rising edge only: 4 re-creating calls = 4 ProviderUsage + exactly 1
+        // degraded event. Unique agent id: the monitor is a process-wide
+        // singleton shared with every other test in this binary.
+        let inner = Arc::new(FakeProvider {
+            usage: TokenUsage {
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_read_tokens: Some(0),
+                cache_creation_tokens: Some(1000),
+                thinking_tokens: None,
+                cost: None,
+            },
+        });
+        let sink = Arc::new(CapturingSink(Mutex::new(Vec::new())));
+        let metering = MeteringProvider::new(
+            inner,
+            Some(sink.clone() as Arc<dyn TraceSink>),
+            "cache-degraded-sink-test",
+        );
+        let msgs = [crate::providers::message::UnifiedMessage::user("hi")];
+        for _ in 0..4 {
+            let _ = metering
+                .process(RequestPayload::new(&msgs))
+                .await
+                .expect("process");
+        }
+
+        let events = sink.0.lock().unwrap();
+        let degraded: Vec<&LoopTraceEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LoopTraceEvent::CacheHealthDegraded { .. }))
+            .collect();
+        assert_eq!(
+            degraded.len(),
+            1,
+            "rising edge only — total events: {}",
+            events.len()
+        );
+        match degraded[0] {
+            LoopTraceEvent::CacheHealthDegraded {
+                scope,
+                streak,
+                writes,
+                ..
+            } => {
+                assert_eq!(scope, "cache-degraded-sink-test");
+                assert_eq!(*streak, 4);
+                assert_eq!(*writes, 1000);
+            }
+            other => panic!("expected CacheHealthDegraded, got {other:?}"),
         }
     }
 

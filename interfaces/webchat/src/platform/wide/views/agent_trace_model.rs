@@ -37,7 +37,11 @@ const fn map_status(status: AgentTracePresentationStatus) -> TraceStatus {
         AgentTracePresentationStatus::InProgress => TraceStatus::InProgress,
         AgentTracePresentationStatus::Success => TraceStatus::Success,
         AgentTracePresentationStatus::Failed => TraceStatus::Failed,
-        AgentTracePresentationStatus::Info => TraceStatus::Pending,
+        // No dedicated warning tint in the Panel trace tree — a degraded-but-
+        // running condition maps to the same neutral pending marker as Info.
+        AgentTracePresentationStatus::Info | AgentTracePresentationStatus::Warning => {
+            TraceStatus::Pending
+        }
     }
 }
 
