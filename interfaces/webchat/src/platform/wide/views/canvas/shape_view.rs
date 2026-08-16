@@ -16,10 +16,18 @@
 //! CSS custom properties do not resolve inside bare SVG attributes, and a
 //! literal `var(…)` there paints black in every browser.
 //!
+//! # Ink and arrows (Task 15)
+//!
+//! - `Ink` renders the pressure-aware freehand outline (`freehand.rs`) as a
+//!   single filled path — the polygon is the stroke's silhouette.
+//! - `Arrow` endpoints follow their bound shapes live: [`resolve_arrow_ends`]
+//!   reads the bound shapes out of the document and [`arrow_anchor`] projects
+//!   each endpoint onto the bound bbox's edge (center-to-edge intersection,
+//!   aimed at the other end). The resolution sits behind a `Memo` so an
+//!   unbound arrow never subscribes to the doc signal at all.
+//!
 //! # What is deliberately simple in this task
 //!
-//! - `Ink` renders the raw polyline; the pressure-aware freehand outline is
-//!   Task 15.
 //! - `Html` is a labelled placeholder box; the sandboxed iframe (with its
 //!   `allow-scripts`-only census) is Task 16.
 //! - Text does not wrap — explicit `\n` breaks only, the `plan_dag.rs`
@@ -30,6 +38,8 @@ use aleph_protocol::canvas::{
 };
 use leptos::prelude::*;
 
+use super::freehand;
+use super::interaction::Bbox;
 use crate::i18n::{t, use_i18n, I18nCtx};
 use crate::state::canvas::CanvasState;
 
@@ -108,28 +118,13 @@ fn ink_stroke_width(size: SizeKind) -> f64 {
     }
 }
 
-/// Path data for an ink polyline (points are shape-origin-relative).
-///
-/// Empty points yield an empty string (the caller skips the `<path>`); a
-/// single point becomes a zero-length segment, which `stroke-linecap: round`
-/// renders as a dot — a tap with a pen must leave a mark, not a panic.
+/// The freehand base diameter for a stroke size — 2× the old polyline
+/// stroke-width, because at the resting pressure of 0.5 the outline's
+/// half-width is a quarter of the base size ([`freehand::THINNING`] math),
+/// which keeps the on-screen weight of existing strokes unchanged.
 #[must_use]
-fn ink_path_d(points: &[[f32; 3]]) -> String {
-    let mut iter = points.iter();
-    let Some(first) = iter.next() else {
-        return String::new();
-    };
-    let mut d = format!("M {} {}", first[0], first[1]);
-    let mut segments = 0usize;
-    for p in iter {
-        d.push_str(&format!(" L {} {}", p[0], p[1]));
-        segments += 1;
-    }
-    if segments == 0 {
-        // Zero-length segment: linecap "round" renders it as a dot.
-        d.push_str(&format!(" L {} {}", first[0], first[1]));
-    }
-    d
+fn freehand_size(size: SizeKind) -> f64 {
+    ink_stroke_width(size) * 2.0
 }
 
 /// First `max` chars of an AI prompt, `…`-terminated — char-boundary safe
@@ -142,6 +137,61 @@ fn prompt_excerpt(prompt: &str, max: usize) -> String {
     let mut s: String = prompt.chars().take(max).collect();
     s.push('…');
     s
+}
+
+/// Where an arrow endpoint bound to a shape attaches: the point where the
+/// ray from the bbox's center toward `toward` crosses the bbox boundary.
+/// Degenerate cases (a zero-extent box, `toward` at the center) answer the
+/// center itself — an anchor must always exist.
+#[must_use]
+fn arrow_anchor(b: Bbox, toward: (f64, f64)) -> (f64, f64) {
+    let (cx, cy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
+    let (dx, dy) = (toward.0 - cx, toward.1 - cy);
+    if dx.abs() < 1e-9 && dy.abs() < 1e-9 {
+        return (cx, cy);
+    }
+    let tx = if dx.abs() > 1e-9 {
+        (b.w / 2.0) / dx.abs()
+    } else {
+        f64::INFINITY
+    };
+    let ty = if dy.abs() > 1e-9 {
+        (b.h / 2.0) / dy.abs()
+    } else {
+        f64::INFINITY
+    };
+    let t = tx.min(ty);
+    if !t.is_finite() {
+        return (cx, cy);
+    }
+    (cx + dx * t, cy + dy * t)
+}
+
+/// Resolve an arrow's endpoints against its bound shapes: a bound end
+/// projects onto its shape's edge ([`arrow_anchor`]), aimed at the other
+/// end's reference point (that end's bound shape's *center*, or its stored
+/// coordinates). An end whose bound shape vanished falls back to its stored
+/// x/y — the wire contract calls them "the recomputed fallback".
+#[must_use]
+fn resolve_arrow_ends(
+    shapes: &[Shape],
+    start: &ArrowEnd,
+    end: &ArrowEnd,
+) -> ((f64, f64), (f64, f64)) {
+    let bbox_of = |bind: &Option<String>| -> Option<Bbox> {
+        bind.as_ref()
+            .and_then(|id| shapes.iter().find(|s| s.id() == id))
+            .map(Bbox::of_shape)
+    };
+    let center = |b: Bbox| (b.x + b.w / 2.0, b.y + b.h / 2.0);
+    let start_bbox = bbox_of(&start.bind);
+    let end_bbox = bbox_of(&end.bind);
+    let start_ref = start_bbox.map_or((start.x, start.y), center);
+    let end_ref = end_bbox.map_or((end.x, end.y), center);
+    (
+        start_bbox.map_or((start.x, start.y), |b| arrow_anchor(b, end_ref)),
+        end_bbox.map_or((end.x, end.y), |b| arrow_anchor(b, start_ref)),
+    )
 }
 
 /// `points=` polygon string for an arrowhead at `end`, pointing away from
@@ -230,7 +280,7 @@ fn shape_svg(shape: &Shape, canvas: CanvasState, i18n: I18nCtx) -> AnyView {
             end,
             style,
             label,
-        } => arrow_svg(start, end, style, label),
+        } => arrow_svg(start, end, style, label, canvas),
         Shape::AiImageFrame {
             common,
             prompt,
@@ -282,20 +332,15 @@ fn geo_svg(common: &ShapeCommon, form: GeoForm, style: &ShapeStyle, text: &str) 
 }
 
 fn ink_svg(common: &ShapeCommon, style: &ShapeStyle, points: &[[f32; 3]]) -> AnyView {
-    let d = ink_path_d(points);
+    // The pressure-aware silhouette, filled — not a stroked polyline: the
+    // outline's varying width IS the pressure rendering (`freehand.rs`).
+    let d = freehand::outline_path_d(points, freehand_size(style.size));
     if d.is_empty() {
         return ().into_any();
     }
     view! {
         <g transform=format!("translate({} {})", common.x, common.y)>
-            <path
-                d=d
-                fill="none"
-                style=format!("stroke: {};", palette_var(&style.color))
-                stroke-width=ink_stroke_width(style.size)
-                stroke-linecap="round"
-                stroke-linejoin="round"
-            />
+            <path d=d style=format!("fill: {};", palette_var(&style.color)) />
         </g>
     }
     .into_any()
@@ -430,28 +475,53 @@ fn html_placeholder_svg(common: &ShapeCommon, i18n: I18nCtx) -> AnyView {
     .into_any()
 }
 
-fn arrow_svg(start: &ArrowEnd, end: &ArrowEnd, style: &ShapeStyle, label: &str) -> AnyView {
+fn arrow_svg(
+    start: &ArrowEnd,
+    end: &ArrowEnd,
+    style: &ShapeStyle,
+    label: &str,
+    canvas: CanvasState,
+) -> AnyView {
     let stroke = palette_var(&style.color);
-    let head = arrow_head_points((start.x, start.y), (end.x, end.y));
+    // Bound endpoints re-resolve whenever the document changes (the bound
+    // shape may have moved), so the resolution reads the doc signal — but
+    // only when a binding exists: an unbound arrow must not re-render on
+    // every unrelated edit. The Memo dedupes by value, so doc churn that
+    // leaves the anchors unchanged updates nothing downstream.
+    let has_binds = start.bind.is_some() || end.bind.is_some();
+    let (start, end) = (start.clone(), end.clone());
+    let raw = ((start.x, start.y), (end.x, end.y));
+    let ends: Memo<((f64, f64), (f64, f64))> = Memo::new(move |_| {
+        if !has_binds {
+            return raw;
+        }
+        canvas.doc.with(|d| {
+            let shapes = d.as_ref().map_or(&[][..], |d| d.shapes.as_slice());
+            resolve_arrow_ends(shapes, &start, &end)
+        })
+    });
+    let label = label.to_string();
     view! {
         <g>
             <line
-                x1=start.x
-                y1=start.y
-                x2=end.x
-                y2=end.y
+                x1=move || ends.get().0.0
+                y1=move || ends.get().0.1
+                x2=move || ends.get().1.0
+                y2=move || ends.get().1.1
                 style=format!("stroke: {stroke};")
                 stroke-width=2
             />
-            {(!head.is_empty()).then(|| view! {
-                <polygon points=head style=format!("fill: {stroke};") />
-            })}
+            {move || {
+                let (s, e) = ends.get();
+                let head = arrow_head_points(s, e);
+                (!head.is_empty())
+                    .then(|| view! { <polygon points=head style=format!("fill: {stroke};") /> })
+            }}
             {(!label.is_empty()).then(|| {
-                let label = label.to_string();
                 view! {
                     <text
-                        x=(start.x + end.x) / 2.0
-                        y=(start.y + end.y) / 2.0 - 6.0
+                        x=move || (ends.get().0.0 + ends.get().1.0) / 2.0
+                        y=move || (ends.get().0.1 + ends.get().1.1) / 2.0 - 6.0
                         text-anchor="middle"
                         font-size=12
                         style=format!("fill: {stroke}; user-select: none;")
@@ -536,22 +606,79 @@ fn ai_frame_svg(
 mod tests {
     use super::*;
 
-    #[test]
-    fn ink_path_d_handles_empty_and_single_point_without_panicking() {
-        assert_eq!(ink_path_d(&[]), "", "no points, no path");
-        assert_eq!(
-            ink_path_d(&[[4.0, 5.0, 0.5]]),
-            "M 4 5 L 4 5",
-            "a single point must become a zero-length dot segment"
+    fn bbox(x: f64, y: f64, w: f64, h: f64) -> Bbox {
+        Bbox { x, y, w, h }
+    }
+
+    #[track_caller]
+    fn assert_close(got: (f64, f64), want: (f64, f64)) {
+        assert!(
+            (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
+            "got {got:?}, want {want:?}"
         );
     }
 
     #[test]
-    fn ink_path_d_chains_line_segments_in_order() {
+    fn arrow_anchor_lands_on_the_correct_edge_in_all_four_quadrants() {
+        // Box (0,0)–(100,60), center (50,30). Each target sits in a
+        // different quadrant relative to the center; the anchor must land on
+        // the boundary, on that quadrant's side.
+        let b = bbox(0.0, 0.0, 100.0, 60.0);
+        // NE, steep: exits the top edge, right half.
+        assert_close(arrow_anchor(b, (200.0, -120.0)), (80.0, 0.0));
+        // SE, shallow: exits the right edge, lower half.
+        assert_close(arrow_anchor(b, (250.0, 130.0)), (100.0, 55.0));
+        // SW, steep: exits the bottom edge, left half.
+        assert_close(arrow_anchor(b, (-150.0, 230.0)), (20.0, 60.0));
+        // NW, diagonal: exits the top edge, left half.
+        assert_close(arrow_anchor(b, (-50.0, -70.0)), (20.0, 0.0));
+    }
+
+    #[test]
+    fn arrow_anchor_degenerate_targets_answer_the_center() {
+        let b = bbox(0.0, 0.0, 100.0, 60.0);
         assert_eq!(
-            ink_path_d(&[[0.0, 0.0, 0.5], [10.0, 0.0, 0.5], [10.0, 20.0, 0.5]]),
-            "M 0 0 L 10 0 L 10 20"
+            arrow_anchor(b, (50.0, 30.0)),
+            (50.0, 30.0),
+            "toward = center"
         );
+        let hairline = bbox(10.0, 10.0, 0.0, 0.0);
+        assert_eq!(arrow_anchor(hairline, (99.0, 99.0)), (10.0, 10.0));
+    }
+
+    #[test]
+    fn resolve_arrow_ends_follows_bound_shapes_and_falls_back_when_they_vanish() {
+        let target = Shape::Note {
+            common: ShapeCommon {
+                id: "n1".to_string(),
+                x: 200.0,
+                y: 0.0,
+                w: 100.0,
+                h: 60.0,
+                z: aleph_protocol::canvas::FracIndex::first(),
+                parent_id: None,
+            },
+            style: ShapeStyle::default(),
+            text: String::new(),
+        };
+        let start = ArrowEnd {
+            x: 0.0,
+            y: 30.0,
+            bind: None,
+        };
+        let end = ArrowEnd {
+            x: 210.0, // stale drawn coordinate — the binding overrides it
+            y: 10.0,
+            bind: Some("n1".to_string()),
+        };
+        let (s, e) = resolve_arrow_ends(std::slice::from_ref(&target), &start, &end);
+        assert_eq!(s, (0.0, 30.0), "an unbound end keeps its coordinates");
+        // The bound end sits on the shape's near edge, aimed at the start.
+        assert_close(e, (200.0, 30.0));
+        // The bound shape vanished (deleted by a broadcast): stored x/y is
+        // the documented fallback.
+        let (_, e) = resolve_arrow_ends(&[], &start, &end);
+        assert_eq!(e, (210.0, 10.0));
     }
 
     #[test]

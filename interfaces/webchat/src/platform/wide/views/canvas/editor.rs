@@ -87,6 +87,10 @@ use crate::state::hotkey::focus_is_editable;
 const CLICK_SLOP_PX: f64 = 3.0;
 /// Resize handle edge length in screen pixels (constant apparent size).
 const HANDLE_PX: f64 = 8.0;
+/// Minimum spacing between accepted ink points, in *screen* pixels — the
+/// Draw tool's decimation floor. Divided by zoom before it reaches the
+/// machine, like [`CLICK_SLOP_PX`].
+const DRAW_MIN_DIST_PX: f64 = 2.0;
 /// How long the selection may settle before it is pushed to the server.
 const SELECTION_DEBOUNCE_MS: u32 = 300;
 /// Arrow-key nudge distances, world units (shift = the larger one).
@@ -290,6 +294,8 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let undo_stack = StoredValue::new(UndoStack::new());
     let queue = StoredValue::new(SendQueue::new());
     let marquee_sig: RwSignal<Option<Bbox>> = RwSignal::new(None);
+    // The shape an in-flight arrow endpoint would bind to (hover highlight).
+    let arrow_hover_sig: RwSignal<Option<String>> = RwSignal::new(None);
     let surface_ref: NodeRef<leptos::html::Div> = NodeRef::new();
     // The open text-edit session, if any (`text_edit.rs` owns its rules).
     // Scoped to the editor like the machine: it must not outlive the canvas.
@@ -362,10 +368,18 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             }
         }
     };
-    let sync_marquee = move || {
+    // Mirror the machine's render-relevant gesture state into signals after
+    // every transition — one syncer for both, so a call site cannot refresh
+    // the marquee and leave a stale arrow highlight behind.
+    let sync_gesture = move || {
         marquee_sig.set(
             machine
                 .try_with_value(InteractionState::marquee_rect)
+                .flatten(),
+        );
+        arrow_hover_sig.set(
+            machine
+                .try_with_value(InteractionState::arrow_hover)
                 .flatten(),
         );
     };
@@ -426,7 +440,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     .try_update_value(InteractionState::cancel)
                     .unwrap_or_default();
                 run_effects(effects);
-                sync_marquee();
+                sync_gesture();
             }
             return;
         }
@@ -619,9 +633,45 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             run_effects(effects);
             return;
         }
-        if tool != CanvasTool::Select {
-            // Draw/Arrow land in Task 15.
+        if tool == CanvasTool::Draw || tool == CanvasTool::Arrow {
+            ev.prevent_default();
+            let cam = camera.get_untracked();
+            let Some(world) = world_of(&ev, cam) else {
+                return;
+            };
+            if let Some(el) = ev
+                .current_target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            {
+                let _ = el.set_pointer_capture(ev.pointer_id());
+            }
+            let pressure = interaction::effective_pressure(ev.pressure());
+            let effects = canvas.doc.with_untracked(|d| {
+                let Some(d) = d.as_ref() else {
+                    return Vec::new();
+                };
+                machine
+                    .try_update_value(|m| {
+                        if tool == CanvasTool::Draw {
+                            m.begin_draw(
+                                world,
+                                pressure,
+                                id_mint::mint_shape_id(),
+                                &d.shapes,
+                                DRAW_MIN_DIST_PX / cam.zoom,
+                            )
+                        } else {
+                            let hit = interaction::topmost_hit(&d.shapes, world);
+                            m.begin_arrow(world, hit, id_mint::mint_shape_id(), &d.shapes)
+                        }
+                    })
+                    .unwrap_or_default()
+            });
+            run_effects(effects);
             return;
+        }
+        if tool != CanvasTool::Select {
+            return; // Pan is claimed by pan_gesture above.
         }
         let Some(world) = world_of(&ev, camera.get_untracked()) else {
             return;
@@ -646,7 +696,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 .unwrap_or_default()
         });
         run_effects(effects);
-        sync_marquee();
+        sync_gesture();
     };
     let on_pointermove = move |ev: web_sys::PointerEvent| {
         if let Some(mut drag) = pan_drag.get_untracked() {
@@ -672,16 +722,22 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             return;
         };
         let slop = CLICK_SLOP_PX / cam.zoom;
+        let pressure = interaction::effective_pressure(ev.pressure());
         let effects = canvas.doc.with_untracked(|d| {
             let Some(d) = d.as_ref() else {
                 return Vec::new();
             };
             machine
-                .try_update_value(|m| m.pointer_move(world, &d.shapes, slop))
+                .try_update_value(|m| {
+                    // An active ink stroke consumes the move (with pressure);
+                    // every other drag goes through the pressureless machine.
+                    m.draw_move(world, pressure)
+                        .unwrap_or_else(|| m.pointer_move(world, &d.shapes, slop))
+                })
                 .unwrap_or_default()
         });
         run_effects(effects);
-        sync_marquee();
+        sync_gesture();
     };
     let end_pan = move |ev: &web_sys::PointerEvent| -> bool {
         let Some(drag) = pan_drag.get_untracked() else {
@@ -715,11 +771,13 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 .unwrap_or_default()
         });
         run_effects(effects);
-        sync_marquee();
+        sync_gesture();
         // A finished creation gesture drops back to Select — one shape per
-        // tool pick, the tldraw convention. Cancel (Esc) deliberately keeps
-        // the tool armed: the user abandoned the drag, not the intent.
-        if interaction::create_kind(canvas.tool.get_untracked()).is_some() {
+        // tool pick, the tldraw convention; the Arrow tool follows it. Draw
+        // deliberately stays armed: strokes come in batches. Cancel (Esc)
+        // keeps any tool armed: the user abandoned the drag, not the intent.
+        let tool = canvas.tool.get_untracked();
+        if interaction::create_kind(tool).is_some() || tool == CanvasTool::Arrow {
             canvas.tool.set(CanvasTool::Select);
         }
     };
@@ -757,7 +815,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             .try_update_value(InteractionState::cancel)
             .unwrap_or_default();
         run_effects(effects);
-        sync_marquee();
+        sync_gesture();
     };
 
     // Pointer down on a resize handle: capture on the *surface* (the handle
@@ -876,6 +934,28 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                                     })
                                     .collect_view()}
                             </g>
+                        }
+                    })}
+                    // Arrow-bind hover highlight: the shape the endpoint
+                    // would bind to if released here.
+                    {move || arrow_hover_sig.get().and_then(|id| {
+                        doc.with(|d| {
+                            d.as_ref()
+                                .and_then(|d| d.shapes.iter().find(|s| s.id() == id))
+                                .map(interaction::Bbox::of_shape)
+                        })
+                    }).map(|b| {
+                        let zoom = camera.get().zoom;
+                        let pad = 2.0 / zoom;
+                        view! {
+                            <rect
+                                x=b.x - pad y=b.y - pad
+                                width=b.w + pad * 2.0 height=b.h + pad * 2.0
+                                fill="none"
+                                style="stroke: var(--color-info);"
+                                stroke-width=2.0 / zoom
+                                stroke-dasharray=format!("{} {}", 5.0 / zoom, 4.0 / zoom)
+                            />
                         }
                     })}
                 </g>

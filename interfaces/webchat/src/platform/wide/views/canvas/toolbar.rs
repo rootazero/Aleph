@@ -4,9 +4,9 @@
 //!
 //! Not in the plan's Task-14 file list: the plan omitted a toolbar entirely,
 //! which would have left every creation tool unreachable (a signal with no
-//! writer — the "capability wired ≠ capability delivered" failure). Only the
-//! tools that work today get a button; Draw and Arrow join with Task 15
-//! rather than shipping as dead buttons.
+//! writer — the "capability wired ≠ capability delivered" failure). Every
+//! tool the editor implements gets a button — the full set since Task 15
+//! brought Draw and Arrow.
 //!
 //! Sits inside the editor surface, after the overlay layer in DOM order (so
 //! it paints on top), and stops pointer/wheel propagation — a click on a
@@ -89,6 +89,17 @@ pub(super) fn CanvasToolbar() -> impl IntoView {
             </ToolButton>
             <div class="w-px h-5 mx-0.5 bg-border"></div>
             <ToolButton
+                tool=CanvasTool::Draw
+                title=Signal::derive(move || t_string!(i18n, canvas.tool_draw).to_string())
+            >
+                {icon! {
+                    <path d="M12 19l7-7 3 3-7 7-3-3z" />
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+                    <path d="M2 2l7.586 7.586" />
+                    <circle cx="11" cy="11" r="2" />
+                }}
+            </ToolButton>
+            <ToolButton
                 tool=CanvasTool::Geo(GeoForm::Rect)
                 title=Signal::derive(move || t_string!(i18n, canvas.tool_rect).to_string())
             >
@@ -128,6 +139,15 @@ pub(super) fn CanvasToolbar() -> impl IntoView {
                     <line x1="17" y1="2" x2="17" y2="22" />
                     <line x1="2" y1="7" x2="22" y2="7" />
                     <line x1="2" y1="17" x2="22" y2="17" />
+                }}
+            </ToolButton>
+            <ToolButton
+                tool=CanvasTool::Arrow
+                title=Signal::derive(move || t_string!(i18n, canvas.tool_arrow).to_string())
+            >
+                {icon! {
+                    <line x1="4" y1="20" x2="20" y2="4" />
+                    <polyline points="11 4 20 4 20 13" />
                 }}
             </ToolButton>
         </div>

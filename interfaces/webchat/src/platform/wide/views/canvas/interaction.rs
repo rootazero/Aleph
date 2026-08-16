@@ -30,7 +30,25 @@
 //! tool is the exception: it never commits here — it previews the empty shape
 //! and hands off to the text-editing overlay ([`Effect::BeginTextEdit`] with
 //! `fresh: true`), whose empty-text commit discards instead of creating
-//! (`text_edit.rs`). Draw/Arrow are Task 15.
+//! (`text_edit.rs`).
+//!
+//! # Draw / Arrow (their own gesture shapes, not box drags)
+//!
+//! **Draw** ([`InteractionState::begin_draw`] / [`InteractionState::draw_move`])
+//! accumulates world points with pressure, decimated to a minimum spacing the
+//! editor derives from 2 screen px ÷ zoom; every accepted point re-previews
+//! the ink shape, whose bbox is the points' extent and whose stored points
+//! are origin-relative ([`Shape::Ink`]'s wire contract). The press itself
+//! previews a dot, so a tap leaves a mark. Release commits (undo = delete)
+//! without selecting — the tool stays armed, strokes come in batches.
+//!
+//! **Arrow** ([`InteractionState::begin_arrow`]) draws a two-point arrow from
+//! press to release. A press over a shape binds `start`, a release over one
+//! binds `end` ([`aleph_protocol::canvas::ArrowEnd::bind`]); the draft arrow
+//! itself is excluded from binding (its preview lives in the doc and its own
+//! bbox would otherwise swallow every hit). During the drag the machine
+//! tracks the would-bind target ([`InteractionState::arrow_hover`]) so the
+//! editor can highlight it. A click without a drag creates nothing.
 //!
 //! # Hit testing
 //!
@@ -38,7 +56,9 @@
 //! axis-aligned bounds, topmost = greatest `(z, id)`, the exact tie-break
 //! `editor.rs::z_sorted_ids` paints with (later-painted wins the hit).
 
-use aleph_protocol::canvas::{CanvasOp, FracIndex, GeoForm, Shape, ShapeCommon, ShapeStyle};
+use aleph_protocol::canvas::{
+    ArrowEnd, CanvasOp, FracIndex, GeoForm, Shape, ShapeCommon, ShapeStyle,
+};
 
 use crate::state::canvas::CanvasTool;
 
@@ -237,9 +257,9 @@ pub(super) enum CreateKind {
 }
 
 /// The creation kind for a tool, `None` for the non-creating tools
-/// (Select/Pan) and for the Task-15 tools (Draw/Arrow), which have their own
-/// gesture shapes (point accumulation, endpoint binding) rather than a box
-/// drag.
+/// (Select/Pan) and for Draw/Arrow, which have their own entry points
+/// ([`InteractionState::begin_draw`] / [`InteractionState::begin_arrow`] —
+/// point accumulation and endpoint binding, not a box drag).
 #[must_use]
 pub(super) fn create_kind(tool: CanvasTool) -> Option<CreateKind> {
     match tool {
@@ -310,6 +330,114 @@ fn shape_for_create(kind: CreateKind, id: &str, z: &FracIndex, b: Bbox) -> Shape
             title: String::new(),
             aspect_locked: false,
         },
+    }
+}
+
+/// The ink shape for a set of accumulated **world** points: the bbox is the
+/// points' extent (clamped to visible), and the stored points are relative
+/// to that origin — the wire contract of [`Shape::Ink`]. Total on empty
+/// input for defensiveness, though every producer seeds the press point.
+#[must_use]
+fn ink_shape(id: &str, z: &FracIndex, world_points: &[[f32; 3]]) -> Shape {
+    let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+    let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in world_points {
+        min_x = min_x.min(f64::from(p[0]));
+        min_y = min_y.min(f64::from(p[1]));
+        max_x = max_x.max(f64::from(p[0]));
+        max_y = max_y.max(f64::from(p[1]));
+    }
+    if world_points.is_empty() {
+        (min_x, min_y, max_x, max_y) = (0.0, 0.0, 0.0, 0.0);
+    }
+    let b = min_extent(Bbox {
+        x: min_x,
+        y: min_y,
+        w: max_x - min_x,
+        h: max_y - min_y,
+    });
+    let points = world_points
+        .iter()
+        .map(|p| [p[0] - min_x as f32, p[1] - min_y as f32, p[2]])
+        .collect();
+    Shape::Ink {
+        common: ShapeCommon {
+            id: id.to_string(),
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+            z: z.clone(),
+            parent_id: None,
+        },
+        style: ShapeStyle::default(),
+        points,
+    }
+}
+
+/// A two-point arrow spanning `start`→`end`, endpoints absolute (the wire
+/// contract of [`Shape::Arrow`]), bbox normalized over the two points.
+#[must_use]
+fn arrow_shape(
+    id: &str,
+    z: &FracIndex,
+    start: (f64, f64),
+    start_bind: Option<String>,
+    end: (f64, f64),
+    end_bind: Option<String>,
+) -> Shape {
+    let b = Bbox::from_corners(start, end);
+    Shape::Arrow {
+        common: ShapeCommon {
+            id: id.to_string(),
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+            z: z.clone(),
+            parent_id: None,
+        },
+        start: ArrowEnd {
+            x: start.0,
+            y: start.1,
+            bind: start_bind,
+        },
+        end: ArrowEnd {
+            x: end.0,
+            y: end.1,
+            bind: end_bind,
+        },
+        style: ShapeStyle::default(),
+        label: String::new(),
+    }
+}
+
+/// The topmost shape under a world point that an arrow endpoint may bind to
+/// — [`topmost_hit`]'s ordering, minus the draft arrow itself (its preview
+/// lives in the doc, and its own bbox contains both endpoints).
+#[must_use]
+fn bind_target<'a>(shapes: &'a [Shape], world: (f64, f64), draft_id: &str) -> Option<&'a Shape> {
+    shapes
+        .iter()
+        .filter(|s| s.id() != draft_id && Bbox::of_shape(s).contains(world))
+        .max_by(|a, b| {
+            a.common()
+                .z
+                .cmp(&b.common().z)
+                .then_with(|| a.id().cmp(b.id()))
+        })
+}
+
+/// Pointer pressure with the hardware-less fallback: mice (and pens that do
+/// not report pressure) may deliver 0 even mid-press; the spec's "no
+/// pressure support" value is 0.5, so a zero reading normalizes to it —
+/// otherwise a mouse stroke would draw at the minimum radius everywhere.
+#[must_use]
+pub(super) fn effective_pressure(raw: f32) -> f32 {
+    if raw <= 0.0 {
+        0.5
+    } else {
+        raw
     }
 }
 
@@ -421,12 +549,38 @@ pub(super) enum Effect {
     BeginTextEdit { shape: Shape, fresh: bool },
 }
 
-/// The in-flight drag, if any. `Drawing`/`ArrowDraft` variants arrive with
-/// the Draw/Arrow tools (Task 15).
+/// The in-flight drag, if any.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(super) enum Drag {
     #[default]
     None,
+    /// An ink stroke being drawn: world points accumulate (decimated to
+    /// `min_dist`), each accepted point re-previews the shape.
+    Drawing {
+        id: String,
+        /// Fresh z above the document top, minted once with the id.
+        z: FracIndex,
+        /// Accumulated **world** points (`[x, y, pressure]`); the shape they
+        /// preview/commit normalizes them to its bbox ([`ink_shape`]).
+        points: Vec<[f32; 3]>,
+        /// Minimum world distance between successive points — the editor
+        /// passes 2 screen px ÷ zoom.
+        min_dist: f64,
+    },
+    /// A two-point arrow being dragged out.
+    ArrowDraft {
+        id: String,
+        z: FracIndex,
+        start: (f64, f64),
+        /// Shape under the press, bound as the start endpoint.
+        start_bind: Option<String>,
+        /// Shape currently under the pointer — the endpoint's would-bind
+        /// target, surfaced for hover highlighting.
+        hover: Option<String>,
+        /// Set once the pointer leaves the click slop; an arrow needs a
+        /// drag — a click creates nothing.
+        moved: bool,
+    },
     Create {
         kind: CreateKind,
         /// Minted at `begin_create` — stable through the gesture, so every
@@ -493,7 +647,8 @@ impl InteractionState {
     /// Pointer down on the canvas surface (not on a resize handle — that is
     /// [`Self::begin_resize`]).
     ///
-    /// Select tool only; other tools return nothing until their tasks land.
+    /// Select tool only; the creation tools enter through [`Self::begin_create`],
+    /// Draw through [`Self::begin_draw`], Arrow through [`Self::begin_arrow`].
     /// Semantics: shift-click toggles membership without starting a drag;
     /// a plain click on a selected shape starts moving the whole selection;
     /// on an unselected shape it selects it and starts moving just it; on
@@ -601,6 +756,94 @@ impl InteractionState {
         vec![Effect::SetSelection(Vec::new())]
     }
 
+    /// Pointer down with the Draw tool. Seeds the stroke with the press
+    /// point and previews it immediately — a tap must leave a dot, and the
+    /// unconditional preview keeps cancel/commit total (something to
+    /// discard, something to upsert). Clears the selection like every
+    /// creation gesture.
+    #[must_use]
+    pub(super) fn begin_draw(
+        &mut self,
+        world: (f64, f64),
+        pressure: f32,
+        id: String,
+        shapes: &[Shape],
+        min_dist: f64,
+    ) -> Vec<Effect> {
+        let top = shapes.iter().map(|s| s.common().z.clone()).max();
+        let z = FracIndex::between(top.as_ref(), None);
+        let points = vec![[world.0 as f32, world.1 as f32, pressure]];
+        let preview = ink_shape(&id, &z, &points);
+        self.drag = Drag::Drawing {
+            id,
+            z,
+            points,
+            min_dist,
+        };
+        vec![
+            Effect::SetSelection(Vec::new()),
+            Effect::Preview(vec![preview]),
+        ]
+    }
+
+    /// Pointer moved while drawing. `None` when no ink stroke is active (the
+    /// caller falls through to [`Self::pointer_move`]); `Some(vec![])` when
+    /// the point was decimated away.
+    #[must_use]
+    pub(super) fn draw_move(&mut self, world: (f64, f64), pressure: f32) -> Option<Vec<Effect>> {
+        let Drag::Drawing {
+            id,
+            z,
+            points,
+            min_dist,
+        } = &mut self.drag
+        else {
+            return None;
+        };
+        let last = points
+            .last()
+            .expect("a drawing always holds its press point");
+        let (dx, dy) = (world.0 - f64::from(last[0]), world.1 - f64::from(last[1]));
+        if (dx * dx + dy * dy).sqrt() < *min_dist {
+            return Some(Vec::new());
+        }
+        points.push([world.0 as f32, world.1 as f32, pressure]);
+        Some(vec![Effect::Preview(vec![ink_shape(id, z, points)])])
+    }
+
+    /// Pointer down with the Arrow tool. `hit` is the shape under the press
+    /// (the editor's topmost hit) — it becomes the start endpoint's binding.
+    #[must_use]
+    pub(super) fn begin_arrow(
+        &mut self,
+        world: (f64, f64),
+        hit: Option<&Shape>,
+        id: String,
+        shapes: &[Shape],
+    ) -> Vec<Effect> {
+        let top = shapes.iter().map(|s| s.common().z.clone()).max();
+        self.drag = Drag::ArrowDraft {
+            id,
+            z: FracIndex::between(top.as_ref(), None),
+            start: world,
+            start_bind: hit.map(|s| s.id().to_string()),
+            hover: None,
+            moved: false,
+        };
+        vec![Effect::SetSelection(Vec::new())]
+    }
+
+    /// The shape an arrow endpoint would bind to right now — for the
+    /// editor's hover highlight. `None` outside an arrow drag.
+    #[must_use]
+    pub(super) fn arrow_hover(&self) -> Option<String> {
+        if let Drag::ArrowDraft { hover, .. } = &self.drag {
+            hover.clone()
+        } else {
+            None
+        }
+    }
+
     /// Pointer moved. `slop` is the click tolerance in world units (the
     /// editor passes screen-pixels ÷ zoom): a Move drag stays a click until
     /// the pointer leaves it.
@@ -613,6 +856,32 @@ impl InteractionState {
     ) -> Vec<Effect> {
         match &mut self.drag {
             Drag::None => Vec::new(),
+            // Drawing is pressure-driven and handled by `draw_move`; a stray
+            // pressureless move (the editor never sends one) changes nothing.
+            Drag::Drawing { .. } => Vec::new(),
+            Drag::ArrowDraft {
+                id,
+                z,
+                start,
+                start_bind,
+                hover,
+                moved,
+            } => {
+                let (dx, dy) = (world.0 - start.0, world.1 - start.1);
+                if !*moved && dx.abs() <= slop && dy.abs() <= slop {
+                    return Vec::new();
+                }
+                *moved = true;
+                *hover = bind_target(shapes, world, id).map(|s| s.id().to_string());
+                vec![Effect::Preview(vec![arrow_shape(
+                    id,
+                    z,
+                    *start,
+                    start_bind.clone(),
+                    world,
+                    None,
+                )])]
+            }
             Drag::Create {
                 kind,
                 id,
@@ -667,6 +936,37 @@ impl InteractionState {
     pub(super) fn pointer_up(&mut self, world: (f64, f64), shapes: &[Shape]) -> Vec<Effect> {
         match std::mem::take(&mut self.drag) {
             Drag::None => Vec::new(),
+            Drag::Drawing { id, z, points, .. } => {
+                // Commit whatever accumulated — a tap is a dot. No selection
+                // change: the Draw tool stays armed, strokes come in batches.
+                let shape = ink_shape(&id, &z, &points);
+                vec![Effect::Commit {
+                    redo: vec![CanvasOp::UpsertShape { shape }],
+                    undo: vec![CanvasOp::DeleteShape { id }],
+                }]
+            }
+            Drag::ArrowDraft {
+                id,
+                z,
+                start,
+                start_bind,
+                moved,
+                ..
+            } => {
+                if !moved {
+                    // An arrow needs two distinct points; nothing previewed.
+                    return Vec::new();
+                }
+                let end_bind = bind_target(shapes, world, &id).map(|s| s.id().to_string());
+                let shape = arrow_shape(&id, &z, start, start_bind, world, end_bind);
+                vec![
+                    Effect::SetSelection(vec![id.clone()]),
+                    Effect::Commit {
+                        redo: vec![CanvasOp::UpsertShape { shape }],
+                        undo: vec![CanvasOp::DeleteShape { id }],
+                    },
+                ]
+            }
             Drag::Create {
                 kind,
                 id,
@@ -740,6 +1040,15 @@ impl InteractionState {
     pub(super) fn cancel(&mut self) -> Vec<Effect> {
         match std::mem::take(&mut self.drag) {
             Drag::None => Vec::new(),
+            // A drawing previews from the press itself — always discard.
+            Drag::Drawing { id, .. } => vec![Effect::DiscardPreview(vec![id])],
+            Drag::ArrowDraft { id, moved, .. } => {
+                if moved {
+                    vec![Effect::DiscardPreview(vec![id])]
+                } else {
+                    Vec::new()
+                }
+            }
             Drag::Create { id, moved, .. } => {
                 if moved {
                     // The preview inserted a shape the doc never owned:
@@ -1561,6 +1870,179 @@ mod tests {
         // …and canceling before any movement has nothing to discard.
         let mut m = InteractionState::new();
         let _ = m.begin_create(CreateKind::Note, (0.0, 0.0), "n1".to_string(), &[]);
+        assert!(m.cancel().is_empty());
+    }
+
+    // ---- draw tool ---------------------------------------------------------
+
+    #[test]
+    fn draw_decimates_close_points_and_normalizes_the_stroke_to_its_bbox() {
+        let mut m = InteractionState::new();
+        let effects = m.begin_draw((10.0, 20.0), 0.5, "ink1".to_string(), &[], 2.0);
+        assert_eq!(
+            ids(&effects),
+            Vec::<String>::new(),
+            "starting a stroke clears the selection"
+        );
+        let Some(Effect::Preview(previewed)) =
+            effects.iter().find(|e| matches!(e, Effect::Preview(_)))
+        else {
+            panic!("the press must preview a dot, got {effects:?}");
+        };
+        let Shape::Ink { points, .. } = &previewed[0] else {
+            panic!("draw previews ink");
+        };
+        assert_eq!(points.len(), 1);
+
+        // Within min_dist (2.0 world units): decimated, no new preview.
+        let effects = m.draw_move((11.0, 20.5), 0.5).expect("drawing is active");
+        assert!(effects.is_empty(), "a sub-threshold move adds no point");
+
+        // Beyond: the point lands and the preview re-normalizes.
+        let effects = m.draw_move((50.0, 60.0), 0.9).expect("drawing is active");
+        let Some(Effect::Preview(previewed)) = effects.first() else {
+            panic!("expected a Preview, got {effects:?}");
+        };
+        let Shape::Ink { common, points, .. } = &previewed[0] else {
+            panic!("draw previews ink");
+        };
+        assert_eq!(
+            (common.x, common.y, common.w, common.h),
+            (10.0, 20.0, 40.0, 40.0),
+            "the bbox is the points' extent"
+        );
+        assert_eq!(
+            points,
+            &vec![[0.0, 0.0, 0.5], [40.0, 40.0, 0.9]],
+            "stored points are origin-relative and keep their pressure"
+        );
+
+        // Release commits with delete as undo, and no selection change —
+        // the tool stays armed for the next stroke.
+        let effects = m.pointer_up((50.0, 60.0), &[]);
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::SetSelection(_))),
+            "a finished stroke must not grab the selection"
+        );
+        let Some(Effect::Commit { redo, undo }) = effects.first() else {
+            panic!("expected a Commit, got {effects:?}");
+        };
+        let CanvasOp::UpsertShape { shape } = &redo[0] else {
+            panic!("draw commits an upsert");
+        };
+        assert!(matches!(shape, Shape::Ink { .. }));
+        assert_eq!(
+            undo,
+            &vec![CanvasOp::DeleteShape { id: "ink1".into() }],
+            "undoing a stroke deletes it"
+        );
+        assert!(!m.is_dragging());
+    }
+
+    #[test]
+    fn draw_move_answers_none_outside_an_ink_drag_and_esc_discards_the_stroke() {
+        let mut m = InteractionState::new();
+        assert!(m.draw_move((0.0, 0.0), 0.5).is_none(), "no stroke active");
+
+        let _ = m.begin_draw((0.0, 0.0), 0.5, "ink1".to_string(), &[], 2.0);
+        let effects = m.cancel();
+        assert_eq!(
+            effects,
+            vec![Effect::DiscardPreview(vec!["ink1".to_string()])],
+            "even an unmoved stroke previewed its dot — cancel must discard it"
+        );
+        assert!(!m.is_dragging());
+    }
+
+    #[test]
+    fn effective_pressure_normalizes_a_pressureless_reading_to_the_spec_default() {
+        assert!((effective_pressure(0.0) - 0.5).abs() < f32::EPSILON);
+        assert!((effective_pressure(0.8) - 0.8).abs() < f32::EPSILON);
+    }
+
+    // ---- arrow tool --------------------------------------------------------
+
+    #[test]
+    fn an_arrow_drag_binds_both_endpoints_and_commits_with_delete_as_undo() {
+        let shapes = vec![
+            note_at("a", 0.0, 0.0, 100.0, 100.0, "U"),
+            note_at("b", 300.0, 0.0, 100.0, 100.0, "V"),
+        ];
+        let mut m = InteractionState::new();
+        let effects = m.begin_arrow((50.0, 50.0), Some(&shapes[0]), "ar1".to_string(), &shapes);
+        assert_eq!(ids(&effects), Vec::<String>::new());
+
+        // Over empty canvas: preview, no hover target.
+        let effects = m.pointer_move((200.0, 50.0), &shapes, 2.0);
+        let Some(Effect::Preview(previewed)) = effects.first() else {
+            panic!("expected a Preview, got {effects:?}");
+        };
+        let Shape::Arrow { start, end, .. } = &previewed[0] else {
+            panic!("arrow previews an arrow");
+        };
+        assert_eq!(
+            start.bind.as_deref(),
+            Some("a"),
+            "the press bound the start"
+        );
+        assert!(end.bind.is_none(), "the end binds at release, not mid-drag");
+        assert_eq!(m.arrow_hover(), None);
+
+        // Over shape b: the would-bind target surfaces for highlighting. The
+        // doc now also holds the previewed draft itself — it must never be
+        // its own bind target.
+        let mut with_draft = shapes.clone();
+        with_draft.push(previewed[0].clone());
+        let _ = m.pointer_move((350.0, 50.0), &with_draft, 2.0);
+        assert_eq!(m.arrow_hover(), Some("b".to_string()));
+
+        let effects = m.pointer_up((350.0, 50.0), &with_draft);
+        assert_eq!(ids(&effects), sel(&["ar1"]), "the new arrow is selected");
+        let Some(Effect::Commit { redo, undo }) =
+            effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
+        else {
+            panic!("expected a Commit, got {effects:?}");
+        };
+        let CanvasOp::UpsertShape { shape } = &redo[0] else {
+            panic!("arrow commits an upsert");
+        };
+        let Shape::Arrow {
+            common, start, end, ..
+        } = shape
+        else {
+            panic!("still an arrow");
+        };
+        assert_eq!((start.x, start.y), (50.0, 50.0));
+        assert_eq!(start.bind.as_deref(), Some("a"));
+        assert_eq!((end.x, end.y), (350.0, 50.0));
+        assert_eq!(end.bind.as_deref(), Some("b"), "the release bound the end");
+        assert_eq!(
+            (common.x, common.y, common.w, common.h),
+            (50.0, 50.0, 300.0, 0.0),
+            "the bbox spans the two endpoints"
+        );
+        assert_eq!(undo, &vec![CanvasOp::DeleteShape { id: "ar1".into() }]);
+        assert_eq!(m.arrow_hover(), None, "the drag is over");
+    }
+
+    #[test]
+    fn an_arrow_click_commits_nothing_and_esc_discards_a_moved_draft() {
+        let mut m = InteractionState::new();
+        let _ = m.begin_arrow((10.0, 10.0), None, "ar1".to_string(), &[]);
+        assert!(
+            m.pointer_up((10.0, 10.0), &[]).is_empty(),
+            "an arrow needs a drag — a click creates nothing"
+        );
+
+        let _ = m.begin_arrow((10.0, 10.0), None, "ar2".to_string(), &[]);
+        let _ = m.pointer_move((200.0, 200.0), &[], 2.0);
+        assert_eq!(
+            m.cancel(),
+            vec![Effect::DiscardPreview(vec!["ar2".to_string()])]
+        );
+        // …but an unmoved draft previewed nothing, so there is nothing to
+        // discard.
+        let _ = m.begin_arrow((10.0, 10.0), None, "ar3".to_string(), &[]);
         assert!(m.cancel().is_empty());
     }
 

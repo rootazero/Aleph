@@ -339,6 +339,8 @@
     "ai_status_failed": "Failed",
     "tool_select": "Select",
     "tool_pan": "Pan",
+    "tool_draw": "Draw",
+    "tool_arrow": "Arrow",
     "tool_rect": "Rectangle",
     "tool_ellipse": "Ellipse",
     "tool_note": "Sticky note",

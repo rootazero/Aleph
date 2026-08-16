@@ -25,6 +25,7 @@
 //!    dumber answer.
 
 mod editor;
+mod freehand;
 mod id_mint;
 mod interaction;
 mod ops;
