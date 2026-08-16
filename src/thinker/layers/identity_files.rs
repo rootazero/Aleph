@@ -170,8 +170,6 @@ mod tests {
         IdentityFile {
             name,
             content: Some(content.to_string()),
-            truncated: false,
-            original_size: content.len(),
         }
     }
 
@@ -179,8 +177,6 @@ mod tests {
         IdentityFile {
             name,
             content: None,
-            truncated: false,
-            original_size: 0,
         }
     }
 

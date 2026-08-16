@@ -389,8 +389,6 @@ mod layer_input_tests {
             files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some("You are Aleph.".to_string()),
-                truncated: false,
-                original_size: 14,
             }],
         };
 

@@ -273,14 +273,10 @@ mod tests {
                 IdentityFile {
                     name: "SOUL.md",
                     content: Some("You are Aleph, a calm and precise assistant.".to_string()),
-                    truncated: false,
-                    original_size: 44,
                 },
                 IdentityFile {
                     name: "AGENTS.md",
                     content: Some("This project uses Rust and tokio.".to_string()),
-                    truncated: false,
-                    original_size: 33,
                 },
             ],
         };
