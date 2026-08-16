@@ -17,12 +17,11 @@ pub(super) async fn replace_tool_arc_impl(
     let new_description = tool.definition().description;
 
     let mut guard = tools.lock().unwrap_or_else(|e| e.into_inner());
-    let old_tool = guard.insert(name.clone(), tool);
+    let was_replaced = guard.insert(name.clone(), tool).is_some();
 
     ToolUpdateInfo {
         tool_name: name,
-        was_replaced: old_tool.is_some(),
-        old_description: old_tool.map(|t| t.definition().description),
+        was_replaced,
         new_description,
     }
 }

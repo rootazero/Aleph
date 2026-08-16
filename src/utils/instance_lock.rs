@@ -28,7 +28,6 @@ const HOLDER_FILENAME: &str = "aleph.lock.pid";
 pub struct InstanceLock {
     #[allow(dead_code)] // Held for OS-level lock lifetime via Drop on `File`.
     file: File,
-    path: PathBuf,
     holder_path: PathBuf,
     holder_pid: u32,
 }
@@ -93,7 +92,6 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
             write_holder(&holder_path, pid)?;
             Ok(AcquireOutcome::Acquired(InstanceLock {
                 file,
-                path: lock_path,
                 holder_path,
                 holder_pid: pid,
             }))

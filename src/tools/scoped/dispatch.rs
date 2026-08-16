@@ -260,7 +260,6 @@ impl ScopedToolService {
         // rewrite the tool input via `update_input:`. Inert when no executor
         // is wired or when no hooks match the event. Runs BEFORE routing so a
         // blocked call never reaches the retry pipeline.
-        let started = std::time::Instant::now();
         let (effective_input, mut pre_hook_contexts) = match self
             .run_before_tool_hooks(name, input.clone(), authorized)
             .await

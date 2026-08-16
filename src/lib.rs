@@ -178,7 +178,7 @@ pub use crate::thinker::{
 // =============================================================================
 
 // Unified tool traits
-pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer, AlephToolServerHandle};
+pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer};
 
 // Tool Metadata (registry)
 pub use crate::tool_metadata::{
