@@ -1,5 +1,10 @@
 //! Voice mode set tool — toggle voice output on/off for a channel.
 //!
+//! Sister files (see `crate::gateway::voice::mod` for the canonical cross-reference table):
+//! - `crate::gateway::voice::state.rs` — `VoiceState` this tool mutates.
+//! - `crate::gateway::voice::voice_mode.rs` — session-keyed `VoiceTurnState` (different concept; we do NOT touch it).
+//! - `crate::thinker::layers::voice_mode.rs` — the prompt-layer that reads the session registry.
+//!
 //! Implements R9: Everything is a Tool. The LLM selects this tool when the
 //! user says things like "turn on voice mode" or "switch to voice replies".
 

@@ -60,8 +60,6 @@ mod tests {
             files: vec![IdentityFile {
                 name,
                 content: Some(content.to_string()),
-                truncated: false,
-                original_size: content.len(),
             }],
         }
     }

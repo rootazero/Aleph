@@ -1,5 +1,10 @@
 //! Session → voice-mode pointer registry.
 //!
+//! Sister files (see `super::mod` for the canonical cross-reference table):
+//! - `state.rs` — channel-keyed `VoiceState` (different concept, confusingly similar name).
+//! - `voice_mode_set.rs` (in `builtin_tools/voice_tools/`) — the LLM tool mutates `VoiceState`.
+//! - `thinker::layers::voice_mode.rs` — the prompt-layer that reads this registry.
+//!
 //! Voice mode is decided in the gateway inbound router (from per-channel
 //! [`VoiceState`](super::state::VoiceState) plus the inbound voice-reply hint),
 //! but it must be *read* much later and in a different subsystem — during system

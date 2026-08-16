@@ -178,8 +178,7 @@ impl Clone for VideoGenerateTool {
 #[async_trait]
 impl AlephTool for VideoGenerateTool {
     const NAME: &'static str = "video_generate";
-    const DESCRIPTION: &'static str =
-        "Generate a video from a text description. Provide a detailed prompt describing the scene, motion, style, and camera movement.";
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
     type Args = VideoGenerateArgs;
     type Output = VideoGenerateOutput;
 

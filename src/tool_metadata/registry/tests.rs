@@ -5,11 +5,7 @@ use crate::tool_metadata::types::ToolPriority;
 /// Fetch a single registered (active) tool by id, replacing the removed
 /// `get_by_id` for tests that inspect one tool after registration.
 async fn fetch_by_id(registry: &ToolCatalog, id: &str) -> Option<UnifiedTool> {
-    registry
-        .list_all()
-        .await
-        .into_iter()
-        .find(|t| t.id == id)
+    registry.list_all().await.into_iter().find(|t| t.id == id)
 }
 
 #[tokio::test]

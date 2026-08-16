@@ -87,11 +87,7 @@ fn update_existing_repo(repo: &git2::Repository) -> Result<(), git2::Error> {
     // reject it as malformed OR, worse, interpret it as a write-back to the
     // local branch. Naming both ends keeps the fetch deterministic across
     // versions and pins the destination the reset below reads from.
-    remote.fetch(
-        &["refs/heads/main:refs/remotes/origin/main"],
-        None,
-        None,
-    )?;
+    remote.fetch(&["refs/heads/main:refs/remotes/origin/main"], None, None)?;
     let fetch_head = repo.find_reference("FETCH_HEAD")?;
     let target = repo.reference_to_annotated_commit(&fetch_head)?.id();
     let obj = repo.find_object(target, None)?;

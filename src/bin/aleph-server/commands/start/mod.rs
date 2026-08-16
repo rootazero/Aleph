@@ -1281,9 +1281,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // takes `&EventContext` for forward compatibility, so we pass a default.
     if let Some(event_store) = agent_result.event_store.clone() {
         {
-            use alephcore::event::{
-                EventContext, EventFilter, EventHandler, EventType, GlobalBus,
-            };
+            use alephcore::event::{EventContext, EventFilter, EventHandler, EventType, GlobalBus};
             use alephcore::teams::events::TeamEventLogger;
 
             let team_logger = Arc::new(TeamEventLogger::new(event_store));

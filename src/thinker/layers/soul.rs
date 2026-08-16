@@ -81,8 +81,6 @@ mod tests {
             files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some("You are a custom soul from workspace.".to_string()),
-                truncated: false,
-                original_size: 37,
             }],
         };
         let input = LayerInput::basic(&config, &[]).with_identity_files(&workspace);
@@ -111,8 +109,6 @@ mod tests {
             files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some(malicious.to_string()),
-                truncated: false,
-                original_size: malicious.len(),
             }],
         };
         let input = LayerInput::basic(&config, &[]).with_identity_files(&workspace);
@@ -144,8 +140,6 @@ mod tests {
             files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some(clean.to_string()),
-                truncated: false,
-                original_size: clean.len(),
             }],
         };
         let input = LayerInput::basic(&config, &[]).with_identity_files(&workspace);

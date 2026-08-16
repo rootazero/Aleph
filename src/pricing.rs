@@ -1357,11 +1357,7 @@ const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
         "gpt-5.4-mini",
         &[],
     ),
-    (
-        "openai",
-        "gpt-5.4-nano",
-        &[],
-    ),
+    ("openai", "gpt-5.4-nano", &[]),
     (
         "openai",
         "gpt-5.4",
@@ -2790,8 +2786,8 @@ mod tests {
 
     #[test]
     fn lookup_tiers_only_matches_tiered_models() {
-        assert!(lookup_tiers("google", "gemini-2.5-pro").is_some());        // 4.6 resolves to the *negative* row — present, deliberately empty —
-        // so the broad `claude-sonnet-4` beta row can never reach it.
+        assert!(lookup_tiers("google", "gemini-2.5-pro").is_some()); // 4.6 resolves to the *negative* row — present, deliberately empty —
+                                                                     // so the broad `claude-sonnet-4` beta row can never reach it.
         assert_eq!(
             lookup_tiers("anthropic", "claude-sonnet-4-6").map(<[_]>::len),
             Some(0)

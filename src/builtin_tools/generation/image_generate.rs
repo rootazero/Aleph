@@ -89,7 +89,8 @@ impl ImageGenerateTool {
     pub const NAME: &'static str = "image_generate";
 
     /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = "Generate an image from a text description. Use this when you need to create visual content based on a prompt.";
+    pub const DESCRIPTION: &'static str =
+        r#"Generate images from text prompts using AI image generation providers."#;
 
     /// Create a new `ImageGenerateTool` with the given provider registry
     pub const fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
@@ -256,8 +257,7 @@ impl Clone for ImageGenerateTool {
 #[async_trait]
 impl AlephTool for ImageGenerateTool {
     const NAME: &'static str = "image_generate";
-    const DESCRIPTION: &'static str =
-        r#"Generate images from text prompts using AI image generation providers."#;
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = ImageGenerateArgs;
     type Output = ImageGenerateOutput;

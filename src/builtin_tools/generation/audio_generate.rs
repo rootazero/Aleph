@@ -156,8 +156,7 @@ impl Clone for AudioGenerateTool {
 #[async_trait]
 impl AlephTool for AudioGenerateTool {
     const NAME: &'static str = "audio_generate";
-    const DESCRIPTION: &'static str =
-        "Generate audio or music from a text description. Provide a prompt describing the genre, mood, instruments, tempo, and style.";
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
     type Args = AudioGenerateArgs;
     type Output = AudioGenerateOutput;
 

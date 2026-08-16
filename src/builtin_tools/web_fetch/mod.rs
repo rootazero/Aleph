@@ -377,7 +377,7 @@ fn apply_focus_prompt(mut result: WebFetchResult, prompt: Option<&str>) -> WebFe
 #[async_trait]
 impl AlephTool for WebFetchTool {
     const NAME: &'static str = "web_fetch";
-    const DESCRIPTION: &'static str = "Fetch and extract text content from a web page URL.";
+    const DESCRIPTION: &'static str = Self::DESCRIPTION;
 
     type Args = WebFetchArgs;
     type Output = WebFetchResult;

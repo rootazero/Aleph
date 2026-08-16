@@ -1044,13 +1044,57 @@ mod tests {
             .collect()
     }
 
-    /// Does this file both reach for the real home *and* name `.aleph`?
-    fn hand_rolls_aleph_home(text: &str) -> bool {
+    /// Names of consts whose value *is* the Aleph home directory, derived from
+    /// the sources rather than listed here.
+    ///
+    /// The predicate below is conjunctive — a file has to reach for the real
+    /// home *and* name `.aleph`. Its blind spot is a file that does the second
+    /// half through an identifier: `home.join(ALEPH_HOME_DIR)` names no
+    /// `.aleph` anywhere in the file, so the guard walks past it. Deriving the
+    /// alias set keeps that from being closed with a hand-written list, which
+    /// would be the second source of truth this whole module exists to remove:
+    /// a const that stops holding `.aleph` stops being an alias on its own.
+    ///
+    /// Only the bare directory name and the `~/.aleph` prefix qualify. A
+    /// const like `ENVELOPE_SUFFIX = ".aleph-sig.json"` names a file suffix,
+    /// not a root, and joining it to a home is not this bug.
+    fn aleph_home_aliases(sources: &[(String, String)]) -> Vec<String> {
+        let mut names = Vec::new();
+        for (_, text) in sources {
+            for (_, line) in code_lines(text) {
+                let Some((decl, value)) = line.split_once('=') else {
+                    continue;
+                };
+                if !decl.contains("const ") && !decl.contains("static ") {
+                    continue;
+                }
+                let value = value.trim();
+                if !(value.starts_with("\".aleph\"") || value.starts_with("\"~/.aleph")) {
+                    continue;
+                }
+                let Some(name) = decl
+                    .split(':')
+                    .next()
+                    .and_then(|lhs| lhs.split_whitespace().last())
+                else {
+                    continue;
+                };
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Does this file both reach for the real home *and* name `.aleph` —
+    /// literally, or through one of the aliases that holds that literal?
+    fn hand_rolls_aleph_home(text: &str, aliases: &[String]) -> bool {
         let mut home = false;
         let mut aleph = false;
         for (_, line) in code_lines(text) {
             home |= line.contains("dirs::home_dir()");
-            aleph |= line.contains(".aleph");
+            aleph |= line.contains(".aleph") || aliases.iter().any(|a| line.contains(a.as_str()));
         }
         home && aleph
     }
@@ -1094,12 +1138,14 @@ mod tests {
     /// bug.
     #[test]
     fn no_hand_rolled_aleph_home_outside_the_allowlist() {
+        let sources = all_sources();
+        let aliases = aleph_home_aliases(&sources);
         let mut offenders: Vec<String> = Vec::new();
-        for (rel, text) in all_sources() {
+        for (rel, text) in sources {
             if HOME_JOIN_ALLOWLIST.iter().any(|(f, _)| *f == rel) {
                 continue;
             }
-            if !hand_rolls_aleph_home(&text) {
+            if !hand_rolls_aleph_home(&text, &aliases) {
                 continue;
             }
             let sites: Vec<String> = code_lines(&text)
@@ -1128,20 +1174,43 @@ mod tests {
         let far_apart = "fn default() -> String { \"~/.aleph/data/tasks.db\".into() }\n\
                          // fifty lines of unrelated code\n\
                          fn expand(p: &str) -> PathBuf { dirs::home_dir().unwrap().join(p) }";
+        // The fourth spells `.aleph` nowhere: it reaches the home directory and
+        // then names it through the const that holds the literal. Before the
+        // alias derivation this file read as clean.
+        let via_alias = "use crate::discovery::paths::ALEPH_HOME_DIR;\n\
+                         fn root() -> PathBuf { dirs::home_dir().unwrap().join(ALEPH_HOME_DIR) }";
+        let aliases = aleph_home_aliases(&all_sources());
+        assert!(
+            aliases.iter().any(|a| a == "ALEPH_HOME_DIR"),
+            "the alias derivation stopped finding the const that *is* `.aleph`, so the \
+             identifier half of the predicate now matches nothing: {aliases:?}"
+        );
         for source in [single_line, two_lines, far_apart] {
             assert!(
-                hand_rolls_aleph_home(source),
+                hand_rolls_aleph_home(source, &[]),
                 "guard missed a hand-rolled path:\n{source}"
             );
         }
+        assert!(
+            !hand_rolls_aleph_home(via_alias, &[]),
+            "this case is only interesting if the literal-only predicate walks past it"
+        );
+        assert!(
+            hand_rolls_aleph_home(via_alias, &aliases),
+            "guard missed a home path composed through an alias:\n{via_alias}"
+        );
 
         // Still text-blind to comments — the repo discusses this bug by name.
         assert!(!hand_rolls_aleph_home(
-            "// dirs::home_dir().join(\".aleph\") is what NOT to do"
+            "// dirs::home_dir().join(\".aleph\") is what NOT to do",
+            &[]
         ));
         // And a file that only does one half is not an offender.
-        assert!(!hand_rolls_aleph_home("let h = dirs::home_dir();"));
-        assert!(!hand_rolls_aleph_home("let p = root.join(\".aleph\");"));
+        assert!(!hand_rolls_aleph_home("let h = dirs::home_dir();", &[]));
+        assert!(!hand_rolls_aleph_home(
+            "let p = root.join(\".aleph\");",
+            &[]
+        ));
     }
 
     /// An exemption that no longer offends is a lie the next reader has to
@@ -1155,10 +1224,11 @@ mod tests {
     #[test]
     fn every_exemption_still_offends() {
         let sources = all_sources();
+        let aliases = aleph_home_aliases(&sources);
         let mut stale: Vec<&str> = Vec::new();
         for (file, _) in HOME_JOIN_ALLOWLIST {
             match sources.iter().find(|(rel, _)| rel == file) {
-                Some((_, text)) if hand_rolls_aleph_home(text) => {}
+                Some((_, text)) if hand_rolls_aleph_home(text, &aliases) => {}
                 _ => stale.push(file),
             }
         }

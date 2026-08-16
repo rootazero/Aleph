@@ -1,5 +1,10 @@
 //! `VoiceModeLayer` — injects voice-mode guidelines when active (priority 1710).
 //!
+//! Sister files (see `crate::gateway::voice::mod` for the canonical cross-reference table):
+//! - `crate::gateway::voice::voice_mode.rs` — the session-keyed registry this layer reads.
+//! - `crate::gateway::voice::state.rs` — channel-keyed `VoiceState` (different concept; this layer does not read it).
+//! - `crate::builtin_tools::voice_tools::voice_mode_set.rs` — the LLM tool that toggles channel voice.
+//!
 //! Voice-as-Context: when the gateway marks the session as spoken (the inbound
 //! router writes it to [`voice_mode`](crate::gateway::voice::voice_mode),
 //! the harness bridge reads it into [`ResolvedContext::voice`]), this layer
@@ -244,5 +249,127 @@ mod tests {
         let out = render(&ctx_with_voice(VoiceContext::SpokenTranscribed));
         assert!(out.contains("transcribed from speech"));
         assert!(!out.contains("Domain vocabulary"));
+    }
+
+    // -----------------------------------------------------------------------
+    // End-to-end regression pin (2026-08-16 round)
+    //
+    // These tests pin the full registry → prompt_build → rendered-prompt
+    // chain. The unit tests above fabricate a `ResolvedContext` directly;
+    // these exercise the real registry read path (`voice_mode::get`) and
+    // the same translation that `prompt_build.rs:862-870` performs.
+    //
+    // The bug class these prevent: `metadata["voice_mode_active"]` died
+    // because `build_system_prompt` never read it. The history of that
+    // dead-code stamp is the reason this end-to-end pin matters.
+    // -----------------------------------------------------------------------
+
+    /// Mirror of `prompt_build.rs:862-870` — keep these in sync if the
+    /// translation ever changes. The test imports the registry directly
+    /// rather than the prompt-build function so the test pin does not
+    /// depend on the full `resolved_context` plumbing.
+    fn translate_registry_to_resolved(session_key: &str) -> (VoiceContext, Option<String>) {
+        let turn = crate::gateway::voice::voice_mode::get(session_key);
+        let voice = match turn.as_ref() {
+            Some(s) if s.transcribed => VoiceContext::SpokenTranscribed,
+            Some(_) => VoiceContext::Spoken,
+            None => VoiceContext::Off,
+        };
+        let vocab = turn.and_then(|s| s.vocabulary);
+        (voice, vocab)
+    }
+
+    #[test]
+    fn end_to_end_registry_to_rendered_prompt() {
+        // Push a VoiceTurnState with vocabulary through the registry, then
+        // translate + render via the SAME path prompt_build walks.
+        let sk = "voice-e2e-spoken-transcribed";
+        crate::gateway::voice::voice_mode::set(
+            sk,
+            Some(crate::gateway::voice::voice_mode::VoiceTurnState::new(
+                true,
+                Some("Aleph, Leptos, Rust".to_string()),
+            )),
+        );
+
+        let (voice, vocab) = translate_registry_to_resolved(sk);
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+        );
+        ctx.voice = voice;
+        ctx.voice_vocabulary = vocab;
+
+        let rendered = render(&ctx);
+
+        assert!(rendered.contains("## Voice Mode"));
+        assert!(rendered.contains("transcribed from speech"));
+        assert!(
+            rendered.contains("Domain vocabulary for this conversation: Aleph, Leptos, Rust"),
+            "vocabulary must propagate registry → resolved context → rendered prompt"
+        );
+        assert!(rendered.contains("Prefer these exact terms when repairing misrecognized words"));
+
+        crate::gateway::voice::voice_mode::set(sk, None);
+    }
+
+    #[test]
+    fn end_to_end_typed_input_rendered_prompt_is_byte_identical() {
+        // Regression: a voice-off turn (no registry entry) must NOT render
+        // any voice-mode text. Same shape as `skips_when_voice_inactive`
+        // but through the registry read path.
+        let sk = "voice-e2e-typed";
+        crate::gateway::voice::voice_mode::set(sk, None);
+
+        let (voice, _vocab) = translate_registry_to_resolved(sk);
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+        );
+        ctx.voice = voice;
+
+        let rendered = render(&ctx);
+        assert!(
+            rendered.is_empty(),
+            "voice-off turn must not render voice guidelines"
+        );
+    }
+
+    #[test]
+    fn end_to_end_spoken_only_ignores_vocabulary() {
+        // The same shape as `spoken_only_turn_ignores_vocabulary` but via
+        // the registry path — a typed voice-out turn must bloat neither
+        // the prompt bytes nor the registry write with vocabulary.
+        let sk = "voice-e2e-spoken-only";
+        crate::gateway::voice::voice_mode::set(
+            sk,
+            Some(crate::gateway::voice::voice_mode::VoiceTurnState::new(
+                false,
+                // typed input has no recognition errors → vocabulary_hint
+                // is None at the gateway boundary. The inbound router
+                // codifies this in `executor.rs:345-365`.
+                None,
+            )),
+        );
+
+        let (voice, vocab) = translate_registry_to_resolved(sk);
+        assert_eq!(voice, VoiceContext::Spoken);
+        assert!(vocab.is_none());
+
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+        );
+        ctx.voice = voice;
+        ctx.voice_vocabulary = vocab;
+
+        let rendered = render(&ctx);
+        assert!(rendered.contains("## Voice Mode"));
+        assert!(
+            !rendered.contains("Domain vocabulary"),
+            "spoken-only must not render vocabulary"
+        );
+
+        crate::gateway::voice::voice_mode::set(sk, None);
     }
 }
