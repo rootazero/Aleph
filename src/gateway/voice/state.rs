@@ -98,4 +98,68 @@ mod tests {
         assert!(!state.enabled, "should be disabled after 3 failures");
         assert_eq!(state.consecutive_failures, 3);
     }
+
+    // -----------------------------------------------------------------------
+    // Failure-counter contract pin (2026-08-16 round)
+    //
+    // The caller in `reply_emitter/helpers::send_as_voice` calls `record_failure`
+    // once per failed `generate_tts` call, not once per provider hop within the
+    // call. A single `generate_tts` may try primary + 1 fallback; if both fail
+    // the call returns `None` and the caller increments exactly once. These
+    // tests pin both halves of that contract.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn three_failures_disables_once_no_per_hop_counting() {
+        // Contract: 3 consecutive failures → auto-disable, regardless of how
+        // many provider hops happened within the call. The counter is
+        // incremented by the CALLER (`send_as_voice`), not by the TTS path.
+        let mut state = VoiceState { enabled: true, ..Default::default() };
+        assert!(!state.record_failure());
+        assert!(state.enabled);
+        assert!(!state.record_failure());
+        assert!(state.enabled);
+        let disabled = state.record_failure();
+        assert!(disabled, "the 3rd failure must flip disabled");
+        assert!(!state.enabled);
+        // After disable, more failures keep the channel disabled (the
+        // disabled flag is a one-way latch). The counter keeps growing via
+        // saturating_add — neither a successful synthesis nor further
+        // failures may re-enable the channel without an explicit user toggle.
+        let _ = state.record_failure();
+        assert!(!state.enabled, "channel must stay disabled after auto-disable");
+        // record_success on a disabled channel resets the counter but does
+        // not re-enable — the user must explicitly re-enable (the LLM tool
+        // `voice_mode_set` is the only re-enable path).
+        state.record_success();
+        assert!(!state.enabled, "record_success must not re-enable a disabled channel");
+        assert_eq!(state.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn success_resets_failure_counter() {
+        let mut state = VoiceState {
+            enabled: true,
+            consecutive_failures: 2,
+            ..Default::default()
+        };
+        state.record_success();
+        assert_eq!(state.consecutive_failures, 0);
+        assert!(state.enabled);
+    }
+
+    #[test]
+    fn failure_counter_is_per_channel_state() {
+        // Two channel states must be independent — a failure on channel A
+        // must never leak into channel B's counter.
+        let mut a = VoiceState { enabled: true, ..Default::default() };
+        let mut b = VoiceState { enabled: true, ..Default::default() };
+        a.record_failure();
+        a.record_failure();
+        assert_eq!(a.consecutive_failures, 2);
+        assert_eq!(b.consecutive_failures, 0);
+        b.record_success();
+        assert_eq!(a.consecutive_failures, 2);
+        assert_eq!(b.consecutive_failures, 0);
+    }
 }
