@@ -27,17 +27,12 @@ pub struct RoutingOutcome {
 pub struct RoutingExperienceStore {
     backend: Arc<SqliteMemoryBackend>,
     embedder: Arc<dyn EmbeddingProvider>,
-    retention_cap: usize,
 }
 
 impl RoutingExperienceStore {
     #[must_use]
     pub fn new(backend: Arc<SqliteMemoryBackend>, embedder: Arc<dyn EmbeddingProvider>) -> Self {
-        Self {
-            backend,
-            embedder,
-            retention_cap: DEFAULT_ROUTING_RETENTION_CAP,
-        }
+        Self { backend, embedder }
     }
 
     pub async fn embed_task(&self, text: &str) -> Result<Vec<f32>, AlephError> {
@@ -90,7 +85,7 @@ impl RoutingExperienceStore {
         self.backend
             .record_routing_experience(&row, task_emb, dim)?;
         self.backend
-            .prune_routing_experiences(agent_id, dim, self.retention_cap)?;
+            .prune_routing_experiences(agent_id, dim, DEFAULT_ROUTING_RETENTION_CAP)?;
         Ok(())
     }
 

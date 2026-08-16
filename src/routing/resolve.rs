@@ -162,8 +162,14 @@ pub fn resolve_route(
         };
 
     match matched {
-        Some((b, matched_by)) => build(&b.agent_id, matched_by, b.match_rule.workspace.clone()),
-        None => build(default_agent, MatchedBy::Default, None),
+        Some((b, matched_by)) if !b.agent_id.trim().is_empty() => {
+            build(&b.agent_id, matched_by, b.match_rule.workspace.clone())
+        }
+        // A binding whose `agent_id` is empty/whitespace matches nothing it can
+        // name: fall through to the unmatched default path (`MatchedBy::Default`)
+        // instead of silently resolving to the default agent as if the operator
+        // had deliberately written `agent_id = "main"`.
+        _ => build(default_agent, MatchedBy::Default, None),
     }
 }
 
