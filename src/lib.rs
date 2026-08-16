@@ -244,7 +244,7 @@ pub use crate::providers::AiProvider;
 // =============================================================================
 
 pub use crate::metrics::StageTimer;
-pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
+pub use crate::utils::paths::get_skills_dir;
 
 // Event handler types (for backward compatibility)
 pub use crate::event_handler::{ErrorType, McpServerError, McpStartupReport, ProcessingState};

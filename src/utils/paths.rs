@@ -234,28 +234,11 @@ pub fn legacy_home_aleph_path(relative: &str) -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(".aleph").join(relative))
 }
 
-/// Get the path for the memory database directory (`SQLite`)
-///
-/// Returns: `<config_dir>/memory/`
-///
-/// Creates the directory if it doesn't exist.
-pub fn get_memory_db_path() -> Result<PathBuf> {
-    let memory_dir = get_config_dir()?.join("memory");
-    std::fs::create_dir_all(&memory_dir)
-        .map_err(|e| AlephError::config(format!("Failed to create memory directory: {e}")))?;
-    Ok(memory_dir)
-}
-
 /// Get skills directory path
 ///
 /// Returns: `<config_dir>/skills`
 pub fn get_skills_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("skills"))
-}
-
-/// Get skills directory path as String (for `UniFFI` export)
-pub fn get_skills_dir_string() -> Result<String> {
-    Ok(get_skills_dir()?.to_string_lossy().to_string())
 }
 
 /// Get runtimes directory path
