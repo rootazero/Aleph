@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{AggregateRoot, Entity};
+use crate::domain::Entity;
 
 use super::enums::{
     FactSource, FactSpecificity, MemoryCategory, MemoryLayer, NoteType, TemporalScope,
@@ -99,8 +99,6 @@ impl Entity for MemoryFact {
         &self.id
     }
 }
-
-impl AggregateRoot for MemoryFact {}
 
 impl MemoryFact {
     /// Create a new valid memory fact

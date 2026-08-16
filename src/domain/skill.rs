@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use super::{AggregateRoot, Entity};
+use super::Entity;
 
 // ---------------------------------------------------------------------------
 // SkillId
@@ -404,7 +404,8 @@ impl fmt::Display for SkillContent {
 ///
 /// A `SkillManifest` represents a fully resolved skill with its identity,
 /// content, eligibility, installation instructions, and invocation
-/// policy. It implements `Entity<Id=SkillId>` and `AggregateRoot`.
+/// policy. It implements `Entity<Id=SkillId>` (formerly `AggregateRoot`, removed
+/// 2026-08-16 — see `src/domain/mod.rs`).
 #[derive(Debug, Clone)]
 pub struct SkillManifest {
     /// Unique skill identifier.
@@ -636,8 +637,6 @@ impl Entity for SkillManifest {
         &self.id
     }
 }
-
-impl AggregateRoot for SkillManifest {}
 
 #[cfg(test)]
 mod tests {

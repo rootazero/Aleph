@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Map;
 
 use super::message::{A2AMessage, Artifact};
-use crate::domain::{AggregateRoot, Entity};
+use crate::domain::Entity;
 
 /// A2A task state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,8 +113,6 @@ impl Entity for A2ATask {
         &self.id
     }
 }
-
-impl AggregateRoot for A2ATask {}
 
 impl A2ATask {
     /// Create a new task with default Submitted state
