@@ -1166,6 +1166,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     };
     if let Some(canvas_store) = &canvas_store {
         register_canvas_handlers(&mut server, canvas_store, args.daemon);
+        // The SAME Arc, for the `/canvas-asset/...` capability byte route in
+        // `build_router` — a second store instance would split the
+        // per-canvas critical sections in two.
+        server.set_canvas_store(canvas_store.clone());
     }
 
     let agent_result = register_agent_handlers(

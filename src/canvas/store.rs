@@ -277,12 +277,29 @@ impl CanvasStore {
 
     /// Publish `canvas.updated` for a committed batch. Called INSIDE the
     /// per-canvas critical section (the guard is still alive), so event
-    /// order can never diverge from commit order.
-    fn emit_updated(&self, _doc: &CanvasDoc, _ops: &[CanvasOp], _actor: Option<&str>) {
-        // wired in Task 9: builds `GatewayEventFrame::CanvasUpdated` (the
-        // frame variant lands in the same change-set as this body — no
-        // half-wired state) and publishes it on the bus.
-        let Some(_bus) = &self.event_bus else { return };
+    /// order can never diverge from commit order — pinned by
+    /// `events_publish_in_revision_order_under_contention`.
+    ///
+    /// The frame self-reports the document's owner and project link so the
+    /// delivery plane can classify it without any index seeding (§4.8 mine
+    /// H); the Panel parses the same payload as
+    /// `aleph_protocol::canvas::CanvasUpdated` and ignores the extras.
+    fn emit_updated(&self, doc: &CanvasDoc, ops: &[CanvasOp], actor: Option<&str>) {
+        let Some(bus) = &self.event_bus else { return };
+        let frame = crate::gateway::events::GatewayEventFrame::CanvasUpdated {
+            canvas_id: doc.id.clone(),
+            revision: doc.revision,
+            ops: ops.to_vec(),
+            actor: actor.map(str::to_string),
+            owner_user_id: doc.owner_user_id.clone(),
+            project_id: doc.project_id.clone(),
+        };
+        // A full broadcast channel or a serialization failure must never fail
+        // the apply that already committed; the frame is an announcement, and
+        // `chat.history`-style re-pull (`canvas.get`) remains the authority.
+        if let Err(e) = bus.publish_frame(&frame) {
+            warn!(canvas = %doc.id, error = %e, "canvas: failed to publish canvas.updated");
+        }
     }
 
     pub(super) fn doc_path(&self, id: &str) -> PathBuf {
@@ -587,18 +604,28 @@ mod tests {
         drop(dir);
     }
 
-    /// Pre-planted nail for Task 9 (name kept on purpose): once
-    /// `emit_updated` publishes real frames, this test grows a typed
-    /// subscription asserting the EVENT revision sequence is strictly
-    /// increasing — which holds because the publish happens inside the
-    /// per-canvas critical section (`DocGuard::commit(&mut self)` keeps the
-    /// lock). Until then it pins the commit-order half: every contended
-    /// apply lands exactly one distinct revision.
+    /// The event-order pin `emit_updated`'s doc points at: 20 contended
+    /// applies, a typed subscription, and the received `canvas.updated`
+    /// revision sequence must be exactly the commit sequence — strictly
+    /// increasing, no gaps, no reordering. This holds ONLY because the
+    /// publish happens inside the per-canvas critical section
+    /// (`DocGuard::commit(&mut self)` keeps the lock); a publish after the
+    /// guard dropped would let two racing applies announce in reverse order.
+    /// The apply-result half (each contended apply lands exactly one
+    /// distinct revision) is asserted too.
     #[tokio::test]
     async fn events_publish_in_revision_order_under_contention() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CanvasStore::new(dir.path().to_path_buf()));
-        let doc = store.create(None, None, None).await.unwrap();
+        let bus = Arc::new(GatewayEventBus::new());
+        let store =
+            Arc::new(CanvasStore::new(dir.path().to_path_buf()).with_event_bus(Arc::clone(&bus)));
+        let doc = store
+            .create(None, Some("p-1".into()), Some("u1".into()))
+            .await
+            .unwrap();
+        // Subscribe before any writer spawns: a broadcast receiver only sees
+        // frames sent after it exists.
+        let mut rx = bus.subscribe_typed();
 
         let mut handles = Vec::new();
         for i in 0..20u32 {
@@ -637,6 +664,39 @@ mod tests {
         let final_doc = store.get(&doc.id).await.unwrap();
         assert_eq!(final_doc.revision, doc.revision + 20);
         assert_eq!(final_doc.shapes.len(), 20);
+
+        // The event half: what subscribers saw must BE the commit sequence,
+        // in order — not merely the same set.
+        let mut event_revs = Vec::new();
+        while event_revs.len() < 20 {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("all 20 frames must arrive")
+                .expect("bus stays open");
+            let crate::gateway::events::GatewayEventFrame::CanvasUpdated {
+                canvas_id,
+                revision,
+                owner_user_id,
+                project_id,
+                ..
+            } = frame
+            else {
+                continue; // nothing else publishes on this private bus
+            };
+            assert_eq!(canvas_id, doc.id);
+            assert_eq!(
+                owner_user_id.as_deref(),
+                Some("u1"),
+                "the frame must self-report its owner for the delivery plane"
+            );
+            assert_eq!(project_id.as_deref(), Some("p-1"));
+            event_revs.push(revision);
+        }
+        assert_eq!(
+            event_revs, expected,
+            "publish order must be commit order — the publish runs inside the \
+             per-canvas critical section"
+        );
         drop(dir);
     }
 

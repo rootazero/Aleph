@@ -29,9 +29,15 @@
 //! the signature for that rare verb would thread a second Arc through every
 //! call site for one arm.
 //!
-//! `asset_base` in the `canvas.get` envelope stays `None` until the
-//! capability-URL asset route exists (Task 9); the Panel falls back to
-//! `canvas.asset.get` base64 in the meantime.
+//! `canvas.get` mints a canvas-scoped capability
+//! ([`crate::gateway::security::CanvasCapabilities`], 10-minute TTL) and
+//! fills `asset_base` with `/canvas-asset/<cap>/<canvas_id>` — the byte
+//! route the Panel resolves `<image href>` against
+//! (`server::canvas_asset_route`). Minting happens strictly AFTER
+//! [`gate_canvas`] admitted the caller: the capability is a portable copy of
+//! that visibility verdict, valid for its TTL. `canvas.create` deliberately
+//! leaves `asset_base: None` — a brand-new canvas has no assets, and the
+//! Panel's open path goes through `canvas.get` anyway.
 
 use std::sync::Arc;
 
@@ -144,6 +150,9 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<CanvasStore>) -> 
                 &CanvasEnvelope {
                     canvas: doc,
                     selection,
+                    // Deliberately unminted: a brand-new canvas has no
+                    // assets, and opening it goes through `canvas.get`,
+                    // which mints the capability (see the module doc).
                     asset_base: None,
                 },
             )
@@ -185,15 +194,19 @@ pub async fn handle_get(request: JsonRpcRequest, store: Arc<CanvasStore>) -> Jso
         Err(e) => return e,
     };
     let selection = selection::get(&doc.id);
+    // Minted only past the gate: the capability carries this caller's
+    // visibility verdict to the `/canvas-asset/...` byte route for its TTL.
+    // Fresh mints are idempotent, so the URL is stable across repeated gets
+    // and the browser's image cache keeps working.
+    let cap = crate::gateway::security::CanvasCapabilities::mint(&doc.id);
+    let asset_base = Some(format!("/canvas-asset/{cap}/{}", doc.id));
     success_of(
         request.id,
         CONTEXT,
         &CanvasEnvelope {
             canvas: doc,
             selection,
-            // Task 9 mints the capability URL here; until then the Panel
-            // reads assets through `canvas.asset.get`.
-            asset_base: None,
+            asset_base,
         },
     )
 }
@@ -796,6 +809,56 @@ mod tests {
             keys_of(&parsed),
             "canvas.apply must emit the CanvasApplyResult key set and nothing else"
         );
+    }
+
+    /// `canvas.get` mints `asset_base` = `/canvas-asset/<cap>/<id>` where
+    /// `<cap>` is the live canvas capability — bound to THIS canvas and to
+    /// no other (the byte route resolves the canvas from the capability and
+    /// requires the URL to agree). Stability across gets is what keeps the
+    /// browser's image cache warm.
+    #[tokio::test]
+    async fn get_mints_an_asset_base_bound_to_the_canvas() {
+        let (_dir, store) = store();
+        let id = create_as(&store, "u-alice", None).await;
+
+        let envelope = as_user(
+            "u-alice",
+            handle_get(rpc("canvas.get", json!({ "canvas_id": id })), store.clone()),
+        )
+        .await
+        .result
+        .expect("get");
+        let parsed: CanvasEnvelope =
+            serde_json::from_value(envelope).expect("the contract must parse it");
+        let base = parsed.asset_base.expect("get must mint an asset base");
+
+        let expected_suffix = format!("/{id}");
+        assert!(
+            base.starts_with("/canvas-asset/") && base.ends_with(&expected_suffix),
+            "asset_base must be /canvas-asset/<cap>/<canvas_id>, got {base}"
+        );
+        let cap = base
+            .trim_start_matches("/canvas-asset/")
+            .trim_end_matches(&expected_suffix);
+        assert!(
+            crate::gateway::security::CanvasCapabilities::validate(cap, &id),
+            "the embedded capability must validate for this canvas"
+        );
+        assert!(
+            !crate::gateway::security::CanvasCapabilities::validate(cap, "cv-other"),
+            "…and for no other canvas"
+        );
+
+        // Idempotent while fresh: a second get hands back the same URL.
+        let again = as_user(
+            "u-alice",
+            handle_get(rpc("canvas.get", json!({ "canvas_id": id })), store.clone()),
+        )
+        .await
+        .result
+        .expect("get");
+        let again: CanvasEnvelope = serde_json::from_value(again).expect("parses");
+        assert_eq!(again.asset_base.as_deref(), Some(base.as_str()));
     }
 
     /// Lane pin: the three read methods land in Query on the suffix

@@ -421,6 +421,40 @@ pub enum GatewayEventFrame {
         title: String,
         body: String,
     },
+    /// A committed whiteboard apply (`CanvasStore::apply`), published from
+    /// INSIDE the per-canvas critical section so frame order can never
+    /// diverge from commit order (see `canvas::doc_io`'s module doc).
+    ///
+    /// The Panel parses the payload as `aleph_protocol::canvas::CanvasUpdated`
+    /// (`canvas_id`/`revision`/`ops`/`actor`); the two extra fields exist for
+    /// the delivery plane alone. The frame SELF-REPORTS its attribution
+    /// (§4.8 mine H: a resolution handle must not be installed under narrower
+    /// conditions than the frame is produced under — there is no run or
+    /// session to seed an index from, so the frame carries the answer), and
+    /// `event_visibility` classifies it `ByCanvasScope`, whose arm only
+    /// delegates to `gateway::visibility::canvas_visible_to` — the same
+    /// predicate the RPC face and the tool face resolve.
+    ///
+    /// Deliberately NO `stream_method()` arm: this is a TopicEvent-form frame
+    /// (`{"topic":"canvas.updated","data":…}`); terminal clients have no
+    /// surface for a live board and `frame_census` would otherwise demand a
+    /// `StreamEvent` twin nothing decodes.
+    CanvasUpdated {
+        canvas_id: String,
+        revision: u64,
+        ops: Vec<aleph_protocol::canvas::CanvasOp>,
+        /// Who applied the batch (user id or agent label); `None` for
+        /// anonymous local sessions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor: Option<String>,
+        /// Stamped owner of the canvas; absent reads as the legacy operator,
+        /// the same `owner_or_legacy` convention the predicate applies.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner_user_id: Option<String>,
+        /// Project (room) link, when the canvas is roster-shared.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
+    },
 }
 
 /// How a clarification ended, carried on [`GatewayEventFrame::ClarificationEnded`].
@@ -693,6 +727,9 @@ impl GatewayEventFrame {
             Self::WorkspaceChanged { .. } => "workspace.changed",
             Self::SurfaceNotify { .. } => "surface.notify",
             Self::SurfaceApproval { .. } => "surface.approval",
+            // The protocol const, not a second literal: the Panel subscribes
+            // by this exact string and a drifted copy here would be silent.
+            Self::CanvasUpdated { .. } => aleph_protocol::canvas::TOPIC,
         }
         .to_string()
     }
@@ -924,5 +961,37 @@ mod surface_notify_tests {
         assert_eq!(v["type"], "team_changed");
         assert_eq!(v["team_id"], "t1");
         assert_eq!(v["change"], "updated");
+    }
+
+    /// The cross-crate half of the `canvas.updated` contract: the frame body
+    /// must parse as the protocol payload the Panel decodes
+    /// (`aleph_protocol::canvas::CanvasUpdated` tolerates the two extra
+    /// delivery-plane fields), the topic is the protocol const (one source,
+    /// not a second literal), and there is deliberately no `stream_method`
+    /// arm — a TopicEvent-form frame, invisible to `frame_census`'s
+    /// stream-twin requirement.
+    #[test]
+    fn canvas_updated_parses_as_the_protocol_payload_and_streams_nothing() {
+        let f = GatewayEventFrame::CanvasUpdated {
+            canvas_id: "cv-1".to_string(),
+            revision: 3,
+            ops: vec![aleph_protocol::canvas::CanvasOp::DeleteShape {
+                id: "s1".to_string(),
+            }],
+            actor: Some("u-alice".to_string()),
+            owner_user_id: Some("u-alice".to_string()),
+            project_id: Some("p-room".to_string()),
+        };
+        assert_eq!(f.topic_name(), aleph_protocol::canvas::TOPIC);
+        assert!(f.stream_method().is_none());
+
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "canvas_updated");
+        let payload: aleph_protocol::canvas::CanvasUpdated =
+            serde_json::from_value(v).expect("the Panel-side payload type must parse the frame");
+        assert_eq!(payload.canvas_id, "cv-1");
+        assert_eq!(payload.revision, 3);
+        assert_eq!(payload.ops.len(), 1);
+        assert_eq!(payload.actor.as_deref(), Some("u-alice"));
     }
 }

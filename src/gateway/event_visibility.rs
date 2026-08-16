@@ -223,6 +223,24 @@ pub enum SessionIdentity {
     /// person's work", and the answer to that is not "admins may read
     /// everything" — P1 deliberately does not grant that.
     BySessionKeyOrAdmin(String),
+    /// A whiteboard frame (`canvas.updated`): attributable to the canvas's
+    /// stamped owner plus — when project-linked — that room's roster.
+    ///
+    /// The frame SELF-REPORTS both halves (§4.8 mine H: a resolution handle
+    /// must not be installed under narrower conditions than the frame is
+    /// produced under — a canvas apply has no run or session to seed any
+    /// index from, so the frame carries its own attribution). The arm in
+    /// [`EventVisibilityIndex::event_admits_for`] only DELEGATES to
+    /// [`crate::gateway::visibility::canvas_visible_to`] — the same predicate
+    /// the RPC face (`canvas_visible`) and the tool face
+    /// (`ambient_canvas_visible`) resolve, so the third face of the verb
+    /// cannot drift (§0 "一个动词有 N 个面时，谁能看要在每个面用同一个推导").
+    /// An absent `owner` reads as the legacy operator inside that predicate
+    /// (`owner_or_legacy`), never as "everyone".
+    ByCanvasScope {
+        owner: Option<String>,
+        project: Option<String>,
+    },
     /// Unattributable to any one session — org-level infrastructure, or
     /// already covered by a different gate (see module doc).
     Global,
@@ -452,6 +470,17 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
             }
         }
         "pairing.requested" | "pairing.completed" | "config.changed" => SessionIdentity::Global,
+
+        // Whiteboard applies (`GatewayEventFrame::CanvasUpdated`). The frame
+        // self-reports its owner and project link — there is no run/session
+        // to resolve through any index — and the admit arm delegates to the
+        // one canvas predicate. Absent fields extract as `None`: an unstamped
+        // owner reads as the legacy operator inside `canvas_visible_to`, and
+        // an unlinked canvas has no roster arm.
+        aleph_protocol::canvas::TOPIC => SessionIdentity::ByCanvasScope {
+            owner: str_field(data, "owner_user_id"),
+            project: str_field(data, "project_id"),
+        },
 
         // --- TopicEvent-form frames with no session concept at all ---
         "channel.message"
@@ -730,6 +759,20 @@ impl EventVisibilityIndex {
                     return false;
                 };
                 self.team_admits(&team_id, caller, teams).await
+            }
+            // Only delegation, by ruling: this is the third face of the
+            // canvas verb, and it must resolve the SAME predicate as the RPC
+            // and tool faces rather than re-derive membership here. The
+            // predicate's `actor == None ⇒ unrestricted` convention is
+            // intentional for this arm too — an unscoped delivery loop
+            // (internal/single-user wiring) matches the unscoped RPC caller
+            // byte for byte.
+            SessionIdentity::ByCanvasScope { owner, project } => {
+                crate::gateway::visibility::canvas_visible_to(
+                    owner.as_deref(),
+                    project.as_deref(),
+                    caller_user,
+                )
             }
         }
     }
@@ -2275,6 +2318,16 @@ mod tests {
                 | GatewayEventFrame::HeartbeatTaskChanged { .. }
                 | GatewayEventFrame::TeamChanged { .. }
                 | GatewayEventFrame::SurfaceNotify { .. } => SessionIdentity::Global,
+                // Self-reported canvas attribution; the admit arm delegates
+                // to `visibility::canvas_visible_to` (owner OR roster member).
+                GatewayEventFrame::CanvasUpdated {
+                    owner_user_id,
+                    project_id,
+                    ..
+                } => SessionIdentity::ByCanvasScope {
+                    owner: owner_user_id.clone(),
+                    project: project_id.clone(),
+                },
             }
         }
 
@@ -2497,6 +2550,25 @@ mod tests {
                 title: "t".into(),
                 body: "b".into(),
             },
+            GatewayEventFrame::CanvasUpdated {
+                canvas_id: "cv-1".into(),
+                revision: 2,
+                ops: vec![],
+                actor: Some("u-alice".into()),
+                owner_user_id: Some("u-alice".into()),
+                project_id: Some("p-room".into()),
+            },
+            // The unstamped shape too: absent optionals are SKIPPED on the
+            // wire, so this pins that classification reads absence as `None`
+            // rather than as a missing arm falling to `Global`.
+            GatewayEventFrame::CanvasUpdated {
+                canvas_id: "cv-2".into(),
+                revision: 1,
+                ops: vec![],
+                actor: None,
+                owner_user_id: None,
+                project_id: None,
+            },
         ];
 
         for frame in &samples {
@@ -2507,6 +2579,90 @@ mod tests {
             let actual = session_identity_of(&topic, Some(&data));
             assert_eq!(actual, expected(frame), "topic={topic}");
         }
+    }
+
+    /// The canvas frame's full delivery chain (`event_admits_for`, not the
+    /// classification alone): the owner reads through ownership, a roster
+    /// member of the linked room reads through the roster, and everyone
+    /// else — including an operator-ROLE caller whose user id matches
+    /// neither arm — is refused, because the arm delegates to the same
+    /// `canvas_visible_to` the RPC face resolves and that predicate has no
+    /// admin arm (P1: the answer to "may this person read this person's
+    /// work" is not "admins may read everything").
+    #[tokio::test]
+    async fn canvas_updated_admits_owner_and_roster_member_and_refuses_stranger() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([(
+            "p-board-room".to_string(),
+            "u-bob".to_string(),
+        )]));
+
+        let (store, _temp) = test_store();
+        let store: Arc<dyn SessionStore> = Arc::new(store);
+        let index = EventVisibilityIndex::new();
+
+        let frame = GatewayEventFrame::CanvasUpdated {
+            canvas_id: "cv-adm".into(),
+            revision: 2,
+            ops: vec![],
+            actor: Some("u-alice".into()),
+            owner_user_id: Some("u-alice".into()),
+            project_id: Some("p-board-room".into()),
+        };
+        let topic = frame.topic_name();
+        let data = serde_json::to_value(&frame).unwrap();
+
+        for (caller, role, admitted, why) in [
+            ("u-alice", "member", true, "the owner"),
+            (
+                "u-bob",
+                "member",
+                true,
+                "a roster member of the linked room",
+            ),
+            ("u-carol", "member", false, "a stranger"),
+            (
+                "u-carol",
+                "operator",
+                false,
+                "an operator who is neither owner nor member",
+            ),
+        ] {
+            assert_eq!(
+                index
+                    .event_admits_for(&topic, Some(&data), Some(caller), Some(role), &store, None)
+                    .await,
+                admitted,
+                "{why} ({caller}/{role})"
+            );
+        }
+
+        // Without the project link the roster arm is gone: the member who
+        // read through it above is refused like any stranger.
+        let unlinked = GatewayEventFrame::CanvasUpdated {
+            canvas_id: "cv-adm2".into(),
+            revision: 2,
+            ops: vec![],
+            actor: None,
+            owner_user_id: Some("u-alice".into()),
+            project_id: None,
+        };
+        let data = serde_json::to_value(&unlinked).unwrap();
+        assert!(
+            !index
+                .event_admits_for(
+                    &topic,
+                    Some(&data),
+                    Some("u-bob"),
+                    Some("member"),
+                    &store,
+                    None
+                )
+                .await,
+            "no project link ⇒ no roster arm"
+        );
     }
 
     /// The 2026-08-09 real-machine QA's F1, as a regression: `run_complete`
