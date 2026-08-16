@@ -25,6 +25,9 @@
 //!    dumber answer.
 
 mod editor;
+mod id_mint;
+mod interaction;
+mod ops;
 mod shape_view;
 mod viewport;
 
@@ -375,6 +378,13 @@ fn OpenCanvasPane() -> impl IntoView {
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
 
+    // Memoized on purpose: the raw `doc.with(|d| d.is_none())` closure would
+    // re-run — and rebuild the editor, discarding its drag/undo/queue state —
+    // on EVERY doc mutation, including each optimistic preview frame of a
+    // drag. The memo's `PartialEq` dedupe means the editor mounts once per
+    // open and unmounts once per close, nothing in between.
+    let doc_missing = Memo::new(move |_| canvas.doc.with(|d| d.is_none()));
+
     view! {
         <div class="flex flex-col h-full">
             <div class="px-6 py-4 border-b border-border aleph-content-top flex items-center gap-3">
@@ -403,7 +413,7 @@ fn OpenCanvasPane() -> impl IntoView {
                     </div>
                 })
             }}
-            {move || if canvas.doc.with(|d| d.is_none()) {
+            {move || if doc_missing.get() {
                 view! {
                     <div class="flex-1 flex items-center justify-center text-sm text-text-tertiary">
                         {t!(i18n, common.loading)}
