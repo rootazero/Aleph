@@ -99,4 +99,4 @@ pub use registry::ToolHandlerRegistry;
 pub use server::{AlephToolServer, AlephToolServerHandle};
 pub use service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource};
 pub use traits::{AlephTool, AlephToolDyn};
-pub use types::{ToolRepairInfo, ToolRepairType, ToolUpdateInfo};
+pub use types::ToolUpdateInfo;

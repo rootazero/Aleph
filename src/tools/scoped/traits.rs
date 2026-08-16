@@ -1,9 +1,6 @@
 //! Public traits the LLM-facing scoped service exposes to extensions / hosts.
 
-use serde_json::Value;
-
-use crate::session::events::ToolOutput;
-use crate::tools::service::{ToolDefinition, ToolError};
+use crate::tools::service::ToolDefinition;
 
 // =============================================================================
 // ToolDefinitionRewriter trait
@@ -35,33 +32,4 @@ pub trait ToolDefinitionRewriter: Send + Sync {
     /// rename the tool — `def.name` should be left untouched, since the
     /// dispatch path resolves the underlying handler by that name.
     fn rewrite(&self, def: &mut ToolDefinition);
-}
-
-// =============================================================================
-// ToolHookDecorator trait
-// =============================================================================
-
-/// Optional hook that wraps tool execution.
-///
-/// Implementations receive the tool name and input before execution and the
-/// output/error after. This is intentionally minimal — the hook cannot cancel
-/// or modify the call, only observe it.
-pub trait ToolHookDecorator: Send + Sync {
-    /// Called immediately before a tool is invoked.
-    fn before_execute(&self, name: &str, input: &Value);
-
-    /// Called after a tool invocation completes (success or error).
-    fn after_execute(&self, name: &str, output: &Result<ToolOutput, ToolError>);
-
-    /// Called after [`after_execute`] with the wall-clock duration of the
-    /// dispatch (including retry). Default no-op so existing implementations
-    /// keep compiling. Implement to surface duration metrics without taking
-    /// on per-call latency tracking inside every adapter.
-    fn after_execute_with_duration(
-        &self,
-        _name: &str,
-        _output: &Result<ToolOutput, ToolError>,
-        _duration_ms: u64,
-    ) {
-    }
 }
