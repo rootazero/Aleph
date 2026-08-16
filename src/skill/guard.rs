@@ -19,8 +19,6 @@ pub enum ThreatLevel {
 /// Provenance trust of the skill being installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustLevel {
-    /// Shipped with Aleph — always trusted.
-    Builtin,
     /// From a curated/known publisher.
     Trusted,
     /// Arbitrary third-party (default for uncurated sources).
@@ -195,15 +193,14 @@ pub fn merge_verdicts(verdicts: impl IntoIterator<Item = ScanVerdict>) -> ScanVe
     ScanVerdict { level, findings }
 }
 
-/// Trust × verdict install policy. `Dangerous` is blocked for everyone except
-/// `Builtin`; `Caution` is allowed for `Trusted`+; `Safe` always allowed.
+/// Trust × verdict install policy. `Dangerous` is blocked for everyone;
+/// `Caution` is allowed for `Trusted`+; `Safe` always allowed.
 #[must_use]
 pub const fn install_allowed(level: ThreatLevel, trust: TrustLevel) -> bool {
     match (level, trust) {
         (ThreatLevel::Safe, _) => true,
         (ThreatLevel::Caution, TrustLevel::Community) => false,
         (ThreatLevel::Caution, _) => true,
-        (ThreatLevel::Dangerous, TrustLevel::Builtin) => true,
         (ThreatLevel::Dangerous, _) => false,
     }
 }
@@ -367,7 +364,6 @@ mod tests {
             TrustLevel::Community
         ));
         assert!(install_allowed(ThreatLevel::Safe, TrustLevel::Community));
-        assert!(install_allowed(ThreatLevel::Dangerous, TrustLevel::Builtin));
     }
 
     #[test]

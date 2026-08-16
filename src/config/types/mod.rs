@@ -9,7 +9,6 @@
 //! - `memory`: Memory/RAG settings (`MemoryConfig`)
 //! - `search`: Search capability settings (`SearchConfigInternal`)
 //! - `tools`: Native and MCP tools (`ToolsConfig`, `UnifiedToolsConfig`)
-//! - `skills`: Claude Agent Skills settings (`SkillsConfig`)
 //! - `orchestrator`: Three-Layer Control orchestrator settings (`OrchestratorConfig`, `OrchestratorGuards`)
 
 pub mod acp;
@@ -39,7 +38,6 @@ pub mod search;
 pub mod secrets;
 pub mod security;
 pub mod serde_helpers;
-pub mod skills;
 pub mod stop_hooks;
 pub mod tools;
 pub mod voice_local;
@@ -71,7 +69,6 @@ pub use routing::*;
 pub use search::*;
 pub use secrets::*;
 pub use security::*;
-pub use skills::*;
 pub use stop_hooks::*;
 pub use tools::*;
 pub use voice_local::*;

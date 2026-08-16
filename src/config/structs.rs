@@ -7,10 +7,9 @@ use crate::config::types::{
     FallbackProviderToml, FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig,
     GuardrailsToml, McpConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
     PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig, RoutingRuleConfig,
-    SearchConfigInternal, SecretProviderConfig, SecretsConfig, ShellSecurityConfig, SkillsConfig,
-    StabilityToml, StopHookConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml,
-    TeamMessagesConfigToml, ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig,
-    VoiceSection,
+    SearchConfigInternal, SecretProviderConfig, SecretsConfig, ShellSecurityConfig, StabilityToml,
+    StopHookConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml, TeamMessagesConfigToml,
+    ToolServiceConfig, ToolsConfig, UnifiedToolsConfig, VoiceLocalConfig, VoiceSection,
 };
 use crate::tasks::cron::CronConfig;
 use crate::tasks::heartbeat::config::HeartbeatConfig;
@@ -73,9 +72,6 @@ pub struct Config {
     /// Fetch (URL→markdown) provider configuration. Parallel to `search`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetch: Option<FetchConfigInternal>,
-    /// Skills configuration (Claude Agent Skills standard)
-    #[serde(default)]
-    pub skills: SkillsConfig,
     /// System Tools configuration (Tier 1: native Rust tools)
     #[serde(default)]
     pub tools: ToolsConfig,
@@ -362,7 +358,6 @@ impl Default for Config {
             behavior: Some(BehaviorConfig::default()),
             search: None,
             fetch: None,
-            skills: SkillsConfig::default(),
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
             unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
