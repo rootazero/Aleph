@@ -2047,7 +2047,7 @@ mod tests {
     /// runtime fact, unguessable, and owned by no other tool. The drift half
     /// is a process finding, not a prose license: description bytes landed
     /// without the suite that prices them.
-///
+    ///
     /// 2026-08-16, the executor audit round: 98_861 -> 102_000 B (+3,115 B
     /// of measurement, NOT new spending — the eight generation/channel/voice
     /// tools and `acp_session_control` already shipped their descriptions on

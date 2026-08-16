@@ -74,11 +74,8 @@ impl BuiltinToolRegistry {
                     TaskListTool::new(Arc::clone(store)).with_team_store(config.team_store.clone());
                 // task_comment is unconditional once the coord store exists —
                 // it doesn't depend on the agent message bus.
-                let comment = TaskCommentTool::new(
-                    Arc::clone(store),
-                    current_agent_id.clone(),
-                )
-                .with_team_store(config.team_store.clone());
+                let comment = TaskCommentTool::new(Arc::clone(store), current_agent_id.clone())
+                    .with_team_store(config.team_store.clone());
 
                 // TaskUpdateTool and TaskWaitTool derive purely from the coord
                 // store; the store's own GlobalBus broadcast is what wakes

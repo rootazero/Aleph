@@ -114,7 +114,10 @@ mod tests {
         // Contract: 3 consecutive failures → auto-disable, regardless of how
         // many provider hops happened within the call. The counter is
         // incremented by the CALLER (`send_as_voice`), not by the TTS path.
-        let mut state = VoiceState { enabled: true, ..Default::default() };
+        let mut state = VoiceState {
+            enabled: true,
+            ..Default::default()
+        };
         assert!(!state.record_failure());
         assert!(state.enabled);
         assert!(!state.record_failure());
@@ -127,12 +130,18 @@ mod tests {
         // saturating_add — neither a successful synthesis nor further
         // failures may re-enable the channel without an explicit user toggle.
         let _ = state.record_failure();
-        assert!(!state.enabled, "channel must stay disabled after auto-disable");
+        assert!(
+            !state.enabled,
+            "channel must stay disabled after auto-disable"
+        );
         // record_success on a disabled channel resets the counter but does
         // not re-enable — the user must explicitly re-enable (the LLM tool
         // `voice_mode_set` is the only re-enable path).
         state.record_success();
-        assert!(!state.enabled, "record_success must not re-enable a disabled channel");
+        assert!(
+            !state.enabled,
+            "record_success must not re-enable a disabled channel"
+        );
         assert_eq!(state.consecutive_failures, 0);
     }
 
@@ -152,8 +161,14 @@ mod tests {
     fn failure_counter_is_per_channel_state() {
         // Two channel states must be independent — a failure on channel A
         // must never leak into channel B's counter.
-        let mut a = VoiceState { enabled: true, ..Default::default() };
-        let mut b = VoiceState { enabled: true, ..Default::default() };
+        let mut a = VoiceState {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut b = VoiceState {
+            enabled: true,
+            ..Default::default()
+        };
         a.record_failure();
         a.record_failure();
         assert_eq!(a.consecutive_failures, 2);

@@ -488,7 +488,7 @@ mod tests {
         let mut dec = WhisperLiveDecoder::default();
         let d = dec
             .push(&msg(vec![
-                seg_at(0.0, "", true),    // empty completed
+                seg_at(0.0, "", true),     // empty completed
                 seg_at(1.0, "你好", true), // real followed by empty
             ]))
             .unwrap();

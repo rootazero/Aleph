@@ -637,8 +637,6 @@ pub(crate) fn extract_skill_tree_from_dir(
     all_ok
 }
 
-
-
 /// Public alias for installing a single skill leaf from a filesystem source
 /// (used by the hub GitDir→skill installer). Copies + prunes like an official sync.
 pub(crate) fn copy_skill_leaf(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
@@ -951,13 +949,13 @@ mod tests {
         // The fix removes the symlink and creates a fresh directory in place.
         assert!(prepare_plugin_temp_dir(&tmp_dir));
         let meta = std::fs::symlink_metadata(&tmp_dir).unwrap();
-        assert!(meta.is_dir(), "temp dir must be a real directory, not a symlink");
+        assert!(
+            meta.is_dir(),
+            "temp dir must be a real directory, not a symlink"
+        );
         assert!(!meta.file_type().is_symlink(), "must not be a symlink");
 
         // The original target was untouched.
-        assert_eq!(
-            std::fs::read_to_string(&outside_marker).unwrap(),
-            "target"
-        );
+        assert_eq!(std::fs::read_to_string(&outside_marker).unwrap(), "target");
     }
 }

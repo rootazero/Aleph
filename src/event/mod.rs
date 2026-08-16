@@ -21,11 +21,7 @@ mod tests;
 pub use bus::EventBus;
 pub use handler::{EventContext, EventHandler, HandlerError};
 pub use types::{
-    AlephEvent,
-    EventType,
-    ProcessCompletionEvent,
-    SubAgentCompletionEvent,
-    TimestampedEvent,
+    AlephEvent, EventType, ProcessCompletionEvent, SubAgentCompletionEvent, TimestampedEvent,
 };
 
 // Event filtering for subscription-based routing

@@ -436,11 +436,7 @@ mod tests {
         assert!(ws.get("SOUL.md").is_some());
 
         // Some later files should be skipped once the total budget is spent.
-        let skipped = ws
-            .files
-            .iter()
-            .filter(|f| f.content.is_none())
-            .count();
+        let skipped = ws.files.iter().filter(|f| f.content.is_none()).count();
         assert!(skipped > 0, "Budget should cause truncation");
     }
 

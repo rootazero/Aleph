@@ -268,9 +268,7 @@ mod tests {
     /// translation ever changes. The test imports the registry directly
     /// rather than the prompt-build function so the test pin does not
     /// depend on the full `resolved_context` plumbing.
-    fn translate_registry_to_resolved(
-        session_key: &str,
-    ) -> (VoiceContext, Option<String>) {
+    fn translate_registry_to_resolved(session_key: &str) -> (VoiceContext, Option<String>) {
         let turn = crate::gateway::voice::voice_mode::get(session_key);
         let voice = match turn.as_ref() {
             Some(s) if s.transcribed => VoiceContext::SpokenTranscribed,
@@ -331,7 +329,10 @@ mod tests {
         ctx.voice = voice;
 
         let rendered = render(&ctx);
-        assert!(rendered.is_empty(), "voice-off turn must not render voice guidelines");
+        assert!(
+            rendered.is_empty(),
+            "voice-off turn must not render voice guidelines"
+        );
     }
 
     #[test]
@@ -364,7 +365,10 @@ mod tests {
 
         let rendered = render(&ctx);
         assert!(rendered.contains("## Voice Mode"));
-        assert!(!rendered.contains("Domain vocabulary"), "spoken-only must not render vocabulary");
+        assert!(
+            !rendered.contains("Domain vocabulary"),
+            "spoken-only must not render vocabulary"
+        );
 
         crate::gateway::voice::voice_mode::set(sk, None);
     }

@@ -248,8 +248,8 @@ mod tests {
         let child_completed_clone = child_completed.clone();
 
         // Parent subscribes to child's session SubAgentCompleted events
-        let filter = EventFilter::new(vec![EventType::SubAgentCompleted])
-            .with_session("child-session");
+        let filter =
+            EventFilter::new(vec![EventType::SubAgentCompleted]).with_session("child-session");
 
         let _sub = global_bus
             .subscribe_async(filter, move |event| {

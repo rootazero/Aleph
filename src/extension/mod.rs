@@ -72,14 +72,14 @@ pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
-#[allow(unused_imports)]
-use serde::{Deserialize, Serialize};  // for OwnerTrustPolicyConfig
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::Mutex as StdMutex;
 use crate::sync_primitives::RwLock as StdRwLock;
 use crate::sync_primitives::{AtomicU64, Ordering};
 use hooks::{HookExecutor, ShellHookConsent};
 use manifest::adapter::AdapterRegistry;
+#[allow(unused_imports)]
+use serde::{Deserialize, Serialize}; // for OwnerTrustPolicyConfig
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::sync::{Mutex, RwLock};
@@ -606,7 +606,9 @@ impl ExtensionManager {
                         // Build plugin record from adapter output
                         let mut record =
                             PluginRecord::from_adapter_output(&output, dir_path.clone());
-                        if let Ok(manifest) = manifest::parse_manifest_from_dir_cached_global(dir_path) {
+                        if let Ok(manifest) =
+                            manifest::parse_manifest_from_dir_cached_global(dir_path)
+                        {
                             record.kind = manifest.kind;
                         }
                         let plugin_id = output.plugin_id.clone();

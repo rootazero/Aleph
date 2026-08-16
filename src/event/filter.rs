@@ -239,10 +239,18 @@ mod tests {
         // Filter with no session/agent restrictions should match all sessions/agents
         let filter = EventFilter::new(vec![EventType::SubAgentCompleted]);
 
-        let event = make_global_event("session-1", Some("agent-1".to_string()), make_subagent_event());
+        let event = make_global_event(
+            "session-1",
+            Some("agent-1".to_string()),
+            make_subagent_event(),
+        );
         assert!(filter.matches(&event));
 
-        let event = make_global_event("session-2", Some("agent-2".to_string()), make_subagent_event());
+        let event = make_global_event(
+            "session-2",
+            Some("agent-2".to_string()),
+            make_subagent_event(),
+        );
         assert!(filter.matches(&event));
 
         let event = make_global_event("any-session", None, make_subagent_event());
@@ -280,11 +288,19 @@ mod tests {
         let filter = EventFilter::new(vec![EventType::SubAgentCompleted]).with_agent("agent-1");
 
         // Matching agent
-        let event = make_global_event("session-1", Some("agent-1".to_string()), make_subagent_event());
+        let event = make_global_event(
+            "session-1",
+            Some("agent-1".to_string()),
+            make_subagent_event(),
+        );
         assert!(filter.matches(&event));
 
         // Non-matching agent
-        let event = make_global_event("session-1", Some("agent-2".to_string()), make_subagent_event());
+        let event = make_global_event(
+            "session-1",
+            Some("agent-2".to_string()),
+            make_subagent_event(),
+        );
         assert!(!filter.matches(&event));
 
         // No agent specified in event (filter requires specific agent)
@@ -319,7 +335,10 @@ mod tests {
 
     #[test]
     fn test_filter_event_type_matching() {
-        let filter = EventFilter::new(vec![EventType::SubAgentCompleted, EventType::ProcessCompleted]);
+        let filter = EventFilter::new(vec![
+            EventType::SubAgentCompleted,
+            EventType::ProcessCompleted,
+        ]);
 
         // Matching event types
         assert!(filter.matches(&make_global_event("s1", None, make_subagent_event())));
