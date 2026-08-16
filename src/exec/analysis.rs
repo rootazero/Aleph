@@ -65,16 +65,6 @@ impl CommandAnalysis {
             chains: None,
         }
     }
-
-    /// Get all executable names from segments
-    #[must_use]
-    pub fn executables(&self) -> Vec<&str> {
-        self.segments
-            .iter()
-            .filter_map(|s| s.resolution.as_ref())
-            .map(|r| r.executable_name.as_str())
-            .collect()
-    }
 }
 
 /// A single command segment (one command in a pipeline)
@@ -211,19 +201,5 @@ mod tests {
         let res = CommandResolution::not_found("./my-script.sh");
         assert_eq!(res.executable_name, "my-script.sh");
         assert!(res.resolved_path.is_none());
-    }
-
-    #[test]
-    fn test_executables() {
-        let seg1 = CommandSegment::new("ls", vec!["ls".into()])
-            .with_resolution(CommandResolution::found("ls", PathBuf::from("/bin/ls")));
-        let seg2 = CommandSegment::new("grep", vec!["grep".into()]).with_resolution(
-            CommandResolution::found("grep", PathBuf::from("/usr/bin/grep")),
-        );
-
-        let analysis = CommandAnalysis::success(vec![seg1, seg2], vec![]);
-        let executables = analysis.executables();
-
-        assert_eq!(executables, vec!["ls", "grep"]);
     }
 }

@@ -231,16 +231,6 @@ impl RuntimeSecurityGuard {
                 });
             }
 
-            if exec_scan.has_warnings() {
-                warnings.push("Outbound leak detector warning".to_string());
-                self.log_audit(
-                    &context,
-                    AuditEventType::LeakWarning,
-                    AuditSeverity::Warn,
-                    "outbound leak detector warning".to_string(),
-                );
-            }
-
             // Honor `Redact`-action findings (e.g. bearer tokens). Without this
             // the matched secret would pass through untouched, since it is
             // neither a block nor a warning.
@@ -415,16 +405,6 @@ impl RuntimeSecurityGuard {
             });
         }
 
-        let exec_warned = exec_scan.has_warnings();
-        if exec_warned {
-            self.log_audit(
-                context,
-                AuditEventType::LeakWarning,
-                AuditSeverity::Warn,
-                "inbound leak detector warning".to_string(),
-            );
-        }
-
         // Inbound PII filtering: scrub sensitive data echoed back by LLM
         if self.config.pii_filtering {
             if let Some(engine) = &self.pii_engine {
@@ -460,13 +440,6 @@ impl RuntimeSecurityGuard {
                     });
                 }
             }
-        }
-
-        if exec_warned {
-            return Ok(GuardResult::Warned {
-                text: text.to_string(),
-                warnings: vec!["Inbound leak detector warning".to_string()],
-            });
         }
 
         Ok(GuardResult::Clean {

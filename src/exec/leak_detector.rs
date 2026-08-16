@@ -1,12 +1,11 @@
 //! `LeakDetector` - Bidirectional leak detection for sensitive data.
 //!
-//! Uses Aho-Corasick for fast prefix scanning + regex for full pattern matching.
-//! Scans both outbound (to LLM) and inbound (from LLM) content for:
+//! Runs a full regex sweep over both outbound (to LLM) and inbound (from LLM)
+//! content for:
 //! - API keys (`OpenAI`, Anthropic, Google, AWS, GitHub, Slack)
 //! - Private keys (PEM format)
 //! - Bearer tokens
 
-use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::Regex;
 
 /// Action to take when a leak is detected.
@@ -16,8 +15,6 @@ pub enum LeakAction {
     Block,
     /// Redact the matched portion before transmission.
     Redact,
-    /// Allow transmission but emit a warning.
-    Warn,
 }
 
 /// A pattern to detect potential leaked secrets.
@@ -54,17 +51,11 @@ impl ScanResult {
         self.findings.iter().any(|f| f.action == LeakAction::Block)
     }
 
-    /// Returns true if any finding is a warning.
-    #[must_use]
-    pub fn has_warnings(&self) -> bool {
-        self.findings.iter().any(|f| f.action == LeakAction::Warn)
-    }
-
     /// Returns true if any finding requires redaction.
     ///
-    /// A `Redact` finding is neither a block nor a warning, so consumers that
-    /// only check `has_blocks()`/`has_warnings()` would silently let the matched
-    /// secret through. Callers must consult this and apply [`LeakDetector::redact`].
+    /// A `Redact` finding is not a block, so consumers that only check
+    /// `has_blocks()` would silently let the matched secret through. Callers
+    /// must consult this and apply [`LeakDetector::redact`].
     #[must_use]
     pub fn has_redacts(&self) -> bool {
         self.findings.iter().any(|f| f.action == LeakAction::Redact)
@@ -77,30 +68,17 @@ impl ScanResult {
     }
 }
 
-/// Bidirectional leak detector using Aho-Corasick + regex.
-///
-/// Fast path: Aho-Corasick scans for known prefixes first.
-/// Slow path: Only if a prefix matches, run full regex patterns.
+/// Bidirectional leak detector running a full regex sweep over content.
 pub struct LeakDetector {
-    /// Aho-Corasick automaton for fast prefix scanning.
-    ac: AhoCorasick,
     /// Full regex patterns for detailed matching.
     patterns: Vec<LeakPattern>,
 }
 
 impl LeakDetector {
-    /// Create a new `LeakDetector` with the given prefixes and patterns.
+    /// Create a new `LeakDetector` with the given patterns.
     #[must_use]
-    pub fn new(prefixes: Vec<&'static str>, patterns: Vec<LeakPattern>) -> Self {
-        // ASCII case-insensitive so the fast-path prefix gate matches the
-        // case-insensitive `(?i)` regexes below. Without this, content like
-        // `BEARER <token>` would fail the prefix gate and skip the regex scan
-        // entirely, leaking a secret that the slow path would have caught.
-        let ac = AhoCorasickBuilder::new()
-            .ascii_case_insensitive(true)
-            .build(&prefixes)
-            .expect("failed to build Aho-Corasick automaton");
-        Self { ac, patterns }
+    pub fn new(patterns: Vec<LeakPattern>) -> Self {
+        Self { patterns }
     }
 
     /// Create a `LeakDetector` with default patterns for common secret types.
@@ -116,23 +94,11 @@ impl LeakDetector {
                 action: p.action,
             })
             .collect();
-        Self::new(assets.prefixes, patterns)
+        Self::new(patterns)
     }
 
     /// Scan content for leaks (internal implementation).
     fn scan(&self, content: &str) -> ScanResult {
-        // The Aho-Corasick automaton used to gate the regex sweep: only
-        // patterns whose prefix the automaton knew about were run. Many
-        // high-value credentials (raw JWTs without a `Bearer` prefix, HMAC
-        // blobs, post-quantum secrets) carry no known prefix and used to
-        // slip through every leak check. The current behaviour runs the
-        // regex sweep unconditionally; the automaton's `is_match` result
-        // is discarded because the regex pass is always taken. The
-        // automaton is kept in the struct for future Aho-Corasick use
-        // (set-level replacement, fuzzy match expansion) — the prefix
-        // list at construction is the source of truth for that hook.
-        let _ = self.ac.is_match(content);
-
         // Always run the full regex sweep. The cost of `Regex::find` over a
         // short content string is negligible compared to the cost of a
         // secret-leak callback page.
@@ -164,10 +130,10 @@ impl LeakDetector {
     /// Replace every `Redact`-action pattern match with a redaction marker,
     /// returning the sanitized content.
     ///
-    /// Only `Redact` patterns are rewritten; `Block`/`Warn` matches are left
-    /// untouched because their disposition is the caller's policy decision
-    /// (block the whole message, or warn-and-pass). This is the missing "last
-    /// mile" for `LeakAction::Redact`, which otherwise has no honoring consumer.
+    /// Only `Redact` patterns are rewritten; `Block` matches are left untouched
+    /// because their disposition is the caller's policy decision (block the
+    /// whole message). This is the missing "last mile" for
+    /// `LeakAction::Redact`, which otherwise has no honoring consumer.
     #[must_use]
     pub fn redact(&self, content: &str) -> String {
         let mut current = content.to_string();
@@ -217,7 +183,6 @@ mod tests {
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("Hello world, this is normal text");
         assert!(!result.has_blocks());
-        assert!(!result.has_warnings());
         assert!(result.is_clean());
     }
 
@@ -315,9 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_path_skips_regex_on_clean_content() {
-        // This test verifies the fast path behavior:
-        // content with no prefixes should not trigger regex scanning at all.
+    fn test_clean_content_yields_no_findings() {
+        // Ordinary prose and numbers should not match any secret pattern.
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("The quick brown fox jumps over the lazy dog. 12345");
         assert!(result.is_clean());
@@ -344,9 +308,9 @@ mod tests {
     }
 
     #[test]
-    fn test_uppercase_bearer_not_skipped_by_fast_path() {
-        // Regression: the Aho-Corasick prefix gate must be case-insensitive so
-        // an uppercase `BEARER` still reaches the `(?i)bearer` regex.
+    fn test_uppercase_bearer_is_detected() {
+        // Regression: the `(?i)bearer` regex must match an uppercase `BEARER`
+        // token (it once slipped through a case-sensitive prefix gate).
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("BEARER eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
         let bearer_finding = result
@@ -355,7 +319,7 @@ mod tests {
             .find(|f| f.pattern_name == "bearer_token");
         assert!(
             bearer_finding.is_some(),
-            "uppercase BEARER must not bypass the fast-path prefix gate"
+            "uppercase BEARER must be detected by the case-insensitive regex"
         );
     }
 
