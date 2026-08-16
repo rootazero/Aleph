@@ -79,32 +79,54 @@ pub const SCRUBBED_TOKEN_REPLACEMENT: &str = "[REMOVED_SPECIAL_TOKEN]";
 /// LLM tokenizer / chat-template markers that must never appear verbatim
 /// in untrusted content. Kept together so detection and scrubbing share
 /// one source of truth.
+///
+/// Parity with openclaw `security/external-content.ts::LLM_SPECIAL_TOKEN_LITERALS`,
+/// plus the `<|system|>` / `<|user|>` / `<|assistant|>` GPT-style triple that
+/// list omits.
 const TOKENIZER_MARKERS: &[&str] = &[
+    // ChatML / Qwen
     "<|im_start|>",
     "<|im_end|>",
     "<|endoftext|>",
     "<|system|>",
     "<|user|>",
     "<|assistant|>",
+    // Llama 3.x / 4.x
     "<|begin_of_text|>",
     "<|end_of_text|>",
     "<|eot_id|>",
     "<|start_header_id|>",
     "<|end_header_id|>",
+    "<|python_tag|>",
+    "<|eom_id|>",
+    // GPT-OSS / harmony
+    "<|channel|>",
+    "<|message|>",
+    "<|return|>",
+    "<|call|>",
 ];
 
 /// Instruct-tuning / RLHF format markers that hijack many open-weight models.
 const FORMAT_MARKERS: &[&str] = &[
+    // Mistral / Mixtral
     "[INST]",
     "[/INST]",
     "<<SYS>>",
     "<</SYS>>",
+    // Phi and other sentencepiece-style templates. `<s>[INST]` (the composite
+    // BOS+INST opener) must outrank bare `<s>` at match time — ALL_MARKERS
+    // sorts longest-first so the composite scrubs as ONE replacement.
+    "<s>[INST]",
+    "<s>",
+    "</s>",
+    // Gemma
+    "<start_of_turn>",
+    "<end_of_turn>",
+    // Alpaca-style section headers
     "### Instruction:",
     "### Response:",
     "### Human:",
     "### Assistant:",
-    "<s>[INST]",
-    "</s>",
 ];
 
 /// Generate a random 8-byte hex ID.
@@ -263,11 +285,26 @@ fn fence_id<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
 }
 
 static ALL_MARKERS: Lazy<Vec<&'static str>> = Lazy::new(|| {
-    TOKENIZER_MARKERS
+    let mut markers: Vec<&'static str> = TOKENIZER_MARKERS
         .iter()
         .chain(FORMAT_MARKERS.iter())
         .copied()
-        .collect()
+        .collect();
+    // Longest-first so overlapping markers resolve to the composite form
+    // (`<s>[INST]` beats `<s>`) independent of declaration order above.
+    markers.sort_by_key(|m| std::cmp::Reverse(m.len()));
+    markers
+});
+
+/// Hugging Face chat templates reserve token spellings of this shape for
+/// future models (`<|reserved_special_token_0|>` … `_247|>`). The literals
+/// above cover the KNOWN tokens; this catches the reserved-but-unassigned
+/// ones a template-injection payload would reach for. Case-sensitive like
+/// openclaw's pattern: the canonical spellings are lowercase.
+static RESERVED_TOKEN_RE: Lazy<regex::Regex> = Lazy::new(|| {
+    // rust-doctor-disable-next-line panic-in-library
+    regex::Regex::new(r"<\|reserved_special_token_\d+\|>")
+        .expect("static reserved-token regex must compile")
 });
 
 /// Replace every tokenizer / format marker with [`SCRUBBED_TOKEN_REPLACEMENT`].
@@ -297,7 +334,17 @@ pub(crate) fn scrub_special_tokens(text: &str) -> (String, usize) {
             i += ch.len_utf8();
         }
     }
-    (out, count)
+
+    // Second pass: reserved-token regex (the literals above are exact-match;
+    // `<|reserved_special_token_NN|>` is a family, not a literal).
+    let mut total = count;
+    let out = RESERVED_TOKEN_RE
+        .replace_all(&out, |_: &regex::Captures<'_>| {
+            total += 1;
+            SCRUBBED_TOKEN_REPLACEMENT
+        })
+        .into_owned();
+    (out, total)
 }
 
 /// Normalizes homoglyphs to prevent visual spoofing attacks.
@@ -516,6 +563,44 @@ mod tests {
         assert_eq!(n, 2, "should replace both tokenizer markers");
         assert!(!out.contains("<|im_start|>"));
         assert!(!out.contains("<|im_end|>"));
+        assert!(out.contains(SCRUBBED_TOKEN_REPLACEMENT));
+    }
+
+    #[test]
+    fn scrub_covers_the_openclaw_parity_families() {
+        // Llama tool-call / end-of-message, GPT-OSS harmony channels, Gemma
+        // turns — the three families the original table lacked.
+        for marker in [
+            "<|python_tag|>",
+            "<|eom_id|>",
+            "<|channel|>",
+            "<|message|>",
+            "<|return|>",
+            "<|call|>",
+            "<start_of_turn>",
+            "<end_of_turn>",
+        ] {
+            let (out, n) = scrub_special_tokens(marker);
+            assert_eq!(n, 1, "{marker} should scrub exactly once");
+            assert_eq!(out, SCRUBBED_TOKEN_REPLACEMENT);
+        }
+    }
+
+    #[test]
+    fn scrub_composite_bos_inst_is_one_replacement_not_two() {
+        // `<s>[INST]` is one logical opener; the longest-first sort in
+        // ALL_MARKERS is what keeps it from being eaten as `<s>` + `[INST]`.
+        let (out, n) = scrub_special_tokens("<s>[INST] do thing [/INST]");
+        assert_eq!(n, 2, "composite + [/INST], not a third for bare <s>");
+        assert!(!out.contains("[INST]"));
+        assert!(!out.contains("<s>"));
+    }
+
+    #[test]
+    fn scrub_catches_reserved_special_token_family() {
+        let (out, n) = scrub_special_tokens("inject <|reserved_special_token_42|> here");
+        assert_eq!(n, 1);
+        assert!(!out.contains("reserved_special_token"));
         assert!(out.contains(SCRUBBED_TOKEN_REPLACEMENT));
     }
 
