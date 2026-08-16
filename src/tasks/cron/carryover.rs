@@ -32,7 +32,7 @@
 //! restarts (unlike a process-memory cache), and is trivial to inspect
 //! / clear from the shell when debugging.
 //!
-//! `$ALEPH_HOME` resolves identically to [`crate::canvas_io::canvas_dir`]
+//! `$ALEPH_HOME` resolves identically to [`crate::json_canvas_io::canvas_dir`]
 //! — env var → `~/.aleph` → `./` last resort.
 
 use std::fs;
@@ -92,13 +92,13 @@ pub fn carryover_dir() -> PathBuf {
 }
 
 /// Aleph home, or the CWD when it cannot be resolved at all.
-/// Single source: [`crate::utils::paths::get_config_dir`] (see `canvas_io`).
+/// Single source: [`crate::utils::paths::get_config_dir`] (see `json_canvas_io`).
 fn aleph_home() -> PathBuf {
     crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Sanitise `job_id` to `[A-Za-z0-9._-]` for safe filesystem use. Same
-/// rules as [`crate::canvas_io::sanitise_name`] but inlined to keep the
+/// rules as [`crate::json_canvas_io::sanitise_name`] but inlined to keep the
 /// dependency on canvas io off this module.
 fn sanitise_job_id(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -178,7 +178,7 @@ pub fn read(job_id: &str) -> std::io::Result<Option<CarryOver>> {
 
 /// Write `record` for `job_id` under `dir`. Creates the directory on
 /// demand. Atomic-rename via tempfile to avoid partial reads on crash —
-/// matches the [`crate::canvas_io::save_canvas`] pattern.
+/// matches the [`crate::json_canvas_io::save_canvas`] pattern.
 pub fn write_at(dir: &std::path::Path, job_id: &str, record: &CarryOver) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     let dest = carryover_path_at(dir, job_id);

@@ -30,7 +30,7 @@ const BUILTIN_TEMPLATES: &[(&str, &str)] = &[
 /// Honours `$ALEPH_HOME` for parity with the `project_root` + dotfiles code.
 pub fn default_user_dir() -> PathBuf {
     // Single source: `get_config_dir` already IS the `ALEPH_HOME` -> `~/.aleph`
-    // rule (see `canvas_io::aleph_home` for why the copies were collapsed).
+    // rule (see `json_canvas_io::aleph_home` for why the copies were collapsed).
     let base = crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."));
     base.join("teams").join("templates")
 }

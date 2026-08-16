@@ -199,7 +199,7 @@ pub fn get_home_dir() -> Result<PathBuf> {
 /// Returns error if home directory cannot be determined
 pub fn get_config_dir() -> Result<PathBuf> {
     // Explicit override: `ALEPH_HOME` points directly at the `.aleph` data
-    // directory (same convention as canvas_io / cron carryover). This is the
+    // directory (same convention as json_canvas_io / cron carryover). This is the
     // single authoritative knob for relocating *all* Aleph state — honoured
     // here so config, data, vault and lock resolution stay consistent (e.g.
     // test harnesses can fully isolate from the real ~/.aleph).

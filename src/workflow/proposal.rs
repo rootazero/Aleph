@@ -20,7 +20,7 @@
 
 use std::path::PathBuf;
 
-use crate::canvas_io::sanitise_name;
+use crate::json_canvas_io::sanitise_name;
 use crate::error::Result;
 use crate::routing::DEFAULT_AGENT_ID;
 use crate::workflow::def::{WorkflowDef, WorkflowStepDef};

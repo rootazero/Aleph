@@ -1,17 +1,19 @@
 //! Server-side I/O for Obsidian JSON Canvas (`.canvas`) files.
+//! (renamed from `canvas_io` when the whiteboard took the `canvas` name —
+//! see `src/canvas/`)
 //!
 //! Lives under `$ALEPH_HOME/canvases/`. Pure file-system layer — no JSON-RPC,
 //! no tool registration. The future `memory_canvas` builtin tool (R8 everything-is-a-tool)
 //! and `graph.import_canvas` / `graph.export_canvas` RPCs will both adopt this
 //! module rather than re-rolling I/O.
 //!
-//! Schema types come from [`aleph_protocol::canvas_format`] so the wire shape
+//! Schema types come from [`aleph_protocol::json_canvas`] so the wire shape
 //! matches the panel exactly.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aleph_protocol::canvas_format::{parse, to_string_pretty, Document};
+use aleph_protocol::json_canvas::{parse, to_string_pretty, Document};
 
 use crate::error::AlephError;
 
@@ -188,7 +190,7 @@ pub fn list() -> Result<Vec<CanvasMeta>, AlephError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::canvas_format::{Node, NodeCommon};
+    use aleph_protocol::json_canvas::{Node, NodeCommon};
     use tempfile::TempDir;
 
     fn sample_doc() -> Document {

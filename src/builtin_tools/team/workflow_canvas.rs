@@ -17,7 +17,7 @@ use crate::sync_primitives::Arc;
 use crate::teams::workflow_canvas::{canvas_to_new_tasks, tasks_to_canvas};
 use crate::tools::AlephTool;
 
-use aleph_protocol::canvas_format::Document;
+use aleph_protocol::json_canvas::Document;
 
 // =============================================================================
 // Args / Output

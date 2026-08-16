@@ -1,11 +1,12 @@
 //! Obsidian JSON Canvas 1.0 schema types — wire-compatible with `.canvas` files.
+//! (renamed from `canvas_format` when the whiteboard took the `canvas` name —
+//! see `shared/protocol/src/canvas.rs` and `src/canvas/`)
 //!
 //! Reference: `obsidianmd/jsoncanvas` `spec/1.0.md`.
 //!
 //! Lives in `aleph-protocol` so both the panel (frontend) and core (server-side
 //! tools like `memory_canvas` save/load) share a single source of truth. Pure
-//! data — no I/O, no Leptos, no DOM. Conversion to/from Aleph's internal graph
-//! DTOs lives in `interfaces/webchat/src/canvas_engine/json_canvas/convert.rs`.
+//! data — no I/O, no Leptos, no DOM.
 //!
 //! All wire field names match the spec verbatim (`fromNode`, `toSide`, …) via
 //! serde `rename` attributes, so any `.canvas` file produced by Obsidian
