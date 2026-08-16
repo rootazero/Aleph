@@ -191,9 +191,7 @@ impl RuntimeSecurityGuard {
                     }
                     {
                         let mut detector = self.secret_leak_detector.lock().await;
-                        for secret in &injected {
-                            detector.register_injected(std::slice::from_ref(secret), &[]);
-                        }
+                        detector.register_injected(&injected);
                     }
                 }
             }
@@ -445,12 +443,6 @@ impl RuntimeSecurityGuard {
         Ok(GuardResult::Clean {
             text: text.to_string(),
         })
-    }
-
-    /// Clear tracked injected secrets (call at end of request/session).
-    pub async fn clear_injected_secrets(&self) {
-        let mut detector = self.secret_leak_detector.lock().await;
-        detector.clear();
     }
 }
 

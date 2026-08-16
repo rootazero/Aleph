@@ -3,19 +3,25 @@
 //! Scans outbound requests and inbound responses for leaked secret values.
 //! Uses two detection strategies:
 //! 1. Pattern rules - known secret formats (sk-ant-*, AKIA*, etc.)
-//! 2. Exact value detection - substring match of recently injected secrets
+//! 2. Injected-value detection — substring match of recently injected secrets,
+//!    performed over `(hash, length)` fingerprints so no plaintext secret is
+//!    ever retained by the detector (see [`LeakDetector::scan_inbound`]).
 
 use std::hash::{Hash, Hasher};
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use super::injection::{InjectedSecret, INJECTED_HASH_KEY0, INJECTED_HASH_KEY1};
 
 const REDACTED_LEAK: &str = "***LEAKED_REDACTED***";
 const REDACTED_INJECTED: &str = "***INJECTED_REDACTED***";
-const REDACTED_HASH_MATCH: &str = "***HASH_MATCHED_REDACTED***";
+
+/// Shortest secret tracked for injected-value substring matching. Below this a
+/// window match is more likely to be a coincidence in prose than a leak, and
+/// short values are already covered by the pattern rules.
+const MIN_INJECTED_MATCH_LEN: usize = 8;
 
 /// Result of a leak scan.
 #[derive(Debug, Clone)]
@@ -189,7 +195,11 @@ struct CompiledCustomPattern {
 /// Bidirectional leak detector for secret values.
 pub struct LeakDetector {
     injected_hashes: HashSet<u64>,
-    injected_values: Vec<String>,
+    /// Byte lengths of the registered secrets — the window sizes
+    /// [`Self::scan_inbound`] slides over inbound content. Kept as a sorted set
+    /// because a handful of distinct lengths is the norm and the scan cost is
+    /// linear in their sum.
+    injected_lens: BTreeSet<usize>,
     custom_patterns: Vec<CompiledCustomPattern>,
 }
 
@@ -198,7 +208,7 @@ impl LeakDetector {
     pub fn new() -> Self {
         Self {
             injected_hashes: HashSet::new(),
-            injected_values: Vec::new(),
+            injected_lens: BTreeSet::new(),
             custom_patterns: Vec::new(),
         }
     }
@@ -230,16 +240,19 @@ impl LeakDetector {
 
     /// Register secrets that were injected in the current request.
     ///
-    /// Only values with length >= 8 are tracked for exact substring matching.
-    /// Shorter values are skipped to reduce false positives with common words.
-    pub fn register_injected(&mut self, secrets: &[InjectedSecret], values: &[&str]) {
+    /// Only the `(siphash, byte length)` fingerprint is stored — never the
+    /// plaintext, matching the contract of
+    /// [`crate::secrets::injection::render_with_secrets`] ("with hashes, never
+    /// plaintext"). Secrets shorter than [`MIN_INJECTED_MATCH_LEN`] are not
+    /// tracked for substring matching: a 7-byte window over prose produces
+    /// false positives, and short values are covered by the pattern rules.
+    pub fn register_injected(&mut self, secrets: &[InjectedSecret]) {
         for secret in secrets {
-            self.injected_hashes.insert(secret.value_hash);
-        }
-        for value in values {
-            if value.len() >= 8 {
-                self.injected_values.push(value.to_string());
+            if secret.value_len < MIN_INJECTED_MATCH_LEN {
+                continue;
             }
+            self.injected_hashes.insert(secret.value_hash);
+            self.injected_lens.insert(secret.value_len);
         }
     }
 
@@ -290,6 +303,15 @@ impl LeakDetector {
     }
 
     /// Scan inbound content for echoed secret values.
+    ///
+    /// After the pattern rules, every registered secret is looked for as a
+    /// **substring** — by hashing each window of the content whose length
+    /// matches a registered secret's length and testing the fingerprint set.
+    /// This is the same `(hash, len)` identification `crate::sandbox::scrub`
+    /// uses, and it is what makes the check independent of the surrounding
+    /// text: the previous version hashed whitespace-split words verbatim, so
+    /// the single most likely echo — `"Your API key is <SECRET>, stored."` —
+    /// hashed `"<SECRET>,"` (trailing comma) and did not match.
     #[must_use]
     pub fn scan_inbound(&self, content: &str) -> LeakDecision {
         let (found_labels, redacted) = self.scan_patterns(content);
@@ -301,43 +323,49 @@ impl LeakDetector {
             };
         }
 
-        // Check exact injected value matches
-        for injected_value in &self.injected_values {
-            if content.contains(injected_value.as_str()) {
-                let redacted = content.replace(injected_value.as_str(), REDACTED_INJECTED);
-                return LeakDecision::Block {
-                    reason: "Inbound response echoed an injected secret value".to_string(),
-                    redacted_content: redacted,
-                };
-            }
-        }
-
-        // Check hash-based detection for content fragments
-        for word in content.split_whitespace() {
-            if word.len() >= 8 {
-                let mut hasher = siphasher::sip::SipHasher::new_with_keys(
-                    INJECTED_HASH_KEY0,
-                    INJECTED_HASH_KEY1,
-                );
-                word.hash(&mut hasher);
-                let hash = hasher.finish();
-                if self.injected_hashes.contains(&hash) {
-                    return LeakDecision::Block {
-                        reason: "Inbound response contains hash-matched injected secret"
-                            .to_string(),
-                        redacted_content: content.replace(word, REDACTED_HASH_MATCH),
-                    };
-                }
-            }
+        if let Some(matched) = self.find_injected_substring(content) {
+            return LeakDecision::Block {
+                reason: "Inbound response echoed an injected secret value".to_string(),
+                redacted_content: content.replace(matched, REDACTED_INJECTED),
+            };
         }
 
         LeakDecision::Allow
     }
 
-    /// Clear all tracked injected secrets.
-    pub fn clear(&mut self) {
-        self.injected_hashes.clear();
-        self.injected_values.clear();
+    /// The first substring of `content` whose `(siphash, byte length)` matches a
+    /// registered secret, or `None`.
+    ///
+    /// Cost is `O(content.len() * sum(injected_lens))` hashing, and the common
+    /// case — no secret was injected — exits on the first check. Windows are
+    /// taken over `char_indices` so a multi-byte boundary can never panic; a
+    /// window is skipped when the end offset is not a char boundary (a secret is
+    /// matched at its own byte length, so its real occurrence always is one).
+    fn find_injected_substring<'c>(&self, content: &'c str) -> Option<&'c str> {
+        if self.injected_lens.is_empty() {
+            return None;
+        }
+        for &len in &self.injected_lens {
+            if len > content.len() {
+                continue;
+            }
+            for (start, _) in content.char_indices() {
+                let end = start + len;
+                if end > content.len() || !content.is_char_boundary(end) {
+                    continue;
+                }
+                let window = &content[start..end];
+                let mut hasher = siphasher::sip::SipHasher::new_with_keys(
+                    INJECTED_HASH_KEY0,
+                    INJECTED_HASH_KEY1,
+                );
+                window.hash(&mut hasher);
+                if self.injected_hashes.contains(&hasher.finish()) {
+                    return Some(window);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -416,34 +444,67 @@ mod tests {
     #[test]
     fn test_inbound_blocks_echoed_injected_value() {
         let mut detector = LeakDetector::new();
-        let injected = InjectedSecret {
-            name: "my_key".to_string(),
-            value_hash: {
-                let mut h = siphasher::sip::SipHasher::new_with_keys(
-                    0x517c_c1b7_2722_0a95,
-                    0x6c62_272e_07bb_0142,
-                );
-                "sk-ant-my-super-secret-key-12345678".hash(&mut h);
-                h.finish()
-            },
-            value_len: 35,
-        };
-        detector.register_injected(&[injected], &["sk-ant-my-super-secret-key-12345678"]);
+        // Deliberately NOT a vendor-recognisable format: this must be blocked by
+        // the injected-fingerprint path, not by a pattern rule.
+        let secret = "Kf83-quiet-brook-91xz";
+        detector.register_injected(&[InjectedSecret::from_value("my_key", secret)]);
 
-        let response = "Your API key is sk-ant-my-super-secret-key-12345678, stored.";
-        let decision = detector.scan_inbound(response);
-        assert!(decision.is_blocked());
+        // The comma is the point: the previous whitespace-word hashing hashed
+        // "<SECRET>," and let the most likely echo of all through.
+        let response = format!("Your API key is {secret}, stored.");
+        let decision = detector.scan_inbound(&response);
+        assert!(decision.is_blocked(), "echoed injected secret must block");
+        if let LeakDecision::Block {
+            redacted_content, ..
+        } = decision
+        {
+            assert!(!redacted_content.contains(secret));
+            assert!(redacted_content.contains(REDACTED_INJECTED));
+        }
+    }
+
+    #[test]
+    fn test_inbound_blocks_echoed_injected_value_without_word_boundaries() {
+        let mut detector = LeakDetector::new();
+        let secret = "Kf83-quiet-brook-91xz";
+        detector.register_injected(&[InjectedSecret::from_value("my_key", secret)]);
+
+        // Glued to surrounding text with no whitespace at all — a JSON body or a
+        // URL query is the realistic shape.
+        let response = format!("{{\"token\":\"{secret}\"}}");
+        assert!(detector.scan_inbound(&response).is_blocked());
+    }
+
+    #[test]
+    fn test_inbound_scan_handles_multibyte_content() {
+        let mut detector = LeakDetector::new();
+        let secret = "Kf83-quiet-brook-91xz";
+        detector.register_injected(&[InjectedSecret::from_value("my_key", secret)]);
+
+        // Windows are taken over char boundaries; CJK text must neither panic
+        // nor false-positive.
+        assert!(!detector.scan_inbound("密钥已保存，请勿外泄。").is_blocked());
+        assert!(detector
+            .scan_inbound(&format!("密钥是{secret}，已保存"))
+            .is_blocked());
+    }
+
+    #[test]
+    fn test_short_injected_values_not_tracked() {
+        let mut detector = LeakDetector::new();
+        detector.register_injected(&[InjectedSecret::from_value("k", "short")]);
+        // Below MIN_INJECTED_MATCH_LEN: not tracked, so echoing it is allowed by
+        // this path (pattern rules still apply).
+        assert!(!detector.scan_inbound("the value is short").is_blocked());
     }
 
     #[test]
     fn test_inbound_allows_safe_response() {
         let mut detector = LeakDetector::new();
-        let injected = InjectedSecret {
-            name: "key".to_string(),
-            value_hash: 12345,
-            value_len: 20,
-        };
-        detector.register_injected(&[injected], &["some-long-secret-value-here"]);
+        detector.register_injected(&[InjectedSecret::from_value(
+            "key",
+            "some-long-secret-value-here",
+        )]);
 
         let response = "Request processed successfully. Status: 200 OK.";
         let decision = detector.scan_inbound(response);
@@ -483,22 +544,16 @@ mod tests {
     }
 
     #[test]
-    fn test_clear_resets_state() {
+    fn test_registering_stores_fingerprint_only() {
         let mut detector = LeakDetector::new();
-        detector.register_injected(
-            &[InjectedSecret {
-                name: "k".to_string(),
-                value_hash: 999,
-                value_len: 10,
-            }],
-            &["abcdefghij"],
-        );
+        let secret = "abcdefghij-fingerprint-only";
+        detector.register_injected(&[InjectedSecret::from_value("k", secret)]);
         assert!(!detector.injected_hashes.is_empty());
-        assert!(!detector.injected_values.is_empty());
-
-        detector.clear();
-        assert!(detector.injected_hashes.is_empty());
-        assert!(detector.injected_values.is_empty());
+        assert_eq!(
+            detector.injected_lens.iter().copied().collect::<Vec<_>>(),
+            vec![secret.len()],
+            "only the length is kept alongside the hash"
+        );
     }
 
     #[test]
@@ -514,13 +569,6 @@ mod tests {
         } else {
             panic!("Expected Block");
         }
-    }
-
-    #[test]
-    fn test_short_values_not_tracked() {
-        let mut detector = LeakDetector::new();
-        detector.register_injected(&[], &["short"]);
-        assert!(detector.injected_values.is_empty());
     }
 
     #[test]
