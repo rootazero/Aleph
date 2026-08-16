@@ -70,7 +70,11 @@ pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 ///
 /// Mirrors the `⚠️ Legacy — parsed but inert` markers in the `/self` SKILL.md.
 /// Editing these is a no-op at runtime.
-const INERT_SECTIONS: &[&str] = &["task_routing"];
+///
+/// Empty as of 2026-08-16: the former `task_routing` entry named a `Config`
+/// section that no longer exists, so it was removed — the `dead_keys` scan
+/// reports nonexistent sections at load time instead.
+const INERT_SECTIONS: &[&str] = &[];
 
 impl ReloadImpact {
     /// Classify a dot-path config target (e.g. `"providers.openai"`,
@@ -147,15 +151,6 @@ mod tests {
         assert_eq!(
             ReloadImpact::classify("behavior.output_mode"),
             ReloadImpact::Live
-        );
-    }
-
-    #[test]
-    fn legacy_sections_are_inert() {
-        assert_eq!(
-            ReloadImpact::classify("task_routing"),
-            ReloadImpact::Inert,
-            "expected 'task_routing' to be inert"
         );
     }
 

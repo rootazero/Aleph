@@ -170,7 +170,6 @@ pub fn get_merged_generation_preset(
             ))
         }
         (Some(b), None) => Some(crate::config::presets_override::OwnedGenerationPreset {
-            provider_type: b.provider_type.to_string(),
             default_model: b.default_model.to_string(),
             base_url: b.base_url.map(|u| u.to_string()),
         }),

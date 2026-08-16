@@ -149,8 +149,6 @@ pub struct OwnedProviderPreset {
 /// Owned version of `GenerationPreset` for runtime-merged presets.
 #[derive(Debug, Clone)]
 pub struct OwnedGenerationPreset {
-    #[allow(dead_code)]
-    pub provider_type: String,
     pub default_model: String,
     pub base_url: Option<String>,
 }
@@ -211,10 +209,6 @@ pub fn merge_generation_preset(
     partial: &PartialGenerationPreset,
 ) -> OwnedGenerationPreset {
     OwnedGenerationPreset {
-        provider_type: partial
-            .provider_type
-            .clone()
-            .unwrap_or_else(|| builtin.provider_type.to_string()),
         default_model: partial
             .default_model
             .clone()
@@ -232,8 +226,10 @@ pub fn merge_generation_preset(
 pub fn partial_to_generation_preset(
     partial: &PartialGenerationPreset,
 ) -> Option<OwnedGenerationPreset> {
+    // A generation provider must declare a type; require it even though the
+    // owned preset no longer carries the value.
+    partial.provider_type.as_ref()?;
     Some(OwnedGenerationPreset {
-        provider_type: partial.provider_type.clone()?,
         default_model: partial.default_model.clone().unwrap_or_default(),
         base_url: partial.base_url.clone(),
     })
@@ -484,7 +480,6 @@ aliases = ["doubao", "ark"]
         };
 
         let merged = merge_generation_preset(&builtin, &partial);
-        assert_eq!(merged.provider_type, "custom");
         assert_eq!(merged.default_model, "custom-model");
         assert_eq!(merged.base_url.as_deref(), Some("https://custom.com"));
     }
@@ -500,7 +495,6 @@ aliases = ["doubao", "ark"]
         let partial = PartialGenerationPreset::default();
 
         let merged = merge_generation_preset(&builtin, &partial);
-        assert_eq!(merged.provider_type, "openai");
         assert_eq!(merged.default_model, "dall-e-3");
         assert_eq!(merged.base_url.as_deref(), Some("https://api.openai.com"));
     }
@@ -516,7 +510,6 @@ aliases = ["doubao", "ark"]
         let partial = PartialGenerationPreset::default();
 
         let merged = merge_generation_preset(&builtin, &partial);
-        assert_eq!(merged.provider_type, "google");
         assert!(merged.base_url.is_none());
     }
 
@@ -530,7 +523,6 @@ aliases = ["doubao", "ark"]
         };
 
         let owned = partial_to_generation_preset(&partial).unwrap();
-        assert_eq!(owned.provider_type, "custom");
         assert_eq!(owned.default_model, "my-model");
         assert_eq!(owned.base_url.as_deref(), Some("https://my-api.com"));
     }
@@ -543,7 +535,6 @@ aliases = ["doubao", "ark"]
         };
 
         let owned = partial_to_generation_preset(&partial).unwrap();
-        assert_eq!(owned.provider_type, "custom");
         assert_eq!(owned.default_model, "");
         assert!(owned.base_url.is_none());
     }
