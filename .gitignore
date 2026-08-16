@@ -1,7 +1,11 @@
 # ==============================================================================
 # Secrets — NEVER commit (release signing private key, password, credentials)
 # ==============================================================================
-secrets/
+# Anchored to the repo root on purpose. An unanchored `secrets/` also matches
+# `src/secrets/` (the secrets *subsystem* source), which made every new file
+# there invisible to `git add .` and made `rg` skip the whole module — so a
+# repo-wide grep for a consumer inside `src/secrets/` silently returned zero.
+/secrets/
 
 # ==============================================================================
 # Languages & build systems
