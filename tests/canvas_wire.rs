@@ -58,8 +58,9 @@ use alephcore::projects::roster;
 /// `roster::publish` REPLACES the process-global snapshot (its doc says so),
 /// and the tests in this binary run in parallel. The lib's `TEST_GUARD` is
 /// `#[cfg(test)]` and thus invisible to an integration test, so this binary
-/// carries its own — same reason, same shape.
-static ROSTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// carries its own — same reason. Async-aware (unlike the lib twin) because
+/// the guard is held across the test's awaits (`clippy::await_holding_lock`).
+static ROSTER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn rpc(method: &str, params: Value) -> JsonRpcRequest {
     JsonRpcRequest::with_id(method, Some(params), json!(1))
@@ -420,7 +421,7 @@ fn every_tool_the_panel_canvas_templates_name_resolves_in_the_real_tool_table() 
 /// — and an operator-ROLE stranger out too (the predicate has no admin arm).
 #[tokio::test]
 async fn a_real_apply_broadcasts_a_frame_the_visibility_plane_scopes_correctly() {
-    let _guard = ROSTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ROSTER_LOCK.lock().await;
     roster::publish(roster::RosterSnapshot::from_pairs([
         ("p-wire-room".to_string(), "u-alice".to_string()),
         ("p-wire-room".to_string(), "u-bob".to_string()),
