@@ -163,3 +163,31 @@ Wire 契约单一源       shared/protocol/src/canvas.rs                        
 - `save_view_state` 相机同步（每设备偏好归 localStorage——多设备判据反向适用）
 - 形状旋转、画布缩略图、HTML/SVG 对外导出（PNG 已覆盖标注流程）、phone 编辑、独立 CLI/TUI 客户端面
 - tldraw 嵌入（商业许可 + JS 依赖 + 双状态源，已否决）
+
+---
+
+## 7. 实施状态与偏差记录（实施后补记）
+
+> **状态：已完成（2026-08-17）**，worktree 分支 `worktree-panel-canvas-whiteboard`，计划 21 任务全交付。运行参考（实现后的权威文档）：[docs/reference/CANVAS.md](../../reference/CANVAS.md)；落点索引：FEATURE_LOCATOR §6.10；真机九项清单：`qa/canvas/`。以下逐条记录实施与本 spec 的偏差——每条都指得出代码锚点与测试名，按「计划期裁定」与「实施期新增」分组。
+
+### 计划期裁定（计划自审 §4 已预告，实施证实）
+
+1. **`canvas_format`/`canvas_io` 更名让位，不是 CUT**。spec §1 把它们列为命名让位对象时倾向清除；验证发现两者都有活消费者（`src/workflow/{store,proposal}.rs`、`src/teams/workflow_canvas.rs`、`src/tasks/cron/carryover.rs` 等七处）。落地为纯更名：`shared/protocol/src/json_canvas.rs` + `src/json_canvas_io.rs`，自带 round-trip 测试整批跟随，模块 doc 首行注明改名缘由。
+2. **素材展示从「RPC base64」升级为能力 URL 字节路由**。spec §3 表里 `canvas.asset.get` 是唯一下载通道；实现另建 `GET /canvas-asset/{cap}/{canvas_id}/{asset_id}`（`src/gateway/server/canvas_asset_route.rs` + `src/gateway/security/canvas_caps.rs`，镜像 artifact 先例：浏览器缓存 + 不过 WS）。`canvas.get` 铸 10 分钟 TTL 的 canvas-scoped cap 填 `asset_base`，Panel `<image href>` = `{asset_base}/{asset_id}`（守卫 `asset_href_is_the_minted_base_plus_one_path_segment`）。`canvas.asset.get`（base64）**保留**——它是 srcdoc 文本与 AI 附件的回读通道（能力路由是给 `<image href>` 的，不作回读）。守卫：`a_valid_capability_serves_immutable_private_bytes` / `asset_route_refuses_expired_or_mismatched_cap` / `html_asset_is_served_as_plain_text` / `an_svg_asset_keeps_its_type_but_is_sandboxed`。
+3. **冲突错误铸了专用码 `REVISION_CONFLICT = -32031`（而非复用 INVALID_PARAMS）——但 Panel 实际按 message 文本分支**。spec §3「客户端按专用错误码自动重拉重放」只兑现了一半：码在 wire 上（`src/gateway/protocol.rs`，映射唯一发生在 `handlers/canvas_error.rs::respond`，`apply_conflict_maps_to_revision_conflict_code`），但 `DashboardState::rpc_call` 的消息循环把 pending RPC 错误解析成 `error.message` **单独一个字符串**——码对每个方法统一掉地。Panel 因此按服务端用测试钉住的消息形状分支（服务端 `the_conflict_message_names_the_current_revision` ↔ Panel `ops.rs::is_revision_conflict` + `the_conflict_detector_matches_the_phrase_the_server_mints` 两侧对账）。**记录为已知债**（`api/canvas.rs` 模块 doc 原文）：`rpc_call` 若开始透传 code，冲突检测应改按码分支——码先于消费者存在，为的就是那一天。
+
+### 实施期新增（spec 未预见，committed reality）
+
+4. **`views/canvas/toolbar.rs`（计划外文件）**：spec §4 与计划 Task 12–14 的文件清单都没有工具切换器——落地后每个创建工具（Geo/Note/Text/Frame/Draw/Arrow）都会是「无写者的信号」（capability wired ≠ capability delivered）。toolbar 是 `CanvasState::tool` 除编辑器建形后回落 Select 外的唯一写者，纯接线组件（工具模式语义由 `interaction.rs` 单测覆盖，如 `create_kind_maps_exactly_the_four_box_creation_tools`）。
+5. **AI 框插入按钮**：同一失效的第二例——spec §4 流程从「用户建 `AiImageFrame`」开始，但没有任何 UI 入口能建它（只有模型经工具够得到）。落地为编辑器的 `insert_ai_frame` 回调（视口中心；坐标换算只有编辑器持有 surface rect + camera，故住 `editor.rs`）+ 纯函数 `ai.rs::insert_frame_ops`（守卫 `insert_frame_ops_creates_a_centered_draft_frame_with_a_deleting_undo`）。
+6. **箭头头 = 计算出的 `<polygon>`，非 SVG `<marker>`**（计划 Task 12 草图写「箭头 marker」）：`shape_view.rs::arrow_head_points` 对退化（零长）箭头返回空串——NaN 顶点是 SVG 解析错误不是隐形三角；且同一函数被 `export.rs` 独立文档序列化共用（`<marker>` defs 在两个渲染面就是两份实现）。守卫 `arrow_head_is_symmetric_and_empty_for_a_degenerate_arrow`。
+7. **`export.rs` 写死 hex 有理**（Panel「配色只用主题 token」规则的例外，模块 doc 专节论证）：导出 SVG 在脱离 DOM 的 off-screen image 里光栅化，app 的 custom properties 不存在——`var(--color-*)` 解析为空涂黑。hex 是 `shape_view::palette_var` 同槽位的 light-theme 读数，如印刷定墨。守卫 `svg_export_embeds_images_as_data_urls`（连带：image href 内联 data: URL——能力 URL 对他人 401 且外部 href 会 taint canvas 让 `to_data_url` 抛）。
+8. **Deck 组建的帧序是阅读序启发式，非选区序**（spec §4 未规定序）：`decks.rs::selected_frames` 按 center-x 升序、center-y 破平、id 兜底——marquee 报的是文档序=创建序，不是用户看到的；抽屉拖拽重排是启发式误读的纠正路径。守卫 `selected_frames_keeps_only_frames_in_reading_order` / `selected_frames_ties_break_on_center_y_then_id`。
+9. **`AiFrameStatus` 增 `Failed` 变体**（spec §2 写 `Draft|Pending|Done`）：生成失败要有可渲染的终态，否则框永远 Pending。锚点 `shared/protocol/src/canvas.rs`；Panel 状态推进纯函数 `ai.rs::frame_with_status` 测试覆盖 Failed 臂。
+10. **工具面第 7 个 action `read_asset`**（spec §3 列 6 个）：模型标注/参考流程需要回读素材正文（text/html 返回字符串、image 返回 `_media` data URL）。锚点 `src/builtin_tools/canvas.rs`。
+11. **lane 登记零改动**（spec §3 注册纪律第 1 条要求读 RPC 显式进 `lane.rs::override_for`）：实测三个读方法后缀恰是 `get`/`list`，既有 Query 启发式已覆盖——显式登记会是第二份答案。以 `handlers/canvas.rs::every_canvas_read_lands_in_query_lane` 钉住防未来改名漏 lane。同类：`method_visibility.rs` 里 `canvas.list` 是 `ListFiltered`（非全族 `KeyChecked`——list 无 addressed record），`canvas.create` 刻意缺席（`projects.create` 同裁定）。
+12. **`fnv1a.rs` 落 `memory_graph/` 而非 `views/memory/galaxy/`**（计划 Task 1 草图把它分给 galaxy）：shared 半的 `category_color` 用它 hash 类别名，shared 不许伸进 view 私有模块（`memory_graph/mod.rs` doc 记录）。
+
+### 文档收尾时顺带订正
+
+- FEATURE_LOCATOR §0/§6.3/§2.5-邻近行里指向旧路径（`views/canvas/` 星系、`canvas_engine/`、`canvas_format.rs`、`CanvasView`）的锚点已同批订正为 `views/memory/galaxy/`、`memory_graph/`、`json_canvas.rs`、`GalaxyView`——「同一事实的两份表述，只改一份就是静默说谎」。
