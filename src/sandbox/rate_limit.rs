@@ -91,11 +91,11 @@ impl Default for SandboxRateLimitConfig {
 /// Categorize a tool name into a `ToolCategory`.
 #[must_use]
 pub fn categorize_tool(tool_name: &str) -> ToolCategory {
-    match tool_name {
-        // NOTE: `tool_name` currently carries `command.program`, not the
-        // AlephTool::NAME constant. These match arms target the real
-        // AlephTool::NAME values that will arrive once the SandboxHookContext
-        // is threaded with the real tool name.
+    // `ALEPH_TOOL_NAME` carries "code_exec:python" / "code_exec:javascript" /
+    // "bash" (see `code_exec.rs`); the rate-limit bucket only cares about the
+    // tool family, so drop any `:language` suffix before matching.
+    let base = tool_name.split(':').next().unwrap_or(tool_name);
+    match base {
         "self_config" | "skill_install" => ToolCategory::Admin,
         "code_exec" | "bash" => ToolCategory::Dangerous,
         "file_ops" | "apply_patch" => ToolCategory::Write,
@@ -201,13 +201,23 @@ impl RateLimitHook {
 impl SandboxBeforeHook for RateLimitHook {
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult {
         let session_id = &ctx.command.session_id;
-        let category = categorize_tool(ctx.tool_name);
+        // `SandboxHookContext::tool_name` is `command.program` ("bash"/
+        // "python3"/"node"), which would send Python/JS `code_exec` into the
+        // loose Read bucket (6x the Dangerous allowance). The tools stamp the
+        // real identity into `ALEPH_TOOL_NAME`, so prefer that when present.
+        let tool_name = ctx
+            .command
+            .env
+            .get("ALEPH_TOOL_NAME")
+            .map(String::as_str)
+            .unwrap_or(ctx.tool_name);
+        let category = categorize_tool(tool_name);
 
         if let Err(reason) = self.limiter.check_and_record(session_id, &category) {
             tracing::warn!(
                 target: "sandbox_rate_limit",
                 session_id = ?session_id,
-                tool_name = ctx.tool_name,
+                tool_name = tool_name,
                 category = ?category,
                 reason = %reason,
                 "sandbox rate limit exceeded"
@@ -257,6 +267,12 @@ mod tests {
     fn categorize_tool_dangerous() {
         assert_eq!(categorize_tool("code_exec"), ToolCategory::Dangerous);
         assert_eq!(categorize_tool("bash"), ToolCategory::Dangerous);
+        // ALEPH_TOOL_NAME strips the language suffix but keeps the family.
+        assert_eq!(categorize_tool("code_exec:python"), ToolCategory::Dangerous);
+        assert_eq!(
+            categorize_tool("code_exec:javascript"),
+            ToolCategory::Dangerous
+        );
     }
 
     #[test]

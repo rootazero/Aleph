@@ -189,16 +189,6 @@ impl BubblewrapDriver {
                     ),
                 });
             }
-            NetworkPolicy::ProxyOnly { .. } => {
-                return Err(SandboxError::UnsupportedPolicy {
-                    platform: "linux/bwrap",
-                    feature: "NetworkPolicy::ProxyOnly".into(),
-                    reason: "proxy-only (port-list) mode is not wired on Linux; the \
-                             supported proxied path is AllowHosts via WorkspaceSandbox. \
-                             Use AllowAll or None."
-                        .into(),
-                });
-            }
         }
 
         self.add_fs_args(&mut args, &policy.filesystem, cwd)?;
@@ -994,20 +984,6 @@ mod tests {
             }
             other => panic!("expected UnsupportedPolicy, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn generate_args_proxy_only_returns_unsupported() {
-        let driver = BubblewrapDriver::new();
-        let policy = SandboxPolicy {
-            network: NetworkPolicy::ProxyOnly { ports: vec![8080] },
-            ..Default::default()
-        };
-        let cwd = Path::new("/tmp/ws");
-        let err = driver
-            .generate_args(&policy, cwd)
-            .expect_err("ProxyOnly must hard-fail on linux/bwrap");
-        assert!(matches!(err, SandboxError::UnsupportedPolicy { .. }));
     }
 
     #[test]

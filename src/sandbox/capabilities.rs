@@ -4,15 +4,14 @@
 //!
 //! **macOS**: `NetworkPolicy::AllowHosts` accepts IP literals only. Hostnames
 //! return `SandboxError::UnsupportedPolicy` because Seatbelt's `remote ip`
-//! matcher does not perform DNS resolution. `ProxyOnly { ports }` is honored
-//! by allowing outbound connections to `localhost:port`.
+//! matcher does not perform DNS resolution.
 //!
-//! **Linux**: `AllowHosts` and `ProxyOnly` return `UnsupportedPolicy`.
+//! **Linux**: `AllowHosts` returns `UnsupportedPolicy`.
 //! Bubblewrap only offers all-or-nothing network isolation (`--unshare-net`);
 //! fine-grained host filtering requires Landlock + seccomp-bpf or iptables
 //! (deferred — see spec SP-2). Use `AllowAll` or `None`.
 //!
-//! **Windows**: `AllowHosts` and `ProxyOnly` return `UnsupportedPolicy`. The
+//! **Windows**: `AllowHosts` returns `UnsupportedPolicy`. The
 //! WFP (Windows Filtering Platform) integration that would enforce per-host
 //! rules is deferred — see spec SP-3. Use `AllowAll` or `None`.
 //!

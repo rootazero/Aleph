@@ -12,26 +12,6 @@ pub mod windows;
 pub mod common;
 
 #[must_use]
-pub fn create_platform_driver() -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
-    #[cfg(target_os = "macos")]
-    {
-        Arc::new(macos::seatbelt::SeatbeltDriver::new())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Arc::new(linux::bwrap::BubblewrapDriver::new())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Arc::new(windows::driver::WindowsSandboxDriver::new())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        Arc::new(UnsupportedDriver)
-    }
-}
-
-#[must_use]
 pub fn create_platform_driver_from_config(
     config: &crate::sandbox::config::SandboxConfig,
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {

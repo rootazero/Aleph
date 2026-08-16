@@ -178,15 +178,6 @@ impl WindowsSandboxDriver {
                     ),
                 });
             }
-            NetworkPolicy::ProxyOnly { .. } => {
-                return Err(SandboxError::UnsupportedPolicy {
-                    platform: "windows/token",
-                    feature: "NetworkPolicy::ProxyOnly".into(),
-                    reason: "proxy-only routing requires WFP (spec SP-3). \
-                             Use AllowAll or None."
-                        .into(),
-                });
-            }
         }
 
         lines.push(format!("allow_fork={}", policy.process.allow_fork));
@@ -589,20 +580,6 @@ mod tests {
             }
             other => panic!("expected UnsupportedPolicy, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn generate_profile_proxy_only_returns_unsupported() {
-        let driver = WindowsSandboxDriver::new();
-        let policy = SandboxPolicy {
-            network: NetworkPolicy::ProxyOnly { ports: vec![8080] },
-            ..Default::default()
-        };
-        let cwd = Path::new("C:\\workspace");
-        assert!(matches!(
-            driver.generate_profile(&policy, cwd),
-            Err(SandboxError::UnsupportedPolicy { .. })
-        ));
     }
 
     #[test]

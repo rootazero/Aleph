@@ -869,15 +869,6 @@ impl SeatbeltDriver {
                     ));
                 }
             }
-            NetworkPolicy::ProxyOnly { ports } => {
-                profile.push_str(RESTRICTED_NETWORK_POLICY);
-                profile.push_str("; proxy-only network access\n");
-                for port in ports {
-                    profile.push_str(&format!(
-                        "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
-                    ));
-                }
-            }
         }
         Ok(())
     }

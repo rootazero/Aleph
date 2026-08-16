@@ -44,8 +44,6 @@ pub enum NetworkPolicy {
     AllowHosts(Vec<String>),
     /// Allow all network access.
     AllowAll,
-    /// Allow only proxy connections on specific ports.
-    ProxyOnly { ports: Vec<u16> },
 }
 
 /// Process execution policy.
