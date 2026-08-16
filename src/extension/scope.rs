@@ -25,33 +25,6 @@ pub fn scope_install_dir(
     }
 }
 
-/// Get all scope directories in priority order (highest first)
-#[must_use]
-pub fn scope_dirs_by_priority(
-    project_dir: Option<&Path>,
-    agent_id: Option<&str>,
-) -> Vec<(String, PathBuf)> {
-    let mut dirs = Vec::new();
-
-    if let Some(aid) = agent_id {
-        if let Ok(home) = crate::discovery::aleph_home_dir() {
-            dirs.push((
-                "agent".to_string(),
-                home.join(format!("agents/{aid}/plugins")),
-            ));
-        }
-    }
-    if let Some(project) = project_dir {
-        dirs.push(("local".to_string(), project.join(".aleph/plugins.local")));
-        dirs.push(("project".to_string(), project.join(".aleph/plugins")));
-    }
-    if let Ok(home) = crate::discovery::aleph_home_dir() {
-        dirs.push(("user".to_string(), home.join("plugins/installed")));
-    }
-
-    dirs
-}
-
 /// Parse a scope string from CLI --scope argument
 pub fn parse_scope(s: &str) -> Result<PluginScope, String> {
     match s.to_lowercase().as_str() {
@@ -158,38 +131,5 @@ mod tests {
             err2.contains("Expected: user, project, local"),
             "got: {err2}"
         );
-    }
-
-    #[test]
-    fn test_scope_dirs_by_priority() {
-        let project = tempdir().unwrap();
-
-        // Without agent_id: local > project > user
-        let dirs = scope_dirs_by_priority(Some(project.path()), None);
-        assert_eq!(dirs.len(), 3);
-        assert_eq!(dirs[0].0, "local");
-        assert_eq!(dirs[1].0, "project");
-        assert_eq!(dirs[2].0, "user");
-
-        // With agent_id: agent > local > project > user
-        let dirs_with_agent = scope_dirs_by_priority(Some(project.path()), Some("my-agent"));
-        assert_eq!(dirs_with_agent.len(), 4);
-        assert_eq!(dirs_with_agent[0].0, "agent");
-        assert_eq!(dirs_with_agent[1].0, "local");
-        assert_eq!(dirs_with_agent[2].0, "project");
-        assert_eq!(dirs_with_agent[3].0, "user");
-
-        // Agent path contains agent id
-        let agent_path = &dirs_with_agent[0].1;
-        assert!(
-            agent_path.to_string_lossy().contains("my-agent"),
-            "Agent path should contain agent id, got: {}",
-            agent_path.display()
-        );
-
-        // Without project_dir: only user (and agent if provided)
-        let dirs_no_project = scope_dirs_by_priority(None, None);
-        assert_eq!(dirs_no_project.len(), 1);
-        assert_eq!(dirs_no_project[0].0, "user");
     }
 }

@@ -72,6 +72,8 @@ pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
+#[allow(unused_imports)]
+use serde::{Deserialize, Serialize};  // for OwnerTrustPolicyConfig
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::Mutex as StdMutex;
 use crate::sync_primitives::RwLock as StdRwLock;
@@ -118,6 +120,54 @@ pub struct ExtensionConfig {
     /// undocumented production knob with no consumers (R10).
     #[cfg(test)]
     pub extra_plugin_parents: Vec<PathBuf>,
+
+    /// Owner trust policy for plugin loading. Default is `permissive()`
+    /// (legacy behaviour: every plugin loads). Setting this to `restrictive`
+    /// causes `Workspace`/`Global` plugins to be gated by the supplied
+    /// allowlist — see [`crate::extension::plugin_trust::OwnerTrustPolicy`].
+    /// Wrapped in `Option` because `Default` cannot construct an
+    /// `OwnerTrustPolicy` value from this module without an import seam.
+    pub owner_trust: Option<OwnerTrustPolicyConfig>,
+}
+
+/// Wire-friendly form of [`crate::extension::plugin_trust::OwnerTrustPolicy`].
+///
+/// We don't deserialize `OwnerTrustPolicy` directly because it is a runtime
+/// stateful object with a method-rich API (`trust`, `untrust`, `allowlist()`);
+/// operators only need the static allowlist + mode. The manager converts this
+/// DTO into the runtime policy in [`ExtensionManager::new`].
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerTrustPolicyConfig {
+    /// `true` → enforce the allowlist for `Workspace`/`Global` plugins.
+    /// `false` → permissive (legacy).
+    #[serde(default)]
+    pub restrictive: bool,
+    /// Plugin ids that may load from non-trusted origins when restrictive.
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+}
+
+impl Default for OwnerTrustPolicyConfig {
+    fn default() -> Self {
+        Self {
+            restrictive: false,
+            allowlist: Vec::new(),
+        }
+    }
+}
+
+impl OwnerTrustPolicyConfig {
+    /// Materialise the runtime policy. `restrictive=false` ⇒ `permissive()`
+    /// (matches historical default); `restrictive=true` ⇒ `restrictive(allowlist)`.
+    #[must_use]
+    pub fn to_policy(self) -> crate::extension::plugin_trust::OwnerTrustPolicy {
+        if self.restrictive {
+            crate::extension::plugin_trust::OwnerTrustPolicy::restrictive(self.allowlist)
+        } else {
+            crate::extension::plugin_trust::OwnerTrustPolicy::permissive()
+        }
+    }
 }
 
 /// Extension Manager - main entry point for the extension system
@@ -322,7 +372,10 @@ impl ExtensionManager {
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(
-                crate::extension::plugin_trust::OwnerTrustPolicy::permissive(),
+                config
+                    .owner_trust
+                    .map(OwnerTrustPolicyConfig::to_policy)
+                    .unwrap_or_else(crate::extension::plugin_trust::OwnerTrustPolicy::permissive),
             )),
             plugins_config,
             plugins_config_path,
@@ -476,7 +529,7 @@ impl ExtensionManager {
         };
 
         for (id, root) in &candidates {
-            match manifest::parse_manifest_from_dir_sync(root) {
+            match manifest::parse_manifest_from_dir_cached_global(root) {
                 Ok(m) if m.kind == PluginKind::Mcp => {
                     if let Err(e) = self.ensure_plugin_loaded(id).await {
                         tracing::warn!(plugin = %id, error = %e, "sync_mcp_plugin_servers: failed to load MCP plugin");
@@ -562,7 +615,7 @@ impl ExtensionManager {
                         // Build plugin record from adapter output
                         let mut record =
                             PluginRecord::from_adapter_output(&output, dir_path.clone());
-                        if let Ok(manifest) = manifest::parse_manifest_from_dir_sync(dir_path) {
+                        if let Ok(manifest) = manifest::parse_manifest_from_dir_cached_global(dir_path) {
                             record.kind = manifest.kind;
                         }
                         let plugin_id = output.plugin_id.clone();
@@ -1258,7 +1311,7 @@ impl ExtensionManager {
 
         // Build updated plugin record
         let mut record = PluginRecord::from_adapter_output(&output, root_dir.clone());
-        if let Ok(manifest) = manifest::parse_manifest_from_dir_sync(&root_dir) {
+        if let Ok(manifest) = manifest::parse_manifest_from_dir_cached_global(&root_dir) {
             record.kind = manifest.kind;
         }
 

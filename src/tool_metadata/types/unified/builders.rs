@@ -66,19 +66,6 @@ impl UnifiedTool {
         self
     }
 
-    /// Builder method: set service name
-    pub fn with_service_name(mut self, service: impl Into<String>) -> Self {
-        self.service_name = Some(service.into());
-        self
-    }
-
-    /// Builder method: set active state
-    #[must_use]
-    pub const fn with_active(mut self, active: bool) -> Self {
-        self.is_active = active;
-        self
-    }
-
     // =========================================================================
     // UI Metadata Builder Methods
     // =========================================================================
@@ -108,30 +95,10 @@ impl UnifiedTool {
         self
     }
 
-    /// Builder method: set builtin flag
-    #[must_use]
-    pub const fn with_builtin(mut self, is_builtin: bool) -> Self {
-        self.is_builtin = is_builtin;
-        self
-    }
-
     /// Builder method: set sort order
     #[must_use]
     pub const fn with_sort_order(mut self, order: i32) -> Self {
         self.sort_order = order;
-        self
-    }
-
-    /// Builder method: set `has_subtools` flag
-    #[must_use]
-    pub const fn with_has_subtools(mut self, has: bool) -> Self {
-        self.has_subtools = has;
-        self
-    }
-
-    /// Builder method: add a subtool ID
-    pub fn with_subtool(mut self, subtool_id: impl Into<String>) -> Self {
-        self.subtools.push(subtool_id.into());
         self
     }
 
@@ -168,30 +135,6 @@ impl UnifiedTool {
     #[must_use]
     pub const fn with_routing_strip_prefix(mut self, strip: bool) -> Self {
         self.routing_strip_prefix = strip;
-        self
-    }
-
-    /// Builder method: set routing context format
-    pub fn with_routing_context_format(mut self, format: impl Into<String>) -> Self {
-        self.routing_context_format = Some(format.into());
-        self
-    }
-
-    // =========================================================================
-    // Conflict Resolution Builder Methods
-    // =========================================================================
-
-    /// Builder method: set original name (before conflict resolution renaming)
-    pub fn with_original_name(mut self, name: impl Into<String>) -> Self {
-        self.original_name = Some(name.into());
-        self.was_renamed = true;
-        self
-    }
-
-    /// Builder method: mark as renamed due to conflict
-    #[must_use]
-    pub const fn with_was_renamed(mut self, renamed: bool) -> Self {
-        self.was_renamed = renamed;
         self
     }
 

@@ -92,23 +92,6 @@ fn test_tool_source_mcp_prompt_line() {
 }
 
 #[test]
-fn test_unified_tool_with_original_name() {
-    let tool = UnifiedTool::new(
-        "mcp:server:search-mcp",
-        "search-mcp",
-        "Search via MCP",
-        ToolSource::Mcp {
-            server: "server".into(),
-        },
-    )
-    .with_original_name("search");
-
-    assert_eq!(tool.name, "search-mcp");
-    assert_eq!(tool.original_name, Some("search".to_string()));
-    assert!(tool.was_renamed);
-}
-
-#[test]
 fn test_unified_tool_with_safety_level() {
     use crate::tool_metadata::types::safety::ToolSafetyLevel;
     let tool = UnifiedTool::new(

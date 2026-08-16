@@ -534,7 +534,7 @@ impl BuiltinToolRegistry {
         reg(
             tools,
             "voice_mode_set",
-            "Enable or disable voice mode for a channel. When enabled, all replies will be converted to speech audio. Use when user says 'turn on voice mode', 'switch to voice', 'enable voice replies', etc.",
+            crate::builtin_tools::voice_tools::VoiceModeSetTool::DESCRIPTION,
             schema::<crate::builtin_tools::voice_tools::VoiceModeSetArgs>("voice_mode_set"),
         );
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
@@ -543,9 +543,7 @@ impl BuiltinToolRegistry {
         reg(
             tools,
             "local_voice",
-            "Check the local voice (BYO OpenAI-compatible STT/TTS endpoint) configuration and \
-             reachability. Use when the user asks whether local voice is ready, configured, or \
-             why voice requests fail.",
+            crate::builtin_tools::voice_tools::LocalVoiceTool::DESCRIPTION,
             schema::<crate::builtin_tools::voice_tools::LocalVoiceArgs>("local_voice"),
         );
         info!("Registered local_voice tool in BuiltinToolRegistry");

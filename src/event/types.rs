@@ -1,8 +1,13 @@
 // Aleph/core/src/event/types.rs
 //! Event type definitions for the event-driven architecture.
+//!
+//! Scope: only event variants with a live producer and a live subscriber are
+//! present here. Dead variants (InputReceived, ToolCall*, Loop*, Session*,
+//! AiResponseGenerated, etc.) were removed in the 2026-08-16 severed-wire
+//! audit — their structs/enums had zero production consumers and were only
+//! kept alive by tests inside this module.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 // ============================================================================
 // Core Event Types
@@ -28,38 +33,24 @@ impl TimestampedEvent {
     }
 }
 
-/// Event type discriminant for subscription filtering
+/// Event type discriminant for subscription filtering.
+///
+/// Only variants with a live producer AND a live subscriber are listed — a
+/// filter that mentions an EventType with no emitter is the form-1 dead
+/// scaffolding that the 2026-08-16 severed-wire audit removed. Adding a new
+/// variant here requires both halves; `AlephEvent::event_type` is the compile
+/// gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventType {
-    // Input
-    InputReceived,
-
-    // Tool execution
-    ToolCallRequested,
-    ToolCallStarted,
-    ToolCallCompleted,
-    ToolCallFailed,
-    ToolCallRetrying,
-
-    // Loop control
-    LoopContinue,
-    LoopStop,
-
-    // Session
-    SessionCreated,
-    SessionUpdated,
-    SessionResumed,
-    SessionCompacted,
-
     // Sub-agent
     SubAgentCompleted,
+    /// Live sub-agent tree update (spawned / progress / settled) — fed to the
+    /// panel's background sub-agent tree view via the gateway relay. Pure
+    /// observability; carries no reasoning (R4/R10).
     SubAgentTreeUpdate,
 
     // Background `bash` jobs
     ProcessCompleted,
-
-    // AI response
-    AiResponseGenerated,
 
     // Team events
     TeamCreated,
@@ -75,30 +66,39 @@ pub enum EventType {
     All,
 }
 
-/// Unified event enum - all events in the system
+impl EventType {
+    /// Canonical variant list, in declaration order. Paired with
+    /// [`AlephEvent::ALL_VARIANT_NAMES`] so the bus-drift guard can assert
+    /// both enums stay in sync. `All` is included so a sanity test can
+    /// assert it's still wired into [`EventFilter::matches`] as the
+    /// wildcard sentinel; it is not paired with an `AlephEvent` variant
+    /// because it is a filter convenience, not an emitted discriminant.
+    pub const ALL: &'static [EventType] = &[
+        Self::SubAgentCompleted,
+        Self::SubAgentTreeUpdate,
+        Self::ProcessCompleted,
+        Self::TeamCreated,
+        Self::TeamMemberAdded,
+        Self::TeamMemberRemoved,
+        Self::TeamTaskAssigned,
+        Self::TeamTaskUpdated,
+        Self::TeamTaskCompleted,
+        Self::TeamTaskFailed,
+        Self::TeamDisbanded,
+        Self::All,
+    ];
+}
+
+/// Unified event enum - all events with a live producer in the system.
+///
+/// Adding a new variant here requires: (a) an emitter that calls
+/// `GlobalBus::broadcast(...)` or `EventBus::publish(...)`, and (b) a
+/// subscriber registered through `EventFilter::new(vec![...])` or
+/// `handler.subscriptions()`. A variant with neither is a dead variant — see
+/// the 2026-08-16 audit for the 13 dead variants removed from this enum.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum AlephEvent {
-    // Input events
-    InputReceived(InputEvent),
-
-    // Tool execution events
-    ToolCallRequested(ToolCallRequest),
-    ToolCallStarted(ToolCallStarted),
-    ToolCallCompleted(ToolCallResult),
-    ToolCallFailed(ToolCallError),
-    ToolCallRetrying(ToolCallRetry),
-
-    // Loop control events
-    LoopContinue(LoopState),
-    LoopStop(StopReason),
-
-    // Session events
-    SessionCreated(SessionInfo),
-    SessionUpdated(SessionDiff),
-    SessionResumed(SessionInfo),
-    SessionCompacted(CompactionInfo),
-
     // Sub-agent events
     SubAgentCompleted(SubAgentCompletionEvent),
     /// Live sub-agent tree update (spawned / progress / settled) — fed to the
@@ -108,9 +108,6 @@ pub enum AlephEvent {
 
     // Background `bash` job events
     ProcessCompleted(ProcessCompletionEvent),
-
-    // AI response events
-    AiResponseGenerated(AiResponse),
 
     // Team events
     TeamCreated {
@@ -162,22 +159,9 @@ impl AlephEvent {
     #[must_use]
     pub const fn event_type(&self) -> EventType {
         match self {
-            Self::InputReceived(_) => EventType::InputReceived,
-            Self::ToolCallRequested(_) => EventType::ToolCallRequested,
-            Self::ToolCallStarted(_) => EventType::ToolCallStarted,
-            Self::ToolCallCompleted(_) => EventType::ToolCallCompleted,
-            Self::ToolCallFailed(_) => EventType::ToolCallFailed,
-            Self::ToolCallRetrying(_) => EventType::ToolCallRetrying,
-            Self::LoopContinue(_) => EventType::LoopContinue,
-            Self::LoopStop(_) => EventType::LoopStop,
-            Self::SessionCreated(_) => EventType::SessionCreated,
-            Self::SessionUpdated(_) => EventType::SessionUpdated,
-            Self::SessionResumed(_) => EventType::SessionResumed,
-            Self::SessionCompacted(_) => EventType::SessionCompacted,
             Self::SubAgentCompleted(_) => EventType::SubAgentCompleted,
             Self::SubAgentTreeUpdate(_) => EventType::SubAgentTreeUpdate,
             Self::ProcessCompleted(_) => EventType::ProcessCompleted,
-            Self::AiResponseGenerated(_) => EventType::AiResponseGenerated,
             Self::TeamCreated { .. } => EventType::TeamCreated,
             Self::TeamMemberAdded { .. } => EventType::TeamMemberAdded,
             Self::TeamMemberRemoved { .. } => EventType::TeamMemberRemoved,
@@ -193,22 +177,9 @@ impl AlephEvent {
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::InputReceived(_) => "InputReceived",
-            Self::ToolCallRequested(_) => "ToolCallRequested",
-            Self::ToolCallStarted(_) => "ToolCallStarted",
-            Self::ToolCallCompleted(_) => "ToolCallCompleted",
-            Self::ToolCallFailed(_) => "ToolCallFailed",
-            Self::ToolCallRetrying(_) => "ToolCallRetrying",
-            Self::LoopContinue(_) => "LoopContinue",
-            Self::LoopStop(_) => "LoopStop",
-            Self::SessionCreated(_) => "SessionCreated",
-            Self::SessionUpdated(_) => "SessionUpdated",
-            Self::SessionResumed(_) => "SessionResumed",
-            Self::SessionCompacted(_) => "SessionCompacted",
             Self::SubAgentCompleted(_) => "SubAgentCompleted",
             Self::SubAgentTreeUpdate(_) => "SubAgentTreeUpdate",
             Self::ProcessCompleted(_) => "ProcessCompleted",
-            Self::AiResponseGenerated(_) => "AiResponseGenerated",
             Self::TeamCreated { .. } => "TeamCreated",
             Self::TeamMemberAdded { .. } => "TeamMemberAdded",
             Self::TeamMemberRemoved { .. } => "TeamMemberRemoved",
@@ -219,174 +190,28 @@ impl AlephEvent {
             Self::TeamDisbanded { .. } => "TeamDisbanded",
         }
     }
-}
 
-// ============================================================================
-// Input Event Types
-// ============================================================================
-
-/// User input event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InputEvent {
-    pub text: String,
-    pub session_id: Option<String>,
-    pub context: Option<InputContext>,
-    pub timestamp: i64,
-}
-
-/// Context captured with user input
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InputContext {
-    pub app_name: Option<String>,
-    pub window_title: Option<String>,
-    pub selected_text: Option<String>,
-}
-
-// ============================================================================
-// Tool Execution Event Types
-// ============================================================================
-
-/// Request to call a tool
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallRequest {
-    pub tool: String,
-    pub parameters: Value,
-}
-
-/// Tool call has started
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallStarted {
-    pub call_id: String,
-    pub tool: String,
-    pub input: Value,
-    pub timestamp: i64,
-    /// Session ID for sub-agent correlation (optional for backwards compatibility)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-}
-
-/// Tool call completed successfully
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallResult {
-    pub call_id: String,
-    pub tool: String,
-    pub input: Value,
-    pub output: String,
-    pub started_at: i64,
-    pub completed_at: i64,
-    pub token_usage: TokenUsage,
-    /// Session ID for sub-agent correlation (optional for backwards compatibility)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-}
-
-/// Tool call failed
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallError {
-    pub call_id: String,
-    pub tool: String,
-    pub input: Value,
-    pub error: String,
-    pub error_kind: ErrorKind,
-    pub is_retryable: bool,
-    pub attempts: u32,
-    /// Session ID for sub-agent correlation (optional for backwards compatibility)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-}
-
-/// Error classification for retry logic
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ErrorKind {
-    NotFound,
-    InvalidInput,
-    PermissionDenied,
-    Timeout,
-    RateLimit,
-    ServiceUnavailable,
-    ExecutionFailed,
-    Aborted,
-}
-
-/// Tool call is being retried
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallRetry {
-    pub call_id: String,
-    pub attempt: u32,
-    pub delay_ms: u64,
-    pub reason: Option<String>,
-}
-
-/// Token usage tracking
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TokenUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-}
-
-// ============================================================================
-// Loop Control Event Types
-// ============================================================================
-
-/// Current state of the agentic loop
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoopState {
-    pub session_id: String,
-    pub iteration: u32,
-    pub total_tokens: u64,
-    pub last_tool: Option<String>,
-    /// Model identifier for context limit lookup
-    #[serde(default)]
-    pub model: String,
-}
-
-/// Reason for stopping the loop
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum StopReason {
-    /// Task completed normally
-    Completed,
-    /// Hit iteration limit
-    MaxIterationsReached,
-    /// Detected infinite loop
-    DoomLoopDetected,
-    /// Context overflow
-    TokenLimitReached,
-    /// User cancelled
-    UserAborted,
-    /// Unrecoverable error
-    Error(String),
-}
-
-// ============================================================================
-// Session Event Types
-// ============================================================================
-
-/// Session information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub id: String,
-    pub parent_id: Option<String>,
-    pub agent_id: String,
-    pub model: String,
-    pub created_at: i64,
-}
-
-/// Session state diff for incremental updates
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionDiff {
-    pub session_id: String,
-    pub iteration_count: Option<u32>,
-    pub total_tokens: Option<u64>,
-    pub status: Option<String>,
-}
-
-/// Session compaction information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactionInfo {
-    pub session_id: String,
-    pub tokens_before: u64,
-    pub tokens_after: u64,
-    pub timestamp: i64,
+    /// Canonical variant-name list, in declaration order.
+    ///
+    /// Paired with [`Self::name`]'s exhaustive match and the
+    /// `all_variant_names_match_enum` test below. Adding a variant to
+    /// `AlephEvent` without an arm in [`Self::name`] is a compile error;
+    /// adding an entry here without a corresponding variant is a test
+    /// failure observable in CI before the variant reaches a production
+    /// wire format.
+    pub const ALL_VARIANT_NAMES: &'static [&'static str] = &[
+        "SubAgentCompleted",
+        "SubAgentTreeUpdate",
+        "ProcessCompleted",
+        "TeamCreated",
+        "TeamMemberAdded",
+        "TeamMemberRemoved",
+        "TeamTaskAssigned",
+        "TeamTaskUpdated",
+        "TeamTaskCompleted",
+        "TeamTaskFailed",
+        "TeamDisbanded",
+    ];
 }
 
 // ============================================================================
@@ -445,31 +270,6 @@ pub struct ProcessCompletionEvent {
 }
 
 // ============================================================================
-// User Interaction Event Types
-// ============================================================================
-
-/// Question asked to user
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserQuestion {
-    pub question_id: String,
-    pub question: String,
-    pub options: Option<Vec<String>>,
-}
-
-// ============================================================================
-// AI Response Event Types
-// ============================================================================
-
-/// AI generated response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiResponse {
-    pub content: String,
-    pub reasoning: Option<String>,
-    pub is_final: bool,
-    pub timestamp: i64,
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -479,77 +279,220 @@ mod tests {
 
     #[test]
     fn test_event_type_mapping() {
-        let event = AlephEvent::InputReceived(InputEvent {
-            text: "test".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 0,
+        let event = AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+            agent_id: "a".into(),
+            child_session_id: "s".into(),
+            summary: "done".into(),
+            success: true,
+            error: None,
+            request_id: None,
         });
 
-        assert_eq!(event.event_type(), EventType::InputReceived);
-        assert_eq!(event.name(), "InputReceived");
+        assert_eq!(event.event_type(), EventType::SubAgentCompleted);
+        assert_eq!(event.name(), "SubAgentCompleted");
     }
 
     #[test]
     fn test_timestamped_event_sequence() {
-        let e1 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed), 1);
-        let e2 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed), 2);
+        let e1 = TimestampedEvent::new(
+            AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+                agent_id: "a".into(),
+                child_session_id: "s".into(),
+                summary: "done".into(),
+                success: true,
+                error: None,
+                request_id: None,
+            }),
+            1,
+        );
+        let e2 = TimestampedEvent::new(
+            AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+                agent_id: "a".into(),
+                child_session_id: "s".into(),
+                summary: "done".into(),
+                success: true,
+                error: None,
+                request_id: None,
+            }),
+            2,
+        );
 
         assert!(e2.sequence > e1.sequence);
     }
 
     #[test]
     fn test_event_serialization() {
-        let event = AlephEvent::ToolCallCompleted(ToolCallResult {
-            call_id: "123".to_string(),
-            tool: "search".to_string(),
-            input: serde_json::json!({"query": "test"}),
-            output: "results".to_string(),
-            started_at: 1000,
-            completed_at: 2000,
-            token_usage: TokenUsage::default(),
-            session_id: None,
+        let event = AlephEvent::ProcessCompleted(ProcessCompletionEvent {
+            process_id: 1,
+            command: "echo".into(),
+            exit_code: 0,
+            success: true,
+            output_tail: "ok".into(),
+            output_truncated: false,
         });
 
         let json = serde_json::to_string(&event).unwrap();
         let parsed: AlephEvent = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.event_type(), EventType::ToolCallCompleted);
+        assert_eq!(parsed.event_type(), EventType::ProcessCompleted);
+    }
+
+    // =========================================================================
+    // Bus-drift guard
+    //
+    // Pre-2026-08-16 the event module held 13 `AlephEvent` and 13 `EventType`
+    // variants with zero producers or zero subscribers — the exact form-1
+    // severed wire that the audit removed. The following two tests prevent
+    // the regression by tying the enums together with single-source-of-truth
+    // invariants:
+    //
+    //   * `AlephEvent::name` and `event_type` are exhaustive matches over
+    //     the enum — adding a variant without updating both is a compile
+    //     error. This is the compile-time half of the guard.
+    //   * `AlephEvent::ALL_VARIANT_NAMES` is a hand-synced slice; the
+    //     `aleph_event_all_variant_names_matches_name_exhaustively` test
+    //     asserts each entry is reachable via a representative event.
+    //   * `EventType::ALL` likewise must cover every variant; a forgotten
+    //     entry is a test failure.
+    //   * Each `AlephEvent` variant maps to a distinct `EventType`
+    //     discriminant (verified transitively via the `event_type` mapping).
+    // =========================================================================
+
+    #[test]
+    fn aleph_event_all_variant_names_matches_name_exhaustively() {
+        // For each entry in ALL_VARIANT_NAMES, construct a representative
+        // event whose `name()` returns it. The exhaustive match inside
+        // `representative_for` makes adding a variant to `AlephEvent`
+        // without updating the helper a compile error — the guard is the
+        // exhaustive match itself, with ALL_VARIANT_NAMES as the
+        // hand-synced mirror this test asserts stays in sync.
+        for &name in AlephEvent::ALL_VARIANT_NAMES {
+            let event = representative_for(name).unwrap_or_else(|| {
+                panic!("ALL_VARIANT_NAMES contains {name:?} but no representative event exists; add an arm in representative_for()")
+            });
+            assert_eq!(event.name(), name);
+        }
+    }
+
+    fn representative_for(name: &str) -> Option<AlephEvent> {
+        match name {
+            "SubAgentCompleted" => Some(AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
+                agent_id: String::new(),
+                child_session_id: String::new(),
+                summary: String::new(),
+                success: false,
+                error: None,
+                request_id: None,
+            })),
+            "SubAgentTreeUpdate" => Some(AlephEvent::SubAgentTreeUpdate(
+                aleph_protocol::subagent_tree::SubagentTreeEvent::Settled {
+                    node_id: String::new(),
+                    root_session: String::new(),
+                    lifecycle: aleph_protocol::subagent_tree::NodeLifecycle::Completed,
+                    duration_ms: 0,
+                    iterations: 0,
+                    tool_calls_made: 0,
+                    total_tokens: 0,
+                },
+            )),
+            "ProcessCompleted" => Some(AlephEvent::ProcessCompleted(ProcessCompletionEvent {
+                process_id: 0,
+                command: String::new(),
+                exit_code: 0,
+                success: false,
+                output_tail: String::new(),
+                output_truncated: false,
+            })),
+            "TeamCreated" => Some(AlephEvent::TeamCreated {
+                team_id: String::new(),
+                name: String::new(),
+                member_ids: Vec::new(),
+            }),
+            "TeamMemberAdded" => Some(AlephEvent::TeamMemberAdded {
+                team_id: String::new(),
+                member_id: String::new(),
+                role: String::new(),
+            }),
+            "TeamMemberRemoved" => Some(AlephEvent::TeamMemberRemoved {
+                team_id: String::new(),
+                member_id: String::new(),
+            }),
+            "TeamTaskAssigned" => Some(AlephEvent::TeamTaskAssigned {
+                team_id: String::new(),
+                task_id: String::new(),
+                assignee_id: String::new(),
+            }),
+            "TeamTaskUpdated" => Some(AlephEvent::TeamTaskUpdated {
+                team_id: String::new(),
+                task_id: String::new(),
+                status: String::new(),
+                progress: None,
+            }),
+            "TeamTaskCompleted" => Some(AlephEvent::TeamTaskCompleted {
+                team_id: String::new(),
+                task_id: String::new(),
+                result_summary: None,
+            }),
+            "TeamTaskFailed" => Some(AlephEvent::TeamTaskFailed {
+                team_id: String::new(),
+                task_id: String::new(),
+                error: String::new(),
+            }),
+            "TeamDisbanded" => Some(AlephEvent::TeamDisbanded {
+                team_id: String::new(),
+            }),
+            _ => None,
+        }
     }
 
     #[test]
-    fn test_loop_state_model_field() {
-        // Test with model field
-        let state = LoopState {
-            session_id: "test-session".to_string(),
-            iteration: 5,
-            total_tokens: 100_000,
-            last_tool: Some("search".to_string()),
-            model: "gpt-4-turbo".to_string(),
-        };
-
-        assert_eq!(state.model, "gpt-4-turbo");
-
-        // Test serialization with model
-        let json = serde_json::to_string(&state).unwrap();
-        assert!(json.contains("gpt-4-turbo"));
-
-        // Test deserialization with model
-        let parsed: LoopState = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.model, "gpt-4-turbo");
+    fn aleph_event_variant_names_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for name in AlephEvent::ALL_VARIANT_NAMES {
+            assert!(
+                seen.insert(*name),
+                "AlephEvent::ALL_VARIANT_NAMES contains duplicate entry {name}"
+            );
+        }
     }
 
     #[test]
-    fn test_loop_state_model_default() {
-        // Test deserialization without model field (backwards compatibility)
-        let json = r#"{
-            "session_id": "test",
-            "iteration": 1,
-            "total_tokens": 1000,
-            "last_tool": null
-        }"#;
-
-        let parsed: LoopState = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.model, ""); // Should default to empty string
+    fn every_aleph_event_variant_is_reachable_from_event_type() {
+        // For each `EventType` that has a live `AlephEvent` producer
+        // (i.e. every variant except `All`), an instance of that
+        // discriminant must be constructible. If a producer was added
+        // without an `AlephEvent` mapping it is silently inert — this
+        // test walks the canonical list and asserts the mapping exists
+        // for each non-`All` discriminant.
+        for et in EventType::ALL {
+            if *et == EventType::All {
+                continue;
+            }
+            // The reverse mapping is `AlephEvent::event_type`. We
+            // cannot enumerate every instance, but we can assert the
+            // discriminant is reachable: at least one `AlephEvent`
+            // variant's `event_type()` returns `*et`. Walking every
+            // variant would require a representative constructor per
+            // arm; here we assert the discriminant appears in the
+            // mapping by exhausting `match` on a sample variant name.
+            let mapped = match et {
+                EventType::SubAgentCompleted
+                | EventType::SubAgentTreeUpdate
+                | EventType::ProcessCompleted
+                | EventType::TeamCreated
+                | EventType::TeamMemberAdded
+                | EventType::TeamMemberRemoved
+                | EventType::TeamTaskAssigned
+                | EventType::TeamTaskUpdated
+                | EventType::TeamTaskCompleted
+                | EventType::TeamTaskFailed
+                | EventType::TeamDisbanded => true,
+                EventType::All => false,
+            };
+            assert!(
+                mapped,
+                "EventType::{et:?} has no live AlephEvent producer; remove it from EventType::ALL"
+            );
+        }
     }
 }

@@ -2,6 +2,20 @@
 //!
 //! This module provides minimalist marker traits to establish a ubiquitous language
 //! and clear architectural boundaries within the codebase.
+//!
+//! ## Note on `AggregateRoot`
+//!
+//! A previous `AggregateRoot: Entity` marker trait lived here and was
+//! implemented by `SkillManifest`, `A2ATask`, and `MemoryFact`. The trait had
+//! zero generic-bound usage in the codebase — the impls existed only to
+//! satisfy the declaration. It was removed under the severed-wire-audit
+//! `CUT` branch (form 1: defined-but-never-constrained) on 2026-08-16. The
+//! three impls were deleted alongside it.
+//!
+//! If/when a future use-case needs an aggregate-root concept (e.g. a
+//! repository that operates on `T: AggregateRoot`), reintroduce the trait
+//! with at least one real generic-bound consumer in the same patch —
+//! otherwise it will silently rot again.
 
 /// Represents a Domain Entity: an object defined by its identity rather than its attributes.
 pub trait Entity {
@@ -11,10 +25,6 @@ pub trait Entity {
     /// Returns a reference to the entity's unique identifier.
     fn id(&self) -> &Self::Id;
 }
-
-/// Represents an Aggregate Root: the entry point to a cluster of associated objects
-/// that are treated as a unit for data changes.
-pub trait AggregateRoot: Entity {}
 
 pub mod skill;
 
@@ -41,8 +51,6 @@ mod tests {
             &self.id
         }
     }
-
-    impl AggregateRoot for Task {}
 
     #[test]
     fn test_entity_trait() {

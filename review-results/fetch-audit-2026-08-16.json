@@ -1,0 +1,46 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-16",
+  "module": "src/fetch",
+  "files_scanned": [
+    "src/fetch/mod.rs",
+    "src/fetch/factory.rs",
+    "src/fetch/provider.rs",
+    "src/fetch/registry.rs",
+    "src/fetch/providers/mod.rs",
+    "src/fetch/providers/crawl4ai.rs",
+    "src/fetch/providers/firecrawl.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (grep-diff across src/, bin/, interfaces/) plus seam-catalog lenses 1/2/3/5/7",
+  "findings": [
+    {
+      "id": "sw-fetch-1",
+      "module": "src/fetch",
+      "files": ["src/fetch/mod.rs:13"],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub use factory::{FetchProviderFactory, FetchProviderFactoryRegistry}; (re-exports)",
+      "produced_location": "src/fetch/mod.rs:13 (pre-edit)",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "The two re-export lines expose `crate::fetch::FetchProviderFactory` and `crate::fetch::FetchProviderFactoryRegistry` as public paths. Repo-wide grep for those paths finds ZERO references outside `src/fetch/mod.rs` itself. The internal consumer (`src/fetch/registry.rs:2`) imports via the full `crate::fetch::factory::FetchProviderFactoryRegistry` path, which is independent of the re-export. The trait and registry struct themselves remain in the public `factory` submodule and continue to back the live registry pipeline — only the redundant top-level re-export aliases are removed, matching the skill's rule 'no live caller -> default CUT'. Note: the underlying `FetchProviderFactory`/`FetchProviderFactoryRegistry` types in factory.rs are KEPT — only the redundant top-level re-export aliases go.",
+      "proposed_change": "Removed `pub use factory::{FetchProviderFactory, FetchProviderFactoryRegistry};` from src/fetch/mod.rs:13. Updated the module doc-comment (line 4) to drop the rustdoc links to the now-private-at-top-level aliases; the underlying types remain reachable via `crate::fetch::factory::FetchProviderFactory` etc. and are documented as part of the `factory` submodule bullet.",
+      "risk": "None. No external crate or module referenced the re-exported paths (verified by grep across src/, bin/, interfaces/). Internal consumers use the full module path and are unaffected.",
+      "verification": "rg 'fetch::FetchProviderFactory' . --type rust -> empty. rg 'fetch::FetchProviderFactoryRegistry' . --type rust -> empty. Internal `factory.rs` references are within the defining module and unaffected by the re-export removal.",
+      "existing_review_ref": null
+    }
+  ],
+  "cross_reference": {
+    "baseline": "this is the first severed-wire audit pass over src/fetch (10 prior audits covered config/, context/, discovery/, domain/, exec/, executor/, tool_metadata/ but not fetch)",
+    "notes": [
+      "PROVIDER REGISTRATION PARITY: Both 'crawl4ai' (factory.rs:27) and 'firecrawl' (factory.rs:50) are wired into FetchProviderFactoryRegistry::with_defaults() at factory.rs:83-84. No provider defined-but-unregistered; no entry registered-but-undefined. Wired.",
+      "TRAIT METHOD PARITY: FetchProvider trait (provider.rs:7) declares fetch/name/is_available. Both Crawl4aiFetchProvider (crawl4ai.rs:32-47) and FirecrawlFetchProvider (firecrawl.rs:58-80) implement all three. No drift. Wired.",
+      "CONFIG-READER PARITY: FetchConfigInternal fields enabled (executor/constructor/mod.rs:64), default_provider (fetch/registry.rs:50), fallback_providers (fetch/registry.rs:53), backends (fetch/registry.rs:18) are all read. FetchBackendConfig fields provider_type (factory.rs:18, fetch/registry.rs:21,35), api_key (factory.rs:34), base_url (factory.rs:41, fetch_config.rs:402), timeout_seconds (crawl4ai.rs:20, fetch_config.rs:269), verified (fetch_config.rs:157,282,473 data flow) are all read or write-used. No inert config (no Form 3).",
+      "STUB SWEEP (Form 2): rg 'TODO|FIXME|unimplemented!|todo!\\(\\)' src/fetch/ -> empty. No provider returns Ok without fetching; both Crawl4aiBackend::fetch_markdown (src/builtin_tools/crawl4ai.rs:120) and FirecrawlFetchProvider::fetch (real reqwest POST to /v2/scrape) are live HTTP calls. No stubs.",
+      "CALL-VS-HANDLER PARITY (Form 4): FetchRegistry::from_config has one production caller at executor/constructor/mod.rs:76. Crawl4aiFetchProvider::from_backend called from factory.rs:43 and fetch_config.rs:410. FirecrawlFetchProvider::new called from factory.rs:70 and fetch_config.rs:445. Both provider .fetch() methods are reached via trait dispatch at web_fetch/mod.rs:161 and fetch_config.rs:418,454. No client ghosts.",
+      "PROVIDER-TYPE NAME DRIFT (Form 5): 'crawl4ai' and 'firecrawl' strings are consistent across factory.rs:27,50, factory.rs:83-84, registry.rs:21,35, fetch_config.rs:413,447, crawl4ai.rs:6 (NAME const), firecrawl.rs:6 (NAME const). No drift. Wired.",
+      "DECIDE (out of scope, flagged for follow-up): src/builtin_tools/web_fetch/mod.rs:178 sets `extractor: Extractor::Crawl4ai` for ALL successful FetchProvider results — when a firecrawl provider serves the content, the persisted/extracted result still claims it came from Crawl4ai (the Extractor enum has only Readability/Selector/Crawl4ai variants, no Firecrawl). This is a real Form 5 name-drift bug at the consumer side of the FetchProvider contract, but it lives OUTSIDE src/fetch/ (in src/builtin_tools/web_fetch/types.rs and src/builtin_tools/web_fetch/mod.rs), so per the audit's 'Stay within src/fetch/' rule it is deferred to a follow-up task. Suggested fix: add `Firecrawl` variant to Extractor and map `provider.name()` -> enum at web_fetch/mod.rs:178.",
+      "DESIGN-PARALLEL NOTE: src/fetch mirrors src/search structurally (factory + registry + providers pattern). Search reuses the parallel `ProviderFactory` trait externally (config/validate.rs:480 calls `ProviderFactoryRegistry::with_defaults()` for validation; providers implement `crate::search::ProviderFactory`). Fetch does NOT have an equivalent external validator — fetch_config.rs uses the providers directly, not the factory registry. This is a deliberate design difference (fetch has only 2 providers, so no centralized validation is needed), not a defect."
+    ]
+  }
+}

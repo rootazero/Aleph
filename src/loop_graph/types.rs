@@ -8,7 +8,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// What a graph node stands for. Loop kinds are *bindings* to existing
-/// entities (goal/cron/heartbeat/daemon) — never copies of their state.
+/// entities (goal/cron/heartbeat/daemon/team/workflow) — never copies of
+/// their state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -25,6 +26,15 @@ pub enum NodeKind {
     /// the graph only by explicit pairing — never automatically; fast-loop
     /// coord tasks never become nodes.
     Team,
+    /// A re-runnable multi-step DAG template (`workflow:<template_name>`).
+    // Victory claim = one RUN fully settling: the dispatcher's settle sweep
+    // (`teams/dispatcher/schedule/settle.rs`) is the single terminal
+    // collection point and pokes the watchers from there. Kept as a `//`
+    // comment, not `///`: every doc line on this enum ships in the tool
+    // schema (REGISTRY_SCHEMA_CEILING_BYTES prices it); the mechanics are
+    // recorded in GRAPH_LAYER.md and settle.rs, which the model never pays
+    // for per-request.
+    Workflow,
     /// An irrefutable measurement (`anchor:<slug>`) — body declares `{probe, truth}`.
     Anchor,
     /// A rule no optimizing loop may tune (`frozen:<slug>`) — body points at
@@ -44,6 +54,7 @@ impl NodeKind {
             Self::LoopHeartbeat => "loop_heartbeat",
             Self::Daemon => "daemon",
             Self::Team => "team",
+            Self::Workflow => "workflow",
             Self::Anchor => "anchor",
             Self::Frozen => "frozen",
             Self::Root => "root",
@@ -58,6 +69,7 @@ impl NodeKind {
             "loop_heartbeat" => Some(Self::LoopHeartbeat),
             "daemon" => Some(Self::Daemon),
             "team" => Some(Self::Team),
+            "workflow" => Some(Self::Workflow),
             "anchor" => Some(Self::Anchor),
             "frozen" => Some(Self::Frozen),
             "root" => Some(Self::Root),
@@ -67,11 +79,24 @@ impl NodeKind {
 
     /// Loops that optimize something and therefore need watching. Anchors,
     /// frozen rules and roots are ground, not optimizers.
+    ///
+    /// `Workflow` is in this set: a template whose runs autonomously chew
+    /// through a DAG is an optimizer exactly like a cron loop. Adding it here
+    /// (rather than at each consumer) is what activates, with zero further
+    /// code, the two mechanical consumers keyed on this predicate:
+    /// `store::lint_naked_loops` (an unwatched workflow is flagged naked) and
+    /// `enable_audit`'s `wire_audit_edges` in `builtin_tools/loop_graph_manage.rs`
+    /// (the audit ring fans an `audits` edge onto every registered workflow).
     #[must_use]
     pub const fn is_optimization_loop(self) -> bool {
         matches!(
             self,
-            Self::LoopGoal | Self::LoopCron | Self::LoopHeartbeat | Self::Daemon | Self::Team
+            Self::LoopGoal
+                | Self::LoopCron
+                | Self::LoopHeartbeat
+                | Self::Daemon
+                | Self::Team
+                | Self::Workflow
         )
     }
 }
@@ -297,6 +322,7 @@ mod tests {
             NodeKind::LoopHeartbeat,
             NodeKind::Daemon,
             NodeKind::Team,
+            NodeKind::Workflow,
             NodeKind::Anchor,
             NodeKind::Frozen,
             NodeKind::Root,
@@ -321,6 +347,11 @@ mod tests {
     fn optimization_loop_classification() {
         assert!(NodeKind::Daemon.is_optimization_loop());
         assert!(NodeKind::Team.is_optimization_loop());
+        assert!(
+            NodeKind::Workflow.is_optimization_loop(),
+            "a re-runnable DAG template is an optimizer: lint must flag it naked \
+             and enable_audit must wire it into the audit ring"
+        );
         assert!(!NodeKind::Anchor.is_optimization_loop());
         assert!(!NodeKind::Root.is_optimization_loop());
     }

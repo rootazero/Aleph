@@ -21,6 +21,20 @@
 //! `cancel` action stamps the marker itself — the cancelling user already
 //! knows, so no redundant push.
 //!
+//! A settled run now has TWO terminal exits, and this sweep is the single
+//! collection point for both:
+//! 1. the origin-channel push above (the user-facing one), and
+//! 2. the loop_graph victory-claim poke (`notify_workflow_settled`) — a
+//!    `workflow:<template>` node paired with a `watches` watcher gets its
+//!    immediate review at the moment the run settles, exactly like a goal
+//!    Complete or a team disband.
+//!
+//! Only INTERACTIVE runs (those carrying a `workflow_origin` stamp) reach the
+//! candidate loop, so only they poke. A non-interactive run — launched by a
+//! cron job — deliberately does not: the cron that launched it is itself the
+//! observation surface watching that schedule, and poking from here would
+//! double-review what the launching loop already sees.
+//!
 //! Mechanical throughout (R7/R10): pure status aggregation, no judgement of
 //! whether the outcome is "good"; interpreting the summary is the user's /
 //! model's job.
@@ -333,6 +347,35 @@ impl TeamDispatcher {
                             .await
                         {
                             tracing::warn!(run_id = %rid, error = %e, "dispatcher: failed to stamp workflow_notified marker");
+                        }
+                    }
+                    // Terminal exit #2: the loop_graph victory-claim poke — a
+                    // `watches`-paired cron watcher gets its immediate review
+                    // now, not whenever its own cadence comes round. Guarded on
+                    // a real template name: "(unknown)" means the metadata
+                    // never carried one, and poking `workflow:(unknown)` could
+                    // only wake a watcher for a node nobody can register.
+                    //
+                    // Best-effort, and deliberately NOT claim-guarded like the
+                    // goal path is. The goal settle-notify CAS exists FOR the
+                    // poke (release on failure ⇒ retry next observation). The
+                    // `workflow_notified` marker above exists for the CHANNEL
+                    // PUSH — which already succeeded — so releasing it over a
+                    // failed poke would re-send a summary the user already got
+                    // (and the reopen logic would then fight the re-stamp).
+                    // The missed immediate review is backstopped by the
+                    // watcher's periodic cadence, which is the same deal a
+                    // debounced goal settle accepts. No graph / no watchers →
+                    // `notify_workflow_settled` is a no-op returning true.
+                    if name != "(unknown)" {
+                        let poked = crate::loop_graph::service::notify_workflow_settled(name).await;
+                        if !poked {
+                            tracing::warn!(
+                                run_id = %rid,
+                                workflow = %name,
+                                "dispatcher: loop_graph watcher poke failed — \
+                                 watcher's periodic cadence backstops"
+                            );
                         }
                     }
                 }

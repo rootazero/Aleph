@@ -390,14 +390,12 @@ mod tests {
                 orphans.push(def.name.to_string());
             }
         }
-        for (name, _) in super::super::definitions::REGISTRY_ONLY_DESCRIPTIONS
-            .iter()
-            .copied()
-        {
+        for (name, _) in super::super::REGISTRY_ONLY_DESCRIPTIONS.iter().copied() {
             // REGISTRY_ONLY_DESCRIPTIONS is gated `#[cfg(test)]` so it
             // is not exported under the production binary — this test
             // needs the dev profile to compile, which is fine for a
-            // test-only constant.
+            // test-only constant. Reached via the `#[cfg(test)]`
+            // re-export at `builtin_registry/mod.rs`.
             if !grouped.contains(name) {
                 orphans.push(name.to_string());
             }

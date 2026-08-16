@@ -177,7 +177,12 @@ impl WebFetchTool {
                             url: args.url.clone(),
                             title: None,
                             content: wrapped,
-                            extractor: Extractor::Crawl4ai,
+                            // Records the backend that actually served the
+                            // content; previously this was hardcoded to
+                            // `Crawl4ai`, which silently lied when firecrawl
+                            // (or any future provider) had done the work
+                            // (form-5 name drift in the result envelope).
+                            extractor: Extractor::for_provider_name(provider.name()),
                         };
                         cache_store(key, bare.clone());
                         return Ok(apply_focus_prompt(bare, args.prompt.as_deref()));
@@ -258,11 +263,7 @@ impl WebFetchTool {
         );
 
         // Notify success
-        let extractor_name = match &extractor {
-            Extractor::Readability => "readability",
-            Extractor::Selector => "selector",
-            Extractor::Crawl4ai => "crawl4ai",
-        };
+        let extractor_name = extractor.as_str();
         let result_summary = format!(
             "已获取网页内容 ({} 字符, {})",
             content.len(),

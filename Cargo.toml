@@ -368,6 +368,14 @@ required-features = ["test-helpers"]
 name = "memory_reflect_integration"
 required-features = ["test-helpers"]
 
+# Uses `utils::scratch::keep_until_exit` for tempdir diagnostics; that module
+# is `cfg(any(test, feature = "test-helpers"))`. Without the explicit
+# required-features the integration test compiles against the published-lib
+# surface where `scratch` is configured out, and rustc reports E0433.
+[[test]]
+name = "resume_coordinator_integration"
+required-features = ["test-helpers"]
+
 # Channel instanceless testing framework
 [[test]]
 name = "webhook_contract_test"

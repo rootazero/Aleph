@@ -59,8 +59,6 @@ impl Default for DiscoveryConfig {
 /// Discovery Manager - main entry point for the discovery system
 #[derive(Debug)]
 pub struct DiscoveryManager {
-    #[allow(dead_code)]
-    config: DiscoveryConfig,
     scanner: DirectoryScanner,
 }
 
@@ -68,7 +66,7 @@ impl DiscoveryManager {
     /// Create a new discovery manager
     pub fn new(config: DiscoveryConfig) -> DiscoveryResult<Self> {
         let scanner = DirectoryScanner::new(&config)?;
-        Ok(Self { config, scanner })
+        Ok(Self { scanner })
     }
 
     /// Get the Aleph home directory (~/.aleph/)
