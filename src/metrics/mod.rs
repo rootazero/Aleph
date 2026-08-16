@@ -71,7 +71,11 @@ pub fn init_metrics_runtime(policy: &crate::config::MetricsPolicy) {
         })
         .is_err()
     {
-        tracing::debug!("metrics runtime already initialised; ignoring reload");
+        tracing::warn!(
+            "metrics runtime already initialised; ignoring reload — the reloaded \
+             [policies.metrics] values are silently inactive, restart the process to \
+             pick them up"
+        );
     }
 }
 
