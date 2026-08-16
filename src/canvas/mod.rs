@@ -9,7 +9,9 @@
 //! validation. RPC handlers and the tool face both consume [`CanvasStore`];
 //! neither reaches the disk directly.
 
+mod assets;
 mod doc_io;
+pub mod selection;
 mod store;
 mod validate;
 

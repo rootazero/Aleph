@@ -26,9 +26,11 @@ use crate::gateway::event_bus::GatewayEventBus;
 /// the three-way split exists to prevent (§4.13c appendix A).
 #[derive(Debug, thiserror::Error)]
 pub enum CanvasError {
-    /// No canvas with this id. Never conflated with a parse failure —
-    /// "failed to parse" and "does not exist" are two different answers.
-    #[error("canvas not found: {0}")]
+    /// The addressed thing does not exist; the payload names it
+    /// ("canvas cv-…" / "asset … in canvas cv-…"). Never conflated with a
+    /// parse failure — "failed to parse" and "does not exist" are two
+    /// different answers.
+    #[error("not found: {0}")]
     NotFound(String),
     /// Caller-fixable input problem (bad id charset, oversized batch, …).
     #[error("invalid canvas request: {0}")]
@@ -44,8 +46,11 @@ pub enum CanvasError {
 
 /// File-backed canvas store with per-canvas write locks.
 pub struct CanvasStore {
-    root: PathBuf,
-    locks: DocLocks,
+    /// `pub(super)` for the `assets` sibling module, which extends this type
+    /// with the asset API and needs the same root and the same locks — a
+    /// second lock table would split the critical section in two.
+    pub(super) root: PathBuf,
+    pub(super) locks: DocLocks,
     event_bus: Option<Arc<GatewayEventBus>>,
 }
 
@@ -101,7 +106,7 @@ impl CanvasStore {
         Self::checked_id(id)?;
         match super::doc_io::read(&self.doc_path(id)).await? {
             Some(doc) => Ok(doc),
-            None => Err(CanvasError::NotFound(id.to_string())),
+            None => Err(CanvasError::NotFound(format!("canvas {id}"))),
         }
     }
 
@@ -185,7 +190,7 @@ impl CanvasStore {
         let mut guard = self.locks.lock(id, self.doc_path(id)).await?;
         let doc = guard
             .existing_mut()
-            .ok_or_else(|| CanvasError::NotFound(id.to_string()))?;
+            .ok_or_else(|| CanvasError::NotFound(format!("canvas {id}")))?;
         if doc.revision != base_revision {
             return Err(CanvasError::Conflict {
                 current_revision: doc.revision,
@@ -201,7 +206,22 @@ impl CanvasStore {
         // racing applies could publish in reverse revision order.
         let committed = guard.commit().await?;
         let new_revision = committed.revision;
+        // The committed batch is what defines "referenced" from here on —
+        // snapshot it while still inside the critical section, so the sweep
+        // below can never race a later apply's references.
+        let referenced: std::collections::HashSet<String> = committed
+            .shapes
+            .iter()
+            .flat_map(|s| s.asset_ids())
+            .map(str::to_string)
+            .collect();
         self.emit_updated(committed, &ops, actor.as_deref());
+        // Orphan sweep in passing (assets.rs): best-effort — a failed sweep
+        // must never fail the apply that already committed and announced.
+        if let Err(e) = self.sweep_assets_with(id, &referenced).await {
+            warn!(canvas = %id, error = %e,
+                "canvas: orphan asset sweep after apply failed");
+        }
         drop(guard);
         Ok(new_revision)
     }
@@ -212,7 +232,7 @@ impl CanvasStore {
         Self::checked_id(id)?;
         let mut guard = self.locks.lock(id, self.doc_path(id)).await?;
         if guard.existing_mut().is_none() {
-            return Err(CanvasError::NotFound(id.to_string()));
+            return Err(CanvasError::NotFound(format!("canvas {id}")));
         }
         // Remove while still holding the per-canvas lock, so a racing apply
         // either committed before us or finds nothing to lock onto after.
@@ -233,13 +253,13 @@ impl CanvasStore {
         let Some(_bus) = &self.event_bus else { return };
     }
 
-    fn doc_path(&self, id: &str) -> PathBuf {
+    pub(super) fn doc_path(&self, id: &str) -> PathBuf {
         self.root.join(id).join("doc.json")
     }
 
     /// Every path join sits behind this gate: the id charset has no
     /// separators and no dots, so `root.join(id)` cannot traverse.
-    fn checked_id(id: &str) -> Result<(), CanvasError> {
+    pub(super) fn checked_id(id: &str) -> Result<(), CanvasError> {
         if validate::is_valid_id(id) {
             Ok(())
         } else {
