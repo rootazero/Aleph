@@ -26,10 +26,25 @@
 //!   aimed at the other end). The resolution sits behind a `Memo` so an
 //!   unbound arrow never subscribes to the doc signal at all.
 //!
+//! # HTML frames (Task 16)
+//!
+//! `Shape::Html` renders in TWO layers. The SVG half here stays the labelled
+//! placeholder box — it is what shows while the srcdoc is in flight (and all
+//! that shows if the fetch fails). The live half is [`HtmlFrameOverlay`],
+//! mounted by the editor inside its world-transformed HTML overlay: one
+//! sandboxed iframe per `Html` shape, `sandbox="allow-scripts"` and NEVER
+//! `allow-same-origin` — model-authored HTML runs in an opaque origin that
+//! cannot reach the Panel's RPCs, storage or cookies. A source-level census
+//! below pins both halves of that sentence.
+//!
+//! srcdoc content arrives over `canvas.asset.get` (base64 → text), not over
+//! the capability byte route: the route serves `text/html` as `text/plain`
+//! by design (the server-side XSS boundary), so the RPC is the only path
+//! that yields usable source. Fetches are dedup'd by
+//! [`super::asset_ingest::SrcdocCache`].
+//!
 //! # What is deliberately simple in this task
 //!
-//! - `Html` is a labelled placeholder box; the sandboxed iframe (with its
-//!   `allow-scripts`-only census) is Task 16.
 //! - Text does not wrap — explicit `\n` breaks only, the `plan_dag.rs`
 //!   limitation. The text-editing overlay (Task 14) owns real layout.
 
@@ -37,9 +52,14 @@ use aleph_protocol::canvas::{
     AiFrameStatus, ArrowEnd, GeoForm, Shape, ShapeCommon, ShapeStyle, SizeKind,
 };
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 
+use super::asset_ingest::SrcdocCache;
 use super::freehand;
 use super::interaction::Bbox;
+use crate::api::canvas::CanvasApi;
+use crate::components::admin_refusal;
+use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n, I18nCtx};
 use crate::state::canvas::CanvasState;
 
@@ -54,6 +74,17 @@ pub(super) fn ShapeView(shape: Memo<Option<Shape>>) -> impl IntoView {
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
     move || shape.get().map(|s| shape_svg(&s, canvas, i18n))
+}
+
+/// Capability URL for one asset's bytes.
+///
+/// The server's byte route is `GET /canvas-asset/{cap}/{canvas_id}/{asset_id}`
+/// and `canvas.get` mints `asset_base` = `/canvas-asset/<cap>/<canvas_id>`
+/// (pinned by the handler test `get_mints_an_asset_base_bound_to_the_canvas`)
+/// — so the href is base + one path segment, nothing else.
+#[must_use]
+fn asset_href(asset_base: &str, asset_id: &str) -> String {
+    format!("{asset_base}/{asset_id}")
 }
 
 /// Resolve a wire palette slot to a theme token reference.
@@ -387,7 +418,7 @@ fn image_svg(common: &ShapeCommon, asset_id: &str, canvas: CanvasState) -> AnyVi
     // at an expired URL.
     match canvas.asset_base.get() {
         Some(base) => {
-            let href = format!("{base}/{asset_id}");
+            let href = asset_href(&base, asset_id);
             view! {
                 <image
                     x=common.x
@@ -602,6 +633,181 @@ fn ai_frame_svg(
     .into_any()
 }
 
+/// The live half of `Shape::Html`: one sandboxed iframe per shape, mounted
+/// in the editor's world-transformed HTML overlay (module doc).
+///
+/// # Mount/update split (why the closures are shaped this way)
+///
+/// A remounted iframe re-parses its srcdoc and reruns its scripts, so
+/// nothing that changes often may cause a remount:
+///
+/// - the wrapper `<div>`'s geometry is a reactive *style* (a drag moves the
+///   frame without touching the iframe),
+/// - selection toggles only the iframe's `pointer-events` style,
+/// - the iframe itself mounts once per resolved srcdoc — asset ids are
+///   content-addressed, so the memo's value can only ever change None→Some.
+///
+/// # Pointer events
+///
+/// `pointer-events: none` by default — canvas gestures over the frame land
+/// on the input plane below, so the frame can be marquee'd, moved and drawn
+/// over like any shape. `auto` only while the shape is selected: that is the
+/// explicit "I want to interact with this content" state. (While selected,
+/// the iframe does eat gestures over its bbox — click empty canvas to
+/// deselect and the frame goes inert again.)
+#[component]
+pub(super) fn HtmlFrameOverlay() -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+    let canvas = expect_context::<CanvasState>();
+    let i18n = use_i18n();
+
+    // Fetch-dedup cache, keyed by asset id (asset_ingest.rs module doc).
+    // StoredValue is not reactive, so inserts bump `cache_epoch` — the one
+    // signal the srcdoc memos subscribe to.
+    let cache: StoredValue<SrcdocCache> = StoredValue::new(SrcdocCache::new());
+    let cache_epoch: RwSignal<u32> = RwSignal::new(0);
+
+    // (canvas_id, [(shape_id, asset_id)]) — the render list and the fetch
+    // driver share one memo, so they cannot disagree about what exists.
+    let html_assets = Memo::new(move |_| {
+        canvas.doc.with(|d| {
+            d.as_ref().map(|d| {
+                (
+                    d.id.clone(),
+                    d.shapes
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Html { common, asset_id } => {
+                                Some((common.id.clone(), asset_id.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+        })
+    });
+
+    // Fetch driver: claim → `canvas.asset.get` → insert/abandon. The RPC —
+    // not the capability byte route — because the route serves text/html as
+    // text/plain by design (module doc).
+    Effect::new(move |_| {
+        let Some((canvas_id, entries)) = html_assets.get() else {
+            return;
+        };
+        for (_shape_id, asset_id) in entries {
+            let claimed = cache
+                .try_update_value(|c| c.begin_fetch(&asset_id))
+                .unwrap_or(false);
+            if !claimed {
+                continue;
+            }
+            let canvas_id = canvas_id.clone();
+            spawn_local(async move {
+                let fetched = CanvasApi::asset_get(&state, &canvas_id, &asset_id).await;
+                match fetched {
+                    Ok(asset) if asset.mime_type == "text/html" => {
+                        let text = crate::views::voice::audio::base64_to_bytes(&asset.data)
+                            .map(|b| String::from_utf8_lossy(&b).into_owned())
+                            .unwrap_or_default();
+                        let _ = cache.try_update_value(|c| c.insert(&asset_id, text));
+                        let _ = cache_epoch.try_update(|v| *v = v.wrapping_add(1));
+                    }
+                    Ok(asset) => {
+                        // A non-html asset in an Html shape is a document
+                        // bug (model-authored), not a user-actionable error:
+                        // say so out loud, keep the placeholder.
+                        let _ = cache.try_update_value(|c| c.abandon(&asset_id));
+                        leptos::logging::warn!(
+                            "canvas html frame: asset {asset_id} is {}, not text/html — \
+                             leaving the placeholder",
+                            asset.mime_type
+                        );
+                    }
+                    Err(e) => {
+                        let _ = cache.try_update_value(|c| c.abandon(&asset_id));
+                        let _ = canvas.load_error.try_update(|v| {
+                            *v = Some(admin_refusal::settings_load_error(i18n, &e, |e| {
+                                format!("Failed to load HTML frame content: {e}")
+                            }));
+                        });
+                    }
+                }
+            });
+        }
+    });
+
+    view! {
+        <For
+            each=move || {
+                html_assets
+                    .get()
+                    .map(|(_, entries)| entries)
+                    .unwrap_or_default()
+            }
+            key=|(shape_id, asset_id)| format!("{shape_id}:{asset_id}")
+            children=move |(shape_id, asset_id): (String, String)| {
+                let sid_for_bbox = shape_id.clone();
+                let bbox = Memo::new(move |_| {
+                    canvas.doc.with(|d| {
+                        d.as_ref().and_then(|d| {
+                            d.shapes
+                                .iter()
+                                .find(|s| s.id() == sid_for_bbox)
+                                .map(Bbox::of_shape)
+                        })
+                    })
+                });
+                let selected = Memo::new(move |_| {
+                    canvas.selection.with(|sel| sel.iter().any(|x| *x == shape_id))
+                });
+                let srcdoc = Memo::new(move |_| {
+                    cache_epoch.get();
+                    cache
+                        .try_with_value(|c| c.get(&asset_id).map(str::to_string))
+                        .flatten()
+                });
+                view! {
+                    <div
+                        class="absolute"
+                        style=move || {
+                            bbox.get()
+                                .map(|b| {
+                                    format!(
+                                        "left: {}px; top: {}px; width: {}px; height: {}px;",
+                                        b.x, b.y, b.w, b.h,
+                                    )
+                                })
+                                .unwrap_or_else(|| "display: none;".to_string())
+                        }
+                    >
+                        {move || {
+                            srcdoc
+                                .get()
+                                .map(|src| {
+                                    view! {
+                                        <iframe
+                                            class="w-full h-full border-0 rounded-md bg-surface-raised"
+                                            sandbox="allow-scripts"
+                                            srcdoc=src
+                                            style=move || {
+                                                if selected.get() {
+                                                    "pointer-events: auto;"
+                                                } else {
+                                                    "pointer-events: none;"
+                                                }
+                                            }
+                                        />
+                                    }
+                                })
+                        }}
+                    </div>
+                }
+            }
+        />
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,5 +936,107 @@ mod tests {
         assert!(font_size_for(SizeKind::Small) < font_size_for(SizeKind::Medium));
         assert!(font_size_for(SizeKind::Medium) < font_size_for(SizeKind::Large));
         assert!(ink_stroke_width(SizeKind::Small) < ink_stroke_width(SizeKind::Large));
+    }
+
+    /// The byte route is `GET /canvas-asset/{cap}/{canvas_id}/{asset_id}`
+    /// and `asset_base` is minted as `/canvas-asset/<cap>/<canvas_id>`
+    /// (server handler test `get_mints_an_asset_base_bound_to_the_canvas`) —
+    /// the href is base + ONE path segment. A second `canvas_id` segment
+    /// here would 404 every image.
+    #[test]
+    fn asset_href_is_the_minted_base_plus_one_path_segment() {
+        assert_eq!(
+            asset_href("/canvas-asset/cap123/cv-9", "aaaa.png"),
+            "/canvas-asset/cap123/cv-9/aaaa.png"
+        );
+    }
+
+    /// This file's production code (test module and comments stripped —
+    /// this very test names the forbidden token, and the scanner judges
+    /// code, not prose; `\r` stripped first, the CRLF-checkout criterion).
+    fn production_code() -> String {
+        let src = include_str!("shape_view.rs").replace('\r', "");
+        let prod = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first piece")
+            .to_string();
+        prod.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Source-level census: the one iframe is sandboxed with `allow-scripts`
+    /// and NEVER `allow-same-origin`.
+    ///
+    /// # Why source-level
+    ///
+    /// The sandbox attribute is a string the compiler cannot check; adding
+    /// `allow-same-origin` "to make the frame work" would compile, render,
+    /// and hand model-authored HTML a same-origin document with reach into
+    /// the Panel's storage and RPCs. At runtime that page looks identical
+    /// until it is exploited.
+    #[test]
+    fn the_iframe_is_sandboxed_with_scripts_only_and_never_same_origin() {
+        let code = production_code();
+        assert_eq!(
+            code.matches("<iframe").count(),
+            1,
+            "exactly one iframe production site in this file"
+        );
+        let at = code.find("<iframe").expect("counted above");
+        let close = code[at..]
+            .find("/>")
+            .expect("the iframe element self-closes");
+        let element = &code[at..at + close];
+        assert!(
+            element.contains("sandbox=\"allow-scripts\""),
+            "the iframe must carry sandbox=\"allow-scripts\":\n{element}"
+        );
+        assert!(
+            !element.contains("allow-same-origin"),
+            "allow-same-origin would give model HTML the Panel's origin:\n{element}"
+        );
+        assert!(
+            !code.contains("allow-same-origin"),
+            "the token must not appear anywhere in this file's production code"
+        );
+    }
+
+    /// …and no second iframe grows anywhere else in the Panel: every embed
+    /// of model-authored HTML must go through the censused one above.
+    #[test]
+    fn no_iframe_exists_outside_the_censused_one() {
+        let root = crate::disposed_reads::src_dir();
+        let sources = crate::disposed_reads::rust_sources(&root);
+        assert!(
+            sources.len() > 50,
+            "found almost no sources — the walk is broken, not the code"
+        );
+        let mut offenders = Vec::new();
+        for path in sources {
+            if path.ends_with("canvas/shape_view.rs") {
+                continue; // the censused site
+            }
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let code: String = src
+                .replace('\r', "")
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if code.contains("<iframe") {
+                offenders.push(path.display().to_string());
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "iframes outside shape_view.rs — route model HTML through the \
+             censused sandboxed frame:\n{}",
+            offenders.join("\n")
+        );
     }
 }

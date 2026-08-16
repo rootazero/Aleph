@@ -24,6 +24,7 @@
 //!    Task 17 reconciler; until then a whole-doc refetch is the correct,
 //!    dumber answer.
 
+mod asset_ingest;
 mod editor;
 mod freehand;
 mod id_mint;

@@ -59,18 +59,21 @@
 
 use std::collections::HashMap;
 
-use aleph_protocol::canvas::{CanvasOp, Shape};
+use aleph_protocol::canvas::{CanvasOp, FracIndex, Shape, ShapeCommon};
 use gloo_timers::future::TimeoutFuture;
-use leptos::ev::{keydown, keyup};
+use leptos::ev::{keydown, keyup, paste};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
+use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
 
+use super::asset_ingest;
 use super::id_mint;
 use super::interaction::{self, Bbox, Handle, InteractionState};
 use super::ops::{self, SendQueue, UndoStack};
-use super::shape_view::ShapeView;
+use super::shape_view::{HtmlFrameOverlay, ShapeView};
 use super::text_edit::{self, TextEditOverlay, TextEditState};
 use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
@@ -249,6 +252,137 @@ fn pump(
             }
         }
     });
+}
+
+/// Natural pixel size of an image, read by decoding it off-DOM.
+///
+/// `HtmlImageElement::decode()` resolves once the bytes are decoded (no
+/// onload closure juggling); a failed decode — or a format that reports
+/// nothing — answers `(0, 0)`, which [`asset_ingest::display_size`] turns
+/// into the fallback bbox.
+async fn natural_image_size(data_url: &str) -> (f64, f64) {
+    let Ok(img) = web_sys::HtmlImageElement::new() else {
+        return (0.0, 0.0);
+    };
+    img.set_src(data_url);
+    if JsFuture::from(img.decode()).await.is_err() {
+        return (0.0, 0.0);
+    }
+    (
+        f64::from(img.natural_width()),
+        f64::from(img.natural_height()),
+    )
+}
+
+/// Read every image file in `file_list` onto the open canvas, centered on
+/// `world` — the drop/paste pipeline: `FileReader` → data URL (the composer
+/// `attachments.rs` idiom) → `canvas.asset.put` → optimistic
+/// `UpsertShape(Image)` through the same `commit` funnel as every gesture.
+///
+/// Non-image files are skipped by the `image/*` shape gate; the server's
+/// mime allowlist stays the one authority on what an asset may be
+/// (`asset_ingest.rs` module doc), and its refusal surfaces through
+/// `load_error` like any other write failure.
+fn ingest_image_files<F>(
+    state: DashboardState,
+    canvas: CanvasState,
+    i18n: crate::i18n::I18nCtx,
+    commit: F,
+    file_list: &web_sys::FileList,
+    world: (f64, f64),
+) where
+    F: Fn(Vec<CanvasOp>, Vec<CanvasOp>) + Copy + 'static,
+{
+    // The canvas this gesture aimed at — revalidated after every await, so
+    // an upload that outlives a canvas switch lands nowhere instead of on
+    // whatever happens to be open by then.
+    let Some(target_id) = canvas.open_canvas.get_untracked() else {
+        return;
+    };
+    for i in 0..file_list.length() {
+        let Some(file) = file_list.get(i) else {
+            continue;
+        };
+        let mime = file.type_();
+        if !asset_ingest::is_image_mime(&mime) {
+            continue;
+        }
+        let Ok(reader) = web_sys::FileReader::new() else {
+            continue;
+        };
+        let reader_clone = reader.clone();
+        let target = target_id.clone();
+        let onload = Closure::wrap(Box::new(move || {
+            let Ok(result) = reader_clone.result() else {
+                return;
+            };
+            let Some(data_url) = result.as_string() else {
+                return;
+            };
+            let mime = mime.clone();
+            let id = target.clone();
+            spawn_local(async move {
+                let (natural_w, natural_h) = natural_image_size(&data_url).await;
+                let Some(b64) = asset_ingest::data_url_base64(&data_url) else {
+                    return; // zero-byte file: nothing to store
+                };
+                let put = CanvasApi::asset_put(&state, &id, &mime, b64.to_string()).await;
+                let Some(open) = canvas.open_canvas.try_get_untracked() else {
+                    return;
+                };
+                if open.as_deref() != Some(id.as_str()) {
+                    return; // switched canvases while uploading
+                }
+                let asset_id = match put {
+                    Ok(asset_id) => asset_id,
+                    Err(e) => {
+                        let _ = canvas.load_error.try_update(|v| {
+                            *v = Some(admin_refusal::settings_write_error(i18n, &e, |e| {
+                                format!("Failed to upload image: {e}")
+                            }));
+                        });
+                        return;
+                    }
+                };
+                let (w, h) = asset_ingest::display_size(natural_w, natural_h);
+                let minted = canvas
+                    .doc
+                    .try_with_untracked(|d| {
+                        d.as_ref().filter(|d| d.id == id).map(|d| {
+                            let top = d.shapes.iter().map(|s| s.common().z.clone()).max();
+                            let shape = Shape::Image {
+                                common: ShapeCommon {
+                                    id: id_mint::mint_shape_id(),
+                                    x: world.0 - w / 2.0,
+                                    y: world.1 - h / 2.0,
+                                    w,
+                                    h,
+                                    z: FracIndex::between(top.as_ref(), None),
+                                    parent_id: None,
+                                },
+                                asset_id,
+                                natural_w,
+                                natural_h,
+                            };
+                            let redo = vec![CanvasOp::UpsertShape {
+                                shape: shape.clone(),
+                            }];
+                            let undo = ops::invert(d, &redo);
+                            (redo, undo, shape.id().to_string())
+                        })
+                    })
+                    .flatten();
+                let Some((redo, undo, new_id)) = minted else {
+                    return;
+                };
+                commit(redo, undo);
+                canvas.selection.set(vec![new_id]);
+            });
+        }) as Box<dyn Fn()>);
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget();
+        let _ = reader.read_as_data_url(&file);
+    }
 }
 
 /// The editor surface. Mounted by `OpenCanvasPane` once the document has
@@ -546,10 +680,57 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             space_down.set(false);
         }
     });
+    // Paste: clipboard image files land at the viewport center (a paste has
+    // no cursor position). Window-level like the key chords, with the same
+    // gates — and `focus_is_editable` keeps a paste aimed at a text input
+    // (the composer, the text-edit overlay) out of the canvas entirely.
+    let paste_handle = window_event_listener(paste, move |ev: web_sys::ClipboardEvent| {
+        if PanelMode::from_path(&pathname.get_untracked()) != PanelMode::Canvas {
+            return;
+        }
+        if focus_is_editable() {
+            return;
+        }
+        let Some(files) = ev.clipboard_data().and_then(|dt| dt.files()) else {
+            return;
+        };
+        if files.length() == 0 {
+            return; // text paste: not ours
+        }
+        ev.prevent_default();
+        let Some(surface) = surface_ref.get_untracked() else {
+            return;
+        };
+        let rect = surface.get_bounding_client_rect();
+        let world = viewport::screen_to_world(
+            camera.get_untracked(),
+            rect.width() / 2.0,
+            rect.height() / 2.0,
+        );
+        ingest_image_files(state, canvas, i18n, commit, &files, world);
+    });
     on_cleanup(move || {
         down_handle.remove();
         up_handle.remove();
+        paste_handle.remove();
     });
+
+    // Drag-drop: images land centered on the drop point. `dragover` must
+    // prevent-default or the browser never allows the drop (and navigates
+    // to the file instead).
+    let on_dragover = move |ev: web_sys::DragEvent| {
+        ev.prevent_default();
+    };
+    let on_drop = move |ev: web_sys::DragEvent| {
+        ev.prevent_default();
+        let Some(world) = world_of(&ev, camera.get_untracked()) else {
+            return;
+        };
+        let Some(files) = ev.data_transfer().and_then(|dt| dt.files()) else {
+            return;
+        };
+        ingest_image_files(state, canvas, i18n, commit, &files, world);
+    };
 
     // ---- wheel ------------------------------------------------------------
     let on_wheel = move |ev: web_sys::WheelEvent| {
@@ -862,6 +1043,8 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             on:pointerup=on_pointerup
             on:pointercancel=on_pointercancel
             on:dblclick=on_dblclick
+            on:dragover=on_dragover
+            on:drop=on_drop
         >
             <svg class="absolute inset-0 w-full h-full block">
                 <g transform=move || viewport::svg_transform(camera.get())>
@@ -968,6 +1151,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 class="absolute inset-0 pointer-events-none"
                 style=move || viewport::css_transform(camera.get())
             >
+                // Sandboxed HTML frames first: the textarea below must paint
+                // above them when both occupy the same world space.
+                <HtmlFrameOverlay />
                 <TextEditOverlay
                     editing=text_editing
                     on_commit=Callback::new(move |(redo, undo): (Vec<CanvasOp>, Vec<CanvasOp>)| {

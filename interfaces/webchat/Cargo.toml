@@ -41,6 +41,8 @@ web-sys = { version = "0.3", features = [
     "Performance",
     # cycle-2 G5 (drop zone) + G4 (clipboard copy)
     "DragEvent", "DataTransfer", "Navigator", "Clipboard",
+    # canvas image drop/paste — clipboard files + off-DOM decode for natural size
+    "ClipboardEvent", "HtmlImageElement",
     # graph_canvas rAF visibility pause (async, no forced layout)
     "IntersectionObserver", "IntersectionObserverEntry",
     # graph_canvas resize without per-frame getBoundingClientRect layout reads

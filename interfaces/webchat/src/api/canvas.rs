@@ -36,8 +36,9 @@
 //! spelling site per side of the wire.
 
 use aleph_protocol::canvas::{
-    AssetPutParams, AssetPutResult, CanvasApplyParams, CanvasApplyResult, CanvasCreateParams,
-    CanvasDoc, CanvasEnvelope, CanvasList, CanvasOp, CanvasRef, CanvasRow, SelectionSetParams,
+    AssetGetParams, AssetGetResult, AssetPutParams, AssetPutResult, CanvasApplyParams,
+    CanvasApplyResult, CanvasCreateParams, CanvasDoc, CanvasEnvelope, CanvasList, CanvasOp,
+    CanvasRef, CanvasRow, SelectionSetParams,
 };
 use serde_json::Value;
 
@@ -165,6 +166,31 @@ impl CanvasApi {
         serde_json::from_value::<AssetPutResult>(result)
             .map(|r| r.asset_id)
             .map_err(|e| format!("Invalid canvas.asset.put response: {e}"))
+    }
+
+    /// Read an asset back as `(mime_type, base64)`.
+    ///
+    /// This is how the Panel obtains `text/html` asset *source*: the
+    /// capability byte route deliberately serves html as `text/plain` (the
+    /// XSS boundary — a capability URL opened directly must never become a
+    /// same-origin HTML page), so iframe `srcdoc` content comes through the
+    /// RPC instead. Images keep using the byte route (`asset_base`), which
+    /// the browser can cache.
+    pub async fn asset_get(
+        state: &DashboardState,
+        id: &str,
+        asset_id: &str,
+    ) -> Result<AssetGetResult, String> {
+        let params = encode(
+            "canvas.asset.get",
+            &AssetGetParams {
+                canvas_id: id.to_string(),
+                asset_id: asset_id.to_string(),
+            },
+        )?;
+        let result = state.rpc_call("canvas.asset.get", params).await?;
+        serde_json::from_value::<AssetGetResult>(result)
+            .map_err(|e| format!("Invalid canvas.asset.get response: {e}"))
     }
 
     /// Push this client's selection so the model can read it back through
