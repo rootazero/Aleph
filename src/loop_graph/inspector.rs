@@ -11,10 +11,11 @@
 //! Design choices:
 //! - **Read-only**: never calls `upsert_*` / `delete_*`. The store is the
 //!   writer; this is a reader.
-//! - **Bounded traversals**: walks carry an explicit `max_steps` ceiling so an
-//!   accidental cycle cannot run forever. The default equals the node count
-//!   plus one, which is exact for a finite DAG — but inspectors from
-//!   untrusted input use a hard ceiling too.
+//! - **Bounded traversals**: walks carry an explicit hard ceiling
+//!   ([`MAX_TRAVERSAL_STEPS`] = 1024, independent of node count) so an
+//!   accidental cycle errors out instead of running forever. (An earlier
+//!   draft of this comment described the bound as "node count plus one";
+//!   the implementation has always been the fixed ceiling.)
 //! - **`Result`-propagating**: a transient store error is `Err`, not
 //!   `Ok(None)`. `governing_owner` already has this discipline; the inspector
 //!   unifies it.
@@ -34,6 +35,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::error::{AlephError, Result};
+use crate::loop_graph::snapshot::{EventRecord, SnapshotStore};
 use crate::loop_graph::store::LoopGraphStore;
 use crate::loop_graph::types::{EdgeKind, GraphEdge, GraphNode, NodeKind};
 
@@ -147,12 +149,36 @@ impl TopologySummary {
 pub struct LoopGraphInspector<'a> {
     store: &'a LoopGraphStore,
     agent_id: &'a str,
+    snapshots: Option<&'a SnapshotStore>,
 }
 
 impl<'a> LoopGraphInspector<'a> {
     #[must_use]
     pub const fn new(store: &'a LoopGraphStore, agent_id: &'a str) -> Self {
-        Self { store, agent_id }
+        Self {
+            store,
+            agent_id,
+            snapshots: None,
+        }
+    }
+
+    /// Attach the snapshot store (unlocks [`Self::recent_events`], the read
+    /// half of the topology-mutation audit log).
+    #[must_use]
+    pub const fn with_snapshots(mut self, snapshots: &'a SnapshotStore) -> Self {
+        self.snapshots = Some(snapshots);
+        self
+    }
+
+    /// Newest topology-mutation events, bounded. Pure delegation to
+    /// [`SnapshotStore::list_events`]; `Err` (not an empty vec) when no
+    /// snapshot store is attached, so "subsystem absent" is never confused
+    /// with "nothing happened".
+    pub fn recent_events(&self, limit: usize) -> Result<Vec<EventRecord>> {
+        let snapshots = self
+            .snapshots
+            .ok_or_else(|| AlephError::other("loop_graph inspector: no snapshot store attached"))?;
+        snapshots.list_events(limit, None)
     }
 
     /// Compute a [`NodeSubgraph`] for `node_id`. `Ok(None)` is "not a
@@ -351,9 +377,20 @@ impl<'a> LoopGraphInspector<'a> {
         })
     }
 
-    /// Render a [`TopologySummary`]. Used by `loop_graph status` (replaces the
-    /// hand-rolled join), `governance_metrics`, and the weekly audit template's
-    /// first step.
+    /// The aggregate-count answer for the topology: node/edge counts by kind
+    /// plus the naked-loop / unanchored-chain tallies from lint.
+    ///
+    /// **Single-source direction**: this is where aggregate counts live.
+    /// `loop_graph status` does NOT consume it today — status renders
+    /// per-node live joins (goal/cron/team three-way reads of the EXECUTING
+    /// entities' own stores) that this aggregate view deliberately lacks, and
+    /// switching it over would silently drop exactly those lines; the two are
+    /// instead pinned consistent by
+    /// `loop_graph_manage::tests::status_counts_agree_with_inspector_summary`.
+    /// (An earlier draft of this doc claimed status and `governance_metrics`
+    /// already consumed `summary()` — neither did; the only production
+    /// consumer of the inspector today is the `impact` action.) If status's
+    /// aggregate half ever moves, it moves HERE, not into a second hand-roll.
     pub fn summary(&self) -> Result<TopologySummary> {
         let nodes = self.store.list_nodes(self.agent_id)?;
         let edges = self.store.list_edges(self.agent_id)?;
@@ -921,5 +958,31 @@ mod tests {
         // Only LoopGoal counts as an optimization loop; root and frozen do not.
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].0.id, "goal:s1");
+    }
+
+    #[test]
+    fn recent_events_delegates_to_the_snapshot_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LoopGraphStore::open(&dir.path().join("g.db")).unwrap();
+        let snaps = crate::loop_graph::SnapshotStore::open(&dir.path().join("s.db")).unwrap();
+        snaps
+            .append_event(&crate::loop_graph::TopologyEvent::GcCompleted {
+                agent_id: "main".into(),
+                removed: 2,
+                retained_acl: 1,
+            })
+            .unwrap();
+
+        // Without the store attached: Err, never a silent empty vec.
+        let bare = LoopGraphInspector::new(&s, "main");
+        assert!(
+            bare.recent_events(10).is_err(),
+            "no snapshot store attached must be an Err, not 'nothing happened'"
+        );
+
+        let inspector = LoopGraphInspector::new(&s, "main").with_snapshots(&snaps);
+        let rows = inspector.recent_events(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, "gc_completed");
     }
 }

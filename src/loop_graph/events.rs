@@ -1,26 +1,32 @@
 //! Topology event bus — a lightweight broadcaster for governance-graph mutations.
 //!
-//! Why a bus: the role graph is read by four consumers today (`render_session_topology`
-//! for the system prompt, `notify_goal_settled` for cron poke, `governing_owner` for the
-//! objective ACL, `doctor::loop_graph` for structural lint). None of them know the
-//! other three exists, and none react when the topology changes — a watchdog installed
-//! via `loop_graph(action="pair")` has no way to tell the prompt layer its view of
-//! reality just shifted, and a `drop_node` leaves every consumer to discover the
-//! change on the next read. This bus does NOT decide anything (R7 — every semantic
-//! verdict stays with the LLM); it just delivers the news.
+//! Why a bus: the role graph has four READERS (`render_session_topology`
+//! for the system prompt, `notify_goal_settled` for cron poke, `governing_owner`
+//! for the objective ACL, `doctor::loop_graph` for structural lint) that read
+//! the store on demand and know nothing of each other. None of them subscribes
+//! to this bus — and an earlier version of this comment claimed they were its
+//! consumers, which was false: until the audit persister landed the bus had
+//! ZERO consumers and every published event went into the void. The one real
+//! consumer today is **`loop_graph::spawn_event_persister`**, which appends
+//! every event to the snapshot DB's `events` table (the governance audit log,
+//! queryable via `inspector::recent_events` / `loop_graph(action="events")`).
+//! This bus does NOT decide anything (R7 — every semantic verdict stays with
+//! the LLM); it just delivers the news.
 //!
 //! Design choices:
 //! - `tokio::sync::broadcast` (not `watch`): we want EVERY mutation, not the latest,
 //!   because losing a `NodeDeleted` mid-audit is the same class of failure as losing
 //!   the row itself. `watch` collapses the stream.
 //! - Bounded channel (cap = 256, doubled under pressure by `tokio`'s default).
-//! - Subscriber count tracked so `governance_metrics` can report "how many live
-//!   observers" — itself a graph signal ("the audit ring disconnected from the
-//!   Panel" is a finding).
+//! - `subscriber_count` is exposed for a future "how many live observers"
+//!   metric — a bus that used to have subscribers and now has none is a
+//!   finding ("the audit persister died"). Nothing reads it today; the
+//!   earlier claim that `governance_metrics` did was aspirational.
 //! - Zero allocation in the publisher path: events are owned strings, copied once.
 //!
 //! What this is NOT:
-//! - Not a WAL. Snapshots (see `snapshot.rs`) are the WAL.
+//! - Not durable. The bus itself is in-memory fan-out; durability is the
+//!   `events` table in `snapshot.rs`, fed by the persister above.
 //! - Not a hook system. `src/extension/hooks/` is that.
 //! - Not a write barrier. The store's invariants run before publish; publishing a
 //!   refusal (`Store rejected an invalid edge`) is a separate event kind we don't
@@ -34,9 +40,10 @@ use tokio::sync::broadcast;
 use crate::loop_graph::types::{EdgeKind, NodeKind};
 
 /// Capacity for the broadcast channel. Larger = more events kept under lag, smaller
-/// = tighter backpressure. 256 is enough for the four documented consumers plus
-/// any future audit-log subscriber, and a slow consumer gets `RecvError::Lagged`
-/// rather than blocking the publisher (Tokio's default behavior).
+/// = tighter backpressure. 256 covers burst writes (an `enable_audit` fan-out is
+/// one event per wired node) with ample headroom for the audit persister, and a
+/// slow consumer gets `RecvError::Lagged` rather than blocking the publisher
+/// (Tokio's default behavior).
 const BUS_CAPACITY: usize = 256;
 
 /// A topology mutation. Carries enough to identify what changed without forcing
@@ -131,10 +138,9 @@ impl TopologyEventBus {
         let _ = self.inner.send(ev);
     }
 
-    /// How many live subscribers right now. Exposed for `governance_metrics` —
-    /// a bus with no subscribers is not a failure (graphs are useful even when
-    /// nothing reads them), but a bus that USED to have subscribers and now
-    /// doesn't is a finding ("the Panel disconnected from governance events").
+    /// How many live subscribers right now. Today the audit persister is the
+    /// only one; the count is exposed for a future observer-metric (see the
+    /// module doc), not read by anything yet.
     #[must_use]
     pub fn subscriber_count(&self) -> usize {
         self.inner.receiver_count()

@@ -23,6 +23,11 @@
 //!   "re-adopt orphan" pattern is the precedent — explicit, carded, traced.
 //! - **Compact label** (caller-supplied, ≤ 200 chars) so audit log rows can
 //!   reference a snapshot by name without a join.
+//! - **The `events` table is the bus's persistence half** (langgraph's
+//!   writes-table pattern): `spawn_event_persister` appends every
+//!   [`TopologyEvent`] the broadcast bus carries, so the mutation stream
+//!   survives the process that broadcast it. Append-only, bounded reads;
+//!   same "audit trail, not governance state" ownership as snapshots.
 //!
 //! What this is NOT:
 //! - Not a WAL. The store's mutations are durable by SQLite's own WAL; this
@@ -38,6 +43,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
+use crate::loop_graph::events::TopologyEvent;
 use crate::loop_graph::store::LoopGraphStore;
 use crate::loop_graph::types::{EdgeKind, GraphEdge, GraphNode, NodeKind};
 use crate::sync_primitives::{Mutex, MutexGuard};
@@ -56,6 +62,24 @@ pub struct SnapshotSummary {
     pub taken_at_iso: String,
     pub node_count: usize,
     pub edge_count: usize,
+}
+
+/// One row of the topology-mutation audit log — what `list_events` returns.
+///
+/// This is the persistence half of the `events.rs` bus (the langgraph
+/// writes-table pattern: every mutation the bus broadcast, appended once).
+/// `payload_json` is the FULL serialized [`TopologyEvent`] (its serde `kind`
+/// tag included); the `kind` column duplicates that tag so filters never have
+/// to parse JSON to answer "show me the deletions". Append-only by design:
+/// like snapshots, these rows are an audit trail, not governance state, and
+/// retention cuts are the operator's call, not this module's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventRecord {
+    pub id: i64,
+    pub ts_ms: i64,
+    pub ts_iso: String,
+    pub kind: String,
+    pub payload_json: String,
 }
 
 /// Public full record — what `get_snapshot` returns, with the parsed rows
@@ -131,7 +155,17 @@ impl SnapshotStore {
                  nodes_json    TEXT NOT NULL,
                  edges_json    TEXT NOT NULL
              );
-             CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON snapshots(taken_at_ms);",
+             CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON snapshots(taken_at_ms);
+             -- The bus's persistence half (see `EventRecord`). Same
+             -- create-if-missing migration style as `snapshots` above: an
+             -- existing DB gains the table on next open, nothing is rewritten.
+             CREATE TABLE IF NOT EXISTS events (
+                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ts_ms        INTEGER NOT NULL,
+                 kind         TEXT NOT NULL,
+                 payload_json TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind);",
         )
         .map_err(|e| AlephError::other(format!("snapshot store init: {e}")))?;
         Ok(Self {
@@ -271,6 +305,63 @@ impl SnapshotStore {
             .execute("DELETE FROM snapshots WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| AlephError::other(format!("snapshot delete: {e}")))?;
         Ok(n > 0)
+    }
+
+    /// Append one topology event to the audit log. Called by the persister
+    /// task (`loop_graph::spawn_event_persister`) for every event the bus
+    /// broadcasts; append-only, one row per event, insert + rowid under the
+    /// same single lock as `capture` (same race, same fix).
+    pub fn append_event(&self, ev: &TopologyEvent) -> Result<i64> {
+        let payload = serde_json::to_value(ev)
+            .map_err(|e| AlephError::other(format!("event serialize: {e}")))?;
+        // The serde tag is the discriminator every reader filters on; deriving
+        // the column from the serialized payload (rather than a hand-maintained
+        // `match`) means a renamed variant can never split the two.
+        let kind = payload
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let payload_json = serde_json::to_string(&payload)
+            .map_err(|e| AlephError::other(format!("event serialize json: {e}")))?;
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO events (ts_ms, kind, payload_json) VALUES (?1, ?2, ?3)",
+            rusqlite::params![Utc::now().timestamp_millis(), kind, payload_json],
+        )
+        .map_err(|e| AlephError::other(format!("event insert: {e}")))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Read the audit log newest-first, bounded. `before_id` pages backwards
+    /// ("rows older than the oldest id of the previous page"); `None` starts
+    /// at the newest row. Both halves are explicit so a caller cannot ask for
+    /// the whole table by accident.
+    pub fn list_events(&self, limit: usize, before_id: Option<i64>) -> Result<Vec<EventRecord>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, ts_ms, kind, payload_json FROM events
+                 WHERE (?1 IS NULL OR id < ?1)
+                 ORDER BY id DESC LIMIT ?2",
+            )
+            .map_err(|e| AlephError::other(format!("event list prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![before_id, limit as i64], |r| {
+                Ok(EventRecord {
+                    id: r.get(0)?,
+                    ts_ms: r.get(1)?,
+                    ts_iso: iso_from_ms(r.get(1)?),
+                    kind: r.get(2)?,
+                    payload_json: r.get(3)?,
+                })
+            })
+            .map_err(|e| AlephError::other(format!("event list query: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| AlephError::other(format!("event list row: {e}")))?);
+        }
+        Ok(out)
     }
 }
 
@@ -723,5 +814,54 @@ mod tests {
             "snapshot must mirror the store's fail-soft view: {:?}",
             snap.nodes
         );
+    }
+
+    #[test]
+    fn events_append_then_list_round_trips_newest_first() {
+        let (_d, _g, s) = store();
+        let ev1 = TopologyEvent::NodeUpserted {
+            agent_id: "main".into(),
+            id: "goal:s1".into(),
+            node_kind: NodeKind::LoopGoal,
+        };
+        let ev2 = TopologyEvent::EdgeDeleted {
+            agent_id: "main".into(),
+            from_id: "cron:w".into(),
+            to_id: "goal:s1".into(),
+            edge_kind: EdgeKind::Watches,
+        };
+        let id1 = s.append_event(&ev1).unwrap();
+        let id2 = s.append_event(&ev2).unwrap();
+        assert!(id2 > id1);
+
+        let rows = s.list_events(10, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, id2, "newest first");
+        assert_eq!(rows[0].kind, "edge_deleted");
+        assert_eq!(rows[1].kind, "node_upserted");
+        // The payload is the full event, serde tag included — parseable back
+        // into the typed value, so audit readers never handle a second shape.
+        let back: TopologyEvent = serde_json::from_str(&rows[0].payload_json).unwrap();
+        assert_eq!(back, ev2);
+    }
+
+    #[test]
+    fn events_list_is_bounded_and_pages_by_before_id() {
+        let (_d, _g, s) = store();
+        for i in 0..5 {
+            s.append_event(&TopologyEvent::NodeDeleted {
+                agent_id: "main".into(),
+                id: format!("goal:s{i}"),
+            })
+            .unwrap();
+        }
+        let page1 = s.list_events(2, None).unwrap();
+        assert_eq!(page1.len(), 2, "limit is a hard bound");
+        assert_eq!(page1[0].id, 5);
+        let page2 = s.list_events(2, Some(page1[1].id)).unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].id, 3, "pages walk backwards without overlap");
+        let page3 = s.list_events(2, Some(page2[1].id)).unwrap();
+        assert_eq!(page3.len(), 1);
     }
 }

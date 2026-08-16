@@ -530,10 +530,12 @@ pub(crate) fn render_session_topology_in(
     // `.flatten()`, not `?`: BOTH the store error and a genuine "not a
     // registered node" collapse to `None` here, deliberately. This is the
     // prompt-rendering path — an unreadable store must render nothing rather
-    // than break the turn — and `render_session_topology_strict` above is the
-    // variant for callers that need to tell the two apart. (Behaviourally
-    // identical to `.ok()?` — both fold the same two `None`s — but written
-    // as `.flatten()` so the intent is named.)
+    // than break the turn. Callers that need to tell the two apart (doctor,
+    // lint, tests) want the strict variant — it lives under `#[cfg(test)]`
+    // today because tests are its only consumer; promote it the day a
+    // production caller appears. (Behaviourally identical to `.ok()?` — both
+    // fold the same two `None`s — but written as `.flatten()` so the intent
+    // is named.)
     render_session_topology_inner(store, session).ok().flatten()
 }
 
@@ -547,7 +549,12 @@ pub(crate) fn render_session_topology_in(
 /// `Result<None, Err>` shape below lets a caller that cares (doctor, lint,
 /// tests) tell "no governance row" (genuine ungoverned → None) from "could
 /// not read" (transient store failure → Err).
-#[allow(dead_code)] // retained for doctor/lint consumers per doc above; not yet wired
+///
+/// `#[cfg(test)]`, honestly: tests are its only consumer today (it used to
+/// sit in production under `#[allow(dead_code)]` "for doctor/lint, not yet
+/// wired" — an allow that had been there since the function was written).
+/// Promote it to `pub(crate)` when a real caller lands.
+#[cfg(test)]
 pub(crate) fn render_session_topology_strict(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
@@ -562,8 +569,9 @@ pub(crate) fn render_session_topology_strict(
 /// - `Ok(None)` when `goal:<session>` is not a registered node (legitimately
 ///   ungoverned; the prompt cache holds for this session).
 /// - `Ok(Some(_))` with the rendered topology bytes.
-/// - `Err(_)` only when the store could not answer — see
-///   [`render_session_topology_strict`].
+/// - `Err(_)` only when the store could not answer — the case
+///   `render_session_topology_strict` (test-only today, see above) exists to
+///   distinguish from a genuine `None`.
 fn render_session_topology_inner(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
