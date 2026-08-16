@@ -110,7 +110,9 @@ fn cached_glob_regex(pattern: &str) -> Option<regex::Regex> {
             return hit.clone();
         }
     }
-    let compiled = regex::Regex::new(&glob_to_regex_str(pattern)).ok();
+    let compiled = crate::security::safe_regex::bounded_builder(&glob_to_regex_str(pattern))
+        .build()
+        .ok();
     let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
     if guard.len() < GLOB_CACHE_MAX {
         guard.insert(pattern.to_string(), compiled.clone());
@@ -147,7 +149,7 @@ fn compile_rules_grouped(rules: &[PolicyRule]) -> HashMap<ActionType, Vec<Compil
     let mut grouped: HashMap<ActionType, Vec<CompiledRule>> = HashMap::new();
     for rule in rules {
         let regex_str = glob_to_regex_str(&rule.pattern);
-        match regex::Regex::new(&regex_str) {
+        match crate::security::safe_regex::bounded_builder(&regex_str).build() {
             Ok(regex) => {
                 grouped
                     .entry(rule.action_type.clone())
