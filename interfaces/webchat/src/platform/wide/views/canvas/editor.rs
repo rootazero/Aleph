@@ -81,7 +81,7 @@ use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
 use crate::components::mode_sidebar::PanelMode;
 use crate::context::DashboardState;
-use crate::state::canvas::{Camera, CanvasState, CanvasTool};
+use crate::state::canvas::{Camera, CanvasState, CanvasTool, InflightBatch};
 use crate::state::hotkey::focus_is_editable;
 
 /// Click tolerance in *screen* pixels: a press that stays inside this box is
@@ -141,6 +141,11 @@ fn world_of(ev: &web_sys::MouseEvent, camera: Camera) -> Option<(f64, f64)> {
 /// batch only when idle, and the pump keeps draining until `on_ack` has
 /// nothing left), so `canvas.apply` is strictly single-flight per client.
 ///
+/// The pump is also the one producer of `CanvasState::inflight` — the
+/// (base_revision, ops) record the `canvas.updated` reconciler in `mod.rs`
+/// uses to drop this client's own broadcast echo. Published before every
+/// send, retired on every path where the batch stops being on the wire.
+///
 /// Every signal read past an await is `try_*`: the editor (whose scope owns
 /// the queue) can unmount while a response is in flight, and a disposed
 /// `StoredValue` answering `None` is the pump's normal exit.
@@ -165,8 +170,20 @@ fn pump(
                 // The canvas closed (or switched) under us: the queue's
                 // scope is gone with it.
                 let _ = queue.try_update_value(SendQueue::clear);
+                let _ = canvas.inflight.try_update(|v| *v = None);
                 return;
             };
+            // Publish what is about to go on the wire: the reconciler
+            // (mod.rs) tells this batch's broadcast echo from a foreign
+            // batch by matching (base_revision, ops). Set *before* the
+            // send — frames can only arrive while this task is parked on
+            // an await, so the record is in place for the earliest echo.
+            let _ = canvas.inflight.try_update(|v| {
+                *v = Some(InflightBatch {
+                    base_revision: base,
+                    ops: batch.clone(),
+                });
+            });
             match CanvasApi::apply(&state, &id, base, batch.clone()).await {
                 Ok(revision) => {
                     let Some(open) = canvas.open_canvas.try_get_untracked() else {
@@ -174,6 +191,7 @@ fn pump(
                     };
                     if open.as_deref() != Some(id.as_str()) {
                         let _ = queue.try_update_value(SendQueue::clear);
+                        let _ = canvas.inflight.try_update(|v| *v = None);
                         return;
                     }
                     let _ = canvas.doc.try_update(|d| {
@@ -185,13 +203,23 @@ fn pump(
                     });
                     match queue.try_update_value(SendQueue::on_ack).flatten() {
                         Some(next) => batch = next,
-                        None => return,
+                        None => {
+                            // Nothing further on the wire. The doc already
+                            // holds the acked revision, so a late echo is
+                            // dropped as stale even without the record.
+                            let _ = canvas.inflight.try_update(|v| *v = None);
+                            return;
+                        }
                     }
                 }
                 Err(e) if ops::is_revision_conflict(&e) => {
                     // Someone else landed first. Refetch the truth, replay
                     // everything pending (refused batch + queued, original
                     // order) on top, resend against the fresh revision.
+                    // A refused batch will never be echoed — retire its
+                    // inflight record before anything else awaits (the
+                    // resend re-publishes at the top of the loop).
+                    let _ = canvas.inflight.try_update(|v| *v = None);
                     let _ = canvas.pending_conflict.try_update(|v| *v = true);
                     let Some(pending) = queue.try_update_value(SendQueue::recover).flatten() else {
                         let _ = canvas.pending_conflict.try_update(|v| *v = false);
@@ -233,6 +261,7 @@ fn pump(
                     // and refetch server truth — replaying a batch the
                     // server rejected on its merits would fail forever.
                     let _ = queue.try_update_value(SendQueue::clear);
+                    let _ = canvas.inflight.try_update(|v| *v = None);
                     let _ = canvas.load_error.try_update(|v| {
                         *v = Some(admin_refusal::settings_write_error(i18n, &e, |e| {
                             format!("Failed to sync canvas edits: {e}")

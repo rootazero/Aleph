@@ -19,10 +19,10 @@
 //!    reconnects, and a topic only this section consumes has no business on
 //!    every socket.
 //! 3. **Frame consumption** — a `canvas.updated` frame refreshes the library
-//!    rows, and refetches the open document when someone else moved it.
-//!    Incremental ops application (echo suppression, gap detection) is the
-//!    Task 17 reconciler; until then a whole-doc refetch is the correct,
-//!    dumber answer.
+//!    rows and reconciles the open document through `reconcile.rs`: the next
+//!    revision's ops apply in place, our own optimistic echo is dropped
+//!    (matched against `CanvasState.inflight` by base revision + ops), and a
+//!    revision gap falls back to a whole-doc refetch.
 
 mod asset_ingest;
 mod editor;
@@ -30,6 +30,7 @@ mod freehand;
 mod id_mint;
 mod interaction;
 mod ops;
+mod reconcile;
 mod shape_view;
 mod text_edit;
 mod toolbar;
@@ -150,7 +151,7 @@ pub fn CanvasView() -> impl IntoView {
         });
     });
 
-    // (3) Frame consumption — refresh the library, refetch a moved open doc.
+    // (3) Frame consumption — refresh the library, reconcile the open doc.
     let sub_id = state.subscribe_events(move |evt| {
         if evt.topic != canvas_proto::TOPIC {
             return;
@@ -164,11 +165,38 @@ pub fn CanvasView() -> impl IntoView {
         if open.as_deref() != Some(frame.canvas_id.as_str()) {
             return;
         }
-        let held = canvas
-            .doc
-            .with_untracked(|d| d.as_ref().map(|d| d.revision));
-        if held != Some(frame.revision) {
+        let held = canvas.doc.with_untracked(|d| {
+            d.as_ref()
+                .filter(|d| d.id == frame.canvas_id)
+                .map(|d| d.revision)
+        });
+        let Some(local_rev) = held else {
+            // Open but still loading (or the doc signal holds the previous
+            // canvas): the in-flight open fetch may have been answered
+            // before this batch committed, so refetch — `fetch_open_doc`'s
+            // staleness check arbitrates whichever answer lands last.
             fetch_open_doc(state, canvas, i18n, frame.canvas_id);
+            return;
+        };
+        let decision = canvas
+            .inflight
+            .with_untracked(|inflight| reconcile::reconcile(local_rev, &frame, inflight.as_ref()));
+        match decision {
+            reconcile::Reconcile::ApplyOps => {
+                canvas.doc.update(|d| {
+                    let Some(d) = d.as_mut() else { return };
+                    if d.id == frame.canvas_id {
+                        ops::apply_local(d, &frame.ops);
+                        // The frame IS server truth — same authority as an
+                        // apply ack (ops.rs module doc), never optimistic.
+                        d.revision = frame.revision;
+                    }
+                });
+            }
+            reconcile::Reconcile::Refetch => {
+                fetch_open_doc(state, canvas, i18n, frame.canvas_id);
+            }
+            reconcile::Reconcile::DropEcho => {}
         }
     });
     on_cleanup(move || state.unsubscribe_events(sub_id));

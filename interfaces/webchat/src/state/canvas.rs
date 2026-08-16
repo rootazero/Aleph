@@ -12,8 +12,33 @@
 //! the server must not know: which canvas this client is looking at, its
 //! camera, its active tool, and its in-flight error/conflict flags.
 
-use aleph_protocol::canvas::{CanvasDoc, CanvasEnvelope, CanvasRow, GeoForm};
+use aleph_protocol::canvas::{CanvasDoc, CanvasEnvelope, CanvasOp, CanvasRow, GeoForm};
 use leptos::prelude::*;
+
+/// The optimistic `canvas.apply` batch currently on the wire.
+///
+/// Published by the editor's send pump (`views/canvas/editor.rs::pump`) for
+/// exactly one reader: the `canvas.updated` reconciler in
+/// `views/canvas/mod.rs`, which must tell this batch's broadcast **echo**
+/// (revision `base_revision + 1`, same ops) from a foreign batch that won
+/// the race to the same revision. It is a projection of the editor's
+/// `SendQueue::inflight` — republished here because the queue is a
+/// `StoredValue` scoped inside the editor component, which the view shell
+/// (where the frame handler lives) cannot reach. The pump is the only
+/// writer besides [`CanvasState::close_canvas`].
+///
+/// The ops are stored verbatim rather than hashed: equality against the
+/// frame's ops is exact (serde_json round-trips finite `f64` losslessly and
+/// every other field is discrete), a batch is small, and a hash would only
+/// add collision reasoning.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InflightBatch {
+    /// The `base_revision` the batch was sent against; its echo carries
+    /// `base_revision + 1`.
+    pub base_revision: u64,
+    /// The batch ops, byte-for-byte what went on the wire.
+    pub ops: Vec<CanvasOp>,
+}
 
 /// The editor's active tool.
 ///
@@ -78,6 +103,10 @@ pub struct CanvasState {
     /// True while an optimistic apply has been refused with a revision
     /// conflict and the replay (refetch + reapply, Task 13) is in flight.
     pub pending_conflict: RwSignal<bool>,
+    /// The apply batch currently on the wire — the reconciler's echo
+    /// detector (see [`InflightBatch`]). Written only by the editor's send
+    /// pump and by [`Self::close_canvas`].
+    pub inflight: RwSignal<Option<InflightBatch>>,
     /// Last load failure, already classified for display
     /// (`admin_refusal::settings_load_error` framing).
     pub load_error: RwSignal<Option<String>>,
@@ -95,6 +124,7 @@ impl CanvasState {
             tool: RwSignal::new(CanvasTool::default()),
             camera: RwSignal::new(Camera::default()),
             pending_conflict: RwSignal::new(false),
+            inflight: RwSignal::new(None),
             load_error: RwSignal::new(None),
         }
     }
@@ -120,6 +150,9 @@ impl CanvasState {
         self.asset_base.set(None);
         self.selection.set(Vec::new());
         self.pending_conflict.set(false);
+        // A batch still on the wire belongs to the document being left; kept,
+        // it could shadow-match a frame of the next canvas opened.
+        self.inflight.set(None);
     }
 }
 
@@ -188,10 +221,18 @@ mod tests {
             selection: vec!["s1".to_string()],
             asset_base: Some("/canvas-asset/cap/cv-1".to_string()),
         });
+        state.inflight.set(Some(InflightBatch {
+            base_revision: 1,
+            ops: Vec::new(),
+        }));
         state.close_canvas();
         assert!(state.open_canvas.get_untracked().is_none());
         assert!(state.doc.get_untracked().is_none());
         assert!(state.asset_base.get_untracked().is_none());
         assert!(state.selection.get_untracked().is_empty());
+        assert!(
+            state.inflight.get_untracked().is_none(),
+            "an inflight record must not outlive the document it was sent for"
+        );
     }
 }
