@@ -59,10 +59,10 @@ Features:\n\
 - Configurable page size (A4, Letter, A3, or custom)\n\
 - Adjustable font size, line spacing, and margins\n\n\
 PATH RESOLUTION:\n\
-- Relative paths (e.g., \"article.pdf\") → saved to ~/.aleph/output/\n\
+- Relative paths (e.g., \"article.pdf\") → the run's output dir\n\
 - Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
 - Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
-DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs. They will be saved to the default output directory (~/.aleph/output/), which is always writable.\n\n\
+DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs. They will be saved to the run's default output directory, which is always writable.\n\n\
 Examples:\n\
 - Simple: {\"content\": \"Hello World\", \"output_path\": \"hello.pdf\"}\n\
 - With title: {\"content\": \"Document content\", \"output_path\": \"doc.pdf\", \"title\": \"My Document\"}\n\
@@ -138,14 +138,12 @@ Examples:\n\
             let ctx = handle.read().await;
             ctx.output_dir.join("documents")
         } else {
-            dirs::home_dir()
-                .ok_or_else(|| {
+            crate::utils::paths::get_workspaces_dir()
+                .map_err(|_| {
                     ToolError::Execution(
                         "Cannot determine home directory for output path".to_string(),
                     )
                 })?
-                .join(".aleph")
-                .join("workspaces")
                 .join("main")
                 .join("output")
                 .join("documents")
@@ -172,7 +170,7 @@ Features:\n\
 - Configurable page size (A4, Letter, A3, or custom)\n\
 - Adjustable font size, line spacing, and margins\n\n\
 PATH RESOLUTION:\n\
-- Relative paths (e.g., \"article.pdf\") → saved to ~/.aleph/output/\n\
+- Relative paths (e.g., \"article.pdf\") → the run's output dir\n\
 - Home paths (e.g., \"~/Desktop/doc.pdf\") → expanded to user's home directory\n\
 - Absolute paths (e.g., \"/Users/name/doc.pdf\") → used as-is\n\n\
 DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" for generated PDFs.";

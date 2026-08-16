@@ -58,18 +58,18 @@ impl Default for AgentInstanceConfig {
         Self {
             agent_id: "main".to_string(),
             display_name: None,
-            workspace: dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".aleph/workspaces/main"),
+            workspace: crate::config::agent_resolver::default_workspace_root().join("main"),
             model: "claude-sonnet-4-5".to_string(),
             max_loops: 100,
             max_tokens: None,
             system_prompt: None,
             tool_whitelist: vec![],
             tool_blacklist: vec![],
-            agent_dir: dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".aleph/agents/main"),
+            // Both roots come from `agent_resolver` — the same functions the
+            // production path (`from_resolved`) resolves through. Spelling
+            // them by hand here made `Default` describe a layout no live agent
+            // ever used once `ALEPH_HOME` was set.
+            agent_dir: crate::config::agent_resolver::default_agents_root().join("main"),
             allowed_links: None,
             allowed_users: None,
             tool_permissions: None,

@@ -295,15 +295,16 @@ impl TeamCreateTool {
             ))
         })?;
 
-        let agents_state_root = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join(".aleph/agents");
-        let agent_state_dir = agents_state_root.join(&spec.id);
-
-        let workspaces_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join(".aleph/workspaces");
-        let workspace_path = workspaces_dir.join(&spec.id);
+        // Both roots come from the manager boot resolved them into, which is
+        // the same rule `agent_resolver` rebuilds this member with after a
+        // restart (`member_provision`'s module doc spells that dependency
+        // out). Resolving them here by hand meant provisioning wrote identity
+        // files and a workspace where the resolver would not look — first
+        // because the hand-rolled path ignored `ALEPH_HOME`, then because it
+        // ignored `[agents.defaults] agents_root / workspace_root`.
+        let roots = crate::config::agent_manager::provisioning_roots(self.agent_manager.as_deref());
+        let agent_state_dir = roots.agents.join(&spec.id);
+        let workspace_path = roots.workspaces.join(&spec.id);
 
         let display_name = spec.name.as_deref().unwrap_or(&spec.id);
 
@@ -368,7 +369,7 @@ impl TeamCreateTool {
                 agent_id: spec.id.clone(),
                 display_name: spec.name.clone(),
                 workspace: workspace_path,
-                agent_dir: agents_state_root.join(&spec.id),
+                agent_dir: agent_state_dir.clone(),
                 model: model.to_string(),
                 system_prompt: combined_prompt,
                 toolset,

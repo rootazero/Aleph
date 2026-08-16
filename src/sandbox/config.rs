@@ -328,7 +328,8 @@ impl Default for LinuxSandboxConfig {
 /// Runtime configuration for the sandbox subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SandboxConfig {
-    /// Root for per-session workspaces. Defaults to `~/.aleph/workspaces`.
+    /// Root for per-session workspaces. Defaults to `<config_dir>/workspaces`
+    /// (`ALEPH_HOME`-aware — this is the root the jail is anchored to).
     #[serde(default = "default_workspace_root")]
     pub workspace_root: PathBuf,
 
@@ -409,14 +410,14 @@ pub struct SandboxConfig {
 }
 
 fn default_workspace_root() -> PathBuf {
-    dirs::home_dir().map_or_else(
-        || {
-            // Fall back to a known absolute path to avoid creating workspaces
-            // in an arbitrary working directory.
-            PathBuf::from("/tmp/.aleph/workspaces")
-        },
-        |home| home.join(".aleph").join("workspaces"),
-    )
+    // This is the root the sandbox jails into, so a second answer for it is a
+    // containment divergence rather than a cosmetic one: under a relocated
+    // `ALEPH_HOME` the jail sat in a directory no other subsystem knew about.
+    // `paths::get_workspaces_dir` is the single derivation; the fallback keeps
+    // the historical known-absolute path for the no-home case so workspaces
+    // still never land in an arbitrary working directory.
+    crate::utils::paths::get_workspaces_dir()
+        .unwrap_or_else(|_| PathBuf::from("/tmp/.aleph/workspaces"))
 }
 
 const fn default_enabled() -> bool {

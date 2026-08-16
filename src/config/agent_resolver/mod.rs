@@ -205,10 +205,7 @@ impl AgentDefinitionResolver {
     ) -> PathBuf {
         // Warn if explicit workspace is set (deprecated, ignored)
         if agent.workspace.is_some() {
-            let root = defaults
-                .workspace_root
-                .as_ref()
-                .map_or_else(default_workspace_root, |p| resolve_user_path(p));
+            let root = workspace_root_for(defaults);
             tracing::warn!(
                 "Agent '{}': explicit workspace path is deprecated, using {}/{}",
                 agent.id,
@@ -218,12 +215,7 @@ impl AgentDefinitionResolver {
         }
 
         // Enforce 1:1 binding: workspace dir = agent_id
-        let root = defaults
-            .workspace_root
-            .as_ref()
-            .map_or_else(default_workspace_root, |p| resolve_user_path(p));
-
-        root.join(&agent.id)
+        workspace_root_for(defaults).join(&agent.id)
     }
 
     /// Resolve the agent state directory path.
@@ -232,11 +224,7 @@ impl AgentDefinitionResolver {
         agent: &AgentDefinition,
         defaults: &AgentDefaults,
     ) -> PathBuf {
-        let root = defaults
-            .agents_root
-            .as_ref()
-            .map_or_else(default_agents_root, |p| resolve_user_path(p));
-        root.join(&agent.id)
+        agents_root_for(defaults).join(&agent.id)
     }
 
     /// Resolve a single agent definition into a `ResolvedAgent`.
@@ -484,12 +472,42 @@ fn resolve_user_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// Where agent workspaces live for a given `[agents.defaults]`.
+///
+/// The rule — "the configured root if there is one, expanded for a
+/// user-written `~`, else the default" — has exactly one statement, because
+/// it had three inside this file alone and a provisioning site that restates
+/// it invariably drops the configured half. Anything that *creates* or
+/// *archives* an agent's directories must agree with this function, since it
+/// is what rebuilds every agent after a restart; see
+/// [`crate::config::agent_manager::provisioning_roots`], which is how the
+/// tools reach it.
+#[must_use]
+pub fn workspace_root_for(defaults: &AgentDefaults) -> PathBuf {
+    defaults
+        .workspace_root
+        .as_ref()
+        .map_or_else(default_workspace_root, |p| resolve_user_path(p))
+}
+
+/// Where agent state directories live for a given `[agents.defaults]`.
+///
+/// See [`workspace_root_for`] — same rule, sibling root.
+#[must_use]
+pub fn agents_root_for(defaults: &AgentDefaults) -> PathBuf {
+    defaults
+        .agents_root
+        .as_ref()
+        .map_or_else(default_agents_root, |p| resolve_user_path(p))
+}
+
 /// Default workspace root directory: `<config_dir>/workspaces`.
 ///
 /// Workspaces hold runtime data (tool output, project files),
 /// NOT identity files (SOUL.md, AGENTS.md, MEMORY.md) — those live under `agents/`.
 pub(crate) fn default_workspace_root() -> PathBuf {
-    aleph_home().join("workspaces")
+    crate::utils::paths::get_workspaces_dir()
+        .unwrap_or_else(|_| no_home_fallback().join("workspaces"))
 }
 
 /// Default agent state root directory: `<config_dir>/agents`.
@@ -498,14 +516,14 @@ pub(crate) fn default_workspace_root() -> PathBuf {
 /// `SelfConfigTool` writes into. It must therefore be the same resolution: a
 /// second answer for one directory is how identity files end up written where
 /// nothing reads them (2026-08-05 fixed exactly that on the tool side).
-fn default_agents_root() -> PathBuf {
-    aleph_home().join("agents")
+pub(crate) fn default_agents_root() -> PathBuf {
+    crate::utils::paths::get_agents_dir().unwrap_or_else(|_| no_home_fallback().join("agents"))
 }
 
-/// `ALEPH_HOME`-aware Aleph home, with the historical `/tmp` fallback kept for
-/// the (practically unreachable) no-home case so behaviour is unchanged there.
-fn aleph_home() -> PathBuf {
-    crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("/tmp").join(".aleph"))
+/// The historical `/tmp/.aleph` stand-in for the (practically unreachable)
+/// no-home case, kept so behaviour there is unchanged.
+fn no_home_fallback() -> PathBuf {
+    PathBuf::from("/tmp").join(".aleph")
 }
 
 // =============================================================================

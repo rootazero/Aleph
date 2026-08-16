@@ -154,9 +154,12 @@ impl SkillManageTool {
         if let Some(root) = &self.authoring_root {
             return Ok(root.clone());
         }
-        dirs::home_dir()
-            .map(|h| h.join(".aleph").join("skills"))
-            .ok_or_else(|| AlephError::tool("Cannot resolve home directory for skill authoring"))
+        // The loader that has to find what this tool writes is
+        // `paths::user_skills_dirs`, which goes through `get_skills_dir()`.
+        // Resolving the same directory by hand here made authoring the writing
+        // half of a writer/reader split: under a relocated `ALEPH_HOME` a
+        // created skill was never picked up, and nothing errored.
+        crate::utils::paths::get_skills_dir()
     }
 
     // --- shared validation -------------------------------------------------
@@ -732,6 +735,28 @@ mod tests {
         system.init(vec![root.clone()]).await;
         let tool = SkillManageTool::new(system).with_authoring_root(root.clone());
         (tool, root, (dir, home))
+    }
+
+    /// A created skill has to land somewhere the loader will look.
+    ///
+    /// `authoring_root` resolved the real home by hand while
+    /// `paths::user_skills_dirs` goes through `get_skills_dir()`, so under a
+    /// relocated `ALEPH_HOME` `action='create'` reported success and the skill
+    /// was never hot-loaded. Note this asserts the *production* branch — the
+    /// other tests here inject an authoring root and would pass either way.
+    #[test]
+    fn the_production_authoring_root_is_where_the_skill_loader_looks() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let tool = SkillManageTool::new(SkillSystem::new());
+        let authored = tool.authoring_root().expect("authoring root resolves");
+        let loaded = crate::utils::paths::get_skills_dir().expect("skills dir resolves");
+        assert_eq!(
+            authored,
+            loaded,
+            "skills are written to {} but loaded from {}",
+            authored.display(),
+            loaded.display()
+        );
     }
 
     fn create_args(name: &str, body: &str) -> SkillManageArgs {

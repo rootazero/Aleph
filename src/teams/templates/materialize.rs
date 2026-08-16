@@ -5,7 +5,6 @@
 //! and the gateway RPC handler with the same semantics.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use serde::Serialize;
 use tracing::{info, warn};
@@ -438,11 +437,12 @@ async fn provision_member(
         ))
     })?;
 
-    let agents_root = aleph_home().join("agents");
-    let agent_state_dir = agents_root.join(&member.id);
-
-    let workspaces_root = aleph_home().join("workspaces");
-    let workspace_path = workspaces_root.join(&member.id);
+    // Same rule as `team_create`'s inline members and `agent_create`: the
+    // roots boot resolved from `[agents.defaults]`, not the unconfigured
+    // default layout. See `config::agent_manager::provisioning_roots`.
+    let roots = crate::config::agent_manager::provisioning_roots(deps.agent_manager.as_deref());
+    let agent_state_dir = roots.agents.join(&member.id);
+    let workspace_path = roots.workspaces.join(&member.id);
 
     let display_name = member.name.as_deref().unwrap_or(&member.id);
 
@@ -609,12 +609,6 @@ async fn inject_role_prompt(deps: &MaterializeDeps, agent_id: &str, role: &str, 
             "team_template: failed to inject role prompt into SOUL.md"
         );
     }
-}
-
-/// Aleph home, or the CWD when it cannot be resolved at all.
-/// Single source: [`crate::utils::paths::get_config_dir`] (see `canvas_io`).
-fn aleph_home() -> PathBuf {
-    crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 // Errors thrown by helpers wrap `AlephError` only via `Materialize` so the

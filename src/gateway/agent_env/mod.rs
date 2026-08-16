@@ -458,9 +458,9 @@ pub struct AgentEnvStoreConfig {
 impl Default for AgentEnvStoreConfig {
     fn default() -> Self {
         Self {
-            db_path: dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".aleph/data/agent_envs.db"),
+            db_path: aleph_protocol::paths::data_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp").join(".aleph").join("data"))
+                .join("agent_envs.db"),
             default_profile: "default".to_string(),
         }
     }
