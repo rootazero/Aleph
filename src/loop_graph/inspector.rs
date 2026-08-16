@@ -85,9 +85,17 @@ pub struct ImpactReport {
     /// `Ok(None)` if the node does not exist, so the caller can short-circuit.
     pub removed_node: Option<GraphNode>,
     /// Nodes that would become naked (no `watches`/`audits` from a runnable
-    /// source) after the removal. Mirrors [`crate::loop_graph::store::lint`]
-    /// on the simulated post-state.
+    /// source) BECAUSE OF this removal — i.e. covered before, uncovered in
+    /// the simulated post-state. Causal, deliberately: a loop that was
+    /// already naked before the removal is NOT in this list (it is in
+    /// [`Self::already_naked`]), because counting it inflates the blast
+    /// radius and makes the tool's "会失去看守的环" line lie about what the
+    /// operator's action actually breaks.
     pub would_become_naked: Vec<String>,
+    /// Loops that are naked in the simulated post-state but were ALREADY
+    /// naked before the removal — reported separately so the pre-existing
+    /// exposure is visible without being blamed on this removal.
+    pub already_naked: Vec<String>,
     /// `OwnsReference` edges that would become unenforceable because their
     /// `from_id` is the removed node. The store already keeps these rows
     /// dangling on purpose — but the operator should know they are now
@@ -250,13 +258,30 @@ impl<'a> LoopGraphInspector<'a> {
             .map(|n| n.id.as_str())
             .collect();
         let post_edges: Vec<&GraphEdge> = edges.iter().collect();
+        let pre_by_id: HashMap<&str, &GraphNode> =
+            nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         let post_by_id: HashMap<&str, &GraphNode> = nodes
             .iter()
             .filter(|n| n.id != node_id)
             .map(|n| (n.id.as_str(), n))
             .collect();
 
+        // Coverage predicate, evaluated against a node-index: the edges are
+        // identical pre/post (drop_node does not cascade), so the ONLY thing
+        // the removal changes is whether a coverage SOURCE still exists.
+        let has_coverage = |by_id: &HashMap<&str, &GraphNode>, target: &str| -> bool {
+            post_edges.iter().any(|e| {
+                e.to_id == target
+                    && e.from_id != target
+                    && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
+                    && by_id
+                        .get(e.from_id.as_str())
+                        .is_some_and(|s| can_cover_kind(s.kind))
+            })
+        };
+
         let mut would_become_naked = Vec::new();
+        let mut already_naked = Vec::new();
         for n in &nodes {
             if n.id == node_id {
                 continue;
@@ -264,16 +289,16 @@ impl<'a> LoopGraphInspector<'a> {
             if !n.kind.is_optimization_loop() {
                 continue;
             }
-            let watched = post_edges.iter().any(|e| {
-                e.to_id == n.id
-                    && e.from_id != n.id
-                    && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
-                    && post_by_id
-                        .get(e.from_id.as_str())
-                        .is_some_and(|s| can_cover_kind(s.kind))
-            });
-            if !watched {
+            if has_coverage(&post_by_id, &n.id) {
+                continue;
+            }
+            // Naked in the post-state. Was it covered BEFORE? Only then is
+            // the removal the cause; an already-naked loop is pre-existing
+            // exposure, not blast radius.
+            if has_coverage(&pre_by_id, &n.id) {
                 would_become_naked.push(n.id.clone());
+            } else {
+                already_naked.push(n.id.clone());
             }
         }
 
@@ -305,7 +330,11 @@ impl<'a> LoopGraphInspector<'a> {
             if n.id == node_id {
                 continue;
             }
-            if would_become_naked.contains(&n.id) {
+            // The simulated lint mirrors the REAL lint on the post-state,
+            // which flags every naked loop — caused by this removal or not.
+            // (The causal split lives in `would_become_naked` /
+            // `already_naked`; this preview would under-report otherwise.)
+            if would_become_naked.contains(&n.id) || already_naked.contains(&n.id) {
                 lint_findings.push(format!(
                     "裸奔优化环: {} ('{}') 没有任何 watches/audits 入边",
                     n.id, n.label
@@ -316,6 +345,7 @@ impl<'a> LoopGraphInspector<'a> {
         Ok(ImpactReport {
             removed_node,
             would_become_naked,
+            already_naked,
             loses_acl,
             lint_findings,
         })
@@ -652,6 +682,53 @@ mod tests {
             impact.would_become_naked
         );
         assert!(!impact.loses_acl.is_empty() || impact.loses_acl.is_empty()); // sanity
+    }
+
+    /// `would_become_naked` is CAUSAL: a loop already naked before the
+    /// removal is pre-existing exposure, not blast radius. The old predicate
+    /// counted every post-state-naked loop, so the tool's "会失去看守的环"
+    /// line blamed the removal for loops it never watched over.
+    #[test]
+    fn impact_does_not_blame_pre_existing_naked_loops_on_the_removal() {
+        let (_d, s) = store();
+        for (id, kind) in [
+            ("goal:s1", NodeKind::LoopGoal),
+            ("cron:watcher", NodeKind::LoopCron),
+            ("daemon:naked", NodeKind::Daemon),
+        ] {
+            s.upsert_node(&GraphNode::new("main", id, kind, "x", Origin::Llm))
+                .unwrap();
+        }
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "cron:watcher",
+            "goal:s1",
+            EdgeKind::Watches,
+            Origin::Llm,
+        ))
+        .unwrap();
+
+        let inspector = LoopGraphInspector::new(&s, "main");
+        let impact = inspector.impact_of_removing("cron:watcher").unwrap();
+        assert_eq!(
+            impact.would_become_naked,
+            vec!["goal:s1".to_string()],
+            "only the loop that LOSES coverage belongs here: {:?}",
+            impact.would_become_naked
+        );
+        assert_eq!(
+            impact.already_naked,
+            vec!["daemon:naked".to_string()],
+            "pre-existing exposure is reported separately: {:?}",
+            impact.already_naked
+        );
+        // The simulated lint, like the real one, still flags both.
+        let naked_findings = impact
+            .lint_findings
+            .iter()
+            .filter(|f| f.contains("裸奔优化环"))
+            .count();
+        assert_eq!(naked_findings, 2, "{:?}", impact.lint_findings);
     }
 
     #[test]

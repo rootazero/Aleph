@@ -103,10 +103,17 @@ pub fn to_json(store: &LoopGraphStore, agent_id: &str) -> Result<String> {
     let mut nodes = store.list_nodes(agent_id)?;
     let mut edges = store.list_edges(agent_id)?;
     nodes.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
+    // Same total order as `to_dot` — (from_id, to_id, kind) lexicographic. An
+    // earlier draft cross-wired the tuple fields ((a.from, b.from, a.kind)
+    // against (b.from, a.to, b.kind)), which is not a total order at all: it
+    // compared one edge's kind against the OTHER edge's to_id. `sort_by`
+    // tolerated it silently and produced an arbitrary permutation, so DOT and
+    // JSON disagreed about edge order and byte-diffs against the audit log
+    // were meaningless — the exact property the header comment promises.
     edges.sort_by(|a, b| {
-        (a.from_id.as_str(), b.from_id.as_str(), a.kind.as_str()).cmp(&(
+        (a.from_id.as_str(), a.to_id.as_str(), a.kind.as_str()).cmp(&(
             b.from_id.as_str(),
-            a.to_id.as_str(),
+            b.to_id.as_str(),
             b.kind.as_str(),
         ))
     });
@@ -335,6 +342,113 @@ mod tests {
         assert_eq!(j1, j2);
     }
 
+    /// The cross-wired comparator this guards against compared one edge's kind
+    /// against the OTHER edge's to_id, so DOT (correct) and JSON (broken)
+    /// disagreed about edge order. The adversarial case: same `from_id`, and
+    /// a pair whose (kind, to_id) strings order OPPOSITELY under the broken
+    /// tuple — `watches` > `goal:a` while `audits` < `goal:b` — so the broken
+    /// comparator emits the audits edge first where the correct one emits the
+    /// edge to `goal:a` first.
+    #[test]
+    fn json_edge_order_matches_dot_edge_order() {
+        let (_d, s) = store();
+        for id in ["cron:w", "goal:a", "goal:b"] {
+            let kind = if id.starts_with("cron:") {
+                NodeKind::LoopCron
+            } else {
+                NodeKind::LoopGoal
+            };
+            s.upsert_node(&GraphNode::new("main", id, kind, "x", Origin::Llm))
+                .unwrap();
+        }
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "cron:w",
+            "goal:a",
+            EdgeKind::Watches,
+            Origin::Llm,
+        ))
+        .unwrap();
+        s.upsert_edge(&GraphEdge::new(
+            "main",
+            "cron:w",
+            "goal:b",
+            EdgeKind::Audits,
+            Origin::Llm,
+        ))
+        .unwrap();
+
+        let dot = to_dot(&s, "main").unwrap();
+        let dot_order: Vec<&str> = dot
+            .lines()
+            .filter(|l| l.contains("->"))
+            .map(|l| l.trim())
+            .collect();
+        assert_eq!(dot_order.len(), 2, "{dot}");
+        assert!(
+            dot_order[0].starts_with("cron_w -> goal_a"),
+            "dot must order by to_id first: {dot_order:?}"
+        );
+
+        let json = to_json(&s, "main").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json_order: Vec<&str> = parsed["edges"]
+            .as_array()
+            .expect("edges array")
+            .iter()
+            .map(|e| e["to_id"].as_str().expect("to_id"))
+            .collect();
+        assert_eq!(
+            json_order,
+            vec!["goal:a", "goal:b"],
+            "json must use the same (from_id, to_id, kind) order as dot"
+        );
+    }
+
+    /// Determinism against INSERTION order, not just against a second read of
+    /// the same store: the same edge set written in two different orders must
+    /// serialize to identical bytes (the audit log byte-diffs these). The
+    /// store's own ORDER BY feeds `to_json` a sorted vec, so this only fails
+    /// if the in-memory sort is not a genuine total order — exactly the
+    /// regression this test pins.
+    #[test]
+    fn json_bytes_are_identical_for_shuffled_insertion_order() {
+        let edges: Vec<(&str, &str, EdgeKind)> = vec![
+            ("cron:w", "goal:b", EdgeKind::Audits),
+            ("cron:w", "goal:a", EdgeKind::Watches),
+            ("cron:y", "cron:w", EdgeKind::OwnsReference),
+            ("cron:x", "goal:a", EdgeKind::Feeds),
+        ];
+        let mut shuffled = edges.clone();
+        shuffled.reverse();
+
+        let build = |order: &[(&str, &str, EdgeKind)]| {
+            let (_d, s) = store();
+            // upsert_edge requires both endpoints to exist. Pin every
+            // timestamp: created_at_ms/updated_at_ms serialize into the JSON
+            // and a millisecond boundary between the two builds would flake
+            // the byte comparison for a reason that has nothing to do with
+            // ordering.
+            for id in ["cron:w", "cron:x", "cron:y", "goal:a", "goal:b"] {
+                let kind = if id.starts_with("cron:") {
+                    NodeKind::LoopCron
+                } else {
+                    NodeKind::LoopGoal
+                };
+                let mut n = GraphNode::new("main", id, kind, "x", Origin::Llm);
+                n.created_at_ms = 1_700_000_000_000;
+                n.updated_at_ms = 1_700_000_000_000;
+                s.upsert_node(&n).unwrap();
+            }
+            for (from, to, kind) in order {
+                let mut e = GraphEdge::new("main", *from, *to, *kind, Origin::Llm);
+                e.created_at_ms = 1_700_000_000_000;
+                s.upsert_edge(&e).unwrap();
+            }
+            to_json(&s, "main").unwrap()
+        };
+        assert_eq!(build(&edges), build(&shuffled));
+    }
     #[test]
     fn export_handles_large_graph_within_reasonable_byte_size() {
         let (_d, s) = store();

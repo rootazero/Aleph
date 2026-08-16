@@ -1065,6 +1065,15 @@ impl AlephTool for LoopGraphTool {
                         report.would_become_naked.join(", ")
                     ));
                 }
+                // Pre-existing exposure is not this removal's blast radius —
+                // report it on its own line so "会失去看守的环" stays causal.
+                if !report.already_naked.is_empty() {
+                    out.push_str(&format!(
+                        "本就无看守的环（{}，非本次移除所致）: {}\n",
+                        report.already_naked.len(),
+                        report.already_naked.join(", ")
+                    ));
+                }
                 if !report.loses_acl.is_empty() {
                     let pairs: Vec<String> = report
                         .loses_acl

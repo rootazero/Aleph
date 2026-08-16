@@ -163,25 +163,30 @@ impl SnapshotStore {
         let edges_json = serde_json::to_string(&edges)
             .map_err(|e| AlephError::other(format!("snapshot serialize edges: {e}")))?;
         let now_ms = Utc::now().timestamp_millis();
-        self.lock()
-            .execute(
-                "INSERT INTO snapshots
-                     (label, taken_at_ms, node_count, edge_count, nodes_json, edges_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    label,
-                    now_ms,
-                    nodes.len() as i64,
-                    edges.len() as i64,
-                    nodes_json,
-                    edges_json,
-                ],
-            )
-            .map_err(|e| AlephError::other(format!("snapshot insert: {e}")))?;
+        // One lock for insert + rowid. Taking the lock twice (execute, then a
+        // fresh `lock()` for `last_insert_rowid`) let a concurrent `capture`
+        // slip its own INSERT between the two — the rowid read then returned
+        // the OTHER capture's id and this caller's snapshot was filed under a
+        // number that points at someone else's rows forever.
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO snapshots
+                 (label, taken_at_ms, node_count, edge_count, nodes_json, edges_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                label,
+                now_ms,
+                nodes.len() as i64,
+                edges.len() as i64,
+                nodes_json,
+                edges_json,
+            ],
+        )
+        .map_err(|e| AlephError::other(format!("snapshot insert: {e}")))?;
         // `execute` returns rows-affected (1), not the id — `get_snapshot` keyed
         // on that would read the FIRST row forever and every diff came out
         // empty. `last_insert_rowid` is the only correct answer.
-        Ok(self.lock().last_insert_rowid())
+        Ok(conn.last_insert_rowid())
     }
 
     /// List snapshots, newest first. No filtering; the typical operator query
@@ -654,6 +659,44 @@ mod tests {
         assert!(s.delete_snapshot(id).unwrap());
         assert!(s.list_snapshots().unwrap().is_empty());
         assert!(!s.delete_snapshot(id).unwrap(), "second delete is a no-op");
+    }
+
+    /// Two threads capturing at once must each get back the id of THEIR OWN
+    /// rows. The two-lock version (execute, then re-lock for the rowid) let
+    /// thread B's INSERT land between thread A's insert and rowid read, so A
+    /// walked away with B's id — and the audit log's "snapshot #N" reference
+    /// pointed at the wrong topology permanently.
+    #[test]
+    fn concurrent_captures_return_their_own_ids() {
+        let (_d, g, s) = store();
+        g.upsert_node(&goal("s1")).unwrap();
+        let g = std::sync::Arc::new(g);
+        let s = std::sync::Arc::new(s);
+
+        let mut handles = Vec::new();
+        for label in ["thread-a", "thread-b"] {
+            let g = std::sync::Arc::clone(&g);
+            let s = std::sync::Arc::clone(&s);
+            handles.push(std::thread::spawn(move || {
+                let id = s.capture(&g, "main", label).unwrap();
+                (id, label)
+            }));
+        }
+        let mut seen = std::collections::BTreeMap::new();
+        for h in handles {
+            let (id, label) = h.join().expect("capture thread panicked");
+            assert!(
+                seen.insert(id, label).is_none(),
+                "two captures returned the same id {id}"
+            );
+        }
+        for (id, label) in seen {
+            let snap = s.get_snapshot(id).unwrap().expect("snapshot present");
+            assert_eq!(
+                snap.summary.label, label,
+                "id {id} must name the snapshot its own capture wrote"
+            );
+        }
     }
 
     /// The contract the audit template relies on: `nodes_json` is a faithful
