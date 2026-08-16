@@ -16,10 +16,6 @@ pub trait Entity {
 /// that are treated as a unit for data changes.
 pub trait AggregateRoot: Entity {}
 
-/// Represents a Value Object: an object that describes a characteristic but has no identity.
-/// Equality is based on its attributes.
-pub trait ValueObject: Eq + Clone {}
-
 pub mod skill;
 
 #[cfg(test)]
