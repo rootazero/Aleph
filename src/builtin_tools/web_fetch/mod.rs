@@ -160,7 +160,7 @@ impl WebFetchTool {
             for provider in &self.fetch_providers {
                 match provider.fetch(&args.url).await {
                     Ok(markdown) => {
-                        let content = self.truncate_content(markdown);
+                        let content = self.truncate_fetched(&markdown);
                         let summary = format!(
                             "已获取网页内容 ({} 字符, {})",
                             content.len(),
@@ -271,7 +271,12 @@ impl WebFetchTool {
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
-        // Wrap with external content boundary markers
+        // Wrap with external content boundary markers. The content arrives
+        // raw-capped from extraction; `truncate_fetched` re-caps the
+        // SANITIZED image so placeholder growth (a 3-char `<s>` becomes a
+        // 23-char `[REMOVED_SPECIAL_TOKEN]`) cannot push the fenced payload
+        // past `max_content_length`.
+        let content = self.truncate_fetched(&content);
         let wrapped_content = wrap_external_content(
             &content,
             ContentSource::WebFetch {
@@ -302,8 +307,26 @@ impl WebFetchTool {
     }
 
     /// Truncate content to maximum length
-    fn truncate_content(&self, content: String) -> String {
-        extract::truncate_content(content, self.max_content_length)
+    /// Cap fetched content at `max_content_length` chars of SANITIZED text.
+    ///
+    /// The cap applies to what the model actually reads: sanitization inside
+    /// [`wrap_external_content`] can grow the string (tokenizer markers
+    /// become 23-char placeholders), so truncating raw text to the cap first
+    /// would still let the fenced payload exceed it — and a raw cut can land
+    /// inside a forged boundary marker, leaving a stub the sanitizer cannot
+    /// see. `truncate_sanitized_external_content` solves both; the "..."
+    /// suffix convention from the old raw truncation is preserved so
+    /// downstream consumers still see the truncation signal.
+    fn truncate_fetched(&self, content: &str) -> String {
+        let t = crate::security::content_sanitizer::truncate_sanitized_external_content(
+            content,
+            self.max_content_length,
+        );
+        if t.truncated {
+            format!("{}...", t.text)
+        } else {
+            t.text
+        }
     }
 
     /// Enhanced extraction pipeline: pre-clean → Readability → Markdown/Text.
@@ -472,18 +495,35 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_content() {
+    fn test_truncate_fetched() {
         let tool = WebFetchTool::new();
 
         // Short content should not be truncated
         let short = "Hello world".to_string();
-        assert_eq!(tool.truncate_content(short.clone()), short);
+        assert_eq!(tool.truncate_fetched(&short), short);
 
         // Long content should be truncated
         let long = "a".repeat(15000);
-        let truncated = tool.truncate_content(long);
-        assert!(truncated.len() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3); // +3 for "..."
+        let truncated = tool.truncate_fetched(&long);
+        assert!(
+            truncated.chars().count() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3
+        ); // +3 for "..."
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn fetched_truncation_caps_the_sanitized_image() {
+        // `<s>` is 3 raw chars but sanitizes to a 23-char placeholder. The
+        // cap must absorb that growth, not be defeated by it.
+        let tool = WebFetchTool::new();
+        let hostile = "<s>".repeat(4000); // 12_000 raw chars → far over cap sanitized
+        let out = tool.truncate_fetched(&hostile);
+        assert!(
+            out.chars().count() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3,
+            "sanitized image exceeded cap: {} chars",
+            out.chars().count()
+        );
+        assert!(!out.contains("<s>"), "raw marker survived: {:.80}", out);
     }
 
     #[test]
