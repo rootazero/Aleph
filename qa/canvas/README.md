@@ -82,6 +82,18 @@ both edits survive in both tabs, and doc.json holds both (revision advanced
 past both commits). No config change needed — the `/ws` origin policy allows
 any loopback origin regardless of port. Verified 2026-08-17: see spec §8.
 
+The oracle scans the **stream**, not each TCP chunk. It used to test
+`marker in chunk`, so a 6-byte needle split across a 64 KiB read boundary
+was missed — rare enough never to show up in a run, and quietly unsound the
+whole time. `ConflictScanner` now carries `len(marker) - 1` bytes across
+reads: every occurrence is found, none twice. `python3
+qa/canvas/latency_proxy.py --self-test` drives the boundary case (and four
+others) directly, so the claim is falsifiable rather than asserted.
+The remaining honest caveat is narrower than the old one: the oracle reads
+plaintext, so it is blind to a downstream frame that was compressed
+(`permessage-deflate`) or otherwise re-encoded — if the line never appears,
+cross-check doc.json revisions before concluding no conflict occurred.
+
 ## The request-log oracle (always on)
 
 `run.sh` wires `mock_anthropic.py`'s 5th argument unconditionally:
@@ -137,7 +149,14 @@ from the machine's LAN IP. The seeding half is now executable,
 * `python3 qa/canvas/member_seed.py <port> --tls` over loopback — creates
   the member user, a project room with the member on the roster, an
   operator-private canvas, a room canvas, and a one-time bootstrap ticket;
-  it prints a ready-to-open member URL at the LAN IP;
+  it prints a ready-to-open member URL at the LAN IP. Every step is
+  find-or-create: the server has no natural key for any of them
+  (`display_name`, project name and canvas title are all presentation
+  labels with no uniqueness constraint — correctly, since nothing resolves a
+  principal by name), so the first version left a duplicate "QA Member" and,
+  worse, a duplicate canvas pair behind whenever a run died halfway and was
+  retried — which silently breaks the operator control group's *counting*
+  assertion below. The reused ids are listed in the script's output;
 * open that URL in a browser, click through the self-signed-cert
   interstitial (TOFU), and assert (all held on 2026-08-17): the member's
   library shows ONLY the room canvas; the private canvas id over the
@@ -148,6 +167,71 @@ from the machine's LAN IP. The seeding half is now executable,
 This scenario deliberately boots loopback-only; the LAN bind is a config
 edit away, kept out of the default run so an unattended QA box never opens
 a port by accident.
+
+## Item 10: the left-column gallery (added 2026-08-17, verified same day)
+
+The library moved out of the main area into `ModeSidebar`, so the assertions
+that used to be "the list page renders" are now about a list that coexists
+with the open board. Drive it in one browser tab. All of the below held on 2026-08-17 against a
+live server; the two worth knowing how to drive are noted inline.
+
+* **Cold load** — open `/canvas` on a fresh reload with the socket still
+  connecting: the list must read *Loading…*, and only after `canvas.list`
+  answers may it read *No canvases yet*. Seeing "no canvases" first is the
+  bug this state exists to prevent, and it is only observable on a real
+  socket — the unit tests hold `rows_loaded` but not the timing.
+* **Open + highlight** — click a row: the board opens in the main area, the
+  row takes the active tile styling, and the row list stays put (no
+  navigation away from the list, which was the whole point).
+* **Rename, surface 1** — hover a row, click the pencil, type, Enter: the row
+  title changes, and so does the header of the open board if it is that
+  canvas. Refuse cases: an empty title and a 300-character title must both
+  keep the input open with a red reason, and must NOT reach the wire.
+* **Rename, surface 2** — click the title in the board header, type, Enter:
+  same effect, and the sidebar row follows. Escape on either surface reverts
+  without a request.
+* **Rename while drawing** — with a canvas open, apply shapes to it
+  continuously (its row's shape count and timestamp change on every batch)
+  while a rename input is open on that same row: the caret must survive. This
+  is the regression the id-keyed `For` plus leaf memos exist for; the old
+  `(id, revision)` key rebuilt the row — and the input — on every stroke.
+  **Drive both halves from inside one page evaluation**: open a second
+  `WebSocket` to `/ws` from the page itself and apply from there. Two reasons —
+  a second browser tab or an out-of-process client makes the window lose
+  focus, and a window blur *commits the rename* (correct behaviour, but it
+  ends the test); and the assertion has to interleave with the applies.
+  Assert all four: the row's meta line advances (1→2→3… 个形状, so the test is
+  not vacuous), `document.contains(rowNode)` stays true (the node was not
+  remounted), the input is still `document.activeElement`, and
+  `selectionStart` is where you parked it. Held for 5 consecutive applies.
+* **Search** — type into the filter: matching rows remain (title *and* id
+  match), a query matching nothing reads *No canvases match* (not *No
+  canvases yet* — different sentence, different state), and clearing the box
+  restores the full list in the server's most-recently-updated-first order.
+* **Delete** — the trash icon arms an inline confirm inside the row;
+  confirming removes the row, and if that canvas was open the board falls
+  back to the welcome pane rather than leaving an editor bound to a document
+  the server no longer has.
+
+### What the browser cannot reach: `title_gate_probe.py`
+
+`check_title` refuses three things, and a browser can only produce two of
+them. `<input type="text">` runs the DOM's value-sanitization algorithm, which
+**strips CR and LF outright** — a person typing into the rename box can never
+submit a newline, so the control-character arm is unreachable from the Panel
+by construction. (Discovered the honest way: the browser pass "failed" that
+case by renaming a canvas to `onetwo`, which is exactly what a sanitized
+single-line input should do.)
+
+That arm exists for the other two writers — the `canvas` tool and any raw
+JSON-RPC client — and `python3 qa/canvas/title_gate_probe.py [port] [--tls]`
+is what exercises it, on a live wire, against both writers. It also pins the
+property that makes the gate worth having: a refused `SetDocMeta` leaves the
+document *and its revision* untouched, so nothing half-lands and a rejected
+batch costs nobody a revision. Twelve assertions; run it after any change to
+the gate or to `ops_shape`.
+
+Verified 2026-08-17: 12/12 PASS.
 
 ## Where the automated half lives
 

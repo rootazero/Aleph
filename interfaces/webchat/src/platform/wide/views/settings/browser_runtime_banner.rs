@@ -92,9 +92,7 @@ pub fn RuntimeSummaryBanner() -> impl IntoView {
     view! {
         {move || {
             // Still in flight: the banner says nothing rather than guessing.
-            let Some(state) = banner.get() else {
-                return None;
-            };
+            let state = banner.get()?;
             match state {
                 BannerState::Ready => {
                     Some(view! {

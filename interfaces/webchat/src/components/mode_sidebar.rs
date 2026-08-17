@@ -96,9 +96,12 @@ pub fn ModeSidebar() -> impl IntoView {
                     PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
                     PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
                     PanelMode::Memory => view! { <MemorySidebar /> }.into_any(),
-                    // The canvas library lives in the main area; no secondary
-                    // menu in v1 (the NavMenu below still switches sections).
-                    PanelMode::Canvas => ().into_any(),
+                    // The canvas library IS this section's secondary menu:
+                    // titles on the left, the open board on the right, so
+                    // switching canvases no longer means leaving the one you
+                    // are drawing on. The main area keeps the editor (and a
+                    // welcome pane when nothing is open).
+                    PanelMode::Canvas => view! { <crate::views::canvas::CanvasSidebar /> }.into_any(),
                     PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
                     PanelMode::Projects => view! { <crate::components::sidebar::projects::ProjectsSidebar /> }.into_any(),
                     PanelMode::Extensions => view! { <crate::views::extensions::ExtensionsSidebar /> }.into_any(),

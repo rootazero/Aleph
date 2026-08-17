@@ -24,9 +24,14 @@ pub use sleep_inhibitor::LinuxPower;
 pub use system::LinuxSystem;
 
 use aleph_desktop::traits::{
-    AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
-    PimCapability, PowerCapability, ScreenCapability, SystemCapability,
+    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, PowerCapability,
+    ScreenCapability, SystemCapability,
 };
+// Gated exactly like its only use (`LinuxPlatform::ax`): AT-SPI2 exists only on
+// Linux, so on any other host this import is dead and warns — which is why it
+// only shows up when the limb crate is checked cross-platform.
+#[cfg(target_os = "linux")]
+use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::NativeScreen;
 

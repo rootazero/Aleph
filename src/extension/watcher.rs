@@ -113,6 +113,9 @@ pub struct ExtensionWatcher {
     callback: ExtensionChangeCallback,
     /// Debounced file watcher (None when stopped)
     debouncer: Arc<Mutex<Option<Debouncer<RecommendedWatcher, FileIdMap>>>>,
+    /// Runtime-data subtrees to exclude. `None` derives the production set
+    /// from the path helpers; tests inject a scratch tree.
+    excluded_dirs: Option<Vec<PathBuf>>,
 }
 
 impl ExtensionWatcher {
@@ -157,11 +160,7 @@ impl ExtensionWatcher {
             }
         }
 
-        Self {
-            watch_dirs,
-            callback: Arc::new(callback),
-            debouncer: Arc::new(Mutex::new(None)),
-        }
+        Self::new_with_dirs(watch_dirs, callback)
     }
 
     /// Create a watcher for specific directories (test/custom use)
@@ -170,10 +169,34 @@ impl ExtensionWatcher {
         F: Fn(ExtensionChangeEvent) + Send + Sync + 'static,
     {
         Self {
-            watch_dirs,
+            // Canonicalise the roots as well, so that the paths `notify`
+            // reports are canonical on inotify and Windows too — not just on
+            // macOS, where FSEvents resolves them for us. Normalising only one
+            // side of the comparison fixes one platform and leaves the others
+            // broken. `notes/watcher.rs` resolves its root for the mirror
+            // reason (there an unresolved root makes `strip_prefix` classify
+            // the entire vault as "not a note").
+            watch_dirs: watch_dirs
+                .iter()
+                .map(|d| canonicalize_best_effort(d))
+                .collect(),
             callback: Arc::new(callback),
             debouncer: Arc::new(Mutex::new(None)),
+            excluded_dirs: None,
         }
+    }
+
+    /// Test seam: pin the runtime-data exclusion set to a scratch tree.
+    ///
+    /// Production always derives the set from the path helpers; tests cannot,
+    /// because those helpers read the process-global home and libtest runs in
+    /// parallel (an env-var switch would be shared mutable state across
+    /// sibling tests).
+    #[cfg(test)]
+    #[must_use]
+    fn with_excluded_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
+        self.excluded_dirs = Some(dirs);
+        self
     }
 
     /// Start watching extension directories
@@ -194,22 +217,7 @@ impl ExtensionWatcher {
 
         let callback = Arc::clone(&self.callback);
 
-        // Runtime data directories are written constantly during normal chat
-        // turns (sessions, memory notes, runtime ledger, logs). They are not
-        // extension sources, so watching them triggers expensive full reloads
-        // that contend with the hot path. Exclude them from the debounced event
-        // set.
-        let runtime_data_dirs: Vec<PathBuf> = [
-            crate::utils::paths::get_data_dir().ok(),
-            crate::utils::paths::get_runtimes_dir().ok(),
-            crate::utils::paths::get_note_memory_dir()
-                .ok()
-                .and_then(|p| p.parent().map(PathBuf::from)),
-            crate::logging::file_appender::get_log_directory().ok(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let runtime_data_dirs = self.effective_runtime_data_dirs();
 
         // Create debounced watcher
         let mut debouncer = new_debouncer(
@@ -224,7 +232,7 @@ impl ExtensionWatcher {
                             .iter()
                             .flat_map(|e| e.paths.iter().cloned())
                             .filter(|p| Self::should_watch_file(p))
-                            .filter(|p| !runtime_data_dirs.iter().any(|d| p.starts_with(d)))
+                            .filter(|p| !Self::is_runtime_data_path(p, &runtime_data_dirs))
                             .collect();
 
                         if changed_paths.is_empty() {
@@ -311,6 +319,50 @@ impl ExtensionWatcher {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .is_some()
+    }
+
+    /// Directories that hold runtime data rather than extension sources.
+    ///
+    /// Sessions, memory notes, the runtime ledger, canvas documents and logs
+    /// all live under these roots and are rewritten constantly during normal
+    /// operation. They are not extension sources, so letting their events
+    /// through triggers a full (expensive) extension reload — and a
+    /// `tools.changed` broadcast to every connected client — on the hot path.
+    fn default_runtime_data_dirs() -> Vec<PathBuf> {
+        [
+            crate::utils::paths::get_data_dir().ok(),
+            crate::utils::paths::get_runtimes_dir().ok(),
+            crate::utils::paths::get_note_memory_dir()
+                .ok()
+                .and_then(|p| p.parent().map(PathBuf::from)),
+            crate::logging::file_appender::get_log_directory().ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// The exclusion set this watcher will actually apply, canonicalised.
+    ///
+    /// Canonicalisation is not cosmetic. `notify` reports events under the
+    /// *resolved* path (macOS FSEvents rewrites `/var` -> `/private/var`), so
+    /// an exclusion spelled through a symlink — which is how every path helper
+    /// spells it when `ALEPH_HOME` sits under `$TMPDIR`, `/tmp`, or a
+    /// symlinked home — matches nothing, and the whole exclusion set is inert.
+    /// Both sides of the comparison go through the same normaliser so they
+    /// cannot drift; see [`canonicalize_best_effort`].
+    fn effective_runtime_data_dirs(&self) -> Vec<PathBuf> {
+        self.excluded_dirs
+            .clone()
+            .unwrap_or_else(Self::default_runtime_data_dirs)
+            .iter()
+            .map(|d| canonicalize_best_effort(d))
+            .collect()
+    }
+
+    /// True when `path` lives inside one of `runtime_dirs`.
+    fn is_runtime_data_path(path: &Path, runtime_dirs: &[PathBuf]) -> bool {
+        runtime_dirs.iter().any(|d| path.starts_with(d))
     }
 
     /// Check if a file should be watched based on extension
@@ -448,6 +500,9 @@ mod tests {
         assert!(!watcher.is_running());
     }
 
+    /// Watch roots are stored canonicalised, so that the paths `notify`
+    /// reports and the runtime-data exclusion set are spelled the same way on
+    /// every platform.
     #[test]
     fn test_watcher_with_custom_dirs() {
         let temp_dir = TempDir::new().unwrap();
@@ -455,7 +510,7 @@ mod tests {
 
         let watcher = ExtensionWatcher::new_with_dirs(vec![path.clone()], |_| {});
         assert_eq!(watcher.watch_dirs.len(), 1);
-        assert_eq!(watcher.watch_dirs[0], path);
+        assert_eq!(watcher.watch_dirs[0], path.canonicalize().unwrap());
     }
 
     #[test]
@@ -621,6 +676,98 @@ mod tests {
 
         // Callback should have been called
         assert!(called.load(Ordering::SeqCst));
+
+        watcher.stop().unwrap();
+    }
+    /// A symlinked home is the normal case for every isolated deployment:
+    /// `ALEPH_HOME` under `$TMPDIR` (macOS resolves `/var` -> `/private/var`),
+    /// a `/tmp/...` root, or a home directory behind a symlink. The OS
+    /// delivers watch events under the *resolved* path, so an exclusion set
+    /// spelled through the symlink matches nothing and every runtime-data
+    /// write is forwarded as an extension change.
+    #[test]
+    #[cfg(unix)]
+    fn the_runtime_data_exclusion_survives_a_symlinked_root() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real");
+        fs::create_dir_all(real.join("data").join("canvas").join("cv-1")).unwrap();
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // What the OS hands the watcher: the fully resolved path.
+        let event = real
+            .canonicalize()
+            .unwrap()
+            .join("data")
+            .join("canvas")
+            .join("cv-1")
+            .join("doc.json");
+
+        // What a path helper hands the watcher: the same directory, spelled
+        // through the symlink.
+        let watcher = ExtensionWatcher::new_with_dirs(vec![link.clone()], |_| {})
+            .with_excluded_dirs(vec![link.join("data")]);
+
+        let dirs = watcher.effective_runtime_data_dirs();
+        assert!(
+            ExtensionWatcher::is_runtime_data_path(&event, &dirs),
+            "canvas doc.json under the data dir must be excluded even when the \
+             configured exclusion is spelled through a symlink;\n  event = {}\n  \
+             exclusions = {dirs:?}",
+            event.display()
+        );
+    }
+
+    /// End-to-end twin of the above, on live `notify` events. Asserts BOTH
+    /// halves: runtime data is dropped *and* a real extension edit still
+    /// arrives — a watcher that has gone silent would pass the first half
+    /// alone.
+    #[test]
+    #[cfg(unix)]
+    fn a_canvas_write_is_dropped_while_a_skill_edit_still_reloads() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real");
+        fs::create_dir_all(real.join("data").join("canvas").join("cv-1")).unwrap();
+        fs::create_dir_all(real.join("skills")).unwrap();
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let seen: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let watcher = ExtensionWatcher::new_with_dirs(vec![link.clone()], move |ev| {
+            sink.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(ev.changed_paths);
+        })
+        .with_excluded_dirs(vec![link.join("data")]);
+
+        watcher.start().unwrap();
+        thread::sleep(Duration::from_millis(300));
+
+        // Runtime data: must be dropped.
+        fs::write(
+            real.join("data")
+                .join("canvas")
+                .join("cv-1")
+                .join("doc.json"),
+            r#"{"rev":1}"#,
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(1200));
+        let after_canvas = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            after_canvas.is_empty(),
+            "a canvas doc.json write must not reach the extension reload path, got {after_canvas:?}"
+        );
+
+        // Real extension source: must still arrive.
+        fs::write(real.join("skills").join("s.md"), "# skill").unwrap();
+        thread::sleep(Duration::from_millis(1200));
+        let after_skill = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            after_skill.iter().any(|p| p.ends_with("s.md")),
+            "the watcher must still deliver a genuine skill edit, got {after_skill:?}"
+        );
 
         watcher.stop().unwrap();
     }

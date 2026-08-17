@@ -13,6 +13,17 @@ project memory). This turns the seeding half into an executable:
   4. `gateway.ticket.create` a one-time bootstrap ticket for the member,
   5. print the ids and the ready-to-open member URL.
 
+Every step is find-or-create, because a seeder that is not idempotent
+corrupts the very assertions it seeds. Steps 1-3 have no natural key on the
+server: `users` is keyed on `user_id` and `display_name` is a presentation
+label with no uniqueness constraint (correctly so -- nothing resolves a
+principal by name), and the same holds for project names and canvas titles.
+So a run that dies halfway and is retried used to leave behind a second
+"QA Member" principal and, worse, a second "Operator private" / "Room canvas"
+pair -- which silently breaks item 8's counting assertion ("the operator
+control group sees exactly three"). `projects.member.add` needs no such care:
+it is already `INSERT OR IGNORE` server-side.
+
 The browser half stays manual/MCP-driven (that is the point of the QA):
 open the printed URL from the machine's LAN IP — NOT loopback — accept the
 self-signed cert (TOFU), and assert: the member's library shows ONLY the
@@ -45,6 +56,13 @@ except ImportError:
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18798
 TLS = "--tls" in sys.argv
+
+# The names this seeder owns inside a throwaway root. They are the find-or-create
+# keys — see the module docstring for why the server cannot provide one.
+MEMBER_NAME = "QA Member"
+ROOM_NAME = "Canvas QA Room"
+PRIVATE_CANVAS_TITLE = "Operator private"
+ROOM_CANVAS_TITLE = "Room canvas"
 
 
 class Rpc:
@@ -81,21 +99,66 @@ async def main():
         if not connect.get("authorized"):
             sys.exit(f"loopback connect not authorized: {json.dumps(connect)[:200]}")
 
-        member = await rpc.call(
-            "users.create", {"display_name": "QA Member", "role": "member"}
-        )
-        user_id = member["user"]["user_id"]
+        reused = []
 
-        project = await rpc.call("projects.create", {"name": "Canvas QA Room"})
-        project_id = project["project"]["id"]
+        def note(kind, obj_id, was_reused):
+            if was_reused:
+                reused.append(f"{kind}={obj_id}")
+            return obj_id
+
+        # --- 1. member principal -------------------------------------------
+        users = (await rpc.call("users.list", {})).get("users") or []
+        existing = next(
+            (
+                u
+                for u in users
+                if u.get("display_name") == MEMBER_NAME
+                and u.get("role") == "member"
+                and u.get("status") == "active"
+            ),
+            None,
+        )
+        if existing:
+            user_id = note("user", existing["user_id"], True)
+        else:
+            member = await rpc.call(
+                "users.create", {"display_name": MEMBER_NAME, "role": "member"}
+            )
+            user_id = note("user", member["user"]["user_id"], False)
+
+        # --- 2. room + roster ----------------------------------------------
+        projects = (await rpc.call("projects.list", {})).get("projects") or []
+        existing = next((p for p in projects if p.get("name") == ROOM_NAME), None)
+        if existing:
+            project_id = note("project", existing["id"], True)
+        else:
+            project = await rpc.call("projects.create", {"name": ROOM_NAME})
+            project_id = note("project", project["project"]["id"], False)
+        # Server-side `INSERT OR IGNORE`, so this is safe to repeat.
         await rpc.call("projects.member.add", {"id": project_id, "user_id": user_id})
 
-        private = await rpc.call("canvas.create", {"title": "Operator private"})
-        private_id = private["canvas"]["id"]
-        room = await rpc.call(
-            "canvas.create", {"title": "Room canvas", "project_id": project_id}
-        )
-        room_id = room["canvas"]["id"]
+        # --- 3. the two canvases --------------------------------------------
+        canvases = (await rpc.call("canvas.list", {})).get("canvases") or []
+
+        async def find_or_create_canvas(title, project):
+            match = next(
+                (
+                    c
+                    for c in canvases
+                    if c.get("title") == title and c.get("project_id") == project
+                ),
+                None,
+            )
+            if match:
+                return note("canvas", match["id"], True)
+            params = {"title": title}
+            if project is not None:
+                params["project_id"] = project
+            created = await rpc.call("canvas.create", params)
+            return note("canvas", created["canvas"]["id"], False)
+
+        private_id = await find_or_create_canvas(PRIVATE_CANVAS_TITLE, None)
+        room_id = await find_or_create_canvas(ROOM_CANVAS_TITLE, project_id)
 
         ticket = await rpc.call("gateway.ticket.create", {"user_id": user_id})
 
@@ -106,9 +169,16 @@ async def main():
                 "private_canvas_id": private_id,
                 "room_canvas_id": room_id,
                 "ticket": ticket,
+                "reused": reused,
             },
             indent=2,
         ))
+        if reused:
+            print(
+                f"\n(reused {len(reused)} pre-existing object(s) — this root has "
+                "been seeded before; the operator control group should still "
+                "show exactly the two canvases above)"
+            )
         urls = ticket.get("urls") or []
         if urls:
             print(f"\nmember URL (open from the LAN IP, not loopback):\n  {urls[0]}")

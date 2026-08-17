@@ -4,6 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Aleph Panel</title>
+    <!-- Inline so the browser never issues its default GET /favicon.ico:
+         nothing serves that path, so every page load logged a 404 that cost a
+         QA round to chase. A data: URI is inside the Panel CSP
+         (img-src 'self' data: https:) and needs no new dist asset. -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d0d12'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='Georgia,serif' font-size='21' fill='%23e8e6e1'%3E%E2%84%B5%3C/text%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/tailwind.css" />
   </head>
   <body class="bg-surface text-text-primary">

@@ -27,12 +27,22 @@ Oracle
 ------
 Server→client WebSocket text frames are unmasked and (with this gateway)
 uncompressed, so the refusal is greppable in the raw stream: the proxy
-prints `CONFLICT FRAME SEEN` the moment a downstream chunk carries the
+prints `CONFLICT FRAME SEEN` the moment the downstream stream carries the
 `REVISION_CONFLICT` code. That line is the positive proof the conflict arm
 fired — pair it with the effect assertions (both edits present in both tabs
-and in doc.json afterwards). The marker can in principle straddle a chunk
-boundary; treat the absence of the line as "inspect doc.json revisions", not
-as proof of no conflict.
+and in doc.json afterwards).
+
+The scan is over the *stream*, not over each TCP chunk: `ConflictScanner`
+carries `len(marker) - 1` bytes across reads, so a marker split across a
+64 KiB boundary is still found exactly once. (Carrying one byte fewer than
+the marker is what makes it exactly once — no complete marker can be
+re-formed out of the carry alone, so an occurrence cannot be double-counted.)
+`--self-test` drives that boundary case directly.
+
+What absence still does NOT prove: the oracle reads plaintext, so it is blind
+to a downstream frame that was compressed (`permessage-deflate`) or otherwise
+re-encoded. If the line never appears, cross-check `doc.json` revisions
+before concluding no conflict occurred.
 
 Origin note: the gateway's `/ws` origin policy allows any loopback origin
 regardless of port (`origin_policy.rs::is_loopback_host`), so a page served
@@ -54,9 +64,10 @@ import asyncio
 import sys
 import time
 
-LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18799
-TARGET_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 18798
-DELAY_S = (float(sys.argv[3]) if len(sys.argv) > 3 else 2500.0) / 1000.0
+_ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+LISTEN_PORT = int(_ARGS[0]) if len(_ARGS) > 0 else 18799
+TARGET_PORT = int(_ARGS[1]) if len(_ARGS) > 1 else 18798
+DELAY_S = (float(_ARGS[2]) if len(_ARGS) > 2 else 2500.0) / 1000.0
 
 # `"code":-32031` — aleph_protocol::jsonrpc::REVISION_CONFLICT as it appears
 # in a JSON-RPC error response. Scanned only on the unmasked downstream half.
@@ -110,15 +121,45 @@ async def pump_delayed(reader, writer, delay: float) -> None:
         await writer_task
 
 
+class ConflictScanner:
+    """Counts `marker` occurrences in a byte *stream* read in arbitrary chunks.
+
+    A TCP read boundary is not a frame boundary, so scanning each chunk in
+    isolation misses any marker that straddles one — which for a 6-byte needle
+    is rare enough to never show up in a QA run and still leave the oracle
+    quietly unsound. Keeping the trailing `len(marker) - 1` bytes as context
+    makes the scan exact: every occurrence is found, and none is found twice
+    (a complete marker cannot fit inside the carry alone).
+    """
+
+    def __init__(self, marker: bytes) -> None:
+        self.marker = marker
+        self.carry = b""
+        self.count = 0
+
+    def feed(self, chunk: bytes) -> int:
+        """Returns how many new occurrences this chunk completed."""
+        window = self.carry + chunk
+        found = window.count(self.marker)
+        self.count += found
+        keep = len(self.marker) - 1
+        self.carry = window[-keep:] if keep else b""
+        return found
+
+
 async def pump_direct(reader, writer) -> None:
     """server→client: pass through untouched, watching for the conflict code."""
+    scanner = ConflictScanner(CONFLICT_MARKER)
     try:
         while True:
             chunk = await reader.read(65536)
             if not chunk:
                 break
-            if CONFLICT_MARKER in chunk:
-                log(f"CONFLICT FRAME SEEN (downstream carries {CONFLICT_MARKER.decode()})")
+            if scanner.feed(chunk):
+                log(
+                    f"CONFLICT FRAME SEEN (downstream carries "
+                    f"{CONFLICT_MARKER.decode()}; {scanner.count} so far)"
+                )
             writer.write(chunk)
             await writer.drain()
     except (ConnectionError, OSError):
@@ -154,7 +195,35 @@ async def main() -> None:
         await server.serve_forever()
 
 
+def self_test() -> None:
+    """Prove the boundary case the chunk-local scan used to miss."""
+    m = CONFLICT_MARKER
+    cases = [
+        ("whole marker in one chunk", [b'{"code":' + m + b"}"], 1),
+        ("split down the middle", [b'{"code":' + m[:3], m[3:] + b"}"], 1),
+        ("one byte at a time", [bytes([b]) for b in b'{"code":' + m + b"}"], 1),
+        ("two occurrences, one split", [b"x" + m + b"y" + m[:2], m[2:] + b"z"], 2),
+        ("no marker", [b'{"code":-32030}', b'{"code":-320311}'[:8]], 0),
+        ("carry cannot self-complete", [m, b""], 1),
+    ]
+    failures = 0
+    for name, chunks, expected in cases:
+        scanner = ConflictScanner(m)
+        for c in chunks:
+            scanner.feed(c)
+        status = "ok " if scanner.count == expected else "FAIL"
+        if scanner.count != expected:
+            failures += 1
+        print(f"  [{status}] {name}: counted {scanner.count}, expected {expected}")
+    if failures:
+        sys.exit(f"{failures} self-test case(s) failed")
+    print("conflict oracle self-test passed")
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        self_test()
+        sys.exit(0)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
