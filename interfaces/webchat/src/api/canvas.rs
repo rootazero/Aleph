@@ -8,24 +8,20 @@
 //! error on every client at once. No `json!({ … })` literals below and no
 //! local mirror structs — a missing field goes into the protocol crate.
 //!
-//! # How a revision conflict actually reaches this crate
+//! # How a revision conflict reaches this crate
 //!
-//! The server refuses a stale `canvas.apply` with its own JSON-RPC code
-//! (`REVISION_CONFLICT`, `-32031`), but that code never reaches an
-//! `rpc_call` caller: the message loop in `context.rs` resolves a pending
-//! RPC error to **`error.message` alone** — the code is dropped on the floor
-//! there, for every method, and this module follows that reality rather than
-//! redesigning it. What survives is the message, whose shape the server
-//! pins with a test (`the_conflict_message_names_the_current_revision`):
-//!
-//! ```text
-//! Failed to apply canvas ops: revision conflict: canvas is at revision {N}
-//! ```
-//!
-//! So [`CanvasApi::apply`]'s `Err` carries that raw message verbatim, and the
-//! conflict-recovery path (refetch + replay, Task 13) branches on the message
-//! text — there is no code to branch on. If `rpc_call` ever starts surfacing
-//! codes, that path should switch to the code and this paragraph should die.
+//! The server refuses a stale `canvas.apply` with its own JSON-RPC code —
+//! [`aleph_protocol::jsonrpc::REVISION_CONFLICT`], the same constant its one
+//! mapping site (`gateway::handlers::canvas_error::respond`) emits, so a
+//! renumber is a compile error on both sides at once. The code reaches this
+//! crate through `rpc_call_with_code` (the message loop keeps the full error
+//! object since 2026-08-17; the flat `rpc_call` face projects it down to
+//! `message` for every legacy consumer), and [`CanvasApi::apply`] classifies
+//! it **here, at the API boundary**, into [`CanvasApplyError`]: the editor
+//! branches on the enum, never on message text. The conflict message still
+//! names the current revision (`the_conflict_message_names_the_current_revision`
+//! pins it server-side) — but that wording is for humans and models now, not
+//! a protocol surface.
 //!
 //! # One producer for the `canvas.*` wire strings
 //!
@@ -42,7 +38,34 @@ use aleph_protocol::canvas::{
 };
 use serde_json::Value;
 
-use crate::context::DashboardState;
+use crate::context::{DashboardState, RpcFailure};
+
+/// Why a `canvas.apply` failed, classified at the API boundary.
+///
+/// The one consumer that must tell these apart is the editor's send loop:
+/// a [`Conflict`](Self::Conflict) triggers refetch-and-replay, anything else
+/// drops the pending batch and refetches server truth. Classification lives
+/// here — where the wire is parsed — so the editor never sees a raw failure
+/// it would be tempted to string-match.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CanvasApplyError {
+    /// The server refused the batch because `base_revision` was stale
+    /// (`REVISION_CONFLICT` on the wire). Someone else landed first;
+    /// recovery — not surfacing — is the correct response.
+    Conflict,
+    /// Every other refusal or transport failure, message verbatim.
+    Other(String),
+}
+
+impl From<RpcFailure> for CanvasApplyError {
+    fn from(failure: RpcFailure) -> Self {
+        if failure.code == Some(aleph_protocol::jsonrpc::REVISION_CONFLICT) {
+            Self::Conflict
+        } else {
+            Self::Other(failure.message)
+        }
+    }
+}
 
 /// Whiteboard canvas calls.
 pub struct CanvasApi;
@@ -111,15 +134,16 @@ impl CanvasApi {
 
     /// Apply an ops batch against `base_revision`; returns the new revision.
     ///
-    /// On a stale base the `Err` is the server's conflict message **verbatim**
-    /// — it names the current revision, and it is all a caller gets (the
-    /// module doc explains why there is no error code to branch on).
+    /// On a stale base the `Err` is [`CanvasApplyError::Conflict`], classified
+    /// off the wire's `REVISION_CONFLICT` code (see the module doc); every
+    /// other failure carries its message verbatim in
+    /// [`CanvasApplyError::Other`].
     pub async fn apply(
         state: &DashboardState,
         id: &str,
         base_revision: u64,
         ops: Vec<CanvasOp>,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, CanvasApplyError> {
         let params = encode(
             "canvas.apply",
             &CanvasApplyParams {
@@ -127,11 +151,15 @@ impl CanvasApi {
                 base_revision,
                 ops,
             },
-        )?;
-        let result = state.rpc_call("canvas.apply", params).await?;
+        )
+        .map_err(CanvasApplyError::Other)?;
+        let result = state
+            .rpc_call_with_code("canvas.apply", params)
+            .await
+            .map_err(CanvasApplyError::from)?;
         serde_json::from_value::<CanvasApplyResult>(result)
             .map(|r| r.revision)
-            .map_err(|e| format!("Invalid canvas.apply response: {e}"))
+            .map_err(|e| CanvasApplyError::Other(format!("Invalid canvas.apply response: {e}")))
     }
 
     /// Delete a canvas — the owner-only verb. The server answers `{}`;
@@ -215,6 +243,46 @@ impl CanvasApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The conflict classifier branches on the wire code — the same
+    /// [`aleph_protocol::jsonrpc::REVISION_CONFLICT`] constant the server's
+    /// one mapping site emits, so this assertion and the server's
+    /// `apply_conflict_maps_to_revision_conflict_code` read one value.
+    #[test]
+    fn a_revision_conflict_is_classified_by_its_wire_code() {
+        let failure = RpcFailure {
+            code: Some(aleph_protocol::jsonrpc::REVISION_CONFLICT),
+            message: "Failed to apply canvas ops: revision conflict: canvas is at revision 7"
+                .to_string(),
+        };
+        assert_eq!(CanvasApplyError::from(failure), CanvasApplyError::Conflict);
+    }
+
+    /// Phrase-matching is dead: a failure whose *text* happens to contain the
+    /// conflict wording but carries no code (a transport error quoting a log
+    /// line, a proxy page) must NOT trigger refetch-and-replay. This is the
+    /// negative half the old `is_revision_conflict(message)` detector could
+    /// never have — it was retired when `rpc_call_with_code` landed.
+    #[test]
+    fn the_conflict_phrase_without_the_code_is_not_a_conflict() {
+        let failure = RpcFailure {
+            code: None,
+            message: "upstream said: revision conflict: canvas is at revision 7".to_string(),
+        };
+        assert_eq!(
+            CanvasApplyError::from(failure.clone()),
+            CanvasApplyError::Other(failure.message)
+        );
+
+        let wrong_code = RpcFailure {
+            code: Some(aleph_protocol::jsonrpc::INTERNAL_ERROR),
+            message: "revision conflict".to_string(),
+        };
+        assert!(matches!(
+            CanvasApplyError::from(wrong_code),
+            CanvasApplyError::Other(_)
+        ));
+    }
 
     /// A missing `canvases` key is a broken response, not an empty library.
     #[test]

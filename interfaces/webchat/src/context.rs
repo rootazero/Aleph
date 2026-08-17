@@ -73,12 +73,65 @@ pub const fn gateway_readiness(is_connected: bool, needs_token: bool) -> Gateway
     }
 }
 
+/// A failed RPC, as the wire reported it — or as this client manufactured it.
+///
+/// `code` is `Some` only when a real JSON-RPC error object carried one. Every
+/// locally-minted failure (socket not up, send failed, response channel
+/// closed, timeout) is `code: None`, so a caller branching on a code can
+/// never mistake a transport hiccup for a server verdict — the same
+/// "a refusal is not an answer" discipline [`GATEWAY_NOT_READY`] documents,
+/// carried into the typed face.
+///
+/// Most consumers never see this type: [`DashboardState::rpc_call`] projects
+/// it to `message` alone at exactly one site, so the ~150 `String`-error call
+/// sites (and the `admin_refusal` classifier behind them) receive bytes
+/// identical to what they always received. Callers that need the code — the
+/// canvas conflict classifier is the one that forced this type into
+/// existence — use [`DashboardState::rpc_call_with_code`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RpcFailure {
+    /// The JSON-RPC `error.code`, when the server sent one.
+    pub code: Option<i32>,
+    /// The human/model-readable `error.message` (or the local failure text).
+    pub message: String,
+}
+
+impl RpcFailure {
+    /// A failure this client minted itself — never carries a code, by
+    /// construction, so it can never impersonate a server verdict.
+    fn local(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+}
+
+/// Parse a JSON-RPC `error` member into an [`RpcFailure`].
+///
+/// Pure so the message loop's one parsing decision is unit-testable off the
+/// wasm target. A code outside `i32` (not producible by the server, but the
+/// wire is untrusted input) degrades to `None` rather than wrapping.
+fn parse_rpc_error(error: &Value) -> RpcFailure {
+    RpcFailure {
+        code: error
+            .get("code")
+            .and_then(Value::as_i64)
+            .and_then(|c| i32::try_from(c).ok()),
+        message: error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown error")
+            .to_string(),
+    }
+}
+
 // RPC request sent to the message loop
 struct RpcRequest {
     id: String,
     method: String,
     params: Value,
-    response_tx: oneshot::Sender<Result<Value, String>>,
+    response_tx: oneshot::Sender<Result<Value, RpcFailure>>,
 }
 
 // Event received from Gateway
@@ -900,8 +953,36 @@ impl DashboardState {
     /// keyed on additional signals, so a helper that knows only about
     /// `is_connected` would be strictly less capable than the four-line
     /// `Effect` it replaced, and would have had no callers.
+    ///
+    /// # The `String` face is a projection
+    ///
+    /// The wire hands back a full JSON-RPC error object; this method keeps
+    /// `message` alone, derived from [`RpcFailure`] at exactly this one site,
+    /// so every existing `String`-error consumer (and the `admin_refusal`
+    /// classifier behind them) receives byte-identical text. A caller that
+    /// needs the error **code** uses [`Self::rpc_call_with_code`] — never a
+    /// re-parse of the message text.
     pub async fn rpc_call(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.await_gateway_ready().await?;
+        self.rpc_call_with_code(method, params)
+            .await
+            .map_err(|failure| failure.message)
+    }
+
+    /// [`Self::rpc_call`], keeping the JSON-RPC error code.
+    ///
+    /// Same readiness floor, same single send path — the only difference is
+    /// that the `Err` arm carries what the server actually said instead of
+    /// its `message` projection. Born for the canvas conflict classifier
+    /// (`api/canvas.rs` branches on `REVISION_CONFLICT`); any future caller
+    /// that needs to branch on a code belongs here too.
+    pub async fn rpc_call_with_code(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, RpcFailure> {
+        if let Err(message) = self.await_gateway_ready().await {
+            return Err(RpcFailure::local(message));
+        }
         self.send_rpc(method, params).await
     }
 
@@ -952,7 +1033,7 @@ impl DashboardState {
     /// "connect"` test on purpose: an exemption spelled as a string compare is
     /// one rename away from silently covering something else, and one new
     /// unauthorized method away from being wrong.
-    async fn send_rpc(&self, method: &str, params: Value) -> Result<Value, String> {
+    async fn send_rpc(&self, method: &str, params: Value) -> Result<Value, RpcFailure> {
         // Generate unique ID
         let id = {
             let next_id = self.next_id.with_value(std::clone::Clone::clone);
@@ -980,9 +1061,9 @@ impl DashboardState {
             let rpc_tx = self.rpc_tx.with_value(std::clone::Clone::clone);
             if let Some(tx) = rpc_tx {
                 tx.unbounded_send(request)
-                    .map_err(|_| "Failed to send RPC request".to_string())?;
+                    .map_err(|_| RpcFailure::local("Failed to send RPC request"))?;
             } else {
-                return Err("Not connected".to_string());
+                return Err(RpcFailure::local("Not connected"));
             }
         }
 
@@ -993,8 +1074,10 @@ impl DashboardState {
         // converting an infinite spinner into a surfaced, retryable error.
         use futures::future::{select, Either};
         match select(response_rx, TimeoutFuture::new(30_000)).await {
-            Either::Left((res, _)) => res.map_err(|_| "Response channel closed".to_string())?,
-            Either::Right(((), _)) => Err("Request timed out".to_string()),
+            Either::Left((res, _)) => {
+                res.map_err(|_| RpcFailure::local("Response channel closed"))?
+            }
+            Either::Right(((), _)) => Err(RpcFailure::local("Request timed out")),
         }
     }
 
@@ -1026,7 +1109,13 @@ impl DashboardState {
         // authorized, so waiting for authorization here would deadlock.
         let resp = match self.send_rpc("connect", params).await {
             Ok(r) => r,
-            Err(e) => return Handshake::Failed(classify(FailureStage::Handshake, Some(&e), false)),
+            Err(e) => {
+                return Handshake::Failed(classify(
+                    FailureStage::Handshake,
+                    Some(&e.message),
+                    false,
+                ))
+            }
         };
         self.capture_connect_verdict(&resp);
         if resp.get("authorized").and_then(serde_json::Value::as_bool) == Some(true) {
@@ -1110,8 +1199,10 @@ impl DashboardState {
                     let mut stream = stream.fuse();
                     let mut rpc_rx = rpc_rx.fuse();
                     let mut disconnect_rx = disconnect_rx.fuse();
-                    let mut pending_rpcs: HashMap<String, oneshot::Sender<Result<Value, String>>> =
-                        HashMap::new();
+                    let mut pending_rpcs: HashMap<
+                        String,
+                        oneshot::Sender<Result<Value, RpcFailure>>,
+                    > = HashMap::new();
                     // Track whether the loop exited because of an explicit
                     // disconnect() call (no auto-reconnect) or an unintentional
                     // drop (auto-reconnect to drive ConnectionPhase::Reconnecting
@@ -1141,7 +1232,7 @@ impl DashboardState {
                                     }
                                     Err(e) => {
                                         web_sys::console::error_1(&format!("Failed to send RPC: {e:?}").into());
-                                        let _ = rpc_req.response_tx.send(Err(e.to_string()));
+                                        let _ = rpc_req.response_tx.send(Err(RpcFailure::local(e.to_string())));
                                     }
                                 }
                             }
@@ -1161,11 +1252,7 @@ impl DashboardState {
                                             // Handle RPC response
                                             if let Some(tx) = pending_rpcs.remove(id) {
                                                 if let Some(error) = value.get("error") {
-                                                    let msg = error.get("message")
-                                                        .and_then(|m| m.as_str())
-                                                        .unwrap_or("Unknown error")
-                                                        .to_string();
-                                                    let _ = tx.send(Err(msg));
+                                                    let _ = tx.send(Err(parse_rpc_error(error)));
                                                 } else if let Some(result) = value.get("result") {
                                                     let _ = tx.send(Ok(result.clone()));
                                                 }
@@ -1952,5 +2039,48 @@ mod tests {
     fn remote_http_is_refused() {
         assert!(ws_url_for("http:", "app.example.com").is_err());
         assert!(ws_url_for("http:", "203.0.113.9:18790").is_err());
+    }
+
+    /// The message loop's one error-parsing decision: both halves of a real
+    /// JSON-RPC error object survive into [`RpcFailure`]. The projection in
+    /// `rpc_call` (`message` alone) is one `map_err` away from this value, so
+    /// this test also pins the bytes every legacy `String` consumer receives.
+    #[test]
+    fn a_wire_error_keeps_both_its_code_and_its_message() {
+        let failure = super::parse_rpc_error(&serde_json::json!({
+            "code": -32031,
+            "message": "Failed to apply canvas ops: revision conflict: canvas is at revision 7",
+        }));
+        assert_eq!(failure.code, Some(-32031));
+        assert_eq!(
+            failure.message,
+            "Failed to apply canvas ops: revision conflict: canvas is at revision 7"
+        );
+    }
+
+    /// A code the wire never carried — and one that cannot fit `i32` (the
+    /// wire is untrusted input) — both degrade to `None` rather than to some
+    /// invented number a classifier might branch on.
+    #[test]
+    fn a_missing_or_oversized_code_degrades_to_none() {
+        let missing = super::parse_rpc_error(&serde_json::json!({ "message": "boom" }));
+        assert_eq!(missing.code, None);
+        assert_eq!(missing.message, "boom");
+
+        let oversized = super::parse_rpc_error(&serde_json::json!({
+            "code": i64::from(i32::MAX) + 1,
+            "message": "boom",
+        }));
+        assert_eq!(oversized.code, None);
+    }
+
+    /// Locally-minted failures (socket not up, timeout, closed channel) can
+    /// never impersonate a server verdict: `RpcFailure::local` has no code by
+    /// construction, so a code-branching caller treats them as "not asked".
+    #[test]
+    fn a_local_failure_never_carries_a_code() {
+        let failure = super::RpcFailure::local("Request timed out");
+        assert_eq!(failure.code, None);
+        assert_eq!(failure.message, "Request timed out");
     }
 }
