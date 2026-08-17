@@ -41,18 +41,6 @@ impl PersonaRegistry {
         self.presets.get(id)
     }
 
-    /// Returns the number of preset personas in the registry.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.presets.len()
-    }
-
-    /// Returns `true` if the registry contains no preset personas.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.presets.is_empty()
-    }
-
     /// Resolve a list of [`PersonaSource`] references into concrete [`Persona`] instances.
     ///
     /// - `Preset(id)` — looked up in the registry; returns [`GroupChatError::PersonaNotFound`]
@@ -118,8 +106,8 @@ mod tests {
         let configs = sample_persona_configs();
         let registry = PersonaRegistry::from_configs(&configs);
 
-        assert_eq!(registry.len(), 2);
-        assert!(!registry.is_empty());
+        assert_eq!(registry.presets.len(), 2);
+        assert!(!registry.presets.is_empty());
 
         let arch = registry.get("architect").expect("architect should exist");
         assert_eq!(arch.id, "architect");

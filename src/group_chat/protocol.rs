@@ -5,7 +5,7 @@
 //! used across all group chat interactions regardless of the underlying transport.
 
 use std::fmt;
-use std::str::FromStr;
+
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -210,76 +210,6 @@ impl fmt::Display for GroupChatStatus {
     }
 }
 
-impl FromStr for GroupChatStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            s if s.eq_ignore_ascii_case("active") => Ok(Self::Active),
-            s if s.eq_ignore_ascii_case("ended") => Ok(Self::Ended),
-            _ => Err(format!("unknown group chat status: '{s}'")),
-        }
-    }
-}
-
-// =============================================================================
-// ContentFormat / RenderedContent
-// =============================================================================
-
-/// The format of rendered content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentFormat {
-    /// Markdown formatted text.
-    Markdown,
-    /// HTML formatted text.
-    Html,
-    /// Plain text with no formatting.
-    Plain,
-}
-
-/// Rendered content with format metadata.
-///
-/// Provides convenience constructors for common formats.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RenderedContent {
-    /// The rendered text content.
-    pub text: String,
-    /// The format of the text content.
-    pub format: ContentFormat,
-    /// Optional metadata associated with the content.
-    pub metadata: Option<Value>,
-}
-
-impl RenderedContent {
-    /// Creates a new Markdown-formatted content.
-    pub fn markdown(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            format: ContentFormat::Markdown,
-            metadata: None,
-        }
-    }
-
-    /// Creates a new plain text content.
-    pub fn plain(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            format: ContentFormat::Plain,
-            metadata: None,
-        }
-    }
-
-    /// Creates a new HTML-formatted content.
-    pub fn html(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            format: ContentFormat::Html,
-            metadata: None,
-        }
-    }
-}
-
 // =============================================================================
 // CoordinatorPlan / RespondentPlan
 // =============================================================================
@@ -339,10 +269,6 @@ pub enum GroupChatError {
         /// The maximum allowed.
         max: usize,
     },
-
-    /// The specified session was not found.
-    #[error("session not found: {0}")]
-    SessionNotFound(String),
 
     /// Failed to parse the coordinator's response into a plan.
     #[error("failed to parse coordinator plan: {0}")]
@@ -413,23 +339,10 @@ mod tests {
     }
 
     #[test]
-    fn test_group_chat_status_display_and_fromstr() {
+    fn test_group_chat_status_display() {
         assert_eq!(GroupChatStatus::Active.as_str(), "active");
         assert_eq!(GroupChatStatus::Ended.as_str(), "ended");
         assert_eq!(format!("{}", GroupChatStatus::Active), "active");
-
-        assert_eq!(
-            "active".parse::<GroupChatStatus>().unwrap(),
-            GroupChatStatus::Active
-        );
-        assert_eq!(
-            "ended".parse::<GroupChatStatus>().unwrap(),
-            GroupChatStatus::Ended
-        );
-
-        // Test invalid input
-        assert!("unknown".parse::<GroupChatStatus>().is_err());
-        assert!("".parse::<GroupChatStatus>().is_err());
     }
 
     #[test]
@@ -481,23 +394,5 @@ mod tests {
         assert!(
             matches!(cont, GroupChatRequest::Continue { session_id, .. } if session_id == "session-001")
         );
-    }
-
-    #[test]
-    fn test_rendered_content_creation() {
-        let md = RenderedContent::markdown("# Hello");
-        assert_eq!(md.text, "# Hello");
-        assert_eq!(md.format, ContentFormat::Markdown);
-        assert!(md.metadata.is_none());
-
-        let plain = RenderedContent::plain("Hello world");
-        assert_eq!(plain.text, "Hello world");
-        assert_eq!(plain.format, ContentFormat::Plain);
-        assert!(plain.metadata.is_none());
-
-        let html = RenderedContent::html("<h1>Hello</h1>");
-        assert_eq!(html.text, "<h1>Hello</h1>");
-        assert_eq!(html.format, ContentFormat::Html);
-        assert!(html.metadata.is_none());
     }
 }
