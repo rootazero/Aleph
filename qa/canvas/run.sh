@@ -120,7 +120,7 @@ for _ in $(seq 1 90); do
 done
 echo "gateway up on $GATEWAY_PORT"
 
-say "manual checklist (plan Task 20 — chrome-devtools-mcp 执行，每条带效果断言)"
+say "manual checklist (chrome-devtools-mcp 执行，每条带效果断言)"
 cat <<'CHECKLIST'
   1. 建画布→画矩形/便签/画笔→刷新页面→内容还在（持久化）
   2. 双标签页：A 画一笔 B 实时出现；B 移动形状 A 实时跟随（广播）
@@ -131,6 +131,8 @@ cat <<'CHECKLIST'
   7. Slides：三帧组 deck→播放→翻页→Esc
   8. member 角色（0.0.0.0 + 自签 TLS + 局域网 IP，配方见 memory）看不到 operator 的私有画布；房间画布双方可见可编辑
   9. PNG 导出落文件且可打开
+ 10. 左栏画廊：标题列表 + 打开高亮 + 搜索过滤 + 两面重命名（行内 / 编辑器标题）
+     + 冷加载先「加载中」后「还没有画布」（断言见 README「Item 10」）
 CHECKLIST
 
 cat <<EOF
