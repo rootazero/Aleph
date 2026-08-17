@@ -27,7 +27,6 @@
 
 pub mod auth;
 pub mod chain;
-pub mod context;
 pub mod handler_service;
 pub mod latency;
 pub mod metrics;
@@ -40,7 +39,6 @@ pub mod validate;
 
 pub use auth::{AuthLayer, AuthService};
 pub use chain::MiddlewareChain;
-pub use context::{GatewayRequestContext, TraceFlags};
 pub use handler_service::{HandlerLayer, HandlerService};
 pub use metrics::{MetricsLayer, MetricsService};
 pub use rate_limit::RateLimitLayer;

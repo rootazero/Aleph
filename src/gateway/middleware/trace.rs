@@ -5,9 +5,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use tower::{Layer, Service};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error};
+use uuid::Uuid;
 
-use crate::gateway::middleware::context::GatewayRequestContext;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 #[derive(Clone)]
@@ -62,27 +62,16 @@ where
         let inner = self.inner.clone();
         let mut inner_mut = std::mem::replace(&mut self.inner, inner);
 
-        let ctx = GatewayRequestContext::new("peer");
-        let request_id = ctx.request_id;
+        let request_id = Uuid::new_v4();
         let method = req.method.clone();
 
-        if ctx.trace_flags.detailed_timing {
-            info!(
-                request_id = %request_id,
-                method = %method,
-                has_params = req.params.is_some(),
-                "→ incoming request"
-            );
-        } else {
-            debug!(
-                request_id = %request_id,
-                method = %method,
-                "→ incoming request"
-            );
-        }
+        debug!(
+            request_id = %request_id,
+            method = %method,
+            "→ incoming request"
+        );
 
         let start = std::time::Instant::now();
-        let trace_flags = ctx.trace_flags.clone();
 
         Box::pin(async move {
             let result = inner_mut.call(req).await;
@@ -91,30 +80,11 @@ where
             match &result {
                 Ok(resp) => {
                     if resp.is_error() {
-                        if let Some(error) = &resp.error {
-                            if trace_flags.detailed_timing {
-                                warn!(
-                                    request_id = %request_id,
-                                    method = %method,
-                                    elapsed_ms = %elapsed_ms,
-                                    error_code = error.code,
-                                    "← request completed with error"
-                                );
-                            } else {
-                                debug!(
-                                    request_id = %request_id,
-                                    method = %method,
-                                    elapsed_ms = %elapsed_ms,
-                                    "← request completed with error"
-                                );
-                            }
-                        }
-                    } else if trace_flags.detailed_timing {
-                        info!(
+                        debug!(
                             request_id = %request_id,
                             method = %method,
                             elapsed_ms = %elapsed_ms,
-                            "← request completed"
+                            "← request completed with error"
                         );
                     } else {
                         debug!(

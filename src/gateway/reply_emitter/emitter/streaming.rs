@@ -8,6 +8,29 @@ use crate::gateway::channel::OutboundMessage;
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::streaming::StreamAction;
 
+/// Status strings shown while a Teams-native stream is buffering.
+/// Relocated from `gateway::interfaces::msteams::types` after the
+/// msteams channel module was severed — the only live consumer was
+/// the native-stream `start` path here.
+const TEAMS_STATUS_TEXTS: &[&str] = &[
+    "Looking that up...",
+    "Pulling the pieces together...",
+    "Checking the details...",
+    "Putting an answer together...",
+];
+
+/// Pick a pseudo-random status string from `TEAMS_STATUS_TEXTS`.
+/// Originally `pick_status_text` in the now-deleted msteams tree.
+#[must_use]
+fn pick_status_text() -> &'static str {
+    use std::time::SystemTime;
+    let seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as usize;
+    TEAMS_STATUS_TEXTS[seed % TEAMS_STATUS_TEXTS.len()]
+}
+
 #[async_trait]
 impl EventEmitter for ReplyEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
@@ -241,8 +264,7 @@ impl EventEmitter for ReplyEmitter {
                             let mut state = self.native_stream_state.lock().await;
                             if state.is_none() && accumulated.chars().count() >= 20 {
                                 // First chunk with enough content: start streaming
-                                let status =
-                                    crate::gateway::interfaces::msteams::types::pick_status_text();
+                                let status = pick_status_text();
                                 match handler
                                     .stream_start(&self.route.conversation_id, status)
                                     .await

@@ -40,7 +40,7 @@ pub mod irc;
 pub mod line;
 pub mod matrix;
 pub mod mattermost;
-pub mod msteams;
+
 pub mod nostr;
 pub mod qq;
 pub mod signal;
@@ -64,7 +64,7 @@ pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
 pub use line::{LineChannel, LineChannelFactory, LineConfig};
 pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
 pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
-pub use msteams::{MsTeamsChannel, MsTeamsConfig};
+
 pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
 pub use qq::{QQChannel, QQChannelFactory, QQConfig, QQDmPolicy, QQGroupPolicy};
 pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
