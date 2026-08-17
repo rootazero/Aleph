@@ -99,8 +99,13 @@ python3 "$SHARED/patch_config.py" "$CONFIG" \
 
 say "start mock provider"
 # `quick` plan: short turns, so a stray chat send never wedges the run slot.
+# The request_log (5th arg) is wired UNCONDITIONALLY: the one canvas anomaly
+# this fixture ever produced (an in-run insert_image that never committed,
+# spec §8) was unattributable precisely because the log was off — the oracle
+# costs nothing and only exists when it is already running. The empty 4th
+# positional is how "no tool spec" is spelled when a 5th follows.
 python3 "$SHARED/mock_anthropic.py" "$MOCK_PORT" /etc/hostname quick \
-  ${MOCK_TOOL_SPEC:+"$MOCK_TOOL_SPEC"} >"$QA_ROOT/mock.log" 2>&1 &
+  "${MOCK_TOOL_SPEC:-}" "$QA_ROOT/request_log.jsonl" >"$QA_ROOT/mock.log" 2>&1 &
 MOCK_PID=$!
 sleep 1
 
@@ -133,11 +138,14 @@ cat <<EOF
   Panel:      http://127.0.0.1:$GATEWAY_PORT  →「画布」/ Canvas in the sidebar
   scratch:    $QA_ROOT   (config: $CONFIG)
   logs:       $QA_ROOT/server.log · $QA_ROOT/mock.log · $ALEPH_HOME/logs/
+  oracle:     $QA_ROOT/request_log.jsonl — every request body the mock saw,
+              one JSON object per line; tool_result blocks in it are the only
+              ground truth for "did the model's canvas call commit" (spec §8).
   items 4–6:  the mock emits one fixed tool call per tool turn. Once the live
               canvas/frame ids exist, restart ONLY the mock with a tool spec
-              (server keeps running, state survives):
+              (server keeps running, state survives — keep the request_log arg):
                 kill $MOCK_PID
-                python3 $SHARED/mock_anthropic.py $MOCK_PORT /etc/hostname quick /path/to/spec.json
+                python3 $SHARED/mock_anthropic.py $MOCK_PORT /etc/hostname quick /path/to/spec.json $QA_ROOT/request_log.jsonl
               spec recipe (item 5): see qa/canvas/README.md.
   item 8:     needs a LAN bind + member credentials — recipe in README.md;
               this scenario boots loopback-only on purpose.

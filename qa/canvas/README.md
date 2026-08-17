@@ -57,6 +57,41 @@ for items 1–7 and 9.
 8. member 角色（0.0.0.0 + 自签 TLS + 局域网 IP，配方见 memory）看不到 operator 的私有画布；房间画布双方可见可编辑
 9. PNG 导出落文件且可打开
 
+## Item 3's residual: driving the REAL conflict window
+
+Two MCP-driven tabs can never lose the optimistic-lock race on loopback —
+frame propagation is <100 ms, so serial driving always reconciles before the
+next send and item 3 only ever verifies convergence, not the conflict arm.
+`latency_proxy.py` manufactures the window on the genuine wire by delaying
+**upstream traffic only** (tab A's sends arrive late; broadcasts still reach
+A instantly — which simultaneously pins that an in-flight batch is not
+rebased by a broadcast arriving after send):
+
+```bash
+python3 qa/canvas/latency_proxy.py 18799 18798 2500   # proxy → gateway
+# tab A: http://127.0.0.1:18799   (through the proxy — sluggish by design)
+# tab B: http://127.0.0.1:18798   (direct)
+```
+
+Open the same canvas in both, edit a shape in A, then **within the delay
+window** move the same shape in B. B lands first; A's in-flight
+`canvas.apply` arrives stale; the proxy prints `CONFLICT FRAME SEEN` when
+the `REVISION_CONFLICT` refusal crosses the downstream half (positive proof
+the arm fired), and the effect assertions are: A recovers without a reload,
+both edits survive in both tabs, and doc.json holds both (revision advanced
+past both commits). No config change needed — the `/ws` origin policy allows
+any loopback origin regardless of port. Verified 2026-08-17: see spec §8.
+
+## The request-log oracle (always on)
+
+`run.sh` wires `mock_anthropic.py`'s 5th argument unconditionally:
+`$QA_ROOT/request_log.jsonl` receives every request body the mock saw, one
+JSON object per line. The `tool_result` blocks inside are the only ground
+truth for "did the model's canvas call actually commit" — the one anomaly
+this fixture ever produced (an in-run `insert_image` that never committed,
+spec §8) was unattributable precisely because this log was off. When
+restarting only the mock (items 4–6 recipe below), keep the argument.
+
 ## Items 4–6: making the mock "drive" canvas tools
 
 `mock_anthropic.py` emits **one fixed tool call per tool turn** (its
@@ -88,19 +123,27 @@ instead of `frame_id`. A real provider also works — edit the scratch config's
 provider section by hand — but then the run dials out, which is exactly what
 the mock recipe exists to avoid.
 
-## Item 8: the member role
+## Item 8: the member role (verified 2026-08-17)
 
-Loopback is **always operator**, so member visibility cannot be tested on
-`127.0.0.1` at all. The recipe (proven in the workspace-unarchive round; full
-notes in the project memory):
+Loopback is **always operator** — presenting a member bootstrap ticket over
+`127.0.0.1` still answers `role: "operator"` (verified on a live wire; that
+is the trust model, not a bug) — so member visibility can only be tested
+from the machine's LAN IP. The seeding half is now executable,
+`member_seed.py`; the recipe:
 
-* set `[gateway] host = "0.0.0.0"` in the scratch config and restart;
-* connect from the machine's **LAN IP** (not loopback) over the self-signed
-  TLS the gateway mints — trust it in-app (TOFU);
-* authenticate as a member (member user + device pairing), then assert: the
-  operator's unlinked canvas is absent from the member's library and its id
-  answers not-found, while a project-room canvas is visible and editable
-  from both sides — and the `canvas.updated` broadcast reaches both.
+* set `[gateway] host = "0.0.0.0"` **and** `[gateway.tls] enabled = true`
+  in the scratch config (the plaintext gate refuses a bare LAN bind) and
+  restart the server;
+* `python3 qa/canvas/member_seed.py <port> --tls` over loopback — creates
+  the member user, a project room with the member on the roster, an
+  operator-private canvas, a room canvas, and a one-time bootstrap ticket;
+  it prints a ready-to-open member URL at the LAN IP;
+* open that URL in a browser, click through the self-signed-cert
+  interstitial (TOFU), and assert (all held on 2026-08-17): the member's
+  library shows ONLY the room canvas; the private canvas id over the
+  member's wire answers `-32009 not found` **byte-shaped like a truly
+  nonexistent id** (no-oracle); the room canvas is editable from both sides
+  and `canvas.updated` reaches both live, no reload.
 
 This scenario deliberately boots loopback-only; the LAN bind is a config
 edit away, kept out of the default run so an unattended QA box never opens

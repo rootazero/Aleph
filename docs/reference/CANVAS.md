@@ -59,9 +59,9 @@ Wire 契约单一源       shared/protocol/src/canvas.rs                        
 
 **服务端**：`apply(id, base_revision, ops)` 在每画布锁内比对 `doc.revision != base_revision` → `CanvasError::Conflict { current_revision }`；通过则就地应用、`revision += 1`、原子落盘、**在同一临界区内发布事件**——`DocGuard::commit(&mut self)` 刻意与孪生 `meta.rs` 不同（那边 `commit(self)` 消费 guard 释放锁）：变更+落盘+发布同一锁作用域（roster 先例），**事件序按构造等于提交序**。守卫：`events_publish_in_revision_order_under_contention`（并发 20 次 apply 断言 revision 序列严格递增）、`concurrent_applies_serialize_one_wins_one_conflicts`、`a_dropped_guard_writes_nothing`。
 
-**错误码**：`src/gateway/protocol.rs::REVISION_CONFLICT = -32031`（实现定义区间），映射唯一发生在 `canvas_error::respond`。冲突既非调用方之错也非我方失败，是三分类外的第四臂——码与它的消费者同批出生。
+**错误码**：`aleph_protocol::jsonrpc::REVISION_CONFLICT = -32031`（实现定义区间；2026-08-17 从 `src/gateway/protocol.rs` 上移到共享 crate——真源必须在被依赖的一侧，gateway 侧 re-export 保住既有 import 路径），映射唯一发生在 `canvas_error::respond`。冲突既非调用方之错也非我方失败，是三分类外的第四臂——码与它的消费者同批出生。
 
-**⚠️ Panel 实际按 message 文本分支，不按码**——这是现状不是设计：`DashboardState::rpc_call` 的消息循环把 pending RPC 错误解析成 **`error.message` 单独一个字符串**，码在那里对每个方法统一掉地。`api/canvas.rs` 模块 doc 记录了这条现实；服务端用测试钉住消息形状（`the_conflict_message_names_the_current_revision`：`…revision conflict: canvas is at revision {N}`），Panel 侧 `ops.rs::is_revision_conflict(message)` 匹配那句话（`the_conflict_detector_matches_the_phrase_the_server_mints` 两侧对账）。**已记录的债**：`rpc_call` 若开始透传 code，冲突检测应改按码分支并删掉这段文字——码本身已经在 wire 上，为的就是那一天。
+**Panel 按码分支（2026-08-17 还清的债）**——`DashboardState` 的消息循环曾把 pending RPC 错误解析成 `error.message` 单独一个字符串，Panel 只能按 message 文本 `contains("revision conflict")` 分支。现在消息循环保留完整错误对象（`context.rs::RpcFailure { code, message }`，纯函数 `parse_rpc_error` 单测钉住），`rpc_call` 在**唯一一处**投影回 message（150+ 处 String 消费者与 `admin_refusal` 分类器收到的字节逐字不变），带码面 `rpc_call_with_code` 供需要码的调用方使用。`api/canvas.rs::CanvasApplyError` 在 API 边界分类（`Conflict` / `Other(message)`），editor 按 enum 分支；短语匹配器 `ops.rs::is_revision_conflict` 与其源码对账测试已删。守卫：`a_revision_conflict_is_classified_by_its_wire_code`（两侧读同一个共享常量，改号即编译错）＋ `the_conflict_phrase_without_the_code_is_not_a_conflict`（负半边：文本恰好含冲突措辞的传输错误**不**触发重放——短语匹配时代做不到的断言）。本地铸造的失败（未连上/超时/通道关闭）`code` 恒 `None`，按构造不可能冒充服务端裁决。服务端消息形状照旧钉着（`the_conflict_message_names_the_current_revision`）——但那句话现在只服务人与模型，不再是协议面。
 
 **Panel 冲突恢复**（`views/canvas/ops.rs`）：乐观应用（`apply_local` 与服务端 `validate::apply_ops` 同语义，`apply_local_matches_the_server_apply_ops_loop_verbatim` 对拍）→ 单飞发送（一次一批在途，新 ops 进队列合并，`the_queue_is_single_flight_and_acks_promote_queued_ops_in_order`）→ 冲突时 `recover` 整拉 + 队列按序重放重发（`recover_collapses_the_refused_batch_and_the_queue_in_order`）。undo/redo：ops 可逆（`invert`：upsert→前值 upsert/无前值 delete；性质测试 `apply_then_apply_inverse_round_trips_random_op_sequences`），栈上限 200。
 
@@ -135,10 +135,12 @@ Spec §6 原批 + 实施中新增裁定：
 - **与 `artifact_caps` 共表**——见 §1。
 - **SVG `<marker>` 箭头**——计算 polygon 与导出共用同一数学，见 §6。
 - **`reconcile` 用 `actor` 判回声**——同用户两标签页共享 actor，见 §3。
-- **Panel 侧按错误码分支**——想做而做不到：`rpc_call` 只透传 message（已记录的债，见 §3）。
+- **全面类型化 `rpc_call` 的错误**——冲突分支已按码（§3，2026-08-17），但把 150+ 处 `String` 消费者整体迁到 `RpcFailure` 不做：投影面（`message` 单点派生）已保证字节不漂，整体迁移的收益只剩类型美观，代价是 `admin_refusal` 分类器全链重扫。
 
 ## 9. QA 入口
 
 - **单测**：core `cargo test -p alephcore --lib canvas`（store/assets/selection/validate + handlers + tool + caps + route）；Panel `cargo test -p aleph-panel --lib canvas`（纯函数全家 + 源码 census）。
 - **集成**：`cargo test -p alephcore --features test-helpers --test canvas_wire`——三条：全链 wire 键集对拍（`the_wire_chain_round_trips_every_canvas_response_through_the_contract`）、AI 模板工具名对真工具表求解、事件可见性三角色端到端。
-- **真机**：`./qa/canvas/run.sh`——隔离 `HOME`+`ALEPH_HOME`、mock provider（api_key 内联 config 不碰 vault）、boot-and-wait 形态（驱动手是浏览器 + chrome-devtools-mcp），打印九项清单（持久化/双标签页广播/冲突恢复/工具面+事件面/AI 图片框/标注重生成/Slides/member 可见性/PNG 导出），**每条带效果断言**；items 4–6 的 mock 驱动配方（`tool_spec` 固定工具调用 + 两阶段拿 id）在 `qa/canvas/README.md`。前置：`just wasm`（debug server 从磁盘读 dist，空 dist 每项都为错误的理由「失败」，脚本拒绝启动）。
+- **真机**：`./qa/canvas/run.sh`——隔离 `HOME`+`ALEPH_HOME`、mock provider（api_key 内联 config 不碰 vault，**request_log oracle 无条件接线**到 `$QA_ROOT/request_log.jsonl`）、boot-and-wait 形态（驱动手是浏览器 + chrome-devtools-mcp），打印九项清单（持久化/双标签页广播/冲突恢复/工具面+事件面/AI 图片框/标注重生成/Slides/member 可见性/PNG 导出），**每条带效果断言，九项已全部真机 PASS（2026-08-17 遗留轮补完 3/8 两项）**；items 4–6 的 mock 驱动配方（`tool_spec` 固定工具调用 + 两阶段拿 id）在 `qa/canvas/README.md`。前置：`just wasm`（debug server 从磁盘读 dist，空 dist 每项都为错误的理由「失败」，脚本拒绝启动）。
+- **真冲突窗仪器**：`qa/canvas/latency_proxy.py`——上行 +N ms、下行直通的 TCP 代理；MCP 串行时序在 loopback 上永远输不掉乐观锁竞速（<100ms 帧传播），代理把窗口造在真 wire 上，并在 `-32031` 拒绝帧过下行时打印 `CONFLICT FRAME SEEN` 作正向 oracle。配两侧页内绝对时钟编排（跨 tab 的 MCP 往返延迟不可控，实测一次 21s——定时自拖是唯一可靠编排）。下行直通同时钉住「in-flight batch 不被 send 之后到达的广播 rebase」。
+- **member 场景播种器**：`qa/canvas/member_seed.py`——loopback 一发建齐 member 用户/房间名册/私有+房间双画布/bootstrap ticket 并打印 LAN member URL；浏览器半边照 README item 8 断言（含 no-oracle 同形断言）。⚠️ loopback 出示 member ticket 仍回 `operator`（信任模型），member 半边必须从 LAN IP 连。
