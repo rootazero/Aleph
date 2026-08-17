@@ -46,7 +46,7 @@ impl CronTestHarness {
         let state = Arc::new(ServiceState::new(store, Arc::clone(&clock), config));
 
         let executor = MockExecutor::new();
-        let executor_fn = executor.into_executor_fn();
+        let executor_fn = executor.executor_fn();
         let permits = state.config.max_concurrent_agents.unwrap_or(2).max(1);
 
         Self {
@@ -273,7 +273,9 @@ impl CronTestHarness {
     /// Assert a job's enabled state.
     pub async fn assert_job_enabled(&self, id: &str, expected: bool) {
         let store = self.state.store.lock().await;
-        let job = store.get_job(id).expect(&format!("job '{id}' not found"));
+        let job = store
+            .get_job(id)
+            .unwrap_or_else(|| panic!("job '{id}' not found"));
         assert_eq!(
             job.enabled, expected,
             "expected job '{id}' enabled={expected}, got enabled={}",
@@ -284,7 +286,9 @@ impl CronTestHarness {
     /// Assert a job's consecutive error count.
     pub async fn assert_consecutive_errors(&self, id: &str, expected: u32) {
         let store = self.state.store.lock().await;
-        let job = store.get_job(id).expect(&format!("job '{id}' not found"));
+        let job = store
+            .get_job(id)
+            .unwrap_or_else(|| panic!("job '{id}' not found"));
         assert_eq!(
             job.state.consecutive_errors, expected,
             "expected job '{id}' consecutive_errors={expected}, got {}",
@@ -295,7 +299,9 @@ impl CronTestHarness {
     /// Assert a job's running state.
     pub async fn assert_running(&self, id: &str, expected: bool) {
         let store = self.state.store.lock().await;
-        let job = store.get_job(id).expect(&format!("job '{id}' not found"));
+        let job = store
+            .get_job(id)
+            .unwrap_or_else(|| panic!("job '{id}' not found"));
         let is_running = job.state.running_at_ms.is_some();
         assert_eq!(
             is_running, expected,
@@ -308,7 +314,9 @@ impl CronTestHarness {
     /// Get a job's state.
     pub async fn job_state(&self, id: &str) -> JobStateV2 {
         let store = self.state.store.lock().await;
-        let job = store.get_job(id).expect(&format!("job '{id}' not found"));
+        let job = store
+            .get_job(id)
+            .unwrap_or_else(|| panic!("job '{id}' not found"));
         job.state.clone()
     }
 

@@ -87,7 +87,7 @@ impl MockExecutor {
     }
 
     /// Convert into a `JobExecutorFn` for use with the cron service.
-    pub fn into_executor_fn(&self) -> JobExecutorFn {
+    pub fn executor_fn(&self) -> JobExecutorFn {
         let behaviors = Arc::clone(&self.behaviors);
         let call_log = Arc::clone(&self.call_log);
 

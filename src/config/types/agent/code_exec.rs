@@ -170,16 +170,20 @@ mod tests {
     /// runtime compile sites enforce, not exhaust memory on the way in.
     #[test]
     fn blocked_commands_expansion_bomb_fails_validation() {
-        let mut cfg = CodeExecConfigToml::default();
-        cfg.blocked_commands = vec!["(a{1000}){1000}{1000}".to_string()];
+        let cfg = CodeExecConfigToml {
+            blocked_commands: vec!["(a{1000}){1000}{1000}".to_string()],
+            ..Default::default()
+        };
         let err = cfg.validate().expect_err("expansion bomb must be rejected");
         assert!(err.contains("blocked_commands"), "{err}");
     }
 
     #[test]
     fn blocked_commands_sane_pattern_still_validates() {
-        let mut cfg = CodeExecConfigToml::default();
-        cfg.blocked_commands = vec![r"^rm\s+-rf\s+/".to_string()];
+        let cfg = CodeExecConfigToml {
+            blocked_commands: vec![r"^rm\s+-rf\s+/".to_string()],
+            ..Default::default()
+        };
         assert!(cfg.validate().is_ok());
     }
 }

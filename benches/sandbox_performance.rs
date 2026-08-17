@@ -1,6 +1,7 @@
+use alephcore::sandbox::policy::SandboxPolicy;
 use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
 use alephcore::sandbox::{
-    build_sandbox, create_platform_driver, SandboxCapabilities, SandboxConfig, SandboxPolicy,
+    build_sandbox, create_platform_driver_from_config, SandboxCapabilities, SandboxConfig,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::path::PathBuf;
@@ -34,8 +35,9 @@ fn benchmark_policy_generation(c: &mut Criterion) {
 
 fn benchmark_driver_creation(c: &mut Criterion) {
     c.bench_function("platform_driver_creation", |b| {
+        let config = SandboxConfig::default();
         b.iter(|| {
-            let driver = create_platform_driver();
+            let driver = create_platform_driver_from_config(&config);
             black_box(driver);
         });
     });
@@ -50,7 +52,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
             max_output_bytes: 1024 * 1024,
             ..Default::default()
         };
-        let driver = create_platform_driver();
+        let driver = create_platform_driver_from_config(&config);
         let approval = Arc::new(alephcore::sandbox::exec_approval::gate::ApprovalGate::new(
             None,
         ));
@@ -76,7 +78,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
             max_output_bytes: 1024 * 1024,
             ..Default::default()
         };
-        let driver = create_platform_driver();
+        let driver = create_platform_driver_from_config(&config);
         let approval = Arc::new(alephcore::sandbox::exec_approval::gate::ApprovalGate::new(
             None,
         ));
