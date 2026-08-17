@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
 use crate::gateway::channel::{
-    ChannelHealth, ChannelId, ChannelInfo, ChannelStatus, HealthStatus, OutboundMessage,
+    ChannelId, ChannelInfo, ChannelStatus, OutboundMessage,
 };
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -797,41 +797,7 @@ pub async fn handle_delete(
     )
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ChannelHealthResponse {
-    pub id: String,
-    pub channel_type: String,
-    pub status: String,
-    pub health_status: String,
-    pub last_event_at: String,
-    pub failure_count: u32,
-    pub status_reason: Option<String>,
-}
 
-impl From<(&ChannelId, &str, ChannelStatus, &ChannelHealth)> for ChannelHealthResponse {
-    fn from(
-        (id, channel_type, status, health): (&ChannelId, &str, ChannelStatus, &ChannelHealth),
-    ) -> Self {
-        Self {
-            id: id.as_str().to_string(),
-            channel_type: channel_type.to_string(),
-            status: status_to_string(status),
-            health_status: health_status_to_string(health.status),
-            last_event_at: health.last_event_at.to_rfc3339(),
-            failure_count: health.failure_count,
-            status_reason: health.status_reason.clone(),
-        }
-    }
-}
-
-fn health_status_to_string(status: HealthStatus) -> String {
-    match status {
-        HealthStatus::Healthy => "healthy",
-        HealthStatus::Stale => "stale",
-        HealthStatus::Degraded => "degraded",
-    }
-    .to_string()
-}
 
 #[cfg(test)]
 mod tests {

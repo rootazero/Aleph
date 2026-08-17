@@ -246,12 +246,8 @@ where
             }
         }
 
-        // Resume-style runs (crash resume, post-run steering rescue) carry no
-        // fresh input — the session log already holds the full trajectory —
-        // so a resume-flag check is still needed for the memory write below.
         // The user message is now SSOT via SessionEvent::UserMessage (seed_session
         // path) — no direct add_message call here.
-        let is_resume = request.metadata.get("resume").map(String::as_str) == Some("true");
 
         // Announce the session the moment it's created (first message), not just
         // when the run completes. Without this, a brand-new session is silent for
@@ -614,8 +610,7 @@ where
         drop(_run_slot);
 
         let final_result = match result {
-            Ok(response) => {
-                let response = &response;
+            Ok(_response) => {
                 if trace_task_persisted {
                     self.persist_run_task_status(&run_id, TaskStatus::Completed)
                         .await;
@@ -623,7 +618,7 @@ where
 
                 let occupancy = occupancy_out.lock().ok().and_then(|g| g.clone());
                 // SSOT: the harness already emitted SessionEvent::AssistantMessage for
-                // `response` (the projector writes that row). Emit run_id + occupancy so
+                // `_response` (the projector writes that row). Emit run_id + occupancy so
                 // the projector stamps them onto that row — preserving the Panel context
                 // gauge + workspace trace across a session reload.
                 if let Some(svc) = crate::session::service::global_session_service() {
