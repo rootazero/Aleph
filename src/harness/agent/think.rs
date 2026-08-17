@@ -1568,7 +1568,7 @@ mod tests {
         // regression the gate fix targets: the stream was previously killed by
         // the mere presence of a registry, contradicting the documented "no
         // *output* guardrail" contract.
-        let registry = GuardrailRegistry::empty();
+        let registry = GuardrailRegistry::builder().build();
         assert_eq!(registry.output_count(), 0);
         assert!(super::may_stream_deltas(Some(&registry), true));
         // Still gated on the HTTP seam.

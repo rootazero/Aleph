@@ -10,7 +10,7 @@ use crate::guardrails::registry::GuardrailRegistry;
 
 #[tokio::test]
 async fn noop_input_evaluation_is_fast() {
-    let r = GuardrailRegistry::empty();
+    let r = GuardrailRegistry::builder().build();
     let n = 10_000usize;
     let start = std::time::Instant::now();
     for _ in 0..n {
@@ -32,7 +32,7 @@ async fn noop_input_evaluation_is_fast() {
 
 #[tokio::test]
 async fn noop_output_evaluation_is_fast() {
-    let r = GuardrailRegistry::empty();
+    let r = GuardrailRegistry::builder().build();
     let n = 10_000usize;
     let start = std::time::Instant::now();
     for _ in 0..n {
@@ -45,7 +45,7 @@ async fn noop_output_evaluation_is_fast() {
 
 #[tokio::test]
 async fn disable_all_idempotent_under_repeated_calls() {
-    let r = GuardrailRegistry::empty();
+    let r = GuardrailRegistry::builder().build();
     for _ in 0..1_000 {
         r.disable_all();
         r.enable_all();

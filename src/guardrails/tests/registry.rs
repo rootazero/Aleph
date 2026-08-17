@@ -79,7 +79,7 @@ impl ToolCallGuardrail for AlwaysBlock {
 
 #[tokio::test]
 async fn empty_registry_allows_everything() {
-    let r = GuardrailRegistry::empty();
+    let r = GuardrailRegistry::builder().build();
     assert!(r.evaluate_input("anything").await.is_allow());
     assert!(r.evaluate_output("anything").await.is_allow());
     assert!(r

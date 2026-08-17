@@ -41,16 +41,6 @@ impl GuardrailRegistry {
         GuardrailRegistryBuilder::default()
     }
 
-    #[must_use]
-    pub fn empty() -> Self {
-        Self {
-            input: Vec::new(),
-            output: Vec::new(),
-            tool_call: Vec::new(),
-            enabled: AtomicBool::new(true),
-        }
-    }
-
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Acquire)
     }

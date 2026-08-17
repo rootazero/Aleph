@@ -32,32 +32,12 @@ pub struct PiiSecretsGuardrail {
 }
 
 impl PiiSecretsGuardrail {
-    /// Construct over an existing orchestrator with no resolver. Placeholder
-    /// substitution at the `tool_call` surface will be inert.
-    #[must_use]
-    pub fn new(guard: Arc<RuntimeSecurityGuard>) -> Self {
-        Self {
-            guard,
-            resolver: None,
-        }
-    }
-
     /// Construct over an existing orchestrator with a resolver wired in.
     #[must_use]
     pub fn with_guard_and_resolver(
         guard: Arc<RuntimeSecurityGuard>,
         resolver: Option<Arc<dyn AsyncSecretResolver>>,
     ) -> Self {
-        Self { guard, resolver }
-    }
-
-    /// Construct with a default orchestrator and an optional resolver.
-    /// Convenience for the boot path. Audit channel from the orchestrator
-    /// is dropped here — callers that want audit drainage should construct
-    /// via `with_guard_and_resolver` after spawning their own drain.
-    #[must_use]
-    pub fn with_resolver(resolver: Option<Arc<dyn AsyncSecretResolver>>) -> Self {
-        let guard = Arc::new(RuntimeSecurityGuard::default_guard());
         Self { guard, resolver }
     }
 
@@ -337,7 +317,8 @@ mod delegation_tests {
         } else {
             None
         };
-        PiiSecretsGuardrail::with_resolver(resolver)
+        let guard = Arc::new(RuntimeSecurityGuard::default_guard());
+        PiiSecretsGuardrail::with_guard_and_resolver(guard, resolver)
     }
 
     #[tokio::test]
@@ -453,7 +434,8 @@ mod input_blocking_tests {
 
     #[tokio::test]
     async fn input_blocks_pasted_api_keys() {
-        let g = PiiSecretsGuardrail::with_resolver(None);
+        let guard = Arc::new(RuntimeSecurityGuard::default_guard());
+        let g = PiiSecretsGuardrail::with_guard_and_resolver(guard, None);
         let cases = ["sk-proj-", "sk-ant-", "AKIA", "ghp_", "glpat-"];
         for prefix in cases {
             let text = pasted(prefix);
