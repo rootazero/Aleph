@@ -580,10 +580,14 @@ pub async fn handle_runs(
     }
 }
 
-// ============================================================================
-// Stub handlers (stateless, for HandlerRegistry::new())
-// ============================================================================
-
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_parse_interval() {
+        assert_eq!(parse_interval("5m").unwrap(), 300_000);
+        assert_eq!(parse_interval("1h").unwrap(), 3_600_000);
+        assert_eq!(parse_interval("30s").unwrap(), 30_000);
+        assert_eq!(parse_interval("60000").unwrap(), 60_000);
         assert!(parse_interval("abc").is_err());
     }
 }

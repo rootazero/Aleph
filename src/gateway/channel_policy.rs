@@ -2,14 +2,9 @@
 //!
 //! The channel-level rungs of the permission hierarchy: the tier clamp for
 //! untrusted channels ([`clamp_tier_for_channel`]), the access-policy config
-//! types ([`DmPolicy`] / [`GroupPolicy`]) consumed by channel adapters
-//! (WhatsApp evaluates them in `wa_policy/`; the inbound router has its own
-//! `ChannelConfig` twin).
-//!
-//! Note: `ChannelAccessConfig` and `E164Number` previously lived here and were
-//! documented as "consumed by inbound_router" — that claim was wrong. They were
-//! severed in the 2026-08-17 audit (zero production callers, only the doc
-//! reference and own tests).
+//! types ([`ChannelAccessConfig`] / [`DmPolicy`] / [`GroupPolicy`]) consumed by
+//! channel adapters (WhatsApp evaluates them in `wa_policy/`; the inbound
+//! router has its own `ChannelConfig` twin), and [`E164Number`] normalization.
 
 use crate::config::types::policies::ExecTier;
 use crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY;
@@ -174,6 +169,45 @@ fn channel_identity_meta(
     meta
 }
 
+/// E.164 formatted phone number
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub struct E164Number(pub String);
+
+impl E164Number {
+    pub fn new(number: impl Into<String>) -> Self {
+        Self(number.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Normalize a phone number to E.164 format.
+    ///
+    /// 10-digit numbers are assumed to be US/Canada (country code 1).
+    /// 11-15 digit numbers are assumed to already include the country code.
+    #[must_use]
+    pub fn normalize(raw: &str) -> Option<Self> {
+        let cleaned: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+        if cleaned.len() < 10 || cleaned.len() > 15 {
+            return None;
+        }
+        if cleaned.len() == 10 {
+            // Assume US/Canada: prepend country code 1
+            Some(Self(format!("+1{cleaned}")))
+        } else {
+            Some(Self(format!("+{cleaned}")))
+        }
+    }
+}
+
+impl std::fmt::Display for E164Number {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// DM (direct message) access policy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -202,11 +236,54 @@ pub enum GroupPolicy {
     Disabled,
 }
 
+/// Channel access control configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelAccessConfig {
+    /// DM access policy
+    #[serde(default)]
+    pub dm_policy: DmPolicy,
+
+    /// Allowlisted phone numbers for DMs (E.164 format)
+    #[serde(default)]
+    pub allow_from: Vec<String>,
+
+    /// Group access policy
+    #[serde(default)]
+    pub group_policy: GroupPolicy,
+
+    /// Allowlisted phone numbers for groups (E.164 format)
+    #[serde(default)]
+    pub group_allow_from: Vec<String>,
+
+    /// Explicitly allowlisted group JIDs
+    #[serde(default)]
+    pub groups: Vec<String>,
+
+    /// Bot-to-bot loop protection (active when the channel admits bot-authored
+    /// inbound messages). Per-channel override; falls back to global defaults
+    /// via [`crate::gateway::pair_loop_guard::resolve_pair_loop_settings`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_loop_protection: Option<PairLoopGuardConfig>,
+}
+
+impl Default for ChannelAccessConfig {
+    fn default() -> Self {
+        Self {
+            dm_policy: DmPolicy::Pairing,
+            allow_from: Vec::new(),
+            group_policy: GroupPolicy::Allowlist,
+            group_allow_from: Vec::new(),
+            groups: Vec::new(),
+            bot_loop_protection: None,
+        }
+    }
+}
+
 // NOTE (entropy reduction 2026-07-17): the `ChannelPolicy` trait, its sole implementor
 // `WhatsAppPolicy`, and their `PolicyDecision` result type were deleted here —
 // a dead abstraction island with zero consumers. WhatsApp's live policy
 // evaluation is `interfaces/whatsapp/wa_policy/{dm_policy,group_policy}.rs`,
-// which consumes the [`DmPolicy`] / [`GroupPolicy`] enums defined above.
+// which consumes the `ChannelAccessConfig` data types above directly.
 
 #[cfg(test)]
 mod tests {
@@ -292,5 +369,22 @@ mod tests {
             deny.contains("web_fetch") && deny.contains("deny"),
             "serialized deny layer should preserve the per-channel override, got: {deny}"
         );
+    }
+
+    #[test]
+    fn test_e164_normalize() {
+        assert_eq!(
+            E164Number::normalize("+15551234567").unwrap().as_str(),
+            "+15551234567"
+        );
+        assert_eq!(
+            E164Number::normalize("15551234567").unwrap().as_str(),
+            "+15551234567"
+        );
+        assert_eq!(
+            E164Number::normalize("(555) 123-4567").unwrap().as_str(),
+            "+15551234567"
+        );
+        assert!(E164Number::normalize("123").is_none());
     }
 }
