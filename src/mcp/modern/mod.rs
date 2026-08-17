@@ -255,8 +255,6 @@ pub enum ResultKind {
     InputRequired,
 }
 
-/// `resultType` value for an ordinary result.
-pub const RESULT_TYPE_COMPLETE: &str = "complete";
 /// `resultType` value for a Multi Round-Trip interim result.
 pub const RESULT_TYPE_INPUT_REQUIRED: &str = "input_required";
 

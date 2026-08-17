@@ -578,10 +578,6 @@ impl McpTransport for SseTransport {
     ) -> Result<()> {
         self.send_response(request_id, result).await
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 impl SseTransport {

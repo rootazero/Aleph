@@ -63,7 +63,6 @@ pub use auth::{
     OAuthStorage, OAuthTokens,
 };
 pub use client::{ExternalServerConfig, McpClient};
-pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, ToolContext};
 pub use error_class::{classify_mcp_error, McpErrorKind};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{

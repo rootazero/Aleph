@@ -178,16 +178,7 @@ fn get_runtime_path(cmd: &str) -> Option<String> {
         })
 }
 
-/// Check multiple runtimes at once
-#[cfg(test)]
-pub fn check_all_runtimes() -> Vec<RuntimeCheckResult> {
-    vec![
-        check_runtime(RuntimeKind::Node),
-        check_runtime(RuntimeKind::Python),
-        check_runtime(RuntimeKind::Bun),
-        check_runtime(RuntimeKind::Deno),
-    ]
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -252,16 +243,4 @@ mod tests {
         // available could be true or false depending on system
     }
 
-    #[test]
-    fn test_check_all_runtimes() {
-        let results = check_all_runtimes();
-        assert_eq!(results.len(), 4);
-
-        // Check that all expected runtimes are checked
-        let kinds: Vec<RuntimeKind> = results.iter().map(|r| r.kind).collect();
-        assert!(kinds.contains(&RuntimeKind::Node));
-        assert!(kinds.contains(&RuntimeKind::Python));
-        assert!(kinds.contains(&RuntimeKind::Bun));
-        assert!(kinds.contains(&RuntimeKind::Deno));
     }
-}

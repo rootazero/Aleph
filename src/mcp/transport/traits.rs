@@ -146,12 +146,6 @@ pub trait McpTransport: Send + Sync + std::any::Any {
     fn set_dialect(&self, _dialect: &crate::mcp::modern::McpDialect) {
         // Default no-op; only the Streamable HTTP transport carries the header.
     }
-
-    /// Get a reference to the transport as Any for downcasting
-    ///
-    /// This enables type-specific operations on transports when needed,
-    /// such as setting SSE-specific request handlers for sampling.
-    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 #[cfg(test)]
@@ -272,10 +266,6 @@ mod tests {
 
         fn server_name(&self) -> &str {
             &self.name
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

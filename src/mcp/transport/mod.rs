@@ -21,6 +21,5 @@ mod traits;
 
 pub use http::{HttpTransport, HttpTransportConfig};
 pub use sse::{SseTransport, SseTransportConfig};
-pub use sse_events::{SseEvent, SseNotification, SseRequest};
 pub use stdio::StdioTransport;
 pub use traits::{McpTransport, NotificationCallback};

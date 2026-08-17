@@ -84,11 +84,6 @@ impl McpClient {
         self.tool_filter = filter.filter(|f| !f.is_noop());
     }
 
-    /// Get the sampling handler
-    pub const fn sampling_handler(&self) -> &Arc<SamplingHandler> {
-        &self.sampling_handler
-    }
-
     /// Set callback for sampling requests
     pub async fn set_sampling_callback<F, Fut>(&self, callback: F)
     where

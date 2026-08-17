@@ -557,10 +557,6 @@ impl McpTransport for StdioTransport {
     fn set_notification_handler(&self, handler: NotificationCallback) {
         self.install_notification_handler(handler);
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 impl Drop for StdioTransport {

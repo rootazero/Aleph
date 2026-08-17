@@ -1413,7 +1413,7 @@ pub(crate) const INJECTED_TOOL_DESCRIPTIONS: &[(&str, &str, fn() -> serde_json::
 /// Tools the **MCP bridge** installs straight into the process-wide
 /// `ToolHandlerRegistry` — the fourth registration shape.
 ///
-/// `mcp/tool_bridge.rs::sync_builtins` registers these against a capability
+/// `mcp/tool_bridge.rs::reconcile_capability_tools` registers these against a capability
 /// gate (a connected server actually offering resources / prompts / a
 /// non-stdio transport), and `run_loop` snapshots that registry into every
 /// request's `LoopToolRegistry`. So they are in no catalog, reach no `reg(`
@@ -2509,7 +2509,7 @@ mod tests {
     /// Every tool the MCP bridge installs is measured.
     ///
     /// The fourth shape's witness is `mcp/tool_bridge.rs`'s own name consts:
-    /// registering a bridge tool means declaring one, and `sync_builtins` keys
+    /// registering a bridge tool means declaring one, and `reconcile_capability_tools` keys
     /// every install off it. Compared by VALUE, not by identifier — the table
     /// references those same consts, so a rename that touched only one side
     /// would otherwise leave both agreeing on a name the wire never sees.

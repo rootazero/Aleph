@@ -576,10 +576,6 @@ impl McpTransport for HttpTransport {
             *slot = Some(dialect.clone());
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]

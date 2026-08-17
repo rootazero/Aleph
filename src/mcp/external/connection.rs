@@ -1734,10 +1734,6 @@ mod tests {
         fn set_dialect(&self, dialect: &McpDialect) {
             *self.dialect.lock().unwrap_or_else(|e| e.into_inner()) = Some(dialect.clone());
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     async fn connect_with(transport: &Arc<ScriptedTransport>) -> Result<McpServerConnection> {
