@@ -91,8 +91,3 @@ impl FetchProviderFactoryRegistry {
         self.factories.get(provider_type).map(|b| b.as_ref())
     }
 }
-impl Default for FetchProviderFactoryRegistry {
-    fn default() -> Self {
-        Self::with_defaults()
-    }
-}
