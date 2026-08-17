@@ -10,7 +10,7 @@ use serde_json::Value;
 ///
 /// `#[non_exhaustive]`: trace events grow over time as new observability
 /// hooks are added (e.g. round 2 didn't add any but historically the enum
-/// has grown from 6 → 14 variants). Downstream trace-sink consumers in
+/// has grown from 6 → 19 variants). Downstream trace-sink consumers in
 /// other crates must therefore include a wildcard arm; this annotation
 /// makes that requirement compile-time enforced.
 ///

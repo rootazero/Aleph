@@ -14,7 +14,7 @@ pub mod trait_def;
 pub use agent::AgentHarness;
 pub use callback::{HarnessCallback, NoopHarnessCallback};
 pub use deps::HarnessDeps;
-pub use deps::{StallConfig, StallTracker};
+pub use deps::StallConfig;
 pub use trace_sink::{NoopTraceSink, TraceSink};
 pub use trait_def::{HarnessError, TurnState};
 
