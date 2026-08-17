@@ -738,22 +738,6 @@ where
                     }
                 }
 
-                // Async write to memory system (Layer 1). Resume-style runs
-                // have no fresh user input — a blank user/assistant pair is
-                // noise in raw memory, so skip the write.
-                if !is_resume {
-                    if let Some(ref mb) = self.memory_backend {
-                        let mb = mb.clone();
-                        let sk = request.session_key.to_key_string();
-                        let agent_id = request.session_key.agent_id().to_string();
-                        let ui = request.input.clone();
-                        let ao = response.clone();
-                        tokio::spawn(async move {
-                            super::history::write_conversation_memory(mb, sk, agent_id, ui, ao)
-                                .await;
-                        });
-                    }
-                }
                 // Record conversation turn for compression scheduling. Content-blind:
                 // the turn-threshold cadence only. "Was this a correction worth
                 // remembering?" is the model's call, via flag_user_correction (R7).

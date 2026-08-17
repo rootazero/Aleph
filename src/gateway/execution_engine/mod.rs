@@ -85,8 +85,6 @@ pub struct ExecutionEngineConfig {
     pub max_runs_per_agent: usize,
     /// Default timeout for runs (seconds)
     pub default_timeout_secs: u64,
-    /// Enable detailed tracing
-    pub enable_tracing: bool,
     /// Mid-loop steering: when a message arrives for a session whose loop is
     /// already running, inject it into the live event log (the running loop
     /// consumes it at the next turn boundary) instead of rejecting with
@@ -119,7 +117,6 @@ impl Default for ExecutionEngineConfig {
             max_runs_global: 8,
             max_runs_per_agent: 3,
             default_timeout_secs: 172_800,
-            enable_tracing: true,
             mid_turn_steering: true,
             max_pending_steering: steering::MAX_PENDING_STEERING,
             scratchpad_progress_push: false,

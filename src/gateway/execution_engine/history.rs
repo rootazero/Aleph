@@ -35,18 +35,4 @@ pub(super) async fn build_loop_history(
     msgs
 }
 
-/// Write a conversation turn to the memory system (Layer 1).
-///
-/// With `SessionStore` removed, this is a no-op. Raw conversations are
-/// already stored in `SessionManager`'s `SQLite`. Retained for API compatibility.
-pub(super) async fn write_conversation_memory(
-    _memory_backend: crate::memory::store::MemoryBackend,
-    _session_key: String,
-    _agent_id: String,
-    _user_input: String,
-    _ai_output: String,
-) {
-    // Raw memory persistence removed — SessionStore no longer exists.
-    // Conversations are stored in SessionManager's SQLite.
-    tracing::debug!("Conversation memory write skipped (SessionStore removed)");
-}
+
