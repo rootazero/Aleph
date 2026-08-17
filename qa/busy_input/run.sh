@@ -27,10 +27,11 @@ WEBHOOK_PATH="/webhook/generic"
 # scratch one silently degrades into a full network fetch that then times out.
 # (It also grows a ~/.rustup inside the scratch dir, which is how this trap
 # announces itself.)
-REAL_HOME="$HOME"
-
-export HOME="$QA_ROOT/home"
-export ALEPH_HOME="$QA_ROOT/home/.aleph"
+. "$HERE/../lib/scratch_home.sh"
+# Redirects HOME/ALEPH_HOME into the scratch root AND pins RUSTUP_HOME/
+# CARGO_HOME at the real ones — the redirect and the pin are inseparable
+# on purpose; see that file for the 1.3 GB-per-run leak it closes.
+qa_redirect_home "$QA_ROOT"
 mkdir -p "$ALEPH_HOME"
 CONFIG="$ALEPH_HOME/config.toml"
 DB="$ALEPH_HOME/data/sessions.db"

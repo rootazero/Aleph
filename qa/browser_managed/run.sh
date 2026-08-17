@@ -65,8 +65,8 @@ REAP_IDLE_SECS=5
 REAP_WAIT_SECS="${REAP_WAIT_SECS:-150}"
 
 # Build BEFORE HOME is redirected — cargo's registry, git cache and rustup
-# toolchain all live under the real HOME. See qa/README.md.
-REAL_HOME="$HOME"
+# toolchain all live under the real HOME. See qa/README.md. (`REAL_HOME` is
+# captured by `qa_redirect_home` below, at the point of the redirect itself.)
 
 CLI="${PLAYWRIGHT_CLI:-$(command -v playwright-cli 2>/dev/null)}"
 if [ -z "$CLI" ]; then
@@ -74,8 +74,11 @@ if [ -z "$CLI" ]; then
   exit 69
 fi
 
-export HOME="$QA_ROOT/home"
-export ALEPH_HOME="$QA_ROOT/home/.aleph"
+. "$HERE/../lib/scratch_home.sh"
+# Redirects HOME/ALEPH_HOME into the scratch root AND pins RUSTUP_HOME/
+# CARGO_HOME at the real ones — the redirect and the pin are inseparable
+# on purpose; see that file for the 1.3 GB-per-run leak it closes.
+qa_redirect_home "$QA_ROOT"
 mkdir -p "$ALEPH_HOME"
 CONFIG="$ALEPH_HOME/config.toml"
 UDD="$QA_ROOT/browser-profile"

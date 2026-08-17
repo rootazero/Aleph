@@ -211,12 +211,38 @@ Wire 契约单一源       shared/protocol/src/canvas.rs                        
 ### QA 抓到并修复
 
 - **QA-1（真 bug，已修）**：导出光栅化用 `blob:` URL 加载 SVG，Panel CSP `img-src 'self' data: https:` 不含 `blob:` → 图像加载被策略阻断，导出**从未在真机成功过**（936 条单测全绿也测不到 CSP）。修复：`export.rs::rasterize_svg_to_png` 改 `data:image/svg+xml;charset=utf-8,` + `encode_uri_component`（Unicode 安全、策略白名单内、不放宽 CSP）。
-- **QA-2（预存问题，记录不修）**：`src/extension/watcher.rs` 监视整个 `~/.aleph/` 树，画布每次 apply 写 doc.json 都触发 debounced `extension.reloaded` + `tools.changed` 全量广播——watcher 范围是预存设计（sessions.db 写入同样触发），画布把写频提到拖拽级，放大了噪声。归属 extension 子系统，本分支不动。
+- **QA-2（当时记录「预存设计、不修」——2026-08-17 遗留轮证明这条记录是错的，已修）**：症状属实（画布每次 apply 都触发 `extension.reloaded` + `tools.changed` 全量广播），归因不实。`src/extension/watcher.rs` **早就有**一张 `runtime_data_dirs` 排除表，`get_data_dir()` 正在表上，而画布根就是 `<data_dir>/canvas/` ——所以它本该被挡掉。真因是**比较的两边拼法不同**：`notify` 报的是**解析后**的路径（macOS FSEvents 把 `/var` 重写成 `/private/var`），而排除表是从未解析的 path helper 拼出来的，于是 `starts_with` **一条都不匹配、整张排除表是死的**。实测证据（探针，非推理）：事件路径 `/private/var/…/data/canvas/cv-1/doc.json`，排除项 `/var/…/data`。
+  - **命中条件**：`ALEPH_HOME` 路径上任一段是符号链接——即**每一次 QA 运行**（`$TMPDIR` 在 `/var` 下）、每个 `ALEPH_HOME=/tmp/…`、以及任何 home 本身是软链的部署。默认装机（`~/.aleph` 未软链）不受影响，这也是它四轮没被发现的原因。
+  - **修法**：两边都过同一个既有归一化器 `canonicalize_best_effort`——排除表在 `effective_runtime_data_dirs()` 里归一，**监视根也在构造器里归一**（只归一排除表只修好 macOS：inotify/Windows 报的是按所给根拼出来的路径，两边必须同时归一才在所有平台成立）。这正是 `notes/watcher.rs:160` 为**镜像**理由做过的事（那边未解析的根让 `strip_prefix` 把整个 vault 判成"不是笔记"）。
+  - **守卫**（两条都先手工证伪过，红过才留下）：`the_runtime_data_exclusion_survives_a_symlinked_root`（纯谓词，全平台红）与 `a_canvas_write_is_dropped_while_a_skill_edit_still_reloads`（真 `notify` 事件，**两半都断言**——画布写被丢弃 *且* 真实 skill 编辑仍然到达；只断言前一半的话，一个彻底哑掉的 watcher 也会绿）。
 - **QA 仪器教训**（qa/canvas/README.md 同批补记）：① 合成指针事件后**同脚本内的同步 DOM 读数发生在 Leptos 微任务刷新之前**——所有断言读数必须放到下一次 evaluate 调用或 setTimeout 之后，否则 80 个探针全部自盲；② 按钮匹配用**精确 title**，`includes('选择')` 会先命中聊天 composer 的「为本轮**选择**模型」。
 
 ### 首次 AI 图片框尝试的未决异常
 
 第一次 Generate 的 run 内 `insert_image` 未提交（doc 停在 rev 15），当时未开 `request_log`，回执不可追溯；第二次尝试 + 手动 `tools.invoke` + wire 测试全部绿。若复发：用 `mock_anthropic.py` 第 5 参数 `request_log` 截获 tool_result（本轮已证明该 oracle 可用）。**→ 2026-08-17 遗留轮**：`run.sh` 已把 `request_log` 无条件接线到 `$QA_ROOT/request_log.jsonl`——oracle 只在已经开着时才存在，此后任何复发自带回执。
+
+### 2026-08-17 第二遗留轮（QA-2 + 四项零散尾巴）
+
+1. **QA-2 已修**，且推翻了自己的记录——见上方 QA-2 条目。教训是判据清单 §0 那条的又一次实证：**开工修一条记录在案的 gap，第一步是去代码里确认它还成立**。这里"成立"的只有症状，归因（"watcher 范围是预存设计"）是错的，而错的归因把一个 5 行的真 bug 归档成了"别的子系统的设计选择"。
+2. **`member_seed.py` 改为幂等**（find-or-create）。原因不是洁癖：重跑会多出第二对 "Operator private" / "Room canvas"，而 item 8 的 operator 对照组断言是**数数**（"三个全见"）——一个不幂等的播种器会悄悄推翻它自己要建立的那条断言。
+3. **冲突 oracle 的 chunk 边界洞已补**：`latency_proxy.py` 的 `-32031` 扫描从"每个 TCP chunk 各扫一遍"改成流式 `ConflictScanner`（跨读携带 `len(marker)-1` 字节），并带 `--self-test`。旧写法在 6 字节 needle 跨 64 KiB 边界时漏报，实证：`[b'{"code":' + m[:3], m[3:] + b'}']` 旧扫描计 0、应为 1。README 里那句"缺行不是无冲突的证明"随之收窄成只剩压缩这一种成因。
+4. **Panel 的 `/favicon.ico` 404 已消**（冲突 QA 里那条"无关 404"）。根因：`index.html` 根本没有 `<link rel="icon">`，浏览器于是自动请求 `/favicon.ico`，而 dist 里没有这个文件。修在**单一源**——runtime `index.html` 是 `justfile` 里那段 heredoc 生成的（`interfaces/webchat/index.html` 是 trunk 开发变体、不是出厂的那份），三处一起改并按 heredoc 逐字节重生成 dist。用内联 `data:` SVG（ℵ 字形）而非新增 dist 资产：请求整个消失，且落在 Panel 现有 CSP `img-src 'self' data: https:` 之内——与 QA-1 用 `data:` 换掉被 CSP 挡住的 `blob:` 同一条论证。真机复证：`/favicon.ico` 单独 curl 仍 404（根因未变），而页面加载的 5 个请求全 200、其中没有 favicon 这一条。
+5. **`aleph-desktop-*` 三个限肢 crate 的 check 补跑**，并清掉它暴露的一个警告：`desktop/linux/src/lib.rs` 的 `AccessibilityCapability` import 没有跟着它唯一的使用点一起 `#[cfg(target_os = "linux")]`，所以**只在非 Linux 宿主上**报 unused——正是上一轮跳过的那条命令才看得见的东西。
+6. **侧栏折叠态 / tablet 宽度的画廊：真机补测，两态全 PASS**（chrome-devtools-mcp，效果断言见下表）。
+
+| 状态 | 断言 | 结果 |
+|---|---|---|
+| Wide 1440 基线 | 侧栏在流内 0–225，main 225–1440，三行画廊可达 | ✅ |
+| Wide 折叠 | 侧栏被裁到 width 0 / `overflow:hidden`，三行**命中测试不可达**；main 收回全宽 1440；固定 toggle 在 (10,14) **可达** | ✅ |
+| Wide 折叠→展开 | 点固定 toggle → 侧栏回到 225，三行全部重新可达 | ✅ |
+| Tablet 900（自动） | `ff-tablet` 上身、`sidebar_collapsed` 被强制为真；侧栏 `absolute` / 256px / `translateX(-256px)` 滑出屏外；main **未被挤** (0,900)；toggle 可达 | ✅ |
+| Tablet 900 揭开 | 侧栏滑入 0–256、`z-index:60` **浮在内容之上**，main 仍是 (0,900)——即 CSS 注释声称的"不 re-cramp"确实成立；三行可达 | ✅ |
+| Tablet 行点击 | 点 "Beta sketches" → 编辑器打开该画布（SVG 在场），该行变 `nav-tile-active` 高亮 | ✅ |
+| 边界 1024 | 判为 Wide：侧栏回流内（main.left == sidebar.right），选中态跨带存活 | ✅ |
+| 边界 1023 | 判为 Tablet：强制折叠、absolute 滑出、编辑器仍开着、toggle 可达 | ✅ |
+| 控制台 | 重载后 error/warn **零条**，5 个网络请求全 200 | ✅ |
+
+> **仪器教训（第二条，与首轮那两条同族）**：`offsetParent` 在这里**两个方向都撒谎**——对 `position:fixed` 的固定 toggle 恒为 `null`（会把"可见"读成"不可见"），对被 `overflow:hidden` 裁掉的画廊行**非 null**（会把"已裁掉"读成"仍然可见"）。第一版探针因此同时谎报了两件事，差一点让我写下"折叠态下画廊仍然显示"这个假结论。可用的判据只有**命中测试**：取元素中心点 `document.elementFromPoint`，看回来的是不是它自己或其后代。
 
 ### 2026-08-17 遗留轮收尾（本 spec 的最后三笔账）
 

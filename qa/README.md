@@ -270,6 +270,33 @@ scratch one silently degrades into a full network fetch and then times out
 this. The signature of getting it wrong is a `.rustup/toolchains/` tree
 appearing inside your scratch dir.
 
+**The redirect itself is `qa/lib/scratch_home.sh::qa_redirect_home`, and it
+pins `RUSTUP_HOME`/`CARGO_HOME` as well.** The paragraph above was true and
+still insufficient, which is the interesting part: it names the exact signature
+(`.rustup/toolchains/` inside the scratch dir) and the fixtures all guarded
+their own cargo lines correctly — eleven `HOME="$REAL_HOME" cargo …` call sites,
+every one right — and the leak happened anyway, three times, 1.3 GB each. A
+per-invocation guard covers the line it is written on; `export HOME=` stays in
+force for the whole process, so any *other* rustup-shimmed command (a drive
+script, a `bash`-tool call a scenario makes the agent run, a command typed into
+a shell that inherited the export) re-bootstraps the toolchain. The fix is
+environment-level and lives in the same function as the redirect that creates
+the hazard, so a fixture cannot take the isolation without the protection:
+
+```bash
+. "$HERE/../lib/scratch_home.sh"
+qa_redirect_home "$QA_ROOT"      # exports HOME, ALEPH_HOME, RUSTUP_HOME, CARGO_HOME
+```
+
+`tests/qa_fixture_hygiene.rs` enforces it, deriving the fixture list by walking
+`qa/` rather than from a list in the test — a seventh fixture that hand-rolls
+`export HOME=` is named on its first run. There is no allowlist: obeying the
+rule is free, and an allowlist would be a second source of truth about who may
+hand-roll a scratch home. A per-command `HOME=… cmd` prefix is still fine once
+the pins are in the environment (`browser_managed` needs two, for a
+playwright-cli whose session store is HOME-scoped); only the process-wide
+`export HOME=` is refused.
+
 **Debug builds need `RUST_MIN_STACK=268435456` (256 MB).** The 32 MB floor in
 `main.rs::worker_stack_size` is not enough for a debug-built agent run with
 tools; it aborts with `tokio-rt-worker has overflowed its stack`. `run.sh`

@@ -82,6 +82,18 @@ both edits survive in both tabs, and doc.json holds both (revision advanced
 past both commits). No config change needed — the `/ws` origin policy allows
 any loopback origin regardless of port. Verified 2026-08-17: see spec §8.
 
+The oracle scans the **stream**, not each TCP chunk. It used to test
+`marker in chunk`, so a 6-byte needle split across a 64 KiB read boundary
+was missed — rare enough never to show up in a run, and quietly unsound the
+whole time. `ConflictScanner` now carries `len(marker) - 1` bytes across
+reads: every occurrence is found, none twice. `python3
+qa/canvas/latency_proxy.py --self-test` drives the boundary case (and four
+others) directly, so the claim is falsifiable rather than asserted.
+The remaining honest caveat is narrower than the old one: the oracle reads
+plaintext, so it is blind to a downstream frame that was compressed
+(`permessage-deflate`) or otherwise re-encoded — if the line never appears,
+cross-check doc.json revisions before concluding no conflict occurred.
+
 ## The request-log oracle (always on)
 
 `run.sh` wires `mock_anthropic.py`'s 5th argument unconditionally:
@@ -137,7 +149,14 @@ from the machine's LAN IP. The seeding half is now executable,
 * `python3 qa/canvas/member_seed.py <port> --tls` over loopback — creates
   the member user, a project room with the member on the roster, an
   operator-private canvas, a room canvas, and a one-time bootstrap ticket;
-  it prints a ready-to-open member URL at the LAN IP;
+  it prints a ready-to-open member URL at the LAN IP. Every step is
+  find-or-create: the server has no natural key for any of them
+  (`display_name`, project name and canvas title are all presentation
+  labels with no uniqueness constraint — correctly, since nothing resolves a
+  principal by name), so the first version left a duplicate "QA Member" and,
+  worse, a duplicate canvas pair behind whenever a run died halfway and was
+  retried — which silently breaks the operator control group's *counting*
+  assertion below. The reused ids are listed in the script's output;
 * open that URL in a browser, click through the self-signed-cert
   interstitial (TOFU), and assert (all held on 2026-08-17): the member's
   library shows ONLY the room canvas; the private canvas id over the
