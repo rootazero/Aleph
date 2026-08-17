@@ -36,6 +36,10 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
     let (error_message, set_error_message) = signal(Option::<String>::None);
     let (selected_provider_id, set_selected_provider_id) = signal(Option::<String>::None);
     let (show_add_form, set_show_add_form) = signal(false);
+    // Starting values for the add form when it was opened from a preset row
+    // rather than the "+ Add Custom Provider" button. `None` is the custom
+    // case. Held here because both the row handlers and the right pane need it.
+    let pending_preset = RwSignal::new(Option::<EmbeddingProviderConfig>::None);
 
     // Load providers and presets on mount
     Effect::new(move || {
@@ -186,22 +190,16 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                             }.into_any()
                                                             on_click=move || {
                                                                 if let Some(ref config) = preset_for_add {
-                                                                    let config = config.clone();
-                                                                    let id = config.id.clone();
-                                                                    let state = expect_context::<DashboardState>();
-                                                                    spawn_local(async move {
-                                                                        match EmbeddingProvidersApi::add(&state, config).await {
-                                                                            Ok(_) => {
-                                                                                reload();
-                                                                                set_selected_provider_id.set(Some(id));
-                                                                                set_show_add_form.set(false);
-                                                                            }
-                                                                            Err(e) => {
-                                                                                web_sys::console::error_1(&format!("Failed to add preset: {e}").into());
-                                                                            }
-                                                                        }
-                                                                    });
+                                                                    // Unconfigured: open the form prefilled from
+                                                                    // this preset. Writing here instead — which is
+                                                                    // what this used to do — left a keyless
+                                                                    // provider in the config just from looking at
+                                                                    // a row.
+                                                                    pending_preset.set(Some(config.clone()));
+                                                                    set_selected_provider_id.set(None);
+                                                                    set_show_add_form.set(true);
                                                                 } else {
+                                                                    pending_preset.set(None);
                                                                     set_selected_provider_id.set(Some(sel_id_click.clone()));
                                                                     set_show_add_form.set(false);
                                                                 }
@@ -252,6 +250,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                                         <ProviderBadges state=BadgeState { is_default: cp_is_active, verified: cp_verified } />
                                                                     }.into_any()
                                                                     on_click=move || {
+                                                                        pending_preset.set(None);
                                                                         set_selected_provider_id.set(Some(sel_id.clone()));
                                                                         set_show_add_form.set(false);
                                                                     }
@@ -268,6 +267,9 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                     <div class="pt-2">
                                         <button
                                             on:click=move |_| {
+                                                // A blank custom form: clear any
+                                                // preset the operator picked first.
+                                                pending_preset.set(None);
                                                 set_show_add_form.set(true);
                                                 set_selected_provider_id.set(None);
                                             }
@@ -287,13 +289,23 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
             <div class="w-7/12 min-w-[320px] bg-surface aleph-md-detail">
                 {move || {
                     if show_add_form.get() {
+                        // Reading `pending_preset` here is what re-creates the
+                        // panel when the operator picks a different preset while
+                        // the form is already open — the values are starting
+                        // state, not a live binding.
                         view! {
                             <AddProviderPanel
-                                on_added=move || {
+                                prefill=pending_preset.get()
+                                on_added=move |id| {
                                     set_show_add_form.set(false);
+                                    pending_preset.set(None);
                                     reload();
+                                    set_selected_provider_id.set(Some(id));
                                 }
-                                on_cancel=move || set_show_add_form.set(false)
+                                on_cancel=move || {
+                                    set_show_add_form.set(false);
+                                    pending_preset.set(None);
+                                }
                             />
                         }.into_any()
                     } else if let Some(provider_id) = selected_provider_id.get() {

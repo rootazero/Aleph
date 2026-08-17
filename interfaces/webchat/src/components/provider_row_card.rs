@@ -32,6 +32,33 @@ pub enum RowDot {
     Inactive,
 }
 
+/// Classes for a row drawn as a standalone card, spaced from its siblings.
+fn row_class_card(selected: bool, configured: bool) -> String {
+    let base = "text-left p-3 rounded-lg border transition-all";
+    if selected {
+        format!("{base} bg-primary-subtle border-primary")
+    } else if configured {
+        format!("{base} bg-surface-raised border-border hover:border-primary/40")
+    } else {
+        format!("{base} bg-surface-sunken border-border hover:border-border-strong")
+    }
+}
+
+/// Classes for a row drawn as a member of a bordered list.
+///
+/// Extracted so the one property the flush mode exists to guarantee — that it
+/// contributes **no** border and **no** corner radius, leaving the container's
+/// border as the only edge — is something a test can assert rather than
+/// something a reader has to re-derive from a class soup.
+fn row_class_flush(selected: bool) -> String {
+    let base = "text-left p-3 transition-colors";
+    if selected {
+        format!("{base} bg-primary-subtle")
+    } else {
+        format!("{base} hover:bg-surface-raised")
+    }
+}
+
 #[component]
 pub fn ProviderRowCard(
     /// Display name (capitalisation is caller's responsibility).
@@ -63,8 +90,32 @@ pub fn ProviderRowCard(
     /// Optional glyph (e.g. an emoji) rendered in the icon tile instead of the
     /// first character. Used by generation presets whose icons convey the
     /// generation category (🖼️/🎬/🎤).
-    #[prop(optional, into)]
+    ///
+    /// `optional_no_strip`, not `optional`: plain `optional` strips the
+    /// `Option` and hands the setter a bare `String`, so a caller holding an
+    /// `Option` — a shared picker drawing rows from catalogues that do and do
+    /// not have glyphs — cannot forward it. Omitting the prop still defaults
+    /// to `None`.
+    #[prop(optional_no_strip)]
     icon_glyph: Option<String>,
+    /// Draw the row as a member of a bordered list rather than as a card of
+    /// its own: no border, no corners, selection carried by background alone.
+    ///
+    /// The default (a card) is right in the left panel, where rows are spaced
+    /// siblings on the page background. It is wrong inside the picker's
+    /// popover: there the rows already sit inside a bordered, padded container,
+    /// so each card drew a *third* border at a *different* width than the
+    /// button above it and the sections below it — the eye reads a column whose
+    /// edges keep moving. Flush rows plus one divider between them read as one
+    /// list, which is what a catalogue is.
+    ///
+    /// `is_configured` is deliberately not consulted in this mode. In a card
+    /// list it separates rows that are yours from rows that are on offer; in
+    /// the picker every row is on offer and the ones you already have say so
+    /// with a badge, so a second background tint would only make the list
+    /// stripey.
+    #[prop(optional)]
+    flush: bool,
 ) -> impl IntoView {
     let first_char = name
         .chars()
@@ -78,13 +129,13 @@ pub fn ProviderRowCard(
         <button
             on:click=move |_| on_click()
             class=move || {
-                let base = "text-left p-3 rounded-lg border transition-all";
-                if is_selected() {
-                    format!("{base} bg-primary-subtle border-primary")
-                } else if is_configured() {
-                    format!("{base} bg-surface-raised border-border hover:border-primary/40")
+                if flush {
+                    // `is_configured` is not read here on purpose — see the
+                    // prop's doc. Reading it would also subscribe this class to
+                    // a signal whose value the row does not draw.
+                    row_class_flush(is_selected())
                 } else {
-                    format!("{base} bg-surface-sunken border-border hover:border-border-strong")
+                    row_class_card(is_selected(), is_configured())
                 }
             }
         >
@@ -123,5 +174,48 @@ pub fn ProviderRowCard(
                 {trailing.map(|t| view! { <div class="ml-auto shrink-0">{t.run()}</div> })}
             </div>
         </button>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defect this mode exists for: inside the picker's bordered popover a
+    /// card drew its own border, inset from the container around it and from
+    /// the rows below it, so one column showed edges at three widths. A flush
+    /// row must contribute no edge of its own.
+    #[test]
+    fn a_flush_row_draws_no_edge_of_its_own() {
+        for selected in [true, false] {
+            let cls = row_class_flush(selected);
+            assert!(
+                !cls.contains("border"),
+                "flush row must not draw a border: {cls}"
+            );
+            assert!(
+                !cls.contains("rounded"),
+                "flush row must not round its corners: {cls}"
+            );
+        }
+    }
+
+    /// …and selection still has to be visible without one, or the keyboard
+    /// walk would light nothing.
+    #[test]
+    fn a_flush_row_shows_selection_through_its_background() {
+        assert!(row_class_flush(true).contains("bg-primary-subtle"));
+        assert!(!row_class_flush(false).contains("bg-primary-subtle"));
+    }
+
+    /// The default is unchanged: the left-panel lists are spaced cards on the
+    /// page background, where the border *is* the card.
+    #[test]
+    fn a_card_row_keeps_its_border_and_corners() {
+        for (selected, configured) in [(true, true), (false, true), (false, false)] {
+            let cls = row_class_card(selected, configured);
+            assert!(cls.contains("border"), "{cls}");
+            assert!(cls.contains("rounded-lg"), "{cls}");
+        }
     }
 }

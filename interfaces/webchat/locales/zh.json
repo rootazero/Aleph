@@ -653,14 +653,12 @@
       "testing": "测试中...",
       "deleting": "删除中...",
       "adding": "添加中...",
-      "add_provider": "添加提供商",
       "verified": "已验证",
       "default": "默认",
       "id_name_required": "ID 和名称不能为空",
       "dimensions_hint": "模型输出向量的维度",
       "connected": "已连接",
       "not_connected": "未连接",
-      "quick_setup": "快速设置",
       "saved": "已保存",
       "cancel": "取消",
       "custom_provider_desc": "自定义提供商配置",
@@ -689,7 +687,6 @@
       "set_default": "设为默认",
       "custom_provider": "自定义提供商",
       "setup_prefix": "配置",
-      "search_placeholder": "搜索提供商或模型",
       "configured_providers": "已配置的提供商",
       "get_a_key": "获取 API 密钥",
       "vendor_docs": "供应商文档",
@@ -722,6 +719,13 @@
       "kind_status": "提供商拒绝了请求（鉴权或限流）。",
       "kind_shape": "提供商返回了无法解析的格式。",
       "kind_timeout": "请求超时，可以重试。"
+    },
+    "picker": {
+      "add": "添加提供商",
+      "search": "搜索提供商或模型",
+      "hint": "↑↓ 移动 · Enter 配置 · Esc 关闭",
+      "empty": "没有匹配的提供商",
+      "configured": "已配置"
     },
     "embedding": {
       "title": "嵌入提供商",
@@ -882,9 +886,8 @@
       "smart_routing_hint": "自动将请求路由到最合适的提供商",
       "current_suffix": "（当前）",
       "select_provider": "选择提供商以查看详情",
-      "search_placeholder": "搜索生成供应商",
-      "no_search_match": "没有匹配的供应商。",
-      "get_a_key": "获取 API 密钥"
+      "get_a_key": "获取 API 密钥",
+      "configured_providers": "我的提供商"
     },
     "memory": {
       "title": "记忆与知识",

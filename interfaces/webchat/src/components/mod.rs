@@ -25,6 +25,7 @@ pub mod mode_sidebar;
 pub mod model_picker;
 pub mod nav_menu;
 pub mod notification_center;
+pub mod preset_picker;
 pub mod project_page;
 pub mod provider_badge;
 pub mod provider_key_field;

@@ -16,21 +16,26 @@
 //!
 //! ## Layout
 //! - this module — top-level `ProvidersView`, owns the two fetches
-//! - [`list`] — left-panel sections (Subscription / Configured / Quick setup)
+//! - [`list`] — left-panel sections (Subscription / Configured)
+//! - [`picker`] — the "add a provider" disclosure: search + the rest of the
+//!   catalogue, keyboard-walkable. The 56 unconfigured presets used to render
+//!   as cards in the left panel, which buried the rows actually in use.
 //! - [`detail_panel`] — right-panel detail editor
 
 mod detail_panel;
 mod list;
 mod model_ladder;
+mod picker;
 
 use crate::api::{CatalogEntry, CatalogView, ProviderInfo, ProvidersApi};
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use detail_panel::ProviderDetailPanel;
-use list::{PresetGrid, SubscriptionLoginSection};
+use list::{is_configured, ConfiguredList, SubscriptionLoginSection};
+use picker::CatalogPicker;
 
 #[component]
 #[must_use]
@@ -45,9 +50,26 @@ pub fn ProvidersView() -> impl IntoView {
     let catalog = RwSignal::new(Vec::<CatalogEntry>::new());
     let selected = RwSignal::new(Option::<String>::None);
     let error = RwSignal::new(Option::<String>::None);
-    // Filter term for the left-panel list. Applied to rows the server already
-    // sent, through the shared ranker (R4) — never a query parameter.
-    let search = RwSignal::new(String::new());
+    // Whether the "add a provider" disclosure is expanded. Owned here because
+    // the first-load seed below has to reach it.
+    let picker_open = RwSignal::new(false);
+    // Seed it open **once**, after the catalogue arrives, when the operator has
+    // nothing configured. Otherwise a fresh install renders a left panel
+    // holding one collapsed button and nothing else — and this page's whole job
+    // is offering providers nobody has set up yet. A seed rather than a derived
+    // predicate: a signal that recomputed would snap back open every time the
+    // operator closed it while still configuring their first provider.
+    let seeded = RwSignal::new(false);
+    Effect::new(move |_| {
+        let rows = catalog.get();
+        if rows.is_empty() || seeded.get_untracked() {
+            return;
+        }
+        seeded.set(true);
+        if !rows.iter().any(is_configured) {
+            picker_open.set(true);
+        }
+    });
 
     // Load providers + catalog on mount. `rpc_call` parks on a bounded
     // readiness wait, so a cold load (direct URL / refresh) does not have to
@@ -121,22 +143,21 @@ pub fn ProvidersView() -> impl IntoView {
                         </div>
                     })}
 
-                    // Search — filters the catalogue rows already in hand.
-                    <div>
-                        <input
-                            type="text"
-                            prop:value=move || search.get()
-                            on:input=move |ev| search.set(event_target_value(&ev))
-                            placeholder=move || t_string!(i18n, settings.providers.search_placeholder).to_string()
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                        />
-                    </div>
+                    // Add a provider — button + the searchable catalogue it
+                    // reveals. Top of the panel because it is the action; the
+                    // sections below it are the content.
+                    <CatalogPicker
+                        catalog=catalog
+                        providers=providers
+                        selected=selected
+                        open=picker_open
+                    />
 
                     // Subscription login section (auth_kind == oauth rows)
-                    <SubscriptionLoginSection catalog=catalog providers=providers selected=selected search=search />
+                    <SubscriptionLoginSection catalog=catalog providers=providers selected=selected />
 
-                    // Configured providers, then the rest of the catalogue.
-                    <PresetGrid catalog=catalog providers=providers selected=selected search=search />
+                    // Providers the operator has actually configured.
+                    <ConfiguredList catalog=catalog providers=providers selected=selected />
 
                     // Add Custom Provider button
                     <div class="pt-2">

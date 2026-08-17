@@ -17,7 +17,7 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
         default_video_provider: None,
         default_audio_provider: None,
         default_speech_provider: None,
-        output_dir: String::new(),
+        output_dir: None,
         auto_paste_threshold_mb: 5,
         background_task_threshold_seconds: 30,
         smart_routing_enabled: true,
@@ -62,7 +62,10 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
     Effect::new(move || {
         if !loading.get() {
             let cfg = config.get();
-            output_dir.set(cfg.output_dir);
+            // `None` (unset) and `Some("")` both render an empty box; the
+            // server collapses the empty string back to `None` on save, so the
+            // two cannot drift apart.
+            output_dir.set(cfg.output_dir.unwrap_or_default());
             auto_paste.set(cfg.auto_paste_threshold_mb);
             bg_threshold.set(cfg.background_task_threshold_seconds);
             smart_routing.set(cfg.smart_routing_enabled);
@@ -75,7 +78,7 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
         save_success.set(false);
 
         let mut cfg = config.get();
-        cfg.output_dir = output_dir.get();
+        cfg.output_dir = Some(output_dir.get());
         cfg.auto_paste_threshold_mb = auto_paste.get();
         cfg.background_task_threshold_seconds = bg_threshold.get();
         cfg.smart_routing_enabled = smart_routing.get();
@@ -148,7 +151,14 @@ pub(super) fn GenerationSettingsPanel() -> impl IntoView {
                                     {t!(i18n, settings.generation.bg_threshold_label)} ": " {move || bg_threshold.get()} " " {t!(i18n, settings.generation.bg_threshold_unit)}
                                 </label>
                                 <input
-                                    type="range" min="1" max="300" step="5"
+                                    // min=5, not 1: with step=5 a floor of 1
+                                    // puts the stops at 1/6/11/…, so the
+                                    // shipped default of 30 is not a value this
+                                    // control can hold — the thumb rendered at
+                                    // 31 while the label read 30, and the first
+                                    // drag silently changed a setting the
+                                    // operator only meant to look at.
+                                    type="range" min="5" max="300" step="5"
                                     value=move || bg_threshold.get()
                                     on:input=move |ev| {
                                         if let Ok(v) = event_target_value(&ev).parse::<u32>() { bg_threshold.set(v); }

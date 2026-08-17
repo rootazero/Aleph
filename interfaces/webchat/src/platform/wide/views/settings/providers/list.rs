@@ -1,12 +1,15 @@
-//! Left-panel list sections — Subscription / Configured / Quick setup.
+//! Left-panel list sections — Subscription / Configured.
 //!
-//! All three render a vertical stack of provider cards over the rows
+//! Both render a vertical stack of provider cards over the rows
 //! `providers.catalog` sent. They take the shared `catalog` + `providers` +
-//! `selected` + `search` signals from the parent `ProvidersView` and emit click
-//! handlers that mutate `selected` (unconfigured → `__preset__<id>`,
-//! configured → the real config key).
+//! `selected` signals from the parent `ProvidersView` and emit click handlers
+//! that mutate `selected` (unconfigured → `__preset__<id>`, configured → the
+//! real config key).
 //!
-//! # Why the sections are these three and not "preset vs custom"
+//! The unconfigured remainder of the catalogue lives in [`super::picker`], not
+//! here: 56 rows of it drowned the two the operator came for.
+//!
+//! # Why the sections are these two and not "preset vs custom"
 //!
 //! The server merges presets, operator-defined providers and the MoA pseudo
 //! row into one list and does **not** mark which is which, so that partition is
@@ -14,10 +17,7 @@
 //! preset table, which is the drift this page was rewritten to delete. What
 //! *is* on the row is whether the operator has a `[providers.<id>]` section for
 //! it (a non-empty `models` ladder) and how it authenticates (`auth_kind`), so
-//! those are the cuts: sign-in providers, providers you have set up, and the
-//! rest of the catalogue.
-
-use aleph_protocol::providers::search::filter_catalog;
+//! those are the cuts: sign-in providers, and providers you have set up.
 
 use crate::api::{AuthKind, CatalogEntry, ProviderInfo};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
@@ -43,16 +43,21 @@ pub(super) fn configured_key(entry: &CatalogEntry, providers: &[ProviderInfo]) -
         .map(|p| p.name.clone())
 }
 
-/// Rows this page can edit, filtered by the search box.
+/// Rows this page can edit.
 ///
 /// The MoA pseudo-provider (`protocol == "moa"`) is dropped: it is a virtual
 /// multiplexer over other providers' credentials with no config section of its
 /// own, so a settings row for it would open an editor that can only write
 /// nonsense. Same exclusion, same reason, as `moa::options::available_options`.
-fn editable(catalog: &[CatalogEntry], query: &str) -> Vec<CatalogEntry> {
-    filter_catalog(catalog, query)
-        .into_iter()
+///
+/// No query parameter: the panel now lists only sign-in rows and configured
+/// rows — at most a dozen — and the search box moved into [`super::picker`],
+/// which is the surface with 56 rows to sift.
+fn editable(catalog: &[CatalogEntry]) -> Vec<CatalogEntry> {
+    catalog
+        .iter()
         .filter(|e| e.protocol != "moa")
+        .cloned()
         .collect()
 }
 
@@ -62,7 +67,7 @@ fn editable(catalog: &[CatalogEntry], query: &str) -> Vec<CatalogEntry> {
 /// non-empty ladder is exactly "there is a config entry" — as opposed to
 /// `has_api_key`, which is also true for a key sitting in an env var for a
 /// provider nobody has configured.
-fn is_configured(entry: &CatalogEntry) -> bool {
+pub(super) fn is_configured(entry: &CatalogEntry) -> bool {
     !entry.models.is_empty()
 }
 
@@ -78,7 +83,6 @@ pub(super) fn SubscriptionLoginSection(
     catalog: RwSignal<Vec<CatalogEntry>>,
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
-    search: RwSignal<String>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     // Live OAuth connection state, keyed by the catalogue id. A row is only
@@ -117,7 +121,7 @@ pub(super) fn SubscriptionLoginSection(
 
     view! {
         {move || {
-            let rows: Vec<CatalogEntry> = editable(&catalog.get(), &search.get())
+            let rows: Vec<CatalogEntry> = editable(&catalog.get())
                 .into_iter()
                 .filter(|e| e.auth_kind == AuthKind::OAuth)
                 .collect();
@@ -188,53 +192,44 @@ pub(super) fn SubscriptionLoginSection(
     }
 }
 
-/// Catalogue rows the operator has already configured, and the ones they have
-/// not, as two stacks under one component so the split rule lives in one place.
+/// The catalogue rows the operator has actually configured.
+///
+/// The unconfigured remainder used to render here as a "Quick setup" stack of
+/// 56 cards, which made this panel a scroll well whose least findable rows were
+/// the ones being used. It moved to [`super::picker`]; nothing else about a row
+/// changed, so a provider deleted from the detail pane empties its ladder,
+/// drops out of this list, and is offered again by the picker.
 #[component]
-pub(super) fn PresetGrid(
+pub(super) fn ConfiguredList(
     catalog: RwSignal<Vec<CatalogEntry>>,
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
-    search: RwSignal<String>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         {move || {
-            let rows: Vec<CatalogEntry> = editable(&catalog.get(), &search.get())
+            let mine: Vec<CatalogEntry> = editable(&catalog.get())
                 .into_iter()
                 .filter(|e| e.auth_kind != AuthKind::OAuth)
+                .filter(is_configured)
                 .collect();
-            let known = providers.get();
-            let (mine, rest): (Vec<CatalogEntry>, Vec<CatalogEntry>) =
-                rows.into_iter().partition(is_configured);
-            view! {
-                {(!mine.is_empty()).then(|| view! {
-                    <div>
-                        <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                            {t!(i18n, settings.providers.configured_providers)}
-                        </h2>
-                        <div class="grid grid-cols-1 gap-2">
-                            {mine.into_iter().map(|e| {
-                                let key = configured_key(&e, &known);
-                                view! { <CatalogRow entry=e configured_key=key selected=selected /> }
-                            }).collect_view()}
-                        </div>
-                    </div>
-                })}
-                {(!rest.is_empty()).then(|| view! {
-                    <div>
-                        <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3 mt-6">
-                            {t!(i18n, settings.providers.quick_setup)}
-                        </h2>
-                        <div class="grid grid-cols-1 gap-2">
-                            {rest.into_iter().map(|e| {
-                                let key = configured_key(&e, &known);
-                                view! { <CatalogRow entry=e configured_key=key selected=selected /> }
-                            }).collect_view()}
-                        </div>
-                    </div>
-                })}
+            if mine.is_empty() {
+                return view! { <div></div> }.into_any();
             }
+            let known = providers.get();
+            view! {
+                <div>
+                    <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
+                        {t!(i18n, settings.providers.configured_providers)}
+                    </h2>
+                    <div class="grid grid-cols-1 gap-2">
+                        {mine.into_iter().map(|e| {
+                            let key = configured_key(&e, &known);
+                            view! { <CatalogRow entry=e configured_key=key selected=selected /> }
+                        }).collect_view()}
+                    </div>
+                </div>
+            }.into_any()
         }}
     }
 }

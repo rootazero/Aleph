@@ -57,17 +57,16 @@ impl BehaviorConfigApi {
 // Generation Config API
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerationConfig {
-    pub default_image_provider: Option<String>,
-    pub default_video_provider: Option<String>,
-    pub default_audio_provider: Option<String>,
-    pub default_speech_provider: Option<String>,
-    pub output_dir: String,
-    pub auto_paste_threshold_mb: u32,
-    pub background_task_threshold_seconds: u32,
-    pub smart_routing_enabled: bool,
-}
+/// The `generation_config.*` body, from the protocol crate rather than a hand
+/// copy here.
+///
+/// The copy this replaces declared `output_dir: String` while the server has
+/// always sent `Option<String>`, so on an install that never set one the
+/// response was `null` and serde failed the entire object — the settings
+/// section showed a bare `invalid type: null, expected a string` and none of
+/// its eight controls. Sharing the type makes that shape of drift a compile
+/// error.
+pub use aleph_protocol::providers::GenerationSettings as GenerationConfig;
 
 pub struct GenerationConfigApi;
 

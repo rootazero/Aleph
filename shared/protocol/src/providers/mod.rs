@@ -28,7 +28,7 @@ pub use catalog::{
     DiscoveredModel, ModelCapabilities, ModelLifecycle, ModelSource, ModelStatus, RateBasis,
     RateCard, RosterModel,
 };
-pub use generation::GenerationPresetRow;
+pub use generation::{GenerationPresetRow, GenerationSettings};
 pub use search::{
     filter_catalog, filter_rows, rank_entries, rank_models, rank_rows, EntryMatch, MatchRank,
     RowMatch, Searchable,

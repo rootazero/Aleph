@@ -46,6 +46,11 @@ web-sys = { version = "0.3", features = [
     # canvas PNG export — download anchor (also used by transcript/home exports,
     # which had been riding a transitive feature union until now)
     "HtmlAnchorElement",
+    # providers picker — keep the ArrowUp/ArrowDown row in view with
+    # `block: nearest`, which scrolls the list only. The no-options overload
+    # aligns to an edge and drags every scrollable ancestor with it, so each
+    # keypress would also yank the settings panel behind the picker.
+    "ScrollIntoViewOptions", "ScrollLogicalPosition",
     # graph_canvas rAF visibility pause (async, no forced layout)
     "IntersectionObserver", "IntersectionObserverEntry",
     # graph_canvas resize without per-frame getBoundingClientRect layout reads

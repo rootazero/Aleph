@@ -2,6 +2,9 @@
 //!
 //! ## Layout
 //! - this module — list / cards / category tabs + the main `GenerationProvidersView`
+//! - [`picker`] — the "add a provider" disclosure and the panel/picker
+//!   partition. The 44 presets used to render as cards behind five tabs, which
+//!   put 14 of them in front of an operator looking for the one they had set up
 //! - [`detail_view`] — `ProviderDetailView` for a configured provider
 //! - [`preset_setup`] — `PresetSetupPanel` for unconfigured presets
 //! - [`add_custom`] — `AddCustomProviderPanel` for non-preset providers
@@ -9,6 +12,7 @@
 
 mod add_custom;
 mod detail_view;
+mod picker;
 mod preset_setup;
 mod settings_panel;
 
@@ -20,11 +24,12 @@ use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, use_i18n};
 use crate::preset_providers::{PresetCatalog, PresetProvider};
 
 use add_custom::AddCustomProviderPanel;
 use detail_view::ProviderDetailView;
+use picker::CategoryPicker;
 use preset_setup::PresetSetupPanel;
 use settings_panel::GenerationSettingsPanel;
 
@@ -71,11 +76,30 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let (show_add_form, set_show_add_form) = signal(false);
     let (is_loading, set_is_loading) = signal(true);
     let (error_message, set_error_message) = signal(Option::<String>::None);
-    // Live filter over the rows already in hand. 44 presets across five
-    // category tabs is past the point where scrolling is the answer, and the
-    // matcher is the shared one — so a query here ranks exactly the way the
-    // same query ranks in the chat provider list and the TUI picker.
-    let (search, set_search) = signal(String::new());
+    // Whether the "add a provider" disclosure is expanded. Owned here because
+    // the first-load seed below has to reach it.
+    let picker_open = RwSignal::new(false);
+    // Generation settings are page-level, not a provider row, and expanded they
+    // are three controls and a save button tall. That was invisible while the
+    // panel above them was 14 preset cards deep; with the panel listing only
+    // what the operator configured, leaving them open makes the page look like
+    // its subject is thresholds. Collapsed by default, one click away.
+    let settings_open = RwSignal::new(false);
+    // Seed it open **once**, after the first load, when the operator has no
+    // generation providers at all — otherwise a fresh install renders a left
+    // panel holding one collapsed button. A seed rather than a derived
+    // predicate: a signal that recomputed would snap back open every time the
+    // operator closed it while still configuring their first provider.
+    let seeded = RwSignal::new(false);
+    Effect::new(move |_| {
+        if is_loading.get() || seeded.get_untracked() {
+            return;
+        }
+        seeded.set(true);
+        if providers.get_untracked().is_empty() {
+            picker_open.set(true);
+        }
+    });
 
     // (Re)load providers + preset catalogue whenever the gateway is connected.
     // Subscribes to `is_connected` so a server restart (the only realistic catalog
@@ -108,19 +132,26 @@ pub fn GenerationProvidersView() -> impl IntoView {
                 )),
             }
 
-            // Auto-select a default card on first load so the detail pane shows content
-            // instead of the EmptyState (mirrors Embedding/Reranking). Prefer a configured
-            // provider in the current category; otherwise fall back to its first preset card,
-            // using the same configured-vs-preset id convention as the cards' on_click.
+            // Auto-select a provider on first load so the detail pane shows
+            // content instead of the EmptyState: the category's default, else
+            // any provider configured in it.
+            //
+            // Deliberately no fall-back to the category's first *preset*. That
+            // used to be right, because the panel rendered every preset as a
+            // card and the fallback simply pre-selected the top one. The panel
+            // now lists configured rows only, so the same fallback would open a
+            // setup form for a provider that appears nowhere on the left — and
+            // the case it fired in, nothing configured, is exactly the case the
+            // picker seeds itself open for.
+            //
             // Post-`.await` — same shape, same hazard, and the same fix as the
             // `providers` and `embedding_providers` views (see
-            // `crate::disposed_reads`). Four reads here, one probe: they share
+            // `crate::disposed_reads`). Three reads here, one probe: they share
             // an owner, so if the first survives so do the rest.
-            let (Some(current), Some(cat), Some(prov), Some(cards)) = (
+            let (Some(current), Some(cat), Some(prov)) = (
                 selected_provider_id.try_get_untracked(),
                 selected_category.try_get_untracked(),
                 providers.try_get_untracked(),
-                catalog.try_get_untracked(),
             ) else {
                 return;
             };
@@ -133,17 +164,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         prov.iter()
                             .find(|p| p.effective_generation_type() == Some(cat))
                     })
-                    .map(|p| p.name.clone())
-                    .or_else(|| {
-                        cards.by_category(cat).first().map(|first| {
-                            let id = first.id.clone();
-                            if prov.iter().any(|p| p.name == id) {
-                                id
-                            } else {
-                                format!("__preset__{id}")
-                            }
-                        })
-                    });
+                    .map(|p| p.name.clone());
                 if let Some(sel) = pick {
                     set_selected_provider_id.set(Some(sel));
                 }
@@ -162,25 +183,17 @@ pub fn GenerationProvidersView() -> impl IntoView {
         });
     };
 
-    // Get current category presets, narrowed by the search box.
-    //
-    // Category first, then the ranker: a query must never pull a video preset
-    // into the image tab. An empty query is a no-op inside the matcher, so
-    // this is the unconditional path rather than a branch on "is it empty".
-    let current_presets = move || {
-        catalog
-            .get()
-            .by_category_matching(selected_category.get(), &search.get())
-    };
+    // The presets this category lists: configured only. The rest are one click
+    // away in the picker — see [`picker`] for why this catalogue is safe to
+    // collapse and the embedding one is not.
+    let current_presets =
+        move || picker::listed(&catalog.get(), &providers.get(), selected_category.get());
 
-    // The custom (non-preset) providers in the selected category, after the
-    // same filter. A free function of the signals rather than an inline block,
-    // because the empty state has to know whether *either* list has rows —
-    // telling the operator "nothing matches" above a list of matches is worse
-    // than not having an empty state at all.
+    // The custom (non-preset) providers in the selected category. No filter:
+    // the panel now holds only rows the operator set up themselves, which is a
+    // handful, and the search box moved into the picker — the surface with a
+    // catalogue to sift.
     let current_custom = move || {
-        // Exclusion over the whole category, never the filtered view: a preset
-        // the search hid is still a preset.
         let preset_ids: Vec<String> = catalog
             .get()
             .by_category(selected_category.get())
@@ -188,14 +201,13 @@ pub fn GenerationProvidersView() -> impl IntoView {
             .map(|p| p.id.clone())
             .collect();
         let current_cat = selected_category.get();
-        let owned: Vec<GenerationProviderEntry> = providers
+        providers
             .get()
             .into_iter()
             .filter(|p| {
                 !preset_ids.contains(&p.name) && p.effective_generation_type() == Some(current_cat)
             })
-            .collect();
-        aleph_protocol::providers::filter_rows(&owned, &search.get())
+            .collect::<Vec<GenerationProviderEntry>>()
     };
 
     // Check if a preset is configured
@@ -250,18 +262,6 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     </div>
                 </div>
 
-                // Search — filters the preset rows already in hand, within the
-                // selected category. Same matcher as the chat provider list.
-                <div class="px-6 py-3 border-b border-border">
-                    <input
-                        type="text"
-                        prop:value=move || search.get()
-                        on:input=move |ev| set_search.set(event_target_value(&ev))
-                        placeholder=move || t_string!(i18n, settings.generation.search_placeholder).to_string()
-                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                </div>
-
                 // Content
                 <div class="flex-1 overflow-auto">
                     // Provider cards (loading/error/list)
@@ -280,16 +280,29 @@ pub fn GenerationProvidersView() -> impl IntoView {
                             }.into_any()
                         } else {
                             let presets = current_presets();
-                            // "Nothing matched" only when *neither* list has a
-                            // row. A message above a populated custom section
-                            // would be worse than no message.
-                            let nothing_matched = presets.is_empty() && current_custom().is_empty();
+                            // Read once: the `Show` guard and the grid below
+                            // must agree, and re-deriving would let a refetch
+                            // between them render a heading over nothing.
+                            let has_presets = !presets.is_empty();
                             view! {
                                 <div class="p-6 space-y-4">
-                                    <Show when=move || nothing_matched>
-                                        <div class="py-8 text-center text-sm text-text-tertiary">
-                                            {t!(i18n, settings.generation.no_search_match)}
-                                        </div>
+                                    // Add a provider — button + the searchable
+                                    // catalogue it reveals, scoped to the tab.
+                                    // Top of the panel because it is the
+                                    // action; the sections below are content.
+                                    <CategoryPicker
+                                        catalog=catalog
+                                        providers=providers
+                                        category=selected_category
+                                        selected=set_selected_provider_id
+                                        show_add_form=set_show_add_form
+                                        open=picker_open
+                                    />
+
+                                    <Show when=move || has_presets>
+                                        <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">
+                                            {t!(i18n, settings.generation.configured_providers)}
+                                        </h2>
                                     </Show>
                                     <div class="grid grid-cols-1 gap-2">
                                         {presets.clone().into_iter().map(|preset| {
@@ -387,12 +400,34 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         }
                     }}
 
-                    // Generation Settings (always visible, independent of provider loading)
-                    <div class="px-6 pb-6 space-y-4">
-                        <h2 class="text-lg font-semibold text-text-primary border-t border-border pt-6">
+                    // Generation settings — page-level, so they sit below the
+                    // provider sections behind a disclosure rather than
+                    // competing with them. Outside the loading/error block on
+                    // purpose: these settings come from a different RPC and are
+                    // still reachable when the provider list fails to load.
+                    <div class="px-6 pb-6">
+                        <button
+                            on:click=move |_| {
+                                let next = !settings_open.get_untracked();
+                                settings_open.set(next);
+                            }
+                            class="w-full flex items-center gap-2 border-t border-border pt-6 text-left text-lg font-semibold text-text-primary hover:text-primary transition-colors"
+                        >
+                            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d=move || if settings_open.get() { "M19 9l-7 7-7-7" } else { "M9 5l7 7-7 7" } />
+                            </svg>
                             {t!(i18n, settings.generation.generation_settings)}
-                        </h2>
-                        <GenerationSettingsPanel />
+                        </button>
+                        // Hidden, not unmounted. `Show` would drop the panel
+                        // and take any unsaved slider with it — collapsing a
+                        // section is not a discard, and there is nothing on
+                        // screen to say one happened. The save button stays
+                        // with its controls on purpose: alone under a collapsed
+                        // section it would offer to save what you cannot see.
+                        <div class="mt-4 space-y-4" class:hidden=move || !settings_open.get()>
+                            <GenerationSettingsPanel />
+                        </div>
                     </div>
                 </div>
             </div>
@@ -473,7 +508,7 @@ fn ProviderCard(
         <ProviderRowCard
             name=name
             icon_color=color
-            icon_glyph=icon
+            icon_glyph=Some(icon)
             subtitle=model
             is_selected=move || is_selected
             is_configured=move || is_configured

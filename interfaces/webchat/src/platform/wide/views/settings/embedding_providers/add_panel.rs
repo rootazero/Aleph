@@ -1,5 +1,20 @@
-//! Add-custom-embedding-provider panel. Creates a `preset: "custom"`
-//! `EmbeddingProviderConfig` from scratch; ID + Name + API base + model are required.
+//! Add-embedding-provider panel — the form behind both "+ Add Custom Provider"
+//! and picking an unconfigured preset row.
+//!
+//! Without `prefill` it creates a `preset: "custom"` config from scratch; with
+//! one it starts from that preset's id / endpoint / model / dimensions and
+//! keeps its `preset` label so the server's `apply_embedding_preset_defaults`
+//! still recognises the row. ID + Name + API base + model are required either
+//! way.
+//!
+//! # Why a preset row opens this instead of writing straight through
+//!
+//! Clicking an unconfigured preset card used to `POST embedding_providers.add`
+//! on the spot, so there was no way to look at a preset without leaving a
+//! keyless provider behind in the config. Nothing downstream broke — `add`
+//! does not touch `active_provider_id`, and `remove` refuses to delete the
+//! active row — but browsing should not write. Now nothing is persisted until
+//! Save, which is what the chat and generation preset forms have always done.
 
 use crate::api::{EmbeddingProviderConfig, EmbeddingProvidersApi};
 use crate::components::provider_key_field::ProviderKeyField;
@@ -10,19 +25,46 @@ use leptos::task::spawn_local;
 
 #[component]
 pub(super) fn AddProviderPanel(
-    on_added: impl Fn() + 'static + Copy + Send,
+    /// Receives the id of the row just written, so the caller can select it —
+    /// the operator still has to make it active, and that control lives in the
+    /// detail pane.
+    on_added: impl Fn(String) + 'static + Copy + Send,
     on_cancel: impl Fn() + 'static + Copy + Send,
+    /// Starting values, when the operator picked a preset row rather than
+    /// "+ Add Custom Provider". Taken by value: the caller re-renders this
+    /// panel when it changes, which is also what resets a half-filled form
+    /// between two different presets.
+    #[prop(optional_no_strip)]
+    prefill: Option<EmbeddingProviderConfig>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
 
-    // Form state — custom provider only
-    let id = RwSignal::new(String::new());
-    let name = RwSignal::new(String::new());
-    let api_base = RwSignal::new(String::new());
+    // Form state. The preset label is *not* a form field — it selects the
+    // server-side defaults for this row and has no meaning the operator could
+    // edit — so it rides along in a `StoredValue` instead.
+    let preset = StoredValue::new(
+        prefill
+            .as_ref()
+            .map_or_else(|| "custom".to_string(), |p| p.preset.clone()),
+    );
+    let from_preset = prefill.is_some();
+    let id = RwSignal::new(prefill.as_ref().map(|p| p.id.clone()).unwrap_or_default());
+    let name = RwSignal::new(prefill.as_ref().map(|p| p.name.clone()).unwrap_or_default());
+    let api_base = RwSignal::new(
+        prefill
+            .as_ref()
+            .map(|p| p.api_base.clone())
+            .unwrap_or_default(),
+    );
     let api_key = RwSignal::new(String::new());
-    let form_model = RwSignal::new(String::new());
-    let dimensions = RwSignal::new(1536u32);
+    let form_model = RwSignal::new(
+        prefill
+            .as_ref()
+            .map(|p| p.model.clone())
+            .unwrap_or_default(),
+    );
+    let dimensions = RwSignal::new(prefill.as_ref().map_or(1536, |p| p.dimensions));
 
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
@@ -34,7 +76,7 @@ pub(super) fn AddProviderPanel(
         EmbeddingProviderConfig {
             id: id.get(),
             name: name.get(),
-            preset: "custom".to_string(),
+            preset: preset.get_value(),
             api_base: api_base.get(),
             api_key_env: None,
             api_key: {
@@ -96,11 +138,15 @@ pub(super) fn AddProviderPanel(
             return;
         }
 
+        // Read before the move: the operator may have edited the id away from
+        // whatever the preset suggested, and the row that now exists is the one
+        // the caller has to select.
+        let new_id = config.id.clone();
         spawn_local(async move {
             match EmbeddingProvidersApi::add(&state, config).await {
                 Ok(_) => {
                     set_adding.set(false);
-                    on_added();
+                    on_added(new_id);
                 }
                 Err(e) => {
                     set_adding.set(false);
@@ -119,7 +165,13 @@ pub(super) fn AddProviderPanel(
             // Fixed header
             <div class="px-6 py-4 border-b border-border">
                 <div class="flex items-center justify-between">
-                    <h2 class="text-xl font-semibold text-text-primary">{t!(i18n, settings.embedding.add_custom_provider)}</h2>
+                    <h2 class="text-xl font-semibold text-text-primary">
+                        {move || if from_preset {
+                            view! { {t!(i18n, settings.embedding.add_provider)} }.into_any()
+                        } else {
+                            view! { {t!(i18n, settings.embedding.add_custom_provider)} }.into_any()
+                        }}
+                    </h2>
                     <button
                         on:click=move |_| on_cancel()
                         class="text-text-tertiary hover:text-text-primary transition-colors"
