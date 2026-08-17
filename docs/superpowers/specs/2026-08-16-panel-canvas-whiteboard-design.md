@@ -191,3 +191,29 @@ Wire 契约单一源       shared/protocol/src/canvas.rs                        
 ### 文档收尾时顺带订正
 
 - FEATURE_LOCATOR §0/§6.3/§2.5-邻近行里指向旧路径（`views/canvas/` 星系、`canvas_engine/`、`canvas_format.rs`、`CanvasView`）的锚点已同批订正为 `views/memory/galaxy/`、`memory_graph/`、`json_canvas.rs`、`GalaxyView`——「同一事实的两份表述，只改一份就是静默说谎」。
+
+## 8. 真机 QA 结果（2026-08-17，qa/canvas/run.sh + chrome-devtools-mcp）
+
+九条清单逐项（每条效果断言，非"没报错"）：
+
+| # | 结果 | 效果断言 |
+|---|---|---|
+| 1 持久化 | ✅ | 矩形/便签/画笔 → 刷新重开 → doc.json 与 DOM 逐字节还原 |
+| 2 双标签页广播 | ✅ | A 建形 B 实时 +1；B 移形 A 实时跟随；三方（A/B/doc.json）坐标收敛一致 |
+| 3 并发竞写 | ✅* | A/B 交替拖同形状：两端编辑都落盘（rev 8→10）、零控制台错误、三方收敛。*真冲突窗（<100ms 帧传播）在 MCP 串行时序下无法触发，冲突臂由 T13 重放单测 + wire 测试背书 |
+| 4 模型 insert_html 实时 | ✅ | `tools.invoke canvas(insert_html)` → rev 20 → Panel 实时渲染 `sandbox="allow-scripts"` iframe（无 allow-same-origin），srcdoc 经 RPC 回读 |
+| 5 AI 图片框全流程 | ✅ | 生成按钮 → chat → mock 模型三步照做 → `canvas(insert_image)` rev 19 框被图替换 → Panel 实时 `<image href=能力URL>`；重复调用被拒且错误带围栏+可行动提示（A2 顺带验证） |
+| 6 标注重生成 | ✅ | 笔迹标注 + 选中「按标注重新生成」→ 合成 360×240 真 PNG 上传（第三个素材）→ chat 双附件 → 模型插新图于原图右侧 |
+| 7 Slides | ✅ | 3 Frame 组 deck（非 Frame 被过滤，计数 (3) 准确）→ 全屏黑边播放 → →键 1/3→2/3 → Esc 退出 |
+| 8 member 角色 | 📄 | 按夹具设计 loopback-only（loopback 恒 operator）；LAN+TLS 配方在 qa/canvas/README.md；三角色判据由单测（canvas_visible_to 三角色）+ wire 测试（含 operator-role stranger 拒绝）背书 |
+| 9 PNG 导出 | ✅（修复后） | 首测失败——见下 QA-1；修复后下载触发、blob 10.2KB、PNG 魔数 `89 50 4E 47` 验证 |
+
+### QA 抓到并修复
+
+- **QA-1（真 bug，已修）**：导出光栅化用 `blob:` URL 加载 SVG，Panel CSP `img-src 'self' data: https:` 不含 `blob:` → 图像加载被策略阻断，导出**从未在真机成功过**（936 条单测全绿也测不到 CSP）。修复：`export.rs::rasterize_svg_to_png` 改 `data:image/svg+xml;charset=utf-8,` + `encode_uri_component`（Unicode 安全、策略白名单内、不放宽 CSP）。
+- **QA-2（预存问题，记录不修）**：`src/extension/watcher.rs` 监视整个 `~/.aleph/` 树，画布每次 apply 写 doc.json 都触发 debounced `extension.reloaded` + `tools.changed` 全量广播——watcher 范围是预存设计（sessions.db 写入同样触发），画布把写频提到拖拽级，放大了噪声。归属 extension 子系统，本分支不动。
+- **QA 仪器教训**（qa/canvas/README.md 同批补记）：① 合成指针事件后**同脚本内的同步 DOM 读数发生在 Leptos 微任务刷新之前**——所有断言读数必须放到下一次 evaluate 调用或 setTimeout 之后，否则 80 个探针全部自盲；② 按钮匹配用**精确 title**，`includes('选择')` 会先命中聊天 composer 的「为本轮**选择**模型」。
+
+### 首次 AI 图片框尝试的未决异常
+
+第一次 Generate 的 run 内 `insert_image` 未提交（doc 停在 rev 15），当时未开 `request_log`，回执不可追溯；第二次尝试 + 手动 `tools.invoke` + wire 测试全部绿。若复发：用 `mock_anthropic.py` 第 5 参数 `request_log` 截获 tool_result（本轮已证明该 oracle 可用）。

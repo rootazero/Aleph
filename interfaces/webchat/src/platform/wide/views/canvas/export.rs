@@ -8,7 +8,7 @@
 //!    in the export would 401 for anyone else — and an external href would
 //!    taint the rasterizing canvas, making `to_data_url` throw), and colors
 //!    are concrete hex values (below).
-//! 2. [`rasterize_svg_to_png`] — SVG string → `Blob` → object URL →
+//! 2. [`rasterize_svg_to_png`] — SVG string → `data:` URL (CSP: no `blob:`) →
 //!    `HtmlImageElement::decode()` → `CanvasRenderingContext2d::draw_image`
 //!    → `to_data_url("image/png")`.
 //! 3. [`download_png`] — the `transcript.rs` blob/anchor idiom, via the
@@ -371,10 +371,17 @@ fn push_shape(
 
 /// Rasterize a standalone SVG document to a PNG `data:` URL.
 ///
-/// WASM-only glue: blob → object URL → `HtmlImageElement::decode()` (the
-/// same off-DOM decode `editor.rs::natural_image_size` uses) → 2D canvas →
+/// WASM-only glue: `data:` URL → `HtmlImageElement::decode()` (the same
+/// off-DOM decode `editor.rs::natural_image_size` uses) → 2D canvas →
 /// `to_data_url`. Every failure is a `String` for the caller to classify;
 /// nothing here unwraps — a panic takes the whole Panel down.
+///
+/// The SVG travels as `data:image/svg+xml` (percent-encoded, Unicode-safe)
+/// and NOT as a `blob:` object URL: the Panel ships under a CSP whose
+/// `img-src 'self' data: https:` has no `blob:` source, so a blob-URL image
+/// load is blocked by policy — real-machine QA caught exactly that. `data:`
+/// is inside the policy; widening the CSP for an internal pipeline would be
+/// the wrong direction.
 pub(super) async fn rasterize_svg_to_png(
     svg: &str,
     out_w: u32,
@@ -383,20 +390,12 @@ pub(super) async fn rasterize_svg_to_png(
     let document = web_sys::window()
         .and_then(|w| w.document())
         .ok_or_else(|| "no document".to_string())?;
-    let parts = js_sys::Array::new();
-    parts.push(&wasm_bindgen::JsValue::from_str(svg));
-    let bag = web_sys::BlobPropertyBag::new();
-    bag.set_type("image/svg+xml;charset=utf-8");
-    let blob = web_sys::Blob::new_with_str_sequence_and_options(parts.as_ref(), &bag)
-        .map_err(|_| "could not allocate the SVG blob".to_string())?;
-    let url = web_sys::Url::create_object_url_with_blob(&blob)
-        .map_err(|_| "could not mint an object URL".to_string())?;
+    let encoded: String = js_sys::encode_uri_component(svg).into();
+    let url = format!("data:image/svg+xml;charset=utf-8,{encoded}");
     let img = web_sys::HtmlImageElement::new()
         .map_err(|_| "could not create an image element".to_string())?;
     img.set_src(&url);
     let decoded = wasm_bindgen_futures::JsFuture::from(img.decode()).await;
-    // Revoke before the error branch — the URL's job ended with the decode.
-    let _ = web_sys::Url::revoke_object_url(&url);
     decoded.map_err(|_| "the browser could not decode the export SVG".to_string())?;
 
     let canvas_el = document
