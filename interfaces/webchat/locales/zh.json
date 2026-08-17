@@ -725,7 +725,9 @@
       "search": "搜索提供商或模型",
       "hint": "↑↓ 移动 · Enter 配置 · Esc 关闭",
       "empty": "没有匹配的提供商",
-      "configured": "已配置"
+      "configured": "已配置",
+      "create": "添加此提供商",
+      "phone_add_hint": "选择一个预设，然后填入它的 API 密钥。"
     },
     "embedding": {
       "title": "嵌入提供商",

@@ -27,21 +27,7 @@ use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::ProvidersApi;
-
-/// The config key a catalogue row edits, when the operator has one.
-///
-/// A preset configured under an alias (`kimi` for `moonshot`, `codex` for
-/// `chatgpt`) attaches to the canonical catalogue row server-side, so the row's
-/// id is not necessarily the key `providers.list` reports. The aliases come off
-/// the row itself — this used to be a `codex → chatgpt` literal in this crate,
-/// which covered exactly one of the vendors that have alternative names.
-pub(super) fn configured_key(entry: &CatalogEntry, providers: &[ProviderInfo]) -> Option<String> {
-    providers
-        .iter()
-        .find(|p| p.name == entry.id || entry.aliases.contains(&p.name))
-        .map(|p| p.name.clone())
-}
+use crate::api::{configured_key, is_configured, ProvidersApi};
 
 /// Rows this page can edit.
 ///
@@ -59,16 +45,6 @@ fn editable(catalog: &[CatalogEntry]) -> Vec<CatalogEntry> {
         .filter(|e| e.protocol != "moa")
         .cloned()
         .collect()
-}
-
-/// True when the operator has a `[providers.<id>]` section for this row.
-///
-/// `models` is the operator's ladder and the wire rejects an empty one, so a
-/// non-empty ladder is exactly "there is a config entry" — as opposed to
-/// `has_api_key`, which is also true for a key sitting in an env var for a
-/// provider nobody has configured.
-pub(super) fn is_configured(entry: &CatalogEntry) -> bool {
-    !entry.models.is_empty()
 }
 
 fn badge_state(entry: &CatalogEntry) -> BadgeState {

@@ -725,7 +725,9 @@
       "search": "Search providers or models",
       "hint": "↑↓ to move · Enter to configure · Esc to close",
       "empty": "No provider matches that search",
-      "configured": "Configured"
+      "configured": "Configured",
+      "create": "Add this provider",
+      "phone_add_hint": "Pick a preset, then paste its API key."
     },
     "embedding": {
       "title": "Embedding Providers",

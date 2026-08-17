@@ -60,6 +60,41 @@ impl ModelOverride {
     }
 }
 
+/// True when the operator has a `[providers.<id>]` section for this catalogue
+/// row.
+///
+/// `models` is the operator's ladder and the wire rejects an empty one, so a
+/// non-empty ladder is exactly "there is a config entry" — as opposed to
+/// `has_api_key`, which is also true for a key sitting in an env var for a
+/// provider nobody has configured.
+///
+/// Lives beside the two wire types rather than in either settings screen: it
+/// is a fact about how a [`CatalogEntry`] relates to a [`ProviderInfo`], and
+/// the desktop and phone provider screens both have to answer it. `platform`
+/// enforces that phone code cannot reach into `wide`, so a copy on each side
+/// would be two authors for one predicate.
+#[must_use]
+pub fn is_configured(entry: &CatalogEntry) -> bool {
+    !entry.models.is_empty()
+}
+
+/// The `providers.list` key a catalogue row is configured under, if any.
+///
+/// Not necessarily the catalogue id: a preset configured under an alias (`kimi`
+/// for `moonshot`, `codex` for `chatgpt`) attaches to the canonical catalogue
+/// row server-side, so every screen that wants to open a configured provider's
+/// editor has to address it by the name `providers.list` reports rather than by
+/// the name the catalogue uses. The aliases come off the row itself — this used
+/// to be a `codex → chatgpt` literal in this crate, which covered exactly one of
+/// the vendors that have alternative names.
+#[must_use]
+pub fn configured_key(entry: &CatalogEntry, providers: &[ProviderInfo]) -> Option<String> {
+    providers
+        .iter()
+        .find(|p| p.name == entry.id || entry.aliases.contains(&p.name))
+        .map(|p| p.name.clone())
+}
+
 pub struct ProvidersApi;
 
 impl ProvidersApi {
