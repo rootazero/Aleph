@@ -186,6 +186,9 @@ pub struct BuiltinToolRegistry {
     /// it does not also wait on an `AgentRegistry` or a `SessionManager`.
     pub(crate) workspace_manage_tool:
         Option<crate::builtin_tools::workspace_manage::WorkspaceManageTool>,
+    /// `canvas` — the model's face of the whiteboard (R8 twin of `canvas.*`).
+    /// Needs only the gateway's `CanvasStore` (the event-bus-wired instance).
+    pub(crate) canvas_tool: Option<crate::builtin_tools::canvas::CanvasTool>,
     /// Browser tools (always available, share a single `ProfileManager`)
     pub(crate) browser_open_tool: crate::builtin_tools::browser_tools::BrowserOpenTool,
     pub(crate) browser_click_tool: crate::builtin_tools::browser_tools::BrowserClickTool,

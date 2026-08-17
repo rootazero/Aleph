@@ -25,6 +25,10 @@ pub enum PanelMode {
     Chat,
     Dashboard,
     Memory,
+    /// Whiteboard canvas library + editor (`views/canvas/`). Not the memory
+    /// galaxy — that renderer lives under `views/memory/galaxy/` since the
+    /// whiteboard took the `canvas` name.
+    Canvas,
     Agents,
     Teams,
     Projects,
@@ -41,6 +45,8 @@ impl PanelMode {
     pub fn from_path(path: &str) -> Self {
         if path.starts_with("/memory") {
             Self::Memory
+        } else if path.starts_with("/canvas") {
+            Self::Canvas
         } else if path.starts_with("/agents") {
             Self::Agents
         } else if path.starts_with("/teams") {
@@ -67,7 +73,7 @@ impl PanelMode {
     pub const fn under_more(self) -> bool {
         matches!(
             self,
-            Self::More | Self::Dashboard | Self::Teams | Self::Extensions
+            Self::More | Self::Dashboard | Self::Teams | Self::Extensions | Self::Canvas
         )
     }
 }
@@ -90,6 +96,9 @@ pub fn ModeSidebar() -> impl IntoView {
                     PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
                     PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
                     PanelMode::Memory => view! { <MemorySidebar /> }.into_any(),
+                    // The canvas library lives in the main area; no secondary
+                    // menu in v1 (the NavMenu below still switches sections).
+                    PanelMode::Canvas => ().into_any(),
                     PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
                     PanelMode::Projects => view! { <crate::components::sidebar::projects::ProjectsSidebar /> }.into_any(),
                     PanelMode::Extensions => view! { <crate::views::extensions::ExtensionsSidebar /> }.into_any(),
@@ -185,6 +194,17 @@ mod tests {
         assert_eq!(PanelMode::from_path("/"), PanelMode::Chat);
     }
 
+    /// `/canvas` is the whiteboard, and it neither shadows nor is shadowed by
+    /// `/memory` — the old galaxy lived at `views/canvas/` but never at this
+    /// route, so nothing legacy competes for the prefix.
+    #[test]
+    fn from_path_classifies_canvas() {
+        assert_eq!(PanelMode::from_path("/canvas"), PanelMode::Canvas);
+        assert_eq!(PanelMode::from_path("/canvas/"), PanelMode::Canvas);
+        assert_eq!(PanelMode::from_path("/memory"), PanelMode::Memory);
+        assert_eq!(PanelMode::from_path("/"), PanelMode::Chat);
+    }
+
     #[test]
     fn under_more_covers_more_sections() {
         for m in [
@@ -192,6 +212,9 @@ mod tests {
             PanelMode::Dashboard,
             PanelMode::Teams,
             PanelMode::Extensions,
+            // Canvas is reached through the phone ••• menu (its row lives in
+            // more.rs), so the ••• tab keeps its highlight while inside.
+            PanelMode::Canvas,
         ] {
             assert!(m.under_more(), "{m:?} should be under More");
         }

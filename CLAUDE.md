@@ -562,6 +562,7 @@
 | `src/config/` `src/diagnostics/` | §5.8 §5.9 §5.10 · §5.24（扩展调用记录 → `ext/idle-extensions`）|
 | `desktop/` | [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) · [LINUX_DESKTOP.md](docs/reference/LINUX_DESKTOP.md) · [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) · §7.1–§7.4 |
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 §6.9 |
+| `src/canvas/` `interfaces/webchat/src/platform/wide/views/canvas/` | [CANVAS.md](docs/reference/CANVAS.md) · §6.10 · 真机 QA `qa/canvas/run.sh`（九项清单每条带效果断言） |
 | `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | 判据清单 §0（跨 crate wire 契约）· FEATURE_LOCATOR §5.4（`providers.*` 契约 + 搜索匹配器）· §5.11 §5.13 §5.23 |
 | `src/agents/` `src/teams/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) · §4.4 §4.5 §4.13a–c |
 | `src/tasks/cron/` `src/tasks/heartbeat/` | §4.13b（写面对账守卫 · 共用告警判据 · 停摆 job）· §4.13c（**不阻塞 tick · 投递失败即失败 · 孪生子系统对账**）· `src/tasks/shared/{alert,delivery}.rs` |
@@ -687,6 +688,7 @@ Singleton 由 OS 级 `flock`（`~/.aleph/data/aleph.lock`）强制；CLI 写子�
 | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) | 工具系统 |
 | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) | 预设 provider/模型四表 + 单一 join 点 + 漂移守卫契约 |
 | [MODE_SYSTEM.md](docs/reference/MODE_SYSTEM.md) | 会话模式 chat/work/code |
+| [CANVAS.md](docs/reference/CANVAS.md) | 白板画布：四层架构 + 乐观锁并发协议 + 能力 URL 素材面 + iframe 沙箱边界 |
 | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) | 记忆总览 |
 | └ [RAW_MEMORY.md](docs/reference/memory/RAW_MEMORY.md) · [NOTES.md](docs/reference/memory/NOTES.md) · [RETRIEVAL.md](docs/reference/memory/RETRIEVAL.md) | 三支柱分册 |
 | └ [DREAM_DAEMON.md](docs/reference/memory/DREAM_DAEMON.md) | 离线做梦 + 自进化纪律（**`DreamGate` 已删，勿复活**） |

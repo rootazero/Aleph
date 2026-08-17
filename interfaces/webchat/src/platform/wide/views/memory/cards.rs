@@ -11,9 +11,9 @@ use leptos::prelude::*;
 
 use super::data::{format_ts, Loadable};
 use crate::api::{CompressedFact, RawMemory};
-use crate::canvas_engine::category_color::category_color;
 use crate::components::ui::{Badge, BadgeVariant, ConfirmButton};
 use crate::i18n::{t, t_string, use_i18n};
+use crate::memory_graph::category_color::category_color;
 
 /// Category → badge tone. Mirrors the stripe colour but in the panel's badge
 /// vocabulary, so a note reads the same in a card as it does in the galaxy.

@@ -513,6 +513,13 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: <crate::builtin_tools::workspace_manage::WorkspaceManageTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires the gateway's AgentEnvStore (the one with the event bus)
     },
+    // The model's face of the whiteboard (R8 twin of `canvas.*`). Shares the
+    // one `CanvasStore` instance with the RPC handlers.
+    BuiltinToolDefinition {
+        name: "canvas",
+        description: <crate::builtin_tools::canvas::CanvasTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: true, // Requires the gateway's CanvasStore (the one with the event bus)
+    },
     // Browser tools — always available, share a ProfileManager
     BuiltinToolDefinition {
         name: "browser_open",
@@ -1063,6 +1070,13 @@ pub fn create_tool_boxed(
                     )),
                 ) as Box<dyn AlephToolDyn>
             }),
+        // Same rule as workspace_manage: only the injected store carries the
+        // event bus, so a store opened here would mutate silently.
+        "canvas" => config.and_then(|c| c.canvas_store.as_ref()).map(|store| {
+            Box::new(crate::builtin_tools::canvas::CanvasTool::new(Arc::clone(
+                store,
+            ))) as Box<dyn AlephToolDyn>
+        }),
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
@@ -2086,7 +2100,23 @@ mod tests {
     /// The slack the audit round priced in (102_000 − 98_861 = +3,139)
     /// covers both the +9 B workflow-graph fusion above and this −5 B
     /// path-resolution trim, so the ceiling stays at 102_000 B.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 102_000;
+    ///
+    /// 2026-08-17, the whiteboard canvas tool: 102_000 -> 102_955 B, pinned
+    /// to the measured figure (no slack left deliberately). Decomposed:
+    /// with the `canvas` entry stashed the base measured 101,872 B — i.e.
+    /// the audit round's +3,139 B slack had already been consumed down to
+    /// +128 B by the sibling rounds recorded above, none of it this
+    /// branch's. The canvas tool's own share is +1,083 B, its whole
+    /// DESCRIPTION. Against the three questions: (1) what it states are
+    /// runtime facts the schema cannot carry — the live Panel link (a
+    /// canvas is a surface the user is watching), the two admitted local
+    /// roots for `insert_image`, the internal revision/conflict handling,
+    /// and the frame-replacement semantics that turn an AiImageFrame into
+    /// its image; (2) a stronger model cannot guess which roots this
+    /// deployment admits or that revisions must never be supplied; (3) no
+    /// other tool says any of it — `canvas` is the sole owner of the
+    /// whiteboard vocabulary.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 102_955;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2338,7 +2368,19 @@ mod tests {
     /// value and the prefix are runtime facts — the model cannot register a
     /// workflow node without them; (2) unguessable; (3) owned by no other
     /// tool.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_746;
+    ///
+    /// 2026-08-17: 92_746 -> 92_798 B (+52 B), NONE of it this branch's.
+    /// The +52 B is unowned drift that arrived with origin/main's
+    /// voice-refactor merge (`5ae1814ad`) — verified by an empty diff of
+    /// this file against main and by the ratchet failing identically on the
+    /// merge base before any canvas change existed. Re-pinned to the
+    /// measured figure so the gate is red for the next real spender, not
+    /// for the bystander. The `canvas` tool added the same day contributes
+    /// ZERO here by construction: its registration gates on
+    /// `BuiltinToolConfig::canvas_store`, so its schema is absent from the
+    /// unconditional map this ratchet measures (it is pinned in
+    /// `tools_without_an_unconditional_schema_are_pinned` instead).
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_798;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.
@@ -2433,6 +2475,11 @@ mod tests {
     /// `voice_mode_set` / `local_voice`) are registered unconditionally and
     /// DO carry schemas — the schema path was already honest for them; only
     /// the description measurement was blind.
+    ///
+    /// 2026-08-17: 130 (+1: `canvas`, whose registration gates on the
+    /// gateway's `CanvasStore` — in a wired deployment it carries a schema;
+    /// the deterministic map cannot reach it, same class as the generation
+    /// tools above).
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -2449,8 +2496,8 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 129,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 129 \
+            missing.len() <= 130,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 130 \
              recorded here, so `registry_schema_bytes_ratchet` does not bound them. Either a \
              tool ships with no parameters at all (free, and fine), or it registers only once a \
              dependency is live and its schema is unmeasured (not fine, just not cheap to fix). \

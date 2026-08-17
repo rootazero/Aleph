@@ -33,6 +33,10 @@ pub struct BuiltinToolConfig {
     pub agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
     /// Workspace manager for agent management tools
     pub workspace_manager: Option<Arc<crate::gateway::agent_env::AgentEnvStore>>,
+    /// Whiteboard canvas store for the `canvas` tool — the SAME `Arc` the
+    /// gateway's `canvas.*` handlers hold (only that instance carries the
+    /// event bus, so only its writes publish `canvas.updated` to open Panels).
+    pub canvas_store: Option<Arc<crate::canvas::CanvasStore>>,
     /// Event bus for lifecycle event emission (agent switch/delete)
     pub event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Agent manager for persistent agent definition storage (TOML config)

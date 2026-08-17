@@ -1,437 +1,464 @@
-mod galaxy_build;
-mod galaxy_canvas;
-pub mod gl;
-mod node_detail_panel;
-mod overlay;
-mod viewport_controls;
+//! Whiteboard canvas — `/canvas`: the library page, and (from Task 12) the
+//! editor.
+//!
+//! Not the memory galaxy: that renderer moved to `views/memory/galaxy/` when
+//! the whiteboard claimed the `canvas` name. This module is the Panel half of
+//! the `canvas.*` RPC family (`api/canvas.rs`) and of the `canvas.updated`
+//! event topic.
+//!
+//! # Liveness
+//!
+//! Three wires, all mounted here because this view is a keep-alive container
+//! (`MainContent` hides it with CSS instead of unmounting):
+//!
+//! 1. **Load / reconnect** — the `WorkspacesView` idiom: an `Effect` gated on
+//!    `is_connected`, so the first load waits for the socket instead of
+//!    failing against a connecting one, and a reconnect refetches.
+//! 2. **Topic subscription** — `subscribe_topic` per mount (NOT
+//!    `BASE_TOPICS`): the ledger in `context.rs` replays it across
+//!    reconnects, and a topic only this section consumes has no business on
+//!    every socket.
+//! 3. **Frame consumption** — a `canvas.updated` frame refreshes the library
+//!    rows and reconciles the open document through `reconcile.rs`: the next
+//!    revision's ops apply in place, our own optimistic echo is dropped
+//!    (matched against `CanvasState.inflight` by base revision + ops), and a
+//!    revision gap falls back to a whole-doc refetch.
 
-pub use node_detail_panel::{NodeDetailPanel, NodeExcerpt};
+mod ai;
+mod asset_ingest;
+mod decks;
+mod editor;
+mod export;
+mod freehand;
+mod id_mint;
+mod interaction;
+mod ops;
+mod present;
+mod reconcile;
+mod shape_view;
+mod text_edit;
+mod toolbar;
+mod viewport;
 
+use aleph_protocol::canvas as canvas_proto;
+use aleph_protocol::canvas::CanvasRow;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::graph::GraphApi;
-use crate::canvas_engine::interaction::CanvasEvent;
-use galaxy_build::{build_galaxy, compute_highlight_set, fold_to_lod};
-use leptos::callback::Callback;
-
+use crate::api::canvas::CanvasApi;
+use crate::components::admin_refusal;
 use crate::context::DashboardState;
-use crate::i18n::{t_string, use_i18n};
-use crate::state::memory::{MemoryState, MemoryView, DEFAULT_FOLD};
+use crate::i18n::{t, t_string, use_i18n};
+use crate::state::canvas::CanvasState;
 
-use galaxy_canvas::GalaxyCanvas;
-use overlay::{CanvasOverlay, CanvasStatus};
-use viewport_controls::ViewportControls;
+/// Epoch milliseconds → local `YYYY-MM-DD HH:MM` label (browser timezone,
+/// same idiom as `tasks.rs::format_timestamp_ms`).
+fn updated_label(ts_ms: i64) -> String {
+    let date = js_sys::Date::new_0();
+    date.set_time(ts_ms as f64);
+    let y = date.get_full_year();
+    let mo = date.get_month() + 1;
+    let d = date.get_date();
+    let hh = date.get_hours();
+    let mm = date.get_minutes();
+    format!("{y}-{mo:02}-{d:02} {hh:02}:{mm:02}")
+}
 
-use crate::api::agents::AgentsApi;
+/// Fetch one canvas into the shared state, keeping the answer only if that
+/// canvas is still the open one by the time it arrives.
+///
+/// One function rather than three inlined copies (open-click, create, frame
+/// refresh), because the staleness check is the part a copy would drop.
+fn fetch_open_doc(
+    state: DashboardState,
+    canvas: CanvasState,
+    i18n: crate::i18n::I18nCtx,
+    id: String,
+) {
+    spawn_local(async move {
+        let fetched = CanvasApi::get(&state, &id).await;
+        // Re-check *after* the await: the user may have closed or switched
+        // canvases while the fetch was in flight, and landing a stale
+        // envelope would reopen the one they just left.
+        let Some(open_now) = canvas.open_canvas.try_get_untracked() else {
+            return;
+        };
+        if open_now.as_deref() != Some(id.as_str()) {
+            return;
+        }
+        match fetched {
+            Ok(envelope) => canvas.adopt_envelope(envelope),
+            Err(e) => {
+                canvas
+                    .load_error
+                    .set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
+                        format!("Failed to open canvas: {e}")
+                    })));
+            }
+        }
+    });
+}
+
+/// Refetch the library rows. Errors are ignored here — this runs on event
+/// frames and after writes, where the load `Effect` (which does classify
+/// errors) remains the surface that reports a broken connection.
+fn refresh_rows(state: DashboardState, canvas: CanvasState) {
+    spawn_local(async move {
+        if let Ok(list) = CanvasApi::list(&state).await {
+            canvas.rows.set(list);
+        }
+    });
+}
 
 #[component]
 #[must_use]
 pub fn CanvasView() -> impl IntoView {
-    view! { <GalaxyCanvasView /> }
-}
-
-/// 3D WebGL galaxy canvas host.
-///
-/// Architecture note: `Callback::new` in Leptos 0.8 requires `Send + Sync + 'static`, but WASM
-/// is single-threaded. The `on_event` closure captures only `Copy` reactive signals so it can
-/// satisfy the `Send + Sync` bound.
-#[component]
-fn GalaxyCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
-    let mem = expect_context::<MemoryState>();
+    let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
 
-    // Derive agent_id from MemoryState so the sidebar's agent selector drives
-    // the canvas. Local alias for readability in the Effects below.
-    let agent_id = mem.agent_id;
-
-    // Fetch the agent list once on mount, writing results into MemoryState so
-    // MemorySidebar's <select> can render them.
-    //
-    // This used to retry 3×500 ms on an error whose text contained "Not
-    // connected" — one of five hand-rolled answers in the Panel to "the socket
-    // may still be connecting". It was doubly redundant: the Effect below
-    // already gates the call on `is_connected`, and `rpc_call` now parks the
-    // request until the handshake completes. Matching on error *text* to decide
-    // whether to retry was also the fragile half — the transport's readiness is
-    // not something a caller should be re-deriving from a string.
-    let fetch_agents = move || {
-        let state = state;
-        spawn_local(async move {
-            match AgentsApi::list(&state).await {
-                Ok(resp) => {
-                    mem.agents.set(resp.agents);
-                    let new_default = resp.default_id;
-                    // Only override agent_id if it would actually change.
-                    // Post-`.await` — see `crate::disposed_reads`.
-                    let Some(current) = mem.agent_id.try_get_untracked() else {
-                        return;
-                    };
-                    if current != new_default {
-                        mem.agent_id.set(new_default);
-                    }
-                }
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Agents list failed: {e}").into());
-                }
-            }
-        });
-    };
-
-    // Agent-list bootstrap — gated on the WebSocket connection so AgentsApi::list
-    // doesn't fire before the panel is connected, and gated on an EMPTY agent list
-    // so a reconnect (laptop sleep, server restart) does not re-run it: the fetch
-    // resets `agent_id` to the server default, which would silently throw away the
-    // user's agent selection, search, density and camera with no interaction on
-    // their part.
+    // (1) Load + reconnect — the WorkspacesView idiom, and for the same
+    // reason: a bare `spawn_local` on mount races a socket that is usually
+    // still connecting, fails with "Not connected", and never retries.
     Effect::new(move || {
-        if !state.is_connected.get() || !mem.agents.with_untracked(|a| a.is_empty()) {
-            return;
-        }
-        fetch_agents();
-    });
-
-    // Reactive signals (all Copy — safe to capture in Callback::new closures)
-    // selected_node, search_query, fold_threshold are sourced from MemoryState so
-    // the sidebar and canvas share the same values.
-    let selected_node = mem.selected_node;
-    let set_selected_node = mem.selected_node;
-    let search_query = mem.search_query;
-    let fold_threshold = mem.fold_threshold;
-    let set_fold_threshold = mem.fold_threshold;
-
-    // 3D galaxy data built from the full graph.query response via force-layout seed.
-    let galaxy_data: RwSignal<Option<gl::GraphData>> = RwSignal::new(None);
-
-    // (shown_count, total) when graph.query hit the node cap; None otherwise.
-    let truncation: RwSignal<Option<(usize, usize)>> = RwSignal::new(None);
-
-    // Load state of the galaxy fetch. `loading` starts true: on mount the round-trip
-    // is pending (or waiting on the WebSocket), which is not the same thing as an
-    // empty graph. `load_error` holds the last graph.query failure.
-    let loading: RwSignal<bool> = RwSignal::new(true);
-    let load_error: RwSignal<Option<String>> = RwSignal::new(None);
-    // Written by GalaxyCanvas on a WebGL2 init failure or a lost context.
-    let gl_error: RwSignal<Option<String>> = RwSignal::new(None);
-    // Transient one-liner (no search match, note outside the loaded galaxy).
-    let notice: RwSignal<Option<String>> = RwSignal::new(None);
-
-    // Re-fetch pulses for the galaxy-build Effect: `reload_nonce` is the user's
-    // Retry button; `graph_nonce` is bumped by NodeDetailPanel after a note is
-    // edited / renamed / deleted, so the topology on screen matches the store.
-    let reload_nonce: RwSignal<u32> = RwSignal::new(0);
-    let graph_nonce: RwSignal<u32> = RwSignal::new(0);
-
-    // Intent channels: host → GalaxyCanvas → Scene (non-Send bridge via signals).
-    // `focus_request` triggers fly_to_node; `highlight_request` triggers set_highlight.
-    // `lod_request` controls edge density (0 = all edges, 1 = backbone only).
-    // `viewport_cmd` carries ViewportControls' zoom / fit / reset / focus commands.
-    // All are one-shot pulses consumed (reset to None) by GalaxyCanvas.
-    let focus_request: RwSignal<Option<String>> = RwSignal::new(None);
-    let highlight_request: RwSignal<Option<std::collections::HashSet<u32>>> = RwSignal::new(None);
-    let lod_request: RwSignal<f32> = RwSignal::new(0.0);
-    let highlight_edges_request: RwSignal<Option<std::collections::HashSet<(u32, u32)>>> =
-        RwSignal::new(None);
-    let viewport_cmd: RwSignal<Option<gl::scene::ViewportCmd>> = RwSignal::new(None);
-
-    // Per-node excerpt cache for NodeDetailPanel.
-    let detail_panel_excerpts: RwSignal<std::collections::HashMap<String, NodeExcerpt>> =
-        RwSignal::new(std::collections::HashMap::new());
-
-    // Raw hover intent — written by the (Send+Sync) on_event callback on every
-    // HoverNode transition. Stored as RwSignal so on_event (write) and Effects
-    // (read) can both reach it without sharing a non-Send Rc.
-    let hover_intent: RwSignal<Option<String>> = RwSignal::new(None);
-
-    // Fly the camera to `id` and highlight it plus its topological neighbors.
-    // Captures only Copy signals, so it stays Copy + Send + Sync and can be
-    // reused from the on_event Callback and from the Effects below.
-    let focus_and_highlight = move |id: &str| {
-        focus_request.set(Some(id.to_string()));
-        if let Some(data) = galaxy_data.get_untracked() {
-            highlight_request.set(Some(compute_highlight_set(&data, id)));
-            highlight_edges_request.set(Some(gl::compute_highlight_edges(&data, id)));
-        }
-    };
-
-    // `Some(true/false)` once a galaxy is loaded; `None` while it is not.
-    let in_galaxy = move |id: &str| -> Option<bool> {
-        galaxy_data.with_untracked(|d| d.as_ref().map(|g| g.nodes.iter().any(|n| n.id == id)))
-    };
-
-    // -----------------------------------------------------------------------
-    // Agent-switch reset Effect.
-    // Subscribes to `agent_id`; on a real change (prev != current), wipes all
-    // canvas view state so the new agent's galaxy renders from a clean slate.
-    // The galaxy-build Effect also subscribes to `agent_id` and re-fires
-    // automatically — this Effect's only job is the reset.
-    //
-    // The closure returns the current `agent_id`, so the next invocation sees
-    // it as `prev`. On first mount `prev == None` and the reset body is skipped
-    // (avoids clearing empty state before the galaxy-build Effect's first fetch).
-    // -----------------------------------------------------------------------
-    Effect::new(move |prev: Option<String>| {
-        let current = agent_id.get();
-        if let Some(p) = prev.as_ref() {
-            if *p != current {
-                // Reset reactive signals
-                set_selected_node.set(None);
-                search_query.set(String::new());
-                set_fold_threshold.set(DEFAULT_FOLD);
-                // Clear 3D galaxy signals so the new agent's galaxy rebuilds from scratch.
-                // The galaxy-build Effect repopulates galaxy_data when it re-runs.
-                galaxy_data.set(None);
-                truncation.set(None);
-                focus_request.set(None);
-                highlight_request.set(None);
-                highlight_edges_request.set(None);
-                hover_intent.set(None);
-                load_error.set(None);
-                notice.set(None);
-            }
-        }
-        current
-    });
-
-    // -----------------------------------------------------------------------
-    // Galaxy-build Effect: on mount, on agent switch, on a note mutation
-    // (`graph_nonce`) and on Retry (`reload_nonce`), fetch the full graph and
-    // build the deterministic 3D galaxy seed from its topology.
-    //
-    // A failure is surfaced (`load_error` → the overlay's error card), never
-    // swallowed: an unexplained black rectangle is indistinguishable from an
-    // empty agent.
-    // -----------------------------------------------------------------------
-    Effect::new(move || {
-        graph_nonce.get();
-        reload_nonce.get();
         if !state.is_connected.get() {
             return;
         }
-        let agent = agent_id.get();
-
-        loading.set(true);
         spawn_local(async move {
-            match GraphApi::query(&state, &agent, 500).await {
-                Ok(r) => {
-                    load_error.set(None);
-                    notice.set(None);
-                    // Build deterministic 3D galaxy seed from full-graph topology.
-                    galaxy_data.set(Some(build_galaxy(&r)));
-                    // Surface a "showing top N of M" badge when the query truncated.
-                    truncation.set(
-                        r.total
-                            .filter(|&t| t > r.nodes.len())
-                            .map(|t| (r.nodes.len(), t)),
-                    );
+            match CanvasApi::list(&state).await {
+                Ok(list) => {
+                    canvas.rows.set(list);
+                    canvas.load_error.set(None);
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("graph.query failed: {e}").into());
-                    load_error.set(Some(
-                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                            e.to_string()
-                        }),
-                    ));
+                    // The rows are NOT cleared on failure: a refusal says
+                    // nothing about what is there.
+                    canvas
+                        .load_error
+                        .set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
+                            format!("Failed to load canvases: {e}")
+                        })));
                 }
             }
-            loading.set(false);
         });
     });
 
-    // Canvas status, in priority order: a GL failure beats a load failure beats a
-    // pending round-trip beats an empty graph.
-    let status = Memo::new(move |_| {
-        // GL failures are FATAL, not retryable: the Scene is built once in the
-        // mount Effect, so no amount of re-fetching brings the context back.
-        if let Some(e) = gl_error.get() {
-            return CanvasStatus::Fatal(e);
-        }
-        if let Some(e) = load_error.get() {
-            return CanvasStatus::Error(e);
-        }
-        if loading.get() {
-            return CanvasStatus::Loading;
-        }
-        if galaxy_data.with(|d| d.as_ref().is_some_and(|g| !g.nodes.is_empty())) {
-            CanvasStatus::Ready
-        } else {
-            CanvasStatus::Empty
-        }
-    });
-    let has_nodes = Signal::derive(move || {
-        galaxy_data.with(|d| d.as_ref().is_some_and(|g| !g.nodes.is_empty()))
-    });
-    let has_selection = Signal::derive(move || selected_node.get().is_some());
-
-    // -----------------------------------------------------------------------
-    // Canvas event handler — captures only Copy signals, safe for Callback::new
-    // -----------------------------------------------------------------------
-    let on_event = move |event: CanvasEvent| match event {
-        CanvasEvent::SelectNode(id) => {
-            set_selected_node.set(Some(id.clone()));
-            // Record the visit so NodeDetailPanel's "Recently visited" list accrues.
-            mem.push_recent(id.clone());
-            focus_and_highlight(&id);
-        }
-        CanvasEvent::DeselectNode => {
-            set_selected_node.set(None);
-            // Clear highlight when deselecting.
-            highlight_request.set(None);
-            highlight_edges_request.set(None);
-        }
-        CanvasEvent::HoverNode(hovered_id) => {
-            // Edge-triggered: `HoverNode` only fires on transition (see
-            // galaxy_canvas.rs hit-test). `hover_intent` is passed directly
-            // to `GalaxyCanvas` as `hovered_node` to drive the label overlay.
-            hover_intent.set(hovered_id);
-        }
-    };
-    let on_event = Callback::new(on_event);
-
-    // Search: driven by the hub toolbar's Enter-submit pulse (`mem.search_nonce`).
-    // The toolbar writes `search_query` live on every keystroke but only bumps
-    // `search_nonce` on Enter (same pattern as views/memory/mod.rs:149-157).
-    // Subscribing to `search_nonce` here prevents a graph.search RPC + camera
-    // fly-to on every keystroke; the query is read untracked to avoid a second
-    // subscription.
-    //
-    // On a match, drive the 3D galaxy's intent channels: fly-to + highlight + open
-    // panel. Zero matches and RPC failures used to be entirely invisible — both
-    // now land in the notice strip.
-    Effect::new(move || {
-        mem.search_nonce.get(); // subscribe to Enter-submit pulses only
-        let query = search_query.get_untracked();
-        if query.is_empty() {
+    // (2) Topic subscription — gated on `is_connected` like the loader; a
+    // subscription that failed against a connecting socket is silent forever.
+    Effect::new(move |_| {
+        if !state.is_connected.get() {
             return;
         }
-        let agent = agent_id.get_untracked();
-        // Translate before the round-trip: the reactive read belongs in the Effect.
-        let no_match = t_string!(i18n, memory.search_no_match).to_string();
-        let failed = t_string!(i18n, memory.graph_error).to_string();
-        notice.set(None);
+        let dash = state;
         spawn_local(async move {
-            match GraphApi::search(&state, &agent, &query, 20).await {
-                Ok(response) => match response.results.first() {
-                    Some(first) => {
-                        let id = first.id.clone();
-                        focus_and_highlight(&id);
-                        // Open the node detail panel by selecting the node.
-                        mem.selected_node.set(Some(id));
-                    }
-                    None => notice.set(Some(no_match)),
-                },
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Search failed: {e}").into());
-                    notice.set(Some(
-                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                            format!("{failed} {e}")
-                        }),
-                    ));
-                }
-            }
+            let _ = dash.subscribe_topic(canvas_proto::TOPIC).await;
         });
     });
 
-    // -----------------------------------------------------------------------
-    // Reverse-link Effect: list → graph cross-link.
-    //
-    // When the Memory table's "view in graph" button is clicked, `on_locate`
-    // sets `mem.selected_node` and flips `mem.memory_view` to Graph
-    // (see views/memory/mod.rs on_locate callback). This Effect detects that
-    // and drives the 3D galaxy intent channels to fly to and highlight the node.
-    //
-    // `mem.memory_view` is read with `get_untracked()` — the Effect only
-    // subscribes to `mem.selected_node` changes, not to memory_view.
-    //
-    // It ALSO subscribes to `galaxy_data`, and it must: on a fresh mount carrying
-    // a pre-existing selection (phone: note detail → "view in graph" navigates to
-    // /memory/graph with `selected_node` already set), this Effect runs before the
-    // graph has landed. Without the galaxy in its dependency set it would bail on
-    // the `None` arm below and never re-run, so the fly-to would silently never
-    // happen. `in_galaxy` reads the data untracked, so the subscription is here.
-    //
-    // A note that is not among the loaded (capped) galaxy nodes used to be a
-    // total silent no-op; it now says so, and does not fire dead intent channels.
-    // -----------------------------------------------------------------------
-    Effect::new(move || {
-        galaxy_data.track();
-        let Some(node_id) = mem.selected_node.get() else {
+    // (3) Frame consumption — refresh the library, reconcile the open doc.
+    let sub_id = state.subscribe_events(move |evt| {
+        if evt.topic != canvas_proto::TOPIC {
+            return;
+        }
+        let Ok(frame) = serde_json::from_value::<canvas_proto::CanvasUpdated>(evt.data.clone())
+        else {
             return;
         };
-        // Only act when the memory hub is showing the Graph view; list-originated
-        // locates always flip to Graph first (see on_locate in memory/mod.rs).
-        if mem.memory_view.get_untracked() != MemoryView::Graph {
+        refresh_rows(state, canvas);
+        let open = canvas.open_canvas.get_untracked();
+        if open.as_deref() != Some(frame.canvas_id.as_str()) {
             return;
         }
-        match in_galaxy(&node_id) {
-            // No galaxy loaded yet — this Effect re-runs when it lands (we track
-            // `galaxy_data` above), and the fly-to happens then.
-            None => return,
-            Some(false) => {
-                notice.set(Some(t_string!(i18n, memory.node_not_in_graph).to_string()));
-                return;
+        let held = canvas.doc.with_untracked(|d| {
+            d.as_ref()
+                .filter(|d| d.id == frame.canvas_id)
+                .map(|d| d.revision)
+        });
+        let Some(local_rev) = held else {
+            // Open but still loading (or the doc signal holds the previous
+            // canvas): the in-flight open fetch may have been answered
+            // before this batch committed, so refetch — `fetch_open_doc`'s
+            // staleness check arbitrates whichever answer lands last.
+            fetch_open_doc(state, canvas, i18n, frame.canvas_id);
+            return;
+        };
+        let decision = canvas
+            .inflight
+            .with_untracked(|inflight| reconcile::reconcile(local_rev, &frame, inflight.as_ref()));
+        match decision {
+            reconcile::Reconcile::ApplyOps => {
+                canvas.doc.update(|d| {
+                    let Some(d) = d.as_mut() else { return };
+                    if d.id == frame.canvas_id {
+                        ops::apply_local(d, &frame.ops);
+                        // The frame IS server truth — same authority as an
+                        // apply ack (ops.rs module doc), never optimistic.
+                        d.revision = frame.revision;
+                    }
+                });
             }
-            Some(true) => notice.set(None),
+            reconcile::Reconcile::Refetch => {
+                fetch_open_doc(state, canvas, i18n, frame.canvas_id);
+            }
+            reconcile::Reconcile::DropEcho => {}
         }
-        focus_and_highlight(&node_id);
     });
-
-    // -----------------------------------------------------------------------
-    // Density slider → LOD mapping Effect: fold_threshold (0..=10) → lod (0..1)
-    // via `fold_to_lod`. Higher slider = denser graph.
-    // -----------------------------------------------------------------------
-    Effect::new(move || {
-        lod_request.set(fold_to_lod(fold_threshold.get()));
-    });
+    on_cleanup(move || state.unsubscribe_events(sub_id));
 
     view! {
-        <div class="relative w-full h-full bg-[#080818]">
-            // GalaxyCanvas: 3D force-layout nebula.
-            <GalaxyCanvas
-                graph=galaxy_data
-                on_event=on_event
-                focus_request=focus_request
-                highlight_request=highlight_request
-                lod_request=lod_request
-                selected_node=selected_node
-                hovered_node=hover_intent
-                highlight_edges_request=highlight_edges_request
-                viewport_cmd=viewport_cmd
-                gl_error=gl_error
-            />
-            // Viewport cluster (zoom / fit / reset / focus) + graph-scoped hotkeys.
-            <ViewportControls
-                viewport_cmd=viewport_cmd
-                on_event=on_event
-                has_nodes=has_nodes
-                has_selection=has_selection
-            />
-            // Loading / empty / error card + the transient notice strip.
-            <CanvasOverlay
-                status=status.into()
-                notice=notice
-                on_retry=Callback::new(move |()| reload_nonce.update(|n| *n += 1))
-            />
-            // Truncation badge: shown when graph.query returned fewer nodes than the agent has.
-            {move || truncation.get().map(|(shown, total)| view! {
-                <div class="absolute top-2 right-2 pointer-events-none text-[11px] text-white/70
-                            bg-black/40 rounded px-2 py-0.5 select-none">
-                    {format!("showing top {shown} of {total}")}
+        {move || match canvas.open_canvas.get() {
+            Some(_) => view! { <OpenCanvasPane /> }.into_any(),
+            None => view! { <LibraryPane /> }.into_any(),
+        }}
+    }
+}
+
+/// The library: every canvas the caller can see, a create button, and a
+/// per-row delete with inline confirmation.
+#[component]
+fn LibraryPane() -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+    let canvas = expect_context::<CanvasState>();
+    let i18n = use_i18n();
+
+    // Row id awaiting delete confirmation. Inline (not a modal): the second
+    // click lands where the first one did.
+    let pending_delete = RwSignal::new(Option::<String>::None);
+    let creating = RwSignal::new(false);
+
+    let on_create = move |_| {
+        if creating.get_untracked() {
+            return;
+        }
+        creating.set(true);
+        spawn_local(async move {
+            match CanvasApi::create(&state, None, None).await {
+                Ok(doc) => {
+                    refresh_rows(state, canvas);
+                    // The create envelope carries no asset_base (the server
+                    // mints one only on `canvas.get`), so opening goes
+                    // through the same fetch as a row click.
+                    canvas.open_canvas.set(Some(doc.id.clone()));
+                    canvas.doc.set(None);
+                    fetch_open_doc(state, canvas, i18n, doc.id);
+                }
+                Err(e) => {
+                    canvas
+                        .load_error
+                        .set(Some(admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to create canvas: {e}")
+                        })));
+                }
+            }
+            creating.set(false);
+        });
+    };
+
+    view! {
+        <div class="flex flex-col h-full">
+            <div class="p-6 border-b border-border aleph-content-top flex items-start justify-between gap-4">
+                <div>
+                    <h1 class="text-2xl font-bold text-text-primary">
+                        {t!(i18n, canvas.title)}
+                    </h1>
+                    <p class="mt-1 text-sm text-text-secondary">
+                        {t!(i18n, canvas.subtitle)}
+                    </p>
                 </div>
-            })}
-            // NodeDetailPanel: always mounted — with no selection it shows the
-            // "recently visited" list and the click-a-node hint, which is also
-            // what the empty galaxy needs.
-            <div class="absolute bottom-0 right-0 w-72 max-h-[60%] overflow-y-auto
-                        bg-[#0d1120cc] border border-[#2a3060] rounded-tl-lg shadow-xl
-                        backdrop-blur-sm">
-                <NodeDetailPanel excerpts=detail_panel_excerpts graph_nonce=graph_nonce />
+                <button
+                    class="px-3.5 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-medium transition-colors disabled:opacity-50 flex-shrink-0"
+                    prop:disabled=move || creating.get()
+                    on:click=on_create
+                >
+                    {t!(i18n, canvas.new_canvas)}
+                </button>
+            </div>
+
+            {move || {
+                canvas.load_error.get().map(|msg| view! {
+                    <div class="mx-6 mt-4 px-4 py-3 rounded-lg bg-warning-subtle border border-warning text-sm text-text-primary">
+                        {msg}
+                    </div>
+                })
+            }}
+
+            <div class="flex-1 overflow-y-auto p-6">
+                {move || {
+                    let rows = canvas.rows.get();
+                    if rows.is_empty() {
+                        return view! {
+                            <div class="h-full flex items-center justify-center text-sm text-text-tertiary">
+                                {t!(i18n, canvas.empty)}
+                            </div>
+                        }
+                        .into_any();
+                    }
+                    view! {
+                        <div class="space-y-2 max-w-3xl">
+                            <For
+                                each=move || canvas.rows.get()
+                                key=|row| (row.id.clone(), row.revision)
+                                children=move |row: CanvasRow| {
+                                    view! { <LibraryRow row=row pending_delete=pending_delete /> }
+                                }
+                            />
+                        </div>
+                    }
+                    .into_any()
+                }}
             </div>
         </div>
     }
 }
 
-// Pure graph→galaxy transforms (`build_galaxy`, `fold_to_lod`,
-// `compute_highlight_set`, …) live in `galaxy_build.rs`, the status card in
-// `overlay.rs` — this file holds only the component's reactive wiring.
+#[component]
+fn LibraryRow(row: CanvasRow, pending_delete: RwSignal<Option<String>>) -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+    let canvas = expect_context::<CanvasState>();
+    let i18n = use_i18n();
+
+    let id = row.id.clone();
+    let open_id = row.id.clone();
+    let arm_id = row.id.clone();
+    let confirm_id = row.id.clone();
+    let is_armed = move || pending_delete.get().as_deref() == Some(id.as_str());
+
+    let on_open = move |_| {
+        canvas.open_canvas.set(Some(open_id.clone()));
+        canvas.doc.set(None);
+        fetch_open_doc(state, canvas, i18n, open_id.clone());
+    };
+
+    let on_confirm_delete = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        let id = confirm_id.clone();
+        spawn_local(async move {
+            match CanvasApi::delete(&state, &id).await {
+                Ok(()) => refresh_rows(state, canvas),
+                Err(e) => {
+                    canvas
+                        .load_error
+                        .set(Some(admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to delete canvas: {e}")
+                        })));
+                }
+            }
+            pending_delete.set(None);
+        });
+    };
+
+    view! {
+        <div
+            class="group flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-surface-raised hover:border-primary/50 cursor-pointer transition-colors"
+            on:click=on_open
+        >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                 class="text-text-tertiary flex-shrink-0">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M7 14c1.5-4 3-4 4.5-1s3 3 5.5-3" />
+            </svg>
+            <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-text-primary truncate">{row.title.clone()}</div>
+                <div class="text-xs text-text-tertiary mt-0.5">
+                    {row.shape_count.to_string()}
+                    " " {t!(i18n, canvas.shapes)}
+                    " · " {updated_label(row.updated_at_ms)}
+                </div>
+            </div>
+            {move || if is_armed() {
+                view! {
+                    <div class="flex items-center gap-2" on:click=|ev| ev.stop_propagation()>
+                        <span class="text-xs text-text-secondary">
+                            {t!(i18n, common.confirm_delete)}
+                        </span>
+                        <button
+                            class="px-2.5 py-1 rounded-md bg-danger text-white text-xs font-medium"
+                            on:click=on_confirm_delete.clone()
+                        >
+                            {t!(i18n, common.delete)}
+                        </button>
+                        <button
+                            class="px-2.5 py-1 rounded-md border border-border text-xs text-text-secondary hover:bg-surface-sunken"
+                            on:click=move |ev| { ev.stop_propagation(); pending_delete.set(None); }
+                        >
+                            {t!(i18n, common.cancel)}
+                        </button>
+                    </div>
+                }.into_any()
+            } else {
+                let arm = arm_id.clone();
+                view! {
+                    <button
+                        class="opacity-0 group-hover:opacity-100 p-1.5 rounded-md text-text-tertiary hover:text-danger hover:bg-danger/10 transition-all"
+                        title=move || t_string!(i18n, common.delete).to_string()
+                        on:click=move |ev| { ev.stop_propagation(); pending_delete.set(Some(arm.clone())); }
+                    >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                    </button>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
+/// The open document: header (way back, title, shape count) over the editor
+/// surface. The editor mounts only once the fetch has landed — its camera
+/// gestures and key listeners have no business existing for a spinner.
+#[component]
+fn OpenCanvasPane() -> impl IntoView {
+    let canvas = expect_context::<CanvasState>();
+    let i18n = use_i18n();
+
+    // Memoized on purpose: the raw `doc.with(|d| d.is_none())` closure would
+    // re-run — and rebuild the editor, discarding its drag/undo/queue state —
+    // on EVERY doc mutation, including each optimistic preview frame of a
+    // drag. The memo's `PartialEq` dedupe means the editor mounts once per
+    // open and unmounts once per close, nothing in between.
+    let doc_missing = Memo::new(move |_| canvas.doc.with(|d| d.is_none()));
+
+    view! {
+        <div class="flex flex-col h-full">
+            <div class="px-6 py-4 border-b border-border aleph-content-top flex items-center gap-3">
+                <button
+                    class="flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors"
+                    on:click=move |_| canvas.close_canvas()
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="15 18 9 12 15 6" />
+                    </svg>
+                    {t!(i18n, canvas.back_to_library)}
+                </button>
+                <h2 class="text-base font-semibold text-text-primary truncate">
+                    {move || canvas.doc.with(|d| d.as_ref().map(|d| d.title.clone())).unwrap_or_default()}
+                </h2>
+                <span class="text-xs text-text-tertiary">
+                    {move || canvas.doc.with(|d| d.as_ref().map(|d| d.shapes.len().to_string())).unwrap_or_default()}
+                    " " {t!(i18n, canvas.shapes)}
+                </span>
+            </div>
+            {move || {
+                canvas.load_error.get().map(|msg| view! {
+                    <div class="mx-6 mt-4 px-4 py-3 rounded-lg bg-warning-subtle border border-warning text-sm text-text-primary">
+                        {msg}
+                    </div>
+                })
+            }}
+            {move || if doc_missing.get() {
+                view! {
+                    <div class="flex-1 flex items-center justify-center text-sm text-text-tertiary">
+                        {t!(i18n, common.loading)}
+                    </div>
+                }
+                .into_any()
+            } else {
+                view! { <editor::CanvasEditor /> }.into_any()
+            }}
+        </div>
+    }
+}

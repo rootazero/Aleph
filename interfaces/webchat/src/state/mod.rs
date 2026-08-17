@@ -1,3 +1,4 @@
+pub mod canvas;
 pub mod connection;
 pub mod hotkey;
 pub mod layout;

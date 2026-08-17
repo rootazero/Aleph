@@ -99,8 +99,16 @@ fn build_actions() -> Vec<Action> {
         mk_nav(
             "nav.memory",
             t_string!(i18n, nav.memory).to_string(),
-            &["memory", "canvas", "knowledge", "记忆"],
+            // "canvas" left this list when the whiteboard claimed the word:
+            // matching it here would race the real /canvas entry below.
+            &["memory", "knowledge", "记忆"],
             "/memory",
+        ),
+        mk_nav(
+            "nav.canvas",
+            t_string!(i18n, nav.canvas).to_string(),
+            &["canvas", "whiteboard", "画布", "白板"],
+            "/canvas",
         ),
         mk_nav(
             "nav.agents",

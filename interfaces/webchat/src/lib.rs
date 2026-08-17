@@ -17,7 +17,6 @@
 pub mod api;
 pub mod app;
 pub mod appearance;
-pub mod canvas_engine;
 pub mod components;
 pub mod context;
 // Source-level guard only — no production consumer, so it does not ship.
@@ -26,6 +25,7 @@ pub mod context;
 mod disposed_reads;
 pub mod generation;
 pub mod i18n;
+pub mod memory_graph;
 pub mod models;
 pub mod panic_overlay;
 pub mod platform;

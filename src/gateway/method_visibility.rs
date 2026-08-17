@@ -673,6 +673,22 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("projects.member.remove", Treatment::KeyChecked),
     ("projects.member.list", Treatment::KeyChecked),
     ("projects.room_session", Treatment::KeyChecked),
+    // --- canvas.* (whiteboard — handlers/canvas.rs) ---
+    // Every addressed method resolves the document through the shared
+    // `gate_canvas` admission point (`visibility::canvas_visible`: owner OR
+    // roster member) before any store verb runs, refusing a foreign canvas
+    // with the byte-identical not-found a missing id produces. `canvas.list`
+    // filters `CanvasStore::list_entries` through the same predicate.
+    // `canvas.create` is a creation surface with no addressed record — same
+    // ruling as `projects.create` / `group_chat.start`, deliberately absent
+    // here (its project-link write IS gated, via `project_visible`).
+    ("canvas.list", Treatment::ListFiltered),
+    ("canvas.get", Treatment::KeyChecked),
+    ("canvas.apply", Treatment::KeyChecked),
+    ("canvas.delete", Treatment::KeyChecked),
+    ("canvas.asset.put", Treatment::KeyChecked),
+    ("canvas.asset.get", Treatment::KeyChecked),
+    ("canvas.selection.set", Treatment::KeyChecked),
     // --- on-demand resume ---
     ("agent.resume", Treatment::KeyChecked),
 ];
@@ -963,6 +979,25 @@ mod tests {
         // `group_chat.start` creates; there is no addressed record to check,
         // same ruling as `session.create`.
         assert_eq!(treatment_of("group_chat.start"), None);
+    }
+
+    /// Whiteboard canvas pins. `canvas.create` is a creation surface with no
+    /// addressed record — same ruling as `group_chat.start` above — but its
+    /// audience-widening `project_id` write is still gated in the handler.
+    #[test]
+    fn canvas_methods_are_registered() {
+        assert_eq!(treatment_of("canvas.list"), Some(Treatment::ListFiltered));
+        for m in [
+            "canvas.get",
+            "canvas.apply",
+            "canvas.delete",
+            "canvas.asset.put",
+            "canvas.asset.get",
+            "canvas.selection.set",
+        ] {
+            assert_eq!(treatment_of(m), Some(Treatment::KeyChecked), "{m}");
+        }
+        assert_eq!(treatment_of("canvas.create"), None);
     }
 
     /// The `teams.*` family, tightened 2026-08-06 (`teams.chat.cancel` joined

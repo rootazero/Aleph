@@ -19,6 +19,7 @@ pub mod acp;
 pub mod agent_binding;
 pub mod artifacts;
 pub mod browser;
+pub mod canvas;
 pub mod clarification;
 pub mod config;
 pub mod discord;

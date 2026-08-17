@@ -1,7 +1,7 @@
 //! File-system persistence for workflow templates.
 //!
 //! Lives under `$ALEPH_HOME/workflows/*.json`. Pure file-system layer — no
-//! JSON-RPC, no tool registration (R4). Mirrors [`crate::canvas_io`]: atomic
+//! JSON-RPC, no tool registration (R4). Mirrors [`crate::json_canvas_io`]: atomic
 //! writes via temp-file + rename so readers never see a torn write, and
 //! reuses its `sanitise_name` for path-traversal-safe filenames.
 //!
@@ -21,8 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::canvas_io::sanitise_name;
 use crate::error::{AlephError, Result};
+use crate::json_canvas_io::sanitise_name;
 use crate::workflow::interop::manifest::WorkflowManifest;
 
 /// File extension for stored workflow templates.
@@ -53,7 +53,7 @@ pub fn workflow_dir() -> PathBuf {
 }
 
 /// Aleph home, or the CWD when it cannot be resolved at all.
-/// Single source: [`crate::utils::paths::get_config_dir`] (see `canvas_io`).
+/// Single source: [`crate::utils::paths::get_config_dir`] (see `json_canvas_io`).
 fn aleph_home() -> PathBuf {
     crate::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from("."))
 }

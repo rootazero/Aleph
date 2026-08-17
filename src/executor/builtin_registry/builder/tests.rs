@@ -287,3 +287,88 @@ mod workspace_manage_wiring_tests {
         ));
     }
 }
+
+/// `canvas` (R8) walks the same five-registration chain as
+/// `workspace_manage` above — catalog entry, constructor, schema, dispatch
+/// arm, group listing — and each link fails in the same quiet way. Same
+/// discipline: the whole chain against a real store, because the tool's own
+/// unit tests construct it directly and prove only the last link.
+#[cfg(test)]
+mod canvas_wiring_tests {
+    use crate::canvas::CanvasStore;
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::executor::builtin_registry::{BuiltinToolConfig, BuiltinToolRegistry};
+    use crate::executor::ToolRegistry;
+    use crate::sync_primitives::Arc;
+
+    async fn registry_with_store(dir: &std::path::Path) -> BuiltinToolRegistry {
+        BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            injection_mode: MemoryInjectionMode::Hybrid,
+            canvas_store: Some(Arc::new(CanvasStore::new(dir.to_path_buf()))),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn canvas_is_registered_with_its_schema_and_dispatches() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let registry = registry_with_store(dir.path()).await;
+
+        assert!(registry.has_tool("canvas"));
+
+        // Name without schema = a tool the model is told about and cannot
+        // fill in. Assert on fields the args type actually declares.
+        let schema = registry
+            .get_tool_schema("canvas")
+            .expect("canvas must register a parameters schema");
+        let props = schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("schema properties");
+        for field in ["action", "canvas_id", "ops", "location", "frame_id"] {
+            assert!(
+                props.contains_key(field),
+                "schema is missing `{field}`: {schema}"
+            );
+        }
+
+        // Dispatch reaches the tool, and it is the SAME store: a canvas
+        // created through the tool is readable through the tool.
+        let created = registry
+            .execute_tool(
+                "canvas",
+                serde_json::json!({"action": "create", "title": "Wiring"}),
+            )
+            .await
+            .expect("canvas must dispatch");
+        let id = created["canvas_id"].as_str().expect("canvas_id");
+        let got = registry
+            .execute_tool(
+                "canvas",
+                serde_json::json!({"action": "get", "canvas_id": id}),
+            )
+            .await
+            .expect("get");
+        assert_eq!(got["title"], "Wiring");
+    }
+
+    /// With no store the tool must be absent, not present-and-broken: the
+    /// schema registration and the constructor gate on the same handle.
+    #[tokio::test]
+    async fn canvas_is_absent_without_a_store() {
+        let _home = crate::utils::paths::IsolatedAlephHome::new();
+        let registry = BuiltinToolRegistry::with_config(BuiltinToolConfig {
+            injection_mode: MemoryInjectionMode::Hybrid,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert!(
+            !registry.has_tool("canvas"),
+            "a tool the model can see but nothing can answer is worse than an absent one"
+        );
+    }
+}

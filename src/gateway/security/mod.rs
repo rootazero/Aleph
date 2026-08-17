@@ -15,6 +15,7 @@
 //!         secrets vault, Feishu webhook, WhatsApp vault store)
 //! token_readonly (read-only shared-token lookup for the admin IPC client)
 //! artifact_caps (session-scoped capabilities for the /artifact byte route)
+//! canvas_caps (canvas-scoped capabilities for the /canvas-asset byte route)
 //! ```
 //!
 //! `SecurityStore` persists the vault master key / HMAC secret **plus**
@@ -25,6 +26,7 @@
 //! including the legacy tables kept only for migration compatibility.
 
 pub mod artifact_caps;
+pub mod canvas_caps;
 pub mod crypto;
 pub mod device_token_manager;
 pub mod shared_token;
@@ -33,6 +35,7 @@ pub mod token_readonly;
 
 // Re-export commonly used types
 pub use artifact_caps::ArtifactCapabilities;
+pub use canvas_caps::CanvasCapabilities;
 pub use crypto::{
     generate_keypair, generate_secret, hmac_sign, hmac_verify, sign_message, verify_signature,
     CryptoError, DeviceFingerprint,

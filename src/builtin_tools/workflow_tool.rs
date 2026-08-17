@@ -434,7 +434,7 @@ impl WorkflowTool {
         // whose name contains a char outside [A-Za-z0-9._-] — right after a
         // successful `run`. Canonicalising both sides matches every historic
         // row regardless of which form was stamped.
-        let wanted = crate::canvas_io::sanitise_name(name);
+        let wanted = crate::json_canvas_io::sanitise_name(name);
         let mut groups: std::collections::HashMap<String, Vec<CoordTask>> =
             std::collections::HashMap::new();
         for task in tasks {
@@ -442,7 +442,7 @@ impl WorkflowTool {
                 .metadata
                 .get(WORKFLOW_NAME_KEY)
                 .and_then(|v| v.as_str())
-                .map(crate::canvas_io::sanitise_name)
+                .map(crate::json_canvas_io::sanitise_name)
                 .as_deref()
                 != Some(wanted.as_str())
             {

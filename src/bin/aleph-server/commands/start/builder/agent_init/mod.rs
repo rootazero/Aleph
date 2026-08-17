@@ -163,6 +163,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // handle the gateway `extensions.*` handlers use — it cannot be
     // reconstructed. `None` → agent-driven MCP installs degrade gracefully.
     hub_mcp_handle: Option<alephcore::mcp::manager::McpManagerHandle>,
+    // Whiteboard canvas store for the `canvas` tool — the SAME Arc the
+    // `canvas.*` RPC handlers hold (only that instance carries the event
+    // bus). `None` when the canvas root could not be created at boot.
+    canvas_store: Option<Arc<alephcore::canvas::CanvasStore>>,
 ) -> alephcore::Result<AgentHandlersResult> {
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
@@ -531,6 +535,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             catalog_cache,
             hub_marketplace_configs,
             hub_mcp_handle,
+            // The gateway's own canvas store Arc — see the parameter doc.
+            canvas_store: canvas_store.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await?;

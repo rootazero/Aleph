@@ -229,6 +229,14 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::workspace_manage::WorkspaceManageTool::new(Arc::clone(store))
         });
 
+        // canvas (requires the gateway's CanvasStore). Same rule as
+        // workspace_manage: only the injected instance carries the event bus,
+        // so only its writes publish `canvas.updated` to open Panels.
+        let canvas_tool = config.canvas_store.as_ref().map(|store| {
+            info!("Creating CanvasTool");
+            crate::builtin_tools::canvas::CanvasTool::new(Arc::clone(store))
+        });
+
         // Store catalog-sync tool (requires CatalogCache)
         let hub_catalog_sync_tool = if let Some(ref cache) = config.catalog_cache {
             info!("Creating HubCatalogSyncTool");
@@ -1276,6 +1284,7 @@ impl BuiltinToolRegistry {
             agent_update_tool,
             agent_info_tool,
             workspace_manage_tool,
+            canvas_tool,
             session_context_handle,
             extension_manager: config.extension_manager.clone(),
             acp_delegate_tool,

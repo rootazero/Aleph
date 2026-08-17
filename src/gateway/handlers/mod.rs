@@ -46,6 +46,8 @@ pub mod auth;
 pub mod behavior_config;
 pub mod browser_config;
 pub mod bundled_sync;
+pub mod canvas;
+pub mod canvas_error;
 pub mod channel;
 pub mod chat;
 pub mod clarification;
@@ -709,6 +711,25 @@ impl HandlerRegistry {
                 "gateway.credentials requires gateway config (boot phase 2)",
             )
         });
+        // Whiteboard canvas family — the real handlers need the boot-built
+        // `CanvasStore` (rooted at `utils::paths::get_canvas_root()`, wired
+        // with the event bus); `register_canvas_handlers` overrides at boot.
+        // Deterministic placeholders keep the family honest in harnesses
+        // that construct a registry without booting.
+        for method in [
+            "canvas.create",
+            "canvas.list",
+            "canvas.get",
+            "canvas.apply",
+            "canvas.delete",
+            "canvas.asset.put",
+            "canvas.asset.get",
+            "canvas.selection.set",
+        ] {
+            registry.register(method, |req| async move {
+                service_unavailable(req, "canvas.* requires CanvasStore (boot phase 2)")
+            });
+        }
         // daemon.status and daemon.shutdown need runtime state — placeholders
         registry.register("daemon.status", |req| async move {
             JsonRpcResponse::error(

@@ -15,6 +15,7 @@ use leptos_router::hooks::{use_location, use_navigate};
 use leptos_router::NavigateOptions;
 
 use crate::context::DashboardState;
+use crate::i18n::{t_string, use_i18n};
 use crate::platform::phone::alerts::PhoneAlerts;
 use crate::platform::phone::shell::PhoneShell;
 use crate::state::notifications::{unread_count, NotificationsState};
@@ -64,6 +65,7 @@ pub fn PhoneMore() -> impl IntoView {
 #[must_use]
 fn PhoneMoreMenu() -> impl IntoView {
     let navigate = use_navigate();
+    let i18n = use_i18n();
     let badge = alert_badge_count();
     // `use_navigate` returns a Clone-able Fn; each handler gets its own clone.
     let go = move |path: &'static str| {
@@ -96,6 +98,16 @@ fn PhoneMoreMenu() -> impl IntoView {
                         </svg>
                     </span>
                     <div class="cell-body"><div class="cell-title">"Teams"</div></div>
+                    <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
+                </div>
+                <div class="cell" on:click=go("/canvas")>
+                    <span class="cell-leading">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                            <path d="M7 14c1.5-4 3-4 4.5-1s3 3 5.5-3"></path>
+                        </svg>
+                    </span>
+                    <div class="cell-body"><div class="cell-title">{t_string!(i18n, nav.canvas).to_string()}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/extensions")>

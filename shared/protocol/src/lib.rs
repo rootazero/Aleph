@@ -15,12 +15,13 @@
 
 pub mod artifact;
 pub mod auth;
-pub mod canvas_format;
+pub mod canvas;
 pub mod channel_pairing;
 pub mod desktop_bridge;
 pub mod events;
 pub mod extension_usage;
 mod ids;
+pub mod json_canvas;
 pub mod jsonrpc;
 pub mod paths;
 pub mod plan;

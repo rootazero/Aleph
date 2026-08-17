@@ -389,6 +389,54 @@ pub fn project_visible_to(project_id: &str, actor: Option<&str>) -> bool {
     }
 }
 
+/// Whiteboard visibility: the owner sees it; a project-linked canvas is
+/// visible to every roster member. `actor == None` (cron / internal /
+/// in-process callers) is unrestricted, same convention as the partition
+/// twins above.
+///
+/// Owner OR member — deliberately not [`owner_and_scope_visible_to`], where
+/// the roster REPLACES ownership: a project session is a shared room whose
+/// creator asks the roster like everyone else, while linking a canvas to a
+/// room only WIDENS the audience — the owner keeps their document even when
+/// absent from the roster. Both arms delegate — [`owner_or_legacy`] for the
+/// ownership half and the same [`crate::projects::roster::is_member`] call
+/// [`project_visible_to`] makes for the roster half — never a second inlined
+/// membership check (the ruling on [`stamped_owner_visible`]).
+///
+/// Deliberately NOT answered here: `canvas.delete` is an owner-only verb
+/// whose require-owner gate lives in the RPC handler. This predicate only
+/// answers "may this actor see it".
+#[must_use]
+pub fn canvas_visible_to(
+    owner_user_id: Option<&str>,
+    project_id: Option<&str>,
+    actor: Option<&str>,
+) -> bool {
+    let Some(actor) = actor else {
+        return true;
+    };
+    if owner_or_legacy(owner_user_id) == actor {
+        return true;
+    }
+    project_id.is_some_and(|p| crate::projects::roster::is_member(p, actor))
+}
+
+/// [`canvas_visible_to`] resolved for the RPC face: actor =
+/// [`visible_owner_filter`] (the `CALLER_USER` task-local).
+#[must_use]
+pub fn canvas_visible(owner_user_id: Option<&str>, project_id: Option<&str>) -> bool {
+    canvas_visible_to(owner_user_id, project_id, visible_owner_filter().as_deref())
+}
+
+/// [`canvas_visible_to`] resolved for the tool face: actor =
+/// [`ambient_actor`], because `CALLER_USER` is dead inside a spawned run and
+/// the RPC twin would be constantly true there — see
+/// [`ambient_partition_visible`], which exists for the same reason.
+#[must_use]
+pub fn ambient_canvas_visible(owner_user_id: Option<&str>, project_id: Option<&str>) -> bool {
+    canvas_visible_to(owner_user_id, project_id, ambient_actor().as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -995,6 +1043,14 @@ mod tests {
             "src/gateway/execution_engine/run_loop/inner.rs",
             "who-owns: directory-catalogue registration for this run's owner (room turns short-circuit above it)",
         ),
+        (
+            "src/gateway/handlers/canvas.rs",
+            "who-owns: stamps a new canvas row's owner; runs in gateway dispatch where CALLER_USER is live",
+        ),
+        (
+            "src/builtin_tools/canvas.rs",
+            "who-owns: stamps a new canvas row's owner (the projects.rs shape); every VISIBILITY question in that file goes through ambient_canvas_visible / ambient_actor",
+        ),
     ];
 
     /// Walk `src/` and return `(repo-relative path, contents)` for every `.rs`
@@ -1102,5 +1158,122 @@ mod tests {
         // And with no scope at all, both are the unrestricted `None`.
         assert_eq!(crate::scope::ambient_owner(), None);
         assert_eq!(ambient_actor(), None);
+    }
+
+    // ── whiteboard canvas ───────────────────────────────────────────────
+
+    /// Owner arm, no project link: the stamped owner (or the legacy operator
+    /// for an unstamped doc — same [`owner_or_legacy`] derivation as every
+    /// sibling predicate) is the only scoped actor admitted.
+    #[test]
+    fn a_canvas_is_visible_to_its_owner_and_hidden_from_strangers() {
+        assert!(canvas_visible_to(Some("u-alice"), None, Some("u-alice")));
+        assert!(!canvas_visible_to(Some("u-alice"), None, Some("u-bob")));
+        assert!(canvas_visible_to(None, None, Some(OWNER_USER_ID)));
+        assert!(!canvas_visible_to(None, None, Some("u-bob")));
+    }
+
+    /// Roster arm: linking a canvas to a room widens the audience to the
+    /// roster without re-homing the document — the owner keeps it even when
+    /// absent from the roster (owner OR member, deliberately unlike a project
+    /// SESSION, where the roster replaces ownership).
+    ///
+    /// Deliberately absent here: delete. `canvas.delete` is an owner-only
+    /// verb whose require-owner gate lives in the RPC handler — this
+    /// predicate only answers "may this actor see it".
+    #[test]
+    fn a_project_linked_canvas_is_visible_to_owner_and_every_roster_member() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::projects::roster::publish(crate::projects::roster::RosterSnapshot::from_pairs([(
+            "p-canvas-room".to_string(),
+            "u-bob".to_string(),
+        )]));
+
+        // The member reads through the roster…
+        assert!(canvas_visible_to(
+            Some("u-alice"),
+            Some("p-canvas-room"),
+            Some("u-bob")
+        ));
+        // …the owner through ownership, roster or no roster…
+        assert!(canvas_visible_to(
+            Some("u-alice"),
+            Some("p-canvas-room"),
+            Some("u-alice")
+        ));
+        // …and a stranger is refused.
+        assert!(!canvas_visible_to(
+            Some("u-alice"),
+            Some("p-canvas-room"),
+            Some("u-carol")
+        ));
+    }
+
+    /// `actor == None` (cron / internal / in-process callers) is
+    /// unrestricted, matching every other predicate in this module — and an
+    /// unknown project id is invisible to a scoped non-owner, not an error
+    /// and not a grant.
+    #[test]
+    fn an_unscoped_actor_sees_every_canvas_and_an_unknown_room_grants_nothing() {
+        assert!(canvas_visible_to(Some("u-alice"), None, None));
+        assert!(canvas_visible_to(
+            Some("u-alice"),
+            Some("p-canvas-never-created"),
+            None
+        ));
+        assert!(!canvas_visible_to(
+            Some("u-alice"),
+            Some("p-canvas-never-created"),
+            Some("u-bob")
+        ));
+    }
+
+    /// The RPC twin resolves through [`visible_owner_filter`], the tool twin
+    /// through [`ambient_actor`] — one body, two resolvers. Inside a run
+    /// `CALLER_USER` is dead, so the RPC form is constantly true there; the
+    /// ambient form is the one that still answers.
+    #[tokio::test]
+    async fn the_canvas_resolver_twins_each_read_their_own_surface() {
+        // Gateway surface: CALLER_USER decides.
+        assert!(
+            CALLER_USER
+                .scope(Some("u-alice".to_string()), async {
+                    canvas_visible(Some("u-alice"), None)
+                })
+                .await
+        );
+        assert!(
+            !CALLER_USER
+                .scope(Some("u-bob".to_string()), async {
+                    canvas_visible(Some("u-alice"), None)
+                })
+                .await
+        );
+
+        // Run surface: no CALLER_USER, ambient scope only.
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        let (gateway_says, ambient_says) = crate::scope::with_scope(Some(bob), async {
+            (
+                canvas_visible(Some("u-alice"), None),
+                ambient_canvas_visible(Some("u-alice"), None),
+            )
+        })
+        .await;
+        assert!(
+            gateway_says,
+            "the task-local form is unrestricted inside a run — the fail-open \
+             the tool face must not inherit"
+        );
+        assert!(!ambient_says);
+
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        assert!(
+            crate::scope::with_scope(Some(alice), async {
+                ambient_canvas_visible(Some("u-alice"), None)
+            })
+            .await
+        );
     }
 }

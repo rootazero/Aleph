@@ -1,5 +1,5 @@
-use crate::canvas_engine::adapter::SearchResultDto;
 use crate::context::DashboardState;
+use crate::memory_graph::adapter::SearchResultDto;
 use serde::{Deserialize, Serialize};
 
 /// Raw memory entry (Layer 1 — one conversation record).
@@ -310,7 +310,7 @@ mod tests {
     use super::{
         BackendListFactsResponse, BackendSearchResponse, CompressedFact, MemoryStats, RawMemory,
     };
-    use crate::canvas_engine::adapter::SearchResultDto;
+    use crate::memory_graph::adapter::SearchResultDto;
 
     /// The server sends `null` graph counts when they cannot be computed
     /// (store-wide scope). That must survive as `None`, not become `0` — a
@@ -350,7 +350,7 @@ mod tests {
 
     // ── Version skew: `total` absent, not zero ──────────────────────────────
     //
-    // Mirrors `canvas_engine::adapter::search_result_dto_deserializes_without_
+    // Mirrors `memory_graph::adapter::search_result_dto_deserializes_without_
     // the_new_fields`: a narrow response from an un-upgraded core (Panel
     // connected to an older gateway over LAN) must still parse, and the
     // missing `total` must come back `None` — deserialization already

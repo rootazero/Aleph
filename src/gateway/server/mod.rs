@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod artifact_route;
+mod canvas_asset_route;
 mod flood_guard;
 mod handler;
 mod metrics_endpoint;
@@ -418,6 +419,13 @@ pub struct GatewayServer {
     /// Security store handle for the node `last_seen_at` stamping in the
     /// WS connect/disconnect paths. See `GatewaySharedState::security_store`.
     security_store: Option<Arc<crate::gateway::security::SecurityStore>>,
+    /// Whiteboard canvas store, installed by [`GatewayServer::set_canvas_store`]
+    /// — the SAME Arc the `canvas.*` handlers hold (a second instance would
+    /// split the per-canvas critical sections in two). `Some` mounts the
+    /// capability-gated `/canvas-asset/...` byte route in `build_router`;
+    /// `None` (canvas root unavailable / probe constructors) leaves the
+    /// Panel on the `canvas.asset.get` base64 fallback.
+    canvas_store: Option<Arc<crate::canvas::CanvasStore>>,
     /// See [`GatewaySharedState::node_registry`]. `build_router` clones this Arc
     /// into the shared state so both point at the same registry.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
@@ -485,6 +493,7 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
+            canvas_store: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -542,6 +551,7 @@ impl GatewayServer {
             shared_token_mgr: None,
             device_token_mgr: None,
             security_store: None,
+            canvas_store: None,
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
             exec_approval_manager: None,
             audit_log: None,
@@ -623,6 +633,14 @@ impl GatewayServer {
     /// can stamp enrolled-node `last_seen_at` (offline fleet view honesty).
     pub fn set_security_store(&mut self, store: Arc<crate::gateway::security::SecurityStore>) {
         self.security_store = Some(store);
+    }
+
+    /// Install the whiteboard `CanvasStore` (enables the `/canvas-asset/...`
+    /// byte route in `build_router`). Pass the same Arc the `canvas.*` RPC
+    /// handlers were registered with — one instance owns the per-canvas
+    /// locks and the event bus.
+    pub fn set_canvas_store(&mut self, store: Arc<crate::canvas::CanvasStore>) {
+        self.canvas_store = Some(store);
     }
 
     /// Install the `SecurityAuditLog` so the WS auth path records a forensic
@@ -781,6 +799,24 @@ impl GatewayServer {
             }
         };
 
+        // Capability-gated whiteboard asset bytes — the artifact route's twin
+        // (registered as a real route so `control_plane`'s SPA fallback never
+        // answers `/canvas-asset/...`). Mounted only when boot installed the
+        // one shared `CanvasStore`; see `canvas_asset_route` for why none of
+        // `/ws`'s protections are inherited.
+        let canvas_assets = self.canvas_store.as_ref().map(|store| {
+            canvas_asset_route::canvas_asset_routes(Arc::new(
+                canvas_asset_route::CanvasAssetRouteState::new(
+                    store.clone(),
+                    shared.origin_policy.clone(),
+                    shared.trusted_proxy_enabled,
+                    shared.trusted_proxy_ips.clone(),
+                    shared.allow_insecure_remote,
+                    shared.tls_enabled,
+                ),
+            ))
+        });
+
         let mut router = Router::new()
             .route("/ws", get(handler::ws_upgrade_handler))
             .route("/health", get(probe::handle_health))
@@ -792,6 +828,10 @@ impl GatewayServer {
 
         if let Some(artifacts) = artifacts {
             router = router.merge(artifacts);
+        }
+
+        if let Some(canvas_assets) = canvas_assets {
+            router = router.merge(canvas_assets);
         }
 
         // Merge A2A routes if the subsystem is enabled

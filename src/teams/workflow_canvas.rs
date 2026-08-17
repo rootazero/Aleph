@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use aleph_protocol::canvas_format::{facing_sides, Document, Edge, EndShape, Node, NodeCommon};
+use aleph_protocol::json_canvas::{facing_sides, Document, Edge, EndShape, Node, NodeCommon};
 use serde_json::Value;
 
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, NewCoordTask, Priority};
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn export_anchors_edge_sides_left_to_right() {
-        use aleph_protocol::canvas_format::Side;
+        use aleph_protocol::json_canvas::Side;
         // a (layer 0) → b (layer 1): b sits to the right of a, so the edge
         // should leave a's Right and enter b's Left.
         let tasks = vec![
