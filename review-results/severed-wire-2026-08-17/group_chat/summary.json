@@ -1,0 +1,195 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/group_chat",
+  "files_scanned": [
+    "src/group_chat/channel.rs",
+    "src/group_chat/coordinator.rs",
+    "src/group_chat/executor.rs",
+    "src/group_chat/mod.rs",
+    "src/group_chat/orchestrator.rs",
+    "src/group_chat/persona.rs",
+    "src/group_chat/protocol.rs",
+    "src/group_chat/session.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, interfaces/, shared/; bin/ covered via src/bin), read-before-write triage",
+  "findings": [
+    {
+      "id": "sw-gc-1",
+      "module": "src/group_chat",
+      "files": [
+        "src/group_chat/orchestrator.rs:49",
+        "src/group_chat/executor.rs:80",
+        "src/group_chat/orchestrator.rs:44",
+        "src/group_chat/executor.rs:54",
+        "src/group_chat/orchestrator.rs:140",
+        "src/group_chat/orchestrator.rs:204",
+        "src/group_chat/executor.rs:125",
+        "src/bin/aleph-server/commands/start/mod.rs:2713",
+        "src/bin/aleph-server/commands/start/mod.rs:2728"
+      ],
+      "severity": "high",
+      "form": 2,
+      "produced": "GroupChatOrchestrator::with_database and GroupChatExecutor::with_database (builder methods setting the optional StateDatabase persistence path)",
+      "produced_location": "src/group_chat/orchestrator.rs:49; src/group_chat/executor.rs:80",
+      "consumer_location": "none found",
+      "decision": "CONNECT",
+      "rationale": "rg -n \"with_database\" src/ interfaces/ shared/ returns only the two definitions — zero callers anywhere, not even tests. The only production construction sites (src/bin/aleph-server/commands/start/mod.rs:2713, 2728) call GroupChatOrchestrator::new and GroupChatExecutor::new(...).with_coordinator_visible(...) without with_database, so the db field is always None (orchestrator.rs:44, executor.rs:54) and every persistence branch is unreachable at runtime: create_session's insert_group_chat_session (orchestrator.rs:140-152), end_session's update_group_chat_session_status (orchestrator.rs:204-213), and executor::persist_turn (executor.rs:117-138, early return at :125). The group_chat_sessions/group_chat_turns tables (state_database/schema.rs:242,256) are created by migration but never written; sessions and turns survive only in memory. The prior review's owner_user_id persistence gap (review-results/group_chat.md) was fixed at the SQL layer (column + migration + insert param) but the fix is moot because the wire is missing.",
+      "proposed_change": "In src/bin/aleph-server/commands/start/mod.rs near line 2713/2728, pass the available StateDatabase Arc into both builders: GroupChatOrchestrator::new(gc_config, &persona_configs).with_database(db.clone()) and GroupChatExecutor::new(handle).with_coordinator_visible(...).with_database(db.clone()). Verify the local StateDatabase variable name at that construction site first.",
+      "risk": "Enables DB writes for the first time; persist_turn uses spawn_blocking per turn (executor.rs:117-138) and has zero test coverage via with_database, so wiring it exposes the SQLite path to real contention. Behavioral change: sessions/turns become durable across restart.",
+      "verification": "rg -n \"with_database\" src/ interfaces/ shared/ (only the 2 definitions); rg -n \"GroupChatOrchestrator::new|GroupChatExecutor::new\" src/ (production sites: start/mod.rs:2713/2728).",
+      "existing_review_ref": "review-results/group_chat.md (owner_user_id persistence gap, high) — SQL layer fixed, wire still missing; re-verified against current code."
+    },
+    {
+      "id": "sw-gc-2",
+      "module": "src/group_chat",
+      "files": [
+        "src/resilience/database/group_chat.rs:81",
+        "src/resilience/database/group_chat.rs:159",
+        "src/resilience/database/group_chat.rs:195",
+        "src/resilience/database/group_chat.rs:12",
+        "src/resilience/database/group_chat.rs:24"
+      ],
+      "severity": "medium",
+      "form": 1,
+      "produced": "StateDatabase read APIs get_group_chat_turns, list_active_group_chats, get_group_chat_session_owner plus row structs GroupChatTurn (db) and GroupChatSessionSummary",
+      "produced_location": "src/resilience/database/group_chat.rs:81, 159, 195; :12, :24",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "rg -n \"get_group_chat_turns|list_active_group_chats|get_group_chat_session_owner\" src/ interfaces/ shared/ returns only the definitions (plus one doc-comment mention at src/group_chat/session.rs:99). Zero callers, not even tests. They are the read half of a persistence contract whose write half is also currently inert (sw-gc-1); no replay/resume path for group chats exists. Options: connect into a future replay/list feature, or cut the three read APIs plus the two row structs. Do not delete until sw-gc-1 is resolved.",
+      "proposed_change": "DECIDE — either wire into a group-chat replay/resume surface once sw-gc-1 connects persistence, or delete group_chat.rs:81-98, 159-193, 195-227 and the row structs at :12-22, :24-31.",
+      "risk": "Low; read APIs are unexercised. Keeping them pending sw-gc-1 avoids churn if replay lands.",
+      "verification": "rg -n \"get_group_chat_turns\" src/ interfaces/ shared/; rg -n \"list_active_group_chats\" src/ interfaces/ shared/; rg -n \"get_group_chat_session_owner\" src/ interfaces/ shared/ — definitions only.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gc-3",
+      "module": "src/group_chat",
+      "files": [
+        "src/group_chat/executor.rs:66",
+        "src/group_chat/executor.rs:897",
+        "src/group_chat/executor.rs:1069",
+        "src/bin/aleph-server/commands/start/mod.rs:2718",
+        "src/group_chat/protocol.rs:67"
+      ],
+      "severity": "medium",
+      "form": 4,
+      "produced": "GroupChatExecutor::with_provider_registry (per-persona provider override resolution)",
+      "produced_location": "src/group_chat/executor.rs:66",
+      "consumer_location": "test-only: src/group_chat/executor.rs:897, 1069 (both inside #[cfg(test)] mod tests)",
+      "decision": "CONNECT",
+      "rationale": "rg -n \"with_provider_registry\" src/ interfaces/ shared/ — production calls none; only definition + two test uses. The builder (start/mod.rs:2718-2729) snapshots reg.default_provider() into a StaticDefault and never passes a registry, so resolve_provider (executor.rs:89-114) always uses the default provider and Persona.provider / PersonaConfig.provider (protocol.rs:67, config/types/group_chat.rs:105-110) is an inert config knob with zero runtime effect; the provider_fallback_warned dedupe set (executor.rs:44-46) can never fill. Type seam: with_provider_registry takes Arc<crate::providers::ProviderRegistry> (struct, src/providers/registry.rs:35) while production holds MultiProviderRegistry (src/thinker/mod.rs:202) implementing the separate crate::thinker::ProviderRegistry trait (src/thinker/mod.rs:55) — an adapter or widened parameter is required.",
+      "proposed_change": "CONNECT — hand the executor a real provider registry at construction (start/mod.rs:2718-2729), preferring the live MultiProviderRegistry as both default handle and per-persona lookup source; adapt providers::ProviderRegistry vs thinker::ProviderRegistry type mismatch first.",
+      "risk": "Medium — activating per-persona provider overrides changes which provider serves persona turns; misconfigured persona providers would emit the fallback warn (previously impossible since the registry was never set).",
+      "verification": "rg -n \"with_provider_registry\" src/ interfaces/ shared/ — only executor.rs:66 (def) and :897/:1069 (tests, confirmed inside mod tests).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gc-4",
+      "module": "src/group_chat",
+      "files": [
+        "src/group_chat/protocol.rs:136",
+        "src/group_chat/protocol.rs:143",
+        "src/gateway/inbound_router/group_chat_handler.rs:86",
+        "src/gateway/inbound_router/group_chat_handler.rs:102",
+        "src/group_chat/protocol.rs:477",
+        "src/group_chat/channel.rs:28"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "GroupChatRequest::Continue and GroupChatRequest::Mention enum variants (with router match arms)",
+      "produced_location": "src/group_chat/protocol.rs:136, :143",
+      "consumer_location": "none in production — constructed only in #[cfg(test)] (protocol.rs:477); matched by unreachable arms at src/gateway/inbound_router/group_chat_handler.rs:86, :102",
+      "decision": "DECIDE",
+      "rationale": "rg -n \"GroupChatRequest::\" src/ shows the only producers are channel.rs (Start at :105, End at :41 — parse_group_chat_command never emits Continue/Mention), tests, and the router match. The Continue/Mention match arms in group_chat_handler.rs:86-112 are provably unreachable. The RPC layer (handlers/group_chat.rs:191,294) implements continue/mention by parsing params directly, not via GroupChatRequest. Options: cut variants + arms (RPC covers the feature, channel auto-routes plain messages to active sessions at group_chat_handler.rs:113-150), or extend the parser — redundant and lacks session-map context.",
+      "proposed_change": "DECIDE — cut the two router arms (safe now, provably dead); enum variant removal deferred because the variants carry Serialize/Deserialize/JsonSchema derives (protocol.rs:125-165) forming a serializable contract.",
+      "risk": "Low — arms are unreachable; variant removal would change the serialized request schema.",
+      "verification": "rg -n \"GroupChatRequest::\" src/ interfaces/ shared/ — producers limited to channel.rs:41/:105, protocol.rs tests, and router match arms.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gc-5",
+      "module": "src/group_chat",
+      "files": [
+        "src/group_chat/protocol.rs:232",
+        "src/group_chat/protocol.rs:245",
+        "src/group_chat/protocol.rs:256",
+        "src/group_chat/protocol.rs:265",
+        "src/group_chat/protocol.rs:274",
+        "src/group_chat/mod.rs:17"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "RenderedContent struct + ContentFormat enum + markdown/plain/html constructors, re-exported via pub use protocol::*",
+      "produced_location": "src/group_chat/protocol.rs:226-277",
+      "consumer_location": "none found (module tests only: protocol.rs:488-500)",
+      "decision": "CUT",
+      "rationale": "rg -n \"RenderedContent\" src/ interfaces/ shared/ — only protocol.rs definition, impl, tests. rg -n \"ContentFormat\" with group_chat filter — only protocol.rs (the pdf_generate ContentFormat is an unrelated type). The channel.rs:3-6 doc promise that channels 'render group chat messages in their native format' has no implementing consumer; the type is orphaned public API via the mod.rs:17 glob re-export.",
+      "proposed_change": "Delete protocol.rs:226-277 (section header, ContentFormat, RenderedContent, impl) and the test test_rendered_content_creation (protocol.rs:487-502).",
+      "risk": "None — no production or test code outside the module references these symbols.",
+      "verification": "rg -n \"RenderedContent\" src/ interfaces/ shared/; rg -n \"ContentFormat\" src/group_chat/ — definition + tests only.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gc-6",
+      "module": "src/group_chat",
+      "files": [
+        "src/group_chat/protocol.rs:345"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "GroupChatError::SessionNotFound error variant",
+      "produced_location": "src/group_chat/protocol.rs:345",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "rg -n \"GroupChatError::SessionNotFound|SessionNotFound\\(\" src/ (excluding wizard, a separate type) — only the definition. All other GroupChatError variants are constructed somewhere in the module; SessionNotFound is neither constructed nor matched. The RPC/channel layers use their own literal 'Session not found' strings (e.g. handlers/group_chat.rs:229).",
+      "proposed_change": "Delete protocol.rs:345-347.",
+      "risk": "None — no consumers.",
+      "verification": "rg -n \"SessionNotFound\" src/gateway/ src/group_chat/ src/bin/ — protocol.rs:345 definition only (wizard uses its own WizardSessionError::SessionNotFound).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gc-7",
+      "module": "src/group_chat",
+      "files": [
+        "src/group_chat/persona.rs:46",
+        "src/group_chat/persona.rs:52",
+        "src/group_chat/persona.rs:100",
+        "src/group_chat/persona.rs:101"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "PersonaRegistry::len and PersonaRegistry::is_empty",
+      "produced_location": "src/group_chat/persona.rs:46, :52",
+      "consumer_location": "test-only: src/group_chat/persona.rs:100-101 (inside #[cfg(test)] mod tests)",
+      "decision": "CUT",
+      "rationale": "rg shows len/is_empty used only in persona.rs tests. The orchestrator holds the registry privately (orchestrator.rs:31) and only calls resolve (via create_session); get (persona.rs:40) stays live as resolve's internal lookup. No external production code reaches the registry.",
+      "proposed_change": "Delete persona.rs:46-54 (len + is_empty impl) and the assertions at persona.rs:100-101.",
+      "risk": "None — no production consumers.",
+      "verification": "rg -n \"registry\\.len\\(\\)|registry\\.is_empty\\(\\)|PersonaRegistry\" src/ — test-only usage outside module; orchestrator uses only resolve.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gc-8",
+      "module": "src/group_chat",
+      "files": [
+        "src/group_chat/protocol.rs:213",
+        "src/group_chat/protocol.rs:422",
+        "src/group_chat/protocol.rs:426",
+        "src/group_chat/protocol.rs:431",
+        "src/group_chat/protocol.rs:432"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "impl FromStr for GroupChatStatus",
+      "produced_location": "src/group_chat/protocol.rs:213-223",
+      "consumer_location": "test-only: src/group_chat/protocol.rs:422, 426, 431, 432 (inside #[cfg(test)] mod tests)",
+      "decision": "CUT",
+      "rationale": "rg -n \"parse::<GroupChatStatus>|GroupChatStatus::from_str\" src/ interfaces/ shared/ — only the four test lines. The live half is as_str (consumers: handlers/group_chat.rs:399, orchestrator.rs:206) and Display (protocol.rs:207-211, keep). The DB layer writes status strings via as_str and nothing parses them back (no status read exists, see sw-gc-2). No doc/contract promises FromStr.",
+      "proposed_change": "Delete protocol.rs:213-223 (FromStr impl; keep the Display impl at 207-211 above it) and the four from_str test lines at protocol.rs:422/426/431/432.",
+      "risk": "None — no production consumers.",
+      "verification": "rg -n \"parse::<GroupChatStatus>|GroupChatStatus::from_str\" src/ interfaces/ shared/ — tests only.",
+      "existing_review_ref": null
+    }
+  ]
+}

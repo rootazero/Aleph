@@ -1,0 +1,103 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/media",
+  "files_scanned": [
+    "src/media/mod.rs",
+    "src/media/types.rs",
+    "src/media/error.rs",
+    "src/media/cache.rs",
+    "src/media/detect.rs",
+    "src/media/pipeline.rs",
+    "src/media/policy.rs",
+    "src/media/processor.rs",
+    "src/media/provider.rs",
+    "src/media/resolve.rs",
+    "src/media/transcription.rs",
+    "src/media/whisper.rs",
+    "src/media/processors/mod.rs",
+    "src/media/processors/audio.rs",
+    "src/media/processors/document.rs",
+    "src/media/processors/image.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, src/bin/, interfaces/, shared/), read-before-write triage",
+  "findings": [
+    {
+      "id": "sw-me-1",
+      "module": "src/media",
+      "files": [
+        "src/media/policy.rs:11",
+        "src/media/policy.rs:14",
+        "src/media/policy.rs:18",
+        "src/media/policy.rs:22",
+        "src/media/policy.rs:26",
+        "src/media/policy.rs:30",
+        "src/media/policy.rs:34",
+        "src/media/policy.rs:37",
+        "src/media/policy.rs:40",
+        "src/media/policy.rs:43",
+        "src/media/policy.rs:46",
+        "src/media/policy.rs:49",
+        "src/media/policy.rs:52",
+        "src/media/pipeline.rs:15",
+        "src/media/pipeline.rs:26",
+        "src/lib.rs:232"
+      ],
+      "severity": "medium",
+      "form": 6,
+      "produced": "MediaPolicy struct with 6 pub serde fields (max_image_bytes/max_audio_bytes/max_video_duration/max_video_bytes/max_document_bytes/max_document_pages), 6 serde default fns, Default impl, JsonSchema, re-exported at lib.rs:232",
+      "produced_location": "src/media/policy.rs:11",
+      "consumer_location": "none found outside policy.rs tests and pipeline.rs:26 (MediaPolicy::default()); rg -n \"MediaPolicy\" src/ src/bin/ interfaces/ shared/ returned only lib.rs:232 re-export, policy.rs tests, pipeline.rs:4/17/26, mod.rs docs; rg on the six field names outside policy.rs returned nothing",
+      "decision": "DECIDE",
+      "rationale": "check_size (policy.rs:71) is production-reachable via pipeline.rs:60 (FilePath inputs from the three media tools), but the configuration surface is severed: MediaPipeline::new() hardcodes MediaPolicy::default() (pipeline.rs:26) and has no setter, no config loader references the field names, and no code reads them. serde/JsonSchema promise a config story with zero producers/consumers (form 6 orphaned pub API + form 5 drift). Public lib API (lib.rs re-export) so CUT has external-compat risk; needs human judgment.",
+      "proposed_change": "Option A (CUT surface): make fields private, drop serde/JsonSchema/default fns, keep in-memory defaults and check_size. Option B (CONNECT): add a [media] config section + MediaPipeline::with_policy setter and read it in agent_init/constructor. Option C: leave as-is, documented as default-only.",
+      "risk": "low for option A: no in-repo reader of fields or serde form; MediaPolicy is not in any exported schema (export_desktop_bridge_schema covers aleph_protocol, not alephcore). External alephcore consumers (shells/plugins) are the only breakage surface.",
+      "verification": "rg -n \"MediaPolicy\" src/ src/bin/ interfaces/ shared/ (evidence above); rg -n \"max_video_duration|max_image_bytes|max_audio_bytes|max_video_bytes|max_document_bytes|max_document_pages\" src/ src/bin/ interfaces/ shared/ --glob '!src/media/policy.rs' -> no output. After change: rg for the field names returns only policy.rs.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-me-2",
+      "module": "src/media",
+      "files": [
+        "src/media/types.rs:43",
+        "src/media/types.rs:76",
+        "src/media/detect.rs:56",
+        "src/media/detect.rs:180",
+        "src/media/detect.rs:210",
+        "src/media/policy.rs:97",
+        "src/builtin_tools/media_tools/understand.rs:84"
+      ],
+      "severity": "medium",
+      "form": 1,
+      "produced": "VideoFormat enum (Mp4/WebM/Mov) and MediaType::Video, produced by detect_video_extension (detect.rs:56-58), detect_ftyp_magic (detect.rs:180-208), detect_video_magic (detect.rs:210-217)",
+      "produced_location": "src/media/detect.rs:56",
+      "consumer_location": "no production reader of the VideoFormat value; sole production reader of MediaType::Video is policy.rs:97 (size/duration branch, format unread); rg -n \"VideoFormat\" src/ src/bin/ interfaces/ shared/ shows construction only (detect.rs) plus tests (detect.rs:337/344/351/457, policy.rs:202/212, types.rs:152); rg -n \"MediaType::Video\" src/ | rg -v test shows detect.rs construction + policy.rs:97 only",
+      "decision": "DECIDE",
+      "rationale": "Video detection feeds the media_understand tool, whose DESCRIPTION (understand.rs:84) advertises 'images, audio, video, documents', but the pipeline's only registered providers are image/document/audio (constructor/mod.rs:380-390). Every video media_understand call fails with MediaError::NoProvider { media_type: \"video\" }. VideoFormat is produced-but-never-read dead data (form 1); the tool's video claim is name-drift (form 5). Whether to wire a video provider or cut video support is a product judgment, so DECIDE.",
+      "proposed_change": "Option A (CONNECT): add a video provider (frame extraction into the existing VisionPipeline/ImageMediaProvider). Option B (CUT): drop video detection (detect_video_extension, ftyp video branch, detect_video_magic, VideoFormat, MediaType::Video) and scrub 'video' from understand.rs:84. Option C: leave as forward-looking scaffolding.",
+      "risk": "Option A additive. Option B changes detect_by_extension(\"mp4\") from Ok(Video) to Err(UnsupportedFormat); the tool already maps that to a readable error and nothing matches on VideoFormat's data, so risk is low. Policy video branch (policy.rs:97-117) would become unreachable if CUT.",
+      "verification": "rg -n \"VideoFormat\" src/ src/bin/ interfaces/ shared/ (construction+tests only); rg -n \"MediaType::Video\" src/ | rg -v test (detect construction + policy.rs:97). After fix: video media_understand either succeeds (CONNECT) or yields UnsupportedFormat (CUT).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-me-3",
+      "module": "src/media",
+      "files": [
+        "src/lib.rs:230",
+        "src/lib.rs:231",
+        "src/lib.rs:232"
+      ],
+      "severity": "low",
+      "form": 6,
+      "produced": "lib.rs:230-233 crate-root re-export of AudioFormat, DocFormat, MediaError, MediaImageFormat, MediaInput, MediaOutput, MediaPipeline, MediaPolicy, MediaProvider, MediaType, VideoFormat",
+      "produced_location": "src/lib.rs:230",
+      "consumer_location": "none found in-repo: rg -n \"alephcore::Media|alephcore::media|::media::{\" src/bin/ interfaces/ shared/ desktop/ returned only aleph_protocol::desktop_bridge::methods::media imports (desktop/macos/src/lib.rs:220+); rg -n \"MediaError\" src/ src/bin/ interfaces/ shared/ --glob '!src/media/**' returned only the lib.rs:231 re-export; all in-repo consumers use crate::media::... full paths",
+      "decision": "DECIDE",
+      "rationale": "The re-export block is an orphaned public API surface in-repo, but lib.rs re-exports are a library contract for external alephcore consumers (shells/plugins per the one-core-many-shells architecture) that cannot be verified statically. MediaPolicy/MediaProvider/MediaError in particular are referenced nowhere outside src/media plus this re-export.",
+      "proposed_change": "Option 1: keep as intended external API and document the contract. Option 2: trim to in-repo-referenced types (MediaPipeline, MediaInput, MediaOutput, MediaType + format enums) and drop MediaPolicy/MediaProvider/MediaError until consumed.",
+      "risk": "In-repo removal is source-compatible (nothing imports via crate root); only hypothetical external users break. No behavioral risk.",
+      "verification": "rg -n \"alephcore::Media\" src/ src/bin/ interfaces/ shared/ desktop/ -> empty; after trimming, cargo check -p alephcore (not run here per audit constraints) would confirm no in-repo breakage.",
+      "existing_review_ref": null
+    }
+  ]
+}

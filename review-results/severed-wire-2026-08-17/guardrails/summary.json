@@ -1,0 +1,174 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/guardrails",
+  "files_scanned": [
+    "src/guardrails/decision.rs",
+    "src/guardrails/mod.rs",
+    "src/guardrails/pii_secrets.rs",
+    "src/guardrails/registry.rs",
+    "src/guardrails/traits.rs",
+    "src/guardrails/tests/bench.rs",
+    "src/guardrails/tests/input.rs",
+    "src/guardrails/tests/output.rs",
+    "src/guardrails/tests/registry.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/), read-before-write triage",
+  "findings": [
+    {
+      "id": "sw-gr-1",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/registry.rs:60",
+        "src/guardrails/registry.rs:64",
+        "src/guardrails/registry.rs:54",
+        "src/guardrails/registry.rs:7",
+        "src/harness/agent/think.rs:133"
+      ],
+      "severity": "medium",
+      "form": 2,
+      "produced": "GuardrailRegistry::{disable_all, enable_all, is_enabled} runtime kill-switch (AtomicBool)",
+      "produced_location": "src/guardrails/registry.rs:54-66",
+      "consumer_location": "disable_all/enable_all: tests only (src/guardrails/tests/bench.rs:50, tests/registry.rs:113,183, src/acp/tests.rs:374 is unrelated ACP presets). is_enabled: internal production callers registry.rs:79,150,182,200 + tests registry.rs:114,123, bench.rs:53; no external production consumer",
+      "decision": "DECIDE",
+      "rationale": "disable_all/enable_all have zero production consumers anywhere (rg 'disable_all' src/ bin/ interfaces/ shared/ -> only module tests + doc refs; the only enable_all hits are tokio Runtime::Builder::enable_all in main.rs:220 and mcp_registrar.rs:91, plus unrelated scoped-tools tests). Module doc (registry.rs:7-8) and think.rs:133 promise a 'high-risk runtime rollback knob from master spec § Stage 5', but no admin/IPC/ACP/config-reload path triggers it. is_enabled is internally consumed by the registry's own evaluate paths (not dead) but its pub surface has no external production caller. Inert-but-meaningful surface; spec intent unverifiable from code.",
+      "proposed_change": "Option A (CONNECT): wire an operator surface (ACP tool or gateway admin command) that calls disable_all(). Option B (CUT): delete disable_all/enable_all (registry.rs:60-66), demote is_enabled to private, fix docs at registry.rs:7-8 and think.rs:133.",
+      "risk": "No runtime behavior change either way: the AtomicBool is always true today. Cutting drops a documented-but-unwired Stage 5 feature.",
+      "verification": "rg -n 'disable_all|enable_all' src/ bin/ interfaces/ shared/ -- no production consumer; after either option, module tests (bench.rs, tests/registry.rs) must still pass.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gr-2",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/pii_secrets.rs:38"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "PiiSecretsGuardrail::new(guard: Arc<RuntimeSecurityGuard>)",
+      "produced_location": "src/guardrails/pii_secrets.rs:38-44",
+      "consumer_location": "none found (rg 'PiiSecretsGuardrail::new' src/ bin/ interfaces/ shared/ -> zero hits, including tests; boot path uses with_guard_and_resolver at orchestrator_init.rs:485, tests use with_resolver at pii_secrets.rs:340,456)",
+      "decision": "CUT",
+      "rationale": "Fully dead constructor: no production and no test consumer. Boot uses with_guard_and_resolver; tests use with_resolver. Pure dead code (form 1).",
+      "proposed_change": "Delete src/guardrails/pii_secrets.rs:38-44 (doc + fn). No migration needed.",
+      "risk": "None; no call sites exist.",
+      "verification": "rg -n 'PiiSecretsGuardrail::new' src/ bin/ interfaces/ shared/ stays empty; cargo check clean (not run per audit constraints).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gr-3",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/pii_secrets.rs:59",
+        "src/guardrails/pii_secrets.rs:56"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "PiiSecretsGuardrail::with_resolver(resolver: Option<Arc<dyn AsyncSecretResolver>>)",
+      "produced_location": "src/guardrails/pii_secrets.rs:59-62",
+      "consumer_location": "tests only: src/guardrails/pii_secrets.rs:340 (delegation_tests), :456 (input_blocking_tests); rg 'with_resolver' src/ bin/ interfaces/ shared/ -> no other guardrails consumer (wasm load_plugin_with_resolver unrelated)",
+      "decision": "CUT",
+      "rationale": "Consumed only by #[cfg(test)] modules (form 4). Its stated purpose 'Convenience for the boot path' (pii_secrets.rs:56-58) is stale (form 5): the real boot path (orchestrator_init.rs:485) uses with_guard_and_resolver, and the method drops the audit channel. Behavior is exactly with_guard_and_resolver(Arc::new(RuntimeSecurityGuard::default_guard()), resolver).",
+      "proposed_change": "Delete pii_secrets.rs:56-62; migrate test call sites pii_secrets.rs:340 and :456 to PiiSecretsGuardrail::with_guard_and_resolver(Arc::new(RuntimeSecurityGuard::default_guard()), resolver).",
+      "risk": "None; test-only, behavior identical.",
+      "verification": "rg -n 'with_resolver' src/guardrails/ -> only remaining hits are the migrated tests; cargo test -p alephcore --lib guardrails passes (not run here).",
+      "existing_review_ref": "review-results/pii-batch-3/REPORT.md (Seam-G: pii_secrets.rs delegation wiring OK; does not cover constructor-level dead code)"
+    },
+    {
+      "id": "sw-gr-4",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/decision.rs:44",
+        "src/guardrails/decision.rs:48",
+        "src/guardrails/decision.rs:52",
+        "src/guardrails/decision.rs:56"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "GuardrailDecision::{is_block, is_allow, is_sanitize, is_warn} (#[must_use] pub const fn)",
+      "produced_location": "src/guardrails/decision.rs:44-58",
+      "consumer_location": "tests only: decision.rs:67-101 (#[cfg(test)] mod), tests/registry.rs:83-208, tests/input.rs:37,49, tests/output.rs:38,49; all three production call sites (think.rs:850, think.rs:1293, harness/agent/guardrails.rs:37) match the enum directly",
+      "decision": "DECIDE",
+      "rationale": "Test-only assertion sugar on the public enum (form 4). No doc/contract promises the API and removal cannot break runtime behavior, but ~12 test call sites across 5 files make cutting churn-for-zero-gain. Both keep and cut are safe; judgment call on whether the self-documenting predicates earn their 4 lines.",
+      "proposed_change": "Keep (status quo, used as test assertion surface) OR cut all four and rewrite test assertions with matches!/direct matching.",
+      "risk": "None either way (no production consumer).",
+      "verification": "rg -n '\\.is_block\\(\\)|\\.is_allow\\(\\)|\\.is_sanitize\\(\\)|\\.is_warn\\(\\)' src/ bin/ interfaces/ shared/ -- verify no production hit after any change.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gr-5",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/registry.rs:45"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "GuardrailRegistry::empty()",
+      "produced_location": "src/guardrails/registry.rs:45-52",
+      "consumer_location": "tests only: src/guardrails/tests/bench.rs:13,35,48; tests/registry.rs:82; src/harness/agent/think.rs:1571 (#[test] may_stream_deltas_streams_for_input_or_tool_call_only_registry); rg 'GuardrailRegistry::empty' src/ bin/ interfaces/ shared/ -> no production caller",
+      "decision": "CUT",
+      "rationale": "Zero production consumers (form 4). Boot expresses no-guardrails as None (orchestrator_init.rs:446); may_stream_deltas (think.rs:141) treats None and empty identically. empty() is exactly GuardrailRegistryBuilder::default().build().",
+      "proposed_change": "Delete registry.rs:45-52; migrate 5 test call sites (bench.rs:13,35,48; tests/registry.rs:82; think.rs:1571) to GuardrailRegistry::builder().build().",
+      "risk": "None; identical struct semantics.",
+      "verification": "rg -n 'GuardrailRegistry::empty' src/ bin/ interfaces/ shared/ -> no hits after migration; guardrails + harness registry tests pass (not run here).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gr-6",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/decision.rs:23",
+        "src/harness/agent/think.rs:860"
+      ],
+      "severity": "low",
+      "form": 5,
+      "produced": "Doc claim in GuardrailDecision::Block variant: 'control flow does NOT branch on [class] today: the output call-site turns every Block into a terminal HarnessError'",
+      "produced_location": "src/guardrails/decision.rs:21-27",
+      "consumer_location": "src/harness/agent/think.rs:860-864 matches on class: ErrorClass::Fixable -> AlephError::Validation(msg), _ -> AlephError::other(msg). Input path (think.rs:348-352) and tool-call path (harness/agent/guardrails.rs:58) do ignore class.",
+      "decision": "DECIDE",
+      "rationale": "Name-drift residue: the doc's blanket 'does NOT branch on it' is stale for the output call-site, which selects the error variant from class. The remaining doc claims (input ends turn, tool-call skips dispatch, orchestrator classifies by message, phase6c TODO) are still accurate. Misleading doc risks a future editor removing the class branch.",
+      "proposed_change": "Rewrite decision.rs:23-25 to state that the output call-site maps class to AlephError::Validation vs other; input/tool-call paths ignore it. Doc-only.",
+      "risk": "None (doc-only).",
+      "verification": "None needed beyond review; sed 860,866p src/harness/agent/think.rs shows the branch.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gr-7",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/traits.rs:6",
+        "src/harness/agent/think.rs:299"
+      ],
+      "severity": "low",
+      "form": 5,
+      "produced": "Module doc: 'All three callsites are live in agent.rs::run_turn_internal (input/output) and agent/act.rs (tool-call)'",
+      "produced_location": "src/guardrails/traits.rs:6-7",
+      "consumer_location": "run_turn_internal is defined at src/harness/agent/think.rs:299, not agent.rs (agent.rs:533 only calls it). Input callsite think.rs:348; output think.rs:850,1293; tool-call act.rs:463,800 via apply_tool_call_guardrail (harness/agent/guardrails.rs:23).",
+      "decision": "DECIDE",
+      "rationale": "Stale path reference (form 5): the doc points readers to agent.rs for a fn that lives in think.rs, matching the documented '-55 护栏下沉' move of input screening into screen_session_input. The act.rs tool-call reference is correct.",
+      "proposed_change": "Update traits.rs:6-7 to reference think.rs::run_turn_internal for input/output and agent/act.rs + agent/guardrails.rs for tool-call. Doc-only.",
+      "risk": "None (doc-only).",
+      "verification": "rg -n 'run_turn_internal' src/harness/ -- definition at think.rs:299.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-gr-8",
+      "module": "src/guardrails",
+      "files": [
+        "src/guardrails/tests/input.rs:1",
+        "src/guardrails/tests/output.rs:2"
+      ],
+      "severity": "low",
+      "form": 5,
+      "produced": "Header comments: input.rs 'integration tests are wired in Task 4 once the harness callsite lands'; output.rs 'The harness-level callsite integration test lives in src/harness/tests/ once Task 4 lands'",
+      "produced_location": "src/guardrails/tests/input.rs:1-2, src/guardrails/tests/output.rs:2-3",
+      "consumer_location": "The harness callsites landed (think.rs:348 input, think.rs:850/1293 output, act.rs:463/800 tool-call) and src/harness/tests/guardrails.rs (45927 bytes) is the harness-level integration suite the headers describe as future work.",
+      "decision": "DECIDE",
+      "rationale": "Comment residue describing a pre-wiring state that no longer exists (form 5). Both headers mislead a reader into believing the callsite/integration suite is still pending.",
+      "proposed_change": "Rewrite both headers to current reality: these files exercise the registry surface; callsite integration tests live in src/harness/tests/guardrails.rs. Doc-only.",
+      "risk": "None (doc-only).",
+      "verification": "rg -n 'screen_session_input|evaluate_output' src/harness/agent/think.rs; ls -la src/harness/tests/guardrails.rs.",
+      "existing_review_ref": null
+    }
+  ]
+}

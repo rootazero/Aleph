@@ -1,0 +1,56 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/markdown",
+  "files_scanned": [
+    "src/markdown/mod.rs",
+    "src/markdown/fences.rs",
+    "src/gateway/formatter/splitting.rs (consumer)",
+    "src/gateway/formatter/mod.rs (wiring)",
+    "src/gateway/reply_emitter/emitter/helpers.rs (wiring)"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/), read-before-write triage",
+  "findings": [
+    {
+      "id": "sw-md-1",
+      "module": "src/markdown",
+      "files": ["src/markdown/mod.rs:8", "src/markdown/mod.rs:9", "src/markdown/mod.rs:10"],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub use fences::{find_fence_at, get_fence_split, is_safe_fence_break, parse_fence_spans, FenceSpan, FenceSplit}; (crate-root re-export path crate::markdown::<sym>)",
+      "produced_location": "src/markdown/mod.rs:8-10",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "Zero consumers of the re-export path repo-wide. Every consumer imports via the fences path: splitting.rs:10 uses crate::markdown::fences::{...}, and the doctest at fences.rs:133 uses alephcore::markdown::fences::parse_fence_spans. rg -n 'markdown::(parse_fence_spans|is_safe_fence_break|find_fence_at|get_fence_split|FenceSpan|FenceSplit)' src/ bin/ interfaces/ shared/ -> 0 matches; catch-all rg -n 'markdown::' src/ bin/ interfaces/ shared/ shows all hits are either the fences:: path or other modules'/crates' own markdown submodules (src/export, gateway/interfaces/wechat/outbound, interfaces/tui, interfaces/cli, interfaces/webchat). Module-level pub (lib.rs:91) is only exercised by the doctest; the pub use itself is unused. FenceSplit stays reachable at crate::markdown::fences::FenceSplit (it is not even named in splitting.rs's import list; fields read at splitting.rs:81,86).",
+      "proposed_change": "Delete src/markdown/mod.rs lines 8-10 (the pub use block). Keep 'pub mod fences;' at mod.rs:6. Optional follow-up only (do not bundle): pub mod markdown at lib.rs:91 could become private, but that would break the public doctest example at fences.rs:133, so leave it.",
+      "risk": "None. No production or test code resolves any of the six symbols through the re-export path; removal cannot change runtime behavior or break compilation.",
+      "verification": "Re-run: rg -n 'markdown::(parse_fence_spans|is_safe_fence_break|find_fence_at|get_fence_split|FenceSpan|FenceSplit)' src/ bin/ interfaces/ shared/ (expect 0) and the catch-all rg -n 'markdown::' sweep; then cargo check -p alephcore and cargo test -p alephcore --lib markdown (fixer side).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-md-2",
+      "module": "src/markdown",
+      "files": [
+        "src/markdown/fences.rs:58",
+        "src/markdown/fences.rs:64",
+        "src/markdown/fences.rs:70",
+        "src/markdown/fences.rs:260",
+        "src/markdown/fences.rs:261",
+        "src/markdown/fences.rs:271",
+        "src/markdown/fences.rs:280",
+        "src/markdown/fences.rs:417"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "FenceSpan::marker() (fences.rs:58-60), FenceSpan::indent() (fences.rs:64-66), FenceSpan::language() (fences.rs:70-72) - pub accessors on pub struct",
+      "produced_location": "src/markdown/fences.rs:58-72",
+      "consumer_location": "src/markdown/fences.rs tests only (marker(): :260, :271, :417; indent(): :261, :280; language(): :259, :270, :281, :299, :300, :309, :353, :441, :452, :541, :549, :573; doctest :138)",
+      "decision": "DECIDE",
+      "rationale": "The three accessors have no production consumers. The only production consumer of FenceSpan (src/gateway/formatter/splitting.rs) uses start()/end() (:46, :116-117), close_line() (:47) and contains() (internal, fences.rs:228, :234). rg evidence: rg -n '\\.marker\\(\\)' outside src/markdown/ matches only an unrelated String local marker_text in src/builtin_tools/web_fetch/mod.rs:643; rg -n '\\.indent\\(\\)' outside src/markdown/ -> 0 hits; rg -n '\\.language\\(\\)' outside src/markdown/ -> all hits are config/media language fields, none on FenceSpan; rg -n 'marker|indent|language' src/gateway/formatter/splitting.rs -> doc comments only (:7, :8, :20). These accessors are the only public read path for the pub(crate) fields marker/indent/language on a pub struct in the alephcore lib crate (external dependents exist: shared/client, interfaces/cli, interfaces/tui per Cargo.toml, none currently using alephcore::markdown). Cutting is safe in-crate but shrinks public API; keeping is harmless documented surface. Genuine judgment call.",
+      "proposed_change": "Option 1 (recommended): keep as-is, no diff. Option 2: CUT all three accessors (fences.rs:58-72), downgrade fields marker/indent/language from pub(crate) to private (fences.rs:25,27,29), and update affected test assertions to use field access via super::*. Do not delete without sign-off - public API removal in a lib crate.",
+      "risk": "Option 2 is behavior-neutral today (zero production consumers) but is a public-API removal in a lib crate; hence DECIDE rather than CUT.",
+      "verification": "After any change: cargo test -p alephcore --lib markdown; re-run the three accessor rg sweeps (expect no production hits outside src/markdown/).",
+      "existing_review_ref": null
+    }
+  ]
+}
