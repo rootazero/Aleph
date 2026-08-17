@@ -696,10 +696,9 @@ impl AlephTool for LoopGraphTool {
 
             LoopGraphAction::List => {
                 // Raw dump, deliberately NOT routed through the inspector:
-                // `subgraph_for` is per-node and `loops_with_coverage` drops
-                // non-optimization nodes, so neither is this action's "give me
-                // every row" semantics. The inspector is for questions ABOUT
-                // the topology; `list` is the topology itself.
+                // `subgraph_for` is per-node, so it is not this action's
+                // "give me every row" semantics. The inspector is for
+                // questions ABOUT the topology; `list` is the topology itself.
                 let nodes = self.store.list_nodes(&agent_id)?;
                 let edges = self.store.list_edges(&agent_id)?;
                 Ok(LoopGraphOutput {

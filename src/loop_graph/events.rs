@@ -109,7 +109,7 @@ impl std::fmt::Debug for TopologyEventBus {
 impl TopologyEventBus {
     /// Build a fresh bus with the default capacity. The bus is independent of
     /// the store — both can exist, and the store does NOT hold a reference to
-    /// this bus. Wiring is done by `install_into_store`.
+    /// this bus. Wiring is done by `spawn_event_persister`.
     #[must_use]
     pub fn new() -> Self {
         let (tx, _rx) = broadcast::channel(BUS_CAPACITY);

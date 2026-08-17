@@ -432,35 +432,6 @@ impl<'a> LoopGraphInspector<'a> {
             governance_chain_anchored,
         })
     }
-
-    /// List every optimization loop together with its current coverage
-    /// sources. Cheaper than calling `subgraph_for` per loop because we read
-    /// `nodes`/`edges` once.
-    pub fn loops_with_coverage(&self) -> Result<Vec<(GraphNode, Vec<GraphNode>)>> {
-        let nodes = self.store.list_nodes(self.agent_id)?;
-        let edges = self.store.list_edges(self.agent_id)?;
-        let by_id: HashMap<&str, &GraphNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-
-        let mut out = Vec::new();
-        for n in &nodes {
-            if !n.kind.is_optimization_loop() {
-                continue;
-            }
-            let sources: Vec<GraphNode> = edges
-                .iter()
-                .filter(|e| {
-                    e.to_id == n.id
-                        && matches!(e.kind, EdgeKind::Watches | EdgeKind::Audits)
-                        && by_id
-                            .get(e.from_id.as_str())
-                            .is_some_and(|s| can_cover_kind(s.kind))
-                })
-                .filter_map(|e| by_id.get(e.from_id.as_str()).map(|m| (*m).clone()))
-                .collect();
-            out.push((n.clone(), sources));
-        }
-        Ok(out)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -924,40 +895,6 @@ mod tests {
             result.is_err(),
             "unreadable store must error, not return None"
         );
-    }
-
-    #[test]
-    fn loops_with_coverage_skips_non_optimization_nodes() {
-        let (_d, s) = store();
-        s.upsert_node(&GraphNode::new(
-            "main",
-            "goal:s1",
-            NodeKind::LoopGoal,
-            "g",
-            Origin::Llm,
-        ))
-        .unwrap();
-        s.upsert_node(&GraphNode::new(
-            "main",
-            "root:aleph",
-            NodeKind::Root,
-            "root",
-            Origin::Human,
-        ))
-        .unwrap();
-        s.upsert_node(&GraphNode::new(
-            "main",
-            "frozen:rule",
-            NodeKind::Frozen,
-            "rule",
-            Origin::Llm,
-        ))
-        .unwrap();
-        let inspector = LoopGraphInspector::new(&s, "main");
-        let loops = inspector.loops_with_coverage().unwrap();
-        // Only LoopGoal counts as an optimization loop; root and frozen do not.
-        assert_eq!(loops.len(), 1);
-        assert_eq!(loops[0].0.id, "goal:s1");
     }
 
     #[test]
