@@ -9,7 +9,6 @@
 //! - `EventHandler`: Trait for components to subscribe and handle events
 //! - `GlobalBus`: Singleton event aggregator for cross-agent event routing
 
-mod bus;
 pub mod filter;
 pub mod global_bus;
 mod handler;
@@ -18,10 +17,9 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub use bus::EventBus;
 pub use handler::{EventContext, EventHandler, HandlerError};
 pub use types::{
-    AlephEvent, EventType, ProcessCompletionEvent, SubAgentCompletionEvent, TimestampedEvent,
+    AlephEvent, EventType, ProcessCompletionEvent, SubAgentCompletionEvent,
 };
 
 // Event filtering for subscription-based routing

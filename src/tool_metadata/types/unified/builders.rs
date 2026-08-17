@@ -39,12 +39,6 @@ impl UnifiedTool {
         self
     }
 
-    /// Builder method: set description
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = description.into();
-        self
-    }
-
     /// Builder method: set parameters schema
     #[must_use]
     pub fn with_parameters_schema(mut self, schema: Value) -> Self {

@@ -24,7 +24,7 @@ use async_trait::async_trait;
 /// this context, and `EventHandlerRegistry` was the only consumer of the
 /// abort flag). The struct is kept because the `EventHandler` trait still
 /// carries an `&EventContext` parameter for forward compatibility.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct EventContext;
 
 impl EventContext {
@@ -62,12 +62,14 @@ pub trait EventHandler: Send + Sync {
     ) -> Result<Vec<AlephEvent>, HandlerError>;
 }
 
-/// Error type for event handlers
+/// Error type for event handlers.
+///
+/// The previous `Generic { message }` and `Aborted` variants were Form-6
+/// dead variants — every implementor of `EventHandler` in production
+/// (`TeamNotifier`, `TeamEventLogger`, `Handler`) returned `Ok(vec![])`
+/// unconditionally. The struct is kept as an empty error placeholder so
+/// the trait signature stays typed; new errors should be modelled via the
+/// `AlephEvent` returned in the `Ok` arm rather than this dead slot.
 #[derive(Debug, thiserror::Error)]
-pub enum HandlerError {
-    #[error("Handler error: {message}")]
-    Generic { message: String },
-
-    #[error("Aborted by user")]
-    Aborted,
-}
+#[error("event handler error")]
+pub struct HandlerError;

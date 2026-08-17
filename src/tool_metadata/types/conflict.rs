@@ -149,19 +149,6 @@ impl ToolSource {
         }
     }
 
-    /// Get an icon hint for UI (SF Symbol name suggestion)
-    #[must_use]
-    pub const fn icon_hint(&self) -> &'static str {
-        match self {
-            Self::Native => "star.fill",
-            Self::Builtin => "command.circle.fill",
-            Self::Mcp { .. } => "bolt.fill",
-            Self::Skill { .. } => "lightbulb.fill",
-            Self::Custom { .. } => "command",
-            Self::Plugin { .. } => "puzzlepiece.extension",
-        }
-    }
-
     /// Get the priority level for conflict resolution
     ///
     /// Higher priority tools win name conflicts and lower priority tools
@@ -210,12 +197,6 @@ impl ToolSource {
     #[must_use]
     pub const fn is_skill(&self) -> bool {
         matches!(self, Self::Skill { .. })
-    }
-
-    /// Check if this source is a plugin tool
-    #[must_use]
-    pub const fn is_plugin(&self) -> bool {
-        matches!(self, Self::Plugin { .. })
     }
 
     /// Display priority for UI sorting (lower = first).

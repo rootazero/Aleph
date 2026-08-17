@@ -49,23 +49,6 @@ impl ToolDefinition {
         self
     }
 
-    #[allow(deprecated)]
-    pub fn no_params(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        category: ToolCategory,
-    ) -> Self {
-        Self::new(
-            name,
-            description,
-            serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-            category,
-        )
-    }
 }
 
 #[cfg(test)]

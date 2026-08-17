@@ -13,26 +13,6 @@ use serde::{Deserialize, Serialize};
 // Core Event Types
 // ============================================================================
 
-/// Timestamped event wrapper for history tracking
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimestampedEvent {
-    pub event: AlephEvent,
-    pub timestamp: i64,
-    pub sequence: u64,
-}
-
-impl TimestampedEvent {
-    /// Create a new timestamped event with the given sequence number.
-    #[must_use]
-    pub fn new(event: AlephEvent, sequence: u64) -> Self {
-        Self {
-            event,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            sequence,
-        }
-    }
-}
-
 /// Event type discriminant for subscription filtering.
 ///
 /// Only variants with a live producer AND a live subscriber are listed — a
@@ -64,29 +44,6 @@ pub enum EventType {
 
     // Wildcard for components that want all events
     All,
-}
-
-impl EventType {
-    /// Canonical variant list, in declaration order. Paired with
-    /// [`AlephEvent::ALL_VARIANT_NAMES`] so the bus-drift guard can assert
-    /// both enums stay in sync. `All` is included so a sanity test can
-    /// assert it's still wired into [`EventFilter::matches`] as the
-    /// wildcard sentinel; it is not paired with an `AlephEvent` variant
-    /// because it is a filter convenience, not an emitted discriminant.
-    pub const ALL: &'static [EventType] = &[
-        Self::SubAgentCompleted,
-        Self::SubAgentTreeUpdate,
-        Self::ProcessCompleted,
-        Self::TeamCreated,
-        Self::TeamMemberAdded,
-        Self::TeamMemberRemoved,
-        Self::TeamTaskAssigned,
-        Self::TeamTaskUpdated,
-        Self::TeamTaskCompleted,
-        Self::TeamTaskFailed,
-        Self::TeamDisbanded,
-        Self::All,
-    ];
 }
 
 /// Unified event enum - all events with a live producer in the system.
@@ -191,27 +148,6 @@ impl AlephEvent {
         }
     }
 
-    /// Canonical variant-name list, in declaration order.
-    ///
-    /// Paired with [`Self::name`]'s exhaustive match and the
-    /// `all_variant_names_match_enum` test below. Adding a variant to
-    /// `AlephEvent` without an arm in [`Self::name`] is a compile error;
-    /// adding an entry here without a corresponding variant is a test
-    /// failure observable in CI before the variant reaches a production
-    /// wire format.
-    pub const ALL_VARIANT_NAMES: &'static [&'static str] = &[
-        "SubAgentCompleted",
-        "SubAgentTreeUpdate",
-        "ProcessCompleted",
-        "TeamCreated",
-        "TeamMemberAdded",
-        "TeamMemberRemoved",
-        "TeamTaskAssigned",
-        "TeamTaskUpdated",
-        "TeamTaskCompleted",
-        "TeamTaskFailed",
-        "TeamDisbanded",
-    ];
 }
 
 // ============================================================================
@@ -293,34 +229,6 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamped_event_sequence() {
-        let e1 = TimestampedEvent::new(
-            AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
-                agent_id: "a".into(),
-                child_session_id: "s".into(),
-                summary: "done".into(),
-                success: true,
-                error: None,
-                request_id: None,
-            }),
-            1,
-        );
-        let e2 = TimestampedEvent::new(
-            AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
-                agent_id: "a".into(),
-                child_session_id: "s".into(),
-                summary: "done".into(),
-                success: true,
-                error: None,
-                request_id: None,
-            }),
-            2,
-        );
-
-        assert!(e2.sequence > e1.sequence);
-    }
-
-    #[test]
     fn test_event_serialization() {
         let event = AlephEvent::ProcessCompleted(ProcessCompletionEvent {
             process_id: 1,
@@ -338,161 +246,17 @@ mod tests {
     }
 
     // =========================================================================
-    // Bus-drift guard
+    // Bus-drift guard (compile-time half only)
     //
     // Pre-2026-08-16 the event module held 13 `AlephEvent` and 13 `EventType`
     // variants with zero producers or zero subscribers — the exact form-1
-    // severed wire that the audit removed. The following two tests prevent
-    // the regression by tying the enums together with single-source-of-truth
-    // invariants:
+    // severed wire that the audit removed. The remaining guard is the
+    // exhaustive `match` in `AlephEvent::name` and `AlephEvent::event_type`:
+    // adding a variant to `AlephEvent` without arming both is a compile error.
     //
-    //   * `AlephEvent::name` and `event_type` are exhaustive matches over
-    //     the enum — adding a variant without updating both is a compile
-    //     error. This is the compile-time half of the guard.
-    //   * `AlephEvent::ALL_VARIANT_NAMES` is a hand-synced slice; the
-    //     `aleph_event_all_variant_names_matches_name_exhaustively` test
-    //     asserts each entry is reachable via a representative event.
-    //   * `EventType::ALL` likewise must cover every variant; a forgotten
-    //     entry is a test failure.
-    //   * Each `AlephEvent` variant maps to a distinct `EventType`
-    //     discriminant (verified transitively via the `event_type` mapping).
+    // The runtime halves — `AlephEvent::ALL_VARIANT_NAMES` (hand-synced slice
+    // of variant names) and `EventType::ALL` (hand-synced variant list) plus
+    // their drift tests — were severed on 2026-08-17; they duplicated work
+    // the compile already enforced and had zero production callers.
     // =========================================================================
-
-    #[test]
-    fn aleph_event_all_variant_names_matches_name_exhaustively() {
-        // For each entry in ALL_VARIANT_NAMES, construct a representative
-        // event whose `name()` returns it. The exhaustive match inside
-        // `representative_for` makes adding a variant to `AlephEvent`
-        // without updating the helper a compile error — the guard is the
-        // exhaustive match itself, with ALL_VARIANT_NAMES as the
-        // hand-synced mirror this test asserts stays in sync.
-        for &name in AlephEvent::ALL_VARIANT_NAMES {
-            let event = representative_for(name).unwrap_or_else(|| {
-                panic!("ALL_VARIANT_NAMES contains {name:?} but no representative event exists; add an arm in representative_for()")
-            });
-            assert_eq!(event.name(), name);
-        }
-    }
-
-    fn representative_for(name: &str) -> Option<AlephEvent> {
-        match name {
-            "SubAgentCompleted" => Some(AlephEvent::SubAgentCompleted(SubAgentCompletionEvent {
-                agent_id: String::new(),
-                child_session_id: String::new(),
-                summary: String::new(),
-                success: false,
-                error: None,
-                request_id: None,
-            })),
-            "SubAgentTreeUpdate" => Some(AlephEvent::SubAgentTreeUpdate(
-                aleph_protocol::subagent_tree::SubagentTreeEvent::Settled {
-                    node_id: String::new(),
-                    root_session: String::new(),
-                    lifecycle: aleph_protocol::subagent_tree::NodeLifecycle::Completed,
-                    duration_ms: 0,
-                    iterations: 0,
-                    tool_calls_made: 0,
-                    total_tokens: 0,
-                },
-            )),
-            "ProcessCompleted" => Some(AlephEvent::ProcessCompleted(ProcessCompletionEvent {
-                process_id: 0,
-                command: String::new(),
-                exit_code: 0,
-                success: false,
-                output_tail: String::new(),
-                output_truncated: false,
-            })),
-            "TeamCreated" => Some(AlephEvent::TeamCreated {
-                team_id: String::new(),
-                name: String::new(),
-                member_ids: Vec::new(),
-            }),
-            "TeamMemberAdded" => Some(AlephEvent::TeamMemberAdded {
-                team_id: String::new(),
-                member_id: String::new(),
-                role: String::new(),
-            }),
-            "TeamMemberRemoved" => Some(AlephEvent::TeamMemberRemoved {
-                team_id: String::new(),
-                member_id: String::new(),
-            }),
-            "TeamTaskAssigned" => Some(AlephEvent::TeamTaskAssigned {
-                team_id: String::new(),
-                task_id: String::new(),
-                assignee_id: String::new(),
-            }),
-            "TeamTaskUpdated" => Some(AlephEvent::TeamTaskUpdated {
-                team_id: String::new(),
-                task_id: String::new(),
-                status: String::new(),
-                progress: None,
-            }),
-            "TeamTaskCompleted" => Some(AlephEvent::TeamTaskCompleted {
-                team_id: String::new(),
-                task_id: String::new(),
-                result_summary: None,
-            }),
-            "TeamTaskFailed" => Some(AlephEvent::TeamTaskFailed {
-                team_id: String::new(),
-                task_id: String::new(),
-                error: String::new(),
-            }),
-            "TeamDisbanded" => Some(AlephEvent::TeamDisbanded {
-                team_id: String::new(),
-            }),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn aleph_event_variant_names_are_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for name in AlephEvent::ALL_VARIANT_NAMES {
-            assert!(
-                seen.insert(*name),
-                "AlephEvent::ALL_VARIANT_NAMES contains duplicate entry {name}"
-            );
-        }
-    }
-
-    #[test]
-    fn every_aleph_event_variant_is_reachable_from_event_type() {
-        // For each `EventType` that has a live `AlephEvent` producer
-        // (i.e. every variant except `All`), an instance of that
-        // discriminant must be constructible. If a producer was added
-        // without an `AlephEvent` mapping it is silently inert — this
-        // test walks the canonical list and asserts the mapping exists
-        // for each non-`All` discriminant.
-        for et in EventType::ALL {
-            if *et == EventType::All {
-                continue;
-            }
-            // The reverse mapping is `AlephEvent::event_type`. We
-            // cannot enumerate every instance, but we can assert the
-            // discriminant is reachable: at least one `AlephEvent`
-            // variant's `event_type()` returns `*et`. Walking every
-            // variant would require a representative constructor per
-            // arm; here we assert the discriminant appears in the
-            // mapping by exhausting `match` on a sample variant name.
-            let mapped = match et {
-                EventType::SubAgentCompleted
-                | EventType::SubAgentTreeUpdate
-                | EventType::ProcessCompleted
-                | EventType::TeamCreated
-                | EventType::TeamMemberAdded
-                | EventType::TeamMemberRemoved
-                | EventType::TeamTaskAssigned
-                | EventType::TeamTaskUpdated
-                | EventType::TeamTaskCompleted
-                | EventType::TeamTaskFailed
-                | EventType::TeamDisbanded => true,
-                EventType::All => false,
-            };
-            assert!(
-                mapped,
-                "EventType::{et:?} has no live AlephEvent producer; remove it from EventType::ALL"
-            );
-        }
-    }
 }

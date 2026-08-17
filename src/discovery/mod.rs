@@ -22,9 +22,6 @@ pub enum DiscoveryError {
 
     #[error("Invalid path: {0}")]
     InvalidPath(String),
-
-    #[error("Home directory not found")]
-    HomeDirNotFound,
 }
 
 pub type DiscoveryResult<T> = Result<T, DiscoveryError>;

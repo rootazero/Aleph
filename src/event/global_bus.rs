@@ -15,14 +15,14 @@
 //! // Access the global singleton
 //! let bus = GlobalBus::global();
 //!
-//! // Subscribe to tool events from all agents
+//! // Subscribe to tool events from all agents (async — the canonical entry point)
 //! let filter = EventFilter::new(vec![
 //!     EventType::ProcessCompleted,
 //! ]);
 //!
-//! let sub_id = bus.subscribe(filter, |event| {
+//! let sub_id = bus.subscribe_async(filter, |event| {
 //!     println!("Received event from agent: {}", event.source_agent_id);
-//! });
+//! }).await;
 //!
 //! // Later: unsubscribe
 //! bus.unsubscribe(&sub_id).await;
@@ -233,7 +233,7 @@ impl GlobalBus {
     /// * `session_id` - The source session ID
     /// * `event` - The event to broadcast
     pub async fn broadcast(&self, agent_id: &str, session_id: &str, event: AlephEvent) {
-        let sequence = self.next_sequence();
+        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         let global_event = GlobalEvent::new(agent_id, session_id, event, sequence);
 
         trace!(
@@ -266,40 +266,6 @@ impl GlobalBus {
                 callback(event);
             });
         }
-    }
-
-    /// Subscribe to global events with a filter and callback.
-    ///
-    /// Returns a subscription ID that can be used to unsubscribe later.
-    ///
-    /// # Arguments
-    ///
-    /// * `filter` - Event filter to match events
-    /// * `callback` - Function to call when matching events arrive
-    ///
-    /// # Returns
-    ///
-    /// A unique subscription ID
-    pub fn subscribe(
-        &self,
-        filter: EventFilter,
-        callback: impl Fn(GlobalEvent) + Send + Sync + 'static,
-    ) -> SubscriptionId {
-        let id = SubscriptionId::new(uuid::Uuid::new_v4().to_string());
-        let subscription = Subscription {
-            id: id.clone(),
-            filter,
-            callback: Arc::new(callback),
-        };
-
-        // Use block_in_place to safely acquire the write lock from any context.
-        // This prevents panics when called from an async runtime while still
-        // allowing use from synchronous code.
-        let mut subscriptions = tokio::task::block_in_place(|| self.subscriptions.blocking_write());
-        subscriptions.insert(id.clone(), subscription);
-
-        debug!(subscription_id = %id, "Added global event subscription");
-        id
     }
 
     /// Subscribe to global events (async version).
@@ -336,13 +302,6 @@ impl GlobalBus {
         }
     }
 
-    /// Get the next sequence number.
-    ///
-    /// Returns a monotonically increasing sequence number for ordering events.
-    pub fn next_sequence(&self) -> u64 {
-        self.sequence.fetch_add(1, Ordering::SeqCst)
-    }
-
     /// Get a broadcast receiver for async event handling.
     ///
     /// This is useful for components that want to process events
@@ -355,12 +314,6 @@ impl GlobalBus {
     pub async fn subscription_count(&self) -> usize {
         let subscriptions = self.subscriptions.read().await;
         subscriptions.len()
-    }
-}
-
-impl Default for GlobalBus {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -418,19 +371,6 @@ mod tests {
         assert_eq!(event.source_session_id, "session-1");
         assert_eq!(event.sequence, 42);
         assert!(event.timestamp > 0);
-    }
-
-    #[test]
-    fn test_sequence_increment() {
-        let bus = GlobalBus::new();
-
-        let seq1 = bus.next_sequence();
-        let seq2 = bus.next_sequence();
-        let seq3 = bus.next_sequence();
-
-        assert_eq!(seq1, 0);
-        assert_eq!(seq2, 1);
-        assert_eq!(seq3, 2);
     }
 
     #[tokio::test]
