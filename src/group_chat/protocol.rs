@@ -9,7 +9,6 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 // =============================================================================
 // Speaker
