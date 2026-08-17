@@ -321,7 +321,7 @@ fn split_pipeline(command: &str) -> Result<Vec<String>, String> {
 
 /// Tokenize a single command segment
 #[must_use]
-pub fn tokenize_segment(segment: &str) -> Option<Vec<String>> {
+fn tokenize_segment(segment: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::new();
     let mut buf = String::new();
     let mut in_single = false;

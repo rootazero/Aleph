@@ -110,7 +110,8 @@ impl SecretMasker {
         result
     }
 
-    pub fn contains_secrets(&self, text: &str) -> bool {
+    #[allow(dead_code)]
+    pub(crate) fn contains_secrets(&self, text: &str) -> bool {
         SECRET_PATTERNS.iter().any(|(re, _)| re.is_match(text))
             || operator_patterns().iter().any(|(re, _)| re.is_match(text))
     }

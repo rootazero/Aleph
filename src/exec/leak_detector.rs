@@ -18,7 +18,7 @@ pub enum LeakAction {
 }
 
 /// A pattern to detect potential leaked secrets.
-pub struct LeakPattern {
+pub(crate) struct LeakPattern {
     /// Human-readable name for this pattern.
     pub name: &'static str,
     /// Regex for full pattern matching.
@@ -63,7 +63,8 @@ impl ScanResult {
 
     /// Returns true if no findings were detected.
     #[must_use]
-    pub const fn is_clean(&self) -> bool {
+    #[allow(dead_code)]
+    const fn is_clean(&self) -> bool {
         self.findings.is_empty()
     }
 }
@@ -77,7 +78,8 @@ pub struct LeakDetector {
 impl LeakDetector {
     /// Create a new `LeakDetector` with the given patterns.
     #[must_use]
-    pub fn new(patterns: Vec<LeakPattern>) -> Self {
+    #[allow(dead_code)]
+    fn new(patterns: Vec<LeakPattern>) -> Self {
         Self { patterns }
     }
 

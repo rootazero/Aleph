@@ -164,7 +164,7 @@ impl ExecApprovalRecord {
 
     /// Check if expired
     #[must_use]
-    pub fn is_expired(&self) -> bool {
+    pub(crate) fn is_expired(&self) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -174,7 +174,8 @@ impl ExecApprovalRecord {
 
     /// Check if resolved
     #[must_use]
-    pub const fn is_resolved(&self) -> bool {
+    #[allow(dead_code)]
+    const fn is_resolved(&self) -> bool {
         self.decision.is_some()
     }
 }
@@ -859,7 +860,7 @@ impl ExecApprovalManager {
     }
 
     /// Clean up expired pending requests
-    pub fn cleanup_expired(&self) {
+    pub(crate) fn cleanup_expired(&self) {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
 

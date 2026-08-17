@@ -33,7 +33,8 @@ pub struct SecurityKernel {
 impl SecurityKernel {
     /// Create a new security kernel with no custom patterns.
     #[must_use]
-    pub fn new() -> Self {
+    #[allow(dead_code)]
+    fn new() -> Self {
         Self::default()
     }
 
