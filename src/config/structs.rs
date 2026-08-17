@@ -3,9 +3,9 @@
 //! This module defines the core configuration structures for Aleph.
 
 use crate::config::types::{
-    AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, CoworkConfigToml, ExecutionConfig,
+    AcpConfig, AgentsConfig, BehaviorConfig, ContextBudgetToml, ExecutionConfig,
     FallbackProviderToml, FetchConfigInternal, GeneralConfig, GenerationConfig, GroupChatConfig,
-    GuardrailsToml, McpConfig, MemoryConfig, OrchestratorConfig, PersonaConfig, PoliciesConfig,
+    GuardrailsToml, McpConfig, MemoryConfig, PersonaConfig, PoliciesConfig,
     PrivacyConfig, ProfileConfig, PromptSectionConfig, ProviderConfig, RoutingRuleConfig,
     SearchConfigInternal, SecretProviderConfig, SecretsConfig, ShellSecurityConfig, StabilityToml,
     StopHookConfig, TeamBroadcastConfigToml, TeamDispatcherConfigToml, TeamMessagesConfigToml,
@@ -92,8 +92,14 @@ pub struct Config {
     pub sandbox: crate::sandbox::SandboxConfig,
     /// Agent task orchestration configuration (renamed from cowork)
     /// Supports both [agent] and [cowork] sections for backward compatibility
-    #[serde(default, alias = "cowork")]
-    pub agent: CoworkConfigToml,
+    // (removed: `[agent]` section — see config-002 in the 2026-08-17 wire audit.
+    //  CoworkConfigToml/FileOpsConfigToml/CodeExecConfigToml were parsed and
+    //  validated but had no production consumer; the validator's only check
+    //  was that `planner_provider` existed as a `[providers.*]` key, which
+    //  consumed zero of the field's value. Capability boundaries are now
+    //  owned by `AgentDefinition.subagents`, `AgentDef.allowed_tools`, and the
+    //  exec-tier gate in `src/tools/scoped/`. Existing `config.toml` keeps
+    //  parsing because `Config` does not `deny_unknown_fields`.)
     /// Policies configuration (mechanism-policy separation)
     /// Contains configurable behavioral parameters extracted from mechanism code
     #[serde(default)]
@@ -104,9 +110,6 @@ pub struct Config {
     /// Local voice ([voice.local]) — BYO OpenAI-compatible STT/TTS endpoint.
     #[serde(default, rename = "voice")]
     pub voice_local: VoiceSection,
-    /// Orchestrator configuration (Three-Layer Control architecture)
-    #[serde(default)]
-    pub orchestrator: OrchestratorConfig,
     /// Local-vs-cloud failover routing mode. `Auto` (default) is a no-op:
     /// failover candidate order is unchanged. `AlwaysLocal`/`AlwaysCloud`
     /// shape the chain by endpoint tier (see `[route]`).
@@ -363,11 +366,9 @@ impl Default for Config {
             unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
             tool_service: ToolServiceConfig::default(),
             sandbox: crate::sandbox::SandboxConfig::default(),
-            agent: CoworkConfigToml::default(),
             policies: PoliciesConfig::default(),
             generation: GenerationConfig::default(),
             voice_local: VoiceSection::default(),
-            orchestrator: OrchestratorConfig::default(),
             route: crate::config::types::ModelRouteConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),

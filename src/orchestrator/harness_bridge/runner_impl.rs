@@ -1409,8 +1409,6 @@ mod calibration_carryover_tests {
             token_estimate_ratio: 1.0,
             fresh_tail_count: 6,
             circuit_breaker_max: 3,
-            diminishing_window: 4,
-            diminishing_threshold: 500,
             max_splits: 3,
         }
     }

@@ -83,32 +83,35 @@ const TOLERATED: &[Tolerated] = &[
               bridge honours",
     },
     // ---- Retired: knobs removed with their config kept parsing on purpose.
-    // `[agent]` also answers to `[cowork]` (serde alias), and the alias is what
-    // an old file spells, so both forms need an entry.
+    // `[agent]` and `[cowork]` were removed entirely in 2026-08-17 wire audit
+    // (config-002 + config-007). Both spellings are now just unknown top-level
+    // sections — serde drops them silently. The entries below document the
+    // retirement so a future audit does not re-flag them as missing fields.
     Tolerated {
         path: "agent.subagents",
-        why: "retired with the rest of the decorative sub-agent surface; see the module doc of \
-              src/config/types/agent/mod.rs",
+        why: "retired with the rest of the decorative sub-agent surface; see config-002 in the \
+              2026-08-17 wire audit",
     },
     Tolerated {
         path: "agent.require_confirmation",
-        why: "retired; see the module doc of src/config/types/agent/mod.rs",
+        why: "retired; see config-002 in the 2026-08-17 wire audit",
     },
     Tolerated {
         path: "agent.max_parallelism",
-        why: "retired; see the module doc of src/config/types/agent/mod.rs",
+        why: "retired; see config-002 in the 2026-08-17 wire audit",
     },
     Tolerated {
-        path: "cowork.subagents",
-        why: "`[cowork]` is the legacy spelling of `[agent]`; same retirement",
+        path: "agent.planner_provider",
+        why: "retired — value parsed and validated (key existence check) but never propagated; \
+              see config-002 in the 2026-08-17 wire audit",
     },
     Tolerated {
-        path: "cowork.require_confirmation",
-        why: "`[cowork]` is the legacy spelling of `[agent]`; same retirement",
+        path: "agent.file_ops.*",
+        why: "retired — file-IO gating duplicates `tool_permissions`; see config-002",
     },
     Tolerated {
-        path: "cowork.max_parallelism",
-        why: "`[cowork]` is the legacy spelling of `[agent]`; same retirement",
+        path: "agent.code_exec.*",
+        why: "retired — code-exec gating duplicates `tool_permissions` + sandbox; see config-002",
     },
     Tolerated {
         path: "profiles.*.cache_strategy",

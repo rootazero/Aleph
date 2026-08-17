@@ -182,10 +182,6 @@ pub struct ContextBudgetConfig {
     pub fresh_tail_count: usize,
     /// Max consecutive compaction attempts before circuit breaker trips.
     pub circuit_breaker_max: usize,
-    /// Window size for diminishing returns detection.
-    pub diminishing_window: usize,
-    /// Minimum total output tokens in the window to be considered productive.
-    pub diminishing_threshold: usize,
     /// Max session-splits allowed in one run before a circuit-breaker trip
     /// falls back to `CompactToFit`. Default 3.
     pub max_splits: usize,
@@ -565,8 +561,6 @@ mod tests {
             token_estimate_ratio: 3.5,
             fresh_tail_count: 6,
             circuit_breaker_max: 3,
-            diminishing_window: 4,
-            diminishing_threshold: 500,
             max_splits: 3,
         }
     }

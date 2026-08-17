@@ -41,11 +41,16 @@ fn default_session_store_backend() -> String {
 // BehaviorConfig
 // =============================================================================
 
-/// Behavior configuration for output mode and typing speed
+/// Behavior configuration for output mode
 ///
 /// Active fields:
 /// - `output_mode`: "typewriter" (character-by-character) or "instant" (all at once)
-/// - `typing_speed`: Characters per second for typewriter mode (50-400)
+///
+/// `typing_speed` was retired in the 2026-08-17 wire audit (config-003):
+/// parsed, returned by `handle_get`, and bounded (50-400 cps) by `handle_update`,
+/// but no production code read it to throttle per-second emission. The actual
+/// typewriter path keys only on `output_mode`. Existing `config.toml` keys
+/// keep parsing because `Config` does not `deny_unknown_fields`.
 ///
 /// Deprecated fields (kept for backward compatibility, ignored by code):
 /// - `input_mode`: Replaced by trigger system
@@ -57,24 +62,16 @@ pub struct BehaviorConfig {
     /// Output mode: "typewriter" or "instant"
     #[serde(default = "default_output_mode")]
     pub output_mode: String,
-    /// Typing speed in characters per second (50-400)
-    #[serde(default = "default_typing_speed")]
-    pub typing_speed: u32,
 }
 
 pub fn default_output_mode() -> String {
     "typewriter".to_string()
 }
 
-pub const fn default_typing_speed() -> u32 {
-    200 // 200 characters per second
-}
-
 impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
             output_mode: default_output_mode(),
-            typing_speed: default_typing_speed(),
         }
     }
 }

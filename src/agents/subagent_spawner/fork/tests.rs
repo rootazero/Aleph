@@ -533,8 +533,6 @@ fn cfg(token_budget: u64) -> crate::context::budget::ContextBudgetConfig {
         token_estimate_ratio: 4.0,
         fresh_tail_count: 4,
         circuit_breaker_max: 3,
-        diminishing_window: 3,
-        diminishing_threshold: 100,
         max_splits: 3,
     }
 }

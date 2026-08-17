@@ -13,7 +13,6 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BehaviorConfigDto {
     pub output_mode: String,
-    pub typing_speed: u32,
 }
 
 /// Get behavior configuration
@@ -24,7 +23,6 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 
     let dto = BehaviorConfigDto {
         output_mode: behavior.output_mode.clone(),
-        typing_speed: behavior.typing_speed,
     };
 
     match serde_json::to_value(dto) {
@@ -70,15 +68,7 @@ pub async fn handle_update(
         );
     }
 
-    // Validate typing_speed
-    if dto.typing_speed < 50 || dto.typing_speed > 400 {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            "typing_speed must be between 50 and 400".to_string(),
-        );
-    }
-
+    // Validate output_mode (already above).
     {
         let mut cfg = config.write().await;
 
@@ -89,7 +79,6 @@ pub async fn handle_update(
 
         if let Some(behavior) = &mut cfg.behavior {
             behavior.output_mode = dto.output_mode.clone();
-            behavior.typing_speed = dto.typing_speed;
         }
 
         if let Err(e) = cfg.save_incremental(&["behavior"]) {

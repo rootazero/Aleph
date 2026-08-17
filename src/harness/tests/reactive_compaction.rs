@@ -513,8 +513,6 @@ fn budget_config() -> ContextBudgetConfig {
         token_estimate_ratio: 4.0,
         fresh_tail_count: 2,
         circuit_breaker_max: 10,
-        diminishing_window: 16,
-        diminishing_threshold: 1,
         max_splits: 3,
     }
 }
@@ -530,8 +528,6 @@ fn near_full_budget_config() -> ContextBudgetConfig {
         token_estimate_ratio: 1.0,
         fresh_tail_count: 2,
         circuit_breaker_max: 10,
-        diminishing_window: 16,
-        diminishing_threshold: 1,
         max_splits: 3,
     }
 }

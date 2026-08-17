@@ -534,25 +534,6 @@ impl Config {
             }
         }
 
-        // Validate Agent config
-        if let Err(e) = self.agent.validate() {
-            error!(error = %e, "Agent config validation failed");
-            return Err(AlephError::invalid_config(e));
-        }
-
-        // Validate planner_provider exists if specified
-        if let Some(ref provider_name) = self.agent.planner_provider {
-            if !self.providers.contains_key(provider_name) {
-                error!(
-                    provider = %provider_name,
-                    "Agent planner_provider not found in providers"
-                );
-                return Err(AlephError::invalid_config(format!(
-                    "Agent planner_provider '{provider_name}' not found in providers"
-                )));
-            }
-        }
-
         // Validate group-chat section (sub-config `validate` methods are not
         // reachable from `Config::validate` otherwise, so a typo like
         // `max_personas_per_session = 0` would silently disable every session).

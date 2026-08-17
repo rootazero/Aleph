@@ -61,11 +61,9 @@ fn test_memory_config_deserialization() {
 fn test_behavior_config_serialization() {
     let behavior = BehaviorConfig {
         output_mode: "instant".to_string(),
-        typing_speed: 100,
     };
     let json = serde_json::to_string(&behavior).unwrap();
     assert!(json.contains("instant"));
-    assert!(json.contains("100"));
 }
 
 #[test]
@@ -149,7 +147,6 @@ fn test_config_toml_round_trip() {
     let mut config = Config {
         behavior: Some(BehaviorConfig {
             output_mode: "instant".to_string(),
-            typing_speed: 100,
         }),
         ..Default::default()
     };
@@ -175,7 +172,6 @@ fn test_config_toml_round_trip() {
         deserialized.behavior.as_ref().unwrap().output_mode,
         "instant"
     );
-    assert_eq!(deserialized.behavior.as_ref().unwrap().typing_speed, 100);
     assert_eq!(deserialized.providers.len(), 1);
     // AI-first mode: no builtin rules, only the 1 custom rule we added
     assert_eq!(deserialized.rules.len(), 1);

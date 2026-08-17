@@ -420,8 +420,6 @@ pub fn build_context_budget_config(
         // historical 6; a 1M window keeps ~12 (see `window_aware_fresh_tail`).
         fresh_tail_count: window_aware_fresh_tail(token_budget),
         circuit_breaker_max: 3,
-        diminishing_window: 4,
-        diminishing_threshold: 500,
         max_splits: 3,
     })
 }
@@ -1157,11 +1155,6 @@ mod tests {
         assert_eq!(a.token_estimate_ratio, b.token_estimate_ratio, "ratio");
         assert_eq!(a.fresh_tail_count, b.fresh_tail_count, "fresh_tail");
         assert_eq!(a.circuit_breaker_max, b.circuit_breaker_max, "breaker");
-        assert_eq!(a.diminishing_window, b.diminishing_window, "dim_window");
-        assert_eq!(
-            a.diminishing_threshold, b.diminishing_threshold,
-            "dim_threshold"
-        );
         assert_eq!(a.max_splits, b.max_splits, "max_splits");
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Profiles define the "Physics" of a workspace:
 //! - Model binding (which AI model to use)
-//! - Generation parameters (temperature, etc.)
+//! - Smart recall knobs for cross-workspace memory retrieval
 //!
 //! Profiles are static templates defined in config.toml.
 //! Workspaces are runtime instances that inherit from profiles.
@@ -24,39 +24,25 @@ use super::search::default_true;
 /// Example TOML:
 /// ```toml
 /// [profiles.coding]
-/// description = "Rust/Python development environment"
 /// model = "claude-3-5-sonnet"
-/// temperature = 0.2
 ///
 /// [profiles.creative]
-/// description = "Creative writing and brainstorming"
 /// model = "gemini-1.5-pro"
-/// temperature = 0.9
 /// ```
+///
+/// `description`, `temperature`, `max_tokens`, `history_limit` were retired in
+/// the 2026-08-17 wire audit (config-004): parsed, round-tripped through
+/// `Config`, but no production code read any of them. `model` is the only
+/// profile-level knob that reaches runtime (it is resolved by
+/// `agent_resolver::resolve_one`); `smart_recall` is plumbed into the
+/// `memory_search` tool's per-agent handle. The retired keys still parse
+/// (silently dropped) because `Config` does not `deny_unknown_fields`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ProfileConfig {
-    /// Human-readable description of this profile
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-
     /// Bound AI model (e.g., "claude-3-5-sonnet", "gemini-1.5-pro")
     /// If None, uses the default provider from general config
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-
-    /// Temperature for generation (0.0 - 2.0)
-    /// Lower = more deterministic, higher = more creative
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-
-    /// Max tokens for response
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-
-    /// History limit (max messages to retain in context)
-    /// Helps control "gravity" (token accumulation)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub history_limit: Option<usize>,
 
     /// Smart recall configuration for cross-workspace memory retrieval
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,20 +147,16 @@ mod tests {
     #[test]
     fn test_toml_parsing() {
         let toml_str = r#"
-            description = "Coding environment"
             model = "claude-3-5-sonnet"
-            temperature = 0.2
             cache_strategy = "aggressive"
             history_limit = 50
         "#;
 
         let profile: ProfileConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(profile.description, Some("Coding environment".to_string()));
         assert_eq!(profile.model, Some("claude-3-5-sonnet".to_string()));
-        assert_eq!(profile.temperature, Some(0.2));
-        assert_eq!(profile.history_limit, Some(50));
-        // The TOML above deliberately still carries `cache_strategy` — an
-        // existing user config must keep parsing after the key was removed.
+        // The TOML above deliberately still carries `cache_strategy` and
+        // `history_limit` — retired keys must keep parsing on existing
+        // user configs (Config does not `deny_unknown_fields`).
     }
 
     #[test]
@@ -189,7 +171,6 @@ mod tests {
     #[test]
     fn test_profile_with_smart_recall_deserialize() {
         let toml_str = r#"
-            description = "Test profile"
             model = "claude-3-5-sonnet"
 
             [smart_recall]
@@ -211,7 +192,6 @@ mod tests {
     #[test]
     fn test_profile_without_smart_recall() {
         let toml_str = r#"
-            description = "Minimal profile"
             model = "claude-3-5-sonnet"
         "#;
 
@@ -225,14 +205,10 @@ mod tests {
 
         let toml_str = r#"
             [coding]
-            description = "Development"
             model = "claude-sonnet"
-            temperature = 0.2
 
             [creative]
-            description = "Writing"
             model = "gemini-pro"
-            temperature = 0.9
         "#;
 
         let profiles: HashMap<String, ProfileConfig> = toml::from_str(toml_str).unwrap();

@@ -314,8 +314,6 @@ mod tests {
             token_estimate_ratio: 1.0,
             fresh_tail_count: 1,
             circuit_breaker_max: 2,
-            diminishing_window: 3,
-            diminishing_threshold: 100,
             max_splits: 3,
         };
         let mut budget = ContextBudget::new(&config);
@@ -359,8 +357,6 @@ mod tests {
             token_estimate_ratio: 3.5,
             fresh_tail_count: 1,
             circuit_breaker_max: 2,
-            diminishing_window: 3,
-            diminishing_threshold: 100,
             max_splits: 3,
         };
         let budget = ContextBudget::new(&config);

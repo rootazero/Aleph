@@ -937,7 +937,6 @@ mod tests {
         profiles.insert(
             "coding".to_string(),
             ProfileConfig {
-                description: Some("Coding profile".to_string()),
                 model: Some("claude-sonnet".to_string()),
                 ..Default::default()
             },
@@ -1079,9 +1078,7 @@ mod tests {
 
         // Load profiles with a custom "coding" profile
         let coding_profile = ProfileConfig {
-            description: Some("Coding profile".to_string()),
             model: Some("claude-sonnet".to_string()),
-            temperature: Some(0.2),
             ..Default::default()
         };
         manager.load_profiles(HashMap::from([(
@@ -1099,7 +1096,6 @@ mod tests {
         let active = ActiveAgentEnv::from_manager(&manager, "project-x").await;
         assert_eq!(active.agent_id, "project-x");
         assert_eq!(active.profile.model, Some("claude-sonnet".to_string()));
-        assert_eq!(active.profile.temperature, Some(0.2));
 
         // Memory filter should be scoped to this agent
         let filter_sql = active.memory_filter.to_sql_filter();

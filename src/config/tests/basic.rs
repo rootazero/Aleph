@@ -53,7 +53,6 @@ fn test_default_behavior_config() {
     let behavior = BehaviorConfig::default();
 
     assert_eq!(behavior.output_mode, "typewriter");
-    assert_eq!(behavior.typing_speed, 200);
 }
 
 #[test]

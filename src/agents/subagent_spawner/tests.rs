@@ -288,8 +288,6 @@ mod tests {
             token_estimate_ratio: 3.5,
             fresh_tail_count: 6,
             circuit_breaker_max: 3,
-            diminishing_window: 4,
-            diminishing_threshold: 500,
             max_splits: 3,
         };
         let child_id = ephemeral_for("child-agent", None);
@@ -333,8 +331,6 @@ mod tests {
             token_estimate_ratio: 3.5,
             fresh_tail_count: 6,
             circuit_breaker_max: 3,
-            diminishing_window: 4,
-            diminishing_threshold: 500,
             max_splits: 3,
         };
         let child_id = ephemeral_for("child-agent", None);
