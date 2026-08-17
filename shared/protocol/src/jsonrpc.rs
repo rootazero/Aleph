@@ -48,6 +48,22 @@ pub const PERMISSION_DENIED: i32 = -32008;
 pub const RESOURCE_NOT_FOUND: i32 = -32009;
 /// Operation timeout
 pub const TIMEOUT_ERROR: i32 = -32010;
+/// `canvas.apply` carried a stale `base_revision`. Implementation-defined
+/// server-error range (JSON-RPC reserves -32000..-32099), next to the
+/// gateway's `IDEMPOTENCY_KEY_REQUIRED` (-32030). The error message always
+/// names the current revision (the `CanvasError::Conflict` Display carries
+/// it), and consumers were born with the code: the Panel branches on it to
+/// re-pull the document and replay its pending ops, and the model self-heals
+/// the same way (A2).
+///
+/// It lives in this crate — the one both the server and the Panel depend on —
+/// because BOTH sides read it: the server's one mapping site
+/// (`gateway::handlers::canvas_error::respond`) emits it, and the Panel's
+/// conflict classifier (`api/canvas.rs`) branches on it. With one constant a
+/// renumber moves both sides at once; a copy on either side would let them
+/// drift with both crates' tests still green (the same reasoning as
+/// [`ADMIN_REQUIRED_MESSAGE`]).
+pub const REVISION_CONFLICT: i32 = -32031;
 
 // ============================================================================
 // JSON-RPC 2.0 Types

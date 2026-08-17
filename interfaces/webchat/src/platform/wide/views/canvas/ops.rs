@@ -27,14 +27,14 @@
 //! # Conflict recovery (the protocol's whole point)
 //!
 //! A stale `base_revision` comes back as the `REVISION_CONFLICT` JSON-RPC
-//! code, but that code never reaches this crate — `rpc_call` surfaces
-//! `error.message` alone (see `api/canvas.rs`'s module doc for the
-//! investigation). What survives is the message, whose conflict phrase is
-//! minted by `CanvasError::Conflict`'s `#[error]` attribute in
-//! `src/canvas/store.rs` and pinned here at the source level. On conflict the
-//! editor: refetches the doc, replays [`SendQueue::recover`]'s pending ops
-//! (refused batch first, queued ops after — original order) on the fresh doc,
-//! and resends them as one batch against the fresh revision.
+//! code, classified at the API boundary into
+//! `api::canvas::CanvasApplyError::Conflict` (both sides read the one
+//! constant in `aleph_protocol::jsonrpc` — this crate held a message-phrase
+//! detector until 2026-08-17, when `rpc_call_with_code` started carrying the
+//! code). On conflict the editor: refetches the doc, replays
+//! [`SendQueue::recover`]'s pending ops (refused batch first, queued ops
+//! after — original order) on the fresh doc, and resends them as one batch
+//! against the fresh revision.
 
 use aleph_protocol::canvas::{CanvasDoc, CanvasOp};
 
@@ -122,18 +122,6 @@ pub(super) fn invert(doc_before: &CanvasDoc, ops: &[CanvasOp]) -> Vec<CanvasOp> 
     }
     inverses.reverse();
     inverses
-}
-
-/// Is this `CanvasApi::apply` error a revision conflict?
-///
-/// There is no error code to branch on (`rpc_call` drops it — `api/canvas.rs`
-/// module doc), so the branch is on the message phrase minted by
-/// `CanvasError::Conflict` in `src/canvas/store.rs`. The source-level test
-/// below pins that phrase where it is minted, so a server-side rewording
-/// fails a test instead of silently turning every conflict into the
-/// clear-and-refetch error path.
-pub(super) fn is_revision_conflict(message: &str) -> bool {
-    message.contains("revision conflict")
 }
 
 /// One undoable edit: the ops that made it and the ops that unmake it.
@@ -353,39 +341,6 @@ mod tests {
             "apply_local has drifted from src/canvas/validate.rs::apply_ops — \
              the two mutation loops must stay token-identical"
         );
-    }
-
-    /// The conflict phrase this module branches on is pinned where it is
-    /// minted: `CanvasError::Conflict`'s `#[error]` attribute. Reworded
-    /// server-side, this test names the drift instead of every conflict
-    /// silently taking the clear-and-refetch path.
-    #[test]
-    fn the_conflict_detector_matches_the_phrase_the_server_mints() {
-        let store_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/canvas/store.rs");
-        let store = std::fs::read_to_string(&store_path)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", store_path.display()));
-        let minted = store
-            .replace('\r', "")
-            .lines()
-            .find(|l| l.contains("#[error(") && l.contains("revision conflict"))
-            .map(str::to_string);
-        assert!(
-            minted.is_some(),
-            "src/canvas/store.rs no longer mints a 'revision conflict' error \
-             message — update is_revision_conflict to whatever the server \
-             sends now"
-        );
-        // The full wire shape (context prefix + Display) matches…
-        assert!(is_revision_conflict(
-            "Failed to apply canvas ops: revision conflict: canvas is at revision 7"
-        ));
-        // …and the not-found / invalid shapes do not.
-        assert!(!is_revision_conflict(
-            "Failed to apply canvas ops: canvas cv-x not found"
-        ));
-        assert!(!is_revision_conflict(
-            "Failed to apply canvas ops: 501 ops in one apply exceeds the 500-op cap"
-        ));
     }
 
     // ---- invert ------------------------------------------------------------

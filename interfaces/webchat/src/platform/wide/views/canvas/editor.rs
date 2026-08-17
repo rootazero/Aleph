@@ -77,7 +77,7 @@ use super::text_edit::{self, TextEditOverlay, TextEditState};
 use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
 use super::{ai, asset_ingest, decks, export, present};
-use crate::api::canvas::CanvasApi;
+use crate::api::canvas::{CanvasApi, CanvasApplyError};
 use crate::components::admin_refusal;
 use crate::components::mode_sidebar::PanelMode;
 use crate::context::DashboardState;
@@ -214,7 +214,7 @@ fn pump(
                         }
                     }
                 }
-                Err(e) if ops::is_revision_conflict(&e) => {
+                Err(CanvasApplyError::Conflict) => {
                     // Someone else landed first. Refetch the truth, replay
                     // everything pending (refused batch + queued, original
                     // order) on top, resend against the fresh revision.
@@ -257,7 +257,7 @@ fn pump(
                         }
                     }
                 }
-                Err(e) => {
+                Err(CanvasApplyError::Other(e)) => {
                     // A non-conflict refusal (or a dead transport): the
                     // optimistic doc may now be a lie. Drop what is pending
                     // and refetch server truth — replaying a batch the

@@ -89,7 +89,7 @@ async fn stagger_spreads_jobs() {
         let state = h.job_state(&id).await;
         let next = state
             .next_run_at_ms
-            .expect(&format!("job {id} should have next_run"));
+            .unwrap_or_else(|| panic!("job {id} should have next_run"));
         next_runs.push(next);
     }
 

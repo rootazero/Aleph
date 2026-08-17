@@ -174,7 +174,7 @@ Wire 契约单一源       shared/protocol/src/canvas.rs                        
 
 1. **`canvas_format`/`canvas_io` 更名让位，不是 CUT**。spec §1 把它们列为命名让位对象时倾向清除；验证发现两者都有活消费者（`src/workflow/{store,proposal}.rs`、`src/teams/workflow_canvas.rs`、`src/tasks/cron/carryover.rs` 等七处）。落地为纯更名：`shared/protocol/src/json_canvas.rs` + `src/json_canvas_io.rs`，自带 round-trip 测试整批跟随，模块 doc 首行注明改名缘由。
 2. **素材展示从「RPC base64」升级为能力 URL 字节路由**。spec §3 表里 `canvas.asset.get` 是唯一下载通道；实现另建 `GET /canvas-asset/{cap}/{canvas_id}/{asset_id}`（`src/gateway/server/canvas_asset_route.rs` + `src/gateway/security/canvas_caps.rs`，镜像 artifact 先例：浏览器缓存 + 不过 WS）。`canvas.get` 铸 10 分钟 TTL 的 canvas-scoped cap 填 `asset_base`，Panel `<image href>` = `{asset_base}/{asset_id}`（守卫 `asset_href_is_the_minted_base_plus_one_path_segment`）。`canvas.asset.get`（base64）**保留**——它是 srcdoc 文本与 AI 附件的回读通道（能力路由是给 `<image href>` 的，不作回读）。守卫：`a_valid_capability_serves_immutable_private_bytes` / `asset_route_refuses_expired_or_mismatched_cap` / `html_asset_is_served_as_plain_text` / `an_svg_asset_keeps_its_type_but_is_sandboxed`。
-3. **冲突错误铸了专用码 `REVISION_CONFLICT = -32031`（而非复用 INVALID_PARAMS）——但 Panel 实际按 message 文本分支**。spec §3「客户端按专用错误码自动重拉重放」只兑现了一半：码在 wire 上（`src/gateway/protocol.rs`，映射唯一发生在 `handlers/canvas_error.rs::respond`，`apply_conflict_maps_to_revision_conflict_code`），但 `DashboardState::rpc_call` 的消息循环把 pending RPC 错误解析成 `error.message` **单独一个字符串**——码对每个方法统一掉地。Panel 因此按服务端用测试钉住的消息形状分支（服务端 `the_conflict_message_names_the_current_revision` ↔ Panel `ops.rs::is_revision_conflict` + `the_conflict_detector_matches_the_phrase_the_server_mints` 两侧对账）。**记录为已知债**（`api/canvas.rs` 模块 doc 原文）：`rpc_call` 若开始透传 code，冲突检测应改按码分支——码先于消费者存在，为的就是那一天。
+3. **冲突错误铸了专用码 `REVISION_CONFLICT = -32031`（而非复用 INVALID_PARAMS）——但 Panel 实际按 message 文本分支**。spec §3「客户端按专用错误码自动重拉重放」只兑现了一半：码在 wire 上（`src/gateway/protocol.rs`，映射唯一发生在 `handlers/canvas_error.rs::respond`，`apply_conflict_maps_to_revision_conflict_code`），但 `DashboardState::rpc_call` 的消息循环把 pending RPC 错误解析成 `error.message` **单独一个字符串**——码对每个方法统一掉地。Panel 因此按服务端用测试钉住的消息形状分支（服务端 `the_conflict_message_names_the_current_revision` ↔ Panel `ops.rs::is_revision_conflict` + `the_conflict_detector_matches_the_phrase_the_server_mints` 两侧对账）。**记录为已知债**（`api/canvas.rs` 模块 doc 原文）：`rpc_call` 若开始透传 code，冲突检测应改按码分支——码先于消费者存在，为的就是那一天。**→ 2026-08-17 遗留轮已还清**：消息循环保留完整错误对象（`context.rs::RpcFailure`），`rpc_call` 单点投影回 message（String 消费者字节不变），`rpc_call_with_code` 供带码消费；`REVISION_CONFLICT` 上移 `aleph_protocol::jsonrpc`（两侧共读一个常量），`api/canvas.rs::CanvasApplyError` 边界分类，`ops.rs::is_revision_conflict` 短语匹配器与两侧对账测试整体删除。
 
 ### 实施期新增（spec 未预见，committed reality）
 
@@ -200,12 +200,12 @@ Wire 契约单一源       shared/protocol/src/canvas.rs                        
 |---|---|---|
 | 1 持久化 | ✅ | 矩形/便签/画笔 → 刷新重开 → doc.json 与 DOM 逐字节还原 |
 | 2 双标签页广播 | ✅ | A 建形 B 实时 +1；B 移形 A 实时跟随；三方（A/B/doc.json）坐标收敛一致 |
-| 3 并发竞写 | ✅* | A/B 交替拖同形状：两端编辑都落盘（rev 8→10）、零控制台错误、三方收敛。*真冲突窗（<100ms 帧传播）在 MCP 串行时序下无法触发，冲突臂由 T13 重放单测 + wire 测试背书 |
+| 3 并发竞写 | ✅（2026-08-17 遗留轮补测，冲突臂真机触发） | 首轮：A/B 交替拖同形状，两端编辑都落盘（rev 8→10）、零控制台错误、三方收敛，但真冲突窗（<100ms 帧传播）MCP 串行打不出。补测：`qa/canvas/latency_proxy.py`（tab A 上行 +2.5s、下行直通）+ 两侧页内绝对时钟编排（A 自拖 r1，B 晚 1.5s 自拖 r2）→ B 先落地、A 的 in-flight apply 带过期 rev 到达 → 代理捕获 `-32031` 下行帧（`CONFLICT FRAME SEEN`）→ A 免刷新恢复：rev 5→7，r1=A 目标、r2=B 目标，两标签页 DOM 与 doc.json 三方逐字节收敛，**两端改动全存活**。顺带钉住：in-flight batch 不被 send 之后到达的广播 rebase（下行直通正是为此） |
 | 4 模型 insert_html 实时 | ✅ | `tools.invoke canvas(insert_html)` → rev 20 → Panel 实时渲染 `sandbox="allow-scripts"` iframe（无 allow-same-origin），srcdoc 经 RPC 回读 |
 | 5 AI 图片框全流程 | ✅ | 生成按钮 → chat → mock 模型三步照做 → `canvas(insert_image)` rev 19 框被图替换 → Panel 实时 `<image href=能力URL>`；重复调用被拒且错误带围栏+可行动提示（A2 顺带验证） |
 | 6 标注重生成 | ✅ | 笔迹标注 + 选中「按标注重新生成」→ 合成 360×240 真 PNG 上传（第三个素材）→ chat 双附件 → 模型插新图于原图右侧 |
 | 7 Slides | ✅ | 3 Frame 组 deck（非 Frame 被过滤，计数 (3) 准确）→ 全屏黑边播放 → →键 1/3→2/3 → Esc 退出 |
-| 8 member 角色 | 📄 | 按夹具设计 loopback-only（loopback 恒 operator）；LAN+TLS 配方在 qa/canvas/README.md；三角色判据由单测（canvas_visible_to 三角色）+ wire 测试（含 operator-role stranger 拒绝）背书 |
+| 8 member 角色 | ✅（2026-08-17 遗留轮真机补测） | 配方落成可执行物 `qa/canvas/member_seed.py`（loopback 播种 member/房间/两画布/ticket）。真机：TLS+0.0.0.0 重启 → 浏览器走 LAN IP + TOFU 证书 + bootstrap ticket（消费后 URL 被擦除）→ `role:"member"`。断言全过：member 库**只见**房间画布（两个 operator 私有画布 DOM 级不存在，operator 对照组三个全见）；member 凭据 wire 直调 private id → `-32009 not found` 且**与真正不存在的 id 同形**（no-oracle）；房间画布 member 画矩形落盘 rev 2、operator 画椭圆**实时**到达 member 页（双向广播、零刷新）。顺带真机复证：loopback 出示 member ticket 仍回 `role:"operator"`——信任模型语义（回环恒 operator），正是此场景必须走 LAN IP 的原因 |
 | 9 PNG 导出 | ✅（修复后） | 首测失败——见下 QA-1；修复后下载触发、blob 10.2KB、PNG 魔数 `89 50 4E 47` 验证 |
 
 ### QA 抓到并修复
@@ -216,4 +216,10 @@ Wire 契约单一源       shared/protocol/src/canvas.rs                        
 
 ### 首次 AI 图片框尝试的未决异常
 
-第一次 Generate 的 run 内 `insert_image` 未提交（doc 停在 rev 15），当时未开 `request_log`，回执不可追溯；第二次尝试 + 手动 `tools.invoke` + wire 测试全部绿。若复发：用 `mock_anthropic.py` 第 5 参数 `request_log` 截获 tool_result（本轮已证明该 oracle 可用）。
+第一次 Generate 的 run 内 `insert_image` 未提交（doc 停在 rev 15），当时未开 `request_log`，回执不可追溯；第二次尝试 + 手动 `tools.invoke` + wire 测试全部绿。若复发：用 `mock_anthropic.py` 第 5 参数 `request_log` 截获 tool_result（本轮已证明该 oracle 可用）。**→ 2026-08-17 遗留轮**：`run.sh` 已把 `request_log` 无条件接线到 `$QA_ROOT/request_log.jsonl`——oracle 只在已经开着时才存在，此后任何复发自带回执。
+
+### 2026-08-17 遗留轮收尾（本 spec 的最后三笔账）
+
+1. **§7-3 债已还**：`rpc_call` 透传错误码，冲突检测改按码分支（见 §7-3 追记与 CANVAS.md §3）。真机 QA 的冲突恢复（上表 item 3 补测）跑的正是**新码径**——`RpcFailure` → `CanvasApplyError::Conflict` → 重拉重放，wire 级证明分类链活着。
+2. **item 3 / item 8 真机缺口清零**（上表补测记录）；两件 QA 仪器落成可提交物：`qa/canvas/latency_proxy.py`（上行延迟代理 + `-32031` 帧 oracle）、`qa/canvas/member_seed.py`（member 场景播种器）。
+3. **clippy `--all-targets` 的 main 预存 bench 红已修**：`benches/sandbox_performance.rs` import 的 `create_platform_driver`/`SandboxPolicy` 早已更名/移位（`create_platform_driver_from_config` + `sandbox::policy::SandboxPolicy`），对齐后 bench target clippy 绿。

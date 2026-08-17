@@ -27,6 +27,10 @@ pub use aleph_protocol::jsonrpc::{
     PERMISSION_DENIED,
     RATE_LIMITED,
     RESOURCE_NOT_FOUND,
+    // Canvas optimistic-lock refusal. Lives in aleph-protocol because the
+    // Panel's conflict classifier branches on the same constant the server
+    // emits (single spelling site per side of the wire).
+    REVISION_CONFLICT,
     TIMEOUT_ERROR,
     TOOL_ERROR,
 };
@@ -48,14 +52,6 @@ pub const SERVICE_UNAVAILABLE: i32 = -32099;
 /// (or any stable per-attempt key) and the request will be deduplicated on
 /// re-send. Read-only Query-lane calls are never rejected this way.
 pub const IDEMPOTENCY_KEY_REQUIRED: i32 = -32030;
-/// `canvas.apply` carried a stale `base_revision`. Implementation-defined
-/// server-error range (JSON-RPC reserves -32000..-32099), next to
-/// `IDEMPOTENCY_KEY_REQUIRED`. The error message always names the current
-/// revision (the `CanvasError::Conflict` Display carries it), and consumers
-/// were born with the code: the Panel branches on it to re-pull the document
-/// and replay its pending ops, and the model self-heals the same way (A2).
-/// The one mapping site is `handlers::canvas_error::respond`.
-pub const REVISION_CONFLICT: i32 = -32031;
 
 // ============================================================================
 // JsonRpcRequest with backward-compatible API
