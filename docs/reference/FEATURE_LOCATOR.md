@@ -2743,11 +2743,11 @@
 
 ---
 
-### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17)
+### 6.10 白板画布 (Whiteboard Canvas · 2026-08-17，画廊入左栏轮同日)
 
 > 子系统参考（架构/数据模型/并发协议/安全边界/刻意不做清单的全文）在 [CANVAS.md](CANVAS.md)；spec 母本与逐条偏差记录在 `docs/superpowers/specs/2026-08-16-panel-canvas-whiteboard-design.md`。本节只做落点索引。
 
-- **口语关键词**：白板、画布、whiteboard、无限画布、便签/矩形/椭圆/画笔/箭头/文本/框、AI 图片框、HTML 框、Slides 播放、标注重生成、双标签页实时同步、冲突自动重拉、`canvas(action=…)` 工具、`/canvas-asset/` 素材 URL
+- **口语关键词**：白板、画布、whiteboard、无限画布、便签/矩形/椭圆/画笔/箭头/文本/框、AI 图片框、HTML 框、Slides 播放、标注重生成、双标签页实时同步、冲突自动重拉、`canvas(action=…)` 工具、`/canvas-asset/` 素材 URL、**画廊/画布库/左栏列表/重命名画布/搜索画布**
 - **辨析**：不是记忆星系（§6.3，`views/memory/galaxy/`——原名 `views/canvas/`，本轮更名让位），不是 Obsidian JSON Canvas（`aleph_protocol::json_canvas`——原名 `canvas_format`，同批更名）。
 - **职责**：Panel 全功能白板编辑器 + 服务端持久化 + 乐观锁实时广播 + 模型工具面（Cowart 对齐并超越；tldraw 嵌入已否决——商业许可 + 首个 JS/React 依赖 + 双状态源）。人与模型经**同一个 `CanvasStore`、同一个可见性谓词、同一条事件广播**交替编辑实时互见。
 - **状态**：✅ 21 任务全交付（2026-08-17，worktree 分支 `worktree-panel-canvas-whiteboard`）。真机九项清单在 `qa/canvas/`（boot-and-wait 夹具，驱动手=浏览器 + chrome-devtools-mcp）。**遗留轮（2026-08-17 当日第二轮，分支 `worktree-canvas-leftovers`）九项全 PASS**：item 3 冲突臂经 `latency_proxy.py` 在真 wire 上触发（`-32031` 帧被代理捕获、rev 5→7 两端改动全存活）、item 8 member 经 LAN+TLS+ticket 真机（`member_seed.py` 播种；no-oracle 同形断言过）；三条已知债同轮清零（`rpc_call` 码透传→冲突按码分支、`request_log` oracle 默认接线、bench 预存红修复）。QA 结果全文在 spec §8（`docs/superpowers/specs/2026-08-16-panel-canvas-whiteboard-design.md`）。
@@ -2774,9 +2774,32 @@
 | 17 实时同步 | `mod.rs` 三条 liveness 线（is_connected 门控加载 / `subscribe_topic` 每 mount 不进 `BASE_TOPICS` / 帧→reconcile） | `the_next_revision_applies_its_ops_incrementally` · `our_own_inflight_echo_is_dropped_by_revision_and_ops_match` |
 | 18 AI 三流程+导出 | `ai.rs`（生成/标注消息模板点名 `canvas`/`image_generate`；发送走 `session_dials_for_send`；发送前先 upsert Pending）+ `export.rs`（SVG→PNG；**hex 写死有理**——脱 DOM 文档 `var(--color-*)` 解析不到；image 内联 data: URL 防 taint）+ 编辑器 `insert_ai_frame`（视口中心铸 Draft 框） | `generation_message_names_the_real_tools_and_the_three_steps` · `annotation_message_places_the_result_to_the_right_of_the_original` · `svg_export_embeds_images_as_data_urls` · `text_content_is_xml_escaped` · `insert_frame_ops_creates_a_centered_draft_frame_with_a_deleting_undo` · `armed_frame_sets_prompt_references_and_pending_status` |
 | 19 Decks | `decks.rs`（deck=文档数据经同一 ops 漏斗；帧序=阅读序启发式 center-x→center-y→id，**刻意不用选区序**，拖拽重排是纠正路径）+ `present.rs`（全屏播放，纯数学 fit） | `selected_frames_keeps_only_frames_in_reading_order` · `create_deck_ops_builds_upsert_with_reading_order_and_delete_undo` · `reorder_deck_ops_upserts_new_order_and_inverts_to_the_old` · `fit_zoom_is_the_min_ratio_and_centers_the_frame` · `letterbox_is_symmetric_on_the_unfitted_axis` · `slide_frames_resolves_deck_order_and_drops_dead_ids` |
-| 20 集成+QA | `tests/canvas_wire.rs`（`--features test-helpers`）+ `qa/canvas/{README.md,run.sh}`（九项清单每条带效果断言；mock 驱动配方两阶段拿 id；request_log oracle 无条件接线）+ `qa/canvas/latency_proxy.py`（真冲突窗仪器：上行延迟+下行直通，`-32031` 帧 oracle）+ `qa/canvas/member_seed.py`（member 场景播种器，⚠️ member 半边必须从 LAN IP 连——loopback 出示 ticket 仍是 operator） | `the_wire_chain_round_trips_every_canvas_response_through_the_contract` · `every_tool_the_panel_canvas_templates_name_resolves_in_the_real_tool_table`（散文工具名对真表求解）· `a_real_apply_broadcasts_a_frame_the_visibility_plane_scopes_correctly` |
+| 20 集成+QA | `tests/canvas_wire.rs`（`--features test-helpers`）+ `qa/canvas/{README.md,run.sh}`（十项清单每条带效果断言；mock 驱动配方两阶段拿 id；request_log oracle 无条件接线）+ `qa/canvas/latency_proxy.py`（真冲突窗仪器：上行延迟+下行直通，`-32031` 帧 oracle）+ `qa/canvas/member_seed.py`（member 场景播种器，⚠️ member 半边必须从 LAN IP 连——loopback 出示 ticket 仍是 operator） | `the_wire_chain_round_trips_every_canvas_response_through_the_contract` · `every_tool_the_panel_canvas_templates_name_resolves_in_the_real_tool_table`（散文工具名对真表求解）· `a_real_apply_broadcasts_a_frame_the_visibility_plane_scopes_correctly` |
 
 **棘轮账（2026-08-17，注记全文在 `definitions.rs` 常量 doc）**：`CATALOG_DESCRIPTION_CEILING_BYTES` 102 000→**102 955 B**（基线 101 872——旧 slack 已被兄弟轮耗到 +128，非本分支；canvas 份额 **+1 083 B**＝整份 DESCRIPTION，三问已答）；`REGISTRY_SCHEMA_CEILING_BYTES` 92 746→**92 798 B**（+52 B 全部是 origin/main 语音重构合并 `5ae1814ad` 的无主漂移，canvas 按构造贡献零——注册门控在 `canvas_store`）；`tools_without_an_unconditional_schema_are_pinned` 129→**130**（+1 canvas，generation 工具同类）。
+
+**画廊入左栏轮（2026-08-17 第三轮，worktree 分支 `worktree-canvas-gallery-sidebar`）**——重点是「把画廊迁到左侧栏、以列表展示标题」，而该形态**自带三个前置条件**，本轮一并补齐：
+
+| # | 落点 | 判据 / 守卫 |
+|---|---|---|
+| G1 画廊迁移 | 新 `views/canvas/library.rs`（17 文件）：`CanvasSidebar` 由 `ModeSidebar` 的 `PanelMode::Canvas` 臂渲染（`MemorySidebar` 同惯用形）；主区 `LibraryPane`/`LibraryRow` **删除**，换空态 `WelcomePane`。**三条 liveness 线留在 `CanvasView`**（keep-alive 挂载一次；侧栏随分区挂/卸，装在侧栏＝每次进画布重拉 + 订阅抖动 + 「库里有什么」的第二个答案） | `a_blank_query_keeps_every_row_in_the_servers_order` · `the_filter_matches_titles_and_ids_case_insensitively` |
+| G2 重命名接线 | `SetDocMeta` 的**第一个人类生产者**——op / 服务端 applier / 模型工具面随子系统出厂，人够不到，所以人建的每张画布永远叫 `Untitled`；标题一旦成为导航，这从缺憾变成前提。两个面（侧栏行内 / 编辑器标题）走同一个 `library::submit_title` → `rename_canvas`：同一道契约闸、同一个 no-op 跳过、同一份基准 revision 优先级、冲突重试一次（镜像工具面）。重试读 canvas 但**不 adopt 信封**（只取那一个整数，替换 doc 会丢掉用户正在拖的形状）。Enter 保留红字 / blur 丢弃，两条终局分岔是有意的 | `the_open_document_outranks_the_library_row_for_its_own_canvas` · `a_row_that_is_not_the_open_document_reads_its_own_state` · `an_unknown_canvas_has_no_known_state_rather_than_a_default` · `a_draft_that_trims_back_to_the_current_title_is_not_a_rename` · `an_admissible_change_is_sent_trimmed` · `an_inadmissible_title_is_refused_with_the_contract_gates_reason` |
+| G3 标题闸 | `title` 有两个写者（`canvas.create` 的可选 title、`SetDocMeta`），此前**两个都不校验**：形状数/ops/墨点/素材字节全有上限，唯一给人看的字符串一个都没有。`aleph_protocol::canvas::{MAX_TITLE_BYTES, check_title}` 单一源，Panel 调同一个函数。**只拒不改写**（`apply_ops` 存收到的；trim 归输入端）、**闸在写不在读**（存量长标题照常 list/get）。刻意不进工具 `DESCRIPTION`（拒绝语自陈其因，模型下一轮自愈，A2） | `the_title_cap_is_measured_in_the_unit_it_is_named_for`（bytes 名实相符，CJK 双向断言）· `a_blank_or_control_bearing_title_is_refused_with_a_reason` · `an_admissible_title_with_edge_whitespace_is_accepted_verbatim` · `create_refuses_an_inadmissible_title_instead_of_defaulting` · `a_set_doc_meta_over_the_title_cap_lands_nothing_from_its_batch`（批内兄弟 op 也不落盘、不烧 revision）· `a_control_character_in_a_title_is_refused` · `a_stored_title_that_predates_the_cap_still_lists_and_opens` |
+| G4 行重挂 bug | 旧 `<For key=(id, revision)>` ⇒ **正在画的那张画布的行每批 ops 重挂一次**，行内重命名输入框每笔失焦。修为 key=id + 行自己用 memo 读数据，且 memo 读在**叶子**上（包住整行的闭包会重建它返回的子树，而子树里就是那个输入框）。配套：`<Show>` 包 `<For>`——一个读 `rows` 的闭包包住 `For` 会每帧重建它，键控就成了装饰 | 结构性（真机 QA item 10「rename while drawing」；单测钉不住 DOM 生命周期） |
+| G5 加载态 | 宽端把「还没问过」渲染成「你没有画布」——**phone 端本来就有 `loaded` 判据，宽端没搬**（孪生子系统一边修好要主动搬）。`CanvasState.rows_loaded` 两个消费者共用，三态：加载中 / 空库 / 无匹配 | `rows_loaded` 在 loader 的**两条臂**都置位（失败由 `load_error` 报，留 false 会让列表永远说「加载中」）|
+| G6 熵减 | 顺手清掉 `aleph-panel` 的 4 条预存 clippy warning（`shape_view.rs` manual_contains · `ops.rs` manual_is_multiple_of ×2 · `browser_runtime_banner.rs` question_mark · `galaxy/interaction.rs` enum_variant_names 加带理由的 allow）——`cargo clippy -p aleph-panel --all-targets` 归零 | — |
+
+新 i18n 键（en/zh 同批）：`canvas.{search_placeholder,no_match,rename,select_hint,rename_busy,title_empty,title_too_long,title_control}`。
+
+**真机 QA（2026-08-17，全 PASS）**——`qa/canvas/run.sh` + chrome-devtools-mcp：
+- 冷加载三态经真 socket 抓到转折（t=659 ms「加载中...」→ t=691 ms「还没有画布」）——这一条**只有真 socket 观测得到**，单测握得住 `rows_loaded` 却握不住时序。
+- 两面重命名各自生效且互相到达（侧栏改 → 编辑器标题跟随，走的是 `canvas.updated` 帧；编辑器改 → 侧栏行跟随，走 `refresh_rows`）；trim 生效。
+- 拒绝两臂（空 / 超 200 B）显示本地化红字、输入框保持打开，且**一帧都没上 wire**（劫持 `WebSocket.prototype.send` 计数，零 `canvas.apply`）。
+- **行不重挂**：另一个客户端连打 5 批 ops，行 meta 逐次推进 1→6 个形状（证明测试非空转），同时 `document.contains(rowNode)`、`activeElement`、`selectionStart=6` 全程不变。
+- 搜索（CJK / 大小写不敏感拉丁 / id 前缀 / 无匹配另一句 / 清空复原服务端序）、Escape 取消不发请求（revision 不变）、删除开着的画布回落空态。
+- **新增 `qa/canvas/title_gate_probe.py`（12/12 PASS）**：控制字符那条臂**浏览器结构上够不到**——`<input type="text">` 的 DOM 值净化算法剥掉 CR/LF（真机第一轮就是这么"失败"的：改名成了 `onetwo`）。它是为工具面与裸 RPC 客户端存在的，探针对 `canvas.create` 与 `set_doc_meta` 两个写者各跑一遍，并钉住「被拒的批次连 revision 都不烧」与「恰好等于上限的标题被接受」。
+
+**本轮唯一的自我纠正**：`check_title` 一开始返回 `&'static str`，真机第一眼就看见中文界面里蹦出英文句子。改成闭集 `TitleRejection` 枚举（服务端 `Display` 给模型和日志，Panel 穷举 `match` 到 i18n）——第四个理由是**编译错误**而不是 UI 上的一片空白。顺带一条通用教训：**往 JSON 语言包插键时锚点必须唯一**，`"rename": "Rename",` 在 `chat` 块里先出现，`replace(..., 1)` 于是把三个画布键插进了聊天块（编译期报 `canvas_subkeys` 没有该方法才发现）。
 
 - **打磨话术**：「改任何 canvas 行为先读 [CANVAS.md](CANVAS.md)。『冲突怎么检测的』＝ Panel 按**错误码**（`api/canvas.rs::CanvasApplyError` 在 API 边界按 `aleph_protocol::jsonrpc::REVISION_CONFLICT` 分类；两侧读同一个共享常量，改号即编译错；2026-08-17 之前按 message 文本——那个短语匹配器与其对账测试已删，别复活）。『事件会乱序吗』＝不会按构造：`DocGuard::commit(&mut self)` 留锁、发布在临界区内。『HTML 素材直开 URL 会怎样』＝ text/plain（裁定不是回退），HTML 只在 sandboxed iframe srcdoc 渲染。『模型的 apply 要带 revision 吗』＝不带，工具自读自重试一次。『为什么工具没有 delete』＝整画布删除是 RPC 面 owner-only 动词。新增 addressed RPC/action 记得三面同一个谓词（`canvas_visible_to`），拒绝与不存在同形（no-oracle）。改 `views/canvas/` 逻辑先动纯函数模块+单测，组件只接线；改完跑 `cargo test -p aleph-panel --lib`（不是 check）。」
 
