@@ -184,7 +184,7 @@ pub fn topic_matches(topic: &str, pattern: &str) -> bool {
 /// Strings, numbers, booleans, and JSON null all work; nested objects compare
 /// structurally (rarely useful — prefer narrowing the path).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FieldPredicate {
+pub(crate) struct FieldPredicate {
     /// Dot-separated path inside the event's `data` object.
     pub field: String,
     /// Required value at that path for the event to be delivered.
@@ -199,11 +199,11 @@ pub struct FieldPredicate {
 /// `tools.changed` into per-`scope` channels without server-side knowledge
 /// of subscriber intent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TopicSubscription {
+pub(crate) struct TopicSubscription {
     /// Glob-style topic pattern (see [`topic_matches`]).
     pub pattern: String,
     #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
-    pub where_clause: Vec<FieldPredicate>,
+    pub(crate) where_clause: Vec<FieldPredicate>,
 }
 
 impl TopicSubscription {

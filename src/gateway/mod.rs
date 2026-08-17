@@ -151,7 +151,7 @@ pub use channel::{
     HealthStatus, InboundMessage, MessageId, OutboundMessage, SendResult, UserId,
 };
 pub use channel_registry::{ChannelHealthSummary, ChannelRegistry, ChannelStatusSummary};
-pub use event_bus::{topic_matches, TopicEvent, TopicFilter};
+pub use event_bus::{TopicEvent, TopicFilter};
 pub use events::GatewayEventFrame;
 pub use execution_adapter::ExecutionAdapter;
 pub use handlers::events::{
