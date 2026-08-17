@@ -106,7 +106,6 @@ pub mod route_config;
 pub mod routing_rules;
 pub mod runtimes;
 pub mod search_config;
-pub mod secret_approvals;
 pub mod secret_migration;
 pub mod secrets;
 pub mod security_config;
@@ -348,26 +347,7 @@ impl HandlerRegistry {
         registry.register("pty.close", pty::handle_close);
         registry.register("pty.list", pty::handle_list);
 
-        // Cron handlers (stubs — real handlers wired with CronService in Gateway startup)
-        registry.register("cron.list", cron::handle_list_stub);
-        registry.register("cron.get", cron::handle_get_stub);
-        registry.register("cron.create", cron::handle_create_stub);
-        registry.register("cron.update", cron::handle_update_stub);
-        registry.register("cron.delete", cron::handle_delete_stub);
-        registry.register("cron.status", cron::handle_status_stub);
-        registry.register("cron.run", cron::handle_run_stub);
-        registry.register("cron.runs", cron::handle_runs_stub);
-        registry.register("cron.toggle", cron::handle_toggle_stub);
-
-        // Heartbeat handlers (stubs — real handlers wired with HeartbeatService in Gateway startup)
-        registry.register("heartbeat.list", heartbeat::handle_list_stub);
-        registry.register("heartbeat.get", heartbeat::handle_get_stub);
-        registry.register("heartbeat.create", heartbeat::handle_create_stub);
-        registry.register("heartbeat.update", heartbeat::handle_update_stub);
-        registry.register("heartbeat.delete", heartbeat::handle_delete_stub);
-        registry.register("heartbeat.toggle", heartbeat::handle_toggle_stub);
-        registry.register("heartbeat.wake", heartbeat::handle_wake_stub);
-        registry.register("heartbeat.runs", heartbeat::handle_runs_stub);
+        // Heartbeat handlers — real handlers wired with HeartbeatService in Gateway startup.
 
         // Chat handlers (placeholders - actual handlers wired in Gateway::new())
         registry.register("chat.send", |req| async move {
@@ -1179,33 +1159,6 @@ mod tests {
         assert!(registry.has_method("chat.abort"));
         assert!(registry.has_method("chat.history"));
         assert!(registry.has_method("chat.clear"));
-    }
-
-    #[test]
-    fn test_heartbeat_handlers_registered() {
-        let registry = HandlerRegistry::new();
-        assert!(registry.has_method("heartbeat.list"));
-        assert!(registry.has_method("heartbeat.get"));
-        assert!(registry.has_method("heartbeat.create"));
-        assert!(registry.has_method("heartbeat.update"));
-        assert!(registry.has_method("heartbeat.delete"));
-        assert!(registry.has_method("heartbeat.toggle"));
-        assert!(registry.has_method("heartbeat.wake"));
-        assert!(registry.has_method("heartbeat.runs"));
-    }
-
-    #[test]
-    fn test_cron_handlers_registered() {
-        let registry = HandlerRegistry::new();
-        assert!(registry.has_method("cron.list"));
-        assert!(registry.has_method("cron.get"));
-        assert!(registry.has_method("cron.create"));
-        assert!(registry.has_method("cron.update"));
-        assert!(registry.has_method("cron.delete"));
-        assert!(registry.has_method("cron.status"));
-        assert!(registry.has_method("cron.run"));
-        assert!(registry.has_method("cron.runs"));
-        assert!(registry.has_method("cron.toggle"));
     }
 
     #[test]
