@@ -1,5 +1,14 @@
-//! Whiteboard canvas — `/canvas`: the library page, and (from Task 12) the
-//! editor.
+//! Whiteboard canvas — `/canvas`: the editor surface and the three liveness
+//! wires that feed it.
+//!
+//! The **library** is no longer here: it moved to the left column as
+//! [`library::CanvasSidebar`], so navigating between canvases no longer
+//! means leaving the one you are in. What stays in the main area is the
+//! open document — or, when none is open, a welcome pane pointing at the
+//! list. The wires below stay here rather than moving with the list
+//! because this view is mounted once for the life of the app while the
+//! sidebar remounts on every section switch; see `library.rs`'s module
+//! doc for the full argument.
 //!
 //! Not the memory galaxy: that renderer moved to `views/memory/galaxy/` when
 //! the whiteboard claimed the `canvas` name. This module is the Panel half of
@@ -32,6 +41,7 @@ mod export;
 mod freehand;
 mod id_mint;
 mod interaction;
+mod library;
 mod ops;
 mod present;
 mod reconcile;
@@ -40,8 +50,9 @@ mod text_edit;
 mod toolbar;
 mod viewport;
 
+pub use library::CanvasSidebar;
+
 use aleph_protocol::canvas as canvas_proto;
-use aleph_protocol::canvas::CanvasRow;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -51,64 +62,7 @@ use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use crate::state::canvas::CanvasState;
 
-/// Epoch milliseconds → local `YYYY-MM-DD HH:MM` label (browser timezone,
-/// same idiom as `tasks.rs::format_timestamp_ms`).
-fn updated_label(ts_ms: i64) -> String {
-    let date = js_sys::Date::new_0();
-    date.set_time(ts_ms as f64);
-    let y = date.get_full_year();
-    let mo = date.get_month() + 1;
-    let d = date.get_date();
-    let hh = date.get_hours();
-    let mm = date.get_minutes();
-    format!("{y}-{mo:02}-{d:02} {hh:02}:{mm:02}")
-}
-
-/// Fetch one canvas into the shared state, keeping the answer only if that
-/// canvas is still the open one by the time it arrives.
-///
-/// One function rather than three inlined copies (open-click, create, frame
-/// refresh), because the staleness check is the part a copy would drop.
-fn fetch_open_doc(
-    state: DashboardState,
-    canvas: CanvasState,
-    i18n: crate::i18n::I18nCtx,
-    id: String,
-) {
-    spawn_local(async move {
-        let fetched = CanvasApi::get(&state, &id).await;
-        // Re-check *after* the await: the user may have closed or switched
-        // canvases while the fetch was in flight, and landing a stale
-        // envelope would reopen the one they just left.
-        let Some(open_now) = canvas.open_canvas.try_get_untracked() else {
-            return;
-        };
-        if open_now.as_deref() != Some(id.as_str()) {
-            return;
-        }
-        match fetched {
-            Ok(envelope) => canvas.adopt_envelope(envelope),
-            Err(e) => {
-                canvas
-                    .load_error
-                    .set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
-                        format!("Failed to open canvas: {e}")
-                    })));
-            }
-        }
-    });
-}
-
-/// Refetch the library rows. Errors are ignored here — this runs on event
-/// frames and after writes, where the load `Effect` (which does classify
-/// errors) remains the surface that reports a broken connection.
-fn refresh_rows(state: DashboardState, canvas: CanvasState) {
-    spawn_local(async move {
-        if let Ok(list) = CanvasApi::list(&state).await {
-            canvas.rows.set(list);
-        }
-    });
-}
+use library::{create_canvas, fetch_open_doc, refresh_rows};
 
 #[component]
 #[must_use]
@@ -140,6 +94,10 @@ pub fn CanvasView() -> impl IntoView {
                         })));
                 }
             }
+            // Both arms: the question has now been asked. A failure is
+            // reported by `load_error`; leaving `rows_loaded` false would
+            // make the list say "still loading" forever instead.
+            canvas.rows_loaded.set(true);
         });
     });
 
@@ -208,72 +166,27 @@ pub fn CanvasView() -> impl IntoView {
     view! {
         {move || match canvas.open_canvas.get() {
             Some(_) => view! { <OpenCanvasPane /> }.into_any(),
-            None => view! { <LibraryPane /> }.into_any(),
+            None => view! { <WelcomePane /> }.into_any(),
         }}
     }
 }
 
-/// The library: every canvas the caller can see, a create button, and a
-/// per-row delete with inline confirmation.
+/// Shown while no canvas is open: what this section is, and the one action
+/// that gets you started.
+///
+/// The list that used to fill this space is now the left column, so this pane
+/// deliberately does **not** repeat it — two lists of the same rows in one
+/// viewport would be two answers to "which canvases are there", and the
+/// second one would be the stale one.
 #[component]
-fn LibraryPane() -> impl IntoView {
+fn WelcomePane() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
-
-    // Row id awaiting delete confirmation. Inline (not a modal): the second
-    // click lands where the first one did.
-    let pending_delete = RwSignal::new(Option::<String>::None);
     let creating = RwSignal::new(false);
-
-    let on_create = move |_| {
-        if creating.get_untracked() {
-            return;
-        }
-        creating.set(true);
-        spawn_local(async move {
-            match CanvasApi::create(&state, None, None).await {
-                Ok(doc) => {
-                    refresh_rows(state, canvas);
-                    // The create envelope carries no asset_base (the server
-                    // mints one only on `canvas.get`), so opening goes
-                    // through the same fetch as a row click.
-                    canvas.open_canvas.set(Some(doc.id.clone()));
-                    canvas.doc.set(None);
-                    fetch_open_doc(state, canvas, i18n, doc.id);
-                }
-                Err(e) => {
-                    canvas
-                        .load_error
-                        .set(Some(admin_refusal::settings_write_error(i18n, &e, |e| {
-                            format!("Failed to create canvas: {e}")
-                        })));
-                }
-            }
-            creating.set(false);
-        });
-    };
 
     view! {
         <div class="flex flex-col h-full">
-            <div class="p-6 border-b border-border aleph-content-top flex items-start justify-between gap-4">
-                <div>
-                    <h1 class="text-2xl font-bold text-text-primary">
-                        {t!(i18n, canvas.title)}
-                    </h1>
-                    <p class="mt-1 text-sm text-text-secondary">
-                        {t!(i18n, canvas.subtitle)}
-                    </p>
-                </div>
-                <button
-                    class="px-3.5 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-medium transition-colors disabled:opacity-50 flex-shrink-0"
-                    prop:disabled=move || creating.get()
-                    on:click=on_create
-                >
-                    {t!(i18n, canvas.new_canvas)}
-                </button>
-            </div>
-
             {move || {
                 canvas.load_error.get().map(|msg| view! {
                     <div class="mx-6 mt-4 px-4 py-3 rounded-lg bg-warning-subtle border border-warning text-sm text-text-primary">
@@ -281,138 +194,100 @@ fn LibraryPane() -> impl IntoView {
                     </div>
                 })
             }}
-
-            <div class="flex-1 overflow-y-auto p-6">
-                {move || {
-                    let rows = canvas.rows.get();
-                    if rows.is_empty() {
-                        return view! {
-                            <div class="h-full flex items-center justify-center text-sm text-text-tertiary">
-                                {t!(i18n, canvas.empty)}
-                            </div>
-                        }
-                        .into_any();
-                    }
-                    view! {
-                        <div class="space-y-2 max-w-3xl">
-                            <For
-                                each=move || canvas.rows.get()
-                                key=|row| (row.id.clone(), row.revision)
-                                children=move |row: CanvasRow| {
-                                    view! { <LibraryRow row=row pending_delete=pending_delete /> }
-                                }
-                            />
-                        </div>
-                    }
-                    .into_any()
-                }}
+            <div class="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
+                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+                     class="text-text-tertiary">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M7 14c1.5-4 3-4 4.5-1s3 3 5.5-3" />
+                </svg>
+                <h1 class="text-lg font-semibold text-text-primary">
+                    {t!(i18n, canvas.title)}
+                </h1>
+                <p class="max-w-sm text-sm text-text-secondary">
+                    {t!(i18n, canvas.subtitle)}
+                </p>
+                <p class="text-xs text-text-tertiary">
+                    {t!(i18n, canvas.select_hint)}
+                </p>
+                <button
+                    class="mt-2 px-3.5 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-medium transition-colors disabled:opacity-50"
+                    prop:disabled=move || creating.get()
+                    on:click=move |_| create_canvas(state, canvas, i18n, creating)
+                >
+                    {t!(i18n, canvas.new_canvas)}
+                </button>
             </div>
         </div>
     }
 }
 
+/// The open document: header (way back, editable title, shape count) over the
+/// editor surface. The editor mounts only once the fetch has landed — its
+/// camera gestures and key listeners have no business existing for a spinner.
+///
+/// The title here is the **second** rename surface, and it goes through
+/// `library::submit_title` exactly like the sidebar row does: same gate, same
+/// no-op skip, same base-revision precedence, same one-retry conflict
+/// handling. Two surfaces, one function — a hand-written second copy is how
+/// one of them quietly stops working.
 #[component]
-fn LibraryRow(row: CanvasRow, pending_delete: RwSignal<Option<String>>) -> impl IntoView {
+fn OpenCanvasPane() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
 
-    let id = row.id.clone();
-    let open_id = row.id.clone();
-    let arm_id = row.id.clone();
-    let confirm_id = row.id.clone();
-    let is_armed = move || pending_delete.get().as_deref() == Some(id.as_str());
+    // Title editing, local to this pane: an edit in progress is this visit's
+    // interaction state and must not survive closing the canvas.
+    let editing_title = RwSignal::new(false);
+    let title_draft = RwSignal::new(String::new());
+    // `&'static str`, not `Option<String>`: this holds the contract gate's
+    // refusal reason, minted from a `const`, and the type is what proves it
+    // can never carry an unclassified server error.
+    let title_error = RwSignal::new(Option::<&'static str>::None);
+    let title_input = NodeRef::<leptos::html::Input>::new();
 
-    let on_open = move |_| {
-        canvas.open_canvas.set(Some(open_id.clone()));
-        canvas.doc.set(None);
-        fetch_open_doc(state, canvas, i18n, open_id.clone());
+    let title_now = move || {
+        canvas
+            .doc
+            .with(|d| d.as_ref().map(|d| d.title.clone()))
+            .unwrap_or_default()
     };
 
-    let on_confirm_delete = move |ev: leptos::ev::MouseEvent| {
-        ev.stop_propagation();
-        let id = confirm_id.clone();
+    // Deferred a tick for the same reason as the sidebar's twin: the input is
+    // created inside a nested reactive closure, so the `NodeRef` is not bound
+    // when this effect first runs.
+    Effect::new(move |_| {
+        if !editing_title.get() {
+            return;
+        }
         spawn_local(async move {
-            match CanvasApi::delete(&state, &id).await {
-                Ok(()) => refresh_rows(state, canvas),
-                Err(e) => {
-                    canvas
-                        .load_error
-                        .set(Some(admin_refusal::settings_write_error(i18n, &e, |e| {
-                            format!("Failed to delete canvas: {e}")
-                        })));
-                }
+            gloo_timers::future::TimeoutFuture::new(10).await;
+            if let Some(el) = title_input.get() {
+                let input: &web_sys::HtmlInputElement = &el;
+                let _ = input.focus();
+                input.select();
             }
-            pending_delete.set(None);
         });
+    });
+
+    // Same two endings as the sidebar row: Enter keeps a refusal visible,
+    // blur drops it rather than trapping the user in a red input.
+    let commit_title = move |keep_open_on_refusal: bool| {
+        let Some(id) = canvas.open_canvas.get_untracked() else {
+            editing_title.set(false);
+            return;
+        };
+        let draft = title_draft.get_untracked();
+        if let Err(why) = library::submit_title(state, canvas, i18n, &id, &draft) {
+            if keep_open_on_refusal {
+                title_error.set(Some(why));
+                return;
+            }
+        }
+        editing_title.set(false);
+        title_error.set(None);
     };
-
-    view! {
-        <div
-            class="group flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-surface-raised hover:border-primary/50 cursor-pointer transition-colors"
-            on:click=on_open
-        >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-                 class="text-text-tertiary flex-shrink-0">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M7 14c1.5-4 3-4 4.5-1s3 3 5.5-3" />
-            </svg>
-            <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium text-text-primary truncate">{row.title.clone()}</div>
-                <div class="text-xs text-text-tertiary mt-0.5">
-                    {row.shape_count.to_string()}
-                    " " {t!(i18n, canvas.shapes)}
-                    " · " {updated_label(row.updated_at_ms)}
-                </div>
-            </div>
-            {move || if is_armed() {
-                view! {
-                    <div class="flex items-center gap-2" on:click=|ev| ev.stop_propagation()>
-                        <span class="text-xs text-text-secondary">
-                            {t!(i18n, common.confirm_delete)}
-                        </span>
-                        <button
-                            class="px-2.5 py-1 rounded-md bg-danger text-white text-xs font-medium"
-                            on:click=on_confirm_delete.clone()
-                        >
-                            {t!(i18n, common.delete)}
-                        </button>
-                        <button
-                            class="px-2.5 py-1 rounded-md border border-border text-xs text-text-secondary hover:bg-surface-sunken"
-                            on:click=move |ev| { ev.stop_propagation(); pending_delete.set(None); }
-                        >
-                            {t!(i18n, common.cancel)}
-                        </button>
-                    </div>
-                }.into_any()
-            } else {
-                let arm = arm_id.clone();
-                view! {
-                    <button
-                        class="opacity-0 group-hover:opacity-100 p-1.5 rounded-md text-text-tertiary hover:text-danger hover:bg-danger/10 transition-all"
-                        title=move || t_string!(i18n, common.delete).to_string()
-                        on:click=move |ev| { ev.stop_propagation(); pending_delete.set(Some(arm.clone())); }
-                    >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                    </button>
-                }.into_any()
-            }}
-        </div>
-    }
-}
-
-/// The open document: header (way back, title, shape count) over the editor
-/// surface. The editor mounts only once the fetch has landed — its camera
-/// gestures and key listeners have no business existing for a spinner.
-#[component]
-fn OpenCanvasPane() -> impl IntoView {
-    let canvas = expect_context::<CanvasState>();
-    let i18n = use_i18n();
 
     // Memoized on purpose: the raw `doc.with(|d| d.is_none())` closure would
     // re-run — and rebuild the editor, discarding its drag/undo/queue state —
@@ -434,9 +309,50 @@ fn OpenCanvasPane() -> impl IntoView {
                     </svg>
                     {t!(i18n, canvas.back_to_library)}
                 </button>
-                <h2 class="text-base font-semibold text-text-primary truncate">
-                    {move || canvas.doc.with(|d| d.as_ref().map(|d| d.title.clone())).unwrap_or_default()}
-                </h2>
+                {move || if editing_title.get() {
+                    view! {
+                        <input
+                            node_ref=title_input
+                            type="text"
+                            prop:value=move || title_draft.get()
+                            on:input=move |ev| {
+                                title_draft.set(event_target_value(&ev));
+                                title_error.set(None);
+                            }
+                            on:blur=move |_| commit_title(false)
+                            on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                                match ev.key().as_str() {
+                                    "Enter" => commit_title(true),
+                                    "Escape" => {
+                                        editing_title.set(false);
+                                        title_error.set(None);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            class="min-w-0 flex-1 max-w-md px-2 py-1 bg-surface-sunken border border-primary/60 rounded text-base font-semibold text-text-primary focus:outline-none"
+                        />
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <h2
+                            class="text-base font-semibold text-text-primary truncate cursor-text hover:text-primary transition-colors"
+                            title=move || t_string!(i18n, canvas.rename).to_string()
+                            on:click=move |_| {
+                                title_draft.set(title_now());
+                                title_error.set(None);
+                                editing_title.set(true);
+                            }
+                        >
+                            {title_now}
+                        </h2>
+                    }
+                    .into_any()
+                }}
+                {move || title_error.get().map(|why| view! {
+                    <span class="text-xs text-danger">{why}</span>
+                })}
                 <span class="text-xs text-text-tertiary">
                     {move || canvas.doc.with(|d| d.as_ref().map(|d| d.shapes.len().to_string())).unwrap_or_default()}
                     " " {t!(i18n, canvas.shapes)}

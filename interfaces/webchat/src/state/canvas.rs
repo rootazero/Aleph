@@ -88,6 +88,18 @@ pub struct CanvasState {
     pub open_canvas: RwSignal<Option<String>>,
     /// Library listing (visible slice, server-filtered).
     pub rows: RwSignal<Vec<CanvasRow>>,
+    /// Whether `canvas.list` has answered at least once this session.
+    ///
+    /// Two consumers need it and neither can derive it: an empty `rows` is
+    /// both "you have no canvases" and "nobody has asked yet", and rendering
+    /// the first sentence for the second state tells the user their library
+    /// is empty before the question has been put. (The phone screen already
+    /// carried a local `loaded` flag for exactly this; the wide surface did
+    /// not, and said "No canvases yet" during every cold load.) Set by the
+    /// loader in `views/canvas/mod.rs` — including on failure, where "we
+    /// asked and it went wrong" is reported by `load_error`, not by
+    /// pretending the question is still open.
+    pub rows_loaded: RwSignal<bool>,
     /// The open document, as last fetched or reconciled.
     pub doc: RwSignal<Option<CanvasDoc>>,
     /// Capability base URL for `<image href>` — `{asset_base}/{asset_id}`.
@@ -118,6 +130,7 @@ impl CanvasState {
         Self {
             open_canvas: RwSignal::new(None),
             rows: RwSignal::new(Vec::new()),
+            rows_loaded: RwSignal::new(false),
             doc: RwSignal::new(None),
             asset_base: RwSignal::new(None),
             selection: RwSignal::new(Vec::new()),
