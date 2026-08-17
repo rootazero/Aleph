@@ -30,7 +30,7 @@
 //! did nothing on the second surface is exactly the failure this codebase
 //! keeps paying for.
 
-use aleph_protocol::canvas::{check_title, CanvasDoc, CanvasOp, CanvasRow};
+use aleph_protocol::canvas::{check_title, CanvasDoc, CanvasOp, CanvasRow, TitleRejection};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use web_sys::HtmlInputElement;
@@ -237,7 +237,21 @@ pub(super) enum TitleEdit {
     /// Same title as now: close the editor, touch nothing.
     Unchanged,
     /// Inadmissible; the reason is for whoever typed it.
-    Refused(&'static str),
+    Refused(TitleRejection),
+}
+
+/// Localized rendering of a title refusal.
+///
+/// An exhaustive `match` on purpose, and the reason [`TitleRejection`] is an
+/// enum rather than a sentence: a fourth refusal added in the contract is a
+/// compile error right here, instead of a blank line where a message should
+/// have been.
+pub(super) fn rejection_label(i18n: I18nCtx, why: TitleRejection) -> String {
+    match why {
+        TitleRejection::Empty => t_string!(i18n, canvas.title_empty).to_string(),
+        TitleRejection::TooLong => t_string!(i18n, canvas.title_too_long).to_string(),
+        TitleRejection::ControlCharacter => t_string!(i18n, canvas.title_control).to_string(),
+    }
 }
 
 /// Decide a title edit. `draft` is taken as typed and trimmed here — trimming
@@ -268,7 +282,7 @@ pub(super) fn submit_title(
     i18n: I18nCtx,
     id: &str,
     draft: &str,
-) -> Result<(), &'static str> {
+) -> Result<(), TitleRejection> {
     let current = canvas
         .rows
         .with_untracked(|rows| {
@@ -298,7 +312,7 @@ pub(super) fn submit_title(
 ///
 /// # Conflict handling mirrors the tool face
 ///
-/// The base revision comes from [`pick_base_revision`], and a
+/// The base revision comes from [`pick_known_state`], and a
 /// [`CanvasApplyError::Conflict`] is retried **once** against a freshly read
 /// revision — the same discipline `builtin_tools::canvas` applies for the
 /// same reason: a rename is not a shape edit, it has nothing to rebase, so
@@ -392,12 +406,14 @@ pub fn CanvasSidebar() -> impl IntoView {
     // edits at a time, so one input ref serves them all (chat_sidebar idiom).
     let renaming = RwSignal::new(Option::<String>::None);
     let rename_text = RwSignal::new(String::new());
-    // Why `&'static str` and not `Option<String>`: this signal holds the
-    // reason `check_title` refused, which is minted here from a `const` — it
-    // structurally cannot hold a server error, and the type says so. That is
-    // a stronger statement than an entry on an allowlist would be (see
-    // `admin_refusal`'s `no_error_signal_is_fed_an_unclassified_error`).
-    let rename_error = RwSignal::new(Option::<&'static str>::None);
+    // Why a `TitleRejection` and not an `Option<String>`: this signal holds
+    // the contract gate's verdict, which structurally cannot be a server
+    // error — the type says so, which is a stronger statement than an entry
+    // on an allowlist would be (see `admin_refusal`'s
+    // `no_error_signal_is_fed_an_unclassified_error`) — and it keeps the
+    // wording out of the signal, so the message is rendered in the reader's
+    // language at the point it is displayed.
+    let rename_error = RwSignal::new(Option::<TitleRejection>::None);
     let input_ref = NodeRef::<leptos::html::Input>::new();
 
     // The filtered slice, memoized: `PartialEq` dedupe means a `canvas.list`
@@ -556,7 +572,7 @@ fn LibraryRow(
     pending_delete: RwSignal<Option<String>>,
     renaming: RwSignal<Option<String>>,
     rename_text: RwSignal<String>,
-    rename_error: RwSignal<Option<&'static str>>,
+    rename_error: RwSignal<Option<TitleRejection>>,
     input_ref: NodeRef<leptos::html::Input>,
     commit_rename: Callback<bool>,
 ) -> impl IntoView {
@@ -700,7 +716,7 @@ fn LibraryRow(
 
             {move || (is_renaming.get() && rename_error.get().is_some()).then(|| view! {
                 <div class="mt-1 text-[11px] text-danger">
-                    {move || rename_error.get().unwrap_or_default()}
+                    {move || rename_error.get().map(|why| rejection_label(i18n, why))}
                 </div>
             })}
 
@@ -849,14 +865,14 @@ mod tests {
     /// who typed it learns what to change.
     #[test]
     fn an_inadmissible_title_is_refused_with_the_contract_gates_reason() {
-        let TitleEdit::Refused(why) = decide_title_edit("   ", "Roadmap") else {
-            panic!("a blank draft must be refused");
-        };
-        assert_eq!(Err(why), check_title(""), "the reason is the gate's own");
-
-        assert!(matches!(
+        assert_eq!(
+            decide_title_edit("   ", "Roadmap"),
+            TitleEdit::Refused(TitleRejection::Empty),
+            "the verdict is the contract gate's own, not a local re-derivation"
+        );
+        assert_eq!(
             decide_title_edit(&"x".repeat(1000), "Roadmap"),
-            TitleEdit::Refused(_)
-        ));
+            TitleEdit::Refused(TitleRejection::TooLong)
+        );
     }
 }

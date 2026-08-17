@@ -44,19 +44,55 @@ pub const MAX_TITLE_BYTES: usize = 200;
 /// the caller sent. Trimming belongs at the input edge (the Panel's rename
 /// helper trims before calling this).
 ///
-/// Returns the reason on refusal — a sentence for a human and for a model
-/// (the `canvas` tool passes it straight back so the model can self-heal).
-pub fn check_title(title: &str) -> Result<(), &'static str> {
+/// Returns [`TitleRejection`] on refusal — an enum rather than a sentence,
+/// because both consumers need a different rendering of the same fact and one
+/// of them is localized. See that type.
+pub fn check_title(title: &str) -> Result<(), TitleRejection> {
     if title.trim().is_empty() {
-        return Err("canvas title must not be empty");
+        return Err(TitleRejection::Empty);
     }
     if title.len() > MAX_TITLE_BYTES {
-        return Err("canvas title exceeds 200 bytes");
+        return Err(TitleRejection::TooLong);
     }
     if title.chars().any(char::is_control) {
-        return Err("canvas title must not contain control characters");
+        return Err(TitleRejection::ControlCharacter);
     }
     Ok(())
+}
+
+/// Why [`check_title`] refused.
+///
+/// A closed enum, not the sentence itself, because the refusal has two
+/// audiences that cannot share one string: the server hands it to models and
+/// logs in English (via [`Display`](std::fmt::Display)), and the Panel shows
+/// it to a person in their own language. A `&'static str` would have forced
+/// the Panel either to display English or to pattern-match on English prose —
+/// and a fourth reason added here would then render as nothing at all, in
+/// silence. As an enum, the Panel's mapping is an exhaustive `match`: the
+/// next variant is a compile error on every surface that renders one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleRejection {
+    /// Blank, or nothing but whitespace.
+    Empty,
+    /// Over [`MAX_TITLE_BYTES`].
+    TooLong,
+    /// Carries a control character — a newline would break the single-line
+    /// row the title is now navigated by, and is the shape that forges
+    /// structure in text a model reads back.
+    ControlCharacter,
+}
+
+impl std::fmt::Display for TitleRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("canvas title must not be empty"),
+            Self::TooLong => write!(f, "canvas title exceeds {MAX_TITLE_BYTES} bytes"),
+            Self::ControlCharacter => {
+                f.write_str("canvas title must not contain control characters")
+            }
+        }
+    }
 }
 
 /// Lexicographic fractional index over `0-9A-Za-z` (ASCII order of the digits
@@ -630,10 +666,16 @@ mod tests {
         for bad in ["", "   ", "\u{9}\u{9}"] {
             assert!(check_title(bad).is_err(), "{bad:?} must be refused");
         }
-        let reason = check_title("one\ntwo").expect_err("newlines are control characters");
+        assert_eq!(
+            check_title("one\ntwo"),
+            Err(TitleRejection::ControlCharacter),
+            "a newline is a control character"
+        );
         assert!(
-            reason.contains("control"),
-            "the refusal names its cause so a model can self-heal: {reason}"
+            TitleRejection::ControlCharacter
+                .to_string()
+                .contains("control"),
+            "the English rendering names its cause so a model can self-heal"
         );
     }
 

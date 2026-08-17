@@ -241,10 +241,11 @@ fn OpenCanvasPane() -> impl IntoView {
     // interaction state and must not survive closing the canvas.
     let editing_title = RwSignal::new(false);
     let title_draft = RwSignal::new(String::new());
-    // `&'static str`, not `Option<String>`: this holds the contract gate's
-    // refusal reason, minted from a `const`, and the type is what proves it
-    // can never carry an unclassified server error.
-    let title_error = RwSignal::new(Option::<&'static str>::None);
+    // A `TitleRejection`, not an `Option<String>`: the type is what proves
+    // this can never carry an unclassified server error, and it keeps the
+    // wording out of the signal so the message renders in the reader's
+    // language where it is displayed.
+    let title_error = RwSignal::new(Option::<aleph_protocol::canvas::TitleRejection>::None);
     let title_input = NodeRef::<leptos::html::Input>::new();
 
     let title_now = move || {
@@ -351,7 +352,7 @@ fn OpenCanvasPane() -> impl IntoView {
                     .into_any()
                 }}
                 {move || title_error.get().map(|why| view! {
-                    <span class="text-xs text-danger">{why}</span>
+                    <span class="text-xs text-danger">{library::rejection_label(i18n, why)}</span>
                 })}
                 <span class="text-xs text-text-tertiary">
                     {move || canvas.doc.with(|d| d.as_ref().map(|d| d.shapes.len().to_string())).unwrap_or_default()}
