@@ -8,6 +8,12 @@
 //! [`GalaxyCanvas`]: crate::views::memory::galaxy
 
 /// Pointer events the galaxy emits to the host view.
+///
+/// The shared `Node` suffix is deliberate and not redundancy: these are the
+/// node-directed events specifically, and the graph emits camera and
+/// selection-box events elsewhere. Dropping it would leave `CanvasEvent::Select`,
+/// which does not say what was selected.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone)]
 pub enum CanvasEvent {
     /// A node was clicked.

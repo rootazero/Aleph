@@ -436,13 +436,13 @@ mod tests {
             // Random initial doc.
             let mut shapes = Vec::new();
             for id in ids {
-                if lcg(&mut seed) % 2 == 0 {
+                if lcg(&mut seed).is_multiple_of(2) {
                     shapes.push(note(id, (lcg(&mut seed) % 1000) as f64));
                 }
             }
             let mut decks = Vec::new();
             for id in deck_ids {
-                if lcg(&mut seed) % 2 == 0 {
+                if lcg(&mut seed).is_multiple_of(2) {
                     decks.push(Deck {
                         id: id.to_string(),
                         title: format!("t{}", lcg(&mut seed) % 10),

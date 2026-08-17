@@ -764,7 +764,7 @@ pub(super) fn HtmlFrameOverlay() -> impl IntoView {
                     })
                 });
                 let selected = Memo::new(move |_| {
-                    canvas.selection.with(|sel| sel.iter().any(|x| *x == shape_id))
+                    canvas.selection.with(|sel| sel.contains(&shape_id))
                 });
                 let srcdoc = Memo::new(move |_| {
                     cache_epoch.get();
