@@ -1,0 +1,115 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/fetch",
+  "files_scanned": [
+    "src/fetch/mod.rs",
+    "src/fetch/factory.rs",
+    "src/fetch/provider.rs",
+    "src/fetch/registry.rs",
+    "src/fetch/providers/mod.rs",
+    "src/fetch/providers/crawl4ai.rs",
+    "src/fetch/providers/firecrawl.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/), read-before-write triage",
+  "findings": [
+    {
+      "id": "sw-fetch-2",
+      "module": "src/fetch",
+      "files": ["src/fetch/factory.rs:94-97"],
+      "severity": "low",
+      "form": 1,
+      "produced": "impl Default for FetchProviderFactoryRegistry",
+      "produced_location": "src/fetch/factory.rs:94-97",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "The 4-line Default impl is a pure delegate to with_defaults(). rg -n 'FetchProviderFactoryRegistry::default' src/ bin/ interfaces/ shared/ returns zero hits; rg -n '<FetchProviderFactoryRegistry as Default>::default' returns zero hits. Sole production construction is FetchProviderFactoryRegistry::with_defaults() at src/fetch/registry.rs:15. The Default impl adds no behaviour over the existing public API and is not consumed anywhere in src/, bin/, interfaces/, or shared/. Removal is API-surface-only and breaks no caller.",
+      "proposed_change": "Delete the four-line impl Default for FetchProviderFactoryRegistry block (factory.rs:94-97). Public methods with_defaults()/get()/factories field are preserved unchanged.",
+      "risk": "Low. Pure removal of dead trait impl; no callers to update. Future code that wants Default semantics can call .with_defaults() directly.",
+      "verification": "rg 'FetchProviderFactoryRegistry::default' src/ bin/ interfaces/ shared/ stays empty after CUT. src/fetch/registry.rs:15 (FetchProviderFactoryRegistry::with_defaults()) compiles and behaves identically. cargo check -p alephcore expected green (no callers to update).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-fetch-3",
+      "module": "src/fetch",
+      "files": ["src/fetch/registry.rs:75-77"],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub fn is_empty(&self) -> bool on FetchRegistry",
+      "produced_location": "src/fetch/registry.rs:75-77",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "FetchRegistry::is_empty() is defined as a small convenience wrapper around self.order.is_empty() but has no caller in src/, bin/, interfaces/, or shared/. The constructor at executor/builtin_registry/builder/constructor/mod.rs:72-77 passes registry.select() directly to WebFetchTool::with_fetch_providers(...); emptiness is checked inside WebFetchTool via its own field (self.fetch_providers.is_empty() at web_fetch/mod.rs:151). Two paths: (a) CUT — callers can use registry.select().is_empty() at their discretion; (b) CONNECT — add a registry.is_empty() guard before with_fetch_providers (redundant but documents intent). Option (a) is recommended.",
+      "proposed_change": "Preferred: CUT — delete FetchRegistry::is_empty (lines 75-77) and document its absence. If a future call site needs emptiness, prefer `registry.select().is_empty()` over adding the helper back.",
+      "risk": "Low. Public method removal is API-observable in principle, but no Aleph workspace consumer references it.",
+      "verification": "rg 'is_empty' src/fetch/ returns no FetchRegistry::is_empty hits after CUT. The constructor at executor/builtin_registry/builder/constructor/mod.rs:72-77 is unchanged. cargo check -p alephcore expected green.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-fetch-4",
+      "module": "src/fetch",
+      "files": ["src/config/types/fetch.rs:46", "src/fetch/factory.rs:54", "src/fetch/providers/crawl4ai.rs:22", "src/gateway/handlers/fetch_config.rs:445"],
+      "severity": "medium",
+      "form": 5,
+      "produced": "FetchBackendConfig::timeout_seconds: Option<u64>",
+      "produced_location": "src/config/types/fetch.rs:46",
+      "consumer_location": "src/fetch/providers/crawl4ai.rs:22 (crawl4ai only); none for firecrawl",
+      "decision": "DECIDE",
+      "rationale": "For the firecrawl variant, timeout_seconds is silently inert. FirecrawlFetchFactory::build at factory.rs:54 uses parameter name `_backend: &FetchBackendConfig` — the underscore-prefixed parameter name is the unambiguous signal that the entire backend struct is ignored. The firecrawl HTTP client is constructed via search::providers::base::build_client() (firecrawl.rs:42,52), whose timeout is governed by the search-side config (Decision A reuse). The fetch_config test handler at fetch_config.rs:437-454 also bypasses the FetchBackendConfig struct for firecrawl (passes raw base_url/api_key directly to FirecrawlFetchProvider::new). The firecrawl-side field is therefore intentionally inert by design, but no operator-facing UI hints explain the inertness. Recent rustdoc at config/types/policies/web_fetch.rs:52 documents the behaviour: 'timeout_seconds: 60 (crawl4ai only; firecrawl's timeout comes from the search-side HTTP client).' Three readings: (A) keep inert + improve UI hint, (B) split FetchBackendConfig into per-provider structs (large refactor), (C) make firecrawl honour timeout_seconds by piping it into reqwest::ClientBuilder::timeout (overlaps with the search-side client). Status quo (A) is recommended.",
+      "proposed_change": "No code change in src/fetch/. Recommendation: forward a UI hint to interfaces/cli, interfaces/tui, and interfaces/webchat owners: 'Firecrawl timeout is governed by Search settings; this field is read only for crawl4ai.'",
+      "risk": "None to runtime. UX risk: operators configuring [fetch].backends.firecrawl.timeout_seconds will see no effect.",
+      "verification": "rg 'timeout_seconds' src/gateway/handlers/fetch_config.rs | grep -i firecrawl shows zero firecrawl-side reads (the field is not piped through FirecrawlFetchProvider::new at line 445). UI owners can audit their fetch-settings pages for the field's appearance.",
+      "existing_review_ref": "review-results/fetch-audit-2026-08-16.json cross-reference DECIDE section (implicit firecrawl-timeout-inert-knob concern, not previously formalised as a CUT/CONNECT finding)"
+    }
+  ],
+  "cross_reference": {
+    "prior_audits": [
+      {
+        "path": "review-results/fetch-audit-2026-08-16.json",
+        "findings_total": 1,
+        "findings_status": {
+          "sw-fetch-1": "CUT was applied; src/fetch/mod.rs:13 is now empty (only FetchProvider + FetchRegistry re-exports remain on lines 15-16). Closed."
+        }
+      }
+    ],
+    "wired_symbols_summary": {
+      "producer_count": 22,
+      "wired_producers": [
+        "FetchProvider (trait)",
+        "FetchBuildCtx",
+        "FetchProviderFactory (trait)",
+        "Crawl4aiFetchFactory",
+        "FirecrawlFetchFactory",
+        "FetchProviderFactoryRegistry::with_defaults",
+        "FetchProviderFactoryRegistry::get",
+        "FetchRegistry",
+        "FetchRegistry::from_config",
+        "FetchRegistry::select",
+        "Crawl4aiFetchProvider",
+        "Crawl4aiFetchProvider::from_backend",
+        "FirecrawlFetchProvider",
+        "FirecrawlFetchProvider::new",
+        "FirecrawlScrapeResponse (pub(crate))",
+        "map_scrape (pub(crate))",
+        "crawl4ai NAME const",
+        "firecrawl NAME const",
+        "pub use crawl4ai::Crawl4aiFetchProvider (re-export)",
+        "pub use firecrawl::FirecrawlFetchProvider (re-export)",
+        "pub use provider::FetchProvider (re-export)",
+        "pub use registry::FetchRegistry (re-export)"
+      ],
+      "unwired_producers": [
+        "impl Default for FetchProviderFactoryRegistry (see sw-fetch-2)",
+        "FetchRegistry::is_empty (see sw-fetch-3)"
+      ],
+      "inert_knobs": [
+        "FetchBackendConfig::timeout_seconds for firecrawl variant (see sw-fetch-4)"
+      ]
+    },
+    "test_only_consumers": "none — every public symbol that has a producer outside its own module also has at least one production caller (verified by rg across src/, bin/, interfaces/, shared/).",
+    "stub_forms": "none — rg 'TODO|FIXME/unimplemented!/todo!\\(\\)' src/fetch/ returns zero hits. Both Crawl4aiFetchProvider::fetch and FirecrawlFetchProvider::fetch make live HTTP calls.",
+    "name_drift_forms": "no string-level drift — 'crawl4ai' and 'firecrawl' identifiers match across producer (NAME const, factory.rs:27/50), registry selector (factory.rs:83-84, registry.rs:25/46), config-level selectors (config/types/fetch.rs:), and gateway test handler (fetch_config.rs:410,445).",
+    "deprecated_resolved": "The DECIDE raised in fetch-audit-2026-08-16.json — web_fetch/mod.rs:178 hardcoding Extractor::Crawl4ai — has since been resolved by adding Extractor::for_provider_name at builtin_tools/web_fetch/types.rs:43-50 and switching the consumer call site to use it. No re-raise.",
+    "design_parallel_note": "Fetch mirrors src/search structurally (factory + registry + providers). Search has an external validator that calls ProviderFactoryRegistry::with_defaults() (config/validate.rs:480); fetch does not, because validation happens at handle_test time and there are only 2 providers. Intentional shape difference, not a defect."
+  }
+}

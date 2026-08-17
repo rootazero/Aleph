@@ -5,16 +5,9 @@
 //! enforced uniformly via `admin_auth_middleware` against the vault's
 //! current shared token (same secret the OpenAI-compat `/v1/*`
 //! routes accept, validated with `crate::security::secret_equal`).
-//! Spec C scope covers secrets and agents (memory writes go through
-//! the existing `remember` tool).
+//! Spec C scope covers secrets (memory writes go through the existing
+//! `remember` tool).
 
-// `/v1/admin/agents` is intentionally NOT mounted: the three handlers
-// (`POST /`, `PATCH /{id}`, `DELETE /{id}`) had zero production callers —
-// `aleph agent create / update / delete` was never built, and `CommandPolicy`
-// cannot dispatch dynamic-path routes through `LockOrIpc`. The module is
-// retained so the next iteration re-mounts it as soon as the CLI surfaces
-// those commands; see `agents.rs` for the unused handlers.
-pub mod agents;
 pub mod resume;
 pub mod secrets;
 

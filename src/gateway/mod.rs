@@ -24,7 +24,6 @@
 
 // Social Connectivity: Link data models (always compiled)
 pub mod link;
-pub mod transport;
 
 pub mod admin_api;
 pub mod announce_delivery;
@@ -126,7 +125,6 @@ pub mod trusted_proxy;
 pub mod visibility;
 pub mod voice;
 pub mod webhook_receiver;
-pub mod webhooks;
 pub use event_bus::GatewayEventBus;
 pub use event_emitter::{
     DynEventEmitter, EventEmitter, GatewayEventEmitter, NoOpEventEmitter, OutputMode, StreamEvent,
@@ -191,10 +189,7 @@ pub use resume_coordinator::{
 pub use webhook_receiver::{
     WebhookHandler, WebhookMount, WebhookMountTable, WebhookReceiver, WEBHOOK_ROUTE_PREFIX,
 };
-pub use webhooks::{
-    create_router as create_webhook_router, SignatureFormat, WebhookEndpointConfig, WebhookError,
-    WebhookHandlerState, WebhookProcessor, WebhookRequest, WebhooksConfig,
-};
+
 
 // Shared scanners for the source-level census pins in this directory.
 #[cfg(test)]

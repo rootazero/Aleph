@@ -1,0 +1,216 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/executor",
+  "files_scanned": [
+    "src/executor/mod.rs",
+    "src/executor/tool_registry.rs",
+    "src/executor/builtin_registry/mod.rs",
+    "src/executor/builtin_registry/config.rs",
+    "src/executor/builtin_registry/definitions.rs",
+    "src/executor/builtin_registry/groups.rs",
+    "src/executor/builtin_registry/registry/mod.rs",
+    "src/executor/builtin_registry/registry/struct_def.rs",
+    "src/executor/builtin_registry/registry/inherent.rs",
+    "src/executor/builtin_registry/registry/free_fns.rs",
+    "src/executor/builtin_registry/registry/tool_registry_impl.rs",
+    "src/executor/builtin_registry/registry/tests.rs",
+    "src/executor/builtin_registry/builder/mod.rs",
+    "src/executor/builtin_registry/builder/core_tools.rs",
+    "src/executor/builtin_registry/builder/optional_tools.rs",
+    "src/executor/builtin_registry/builder/tests.rs",
+    "src/executor/builtin_registry/builder/constructor/mod.rs",
+    "src/executor/builtin_registry/builder/constructor/agent_acp_tools.rs",
+    "src/executor/builtin_registry/builder/constructor/collab_session_tools.rs",
+    "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/), read-before-write triage. Cross-checked BUILTIN_TOOL_DEFINITIONS name strings vs single-name dispatch arms in tool_registry_impl.rs (allowing for the combined \"agent_create | … | agent_update\" arm at lines 854-855); every pub item, builder fn, and registry cell accessor traced to a live consumer.",
+  "findings": [
+    {
+      "id": "sw-executor-01",
+      "module": "src/executor",
+      "files": [
+        "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs:447",
+        "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs:472",
+        "src/executor/builtin_registry/registry/tool_registry_impl.rs:992",
+        "src/executor/builtin_registry/registry/tool_registry_impl.rs:1000",
+        "src/builtin_tools/team/task_control.rs:108",
+        "src/builtin_tools/team/task_exit_journal.rs:87",
+        "src/executor/builtin_registry/definitions.rs:1299",
+        "src/executor/builtin_registry/definitions.rs:1477"
+      ],
+      "severity": "medium",
+      "form": 6,
+      "produced": "Constructor-direct registration of team_task_control and task_exit_journal via tools.insert() in coord_team_tools.rs (lines 447, 472). Tool descriptions (~290 + ~410 chars) ship per request. NOT in BUILTIN_TOOL_DEFINITIONS, NOT in REGISTRY_ONLY_DESCRIPTIONS, NOT in REG_INSERTED_NAMES census.",
+      "produced_location": "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs:447 (team_task_control), :472 (task_exit_journal)",
+      "consumer_location": "src/executor/builtin_registry/registry/tool_registry_impl.rs:992 (team_task_control dispatch arm), :1000 (task_exit_journal dispatch arm). Tool descriptions are also surfaced via ToolCatalog completion (unified_tools() at tool_registry_impl.rs map) — so they reach the model. consumer_location for the byte-ceiling guard: none.",
+      "decision": "DECIDE",
+      "rationale": "The prior review's sw-exec-r-3 DECIDE flagged 11 constructor-direct-insert tools as missing from the byte-ceiling census (REGISTRY_ONLY_DESCRIPTIONS + BUILTIN_TOOL_DEFINITIONS). Re-verified on current code: 9 of 11 are now in REGISTRY_ONLY_DESCRIPTIONS (acp_session_control, channel_message, channel_directory, channel_outbox, local_voice, voice_mode_set, audio_generate, video_generate, speech_generate). 2 remain: team_task_control and task_exit_journal. Both are dispatched (tool_registry_impl.rs:992, :1000), both ship description bytes per request, neither is measured by the byte ratchet (definitions.rs CATALOG_DESCRIPTION_CEILING_BYTES sums BUILTIN_TOOL_DEFINITIONS + REGISTRY_ONLY_DESCRIPTIONS + INJECTED + BRIDGE) nor by thinker/prompt_contract::no_sentence_is_stated_twice. The every_registered_core_tool_is_accounted test passes only because the test scans core_tools.rs + optional_tools.rs (reg() sites) + REG_INSERTED_NAMES — it does NOT scan coord_team_tools.rs.",
+      "proposed_change": "Option A (recommended, three-line patch, mirrors the existing acp_session_control row): add (\"team_task_control\", crate::builtin_tools::team::TeamTaskControlTool::DESCRIPTION) and (\"task_exit_journal\", crate::builtin_tools::team::TaskExitJournalTool::DESCRIPTION) to REGISTRY_ONLY_DESCRIPTIONS at definitions.rs:1299. Option B: move the entries into BUILTIN_TOOL_DEFINITIONS (larger diff, inflates unconditional catalogue). Option C (separate from the row fix): extend every_registered_core_tool_is_accounted to include_str! coord_team_tools.rs and enumerate its tools.insert sites — fifth registration shape, per the prior review's DECIDE rationale.",
+      "risk": "None at runtime (the tools work and are advertised today). The patch's only effect is to bring the byte ceiling and the duplicate-sentence scanner back in line with shipped text. Future risk if left unfixed: a guard that certifies N-of-(N+1) shapes hands a clean bill of health to the half still unmeasured, letting prompt bytes grow unnoticed — same shape as the prior review's documented risk.",
+      "verification": "rg 'task_exit_journal|team_task_control' src/executor/builtin_registry/definitions.rs after patch → 2 matches in REGISTRY_ONLY_DESCRIPTIONS. rg 'REG_INSERTED_NAMES' definitions.rs after a hypothetical Option C → unchanged (the row table is correct; the test scanner is the gap). cargo test -p alephcore --lib every_registered_core_tool_is_accounted → currently green (the test only validates its own scope); after Option C the test would FAIL on a future omission.",
+      "existing_review_ref": "sw-exec-r-3 (review-results/executor-registry-audit-2026-08-16.json) — partial reactivation; 9 of 11 names fixed, 2 residual."
+    }
+  ],
+  "verified_connected": [
+    {
+      "symbol": "BuiltinToolRegistry::with_config",
+      "produced": "src/executor/builtin_registry/builder/constructor/mod.rs:47",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:542 (production boot). CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::register_tool",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:31",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:594 (subagent / per-request push). CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::unified_tools",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:296",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:622 (.unified_tools() iterates the runtime map for the model's tool list). CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::get_tool_schema",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:276",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:557. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::set_config_patcher",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:48",
+      "consumer": "src/bin/aleph-server/commands/start/mod.rs:1678 (replaces the broken Arc::get_mut path fixed per executor.md critical #2). CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::set_config_broadcaster",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:61",
+      "consumer": "src/bin/aleph-server/commands/start/mod.rs:1684. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::set_node_registry",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:228",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:771. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::set_node_security_store",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:240",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:775. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::set_memory_reflector",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:214",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:716. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::set_query_filer",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:260",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:751. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::gateway_context_cell",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:191",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:658. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::channel_registry_cell",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:197",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:659; src/tasks/cron/executor.rs:50. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::clarification_manager_cell",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:203",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:660. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::memory_context_provider_cell",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:249",
+      "consumer": "src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:661. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::resolve_plugin_handler",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:300",
+      "consumer": "src/executor/builtin_registry/registry/tool_registry_impl.rs:1635 (plugin-fallback arm of execute_tool). CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::register_core_tools",
+      "produced": "src/executor/builtin_registry/builder/core_tools.rs:21",
+      "consumer": "src/executor/builtin_registry/builder/constructor/mod.rs:1016. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::register_optional_tools",
+      "produced": "src/executor/builtin_registry/builder/optional_tools.rs:25",
+      "consumer": "src/executor/builtin_registry/builder/constructor/mod.rs:1017. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::build_flag_user_correction",
+      "produced": "src/executor/builtin_registry/builder/constructor/mod.rs:1398",
+      "consumer": "src/executor/builtin_registry/registry/tool_registry_impl.rs:382 (per-call composition with this-turn's agent_id). CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::build_agent_acp_a2a_tools",
+      "produced": "src/executor/builtin_registry/builder/constructor/agent_acp_tools.rs:19",
+      "consumer": "src/executor/builtin_registry/builder/constructor/mod.rs:1043. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::build_collab_session_tools",
+      "produced": "src/executor/builtin_registry/builder/constructor/collab_session_tools.rs:21",
+      "consumer": "src/executor/builtin_registry/builder/constructor/mod.rs:1075. CONNECTED."
+    },
+    {
+      "symbol": "BuiltinToolRegistry::build_coord_team_tools",
+      "produced": "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs:22",
+      "consumer": "src/executor/builtin_registry/builder/constructor/mod.rs:1097. CONNECTED."
+    },
+    {
+      "symbol": "parse_caller_agent_id (pub(crate))",
+      "produced": "src/executor/builtin_registry/registry/free_fns.rs:24",
+      "consumer": "src/executor/builtin_registry/registry/inherent.rs:96 + tests. CONNECTED."
+    },
+    {
+      "symbol": "resolve_plugin_handler_from_sources (pub(crate))",
+      "produced": "src/executor/builtin_registry/registry/free_fns.rs:29",
+      "consumer": "src/executor/builtin_registry/registry/inherent.rs:301 + tests. CONNECTED."
+    },
+    {
+      "symbol": "caller_agent_id / caller_memory_partition / caller_profile_partition / inject_delivery_route (pub(super))",
+      "produced": "src/executor/builtin_registry/registry/inherent.rs:87, :140, :164, :179",
+      "consumer": "src/executor/builtin_registry/registry/tool_registry_impl.rs (10+2+2+2 sites). CONNECTED."
+    },
+    {
+      "symbol": "create_tool_boxed",
+      "produced": "src/executor/builtin_registry/definitions.rs:981",
+      "consumer": "src/gateway/execution_engine/slash_command.rs:728. CONNECTED."
+    },
+    {
+      "symbol": "BUILTIN_TOOL_DEFINITIONS",
+      "produced": "src/executor/builtin_registry/definitions.rs:81",
+      "consumer": "src/gateway/handlers/agents.rs:526,535; src/security/dangerous_tools.rs:178; src/builtin_tools/{user_profile,workflow_tool,agent_identity}.rs. CONNECTED."
+    },
+    {
+      "symbol": "TOOL_CATEGORIES",
+      "produced": "src/executor/builtin_registry/groups.rs:20",
+      "consumer": "src/gateway/handlers/agents.rs:526; src/agents/registry.rs:958 (extensions_store family census). CONNECTED."
+    },
+    {
+      "symbol": "BRIDGE_TOOL_DESCRIPTIONS / INJECTED_TOOL_DESCRIPTIONS / REGISTRY_ONLY_DESCRIPTIONS (test-only pub(crate) re-exports)",
+      "produced": "src/executor/builtin_registry/mod.rs:29 + src/executor/mod.rs:24",
+      "consumer": "src/thinker/prompt_contract.rs:570,585,600 (production guards); src/executor/builtin_registry/groups.rs:396 (test); src/executor/builtin_registry/definitions.rs:2628-2730 (test census). CONNECTED."
+    },
+    {
+      "symbol": "ToolRegistry trait (workspace_handle / smart_recall_config_handle / session_context_handle / session_key_handle / execute_tool)",
+      "produced": "src/executor/tool_registry.rs",
+      "consumer": "src/gateway/execution_engine/* + src/gateway/busy_queue/spawn.rs (R constraint); 8 mock impls in src/gateway/execution_engine/tests.rs; src/executor/builtin_registry/registry/tool_registry_impl.rs (production impl). CONNECTED."
+    },
+    {
+      "symbol": "All 174 single-name dispatch arms in tool_registry_impl.rs",
+      "produced": "src/executor/builtin_registry/registry/tool_registry_impl.rs (every entry in BUILTIN_TOOL_DEFINITIONS ∪ REGISTRY_ONLY_DESCRIPTIONS has a matching arm — combined \"agent_create | … | agent_update\" arm at :854-855 covers six names)",
+      "consumer": "src/executor/builtin_registry/registry/struct_def.rs (each arm reads its tool instance); src/executor/builtin_registry/builder/* (each tool is constructed exactly once at boot); src/gateway/execution_engine/run_loop/inner.rs (calls execute_tool). CONNECTED."
+    }
+  ],
+  "prior_reviews_reverified": [
+    {"prior_id": "sw-exec-r-1", "title": "pub fn is_builtin_tool", "status": "CUT — gone from current code"},
+    {"prior_id": "sw-exec-r-2", "title": "pub fn get_builtin_tool_names", "status": "CUT — gone from current code"},
+    {"prior_id": "sw-exec-r-3", "title": "registry-only tool descriptions unaccounted (DECIDE)", "status": "Partial fix — 9 of 11 names now in REGISTRY_ONLY_DESCRIPTIONS; 2 residual (see sw-executor-01)"},
+    {"prior_id": "sw-exec-r-4", "title": "get_builtin_tool_names re-exports", "status": "CUT — gone with sw-exec-r-2"},
+    {"prior_id": "sw-exec-t-1", "title": "BuiltinToolConfig::current_session_key", "status": "CUT — gone from config.rs"},
+    {"prior_id": "sw-exec-t-2", "title": "BuiltinToolConfig::config_patcher", "status": "CUT — gone from config.rs"},
+    {"prior_id": "sw-exec-t-3", "title": "BuiltinToolConfig::current_agent_id (DECIDE)", "status": "CUT — gone from config.rs"}
+  ]
+}

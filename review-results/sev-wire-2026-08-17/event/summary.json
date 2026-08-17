@@ -1,0 +1,274 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/event",
+  "files_scanned": [
+    "src/event/mod.rs",
+    "src/event/bus.rs",
+    "src/event/handler.rs",
+    "src/event/filter.rs",
+    "src/event/global_bus.rs",
+    "src/event/types.rs",
+    "src/event/tests/mod.rs",
+    "src/event/tests/integration.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/), read-before-write triage",
+  "findings": [
+    {
+      "id": "sw-event-01",
+      "module": "src/event",
+      "files": [
+        "src/event/bus.rs:27",
+        "src/event/mod.rs:21"
+      ],
+      "severity": "medium",
+      "form": 1,
+      "produced": "pub struct EventBus (empty marker) + pub fn EventBus::new(), re-exported as pub use bus::EventBus",
+      "produced_location": "src/event/bus.rs:27",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "rg -n 'event::EventBus\\b|event::\\{[^}]*EventBus\\b' over src/, bin/, interfaces/, shared/ returns no production caller. rg -n 'EventBus::new()' shows every other match is GatewayEventBus::new() or TopologyEventBus::new(), not the bare event::EventBus. The doc-comment claim that commands/start/mod.rs constructs EventBus::new() is false — verified via rg -n 'event::' src/bin/aleph-server/commands/start/mod.rs which shows only EventContext, EventFilter, EventHandler, EventType, GlobalBus imports.",
+      "proposed_change": "Delete src/event/bus.rs; remove 'mod bus;' and 'pub use bus::EventBus;' from src/event/mod.rs; update module-level doc to drop the EventBus bullet.",
+      "risk": "low. No external consumer exists (rg proves this). Worst case is an interface we missed; the broad rg rules that out.",
+      "verification": "After cut, rg -n 'EventBus' src/ bin/ interfaces/ shared/ should not reference the bare event::EventBus type. cargo check -p alephcore (out of scope per task) should succeed.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-02",
+      "module": "src/event",
+      "files": [
+        "src/event/global_bus.rs:283"
+      ],
+      "severity": "medium",
+      "form": 1,
+      "produced": "pub fn GlobalBus::subscribe (sync, blocking) — distinct from subscribe_async",
+      "produced_location": "src/event/global_bus.rs:283",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "rg -n '\\.subscribe\\(filter|GlobalBus::global\\(\\)\\.subscribe\\(' src/ bin/ interfaces/ shared/ shows every .subscribe() call is on GatewayEventBus or TopologyEventBus, never on GlobalBus. The only mention of GlobalBus::subscribe is the doc-comment at global_bus.rs:23. Every live producer-side subscriber uses subscribe_async (e.g. teams/dispatcher/mod.rs:236, gateway/announce_delivery.rs:94, teams/notifier.rs boot path).",
+      "proposed_change": "Delete src/event/global_bus.rs:283-306 and the doc-comment block at global_bus.rs:23-28.",
+      "risk": "low. Removing it also closes a latent footgun: the implementation calls tokio::task::block_in_place which would panic if invoked outside a runtime with block_in_place support.",
+      "verification": "rg -n 'GlobalBus::global\\(\\)\\.subscribe\\b|bus\\.subscribe\\(filter' src/ bin/ interfaces/ shared/ returns zero hits after the cut.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-03",
+      "module": "src/event",
+      "files": [
+        "src/event/bus.rs:14"
+      ],
+      "severity": "medium",
+      "form": 5,
+      "produced": "Doc-comment claim that 'EventBus::new()' is constructed in commands/start/mod.rs",
+      "produced_location": "src/event/bus.rs:14",
+      "consumer_location": "none found (the cited caller does not call it)",
+      "decision": "CUT",
+      "rationale": "Form 5 (name/path drift): the comment cites a relationship that does not exist in the current tree. rg -n 'event::' src/bin/aleph-server/commands/start/mod.rs shows the boot path imports EventContext, EventFilter, EventHandler, EventType, GlobalBus — never EventBus. The comment was already outdated when the 2026-08-16 audit removed EventContext::bus.",
+      "proposed_change": "Tied to F-01: deleting bus.rs removes the comment. If bus.rs is kept, rewrite lines 14-25 to remove the false claim.",
+      "risk": "zero. Pure documentation.",
+      "verification": "Stale claim is gone after the cut.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-04",
+      "module": "src/event",
+      "files": [
+        "src/event/types.rs:178"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "pub const fn AlephEvent::name(&self) -> &'static str",
+      "produced_location": "src/event/types.rs:178",
+      "consumer_location": "src/event/types.rs:292 (test), src/event/types.rs:373 (test)",
+      "decision": "DECIDE",
+      "rationale": "Zero production callers. Both consumers are inside #[cfg(test)] mod tests in types.rs (bus-drift guard tests). The function is the human-readable variant name used by the ALL_VARIANT_NAMES invariant. Production code uses event_type() (filter.rs:193) and the JSON tag (serde tag = 'type' in types.rs).",
+      "proposed_change": "None (intentional). Test-only consumer justifies the pub surface.",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-05",
+      "module": "src/event",
+      "files": [
+        "src/event/types.rs:76",
+        "src/event/types.rs:202"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "pub const EventType::ALL and pub const AlephEvent::ALL_VARIANT_NAMES",
+      "produced_location": "src/event/types.rs:76 (EventType::ALL), src/event/types.rs:202 (ALL_VARIANT_NAMES)",
+      "consumer_location": "src/event/types.rs:467,494 (EventType::ALL test consumers); src/event/types.rs:369,451 (ALL_VARIANT_NAMES test consumers)",
+      "decision": "DECIDE",
+      "rationale": "Both constants are consumed only by the bus-drift guard tests inside types.rs itself. The module doc (types.rs:343-356) explicitly frames them as test-only invariants. Hand-synced mirrors that catch typos; removing them would lose the property that a forgotten variant is a test failure.",
+      "proposed_change": "None (intentional). Test invariant justifies the surface.",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-06",
+      "module": "src/event",
+      "files": [
+        "src/event/filter.rs:96"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub fn EventFilter::all() -> Self",
+      "produced_location": "src/event/filter.rs:100",
+      "consumer_location": "src/event/filter.rs:356 (test), src/event/global_bus.rs:476,497,526,565 (tests), src/event/tests/integration.rs:58,120,128,319,354,365 (tests)",
+      "decision": "DECIDE",
+      "rationale": "Zero production callers. Every production EventFilter is built via EventFilter::new(vec![EventType::X]). The convenience is a public API affordance, harmless and used only in tests today.",
+      "proposed_change": "None (intentional).",
+      "risk": "low. Pure API surface.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-07",
+      "module": "src/event",
+      "files": [
+        "src/event/filter.rs:50"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "#[derive(Default)] on EventFilter (auto-derived Default impl)",
+      "produced_location": "src/event/filter.rs:49",
+      "consumer_location": "src/event/filter.rs:432 (test), src/event/tests/integration.rs:388 (test)",
+      "decision": "DECIDE",
+      "rationale": "Both call-sites are tests verifying that the default EventFilter matches nothing (empty event_types). The derived Default is the production-grade contract; the tests assert the contract.",
+      "proposed_change": "None (intentional).",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-08",
+      "module": "src/event",
+      "files": [
+        "src/event/filter.rs:121"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "pub fn EventFilter::with_sessions(self, session_ids: HashSet<String>) -> Self",
+      "produced_location": "src/event/filter.rs:124",
+      "consumer_location": "src/event/filter.rs:279 (test)",
+      "decision": "DECIDE",
+      "rationale": "Single caller, inside #[cfg(test)] mod tests. Production uses single-session .with_session(id) exclusively (goal_wait.rs:98 etc.). Bulk setter is API affordance.",
+      "proposed_change": "None (intentional).",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-09",
+      "module": "src/event",
+      "files": [
+        "src/event/filter.rs:146"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "pub fn EventFilter::with_agents(self, agent_ids: HashSet<String>) -> Self",
+      "produced_location": "src/event/filter.rs:149",
+      "consumer_location": "src/event/filter.rs:317 (test)",
+      "decision": "DECIDE",
+      "rationale": "Symmetric to sw-event-08. Single caller inside #[cfg(test)] mod tests.",
+      "proposed_change": "None (intentional).",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-10",
+      "module": "src/event",
+      "files": [
+        "src/event/global_bus.rs:355"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "pub async fn GlobalBus::subscription_count(&self) -> usize",
+      "produced_location": "src/event/global_bus.rs:355",
+      "consumer_location": "src/event/global_bus.rs:479,483 (tests)",
+      "decision": "DECIDE",
+      "rationale": "Pure observability helper. Both callers are tests in the same module. Not wired into any production diagnostic surface today.",
+      "proposed_change": "None (intentional). Plausible future use as a doctor-style diagnostic.",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-11",
+      "module": "src/event",
+      "files": [
+        "src/event/global_bus.rs:84"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "#[cfg(test)] pub fn GlobalEvent::for_test(...)",
+      "produced_location": "src/event/global_bus.rs:89",
+      "consumer_location": "src/event/filter.rs:234 (test); src/gateway/process_announce.rs:249 (inside #[cfg(test)] mod tests at line 154); src/gateway/subagent_announce.rs:254 (inside #[cfg(test)] mod tests at line 152)",
+      "decision": "DECIDE",
+      "rationale": "Already #[cfg(test)] gated. Cannot be called from production code. Pub visibility is required only because tests live in other modules.",
+      "proposed_change": "None (intentional).",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-12",
+      "module": "src/event",
+      "files": [
+        "src/event/global_bus.rs:162"
+      ],
+      "severity": "low",
+      "form": 6,
+      "produced": "pub struct Subscription { pub id: SubscriptionId, pub filter: EventFilter, pub callback: Arc<dyn Fn(GlobalEvent) + Send + Sync> }",
+      "produced_location": "src/event/global_bus.rs:162",
+      "consumer_location": "src/event/global_bus.rs:259-264 (internal: sub.filter.matches, Arc::clone(&sub.callback) inside broadcast); no external code reads these fields",
+      "decision": "CUT",
+      "rationale": "rg -n 'Subscription\\s*\\{' over src/, bin/, interfaces/, shared/ shows that event::Subscription is constructed only inside subscribe/subscribe_async (global_bus.rs:289, 314); fields are read only by broadcast (global_bus.rs:259-264). No external code constructs or inspects event::Subscription. The fields could be private without breaking any caller.",
+      "proposed_change": "Change pub id, pub filter, pub callback to private in src/event/global_bus.rs:164-168. Keep the type pub for the Debug impl. Optionally remove Subscription from the pub use in src/event/mod.rs:29 if no external code references it.",
+      "risk": "low. External consumers cannot be relying on these fields (rg confirms zero reads).",
+      "verification": "rg -n 'Subscription\\b' src/ bin/ interfaces/ shared/ after the change shows event::Subscription only inside src/event/global_bus.rs.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-13",
+      "module": "src/event",
+      "files": [
+        "src/event/global_bus.rs:120",
+        "src/event/global_bus.rs:126"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub fn SubscriptionId::as_str(&self) -> &str; pub fn SubscriptionId::into_inner(self) -> String",
+      "produced_location": "src/event/global_bus.rs:120 (as_str), src/event/global_bus.rs:126 (into_inner)",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "Zero external callers for either method. The internal HashMap uses SubscriptionId's Hash/Eq; external code that needs to format/inspect the id uses Display or Deref<Target=str>.",
+      "proposed_change": "None (intentional). Tiny API surface; likely intentional future-use.",
+      "risk": "low.",
+      "verification": "n/a.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-event-14",
+      "module": "src/event",
+      "files": [
+        "src/event/types.rs:18",
+        "src/event/mod.rs:24"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "pub struct TimestampedEvent { pub event: AlephEvent, pub timestamp: i64, pub sequence: u64 } + pub fn new",
+      "produced_location": "src/event/types.rs:18",
+      "consumer_location": "src/event/types.rs:297 (test), src/event/types.rs:308 (test); no production consumer",
+      "decision": "CUT",
+      "rationale": "Both callers are inside #[cfg(test)] mod tests in types.rs itself. GlobalEvent (global_bus.rs:54-100) already carries timestamp + sequence and is the actual wire type. TimestampedEvent is a vestigial wrapper from before GlobalBus existed. Re-exported in mod.rs:24 but no production code uses it.",
+      "proposed_change": "Delete src/event/types.rs:18-34 (struct + impl); remove 'TimestampedEvent,' from pub use group in src/event/mod.rs:23-25; delete the test_timestamped_event_sequence test at types.rs:296-313.",
+      "risk": "low. No external consumer exists (rg -n 'TimestampedEvent' src/ bin/ interfaces/ shared/ outside src/event/ returns zero hits).",
+      "verification": "rg -n 'TimestampedEvent' src/ bin/ interfaces/ shared/ returns zero hits after the cut.",
+      "existing_review_ref": null
+    }
+  ]
+}
