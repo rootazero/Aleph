@@ -11,12 +11,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aleph_protocol::canvas::{CanvasDoc, CanvasOp, CanvasRow};
+use aleph_protocol::canvas::{check_title, CanvasDoc, CanvasOp, CanvasRow};
 use tracing::warn;
 
 use super::doc_io::DocLocks;
 use super::validate;
 use crate::gateway::event_bus::GatewayEventBus;
+
+/// Title given to a canvas created without one.
+///
+/// Data, not a UI label, so it is not localized: it is the string that lands
+/// in `doc.json`, in every `canvas.list` row and in the model's view of the
+/// library. A client that wants something else says so at creation, or
+/// renames afterwards.
+const DEFAULT_TITLE: &str = "Untitled";
 
 /// Canvas-layer error, three-way classified (not-found / caller-fixable /
 /// internal, plus the revision conflict the protocol is built around).
@@ -98,11 +106,23 @@ impl CanvasStore {
         project_id: Option<String>,
         owner_user_id: Option<String>,
     ) -> Result<CanvasDoc, CanvasError> {
+        // Second writer of `title`, same gate as `SetDocMeta` — a caller-
+        // supplied title is refused rather than silently replaced by the
+        // default, because substituting a different value than the one asked
+        // for and answering "created" is the quiet lie this gate exists to
+        // stop. `None` (no title asked for) still takes the default.
+        let title = match title {
+            Some(t) => {
+                check_title(&t).map_err(|why| CanvasError::Invalid(why.to_string()))?;
+                t
+            }
+            None => DEFAULT_TITLE.to_string(),
+        };
         let id = format!("cv-{}", uuid::Uuid::new_v4().simple());
         let now = now_ms();
         let doc = CanvasDoc {
             id: id.clone(),
-            title: title.unwrap_or_else(|| "Untitled".to_string()),
+            title,
             owner_user_id,
             project_id,
             revision: 1,
@@ -326,7 +346,9 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::canvas::{Deck, FracIndex, Shape, ShapeCommon, ShapeStyle, MAX_SHAPES};
+    use aleph_protocol::canvas::{
+        Deck, FracIndex, Shape, ShapeCommon, ShapeStyle, MAX_SHAPES, MAX_TITLE_BYTES,
+    };
 
     fn note(id: &str, text: &str) -> Shape {
         Shape::Note {
@@ -355,6 +377,123 @@ mod tests {
             Shape::Note { text, .. } => text,
             other => panic!("expected a note, got {other:?}"),
         }
+    }
+
+    /// Both writers of `title` pass the same gate. `create` refuses an
+    /// inadmissible title rather than quietly substituting the default —
+    /// answering "created" with a different title than the one asked for is
+    /// the silent lie the gate exists to stop.
+    #[tokio::test]
+    async fn create_refuses_an_inadmissible_title_instead_of_defaulting() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CanvasStore::new(dir.path().to_path_buf());
+        let err = store
+            .create(
+                Some("x".repeat(MAX_TITLE_BYTES + 1)),
+                None,
+                Some("u1".into()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CanvasError::Invalid(_)),
+            "an over-cap title is caller-fixable, not internal: {err:?}"
+        );
+        assert!(
+            store.list_entries().await.is_empty(),
+            "a refused create must leave nothing on disk"
+        );
+        // No title asked for still takes the default.
+        let doc = store.create(None, None, Some("u1".into())).await.unwrap();
+        assert_eq!(doc.title, DEFAULT_TITLE);
+    }
+
+    /// The second writer: `SetDocMeta`. The gate runs pre-lock (`ops_shape`),
+    /// so a refused batch never reaches the document — the title, and every
+    /// other op that rode along in the same batch, stay exactly as they were.
+    #[tokio::test]
+    async fn a_set_doc_meta_over_the_title_cap_lands_nothing_from_its_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CanvasStore::new(dir.path().to_path_buf());
+        let doc = store
+            .create(Some("keep me".into()), None, Some("u1".into()))
+            .await
+            .unwrap();
+        let err = store
+            .apply(
+                &doc.id,
+                doc.revision,
+                vec![
+                    upsert_note("n1"),
+                    CanvasOp::SetDocMeta {
+                        title: "x".repeat(MAX_TITLE_BYTES + 1),
+                    },
+                ],
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CanvasError::Invalid(_)), "{err:?}");
+
+        let after = store.get(&doc.id).await.unwrap();
+        assert_eq!(after.title, "keep me", "the title must be untouched");
+        assert!(
+            after.shapes.is_empty(),
+            "the sibling op in the refused batch must not have landed either"
+        );
+        assert_eq!(
+            after.revision, doc.revision,
+            "a refused batch burns no revision"
+        );
+    }
+
+    /// A newline in a title would break the one-line library row it now
+    /// navigates by, and it is the shape that forges structure in text the
+    /// model reads back.
+    #[tokio::test]
+    async fn a_control_character_in_a_title_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CanvasStore::new(dir.path().to_path_buf());
+        let doc = store.create(None, None, Some("u1".into())).await.unwrap();
+        let err = store
+            .apply(
+                &doc.id,
+                doc.revision,
+                vec![CanvasOp::SetDocMeta {
+                    title: "line\nbreak".to_string(),
+                }],
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CanvasError::Invalid(_)), "{err:?}");
+    }
+
+    /// The gate is on **writes**. A document already on disk whose title
+    /// predates the cap keeps listing and opening — a read-side gate would
+    /// make existing canvases disappear from every surface at once, which is
+    /// precisely the failure `list`'s loud-skip discipline is built to avoid.
+    #[tokio::test]
+    async fn a_stored_title_that_predates_the_cap_still_lists_and_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CanvasStore::new(dir.path().to_path_buf());
+        let doc = store.create(None, None, Some("u1".into())).await.unwrap();
+
+        // Write a pre-gate title straight to disk, the way an older build did.
+        let path = dir.path().join(&doc.id).join("doc.json");
+        let mut raw: CanvasDoc =
+            serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        raw.title = "y".repeat(MAX_TITLE_BYTES * 3);
+        tokio::fs::write(&path, serde_json::to_vec(&raw).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(store.list_entries().await.len(), 1, "it must still list");
+        assert_eq!(
+            store.get(&doc.id).await.unwrap().title.len(),
+            MAX_TITLE_BYTES * 3,
+            "and still open, verbatim"
+        );
     }
 
     #[tokio::test]

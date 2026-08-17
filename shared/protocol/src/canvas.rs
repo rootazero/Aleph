@@ -22,6 +22,42 @@ pub const MAX_HTML_ASSET_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_SHAPES: usize = 5000;
 /// Maximum ops accepted by a single `canvas.apply` call.
 pub const MAX_OPS_PER_APPLY: usize = 500;
+/// Upper bound for a canvas title, in bytes.
+///
+/// Bytes, not characters, and named for it: the bound exists because the
+/// title is stored, listed and broadcast, and those costs are byte-shaped.
+/// 200 bytes is ~66 CJK characters — a title, not a document.
+pub const MAX_TITLE_BYTES: usize = 200;
+
+/// The single gate over `CanvasDoc.title`, shared by every writer.
+///
+/// `title` has exactly two writers — the optional title of `canvas.create`
+/// and [`CanvasOp::SetDocMeta`] — and until this existed neither checked
+/// anything: every other stored dimension (shapes, ops per batch, ink points,
+/// asset bytes) carried a cap while the one string a human reads carried
+/// none. It lives in the contract rather than server-side so the Panel
+/// refuses the same strings without a round trip, and refuses them for the
+/// same reasons.
+///
+/// The gate **rejects, it never rewrites**: `apply_ops` stores what it was
+/// given, so a normalizing gate would mean the value on disk is not the value
+/// the caller sent. Trimming belongs at the input edge (the Panel's rename
+/// helper trims before calling this).
+///
+/// Returns the reason on refusal — a sentence for a human and for a model
+/// (the `canvas` tool passes it straight back so the model can self-heal).
+pub fn check_title(title: &str) -> Result<(), &'static str> {
+    if title.trim().is_empty() {
+        return Err("canvas title must not be empty");
+    }
+    if title.len() > MAX_TITLE_BYTES {
+        return Err("canvas title exceeds 200 bytes");
+    }
+    if title.chars().any(char::is_control) {
+        return Err("canvas title must not contain control characters");
+    }
+    Ok(())
+}
 
 /// Lexicographic fractional index over `0-9A-Za-z` (ASCII order of the digits
 /// matches their rank, so plain string comparison is the z-order). `first()`
@@ -566,5 +602,46 @@ mod tests {
 
     fn frac(s: &str) -> FracIndex {
         serde_json::from_value(serde_json::json!(s)).expect("transparent string")
+    }
+
+    /// The cap counts bytes because it is named for bytes. A CJK title well
+    /// under the character budget a byte-blind reader would assume must still
+    /// pass, and a byte-over one must not — the failure mode this pins is the
+    /// opposite of the `min_user_chars` lesson (a threshold named in one unit
+    /// and measured in another), so it is asserted in both directions.
+    #[test]
+    fn the_title_cap_is_measured_in_the_unit_it_is_named_for() {
+        let cjk = "\u{753b}".repeat(60); // 180 bytes, 60 chars
+        assert_eq!(cjk.len(), 180);
+        assert!(
+            check_title(&cjk).is_ok(),
+            "60 CJK chars is a title, not a document"
+        );
+
+        let too_long = "a".repeat(MAX_TITLE_BYTES + 1);
+        assert!(check_title(&too_long).is_err());
+    }
+
+    /// Blank and control-bearing titles are refused. Whitespace-only matters
+    /// because the Panel trims before sending: a title that trims to nothing
+    /// would otherwise land as a row with no label at all.
+    #[test]
+    fn a_blank_or_control_bearing_title_is_refused_with_a_reason() {
+        for bad in ["", "   ", "\u{9}\u{9}"] {
+            assert!(check_title(bad).is_err(), "{bad:?} must be refused");
+        }
+        let reason = check_title("one\ntwo").expect_err("newlines are control characters");
+        assert!(
+            reason.contains("control"),
+            "the refusal names its cause so a model can self-heal: {reason}"
+        );
+    }
+
+    /// The gate refuses, it never rewrites — pinned because a normalizing
+    /// gate would make the value on disk differ from the value the caller
+    /// sent, silently, and `apply_ops` stores what it is handed.
+    #[test]
+    fn an_admissible_title_with_edge_whitespace_is_accepted_verbatim() {
+        assert!(check_title(" spaced ").is_ok());
     }
 }

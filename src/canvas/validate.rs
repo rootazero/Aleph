@@ -6,7 +6,9 @@
 //! (`MAX_SHAPES`); on any error the caller drops its guard without
 //! committing, so a rejected batch never half-lands on disk.
 
-use aleph_protocol::canvas::{CanvasDoc, CanvasOp, Shape, MAX_OPS_PER_APPLY, MAX_SHAPES};
+use aleph_protocol::canvas::{
+    check_title, CanvasDoc, CanvasOp, Shape, MAX_OPS_PER_APPLY, MAX_SHAPES,
+};
 
 use super::store::CanvasError;
 
@@ -48,7 +50,13 @@ pub(super) fn ops_shape(ops: &[CanvasOp]) -> Result<(), CanvasError> {
         match op {
             CanvasOp::UpsertShape { shape } => shape_is_well_formed(shape)?,
             CanvasOp::DeleteShape { id } | CanvasOp::DeleteDeck { id } => require_id(id)?,
-            CanvasOp::SetDocMeta { .. } => {}
+            // The title is the one stored dimension a human reads, and it
+            // used to be the one with no cap at all. `check_title` is the
+            // shared gate — the same function `canvas.create` and the Panel's
+            // rename input call, so all three refuse the same strings.
+            CanvasOp::SetDocMeta { title } => {
+                check_title(title).map_err(|why| CanvasError::Invalid(why.to_string()))?;
+            }
             CanvasOp::UpsertDeck { deck } => {
                 require_id(&deck.id)?;
                 for frame_id in &deck.frame_ids {
