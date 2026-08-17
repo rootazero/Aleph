@@ -115,9 +115,14 @@ impl CodeExecConfigToml {
             }
         }
 
-        // Validate blocked command patterns are valid regex
+        // Validate blocked command patterns are valid regex. Bounded build:
+        // the patterns are operator config (untrusted input), and an
+        // expansion bomb must fail validation, not exhaust memory on load.
         for pattern in &self.blocked_commands {
-            if regex::Regex::new(pattern).is_err() {
+            if crate::security::safe_regex::bounded_builder(pattern)
+                .build()
+                .is_err()
+            {
                 return Err(format!(
                     "agent.code_exec.blocked_commands contains invalid regex: '{pattern}'"
                 ));
@@ -154,4 +159,27 @@ const fn default_code_exec_network() -> bool {
 
 fn default_code_exec_pass_env() -> Vec<String> {
     DEFAULT_PASS_ENV.iter().map(|s| s.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Validation runs at config load; an expansion bomb in operator config
+    /// must fail validation through the same 1 MiB compiled-size cap the
+    /// runtime compile sites enforce, not exhaust memory on the way in.
+    #[test]
+    fn blocked_commands_expansion_bomb_fails_validation() {
+        let mut cfg = CodeExecConfigToml::default();
+        cfg.blocked_commands = vec!["(a{1000}){1000}{1000}".to_string()];
+        let err = cfg.validate().expect_err("expansion bomb must be rejected");
+        assert!(err.contains("blocked_commands"), "{err}");
+    }
+
+    #[test]
+    fn blocked_commands_sane_pattern_still_validates() {
+        let mut cfg = CodeExecConfigToml::default();
+        cfg.blocked_commands = vec![r"^rm\s+-rf\s+/".to_string()];
+        assert!(cfg.validate().is_ok());
+    }
 }

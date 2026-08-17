@@ -1,0 +1,152 @@
+{
+  "module": "pii",
+  "date": "2026-08-16",
+  "files_reviewed": [
+    "src/pii/mod.rs",
+    "src/pii/engine.rs",
+    "src/pii/allowlist.rs",
+    "src/pii/rules/mod.rs",
+    "src/pii/rules/email.rs",
+    "src/pii/rules/ip_address.rs",
+    "src/pii/rules/phone.rs",
+    "src/pii/rules/id_card.rs",
+    "src/pii/rules/bank_card.rs",
+    "src/pii/rules/api_key.rs",
+    "src/pii/rules/ssh_key.rs",
+    "src/pii/rules/custom.rs"
+  ],
+  "total_loc": 2681,
+  "findings_count": {
+    "critical": 0,
+    "high": 2,
+    "medium": 4,
+    "low": 3,
+    "total": 9
+  },
+  "by_category": {
+    "seam": 3,
+    "logic": 1,
+    "architecture": 2,
+    "quality": 3,
+    "operations": 1,
+    "dead_code": 1,
+    "performance": 1
+  },
+  "findings": [
+    {
+      "id": "PII-001",
+      "severity": "high",
+      "category": "seam",
+      "confidence": "high",
+      "path": "src/providers/http_provider.rs:170",
+      "title": "Provider-tier PII filter ignores platform-aware exclusion",
+      "description": "HttpProvider::apply_outbound_safety gates the per-text-block PII filter on is_provider_excluded (global) only and calls engine.filter() (also global, no platform). It does NOT consult is_platform_excluded nor receive a platform name. Operators with [platform_policies.X].exclude_providers bypassed at runtime_guard are surprised at http_provider re-applying PII filtering on the unredacted payload. Same gap also downgrades per-platform PII action overrides (e.g. platform_policies.X.phone = warn).",
+      "suggested_fix": "Propagate platform name through execute/apply_outbound_safety and call is_platform_excluded(platform, provider) + filter_with_platform; OR remove the second-tier PII filter from apply_outbound_safety on the grounds that the guardrail pipeline already covers it."
+    },
+    {
+      "id": "PII-002",
+      "severity": "high",
+      "category": "operations",
+      "confidence": "high",
+      "path": "src/pii/engine.rs:151",
+      "title": "PiiEngine::reload lacks the partial-load summary warning emitted by new",
+      "description": "PiiEngine::new computes configured_custom - loaded_custom and emits one operator-facing warn! summarising partial custom-rule load. PiiEngine::reload does not — it calls the same build_rules but skips the summary. Hot-reload of a half-broken config yields per-rule warns but no top-level signal. Asymmetric operational story between boot and reload.",
+      "suggested_fix": "Reuse the same configured_custom / loaded_custom logic in reload (extract into a helper), or drop it from both."
+    },
+    {
+      "id": "PII-003",
+      "severity": "medium",
+      "category": "dead_code",
+      "confidence": "high",
+      "path": "src/pii/engine.rs:60",
+      "title": "FilterResult.skipped_count is computed but never read",
+      "description": "skipped_count is set in filter_with_config whenever a Block action cannot be applied because matched offsets fall off a char boundary / outside the (mutated) text. The doc-comment explicitly says the audit pipeline (runtime_guard) can use this as a triage signal. Grep across src/ and tests/ finds zero non-test readers — runtime_guard::apply_filter_result only reads blocked_count and warned_count. The field is permanently zero-valued for any consumer.",
+      "suggested_fix": "Either wire apply_filter_result to escalate skipped_count > 0 to a Critical audit entry (the original intent) and document the convention, or drop the field."
+    },
+    {
+      "id": "PII-004",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "path": "src/pii/allowlist.rs",
+      "title": "PII allowlist has no direct unit tests",
+      "description": "src/pii/allowlist.rs ships with zero #[cfg(test)] mod tests. All coverage reaches is_allowed indirectly via engine integration tests. The static sets (TEST_PHONES, LOCAL_IPS) and the regexes (SYSTEM_EMAIL_PATTERNS — pattern widened previously by 56a84247e/c59090033 for the case-fold in both directions) are exactly where a regression in pattern semantics would land first.",
+      "suggested_fix": "Add a #[cfg(test)] mod with positive tests for each rule-name branch (phone, email, ip_address), a negative test for an unrelated rule (api_key returns false for everything), and a case-fold test for the email branch covering .example, .EXAMPLE, noreply@, NO-REPLY@."
+    },
+    {
+      "id": "PII-005",
+      "severity": "medium",
+      "category": "performance",
+      "confidence": "medium",
+      "path": "src/pii/engine.rs:415",
+      "title": "dedup_overlapping is O(n\u00b2)",
+      "description": "dedup_overlapping uses result.iter().any(|existing| m.start < existing.end && m.end > existing.start) inside a loop over the input. For typical outbound PII (1\u20133 matches per message) this is invisible, but the path is on the hot outbound pipeline and the surrounding filter_with_config is invoked once per outbound text block. A pathological case — a long string with many adjacent rule hits, e.g. a 1-MB CSV column with many credit-card Luhn-valid numbers — would walk Vec<PiiMatch> quadratically.",
+      "suggested_fix": "Sort spans by (start, -end) first and run a sweep, or bucket by start/16 and check only the small bucket — either removes the quadratic worst-case while preserving semantics."
+    },
+    {
+      "id": "PII-006",
+      "severity": "medium",
+      "category": "seam",
+      "confidence": "high",
+      "path": "src/pii/engine.rs:166 and src/security/runtime_guard.rs:230-263",
+      "title": "Double PII filter with divergent semantics (filter_with_platform vs filter)",
+      "description": "runtime_guard::process_outbound calls filter_with_platform (platform-aware); the request then continues to HttpProvider::apply_outbound_safety which calls engine.filter (global-config, no platform). The two paths use different filter functions whose semantics diverge whenever [platform_policies.X] overrides the global config. When runtime_guard elects to redact, http_provider tier is a no-op. When runtime_guard elects to skip (platform exclusion), http_provider tier may still redact. Same root cause as PII-001 framed as duplication.",
+      "suggested_fix": "Drop the PII block from apply_outbound_safety on the grounds that the guardrail layer already covers it; OR propagate platform name to apply_outbound_safety and gate on is_platform_excluded(None, &self.name) so the second tier does not contradict the first."
+    },
+    {
+      "id": "PII-007",
+      "severity": "low",
+      "category": "quality",
+      "confidence": "high",
+      "path": "src/pii/engine.rs:209-240",
+      "title": "effective_config clones PrivacyConfig on three early-return paths",
+      "description": "effective_config has three early-return branches — no platform, no platform policy, policy with all-None fields — each returning self.config.clone(). With pii_filtering: true, seven PiiAction defaults, and a few Vecs/HashMaps in PrivacyConfig, each clone is a one-shot allocation per filter call. Hot path, easily avoidable.",
+      "suggested_fix": "Return a thin enum (e.g. EffectiveConfig<'a> { Global(&'a PrivacyConfig), Owned(PrivacyConfig) }) and match in filter_with_config, or split into effective_config_owned and a borrowing version for the identity cases."
+    },
+    {
+      "id": "PII-008",
+      "severity": "low",
+      "category": "logic",
+      "confidence": "high",
+      "path": "src/pii/rules/api_key.rs:31",
+      "title": "Bearer-token char class misses +/= (base64 padding)",
+      "description": "The Bearer branch (?i:Bearer)\\s+[a-zA-Z0-9._\\-]{20,} accepts alphanumerics plus ., _, -. Standard base64 alphabet also includes +, /, =. A Bearer <token> containing those characters is not matched by ApiKeyRule. runtime_guard's ExecLeakDetector covers this with a broader bearer_token rule (per src/exec/leak_detector.rs:239-260), but the PII module's stand-alone capability is documented as filters-outbound — a leaky Bearer in a context where only the PII module ran would slip through.",
+      "suggested_fix": "Widen the bearer token char class to [a-zA-Z0-9._\\-+/=]{20,} or add an explicit \\+ branch. Add a regression test asserting that Bearer abc+def/ghi= is detected by the PII rule alone."
+    },
+    {
+      "id": "PII-009",
+      "severity": "low",
+      "category": "quality",
+      "confidence": "high",
+      "path": "src/pii/engine.rs:124-140 vs 154",
+      "title": "init and reload build different lookup tables (duplicated code)",
+      "description": "PiiEngine::new and PiiEngine::reload both rebuild custom_rule_actions and excluded_providers, but the constructions are open-coded in two places (not extracted into a helper). If a future field is added (e.g. effective_providers or a fast-path phone_digit_set), the same code must be edited in three places (new, reload, and the effective_config indexing path). Drift is a likely failure mode.",
+      "suggested_fix": "Extract fn lookup_tables(config: &PrivacyConfig) -> (HashMap<String, PiiAction>, HashSet<String>) and call it from both new and reload."
+    }
+  ],
+  "non_findings_verified": [
+    "PiiAllowlist is wired into filter_with_config (engine.rs:319); not decorative.",
+    "Custom rule safety via bounded_builder (security/safe_regex.rs); no compile-time memory blowup.",
+    "Rule registration parity: 7 built-in names appear in both build_rules and action_for_rule.",
+    "ssh_key.rs header pattern no longer carries a back-reference; SSH key pairing in detect is plain Rust.",
+    "Severity/blocks ordering in dedup_fixed; covered by test_overlap_block_wins_over_higher_severity_warn.",
+    "Case-fold in email/allowlist tested both directions (56a84247e).",
+    "RwLock discipline consistent; poison-safe recovery via unwrap_or_else(|e| e.into_inner()).",
+    "Off-action skips detection (engine.rs:316-319).",
+    "Char-boundary safety on UTF-8 (engine.rs:378-379 + phone.rs is_timestamp_context snap).",
+    "Warn action preserves text (engine.rs:391-405) — caller-visible Warn semantics correct."
+  ],
+  "consumers": {
+    "init": ["src/bin/aleph-server/commands/start/mod.rs:160"],
+    "reload": [
+      "src/bin/aleph-server/commands/start/builder/handlers/config.rs:94",
+      "src/gateway/handlers/search_config/update.rs:197"
+    ],
+    "global_filter_or_check": [
+      "src/security/runtime_guard.rs (filter_with_platform, is_platform_excluded)",
+      "src/mcp/redact.rs (filter)",
+      "src/providers/http_provider.rs (filter, is_provider_excluded)",
+      "src/browser/secret_guard.rs (build_rules + critical_rules scan)"
+    ]
+  }
+}

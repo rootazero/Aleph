@@ -134,11 +134,15 @@ pub struct CompressResult {
 /// Extract the depth level from a session compactor VFS path.
 ///
 /// Path format: `aleph://session/{id}/d{depth}/{seq}`
+///
+/// Uses the LAST `/d` occurrence so a session id that itself contains `/d`
+/// (e.g. `agent:main:main` keys) can never shadow the real depth segment —
+/// same semantic as the parallel helper in
+/// `session_search_summary::end_hook::extract_depth_from_path`.
 pub(crate) fn extract_depth(path: &str) -> u32 {
-    path.split("/d")
-        .nth(1)
-        .and_then(|s| s.split('/').next())
-        .and_then(|s| s.parse().ok())
+    path.rfind("/d")
+        .and_then(|idx| path[idx + 2..].split_once('/'))
+        .and_then(|(d, _)| d.parse::<u32>().ok())
         .unwrap_or(0)
 }
 

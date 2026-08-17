@@ -1,0 +1,189 @@
+{
+  "module": "orchestrator",
+  "date": "2026-08-16",
+  "files_reviewed": [
+    "src/orchestrator/mod.rs",
+    "src/orchestrator/dispatch.rs",
+    "src/orchestrator/errors.rs",
+    "src/orchestrator/flow_registry.rs",
+    "src/orchestrator/flow_spec.rs",
+    "src/orchestrator/loader.rs",
+    "src/orchestrator/resolver.rs",
+    "src/orchestrator/sandbox_factory.rs",
+    "src/orchestrator/presets/mod.rs",
+    "src/orchestrator/presets/default_flows.toml",
+    "src/orchestrator/deps_builder/mod.rs",
+    "src/orchestrator/deps_builder/common.rs",
+    "src/orchestrator/deps_builder/context_budget.rs",
+    "src/orchestrator/deps_builder/provider_chain.rs",
+    "src/orchestrator/deps_builder/stability.rs",
+    "src/orchestrator/deps_builder/summary.rs",
+    "src/orchestrator/harness_bridge/mod.rs",
+    "src/orchestrator/harness_bridge/backfill.rs",
+    "src/orchestrator/harness_bridge/behavior_resolve.rs",
+    "src/orchestrator/harness_bridge/callback.rs",
+    "src/orchestrator/harness_bridge/context_blocks.rs",
+    "src/orchestrator/harness_bridge/context_estimate.rs",
+    "src/orchestrator/harness_bridge/error.rs",
+    "src/orchestrator/harness_bridge/llm.rs",
+    "src/orchestrator/harness_bridge/prompt_build.rs",
+    "src/orchestrator/harness_bridge/runner_impl.rs",
+    "src/orchestrator/harness_bridge/session_seed.rs",
+    "src/orchestrator/harness_bridge/tests.rs",
+    "src/orchestrator/tests/mod.rs",
+    "src/orchestrator/tests/dispatch.rs",
+    "src/orchestrator/tests/errors.rs",
+    "src/orchestrator/tests/flow_registry.rs",
+    "src/orchestrator/tests/flow_spec_parse.rs",
+    "src/orchestrator/tests/harness_bridge.rs",
+    "src/orchestrator/tests/loader.rs",
+    "src/orchestrator/tests/resolver.rs",
+    "src/orchestrator/tests/sandbox_factory.rs"
+  ],
+  "total_loc": 11447,
+  "findings_count": {
+    "critical": 0,
+    "high": 2,
+    "medium": 5,
+    "low": 6,
+    "total": 13
+  },
+  "by_category": {
+    "logic": 5,
+    "architecture": 5,
+    "quality": 3,
+    "security": 0
+  },
+  "findings": [
+    {
+      "id": "orch-001",
+      "severity": "High",
+      "category": "logic",
+      "confidence": "High",
+      "title": "SessionStrategy::Child resolves parent but never persists it",
+      "location": "src/orchestrator/resolver.rs:69-114 + src/orchestrator/dispatch.rs:834-840",
+      "summary": "resolve_session computes SessionResolution.parent_session_key for Child strategy, but Orchestrator::dispatch only reads session_key. parent_session_key is discarded. The session is created in the store without ever setting the column, even though schema/query handlers all read it.",
+      "tags": ["seam", "wiring-gap", "parent-child"]
+    },
+    {
+      "id": "orch-002",
+      "severity": "High",
+      "category": "logic",
+      "confidence": "High",
+      "title": "UnknownFlow after successful routing leaves no graceful fallback",
+      "location": "src/orchestrator/dispatch.rs:813-820",
+      "summary": "Step 1 has a graceful fallback ONLY for UnknownAgent (resolves to default-agent, overrides spec.agent). UnknownFlow returns hard error. The default_routing table maps every builtin SubAgent id to a same-named flow id, but loop-auditor has no matching preset. Latent today (gateway sends agent_id='main'), but a 1-line change makes it user-visible.",
+      "tags": ["seam", "registration-drift", "fallback-missing"]
+    },
+    {
+      "id": "orch-003",
+      "severity": "Medium",
+      "category": "logic",
+      "confidence": "Medium",
+      "title": "Every gateway chat dispatch hits InvalidConfig for any SubAgent agent_id",
+      "location": "src/orchestrator/dispatch.rs:810-822",
+      "summary": "Six preset flows (explore, coder, researcher, default, plan, verify) declare SessionStrategy::Child with parent_session_key unset; FlowRequest::parent_session is None in gateway. Child strategy requires non-empty parent at runtime, so any routing resolution to these flows hard-fails. Latent today but a stale default_routing entry will hard-fail.",
+      "tags": ["preset-catalog", "session-strategy", "latent-defect"]
+    },
+    {
+      "id": "orch-004",
+      "severity": "Medium",
+      "category": "logic",
+      "confidence": "Medium",
+      "title": "MoA one-shot pref consumed before the failure points it documents to restore on",
+      "location": "src/orchestrator/harness_bridge/runner_impl.rs:342-360",
+      "summary": "take_for_run is called early (~line 346); restore_one_shot only happens inside the try_build_for_run error arm. Between take and harness.run there are ~10 failure-capable steps. Any error consumes the one-shot without restoring it — the 'all paths leave no state' doc claim is false by inspection.",
+      "tags": ["resource-leak", "user-facing-feature", "documentation-drift"]
+    },
+    {
+      "id": "orch-005",
+      "severity": "Medium",
+      "category": "architecture",
+      "confidence": "High",
+      "title": "Orchestrator::reload_flows only replaces the registry; routing/sandbox are immutable",
+      "location": "src/orchestrator/dispatch.rs:541-548",
+      "summary": "Orchestrator exposes reload_flows(new_set) but no equivalent for routing_overrides, default_routing, sandbox_factory. default_routing built once at boot from agent_registry.list_ids() — new plugins/projects invisible to dispatch, fall through to UnknownAgent arm silently.",
+      "tags": ["hot-reload", "immutability-gap", "api-surface"]
+    },
+    {
+      "id": "orch-006",
+      "severity": "Medium",
+      "category": "architecture",
+      "confidence": "High",
+      "title": "Dead re-export: MAX_FLOW_DEPTH has zero non-test consumers",
+      "location": "src/orchestrator/mod.rs:39",
+      "summary": "pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH}; the only consumers are inside src/orchestrator/tests/. Same shape for ContextBudgetRefiner and ProviderChain — re-exported at mod.rs but every consumer imports from crate::orchestrator::deps_builder::*.",
+      "tags": ["dead-code", "public-api-hygiene", "missed-by-8cb10a0ce"]
+    },
+    {
+      "id": "orch-007",
+      "severity": "Medium",
+      "category": "logic",
+      "confidence": "High",
+      "title": "FlowStreamEvent::Complete NOT emitted on error/cancel paths",
+      "location": "src/orchestrator/dispatch.rs:873-958",
+      "summary": "BroadcastCallback::on_complete_with_outcome is the ONLY emitter (single-source comment), called only on Ok arm. Error paths reach ? operator without emitting Complete. Gateway drain has a safety-net that builds from outcome.duration_ms=0; subscribers waiting on Complete frame hang on error paths.",
+      "tags": ["broadcast-channel", "error-handling", "single-source-viol"]
+    },
+    {
+      "id": "orch-008",
+      "severity": "Low",
+      "category": "architecture",
+      "confidence": "High",
+      "title": "Orchestrator fields are all pub; no compile-time enforcement of builders",
+      "location": "src/orchestrator/dispatch.rs:963-977",
+      "summary": "All 9 fields are pub, including active_sessions: Arc<Mutex<HashSet<String>>>. with_subagent_routing/with_agent_registry function as documentation only. Direct field writes possible after construction; race risk on the lock guard itself.",
+      "tags": ["encapsulation", "type-safety", "low-risk"]
+    },
+    {
+      "id": "orch-009",
+      "severity": "Low",
+      "category": "architecture",
+      "confidence": "High",
+      "title": "SessionResolution::is_new is computed but never read in production",
+      "location": "src/orchestrator/resolver.rs:69-115 + src/orchestrator/flow_spec.rs:114-126",
+      "summary": "is_new computed on every resolve_session call; only test files assert on it. No production consumer. Doubly redundant with seed_history's own 'log already non-empty' probe.",
+      "tags": ["dead-field", "redundant-computation"]
+    },
+    {
+      "id": "orch-010",
+      "severity": "Low",
+      "category": "architecture",
+      "confidence": "Medium",
+      "title": "memory_injection_headroom does full session log read on hot path",
+      "location": "src/orchestrator/harness_bridge/prompt_build.rs:191-204",
+      "summary": "get_events(session_id, None, None) called every run for token arithmetic. context_pressure_reminder repeats it. Harness also reads events in runner_impl.rs:1169-1170. Three full scans per turn for a long-lived session.",
+      "tags": ["perf", "hot-path", "n+1-reads"]
+    },
+    {
+      "id": "orch-011",
+      "severity": "Low",
+      "category": "quality",
+      "confidence": "Medium",
+      "title": "load_user_flows_from_dir aborts entire load on first malformed TOML",
+      "location": "src/orchestrator/loader.rs:54-87",
+      "summary": "Single bad file prevents ALL other user flows from loading. No per-file WARN, no continuation past recoverable errors. Symptom: 'my custom flows disappeared' with no diagnostic.",
+      "tags": ["error-handling", "ux", "silent-failure"]
+    },
+    {
+      "id": "orch-012",
+      "severity": "Low",
+      "category": "quality",
+      "confidence": "Medium",
+      "title": "load_prompt_extra_files reads files synchronously with no initial size cap",
+      "location": "src/orchestrator/harness_bridge/prompt_build.rs:258-308",
+      "summary": "std::fs::read_to_string on every path in [prompt.extra_files] with no upper bound on read. Window-scaled per-file cap is applied AFTER full read. A multi-GB file at a configured path blocks the executor on every turn.",
+      "tags": ["perf", "dos-vector", "low-severity"]
+    },
+    {
+      "id": "orch-013",
+      "severity": "Low",
+      "category": "architecture",
+      "confidence": "Medium",
+      "title": "Orchestrator::new takes 6 Arc params positionally; HarnessRunner has 7 separate capability getters",
+      "location": "src/orchestrator/dispatch.rs:534-548, 722-742",
+      "summary": "Implicit builder with positional Arc<dyn Trait> args — easy to mis-order at call site (would compile, route wrong service). HarnessRunner trait has 7 capability getters each with a default None; no compile-time enforcement of which ones production gateways must set.",
+      "tags": ["api-design", "ergonomics", "testability"]
+    }
+  ]
+}

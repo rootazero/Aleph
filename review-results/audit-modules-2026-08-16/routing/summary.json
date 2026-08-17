@@ -1,0 +1,161 @@
+{
+  "module": "routing",
+  "date": "2026-08-16",
+  "files_reviewed": [
+    "src/routing/mod.rs",
+    "src/routing/config.rs",
+    "src/routing/identity_links.rs",
+    "src/routing/observer.rs",
+    "src/routing/experience_store.rs",
+    "src/routing/recall.rs",
+    "src/routing/overlay.rs",
+    "src/routing/resolve.rs",
+    "src/routing/session_key.rs"
+  ],
+  "total_loc": 3828,
+  "findings_count": {
+    "critical": 0,
+    "high": 3,
+    "medium": 5,
+    "low": 4,
+    "total": 12
+  },
+  "by_category": {
+    "logic": 5,
+    "architecture": 4,
+    "quality": 2,
+    "security": 1
+  },
+  "findings": [
+    {
+      "id": 1,
+      "severity": "high",
+      "category": "logic",
+      "confidence": "high",
+      "title": "Empty api_key treated as Available",
+      "path": "src/routing/recall.rs",
+      "line_range": "48-52",
+      "summary": "provider_availability_from_config treats Some(\"\") empty api_key as ProviderStatus::Available, falsely tagging misconfigured providers and recommending them in the recall block."
+    },
+    {
+      "id": 2,
+      "severity": "high",
+      "category": "architecture",
+      "confidence": "high",
+      "title": "Inert retention_cap knob (form-3)",
+      "path": "src/routing/experience_store.rs",
+      "line_range": "11, 30-40",
+      "summary": "RoutingExperienceStore.retention_cap is hardcoded to DEFAULT_ROUTING_RETENTION_CAP=5000 with no setter or constructor parameter; form-3 severed wire."
+    },
+    {
+      "id": 3,
+      "severity": "high",
+      "category": "logic",
+      "confidence": "high",
+      "title": "Empty agent_id in binding silently routes to default agent",
+      "path": "src/routing/resolve.rs",
+      "line_range": "140-155",
+      "summary": "When a binding's agent_id is empty, resolve_route routes to DEFAULT_AGENT_ID=main instead of falling through to the unmatched default-path. Indistinguishable from a deliberate 'main' match."
+    },
+    {
+      "id": 4,
+      "severity": "medium",
+      "category": "logic",
+      "confidence": "high",
+      "title": "OnceLock::set result discarded silently on second recall",
+      "path": "src/routing/recall.rs",
+      "line_range": "94-95",
+      "summary": "build_routing_experience_message uses let _ = attribution.task_emb.set(task_emb.clone()); a second recall silently loses its embedding, breaking D6 record/recall symmetry."
+    },
+    {
+      "id": 5,
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "title": "identity_links only on configured-bindings path",
+      "path": "src/routing/config.rs",
+      "line_range": "38-49",
+      "summary": "Zero-config fallback (resolve_session_key_with_agent) ignores identity_links; only the configured-bindings path consults them. Documented but still a real gap."
+    },
+    {
+      "id": 6,
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "medium",
+      "title": "OutcomeObserver reacts only to SessionCompleted",
+      "path": "src/routing/observer.rs",
+      "line_range": "93-133",
+      "summary": "All non-SessionCompleted events are forwarded but produce no routing record; absence of 'recording' logs is indistinguishable from empty-result paths."
+    },
+    {
+      "id": 7,
+      "severity": "medium",
+      "category": "logic",
+      "confidence": "high",
+      "title": "Main key parser silently re-types main_key=peer|dm|ephemeral",
+      "path": "src/routing/session_key.rs",
+      "line_range": "760-770",
+      "summary": "parse_rest excludes peer|dm|ephemeral from the [main_key] arm; a Main key with such a main_key will not round-trip. project_room does not validate against this reservation."
+    },
+    {
+      "id": 8,
+      "severity": "medium",
+      "category": "quality",
+      "confidence": "high",
+      "title": "SessionKey::task panics on reserved task_type",
+      "path": "src/routing/session_key.rs",
+      "line_range": "178-185",
+      "summary": "Library panic on a String input; no Result, no shared is_reserved_task_type helper, docstring says 'must not be' but does not warn of panic."
+    },
+    {
+      "id": 9,
+      "severity": "low",
+      "category": "quality",
+      "confidence": "high",
+      "title": "context_tokens/context_window hardcoded to 0",
+      "path": "src/routing/experience_store.rs",
+      "line_range": "79-85",
+      "summary": "Two schema columns are always written as 0; a future renderer will treat zero as real measurement. Documented but still worst-of-both-worlds."
+    },
+    {
+      "id": 10,
+      "severity": "low",
+      "category": "architecture",
+      "confidence": "medium",
+      "title": "agent_id verbatim vs session_key normalised split",
+      "path": "src/routing/resolve.rs",
+      "line_range": "135-137",
+      "summary": "ResolvedRoute.agent_id is the raw config string while session_key uses normalized form; intentional but the contract is comment-only and easy to misread."
+    },
+    {
+      "id": 11,
+      "severity": "low",
+      "category": "quality",
+      "confidence": "medium",
+      "title": "format_dm_base PerPeer empty-channel branch is legacy-only",
+      "path": "src/routing/session_key.rs",
+      "line_range": "267-270",
+      "summary": "The empty-channel PerPeer arm is only reachable through SessionKey::peer (legacy alias); refactoring that removes the alias silently makes the arm unreachable."
+    },
+    {
+      "id": 12,
+      "severity": "low",
+      "category": "logic",
+      "confidence": "medium",
+      "title": "Vault-only provider mishandled as Unknown",
+      "path": "src/routing/recall.rs",
+      "line_range": "42-52",
+      "summary": "A provider reachable only via vault (no config entry) is rendered as Unknown, which fail-opens the recall block tag. The LLM picks it up and only discovers the misfire on first call."
+    }
+  ],
+  "scope_notes": {
+    "not_reported_again": [
+      "8c537fb74 routing: rustfmt normalization",
+      "4671057d4 routing: document send-seam DM/group key drift and identity_links fallback wiring gap",
+      "b14c28152 routing: wire binding workspace to executor, unify DM fallback keys, delegate AgentRouter to resolve_route, guard inert account_id",
+      "6cb10a0ce routing: cut dead re-exports, warn on recall failure, document identity_links scope"
+    ],
+    "lenses_applied": ["seam", "logic", "architecture"],
+    "tools_used": ["read", "bash (grep)", "manual cross-reference of consumers"]
+  }
+}

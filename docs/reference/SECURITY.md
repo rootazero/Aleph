@@ -2947,7 +2947,8 @@ from the pre-revert build:
 |--------|----------|---------|
 | SSRF Engine | `src/security/ssrf/` | Outbound request validation |
 | HTTP Headers | `src/security/headers.rs` | Security response headers |
-| Content Sanitizer | `src/security/content_sanitizer.rs` | Prompt injection defense |
+| Content Sanitizer | `src/security/content_sanitizer.rs` | Prompt injection defense — tokenizer/format-marker scrubbing (openclaw-parity literal set + `reserved_special_token_NN` family), forged-boundary-marker replacement, bounded sanitized truncation |
+| Safe Regex | `src/security/safe_regex.rs` | `bounded_builder` — 1 MiB compiled-size cap for untrusted (config/operator-supplied) patterns. Rust's `regex` crate matches in linear time, so the ONLY residual risk is compile-time automaton expansion, not backtracking; every config-pattern compile site routes through it |
 | Audit Logger | `src/security/audit.rs` | Security event logging |
 | Browser Guard | `src/browser/network_policy.rs` | Browser navigation SSRF |
 | Crypto + Vault | `src/gateway/security/` | Secrets vault, shared-token crypto |

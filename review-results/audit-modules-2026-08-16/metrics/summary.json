@@ -1,0 +1,89 @@
+{
+  "module": "metrics",
+  "date": "2026-08-16",
+  "files_reviewed": [
+    {"path": "src/metrics/mod.rs", "loc": 355}
+  ],
+  "total_loc": 355,
+  "findings_count": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 6,
+    "total": 6
+  },
+  "by_category": {
+    "logic": 1,
+    "architecture": 3,
+    "quality": 2,
+    "security": 0
+  },
+  "findings": [
+    {
+      "id": "M-01",
+      "severity": "low",
+      "title": "Drop warning branch suppresses the debug log for slow operations (acknowledged deferred design)",
+      "file": "src/metrics/mod.rs",
+      "line": 198,
+      "category": "logic",
+      "confidence": "high",
+      "description": "When target_ms > 0, enable_warnings = true, and elapsed_ms > threshold_ms, Drop emits tracing::warn! and returns, bypassing the tracing::debug! that would otherwise carry the structured timing record (duration_ms, metadata, stage). Slow operations leave no structured debug trail. Deferred to design-level decision per commit 1f90366f4.",
+      "fix": "No action unless revisiting the deferred item. If revisited, drop the early `return;` so both warn and debug fire for slow operations."
+    },
+    {
+      "id": "M-02",
+      "severity": "low",
+      "title": "Inconsistent re-init log level vs defaults_override::init_defaults_override",
+      "file": "src/metrics/mod.rs",
+      "line": 67,
+      "category": "architecture",
+      "confidence": "high",
+      "description": "Both init_metrics_runtime and defaults_override::init_defaults_override implement write-once OnceLock::set semantics with silently-discarded re-inits. They diverge on log level: metrics uses tracing::debug! while defaults_override uses warn!. Same 'lost write' failure mode, different visibility. The defaults_override variant explicitly states the operational consequence ('silently inactive — restart the process'), which the metrics variant hides at DEBUG.",
+      "fix": "Promote to tracing::warn! with the same actionable phrasing, or extract a shared init_once! macro so both call sites cannot drift."
+    },
+    {
+      "id": "M-03",
+      "severity": "low",
+      "title": "Drop warning branch and init_metrics_runtime / MetricsRuntime have no behavioral tests",
+      "file": "src/metrics/mod.rs",
+      "line": 243,
+      "category": "quality",
+      "confidence": "high",
+      "description": "Twelve in-module tests cover only builder field state and elapsed_ms bounds. The Drop tracing::warn!/debug! emissions, the init_metrics_runtime is_finite() guard, the MetricsRuntime::warning_threshold_ms arithmetic, the MetricsRuntime::default values, and the OnceLock set-conflict path all lack behavioral coverage. Two test names (test_timer_drop_logs, test_timer_target_zero_no_warning) imply behavior the tests do not verify — a maintenance hazard.",
+      "fix": "Add tests with tracing-subscriber's TestWriter (or tracing-test) to capture emitted events across the (target_ms > 0, threshold_exceeded, enable_warnings) × (enable_logging) × (target_ms = 0) matrix. Add table-driven unit tests for warning_threshold_ms covering target_ms = 0, target_ms = u64::MAX, multiplier = 0.0."
+    },
+    {
+      "id": "M-04",
+      "severity": "low",
+      "title": "DEFAULT_WARNING_MULTIPLIER is duplicated independently of MetricsPolicy::default_warning_multiplier",
+      "file": "src/metrics/mod.rs",
+      "line": 28,
+      "category": "architecture",
+      "confidence": "high",
+      "description": "The value 2.0 is independently encoded in three places: DEFAULT_WARNING_MULTIPLIER const (mod.rs:28), default_warning_multiplier() const fn (config/types/policies/metrics.rs:53-55), and the serde default attribute (config/types/policies/metrics.rs:43). If the policy default ever changes, the runtime fallback would still use the old value silently — any pre-init StageTimer (test, early startup) would see a different threshold than configured.",
+      "fix": "Source both defaults from one location — either pub const in config::types::policies::metrics consumed by metrics::DEFAULT_WARNING_MULTIPLIER, or expose MetricsPolicy::DEFAULT_WARNING_MULTIPLIER and have MetricsRuntime::default read it."
+    },
+    {
+      "id": "M-05",
+      "severity": "low",
+      "title": "Module doc overstates capabilities; 'detailed instrumentation when enabled' is not a real mode",
+      "file": "src/metrics/mod.rs",
+      "line": 4,
+      "category": "architecture",
+      "confidence": "high",
+      "description": "Module doc claims the module is 'designed to have minimal overhead when profiling is disabled and detailed instrumentation when enabled.' The actual API has only two binary toggles (enable_logging, enable_warnings); the debug branch emits exactly the same fields whether enable_logging is on or off — it only gates whether the record is emitted at all. The phrase implies a richer profiling mode that doesn't exist.",
+      "fix": "Trim the sentence to: 'It is designed to have minimal overhead when logging is disabled (enable_logging = false) and to emit a debug-level record per stage when enabled.'"
+    },
+    {
+      "id": "M-06",
+      "severity": "low",
+      "title": "MetricsRuntime::warning_threshold_ms is pub but MetricsRuntime itself is private — the pub is no-op",
+      "file": "src/metrics/mod.rs",
+      "line": 84,
+      "category": "quality",
+      "confidence": "high",
+      "description": "MetricsRuntime is a private struct (no pub). metrics_runtime() returns MetricsRuntime by Copy so module-internal code can call warning_threshold_ms, but external crates cannot name the type. The pub keyword and #[must_use] on warning_threshold_ms are inert — they expand public API surface that nobody can reach. The #[must_use] on a u64-returning method is also a code smell that forces _ = or let _ = on every discard.",
+      "fix": "Drop pub (and the #[must_use]) on warning_threshold_ms since MetricsRuntime is module-private. Alternatively, expose MetricsRuntime deliberately as part of the public API."
+    }
+  ]
+}

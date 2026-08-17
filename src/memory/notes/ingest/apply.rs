@@ -357,7 +357,11 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             .join(category)
             .join(format!("{filename}.md"));
         let body = note.to_markdown();
-        tokio::fs::write(&staged_path, &body)
+        // Atomic stage: the whole apply transaction is stage-then-rename, so the
+        // staged file must land atomically too — a plain write that crashes
+        // mid-way leaves a half-written `.md` that `commit` then renames to the
+        // target, shipping a corrupt blob as the new source-of-truth note.
+        crate::utils::atomic_write::atomic_write_file(&staged_path, &body)
             .await
             .map_err(|e| ApplyError::Other(AlephError::other(format!("tx write: {e}"))))?;
         let write = StagedWrite {
@@ -430,13 +434,22 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         }
 
         for (from, to) in &self.pending_links {
-            let _ = self.add_link(from, to).await;
-            let _ = self.add_link(to, from).await;
-            report.linked += 1;
-            // rust-doctor-disable-next-line excessive-clone
-            report.touched_paths.push(from.clone());
-            // rust-doctor-disable-next-line excessive-clone
-            report.touched_paths.push(to.clone());
+            // Both directions must actually land before the link is reported.
+            // `add_link` returns Ok(true) only when it appended the backlink;
+            // a split_path failure, missing file, or backend error is not a
+            // success — so a link that never materialized is not counted and
+            // does not touch its paths. Errors stay tolerated (link failures
+            // must not abort the whole commit), but they no longer masquerade
+            // as successes in the report.
+            let fwd = self.add_link(from, to).await.unwrap_or(false);
+            let rev = self.add_link(to, from).await.unwrap_or(false);
+            if fwd || rev {
+                report.linked += 1;
+                // rust-doctor-disable-next-line excessive-clone
+                report.touched_paths.push(from.clone());
+                // rust-doctor-disable-next-line excessive-clone
+                report.touched_paths.push(to.clone());
+            }
         }
 
         for (old_path, new_path) in &self.pending_supersedes {
@@ -458,10 +471,17 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         Ok(report)
     }
 
-    async fn add_link(&self, from: &str, to: &str) -> Result<(), AlephError> {
-        let (category, filename) = match split_path(from) {
+    /// Append `link_target` as a `[[related]]` entry inside the note at
+    /// `note_path`. Returns Ok(true) when the backlink was actually written,
+    /// Ok(false) when the note path is unparseable or the target file does not
+    /// exist (a silent skip, not an error). Callers wanting a bidirectional
+    /// link call this twice with the arguments swapped — the parameter names
+    /// make the direction explicit: first `(note_path: from, link_target: to)`,
+    /// then `(note_path: to, link_target: from)`.
+    async fn add_link(&self, note_path: &str, link_target: &str) -> Result<bool, AlephError> {
+        let (category, filename) = match split_path(note_path) {
             Ok(p) => p,
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(false),
         };
         let safe = sanitize_title(&filename)?;
         let disk = self
@@ -476,13 +496,15 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             self.indexer
                 .append_to_note(
                     self.agent_id,
-                    from,
+                    note_path,
                     &Vec::<String>::new(),
-                    &[to.to_string()],
+                    &[link_target.to_string()],
                 )
                 .await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 
     async fn mark_superseded(&self, old_path: &str, new_path: &str) -> Result<(), AlephError> {

@@ -280,7 +280,17 @@ pub async fn run_dispatch_and_drain_classified(
     let outcome: FlowOutcome = match handle.completion.await {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(e)) => {
+            // The run failed *before* the harness's broadcast callback could
+            // emit the terminal `Complete` frame (early failures like
+            // Cancelled/UnknownAgent happen before `BroadcastCallback` is
+            // constructed). The drain task therefore never sees a terminal
+            // event — it only exits when the broadcast channel closes. Wait
+            // for it, then emit the safety-net `RunComplete` so channel/Panel
+            // consumers still observe the run end instead of hanging.
+            let _ = drain.await;
             propagate.abort();
+            emit_route_correction(&emitter, run_id, witness_session_for_fallback.as_deref()).await;
+            emit_error_run_complete(&emitter, run_id, &e).await;
             return Err(map_flow_error(e));
         }
         Err(e) => {
@@ -451,6 +461,37 @@ fn correction_for(
         is_fallback: true,
         original_model: Some(witness.first.label()),
     })
+}
+
+/// Emit a terminal `RunComplete` stream event for a run that failed before the
+/// harness produced a `FlowOutcome`. The drain-fallback path in step 4 needs a
+/// real `FlowOutcome`; on pre-outcome failures we synthesize a minimal one so
+/// channel/Panel consumers still observe the run end rather than hanging on a
+/// never-arriving terminal frame. The error is surfaced in the summary text.
+async fn emit_error_run_complete(
+    emitter: &Arc<dyn crate::gateway::event_emitter::EventEmitter>,
+    run_id: &str,
+    err: &FlowError,
+) {
+    let outcome = crate::orchestrator::dispatch::FlowOutcome::default();
+    let mut summary = super::event_drain::build_run_summary(&outcome, None);
+    summary.final_response = Some(format!("Run failed before completion: {err}"));
+    let seq = emitter.next_seq();
+    if let Err(e) = emitter
+        .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
+            run_id: run_id.to_string(),
+            seq,
+            summary,
+            total_duration_ms: 0,
+        })
+        .await
+    {
+        tracing::warn!(
+            run_id,
+            error = %e,
+            "failed to emit the error-path RunComplete stream event"
+        );
+    }
 }
 
 fn map_flow_error(err: FlowError) -> DispatchFailure {

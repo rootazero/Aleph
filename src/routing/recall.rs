@@ -45,10 +45,13 @@ pub fn provider_availability_from_config(
     token_manager: Option<Arc<SharedTokenManager>>,
 ) -> ProviderAvailability {
     Arc::new(move |provider: &str| {
+        // An empty api key (`Some("")`) is a misconfiguration, not a live
+        // credential — treat it exactly like a missing one so a recall block
+        // never recommends a provider that would fail its first call.
         let available = providers
             .get(provider)
             .and_then(|c| c.api_key.as_ref())
-            .is_some()
+            .is_some_and(|k| !k.trim().is_empty())
             || match &token_manager {
                 Some(tm) => {
                     crate::gateway::handlers::resolve_vault_secret(&format!("ai:{provider}"), tm)

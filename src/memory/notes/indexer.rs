@@ -489,7 +489,22 @@ impl<S: NoteStore> NoteIndexer<S> {
             if !CATEGORY_DIRS.contains(&entry.category.as_str()) {
                 continue;
             }
-            let safe_cat = sanitize_title(&entry.category).unwrap_or_else(|_| "other".to_string());
+            let safe_cat = match sanitize_title(&entry.category) {
+                Ok(c) => c,
+                // A category that fails sanitization is itself an anomaly —
+                // routing it to "other" would silently re-home the note in a
+                // wrong dir and, worse, make the prune check below compare
+                // against a path that can never exist, keeping a ghost index
+                // row alive forever. Log and skip instead.
+                Err(e) => {
+                    tracing::warn!(
+                        category = %entry.category,
+                        error = %e,
+                        "full_rebuild: category fails sanitization; skipping note"
+                    );
+                    continue;
+                }
+            };
             let file =
                 agent_dir
                     .join(safe_cat)

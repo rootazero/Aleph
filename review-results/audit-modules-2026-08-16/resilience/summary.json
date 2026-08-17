@@ -1,0 +1,221 @@
+{
+  "module": "resilience",
+  "date": "2026-08-16",
+  "files_reviewed": [
+    "src/resilience/mod.rs",
+    "src/resilience/types.rs",
+    "src/resilience/database/mod.rs",
+    "src/resilience/database/state_database/mod.rs",
+    "src/resilience/database/state_database/schema.rs",
+    "src/resilience/database/state_database/tests.rs",
+    "src/resilience/database/migration.rs",
+    "src/resilience/database/events.rs",
+    "src/resilience/database/tasks.rs",
+    "src/resilience/database/traces.rs",
+    "src/resilience/database/group_chat.rs",
+    "src/resilience/database/memory_events.rs",
+    "src/resilience/database/channel_offsets.rs"
+  ],
+  "total_loc": 5018,
+  "findings_count": {
+    "critical": 0,
+    "high": 4,
+    "medium": 7,
+    "low": 5,
+    "total": 16
+  },
+  "by_category": {
+    "architecture": 13,
+    "logic": 2,
+    "security": 0,
+    "quality": 1
+  },
+  "findings": [
+    {
+      "id": "R-H1",
+      "severity": "high",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/state_database/schema.rs:163-211",
+      "title": "POE tables (poe_events / poe_trust_scores / poe_contracts) fully orphaned",
+      "summary": "Three POE tables with 5 indexes are created on every StateDatabase::new() but no production code reads or writes them. Pure dead schema."
+    },
+    {
+      "id": "R-H2",
+      "severity": "high",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/migration.rs:24-105",
+      "title": "experience_replays migration is dead (no Cortex consumer)",
+      "summary": "migrate_add_experience_replays creates experience_replays + 4 indexes + experiences_vec vec0; nothing reads or writes them anywhere in the tree."
+    },
+    {
+      "id": "R-H3",
+      "severity": "high",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/state_database/mod.rs:449-456",
+      "title": "MemoryStats struct fully orphaned (re-exported from 3 sites, no consumers)",
+      "summary": "Defined in state_database/mod.rs and re-exported from database::mod.rs, resilience::mod.rs, and lib.rs:220. Webchat has its own unrelated MemoryStats. No production reader."
+    },
+    {
+      "id": "R-H4",
+      "severity": "high",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/events.rs",
+      "title": "Entire agent_events Skeleton & Pulse surface unused (9 methods + 7 TYPE_* constants)",
+      "summary": "All 9 CRUD methods on agent_events (insert_event, bulk_insert_events, get_events_by_task, get_events_since_seq, get_events_in_range, get_structural_events, get_latest_event_seq, delete_events_for_task, get_event_count) have zero production callers. AgentEvent TYPE_* constants likewise unused."
+    },
+    {
+      "id": "R-M1",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/types.rs:56-71",
+      "title": "TaskStatus::Idle and ::Swapped never produced (only round-trip)",
+      "summary": "Two of seven TaskStatus variants are documented as Session-as-a-Service but no production path writes them. Accept via from_str_or_default, never written by reconcile or update_task_status."
+    },
+    {
+      "id": "R-M2",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/types.rs:281-291",
+      "title": "should_auto_resume and needs_resume_confirmation unused",
+      "summary": "Both AgentTask recovery-decision methods defined + tested but never called in production. Actual recovery is unconditional Running->Interrupted via reconcile_orphaned_tasks."
+    },
+    {
+      "id": "R-M3",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/types.rs:213-220 + database/tasks.rs",
+      "title": "Recursive Sentry fields (recursion_depth, parent_task_id, with_parent_task) are aspirational",
+      "summary": "Schema columns + struct fields + builder method exist but no code enforces, increments, or reads them. AgentTask::new always sets recursion_depth=0, parent_task_id=None."
+    },
+    {
+      "id": "R-M4",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/types.rs:209-212 + database/tasks.rs",
+      "title": "Shadow Replay recovery fields (checkpoint_snapshot_path, last_tool_call_id) unused",
+      "summary": "Both fields written by insert_agent_task but never read by any recovery code path. Real recovery uses reconcile_orphaned_tasks which ignores them."
+    },
+    {
+      "id": "R-M5",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/state_database/schema.rs:17-47",
+      "title": "memories table + vec0 + FTS5 + triggers dead in state.db",
+      "summary": "Real memory storage is in memory.db via memory/store/sqlite/. Resilience state.db has duplicate dead schema including memories_vec (vec0 1024-dim), memories_fts, 2 sync triggers, 3 indexes. Triggers never fire (no inserts)."
+    },
+    {
+      "id": "R-M6",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/state_database/schema.rs:38-211",
+      "title": "7 tables duplicated from memory.db (compression_sessions / graph_* / daily_insights / dream_status)",
+      "summary": "compression_sessions, graph_nodes, graph_edges, graph_aliases, memory_entities, daily_insights, dream_status are created in state.db but only ever read/written in memory.db (different file, different backend)."
+    },
+    {
+      "id": "R-M7",
+      "severity": "medium",
+      "category": "quality",
+      "confidence": "high",
+      "location": "src/resilience/database/*.rs",
+      "title": "AlephError::config used for 136+ DB errors with misleading TOML suggestion",
+      "summary": "Hardcoded suggestion reads 'Check your configuration file at ~/.aleph/config.toml' but the actual error is a DB connection / FK / serialization failure. memory_events.rs uses AlephError::other (no misleading suggestion) — proving the inconsistency."
+    },
+    {
+      "id": "R-L1",
+      "severity": "low",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/tasks.rs:198-222",
+      "title": "3 of 7 agent_tasks CRUD methods unused outside tests",
+      "summary": "get_tasks_by_session, get_recoverable_tasks, mark_running_as_interrupted have no production callers. The latter two are only invoked internally by reconcile_orphaned_tasks and by tests."
+    },
+    {
+      "id": "R-L2",
+      "severity": "low",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/database/traces.rs",
+      "title": "7 of 11 trace methods unused outside tests",
+      "summary": "bulk_insert_traces, get_last_trace, get_traces_from_step, delete_traces_for_task, get_trace_count, list_trace_tasks, get_trace_by_id. Built for Shadow Replay resume which never materialized."
+    },
+    {
+      "id": "R-L3",
+      "severity": "low",
+      "category": "logic",
+      "confidence": "medium",
+      "location": "src/resilience/database/tasks.rs:107-153",
+      "title": "reconcile_orphaned_tasks returns pre-update snapshot (status stale)",
+      "summary": "Returned AgentTask Vec has status=Running (snapshot) while DB has status=Interrupted. Current callers don't read task.status, so harmless today; footgun for future callers."
+    },
+    {
+      "id": "R-L4",
+      "severity": "low",
+      "category": "logic",
+      "confidence": "medium",
+      "location": "src/resilience/database/tasks.rs:224-237",
+      "title": "mark_running_as_interrupted doesn't set completed_at (state-machine inconsistency)",
+      "summary": "update_task_status sets completed_at for Completed/Failed. The bulk path Running->Interrupted leaves completed_at NULL, indistinguishable from 'started but never finished'. Combines poorly with finding R-L3."
+    },
+    {
+      "id": "R-L5",
+      "severity": "low",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/resilience/mod.rs",
+      "title": "Module name promises reconnect/retry/backoff that does not exist",
+      "summary": "Per grep: src/resilience/ contains zero retry/backoff/reconnect/circuit-breaker code. Module is purely persistence + types. Audit brief's expectation comes from aspirational doc comments in types.rs."
+    }
+  ],
+  "wired_surface_summary": {
+    "agent_tasks_crud_used": ["insert_agent_task", "update_task_status", "get_agent_task", "reconcile_orphaned_tasks"],
+    "task_traces_crud_used": ["insert_trace", "get_traces_by_task", "list_trace_tasks_paged", "aggregate_usage_by_agents", "aggregate_moa_advisor_usage"],
+    "memory_events_crud_used": ["append_memory_event", "append_memory_events", "get_memory_events_for_fact", "get_memory_events_since_seq", "get_memory_events_until", "get_memory_events_in_range", "get_memory_event_latest_seq", "count_memory_events"],
+    "group_chat_used": true,
+    "channel_offsets_used": true,
+    "sticker_descriptions_used": true,
+    "AgentUsageTotal_used": true,
+    "AgentTask_with_lane_used": true,
+    "Lane_Main_Subagent_used": true,
+    "RiskLevel_High_used": true
+  },
+  "dead_schema_inventoried": {
+    "tables_created_no_readers_or_writers": [
+      "poe_events",
+      "poe_trust_scores",
+      "poe_contracts",
+      "experience_replays",
+      "experiences_vec",
+      "memories",
+      "memories_vec",
+      "memories_fts",
+      "compression_sessions",
+      "graph_nodes",
+      "graph_edges",
+      "graph_aliases",
+      "memory_entities",
+      "daily_insights",
+      "dream_status"
+    ],
+    "tables_actively_used": [
+      "agent_tasks",
+      "task_traces",
+      "agent_events (created, NOT used — see R-H4)",
+      "memory_events",
+      "group_chat_sessions",
+      "group_chat_turns",
+      "channel_offsets",
+      "sticker_descriptions",
+      "paired_users"
+    ]
+  }
+}

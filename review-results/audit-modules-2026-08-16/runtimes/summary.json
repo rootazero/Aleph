@@ -1,0 +1,103 @@
+{
+  "module": "runtimes",
+  "date": "2026-08-16",
+  "files_reviewed": [
+    "src/runtimes/mod.rs",
+    "src/runtimes/bootstrap.rs",
+    "src/runtimes/capability.rs",
+    "src/runtimes/ensure.rs",
+    "src/runtimes/ledger.rs",
+    "src/runtimes/npm_global.rs",
+    "src/runtimes/os.rs",
+    "src/runtimes/post_install.rs",
+    "src/runtimes/probe.rs",
+    "src/runtimes/specs.rs"
+  ],
+  "total_loc": 3755,
+  "findings_count": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 5,
+    "total": 7
+  },
+  "by_category": {
+    "seam": 1,
+    "logic": 3,
+    "architecture": 3,
+    "security": 0,
+    "quality": 0
+  },
+  "findings": [
+    {
+      "id": "M-1",
+      "severity": "medium",
+      "category": "seam",
+      "confidence": "high",
+      "location": "src/runtimes/ensure.rs:288-303",
+      "title": "runtime_error format makes the stderr tail uncatchable at the gateway boundary",
+      "description": "AlephError::runtime() output embeds the stderr tail as 'Stderr tail: <X>\\n\\nFix options: ...'. The gateway handler at src/gateway/handlers/runtimes.rs:175 recovers the tail via err_str.split_once(\"Stderr tail: \").map(|(_, tail)| tail.to_string()) which captures everything AFTER the marker — including the Fix options block. The 'stderr' field of RuntimeInstallProgressEvent therefore carries noise in addition to the actual stderr.",
+      "suggested_fix": "Stop encoding stderr in the human-readable error message; expose it as a structured field on AlephError::runtime or a new variant, and have runtime_error return a struct the gateway can serialize field-by-field."
+    },
+    {
+      "id": "M-2",
+      "severity": "medium",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/runtimes/ledger.rs:66,68",
+      "title": "CapabilityEntry::source and last_probed are dead data",
+      "description": "source and last_probed are written by every code path (ensure.rs, runtime_warmup.rs, gateway/handlers/runtimes.rs::handle_refresh, migrate_from_legacy, tests) but never read. CapabilitySource::AlephManaged vs System has no observable effect. last_probed is referenced in the doc-comment for revalidate_ready ('the recorded version stays as-of last_probed, which is why that field exists') but no code consults it for re-probe scheduling. CapabilityStatus::Stale is similarly written only by migrate_from_legacy and never set by the live codepath.",
+      "suggested_fix": "Delete the fields and the Stale variant if nothing is planned to use them, or wire them into the re-probe scheduler so the existing infrastructure pays for itself."
+    },
+    {
+      "id": "L-3",
+      "severity": "low",
+      "category": "logic",
+      "confidence": "high",
+      "location": "src/runtimes/probe.rs:107-148",
+      "title": "find_on_path and get_version have no timeout",
+      "description": "probe::probe runs 'which'/'where' and '<bin> --version' with no timeout wrapper. The bootstrap path (bootstrap.rs::run_cmd) wraps its child in timeout(Duration::from_secs(600), ...); the probe does not. A binary on PATH that hangs on --version (a script without signal handling, a GUI binary that prompts, a fnm install under a corrupted network mount) will hang the probe indefinitely, blocking daemon startup warmup and every subsequent ensure_capability that hits the same name.",
+      "suggested_fix": "Wrap the which/where/--version invocations in tokio::time::timeout (and convert probe::probe to async fn to match the rest of the orchestrator), with a fallback None on timeout."
+    },
+    {
+      "id": "L-4",
+      "severity": "low",
+      "category": "logic",
+      "confidence": "medium",
+      "location": "src/runtimes/ensure.rs:51-126",
+      "title": "Nested lock acquisition order in ensure_capability_recursive has no global invariant",
+      "description": "The function acquires the outer capability's lock BEFORE recursing into each dependency (capability_lock(cap) -> .lock().await -> for dep in deps { recurse(dep) }). capability_lock(name) returns Arc<Mutex<()>> keyed by name, with no per-spec ordering rule. Current SPECS are safe (only node -> fnm, playwright-cli -> node). But the data-driven shape of SPECS means any future addition that lists deps in conflicting orders would deadlock without MAX_BOOTSTRAP_DEPTH catching it.",
+      "suggested_fix": "Either enforce a global lock order (sort deps by name before acquiring) or document explicitly in RuntimeSpec.deps that lock ordering is by name."
+    },
+    {
+      "id": "L-5",
+      "severity": "low",
+      "category": "logic",
+      "confidence": "medium",
+      "location": "src/runtimes/post_install.rs:109-138",
+      "title": "fnm list parsing is fragile against future fnm output formats",
+      "description": "The parser hard-codes two assumptions: the default version line begins with '*' and a version token in that line begins with 'v'. Recent fnm releases have changed column delimiters; if the default line no longer starts with '*', every node install produces NoNodeVersion and the 'lts' alias is silently never created.",
+      "suggested_fix": "Prefer 'fnm current' (which returns just the current default version, no parsing) over scanning 'fnm list'."
+    },
+    {
+      "id": "L-6",
+      "severity": "low",
+      "category": "architecture",
+      "confidence": "medium",
+      "location": "src/runtimes/ensure.rs:173",
+      "title": "CapabilityStatus::Bootstrapping has no transition guard",
+      "description": "The state machine records Bootstrapping in the ledger at line 173, then immediately transitions out. No code path reads the Bootstrapping value to gate behavior. In gateway/handlers/runtimes.rs::handle_refresh there is no check for Bootstrapping; a refresh arriving while ensure_capability holds its install guard can write Missing (probe-failed) over a ledger entry that is mid-install. The bootstrap's eventual Ready write repairs the state, but the variant + field are essentially documentation-in-the-type-system.",
+      "suggested_fix": "Either drop the variant (it is not used as a state) or wire it into handle_refresh to skip entries that are currently Bootstrapping."
+    },
+    {
+      "id": "L-7",
+      "severity": "low",
+      "category": "architecture",
+      "confidence": "high",
+      "location": "src/runtimes/bootstrap.rs:204-273",
+      "title": "enrich_path_for_reprobe mutates process-wide PATH",
+      "description": "The function permanently mutates the daemon's PATH via std::env::set_var(\"PATH\", joined). PATH_LOCK makes the read-modify-write atomic against other prepend_existing_dirs callers, but does not prevent other modules from reading PATH concurrently. Tokio's set_var is unsafe in Rust 2024+; under edition 2021 it carries the documented 'not thread-safe' warning. The risk window is microseconds, so this is a latent risk rather than a current defect.",
+      "suggested_fix": "Switch the daemon to a single Arc<Mutex<OsString>> PATH-equivalent and pass it explicitly to Command::env(\"PATH\", ...), mirroring what probe.rs::enriched_search_path already does correctly."
+    }
+  ]
+}

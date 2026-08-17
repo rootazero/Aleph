@@ -1465,9 +1465,35 @@ impl NoteStore for SqliteMemoryBackend {
         let blob: Option<Vec<u8>> = conn.query_row(&sql, params![rowid], |row| row.get(0)).ok();
 
         Ok(blob.map(|b| {
-            b.chunks_exact(4)
+            // Decode strictly: a blob whose byte length is not a multiple of 4
+            // (or whose decoded length disagrees with the table's dimension)
+            // is corrupt, not a vector — returning a wrong-length Vec<f32>
+            // would silently poison downstream cosine similarity. `chunks_exact`
+            // drops a trailing partial f32 silently, so validate first.
+            if b.len() % 4 != 0 {
+                tracing::warn!(
+                    path = %path,
+                    blob_len = b.len(),
+                    "get_embedding: stored embedding blob is not a multiple of 4 bytes; \
+                     treating as missing"
+                );
+                return Vec::new();
+            }
+            let decoded: Vec<f32> = b
+                .chunks_exact(4)
                 .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect()
+                .collect();
+            if decoded.len() != dim_hint as usize {
+                tracing::warn!(
+                    path = %path,
+                    expected_dim = dim_hint,
+                    actual_dim = decoded.len(),
+                    "get_embedding: stored embedding dimension disagrees with table; \
+                     treating as missing"
+                );
+                return Vec::new();
+            }
+            decoded
         }))
     }
 
@@ -1482,8 +1508,15 @@ impl NoteStore for SqliteMemoryBackend {
         let conn = lock_conn!(self)?;
         let blob = vec::embedding_to_blob(embedding);
 
-        // Overshoot k to account for agent_id post-filtering
-        let k = limit.saturating_mul(3).max(limit);
+        // Overshoot k to account for agent_id post-filtering. Bound the result
+        // set BEFORE building the `IN (...)` placeholder list below: SQLite's
+        // SQLITE_MAX_VARIABLE_NUMBER is 32 766 by default, and every rowid is
+        // one placeholder — an unclamped `limit` (an RPC parameter) could push
+        // the statement past the limit and fail with a misleading "too many
+        // SQL variables" error. 5 000 leaves generous headroom for the extra
+        // `agent_id` bind (mirrors the BATCH_SIZE in `prune_orphan_vectors`).
+        const MAX_KNN_K: usize = 5_000;
+        let k = limit.saturating_mul(3).max(limit).min(MAX_KNN_K);
 
         // Step 1: KNN search on the notes vec0 table alone (sqlite-vec requirement)
         let knn_results = {
@@ -1743,28 +1776,43 @@ impl NoteStore for SqliteMemoryBackend {
         };
 
         let mut nodes = Vec::with_capacity(node_meta.len());
+        // One query for ALL source refs instead of N prepared statements — the
+        // previous per-node loop issued a prepare+query per node, which on a
+        // large vault is thousands of round-trips on a shared connection.
+        let mut source_rows: Vec<(String, String)> = Vec::new();
+        {
+            let mut s2 = conn
+                .prepare(
+                    "SELECT note_path, source_ref FROM notes_sources \
+                     WHERE agent_id = ?1 ORDER BY note_path",
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("load_graph_snapshot sources prep: {e}"))
+                })?;
+            let srows = s2
+                .query_map(params![agent_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| {
+                    AlephError::config(format!("load_graph_snapshot sources query: {e}"))
+                })?;
+            for s in srows {
+                source_rows.push(s.map_err(|e| {
+                    AlephError::config(format!("load_graph_snapshot source row: {e}"))
+                })?);
+            }
+        }
+        // Consume in one pass: `source_rows` is sorted by note_path, so a
+        // single walk groups refs per node without extra allocation.
+        let mut src_iter = source_rows.into_iter().peekable();
         for (path, category) in node_meta {
             // rust-doctor-disable-next-line unnecessary-allocation
             let mut sources = Vec::new();
+            while src_iter
+                .peek()
+                .is_some_and(|(p, _)| p.as_str() == path.as_str())
             {
-                let mut s2 = conn
-                    .prepare(
-                        "SELECT source_ref FROM notes_sources \
-                         WHERE agent_id = ?1 AND note_path = ?2",
-                    )
-                    .map_err(|e| {
-                        AlephError::config(format!("load_graph_snapshot sources prep: {e}"))
-                    })?;
-                let srows = s2
-                    .query_map(params![agent_id, path], |r| r.get::<_, String>(0))
-                    .map_err(|e| {
-                        AlephError::config(format!("load_graph_snapshot sources query: {e}"))
-                    })?;
-                for s in srows {
-                    sources.push(s.map_err(|e| {
-                        AlephError::config(format!("load_graph_snapshot source row: {e}"))
-                    })?);
-                }
+                sources.push(src_iter.next().unwrap().1);
             }
             nodes.push(GraphNode {
                 path,

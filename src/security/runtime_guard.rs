@@ -154,9 +154,16 @@ impl RuntimeSecurityGuard {
                 severity,
                 source_ip: None,
                 session_id: context.session_id.clone(),
-                // Guardrail events fire inside a run, not on a gateway
-                // dispatch, so there is no resolved caller to name.
-                actor_user: None,
+                // WHO ran the turn that tripped the guard. The guard fires
+                // inside the run loop, where `CALLER_USER` is dead (it never
+                // crosses the spawn boundary); the run-start path re-seeds
+                // the same fact as the `AUTHOR_USER_KEY` metadata →
+                // `scope::with_room_author` task-local, which IS visible
+                // here. `None` for runs no human authored (cron, internal)
+                // and for engines that never enter the seeding nest
+                // (fast_path / SimpleExecutionEngine) — an honest absent,
+                // not a forgotten one.
+                actor_user: crate::scope::current_room_author(),
                 detail,
             };
             log.log(entry);
@@ -571,5 +578,42 @@ mod tests {
             "Expected Clean, got {:?}",
             result
         );
+    }
+
+    /// The audit row answers "whose run tripped the guard" — the fact that
+    /// made §5.1's `actor_user` column worth having. The guard fires inside
+    /// the run loop, so the identity arrives via the `AUTHOR_USER_KEY` →
+    /// `scope::with_room_author` task-local, not the dead `CALLER_USER`.
+    #[tokio::test]
+    async fn audit_entry_names_the_run_author_when_one_is_seeded() {
+        let (guard, mut rx) = RuntimeSecurityGuard::new_with_audit(SecurityGuardConfig::default());
+        crate::scope::with_room_author(Some("u-alice".to_string()), async {
+            let _ = guard
+                .process_outbound(
+                    "My key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+                    None,
+                    SecurityContext::default(),
+                )
+                .await;
+        })
+        .await;
+        let entry = rx.recv().await.expect("block should log an audit entry");
+        assert_eq!(entry.actor_user.as_deref(), Some("u-alice"));
+    }
+
+    /// A run no human authored (cron / internal) has no author to name — the
+    /// column stays NULL rather than inventing one.
+    #[tokio::test]
+    async fn audit_entry_actor_is_none_outside_a_seeded_run() {
+        let (guard, mut rx) = RuntimeSecurityGuard::new_with_audit(SecurityGuardConfig::default());
+        let _ = guard
+            .process_outbound(
+                "My key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+                None,
+                SecurityContext::default(),
+            )
+            .await;
+        let entry = rx.recv().await.expect("block should log an audit entry");
+        assert!(entry.actor_user.is_none());
     }
 }

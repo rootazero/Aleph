@@ -725,6 +725,21 @@ pub trait HarnessRunner: Send + Sync {
     }
 }
 
+/// Clone the default-agent spec, overriding `agent` with the requested id so
+/// the harness loads *that* agent's identity from disk. When the base already
+/// targets the requested agent (e.g. `main` itself), return it unchanged.
+fn fallback_spec_with_agent(base: Arc<FlowSpec>, agent_id: &str) -> Arc<FlowSpec> {
+    if base.agent == agent_id {
+        base
+    } else {
+        // rust-doctor-disable-next-line excessive-clone
+        let mut s = (*base).clone();
+        // rust-doctor-disable-next-line excessive-clone
+        s.agent = agent_id.to_string();
+        Arc::new(s)
+    }
+}
+
 impl Orchestrator {
     pub fn new(
         flow_registry: Arc<FlowRegistry>,
@@ -780,11 +795,13 @@ impl Orchestrator {
         // default-agent preset hardcodes `agent = "main"`). This is what lets every
         // registered agent execute — config `[[agents.list]]` and team-created ones
         // live only in the gateway registry, not the orchestrator's builtins.
+        // The same fallback applies when routing *succeeds* but the resolved flow
+        // id is unknown (a routing table entry whose flow was never registered):
+        // prefer serving the request through the default agent over a hard error.
         let spec = match &req.flow_id {
             Some(id) => self
                 .flow_registry
                 .resolve(id)
-                // rust-doctor-disable-next-line excessive-clone
                 .ok_or_else(|| FlowError::UnknownFlow(id.clone()))?,
             None => match resolve_flow_id(
                 &req.agent_id,
@@ -792,25 +809,27 @@ impl Orchestrator {
                 &self.routing_overrides,
                 &self.default_routing,
             ) {
-                Ok(flow_id) => self
-                    .flow_registry
-                    .resolve(&flow_id)
-                    // rust-doctor-disable-next-line excessive-clone
-                    .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))?,
+                Ok(flow_id) => match self.flow_registry.resolve(&flow_id) {
+                    Some(spec) => spec,
+                    None => {
+                        // Routing succeeded but the resolved flow id is unknown
+                        // (a routing-table entry whose flow was never
+                        // registered). Prefer serving through the default agent
+                        // over a hard error; if the default is missing too,
+                        // surface the original UnknownFlow so the caller sees
+                        // what actually went wrong.
+                        self.flow_registry
+                            .resolve(DEFAULT_AGENT_FLOW_ID)
+                            .map(|base| fallback_spec_with_agent(base, &req.agent_id))
+                            .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))?
+                    }
+                },
                 Err(FlowError::UnknownAgent(_)) => {
                     let base = self
                         .flow_registry
                         .resolve(DEFAULT_AGENT_FLOW_ID)
                         .ok_or_else(|| FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string()))?;
-                    if base.agent == req.agent_id {
-                        base
-                    } else {
-                        // rust-doctor-disable-next-line excessive-clone
-                        let mut s = (*base).clone();
-                        // rust-doctor-disable-next-line excessive-clone
-                        s.agent = req.agent_id.clone();
-                        Arc::new(s)
-                    }
+                    fallback_spec_with_agent(base, &req.agent_id)
                 }
                 Err(e) => return Err(e),
             },
@@ -832,6 +851,19 @@ impl Orchestrator {
             fresh_key_fn: || uuid::Uuid::new_v4().to_string(),
         };
         let session_res = resolve_session(session_input)?;
+        // SessionStrategy::Child resolved a parent key here, but the session
+        // store row is created later by the gateway (`SessionStore::get_or_create`)
+        // from the key alone — `parent_session_key` is not threaded through the
+        // dispatch boundary, so the parent link is currently dropped. Log it so
+        // the gap is observable instead of silent; wiring it into the store row
+        // is a cross-boundary change (see resolver.rs doc on SessionResolution).
+        if let Some(parent) = &session_res.parent_session_key {
+            tracing::debug!(
+                session_key = %session_res.session_key,
+                parent_session_key = %parent,
+                "dispatch: child session resolved; parent key is not yet persisted — session store row is created key-only by the gateway"
+            );
+        }
         {
             let mut guard = self
                 .active_sessions

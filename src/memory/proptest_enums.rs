@@ -102,6 +102,14 @@ fn note_type_as_str_values_are_unique() {
         NoteType::SubagentSession,
         NoteType::SubagentCheckpoint,
         NoteType::SubagentTranscript,
+        // Lesson / Skill / Reference / Feedback / Transcript were added after
+        // this list was first written; the count assertion below is what keeps
+        // the census honest, so a missing variant fails loudly here.
+        NoteType::Lesson,
+        NoteType::Skill,
+        NoteType::Reference,
+        NoteType::Feedback,
+        NoteType::Transcript,
     ];
 
     let mut seen = HashSet::new();

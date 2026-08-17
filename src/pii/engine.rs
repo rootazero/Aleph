@@ -9,6 +9,32 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use tracing::warn;
 
+/// Number of built-in rules prepended by [`crate::pii::rules::build_rules`].
+/// Custom rules come after them, so `rules.len() - BUILTIN_RULE_COUNT` is the
+/// number of custom rules that actually compiled.
+const BUILTIN_RULE_COUNT: usize = 7;
+
+/// Emit the single operator-facing "partial custom-rule load" summary when
+/// some configured custom patterns failed to compile. Shared by [`PiiEngine::new`]
+/// (boot) and [`PiiEngine::reload`] (hot-reload) so both paths surface the same
+/// signal — previously `reload` skipped it, making a half-broken config silent
+/// after a reload even though boot had warned.
+fn warn_if_partial_custom_load(config: &PrivacyConfig, rules: &[Box<dyn PiiRule>]) {
+    let configured_custom = config.custom_rules.len();
+    let loaded_custom = rules.len().saturating_sub(BUILTIN_RULE_COUNT);
+    if loaded_custom < configured_custom {
+        // `build_rules` already warns on each invalid pattern; this summary
+        // surfaces a single operator-facing signal so a dashboard / health
+        // check can flag a half-loaded config.
+        warn!(
+            configured_custom_rules = configured_custom,
+            loaded_custom_rules = loaded_custom,
+            skipped = configured_custom - loaded_custom,
+            "Custom PII rules partially loaded; some patterns failed to compile"
+        );
+    }
+}
+
 /// Severity level for PII detections
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
@@ -100,20 +126,8 @@ impl PiiEngine {
     /// Create a new PII engine with the given configuration
     #[must_use]
     pub fn new(config: PrivacyConfig) -> Self {
-        let configured_custom = config.custom_rules.len();
         let rules = crate::pii::rules::build_rules(&config.custom_rules);
-        let loaded_custom = rules.len().saturating_sub(7); // 7 built-ins
-        if loaded_custom < configured_custom {
-            // `build_rules` already warns on each invalid pattern; this
-            // summary surfaces a single operator-facing signal so a
-            // dashboard / health check can flag a half-loaded config.
-            warn!(
-                configured_custom_rules = configured_custom,
-                loaded_custom_rules = loaded_custom,
-                skipped = configured_custom - loaded_custom,
-                "Custom PII rules partially loaded; some patterns failed to compile"
-            );
-        }
+        warn_if_partial_custom_load(&config, &rules);
         let allowlist = PiiAllowlist::default();
         let custom_rule_actions = config
             .custom_rules
@@ -152,6 +166,7 @@ impl PiiEngine {
         if let Some(engine) = PII_ENGINE.get() {
             // Build rules and lookup tables outside the lock to avoid blocking readers.
             let new_rules = crate::pii::rules::build_rules(&config.custom_rules);
+            warn_if_partial_custom_load(&config, &new_rules);
             let custom_rule_actions = config
                 .custom_rules
                 .iter()

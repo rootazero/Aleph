@@ -163,11 +163,18 @@ pub async fn handle_install(
             },
             Err(e) => {
                 let err_str = e.to_string();
-                // Task 4 will emit "Stderr tail: <tail>" as part of the error string.
-                // Extract that tail if present; otherwise fall back to the whole error.
+                // `ensure.rs` emits "Stderr tail: <tail>" as part of the error
+                // string, followed by the canonical "Fix options:" block.
+                // Extract just the tail (stop before the fix-options suffix);
+                // otherwise the Panel's stderr pane would show the boilerplate
+                // help text instead of the actual diagnostic.
                 let stderr = err_str
                     .split_once("Stderr tail: ")
-                    .map(|(_, tail)| tail.to_string())
+                    .map(|(_, tail)| {
+                        tail.split_once("Fix options:")
+                            .map(|(t, _)| t.trim().to_string())
+                            .unwrap_or_else(|| tail.to_string())
+                    })
                     .or_else(|| Some(err_str.clone()));
                 RuntimeInstallProgressEvent {
                     step: cap_for_event,

@@ -3,7 +3,6 @@
 //! Core types for the Multi-Agent Resilience architecture:
 //! - `AgentTask`: Task state and recovery checkpoints
 //! - `TaskTrace`: Structured execution traces for Shadow Replay
-//! - `AgentEvent`: Tiered event persistence (Skeleton & Pulse)
 
 use aleph_protocol::AgentTraceEvent;
 use serde::{Deserialize, Serialize};
@@ -367,105 +366,6 @@ pub struct TaskTraceInfo {
 }
 
 // =============================================================================
-// Agent Event
-// =============================================================================
-
-/// Agent event for tiered persistence (Skeleton & Pulse model)
-///
-/// Structural events (skeleton) are persisted immediately.
-/// Streaming events (pulse) are batched before persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentEvent {
-    /// Auto-incremented ID
-    pub id: i64,
-
-    /// Associated task ID
-    pub task_id: String,
-
-    /// Sequence number for ordering (Gap-Fill support)
-    pub seq: u64,
-
-    /// Event type identifier
-    pub event_type: String,
-
-    /// Full event payload as JSON
-    pub payload_json: String,
-
-    /// Whether this is a structural event (skeleton)
-    pub is_structural: bool,
-
-    /// Timestamp (Unix epoch seconds)
-    pub timestamp: i64,
-}
-
-impl AgentEvent {
-    /// Create a new event (`is_structural` determined by caller)
-    pub fn new(
-        task_id: impl Into<String>,
-        seq: u64,
-        event_type: impl Into<String>,
-        payload_json: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: 0,
-            task_id: task_id.into(),
-            seq,
-            event_type: event_type.into(),
-            payload_json: payload_json.into(),
-            is_structural: false,
-            timestamp: chrono::Utc::now().timestamp(),
-        }
-    }
-
-    /// Create a structural (skeleton) event
-    pub fn structural(
-        task_id: impl Into<String>,
-        seq: u64,
-        event_type: impl Into<String>,
-        payload_json: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: 0,
-            task_id: task_id.into(),
-            seq,
-            event_type: event_type.into(),
-            payload_json: payload_json.into(),
-            is_structural: true,
-            timestamp: chrono::Utc::now().timestamp(),
-        }
-    }
-
-    /// Create a pulse event (batched)
-    pub fn pulse(
-        task_id: impl Into<String>,
-        seq: u64,
-        event_type: impl Into<String>,
-        payload_json: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: 0,
-            task_id: task_id.into(),
-            seq,
-            event_type: event_type.into(),
-            payload_json: payload_json.into(),
-            is_structural: false,
-            timestamp: chrono::Utc::now().timestamp(),
-        }
-    }
-
-    /// Common structural event types
-    pub const TYPE_TASK_STARTED: &'static str = "task_started";
-    pub const TYPE_TOOL_CALL_STARTED: &'static str = "tool_call_started";
-    pub const TYPE_TOOL_CALL_COMPLETED: &'static str = "tool_call_completed";
-    pub const TYPE_ARTIFACT_CREATED: &'static str = "artifact_created";
-    pub const TYPE_TASK_COMPLETED: &'static str = "task_completed";
-    pub const TYPE_TASK_FAILED: &'static str = "task_failed";
-
-    /// Common pulse event types
-    pub const TYPE_AI_STREAMING: &'static str = "ai_streaming";
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
@@ -562,31 +462,6 @@ mod tests {
         assert_eq!(trace.task_id, "task-1");
         assert_eq!(trace.step_index, 0);
         assert_eq!(trace.event.kind(), "text_emitted");
-    }
-
-    #[test]
-    fn test_agent_event_structural() {
-        let event = AgentEvent::structural(
-            "task-1",
-            1,
-            AgentEvent::TYPE_TOOL_CALL_STARTED,
-            r#"{"tool":"search"}"#,
-        );
-
-        assert!(event.is_structural);
-        assert_eq!(event.event_type, "tool_call_started");
-    }
-
-    #[test]
-    fn test_agent_event_pulse() {
-        let event = AgentEvent::pulse(
-            "task-1",
-            2,
-            AgentEvent::TYPE_AI_STREAMING,
-            r#"{"delta":"..."}"#,
-        );
-
-        assert!(!event.is_structural);
     }
 
     #[test]

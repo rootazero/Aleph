@@ -20,7 +20,7 @@ pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     // Fast path: quick probe for any tag-like pattern before doing real work.
     static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-            r"<(?:think|thinking|thought|antthinking|completion-check|task-complete|memory-context)[\s/>]",
+            r"<(?:think|thinking|thought|antthinking|completion-check|task-complete|memory-context|memory)[\s/>]",
         )
             .unwrap_or_else(|_| unreachable!("quick probe regex is statically valid"))
     });
@@ -54,7 +54,10 @@ const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 /// Non-reasoning spans the model may echo that must not reach a user.
 ///
 /// `memory-context` is the fence `memory::assembler::context_block::wrap_memory_context`
-/// puts around recalled long-term memory. The live stream already discards it
+/// puts around recalled long-term memory; `memory` is the outer fence
+/// `memory::assembler::render::render_markdown_v1` uses (slot fences like
+/// `<user_profile>` live inside it, so stripping `memory` alone removes the
+/// whole block). The live stream already discards both
 /// (`streaming_scrubber::DISCARD_TAG_PAIRS`, applied by `MessageAssembler`), but
 /// the terminal answer is raw model text — `RunSummary.final_response` is copied
 /// verbatim from `content.text` — and this list is the only thing standing
@@ -66,7 +69,7 @@ const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 ///
 /// `discard_tag_pairs_are_all_stripped_from_the_terminal_answer` keeps the two
 /// lists from drifting apart again.
-const OTHER_STRIP_TAGS: &[&str] = &["completion-check", "memory-context"];
+const OTHER_STRIP_TAGS: &[&str] = &["completion-check", "memory-context", "memory"];
 
 /// Strip tags while respecting code block boundaries.
 ///

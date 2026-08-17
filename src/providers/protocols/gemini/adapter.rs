@@ -229,6 +229,11 @@ impl ProtocolAdapter for GeminiProtocol {
             pending: VecDeque<Result<ProviderDelta>>,
             /// Set to true after a terminal event to stop the stream
             done: bool,
+            /// Whether a terminal (`Done`/`Error`) was ever queued. A healthy
+            /// Gemini stream ends with `[DONE]`; an EOF without one means the
+            /// body was cut mid-flight (proxy kill, provider fault) and must
+            /// surface as a typed Timeout, not a normal EndTurn.
+            saw_terminal: bool,
         }
 
         let state = State {
@@ -237,6 +242,7 @@ impl ProtocolAdapter for GeminiProtocol {
             fc_counter: 0,
             pending: VecDeque::new(),
             done: false,
+            saw_terminal: false,
         };
 
         let stream = futures::stream::unfold(state, |mut state| async move {
@@ -275,6 +281,14 @@ impl ProtocolAdapter for GeminiProtocol {
                             {
                                 state.done = true;
                             }
+                            if state.pending.iter().any(|d| {
+                                matches!(
+                                    d,
+                                    Ok(ProviderDelta::Done(_)) | Ok(ProviderDelta::Error(_))
+                                )
+                            }) {
+                                state.saw_terminal = true;
+                            }
                         }
                     }
                     continue;
@@ -299,11 +313,40 @@ impl ProtocolAdapter for GeminiProtocol {
                                         &mut state.pending,
                                     );
                                 }
+                                if data != "[DONE]"
+                                    && state.pending.iter().any(|d| {
+                                        matches!(
+                                            d,
+                                            Ok(ProviderDelta::Done(_))
+                                                | Ok(ProviderDelta::Error(_))
+                                        )
+                                    })
+                                {
+                                    state.saw_terminal = true;
+                                }
                             }
                         }
                         state.done = true;
                         if let Some(delta) = state.pending.pop_front() {
                             return Some((delta, state));
+                        }
+                        // Truncation guard: no terminal signal before EOF means
+                        // the body was cut mid-flight. Surface a typed Timeout
+                        // (the failover/retry path classifies it as transient)
+                        // instead of silently ending the turn as if the model
+                        // finished.
+                        if !state.saw_terminal {
+                            return Some((
+                                Err(AlephError::Timeout {
+                                    suggestion: Some(
+                                        "Gemini stream ended before a terminal [DONE] was seen — \
+                                         the connection was cut mid-response. Retry or switch \
+                                         providers."
+                                            .to_string(),
+                                    ),
+                                }),
+                                state,
+                            ));
                         }
                         return None;
                     }

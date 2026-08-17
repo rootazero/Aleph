@@ -98,7 +98,11 @@ impl StateDatabase {
     }
 
     fn run_optional_migrations(conn: &Connection) -> Result<(), AlephError> {
-        migration::migrate_add_experience_replays(conn)?;
+        // NOTE: `migrate_add_experience_replays` was removed 2026-08-16 — the
+        // experience_replays / experiences_vec tables it created had zero
+        // readers or writers anywhere in the tree (Cortex consumer never
+        // landed). Existing databases keep their orphaned tables (harmless);
+        // new databases simply don't create them.
         migration::migrate_task_traces_to_agent_trace(conn)?;
         migration::migrate_add_channel_offsets(conn)?;
         migration::migrate_add_paired_users(conn)?;
@@ -138,7 +142,6 @@ impl StateDatabase {
         .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
         // Run migrations (same as new()) so in-memory DBs have full schema
-        migration::migrate_add_experience_replays(&conn)?;
         migration::migrate_task_traces_to_agent_trace(&conn)?;
         migration::migrate_add_channel_offsets(&conn)?;
         migration::migrate_add_paired_users(&conn)?;
@@ -442,14 +445,4 @@ impl StateDatabase {
             Ok(None)
         }
     }
-}
-
-/// Memory database statistics
-#[derive(Debug, Clone, Default)]
-pub struct MemoryStats {
-    pub total_memories: u64,
-    pub total_apps: u64,
-    pub database_size_mb: f64,
-    pub oldest_memory_timestamp: i64,
-    pub newest_memory_timestamp: i64,
 }
