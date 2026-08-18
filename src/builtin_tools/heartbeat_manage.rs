@@ -191,6 +191,48 @@ impl AlephTool for HeartbeatCreateTool {
             )));
         }
 
+        // BT-B-R4-03: validate the probe tool name format up-front. The
+        // probe executor (`DefaultProbeExecutor`) refuses dangerous or
+        // confirmation-gated tools at probe time, but accepts ANY
+        // non-empty string and only fails at run time when the registry
+        // lookup misses. A heartbeat with a typo'd tool name silently
+        // burns a probe on every tick, with every probe error going to
+        // the failure alert if configured — a perpetually-failing
+        // monitor that the user only notices via the alert. Reject
+        // obviously-bad names at create time so the model (and the
+        // user) see the error immediately. Deep validation (registry
+        // lookup) is left to the timer loop where it can be cross-
+        // checked against the active tool set.
+        let probe = args.probe_tool_name.trim();
+        if probe.is_empty() {
+            return Err(crate::error::AlephError::tool(
+                "probe_tool_name is required and must not be empty",
+            ));
+        }
+        if probe.len() > 256 {
+            return Err(crate::error::AlephError::tool(format!(
+                "probe_tool_name is too long ({} chars, max 256)",
+                probe.len()
+            )));
+        }
+        // Tool names follow `<namespace>.<name>` for MCP / plugin tools
+        // and `<snake_name>` for builtins; whitespace, control bytes, or
+        // `..` (path traversal in a hypothetical file-based lookup)
+        // cannot be part of a real tool name.
+        if probe
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '/' || c == '\\' || c == '`' || c == '$')
+        {
+            return Err(crate::error::AlephError::tool(format!(
+                "probe_tool_name contains an invalid character (whitespace, control, /, \\, `, or $); got '{probe}'"
+            )));
+        }
+        if probe.contains("..") {
+            return Err(crate::error::AlephError::tool(format!(
+                "probe_tool_name contains '..' which is never part of a real tool name; got '{probe}'"
+            )));
+        }
+
         let trigger_condition = args
             .probe_trigger_condition
             .map_or(TriggerCondition::Always, TriggerCondition::from);
