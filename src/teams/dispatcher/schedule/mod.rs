@@ -472,7 +472,7 @@ impl TeamDispatcher {
                         },
                     )
                     .await;
-                let _ = self.coord_store.release_lock(&task_id).await;
+                let _ = self.coord_store.release_lock(&task_id, &owner).await;
                 tracing::info!(task_id = %task_id, "dispatcher: member run cancelled; task left in Cancelled (terminal, sticky)");
             }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {

@@ -195,12 +195,12 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 ApprovalDecisionType::Deny,
                 Some("unavailable".to_string()),
             );
-            return Ok(ApprovalResponse {
+            return ApprovalResponse {
                 outcome: ApprovalOutcome::Denied,
                 deny_reason: Some(
                     "approval notification could not be delivered to the operator surface".to_string(),
                 ),
-            });
+            };
         }
 
         // Phase 3b-2b: surface an in-band "waiting for operator approval" notice

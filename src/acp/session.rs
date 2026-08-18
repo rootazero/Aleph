@@ -43,6 +43,7 @@ impl Default for AdapterConfig {
             cwd: None,
             env: Vec::new(),
             timeout: Duration::from_secs(300),
+            permission_policy: crate::acp::incoming::PermissionPolicy::default(),
         }
     }
 }

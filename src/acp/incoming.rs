@@ -150,7 +150,7 @@ impl IncomingHandler {
                 message: "fs/read_text_file denied by permission policy".to_string(),
             };
         }
-        let abs = match self.confine(path) {
+        let abs = match self.confine(path).await {
             Ok(p) => p,
             Err(e) => return e,
         };
@@ -182,7 +182,7 @@ impl IncomingHandler {
         let Some(content) = params.get("content").and_then(Value::as_str) else {
             return HandlerOutcome::invalid_params("fs/write_text_file: missing 'content'");
         };
-        let abs = match self.confine(path) {
+        let abs = match self.confine(path).await {
             Ok(p) => p,
             Err(e) => return e,
         };
@@ -261,7 +261,7 @@ impl IncomingHandler {
     async fn confine(&self, requested: &str) -> Result<PathBuf, HandlerOutcome> {
         let root = self.root.clone();
         let req = requested.to_string();
-        match tokio::task::spawn_blocking(move || confine_blocking(&root, &req)).await {
+        match tokio::task::spawn_blocking(move || Self::confine_blocking(&root, &req)).await {
             Ok(Ok(p)) => Ok(p),
             Ok(Err(e)) => Err(e),
             Err(join_err) => {

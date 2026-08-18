@@ -67,6 +67,7 @@ impl GenericAcpAdapter {
         oneshot_args: Vec<String>,
         native_acp_args: Vec<String>,
         output_format: OutputFormat,
+        trust_level: crate::config::types::acp::TrustLevel,
     ) -> Self {
         let id = id.into();
         let supported_modes = vec![AdapterMode::Oneshot, AdapterMode::NativeAcp];
@@ -80,6 +81,7 @@ impl GenericAcpAdapter {
             native_acp_args,
             output_format,
             timeout: Duration::from_secs(300),
+            trust_level,
         }
     }
 
