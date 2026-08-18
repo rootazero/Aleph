@@ -117,13 +117,30 @@ impl AlephTool for SessionCompleteTool {
         let content = build_content(&args);
         let session_id = self.current_session_id();
 
+        // PR-3 / BT-D-R4-02: read the actual actor from the turn
+        // context rather than the construction-time self.agent_id.
+        // The previous shape used self.agent_id verbatim, which in
+        // production is always "main" (hardcoded at the dispatcher
+        // construction site). Every non-main agent's completion was
+        // therefore filed under main's memory corpus, and even a
+        // main-agent row lacked the actor distinction that downstream
+        // reflection would need.
+        //
+        // acting_agent_id() falls back to self.agent_id when no turn
+        // context is set, so older call sites (tests, headless CLI
+        // tooling) keep working unchanged. The dispatcher must wrap
+        // tool calls with TURN_CONTEXT.scope(...) for this to read the
+        // real actor; that wrap is wired at the executor boundary
+        // (see builtin_registry / dispatch) and is the prerequisite
+        // for the production fix.
+        let actor = crate::builtin_tools::acting_agent::acting_agent_id(&self.agent_id);
         let mut raw = RawMemory::new(
             content,
             RawMemorySource::SessionEnd {
                 reason: SessionEndReason::TaskDone,
             },
         )
-        .with_agent(self.agent_id.clone());
+        .with_agent(actor.clone());
 
         if let Some(sid) = &session_id {
             raw = raw.with_session(sid.clone());
@@ -132,7 +149,7 @@ impl AlephTool for SessionCompleteTool {
         if let Some(ref registry) = self.capture_registry {
             let store: Arc<dyn RawMemoryStore> = self.db.clone();
             let ctx = CaptureCtx {
-                agent_id: self.agent_id.clone(),
+                agent_id: actor.clone(),
                 namespace: NamespaceScope::Owner,
                 session_id: session_id.clone(),
                 source_hint: "session_end".into(),
@@ -163,7 +180,7 @@ impl AlephTool for SessionCompleteTool {
             ok: true,
             message: format!(
                 "Task completion recorded. Retrospective extraction queued for agent '{}'.",
-                self.agent_id
+                actor
             ),
         })
     }
