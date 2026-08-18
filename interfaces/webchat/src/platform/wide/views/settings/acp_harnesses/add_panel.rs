@@ -177,7 +177,7 @@ pub(super) fn AddHarnessPanel(
                                 set_id_error.set(None);
                             }
                         }
-                        placeholder="e.g. my-custom-cli"
+                        placeholder=t_string!(i18n, settings.acp.add_id_placeholder)
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                     />
                     {move || id_error.get().map(|e| view! {
@@ -196,7 +196,7 @@ pub(super) fn AddHarnessPanel(
                         type="text"
                         value=move || display_name.get()
                         on:input=move |ev| display_name.set(event_target_value(&ev))
-                        placeholder="e.g. My Custom CLI"
+                        placeholder=t_string!(i18n, settings.acp.add_name_placeholder)
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
@@ -216,7 +216,7 @@ pub(super) fn AddHarnessPanel(
                         type="text"
                         value=move || executable.get()
                         on:input=move |ev| executable.set(event_target_value(&ev))
-                        placeholder="e.g. /usr/local/bin/my-tool"
+                        placeholder=t_string!(i18n, settings.acp.add_binary_placeholder)
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
@@ -263,7 +263,7 @@ pub(super) fn AddHarnessPanel(
                         type="text"
                         value=move || args_text.get()
                         on:input=move |ev| args_text.set(event_target_value(&ev))
-                        placeholder="e.g. --print, --no-input"
+                        placeholder=t_string!(i18n, settings.acp.add_args_placeholder)
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.arguments_hint)}</p>
@@ -295,7 +295,7 @@ pub(super) fn AddHarnessPanel(
                                             type="text"
                                             value=move || json_field_name.get()
                                             on:input=move |ev| json_field_name.set(event_target_value(&ev))
-                                            placeholder="result"
+                                            placeholder=t_string!(i18n, settings.acp.add_result_placeholder)
                                             class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                                         />
                                     </div>
@@ -330,7 +330,7 @@ pub(super) fn AddHarnessPanel(
                                                 }
                                             });
                                         }
-                                        placeholder="KEY"
+                                        placeholder=t_string!(i18n, settings.acp.env_key_placeholder)
                                         class="flex-1 px-3 py-2 border border-border rounded bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                                     />
                                     <span class="text-text-tertiary">"="</span>
@@ -344,7 +344,7 @@ pub(super) fn AddHarnessPanel(
                                                 }
                                             });
                                         }
-                                        placeholder="VALUE"
+                                        placeholder=t_string!(i18n, settings.acp.env_value_placeholder)
                                         class="flex-1 px-3 py-2 border border-border rounded bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                                     />
                                     <button
@@ -379,7 +379,7 @@ pub(super) fn AddHarnessPanel(
                         type="text"
                         value=move || cwd.get()
                         on:input=move |ev| cwd.set(event_target_value(&ev))
-                        placeholder="Leave empty for default"
+                        placeholder=t_string!(i18n, settings.acp.default_placeholder)
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>

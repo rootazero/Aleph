@@ -2,6 +2,7 @@ use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
+use super::envelope::{read_checked, Envelope};
 use super::types::TokenResponse;
 
 const TOKEN_REFRESH_MARGIN_SECS: u64 = 300;
@@ -61,17 +62,8 @@ impl TokenManager {
             .await
             .map_err(|e| format!("Token request failed: {e}"))?;
 
-        let token_resp: TokenResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("Token response parse failed: {e}"))?;
-
-        if token_resp.code != 0 {
-            return Err(format!(
-                "Token error: code={}, msg={}",
-                token_resp.code, token_resp.msg
-            ));
-        }
+        let token_resp: TokenResponse =
+            read_checked(resp, "Token").await?;
 
         let access_token = token_resp
             .app_access_token
@@ -144,7 +136,10 @@ impl TokenManager {
                     .send()
                     .await
                 {
-                    Ok(resp) => match resp.json::<TokenResponse>().await {
+                    Ok(resp) => match Envelope::read(resp, "Token refresh")
+                        .await
+                        .and_then(|env| env.parse::<TokenResponse>("Token refresh"))
+                    {
                         Ok(tr) if tr.code == 0 => {
                             if let Some(at) = tr.app_access_token {
                                 let expire = tr.expire.unwrap_or(DEFAULT_TOKEN_EXPIRY_SECS);
@@ -160,7 +155,11 @@ impl TokenManager {
                         Ok(tr) => {
                             tracing::warn!("Token refresh failed: code={}, msg={}", tr.code, tr.msg)
                         }
-                        Err(e) => tracing::warn!("Token refresh parse error: {e}"),
+                        // Already names the status and quotes the body: a 403
+                        // from an expired app secret and a 502 from a proxy used
+                        // to print the same `error decoding response body`, and
+                        // this is a background task nobody is watching.
+                        Err(e) => tracing::warn!("Token refresh failed: {e}"),
                     },
                     Err(e) => tracing::warn!("Token refresh request error: {e}"),
                 }

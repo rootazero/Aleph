@@ -257,6 +257,17 @@ pub(crate) fn offending_lines(src: &str) -> Vec<usize> {
 // measurement counted 174 of those as copy. A text node has a tag on one side
 // of it (`>` above, or `<` below); a class string inside a closure has a brace
 // on both.
+//
+// A third rule joined them once the first two had been run against the tree:
+//
+//  * a literal that a **braced child expression** evaluates to is painted too.
+//
+// RSX wraps every Rust expression in `{…}`, so `{move || if saving.get() {
+// "Saving..." } else { "Save" }}` paints as surely as `<span>"Save"</span>`
+// does — the first two rules simply stop at the brace. Carrying on past it is
+// not a matter of matching more patterns: see [`rendered_literals`], where the
+// measured cost of matching those patterns *without* the position test is
+// recorded.
 
 /// Production lines in `src/` that hard-code English copy.
 ///
@@ -291,10 +302,48 @@ pub(crate) fn offending_lines(src: &str) -> Vec<usize> {
 ///   the same shape as the Chinese side's search aliases.
 /// * **It misses copy that is not in painted position.** `.unwrap_or("Never")`,
 ///   a `match` arm returning a bare `&str`, `format!("Loading {n} items")`,
-///   and a literal inside `{if x { "Yes" } else { "No" }}` are all copy and all
-///   invisible here. This measures the tractable half; it does not claim to be
+///   and a literal inside `{if x { "Yes" } else { "No" }}` were all named here
+///   as invisible. Three of the four now are not — see [`rendered_literals`]
+///   for why the fix was to require *shape and position together*, and what is
+///   still outside. This measures the tractable half; it does not claim to be
 ///   the class.
-const HARDCODED_ENGLISH_LINE_CEILING: usize = 298;
+///
+/// ## 2026-08-18, second measurement: 298 -> 332
+///
+/// **Nothing was added to the crate between those two numbers.** 34 lines that
+/// were always there became visible when [`rendered_literals`] closed the
+/// braced-child blind spot — `"Needs Setup ({})"`, `"New MoA preset"`,
+/// `"Refreshing..."`, `"Latency: {ms}ms"`. This is the same event as the tool
+/// description ratchet's 82,462 -> 93,358 and it deserves the same sentence:
+/// the budget did not get spent, the instrument stopped being blind. Reading a
+/// ratchet's history requires knowing which of the two happened, so the jump is
+/// recorded here rather than folded into a sweep's arithmetic.
+///
+/// ## 2026-08-18, first English sweep: 332 -> 184
+///
+/// The ten worst files, and the sweep turned out to be mostly *wiring* rather
+/// than authoring: **347 of the crate's 2 289 locale keys had no call site at
+/// all**. `settings.channels` alone carried 54 of them — `bot_online`,
+/// `perm_all_granted`, `validating`, `refresh` — every one already translated
+/// in both locales while `channels/discord.rs` went on rendering the English
+/// literal beside it. A key with no reader and a hard-coded string are the two
+/// halves of the same defect, and only one half was visible before this ratchet
+/// existed.
+///
+/// What stayed is the floor, and it is the same shape as the Chinese side's
+/// search aliases — literals in painted position that are not copy:
+///
+/// * **brand and product names**: `"Discord"`, `"crawl4ai"`, `"Firecrawl"`;
+/// * **codec and protocol tokens**: `"MP3"`, `"Opus"`, `"AAC"`, `"FLAC"`,
+///   `"TTS"`;
+/// * **URL specimens** in placeholders: `"https://api.example.com/search"`,
+///   `"http://localhost:11235"`.
+///
+/// Example *values* stayed and their English *prose* did not — the precedent
+/// was already in the tree: `settings.generation.model_placeholder` translates
+/// `e.g.` to `例如` and leaves `dall-e-3, stable-diffusion-xl` alone. The
+/// remaining 184 lines are the tail: 70 files, none above eight.
+const HARDCODED_ENGLISH_LINE_CEILING: usize = 184;
 
 /// Human-facing names the derivation cannot see, because the crate has never
 /// localised one.
@@ -373,11 +422,157 @@ pub(crate) fn english_copy_lines(src: &str, attrs: &BTreeSet<String>) -> Vec<usi
         let mut painted = literals_between_tags(line);
         painted.extend(lone_child_literal(&trimmed, i));
         painted.extend(human_attribute_literals(line, attrs));
+        for expr in braced_child_expressions(&trimmed, i) {
+            painted.extend(rendered_literals(&expr));
+        }
         if painted.iter().any(|t| looks_like_copy(t)) {
             hits.push(*number);
         }
     }
     hits
+}
+
+/// Contents of the brace expressions sitting in **child position** on this line.
+///
+/// RSX writes every Rust expression inside `{…}`, so a literal that reaches the
+/// screen through `format!` or an `if` arm is painted just as surely as
+/// `<span>"Save"</span>` — it is one brace further away, and the two rules
+/// above stop at the brace. This is where they carry on.
+///
+/// Both spellings count: `<span>{…}</span>` on one line, and a `{` opening the
+/// line with a tag on one side of it (the same neighbour test
+/// [`lone_child_literal`] uses).
+///
+/// The scan is **balanced**, not to end-of-line, and that is not a nicety.
+/// `<p class="…">{t!(i18n, k)}</p><p class="…">{…}</p>` is one real line of
+/// this crate; running to the end of it collects the second `class=` and
+/// reports a Tailwind string as copy.
+fn braced_child_expressions(trimmed: &[String], i: usize) -> Vec<String> {
+    let line = &trimmed[i];
+    let mut out = Vec::new();
+    for (at, _) in line.match_indices(">{") {
+        out.push(balanced_from(line, at + 1));
+    }
+    if line.starts_with('{') {
+        let prev = trimmed[..i].iter().rev().find(|l| !l.is_empty());
+        let next = trimmed[i + 1..].iter().find(|l| !l.is_empty());
+        let adjacent =
+            prev.is_some_and(|l| l.ends_with('>')) || next.is_some_and(|l| l.starts_with('<'));
+        if adjacent {
+            out.push(balanced_from(line, 0));
+        }
+    }
+    out
+}
+
+/// Inside of the brace expression opening at byte `at`, up to its matching
+/// `}`. Braces inside string literals do not count; an expression that runs
+/// past the end of the line yields the rest of it.
+fn balanced_from(line: &str, at: usize) -> String {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (idx, c) in line.char_indices().skip_while(|(i, _)| *i < at) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                // A `}` before any `{` means `at` did not point at a brace;
+                // yield nothing rather than underflow.
+                if depth == 0 {
+                    return String::new();
+                }
+                depth -= 1;
+                if depth == 0 {
+                    return line[at + 1..idx].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    line[at + 1..].to_string()
+}
+
+/// The literals a braced expression actually *renders*, as opposed to the ones
+/// it merely mentions.
+///
+/// This is the half of the census that the module doc used to record as
+/// unreachable: `.unwrap_or("Never")`, a `match` arm returning a bare `&str`,
+/// and `format!("Loading {n} items")` are all copy and none of them sits in
+/// painted position. The note said they were invisible and stopped there.
+///
+/// They are invisible to **shape alone** — matching those three patterns across
+/// the crate turns up **1 130** hits, of which the overwhelming majority are
+/// not copy at all: `Self::Jina => "jina"` is a serialization tag,
+/// `Self::Mauve => "oklch(0.60 0.13 310)"` is a colour, and
+/// `format!("Failed to parse: {e}")` is a server error on its way to
+/// `admin_refusal`. A ratchet fed that would be 90% noise, and the first
+/// person to hit it would weaken the rule rather than obey it.
+///
+/// They are also invisible to **position alone** — that is the two rules above.
+///
+/// The conjunction is precise: a literal in one of those three shapes, *inside
+/// a braced child expression*, is being painted. 34 lines, and reading all of
+/// them turns up copy like `"Needs Setup ({})"`, `"New MoA preset"` and
+/// `"Refreshing..."` that nothing in this crate could previously see.
+///
+/// What is still outside: the same three shapes anywhere else — a `match` in a
+/// helper function whose `&str` is returned to a caller that paints it. That
+/// needs to follow a value across a function boundary, which is a different
+/// kind of program than this one, and the doc above still does not claim to
+/// measure the class.
+fn rendered_literals(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (start, end, text) in literals_with_span(content) {
+        let before = content[..start].trim_end();
+        let after = content[end..].trim_start();
+        // `format!("…", …)` — the format string is the output.
+        let is_format = ["format!(", "write!(", "writeln!("]
+            .iter()
+            .any(|m| before.ends_with(m));
+        // `.unwrap_or("…")` / `.unwrap_or_else(|| "…")` — the fallback is what
+        // gets painted precisely when there is nothing else to paint.
+        let is_fallback = [".unwrap_or(", ".unwrap_or_else(", ".unwrap_or_else(||"]
+            .iter()
+            .any(|m| before.ends_with(m));
+        // `{ "…" }` / `=> "…"` — an `if` or `match` arm evaluating to a literal.
+        let is_arm = (before.ends_with('{') || before.ends_with("=>"))
+            && (after.is_empty() || after.starts_with('}') || after.starts_with(','));
+        if is_format || is_fallback || is_arm {
+            out.push(text);
+        }
+    }
+    out
+}
+
+/// Every `"…"` in `content` with the byte range it occupies, escapes honoured.
+fn literals_with_span(content: &str) -> Vec<(usize, usize, String)> {
+    let mut out = Vec::new();
+    let mut idx = 0;
+    let bytes = content.as_bytes();
+    while idx < bytes.len() {
+        if bytes[idx] == b'"' {
+            if let Some(text) = read_literal(content, idx) {
+                let end = idx + text.len() + 2;
+                out.push((idx, end, text));
+                idx = end;
+                continue;
+            }
+            break;
+        }
+        idx += 1;
+    }
+    out
 }
 
 /// A literal alone on its line, with a tag on one side of it.
@@ -457,9 +652,23 @@ fn read_literal(line: &str, at: usize) -> Option<String> {
 
 /// Does this literal read as a sentence rather than as a token?
 ///
-/// Two ASCII letters, counted after `\u{…}` escapes are collapsed — the hex in
-/// `"\u{00B7}"` is letters to `char::is_alphabetic` and the glyph it denotes is
-/// a middle dot, which is punctuation in every language.
+/// Two ASCII letters, counted after two kinds of non-letter are collapsed:
+///
+/// * `\u{…}` escapes — the hex in `"\u{00B7}"` is letters to
+///   `char::is_alphabetic` and the glyph it denotes is a middle dot, which is
+///   punctuation in every language;
+/// * `{…}` format placeholders — the identifier inside `"{prefix} {err}"` is a
+///   *variable name*, and in this crate that variable is very often already
+///   localised. `format!("{by_label} {agent} · {ts_label}")` assembles three
+///   resolved strings and contributes no copy of its own; counting `by_label`
+///   as five letters of English would send a sweep to translate a template
+///   that has nothing to translate.
+///
+/// The second rule is what makes [`rendered_literals`] precise enough to be
+/// worth having: it costs nothing on the literals this file already counted
+/// (measured — none of the 298 carries a placeholder) and removes 19 of the 53
+/// lines the braced-child rule would otherwise have added, all of them pure
+/// assembly like `"@{name}"`, `"v{v}"` and `"{completed}/{total}"`.
 fn looks_like_copy(text: &str) -> bool {
     let mut collapsed = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -471,6 +680,20 @@ fn looks_like_copy(text: &str) -> bool {
                     if c == '}' {
                         break;
                     }
+                }
+            }
+            continue;
+        }
+        if c == '{' {
+            // `{{` is an escaped brace, i.e. a literal `{` in the output.
+            if chars.peek() == Some(&'{') {
+                chars.next();
+                collapsed.push('{');
+                continue;
+            }
+            for c in chars.by_ref() {
+                if c == '}' {
+                    break;
                 }
             }
             continue;
@@ -712,6 +935,99 @@ mod tests {
             None,
             "a local binding is not an attribute; counting it fills the set with \
              variable names",
+        );
+    }
+
+    /// The braced-child rule, on all three shapes and on what must stay out.
+    ///
+    /// Lines 2/4/6 are painted through a brace; 8 is the same `format!` in a
+    /// *helper*, which this rule deliberately does not reach (see
+    /// `rendered_literals`); 10 carries a `class=format!(…)` on its *second*
+    /// element, which only a scan that ran past its own closing brace would
+    /// reach — and which is a Tailwind string, not copy.
+    #[test]
+    fn a_braced_child_expression_is_painted_position_too() {
+        let attrs: BTreeSet<String> = BTreeSet::new();
+        let sample = concat!(
+            "<span>\n",
+            "    {move || if saving.get() { \"Saving...\" } else { \"Save\" }}\n",
+            "</span>\n",
+            "<span>{format!(\"Needs Setup ({})\", n)}</span>\n",
+            "<p>\n",
+            "    {label.clone().unwrap_or(\"Untitled\")}\n",
+            "</p>\n",
+            "fn helper() -> String { format!(\"Needs Setup ({})\", n) }\n",
+            "<div>\n",
+            "<p>{n}</p><p class=format!(\"px-4 {x}\")>{m}</p>\n",
+        );
+        assert_eq!(
+            english_copy_lines(sample, &attrs),
+            vec![2, 4, 6],
+            "the brace hop drifted: 2/4/6 are painted, 8 is a helper the rule \
+             does not claim to reach, and 10's Tailwind string sits past the \
+             closing brace of the expression before it",
+        );
+    }
+
+    /// A literal a braced expression merely *mentions* is not painted.
+    ///
+    /// `{seg(store.kind_filter, "all", t_string!(…))}` is a real line: `"all"`
+    /// is the filter key it compares against, and the copy beside it is already
+    /// localised. An unqualified "any literal inside the braces" rule counts
+    /// the key and sends a sweep to translate it.
+    #[test]
+    fn an_argument_inside_the_braces_is_not_painted() {
+        let attrs: BTreeSet<String> = BTreeSet::new();
+        let sample = concat!(
+            "<div>\n",
+            "    {seg(store.kind_filter, \"all\", t_string!(i18n, k).to_string())}\n",
+            "</div>\n",
+        );
+        assert!(
+            english_copy_lines(sample, &attrs).is_empty(),
+            "a lookup key was counted as copy",
+        );
+    }
+
+    /// A template that only assembles already-resolved strings carries no copy.
+    ///
+    /// Falsified by deleting the `{…}` arm of `looks_like_copy`: every one of
+    /// these reads as several letters of English, and a sweep sent after them
+    /// finds nothing to translate.
+    #[test]
+    fn a_placeholder_only_template_is_not_copy() {
+        for assembly in [
+            "{by_label} {agent} · {ts_label}",
+            "@{name}",
+            "v{v}",
+            "{completed}/{total}",
+            "{next_prefix}{relative}",
+        ] {
+            assert!(
+                !looks_like_copy(assembly),
+                "{assembly:?} is assembly of resolved parts, not copy",
+            );
+        }
+        for copy in ["Needs Setup ({})", "{m} members", "Latency: {ms}ms"] {
+            assert!(looks_like_copy(copy), "{copy:?} is copy and was skipped");
+        }
+    }
+
+    /// `{{` is an escaped brace — a literal `{` in the output, not a placeholder.
+    #[test]
+    fn an_escaped_brace_is_not_a_placeholder() {
+        assert!(looks_like_copy("use {{ and }} to escape"));
+    }
+
+    /// The balanced scan stops at its own closing brace.
+    #[test]
+    fn a_brace_expression_does_not_run_to_the_end_of_the_line() {
+        assert_eq!(balanced_from("<p>{a}</p><p class=\"x\">{b}</p>", 3), "a");
+        assert_eq!(balanced_from("{outer {inner} rest} tail", 0), "outer {inner} rest");
+        assert_eq!(
+            balanced_from("{\"}\" is a literal}", 0),
+            "\"}\" is a literal",
+            "a brace inside a string literal closed the expression early",
         );
     }
 

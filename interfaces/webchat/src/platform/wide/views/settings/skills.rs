@@ -219,7 +219,7 @@ pub fn SkillsView() -> impl IntoView {
                 // Page Header
                 <div class="flex items-center justify-between">
                     <div>
-                        <h1 class="text-2xl font-semibold text-text-primary mb-1">"Skills"</h1>
+                        <h1 class="text-2xl font-semibold text-text-primary mb-1">{t!(i18n, settings.skills.title)}</h1>
                         <p class="text-sm text-text-secondary">
                             {t!(i18n, skills_page.header_desc)}
                         </p>
@@ -272,8 +272,8 @@ pub fn SkillsView() -> impl IntoView {
                         if list.is_empty() {
                             view! {
                                 <div class="text-center py-6 border border-dashed border-border rounded">
-                                    <p class="text-sm text-text-secondary">"No skills found"</p>
-                                    <p class="text-xs text-text-tertiary mt-1">"Try a different tab or add a skill"</p>
+                                    <p class="text-sm text-text-secondary">{t!(i18n, settings.skills.no_skills_found)}</p>
+                                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.skills.no_skills_hint)}</p>
                                 </div>
                             }.into_any()
                         } else {
@@ -323,6 +323,7 @@ fn SkillTabBar(
     active_tab: RwSignal<SkillTab>,
     skills: RwSignal<Vec<SkillStatusEntry>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let count_all = Memo::new(move |_| skills.get().len());
     let count_ready = Memo::new(move |_| {
         skills
@@ -362,25 +363,25 @@ fn SkillTabBar(
                 class=tab_class(SkillTab::All)
                 on:click=move |_| active_tab.set(SkillTab::All)
             >
-                {move || format!("All ({})", count_all.get())}
+                {t!(i18n, settings.skills.tab_all, count = move || count_all.get())}
             </button>
             <button
                 class=tab_class(SkillTab::Ready)
                 on:click=move |_| active_tab.set(SkillTab::Ready)
             >
-                {move || format!("Ready ({})", count_ready.get())}
+                {t!(i18n, settings.skills.tab_ready, count = move || count_ready.get())}
             </button>
             <button
                 class=tab_class(SkillTab::NeedsSetup)
                 on:click=move |_| active_tab.set(SkillTab::NeedsSetup)
             >
-                {move || format!("Needs Setup ({})", count_needs.get())}
+                {t!(i18n, settings.skills.tab_needs_setup, count = move || count_needs.get())}
             </button>
             <button
                 class=tab_class(SkillTab::Disabled)
                 on:click=move |_| active_tab.set(SkillTab::Disabled)
             >
-                {move || format!("Disabled ({})", count_disabled.get())}
+                {t!(i18n, settings.skills.tab_disabled, count = move || count_disabled.get())}
             </button>
         </div>
     }
@@ -669,7 +670,7 @@ fn SkillDetailDialog(
                                                         <div class="flex items-center gap-2">
                                                             <span class="text-warning text-sm">"⚠"</span>
                                                             <span class="text-sm text-text-primary font-mono">{bin_label}</span>
-                                                            <span class="text-xs text-text-tertiary">"(binary missing)"</span>
+                                                            <span class="text-xs text-text-tertiary">{t!(i18n, settings.skills.binary_missing)}</span>
                                                             {if !opts.is_empty() {
                                                                 let opt = opts[0].clone();
                                                                 let opt_id = opt.id.clone();
@@ -731,7 +732,7 @@ fn SkillDetailDialog(
                                                         <div class="flex items-center gap-2">
                                                             <span class="text-warning text-sm">"⚠"</span>
                                                             <span class="text-sm text-text-primary font-mono">{env_var}</span>
-                                                            <span class="text-xs text-text-tertiary">"(env var missing)"</span>
+                                                            <span class="text-xs text-text-tertiary">{t!(i18n, settings.skills.env_var_missing)}</span>
                                                         </div>
                                                     }
                                                 }
@@ -745,7 +746,7 @@ fn SkillDetailDialog(
                                                         <div class="flex items-center gap-2">
                                                             <span class="text-warning text-sm">"⚠"</span>
                                                             <span class="text-sm text-text-primary font-mono">{cfg}</span>
-                                                            <span class="text-xs text-text-tertiary">"(config missing)"</span>
+                                                            <span class="text-xs text-text-tertiary">{t!(i18n, settings.skills.config_missing)}</span>
                                                         </div>
                                                     }
                                                 }
@@ -762,7 +763,7 @@ fn SkillDetailDialog(
                                     view! {
                                         <div class="flex items-center gap-2">
                                             <span class="text-success text-sm">"✓"</span>
-                                            <span class="text-sm text-text-secondary">"All requirements met"</span>
+                                            <span class="text-sm text-text-secondary">{t!(i18n, settings.skills.all_requirements_met)}</span>
                                         </div>
                                     }.into_any()
                                 }}
@@ -836,7 +837,7 @@ fn SkillDetailDialog(
                                                     });
                                                 }
                                             >
-                                                {move || if saving_key.get() { "Saving..." } else { "Save" }}
+                                                {move || if saving_key.get() { t_string!(i18n, settings.skills.saving) } else { t_string!(i18n, settings.skills.save) }}
                                             </button>
                                         </div>
                                         {move || key_error.get().map(|e| view! {
@@ -866,8 +867,8 @@ fn SkillDetailDialog(
                         // Enabled toggle
                         <div class="flex items-center justify-between">
                             <div>
-                                <div class="text-sm font-medium text-text-primary">"Enabled"</div>
-                                <div class="text-xs text-text-secondary">"Allow this skill to be used"</div>
+                                <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.skills.enabled)}</div>
+                                <div class="text-xs text-text-secondary">{t!(i18n, settings.skills.enabled_hint)}</div>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
                                 <input
@@ -907,7 +908,7 @@ fn SkillDetailDialog(
 
                         // Scope dropdown
                         <div>
-                            <label class="block text-sm font-medium text-text-primary mb-1">"Scope"</label>
+                            <label class="block text-sm font-medium text-text-primary mb-1">{t!(i18n, settings.skills.scope)}</label>
                             <select
                                 class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
                                 on:change=move |ev| {
@@ -930,30 +931,30 @@ fn SkillDetailDialog(
                                     });
                                 }
                             >
-                                <option value="system" selected=move || scope.get() == "system">"System"</option>
-                                <option value="tool" selected=move || scope.get() == "tool">"Tool"</option>
-                                <option value="standalone" selected=move || scope.get() == "standalone">"Standalone"</option>
-                                <option value="disabled" selected=move || scope.get() == "disabled">"Disabled"</option>
+                                <option value="system" selected=move || scope.get() == "system">{t!(i18n, settings.skills.scope_system)}</option>
+                                <option value="tool" selected=move || scope.get() == "tool">{t!(i18n, settings.skills.scope_tool)}</option>
+                                <option value="standalone" selected=move || scope.get() == "standalone">{t!(i18n, settings.skills.scope_standalone)}</option>
+                                <option value="disabled" selected=move || scope.get() == "disabled">{t!(i18n, settings.skills.scope_disabled)}</option>
                             </select>
                         </div>
                     </div>
 
                     // Info section
                     <div class="space-y-2">
-                        <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"Info"</h3>
+                        <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.skills.info)}</h3>
                         <div class="space-y-1 text-xs text-text-secondary">
                             <div class="flex items-center gap-2">
-                                <span class="text-text-tertiary w-16">"Source"</span>
+                                <span class="text-text-tertiary w-16">{t!(i18n, settings.skills.source_label)}</span>
                                 <span class="text-text-primary">{skill_for_info.source_label.clone()}</span>
                             </div>
                             <div class="flex items-center gap-2">
-                                <span class="text-text-tertiary w-16">"ID"</span>
+                                <span class="text-text-tertiary w-16">{t!(i18n, settings.skills.id_label)}</span>
                                 <span class="text-text-primary font-mono">{skill_for_info.id.clone()}</span>
                             </div>
                             {if let Some(hp) = skill_for_info.homepage {
                                 view! {
                                     <div class="flex items-center gap-2">
-                                        <span class="text-text-tertiary w-16">"Homepage"</span>
+                                        <span class="text-text-tertiary w-16">{t!(i18n, settings.skills.homepage)}</span>
                                         {safe_homepage_link(&hp, t!(i18n, skills_page.open))}
                                     </div>
                                 }.into_any()
@@ -1058,7 +1059,7 @@ fn AddSkillDialog(
 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"URL"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.skills.url_label)}</label>
                         <input
                             type="text"
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
@@ -1087,7 +1088,7 @@ fn AddSkillDialog(
                         disabled=move || url.get().trim().is_empty() || adding.get()
                         on:click=handle_add
                     >
-                        {move || if adding.get() { "Adding..." } else { "Add" }}
+                        {move || if adding.get() { t_string!(i18n, settings.skills.adding) } else { t_string!(i18n, settings.skills.add) }}
                     </button>
                 </div>
             </div>

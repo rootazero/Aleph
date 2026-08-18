@@ -5,6 +5,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::moa::{MoaApi, MoaPresetDto, MoaSlotDto};
+use crate::i18n::{t, t_string};
 use crate::api::providers::CatalogEntry;
 use crate::context::DashboardState;
 
@@ -166,7 +167,7 @@ pub(super) fn MoaPresetEditor(
     view! {
         <div class="space-y-6">
             <h2 class="text-xl font-semibold text-text-primary">
-                {if is_new { "New MoA preset" } else { "Edit MoA preset" }}
+                {if is_new { t_string!(i18n, settings.moa.preset_new) } else { t_string!(i18n, settings.moa.preset_edit) }}
             </h2>
 
             {move || error.get().map(|e| view! {
@@ -175,7 +176,7 @@ pub(super) fn MoaPresetEditor(
 
             <div class="space-y-4 p-4 bg-surface-raised border border-border rounded-xl">
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Name"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.preset_name)}</label>
                     <input
                         type="text"
                         prop:value=move || name.get()
@@ -186,7 +187,7 @@ pub(super) fn MoaPresetEditor(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-2">"Advisors"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.moa.advisors)}</label>
                     <div class="space-y-2">
                         {move || {
                             let p = preset.get();
@@ -199,7 +200,7 @@ pub(super) fn MoaPresetEditor(
                                 view! {
                                     <div class="flex items-center gap-2">
                                         <span class="text-xs text-text-tertiary w-20 shrink-0">
-                                            {format!("Advisor {}", idx + 1)}
+                                            {t!(i18n, settings.moa.advisor_n, index = move || idx + 1)}
                                         </span>
                                         <SlotPicker
                                             catalog=cat
@@ -219,7 +220,7 @@ pub(super) fn MoaPresetEditor(
                                             })
                                             class="text-xs text-danger hover:underline shrink-0"
                                         >
-                                            "Remove"
+                                            {t!(i18n, settings.moa.advisor_remove)}
                                         </button>
                                     </div>
                                 }
@@ -230,12 +231,12 @@ pub(super) fn MoaPresetEditor(
                         on:click=add_advisor
                         class="mt-2 text-xs text-primary hover:underline"
                     >
-                        "+ Add advisor"
+                        {t!(i18n, settings.moa.advisor_add)}
                     </button>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Aggregator"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.aggregator)}</label>
                     {move || {
                         let p = preset.get();
                         let used = all_used(&p);
@@ -261,7 +262,7 @@ pub(super) fn MoaPresetEditor(
                         }
                         class="w-4 h-4"
                     />
-                    "Enabled"
+                    {t!(i18n, settings.moa.enabled)}
                 </label>
 
                 <div class="space-y-1">
@@ -273,14 +274,14 @@ pub(super) fn MoaPresetEditor(
                             on:change=move |ev| make_default.set(event_target_checked(&ev))
                             class="w-4 h-4 disabled:opacity-50"
                         />
-                        "Set as default preset"
+                        {t!(i18n, settings.moa.set_default)}
                     </label>
                     // Unchecking never clears the default server-side (default is
                     // only ever moved, not removed) — so lock the box on the
                     // preset that already holds it and point users at promotion.
                     {initial_is_default.then(|| view! {
                         <p class="text-xs text-text-tertiary">
-                            "This preset is the default. Promote another preset to change it."
+                            {t!(i18n, settings.moa.is_default_note)}
                         </p>
                     })}
                 </div>
@@ -291,7 +292,7 @@ pub(super) fn MoaPresetEditor(
                     on:click=move |_| show_advanced.update(|v| *v = !*v)
                     class="text-sm font-medium text-text-secondary hover:text-primary"
                 >
-                    {move || if show_advanced.get() { "▾ Advanced" } else { "▸ Advanced" }}
+                    {move || if show_advanced.get() { t_string!(i18n, settings.moa.advanced_hide) } else { t_string!(i18n, settings.moa.advanced_show) }}
                 </button>
 
                 {move || {
@@ -301,7 +302,7 @@ pub(super) fn MoaPresetEditor(
                     view! {
                         <div class="mt-4 space-y-4">
                             <div>
-                                <label class="block text-sm font-medium text-text-secondary mb-1">"Fanout"</label>
+                                <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.fanout)}</label>
                                 <select
                                     prop:value=move || fanout_family(&preset.get().fanout)
                                     on:change=move |ev| {
@@ -314,12 +315,12 @@ pub(super) fn MoaPresetEditor(
                                     }
                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 >
-                                    <option value="per_iteration">"Every tool iteration"</option>
-                                    <option value="user_turn">"Once per run"</option>
-                                    <option value="every_n">"Every Nth tool iteration"</option>
+                                    <option value="per_iteration">{t!(i18n, settings.moa.fanout_per_iteration)}</option>
+                                    <option value="user_turn">{t!(i18n, settings.moa.fanout_user_turn)}</option>
+                                    <option value="every_n">{t!(i18n, settings.moa.fanout_every_n)}</option>
                                 </select>
                                 <p class="mt-1 text-xs text-text-tertiary">
-                                    "Advisor cost and latency multiply by how often they are re-consulted."
+                                    {t!(i18n, settings.moa.fanout_cost_note)}
                                 </p>
                             </div>
 
@@ -329,7 +330,7 @@ pub(super) fn MoaPresetEditor(
                                 }
                                 view! {
                                     <div>
-                                        <label class="block text-sm font-medium text-text-secondary mb-1">"N (re-consult every Nth iteration)"</label>
+                                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.fanout_n_label)}</label>
                                         <input
                                             type="number"
                                             min="2"
@@ -352,7 +353,7 @@ pub(super) fn MoaPresetEditor(
                             }}
 
                             <div>
-                                <label class="block text-sm font-medium text-text-secondary mb-1">"Advisor timeout (seconds)"</label>
+                                <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.advisor_timeout)}</label>
                                 <input
                                     type="number"
                                     min="1"
@@ -372,7 +373,7 @@ pub(super) fn MoaPresetEditor(
                             </div>
 
                             <div>
-                                <label class="block text-sm font-medium text-text-secondary mb-1">"Advisor max tokens (optional)"</label>
+                                <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.advisor_max_tokens)}</label>
                                 <input
                                     type="number"
                                     min="1"
@@ -382,13 +383,13 @@ pub(super) fn MoaPresetEditor(
                                         let parsed = if v.trim().is_empty() { None } else { v.trim().parse::<u32>().ok() };
                                         preset.update(|p| p.advisor_max_tokens = parsed);
                                     }
-                                    placeholder="model default"
+                                    placeholder=t_string!(i18n, settings.moa.model_default)
                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 />
                             </div>
 
                             <div>
-                                <label class="block text-sm font-medium text-text-secondary mb-1">"Advisor temperature (optional)"</label>
+                                <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.advisor_temperature)}</label>
                                 <input
                                     type="number"
                                     step="0.1"
@@ -398,13 +399,13 @@ pub(super) fn MoaPresetEditor(
                                         let parsed = if v.trim().is_empty() { None } else { v.trim().parse::<f32>().ok() };
                                         preset.update(|p| p.advisor_temperature = parsed);
                                     }
-                                    placeholder="model default"
+                                    placeholder=t_string!(i18n, settings.moa.model_default)
                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 />
                             </div>
 
                             <div>
-                                <label class="block text-sm font-medium text-text-secondary mb-1">"Aggregator temperature (optional)"</label>
+                                <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.moa.aggregator_temperature)}</label>
                                 <input
                                     type="number"
                                     step="0.1"
@@ -414,7 +415,7 @@ pub(super) fn MoaPresetEditor(
                                         let parsed = if v.trim().is_empty() { None } else { v.trim().parse::<f32>().ok() };
                                         preset.update(|p| p.aggregator_temperature = parsed);
                                     }
-                                    placeholder="model default"
+                                    placeholder=t_string!(i18n, settings.moa.model_default)
                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 />
                             </div>
@@ -429,13 +430,13 @@ pub(super) fn MoaPresetEditor(
                     prop:disabled=move || saving.get()
                     class="px-6 py-2 bg-primary hover:bg-primary-hover disabled:bg-primary/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                 >
-                    {move || if saving.get() { "Saving…" } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, settings.moa.saving) } else { t_string!(i18n, settings.moa.save) }}
                 </button>
                 <button
                     on:click=move |_| on_cancel()
                     class="px-6 py-2 bg-surface-sunken hover:bg-surface-sunken text-text-primary rounded-lg transition-colors"
                 >
-                    "Cancel"
+                    {t!(i18n, settings.moa.cancel)}
                 </button>
             </div>
         </div>
@@ -449,6 +450,7 @@ fn SlotPicker(
     current: MoaSlotDto,
     on_change: impl Fn(MoaSlotDto) + 'static + Send,
 ) -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let opts = available_options(&catalog, &used, Some(&current));
     let current_value = if current.provider.is_empty() || current.model.is_empty() {
         String::new()
@@ -467,7 +469,7 @@ fn SlotPicker(
             }
             class="flex-1 px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
         >
-            <option value="">"— select model —"</option>
+            <option value="">{t!(i18n, settings.moa.select_model)}</option>
             {opts.into_iter().map(|o| {
                 let value = format!("{}|{}", o.provider, o.model);
                 view! { <option value=value>{o.label}</option> }

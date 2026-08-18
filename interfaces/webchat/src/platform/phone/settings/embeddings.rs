@@ -254,7 +254,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                         </div>
                                         <button
                                             class="ios-switch"
-                                            attr:aria-pressed=move || entry_for_enable.get_value().enabled.to_string()
+                                            aria-pressed=move || entry_for_enable.get_value().enabled.to_string()
                                             on:click=move |ev| {
                                                 ev.stop_propagation();
                                                 let entry = entry_for_enable.get_value();

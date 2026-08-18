@@ -96,6 +96,19 @@ cat <<'CHECKLIST'
   wide (1440x900) — /settings/providers
    1. 展开「添加提供商」→ 列表底部有渐隐；滚到底渐隐消失；搜索到 <6 行时渐隐消失
       断言: 容器 classList 含/不含 `aleph-scroll-more`，与 scrollHeight-scrollTop-clientHeight>1 一致
+      ⚠️ **滚到底那一半在 chrome-devtools-mcp / claude-in-chrome 下测不了，而且它的
+      失败方式是假阴性**（渐隐留着不走，读起来像 bug）。`publish_more_below` 在
+      rAF 回调里量几何，而受控标签页的 `document.visibilityState` 是 `hidden`,
+      浏览器就不跑 rAF 了。**先跑这个探针再下结论**，别靠猜:
+          const fired = await new Promise(res => {
+            let done = false;
+            requestAnimationFrame(() => { done = true; res(true) });
+            setTimeout(() => { if (!done) res(false) }, 1500);
+          });
+          ({ rafFires: fired, visibility: document.visibilityState })
+      2026-08-18 实测 `{rafFires:false, visibility:"hidden"}` ⇒ 该断言无效，不是失败。
+      第三条（搜索到 <6 行渐隐消失）**不经 rAF**：列表重渲染后 class 直接没了,
+      同日实测 `.aleph-scroll-more` 数量 1 → 0，**PASS**。
    2. ↓ 按 30 次（远超行数）后按一次 ↑ → 高亮立刻上移一行
       断言: 高亮行 index 从 len-1 变成 len-2（旧版要按 30 次 ↑ 才动）
    3. ↓ 越过可视区 → 该行自动滚入视野，且外层设置面板不跟着跳
@@ -110,6 +123,11 @@ cat <<'CHECKLIST'
    6. 打开 pill → 搜索框自动获得焦点；↑/↓ 走 [Default]+每个模型；Enter 选中
       断言: 选完 pill 文案变成 provider/model；Esc 关闭
 
+  ⚠️ 下面两档宽度 2026-08-18 仍未跑成: `resize_window` 回报成功而视口纹丝不动
+  （实测请求 1440x900 / 390x844 / 1500x950，`innerWidth` 恒 606）。这不是"忘了跑",
+  是这条工具链改不了视口——要跑 6/7/8 得用真的手动窗口，或换一个能设 device
+  metrics 的驱动。606 < 640 ⇒ 受控浏览器落在**手机形态**，所以 9-13 反而跑得成。
+
   narrow fold (700x900) — 上一轮没测的那一档
    7. /settings/providers 变成上下堆叠（左右分栏消失），页面整体滚动
       断言: `.aleph-md` 的 flex-direction === 'column'
@@ -121,6 +139,17 @@ cat <<'CHECKLIST'
   10. 选一个已配置的预设（groq / deepseek，带「已配置」角标）
       断言: 不进入设置表单，直接关闭 picker 并展开那一行现有的编辑区
   11. 长列表底部渐隐同 1
+
+  ✅ 9 / 10 / 12 / 13 于 2026-08-18 在受控浏览器上真机跑通（视口 606x774，手机形态）:
+     9  → 建了 mistral，`[providers.mistral]` 落盘，行自动展开
+     10 → 点「已配置」的 Groq **不进** setup 表单，picker 关闭、现有行展开
+     12 → 「测试中」→ 绿色「连接成功」，`verified` false→true；折叠后展开 groq
+           **没有**上一行的判定（判定按 provider 键控）
+     13 → 「确认删除？」+ 说明 + 「取消」；取消回单格；确认后行消失且配置段消失
+     ⚠️ 12 必须先把该 provider 的 `base_url` 指向本地 stub —— `providers.test` 发的是
+     **真的一轮 chat completion**（`probe_provider` 里的 "ping"），照原样点会去拨
+     api.mistral.ai。stub 要按 `stream:true` 发 **SSE**，usage 走空 choices 尾块；
+     回普通 JSON 会得到一条读起来像"连不上"的失败。
 
   phone (390x844) — 本轮新增的两个按钮（loopback = operator）
   12. 展开一个已配置 provider → 点「测试连接」

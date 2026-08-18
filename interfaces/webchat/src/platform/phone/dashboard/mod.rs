@@ -17,6 +17,7 @@ pub mod menu;
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
+use crate::i18n::t_string;
 use crate::platform::phone::shell::PhoneShell;
 use crate::views::agent_trace::AgentTrace;
 use crate::views::home::Home;
@@ -72,48 +73,49 @@ pub(crate) fn screen_for_path(path: &str) -> DashScreen {
 #[component]
 #[must_use]
 pub fn PhoneDashboard() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let location = use_location();
     move || {
         match screen_for_path(&location.pathname.get()) {
         DashScreen::Menu => view! { <PhoneDashboardMenu/> }.into_any(),
         DashScreen::Overview => view! {
-            <PhoneShell title="Overview" back="/dashboard" back_label="Dashboard" wrapped=true>
+            <PhoneShell title=t_string!(i18n, dashboard.phone.overview) back="/dashboard" back_label="Dashboard" wrapped=true>
                 <Home/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Trace => view! {
-            <PhoneShell title="Agent Trace" back="/dashboard" back_label="Dashboard" wrapped=true>
+            <PhoneShell title=t_string!(i18n, dashboard.phone.agent_trace) back="/dashboard" back_label="Dashboard" wrapped=true>
                 <AgentTrace/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Subagents => view! {
-            <PhoneShell title="Subagents" back="/dashboard" back_label="Dashboard" wrapped=true>
+            <PhoneShell title=t_string!(i18n, dashboard.phone.subagents) back="/dashboard" back_label="Dashboard" wrapped=true>
                 <SubagentTree/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Tasks => view! {
-            <PhoneShell title="Scheduled Tasks" back="/dashboard" back_label="Dashboard" wrapped=true>
+            <PhoneShell title=t_string!(i18n, dashboard.phone.scheduled_tasks) back="/dashboard" back_label="Dashboard" wrapped=true>
                 <TasksView/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Logs => view! {
-            <PhoneShell title="Server Logs" back="/dashboard" back_label="Dashboard" wrapped=true>
+            <PhoneShell title=t_string!(i18n, dashboard.phone.server_logs) back="/dashboard" back_label="Dashboard" wrapped=true>
                 <Logs/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Runtimes => view! {
-            <PhoneShell title="Runtimes" back="/dashboard" back_label="Dashboard" wrapped=true>
+            <PhoneShell title=t_string!(i18n, dashboard.phone.runtimes) back="/dashboard" back_label="Dashboard" wrapped=true>
                 <RuntimesView/>
             </PhoneShell>
         }
         .into_any(),
         DashScreen::Usage => view! {
-            <PhoneShell title="Usage" back="/dashboard" back_label="Dashboard" wrapped=true>
+            <PhoneShell title=t_string!(i18n, dashboard.phone.usage) back="/dashboard" back_label="Dashboard" wrapped=true>
                 <UsageView/>
             </PhoneShell>
         }

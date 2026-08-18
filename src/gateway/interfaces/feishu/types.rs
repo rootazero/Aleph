@@ -302,3 +302,41 @@ pub struct Avatar {
     pub avatar_240: Option<String>,
     pub avatar_640: Option<String>,
 }
+
+// ── Envelope verdicts ──
+//
+// Every response above carries Lark's `code` / `msg` pair; this is where each
+// one says so, so `envelope::read_checked` can do the three steps (transport,
+// parse, verdict) once instead of at each call site. `BotInfoResponse`'s `msg`
+// is optional and the others' is not — exactly the kind of per-type difference
+// that made the seven hand-rolled copies drift.
+
+macro_rules! lark_envelope {
+    ($ty:ty) => {
+        impl crate::gateway::interfaces::feishu::envelope::LarkEnvelope for $ty {
+            fn code(&self) -> i32 {
+                self.code
+            }
+            fn message(&self) -> String {
+                self.msg.clone()
+            }
+        }
+    };
+}
+
+lark_envelope!(TokenResponse);
+lark_envelope!(WsEndpointResponse);
+lark_envelope!(SendMessageResponse);
+lark_envelope!(UploadImageResponse);
+lark_envelope!(CardCreateResponse);
+lark_envelope!(ReactionResponse);
+lark_envelope!(UserInfoResponse);
+
+impl crate::gateway::interfaces::feishu::envelope::LarkEnvelope for BotInfoResponse {
+    fn code(&self) -> i32 {
+        self.code
+    }
+    fn message(&self) -> String {
+        self.msg.clone().unwrap_or_default()
+    }
+}

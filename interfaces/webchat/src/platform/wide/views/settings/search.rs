@@ -862,7 +862,7 @@ fn ProviderDetailPanel(
                                         } />
                                     </div>
                                     <p class="text-xs text-text-tertiary">
-                                        {preset.map(|p| p.description).unwrap_or("Search provider")}
+                                        {preset.map(|p| p.description.to_string()).unwrap_or_else(|| t_string!(i18n, settings.search.provider_generic_desc).to_string())}
                                     </p>
                                 </div>
                             </div>
@@ -945,7 +945,7 @@ fn ProviderDetailPanel(
                                                         type="text"
                                                         prop:value=move || form_engine_id.get()
                                                         on:input=move |ev| form_engine_id.set(event_target_value(&ev))
-                                                        placeholder="Google Custom Search Engine ID"
+                                                        placeholder=t_string!(i18n, settings.search.google_cse_placeholder)
                                                         class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                                                     />
                                                     <p class="mt-1 text-xs text-text-tertiary">
@@ -962,13 +962,13 @@ fn ProviderDetailPanel(
                                             view! {
                                                 <div>
                                                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                                                        "Engines"
+                                                        {t!(i18n, settings.search.engines)}
                                                     </label>
                                                     <input
                                                         type="text"
                                                         prop:value=move || form_engines.get()
                                                         on:input=move |ev| form_engines.set(event_target_value(&ev))
-                                                        placeholder="bing,brave  ·  leave empty for SearXNG defaults"
+                                                        placeholder=t_string!(i18n, settings.search.engines_placeholder)
                                                         class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                                                     />
                                                     <p class="mt-1 text-xs text-text-tertiary">
@@ -1077,7 +1077,7 @@ fn ProviderDetailPanel(
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                     </svg>
-                                    "Saved successfully"
+                                    {t!(i18n, settings.search.saved_successfully)}
                                 </div>
                             })}
 
@@ -1089,7 +1089,7 @@ fn ProviderDetailPanel(
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                             </svg>
-                                            "Connection successful"
+                                            {t!(i18n, settings.search.connection_successful)}
                                         </div>
                                     }.into_any()
                                 } else {
@@ -1098,7 +1098,7 @@ fn ProviderDetailPanel(
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                                             </svg>
-                                            "Connection failed"
+                                            {t!(i18n, settings.search.connection_failed)}
                                         </div>
                                     }.into_any()
                                 }
@@ -1297,7 +1297,7 @@ fn AddCustomSearchProviderPanel(
                             type="text"
                             prop:value=move || form_name.get()
                             on:input=move |ev| form_name.set(event_target_value(&ev))
-                            placeholder="e.g., my-searxng, custom-search"
+                            placeholder=t_string!(i18n, settings.search.custom_id_placeholder)
                             class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                     </div>
@@ -1331,7 +1331,7 @@ fn AddCustomSearchProviderPanel(
                             type="text"
                             prop:value=move || form_engine_id.get()
                             on:input=move |ev| form_engine_id.set(event_target_value(&ev))
-                            placeholder="Optional — for providers that require it"
+                            placeholder=t_string!(i18n, settings.search.api_key_optional_placeholder)
                             class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                         />
                     </div>
@@ -1741,7 +1741,7 @@ fn FetchProvidersSection() -> impl IntoView {
                     </div>
                     <div class="flex-1">
                         <div class="text-sm font-semibold text-text-primary">"crawl4ai"</div>
-                        <div class="text-xs text-text-tertiary">"Self-hosted URL → Markdown scraper"</div>
+                        <div class="text-xs text-text-tertiary">{t!(i18n, settings.search.crawl4ai_desc)}</div>
                     </div>
                     // Verified badge (reactive: re-evaluates after Test/Save)
                     {move || {
@@ -1767,7 +1767,7 @@ fn FetchProvidersSection() -> impl IntoView {
                 // Base URL
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Base URL"
+                        {t!(i18n, settings.search.base_url)}
                     </label>
                     <input
                         type="text"
@@ -1784,7 +1784,7 @@ fn FetchProvidersSection() -> impl IntoView {
                 // API Key (write-only via ProviderKeyField; shows saved when has_api_key)
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "API Key"
+                        {t!(i18n, settings.search.api_key)}
                     </label>
                     <ProviderKeyField
                         value=form_api_key
@@ -2016,7 +2016,7 @@ fn FetchProvidersSection() -> impl IntoView {
                                 </div>
                                 <div class="flex-1">
                                     <div class="text-sm font-semibold text-text-secondary">
-                                        "Firecrawl (shared)"
+                                        {t!(i18n, settings.search.firecrawl_shared)}
                                     </div>
                                     <div class="text-xs text-text-tertiary">
                                         {t!(i18n, settings.fetch.configure_firecrawl_first)}

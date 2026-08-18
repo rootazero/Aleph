@@ -22,6 +22,135 @@ pub mod settings;
 pub mod shell;
 pub mod teams;
 
+/// The iOS switch renders its "on" state from an attribute, so the markup has
+/// to actually set one.
+///
+/// `styles/ios.css` styles the on state as `.ios-switch[aria-pressed="true"]`
+/// — both the track colour and the knob's `translateX`. There is no other
+/// signal: without that attribute the control is not "unstyled", it is
+/// **indistinguishable from off**.
+///
+/// All three call sites shipped with `attr:aria-pressed=…`. That prefix is for
+/// forwarding attributes onto a *component*'s root element; on a plain
+/// `<button>` the macro accepts it and emits nothing, so the DOM carried no
+/// `aria-pressed` at all — confirmed on a running Panel, where
+/// `document.querySelectorAll('.ios-switch')[0].getAttribute('aria-pressed')`
+/// answered `null` for a provider whose `enabled = true` sat on disk two
+/// panes away.
+///
+/// The cost was not cosmetic. Every provider, every embedding entry and the
+/// model-route escalation toggle read as **off** on the phone regardless of
+/// their real state, and the click handler flips `!enabled` — so the first tap
+/// on a switch that looked off *disabled* an enabled provider. The three
+/// working spellings elsewhere in this crate (`components/ui/swatch_button.rs`,
+/// `components/theme_toggle.rs`, `views/settings/appearance.rs`) all write the
+/// bare `aria-pressed=`; these three were the only ones that did not.
+///
+/// The guard is source-level because the runtime cannot tell the two apart:
+/// an element that never sets the attribute and an element whose state is
+/// genuinely `false` produce byte-identical DOM.
+#[cfg(test)]
+mod switch_state {
+    use crate::disposed_reads::{rust_sources, src_dir};
+
+    /// The selector the stylesheet actually keys the on-state off.
+    ///
+    /// Asserted separately below: if someone restyles the switch to use a
+    /// class, the rule under it stops describing anything and would otherwise
+    /// keep passing forever.
+    const ON_STATE_SELECTOR: &str = r#".ios-switch[aria-pressed="true"]"#;
+
+    /// Lines of `src` that open an `.ios-switch`, paired with the rest of that
+    /// element's opening tag.
+    ///
+    /// The window ends at the tag's own `>`, not after a fixed number of
+    /// lines: a count would run into whatever the next element declares and
+    /// happily accept its attributes as this one's. A tag that never closes is
+    /// reported rather than skipped.
+    ///
+    /// Production lines only, via [`crate::i18n_census::production_lines`] —
+    /// the same cut the two i18n guards use. The first draft scanned raw text
+    /// and its first run reported *this module's own fixture literal*, which is
+    /// the failure mode that cut exists to prevent. Sharing it rather than
+    /// re-deriving it also means a CRLF checkout is handled in one place.
+    fn switch_tags(src: &str) -> Vec<(usize, String, bool)> {
+        let lines = crate::i18n_census::production_lines(src);
+        let mut out = Vec::new();
+        for (idx, (number, text)) in lines.iter().enumerate() {
+            if !text.contains(r#"class="ios-switch""#) {
+                continue;
+            }
+            let mut body = String::new();
+            let mut closed = false;
+            for (_, l) in &lines[idx..] {
+                body.push_str(l);
+                body.push('\n');
+                if l.trim() == ">" || l.trim_end().ends_with("/>") {
+                    closed = true;
+                    break;
+                }
+            }
+            out.push((*number, body, closed));
+        }
+        out
+    }
+
+    #[test]
+    fn the_stylesheet_still_keys_the_on_state_off_aria_pressed() {
+        let css = std::fs::read_to_string(
+            src_dir().parent().expect("src has a parent").join("styles/ios.css"),
+        )
+        .expect("styles/ios.css is readable");
+        assert!(
+            css.contains(ON_STATE_SELECTOR),
+            "`{ON_STATE_SELECTOR}` is gone from styles/ios.css, so the rule below \
+             no longer describes how this control shows its state. Re-derive it \
+             from whatever replaced it rather than deleting it.",
+        );
+    }
+
+    /// Falsified by restoring the `attr:` prefix on any one call site: this
+    /// reddens naming that file and line.
+    #[test]
+    fn every_ios_switch_really_sets_aria_pressed() {
+        let mut offenders = Vec::new();
+        let mut seen = 0usize;
+        for path in rust_sources(&src_dir()) {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for (line, tag, closed) in switch_tags(&src) {
+                seen += 1;
+                let rel = path
+                    .strip_prefix(src_dir())
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                if !closed {
+                    offenders.push(format!("{rel}:{line} (opening tag never closes)"));
+                } else if tag.contains("attr:aria-pressed") {
+                    offenders.push(format!("{rel}:{line} (attr: prefix emits nothing here)"));
+                } else if !tag.contains("aria-pressed") {
+                    offenders.push(format!("{rel}:{line} (no aria-pressed at all)"));
+                }
+            }
+        }
+        assert!(
+            seen >= 3,
+            "found {seen} `.ios-switch` call sites; the scan is broken, not the \
+             crate — a guard that matches nothing passes for the wrong reason",
+        );
+        assert!(
+            offenders.is_empty(),
+            "these `.ios-switch` controls cannot render their on state: {}.\n\
+             `{ON_STATE_SELECTOR}` is the only thing that turns the track and \
+             knob on, so a switch without the attribute is not unstyled — it \
+             looks exactly like off, for every value.",
+            offenders.join(", "),
+        );
+    }
+}
+
 #[cfg(test)]
 mod i18n_census {
     use crate::disposed_reads::{rust_sources, src_dir};

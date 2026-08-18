@@ -112,9 +112,13 @@ mod tests {
     /// the half of this that no local fixture can establish: a round-trip only
     /// ever proves we agree with ourselves.
     ///
-    /// What this still does not cover, and cannot without an app credential:
-    /// how the client behaves against a live 429 or a live permission error.
-    /// The mock Lark in `qa/channels/run.sh` answers every call.
+    /// What this does not cover is the signature *order* under a real
+    /// credential — but the throttle and refusal paths, which this note used to
+    /// list here as equally unreachable, turned out not to need one: they need
+    /// a far end you control, not a real one. `qa/channels/run.sh errors`
+    /// drives them through `mock_lark.py`'s `/__inject` queue, and the first
+    /// thing it found was that Lark's legacy throttle shape (HTTP 400 carrying
+    /// `code: 99991400`) never became `FeishuSendError::RateLimited` at all.
     const LARK_REFERENCE_DIGEST: &str =
         "7f4b9dcba215e2a6da178216cc00fed0b591f17058045440240767ba35736c6b";
 

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Real-machine QA for channel reachability — feishu / line / qq, with msteams
-# as the control.
+# as the control — and for the Lark failure paths behind them.
 #
-#   ./qa/channels/run.sh
+#   ./qa/channels/run.sh            # both phases
+#   ./qa/channels/run.sh reach      # phase 1 only (reachability)
+#   ./qa/channels/run.sh errors     # phase 2 only (throttle / refusal)
+#
+# Phase 2 needs phase 1's server anyway (a channel that never started cannot be
+# throttled), so the modes select which assertions run, not which server boots.
 #
 # This replaces item 18 of qa/picker_nav's manual checklist. That item was the
 # only end-to-end evidence that the feishu CONNECT of 2026-08-18 works, and it
@@ -17,6 +22,12 @@
 # Nothing dials the internet: the provider is qa/busy_input/mock_anthropic.py
 # and the Feishu Open Platform is qa/channels/mock_lark.py.
 set -uo pipefail
+
+MODE="${1:-all}"
+case "$MODE" in
+  all|reach|errors) ;;
+  *) echo "usage: $0 [all|reach|errors]" >&2; exit 64 ;;
+esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -101,13 +112,37 @@ echo "gateway up on $GATEWAY_PORT"
 # The channel start_all() pass runs after the health endpoint is live.
 sleep 3
 
-say "assertions"
 RC=0
-python3 "$HERE/drive_channels.py" \
-  "$QA_ROOT/server.log" "$ALEPH_HOME/logs" \
-  "http://127.0.0.1:$LARK_PORT" \
-  "http://127.0.0.1:$FEISHU_HOOK_PORT$FEISHU_HOOK_PATH" \
-  "$FEISHU_TOKEN" || RC=$?
+
+if [ "$MODE" != "errors" ]; then
+  say "phase 1 — reachability"
+  python3 "$HERE/drive_channels.py" \
+    "$QA_ROOT/server.log" "$ALEPH_HOME/logs" \
+    "http://127.0.0.1:$LARK_PORT" \
+    "http://127.0.0.1:$FEISHU_HOOK_PORT$FEISHU_HOOK_PATH" \
+    "$FEISHU_TOKEN" || RC=$((RC + $?))
+fi
+
+if [ "$MODE" != "reach" ]; then
+  # Phase 2 runs second on purpose. Its cases all read "the channel called the
+  # send endpoint N times", and that sentence means nothing until phase 1 has
+  # established that the channel calls it at all — a dead channel and a channel
+  # that gave up after one throttle produce the same count.
+  say "phase 2 — Lark failure paths (throttle / refusal)"
+  if [ "$MODE" = "errors" ]; then
+    # Standing alone, phase 2 still needs one completed round trip first, so
+    # that its per-case counts start from a channel known to be sending.
+    python3 "$HERE/drive_channels.py" \
+      "$QA_ROOT/server.log" "$ALEPH_HOME/logs" \
+      "http://127.0.0.1:$LARK_PORT" \
+      "http://127.0.0.1:$FEISHU_HOOK_PORT$FEISHU_HOOK_PATH" \
+      "$FEISHU_TOKEN" >/dev/null 2>&1 || true
+  fi
+  python3 "$HERE/drive_lark_errors.py" \
+    "http://127.0.0.1:$LARK_PORT" \
+    "http://127.0.0.1:$FEISHU_HOOK_PORT$FEISHU_HOOK_PATH" \
+    "$FEISHU_TOKEN" "$ALEPH_HOME/logs" || RC=$((RC + $?))
+fi
 
 say "server banner"
 grep -E "Registered channel|Channel .* (started|failed)" "$QA_ROOT/server.log" || true
