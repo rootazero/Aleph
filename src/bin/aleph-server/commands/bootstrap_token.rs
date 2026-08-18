@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// required for token retrieval, but `SharedTokenManager::new` opens it).
 ///
 /// Returns `None` when the DB has no plaintext token (first-run state).
-pub fn read_token_from_db(db_path: &Path, data_dir: &Path) -> Option<String> {
+fn read_token_from_db(db_path: &Path, data_dir: &Path) -> Option<String> {
     let store = Arc::new(SecurityStore::open(db_path).ok()?);
     let vault_path = data_dir.join("secrets.vault");
     let mgr = SharedTokenManager::new(store, vault_path);
