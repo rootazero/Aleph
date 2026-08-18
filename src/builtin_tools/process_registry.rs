@@ -430,10 +430,21 @@ impl ProcessRegistry {
             ProcState::Done(out) => {
                 let out = out.clone();
                 entry.reported = true;
+                // BT-D-R4-15: persist the reported-stamp to the on-disk
+                // journal so a daemon restart does not re-announce this
+                // completion. Without this, the boot reconcile treats the
+                // row as `announced=false` and the handback loop surfaces a
+                // duplicate notice on every subsequent boot until the
+                // journal entry ages out past the retention window.
+                process_journal::record_announced(id);
                 PollOutcome::Done(out)
             }
             ProcState::Killed => {
                 entry.reported = true;
+                // Same: a Killed completion whose notice was delivered
+                // before a crash should not be re-handed-back on the next
+                // boot.
+                process_journal::record_announced(id);
                 PollOutcome::Killed
             }
         }
