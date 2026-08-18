@@ -262,13 +262,30 @@ impl CuratedMemoryStore {
             return Err(CuratedError::Empty);
         }
         let count = ops.len();
+        // BT-D-R4-11: count duplicates so the outcome surfaces a
+        // duplicate-only batch as no-op rather than as a fresh durable
+        // write. apply_one's previous shape silently skipped duplicate
+        // adds (idempotent by design) and returned Ok(()), so a batch of
+        // ten duplicate adds reported "Applied 10 operation(s)." — the
+        // model saw a successful durable write where the truth was
+        // "nothing changed". Track the skip count under the same lock
+        // that owns the entries and surface it in the outcome message.
+        let mut duplicates: usize = 0;
         self.with_lock(|st| {
             for (i, op) in ops.iter().enumerate() {
+                let prev_len = st.entries.len();
                 apply_one(st, op).map_err(|e| CuratedError::BatchAborted {
                     index: i + 1,
                     action: op.action(),
                     reason: e.to_string(),
                 })?;
+                // Detect duplicate Add / replace-with-same-content by
+                // comparing the entries length before/after; apply_one
+                // does not currently expose a "skipped" signal and this
+                // proxy is good enough for the count.
+                if st.entries.len() == prev_len {
+                    duplicates += 1;
+                }
             }
             // Budget is validated on the FINAL state only — a remove that
             // frees space for a later add within the same batch is legal.
@@ -283,7 +300,20 @@ impl CuratedMemoryStore {
             Ok(())
         })
         .await?;
-        Ok(self.outcome(&format!("Applied {count} operation(s).")))
+        let message = if duplicates == count {
+            format!(
+                "No-op: {duplicates}/{count} operation(s) were already present; \
+                 nothing was added."
+            )
+        } else if duplicates > 0 {
+            format!(
+                "Applied {} operation(s); {duplicates} were already present and skipped.",
+                count - duplicates
+            )
+        } else {
+            format!("Applied {count} operation(s).")
+        };
+        Ok(self.outcome(&message))
     }
 
     /// D4 receipt data plane: where writes land, as a human-readable string —
