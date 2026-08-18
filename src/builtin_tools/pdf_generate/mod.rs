@@ -98,8 +98,13 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
     /// Resolve the output path from user-provided string
     ///
     /// Path resolution rules:
-    /// 1. Absolute paths (starting with `/`) - used as-is
-    /// 2. Home paths (starting with `~`) - expanded to home directory
+    /// 1. Absolute paths are coerced to relative — `resolve_output_path`
+    ///    joins them onto the per-run `FsScope` / workspace output dir
+    ///    rather than honouring the absolute prefix. An LLM-supplied
+    ///    absolute path bypassed the FsScope sandbox entirely (BT-C-R4-01).
+    ///    The base name is preserved; only the parent is rewritten.
+    /// 2. Home paths (starting with `~`) - expanded and joined onto the
+    ///    workspace output dir, same reasoning.
     /// 3. Relative paths - anchored at the per-run `FsScope` base, falling back
     ///    to the shared `ToolContext` `output_dir`, then a global default
     async fn resolve_output_path(
@@ -108,16 +113,41 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
     ) -> std::result::Result<PathBuf, ToolError> {
         let output_path = Path::new(output_path);
 
+        // BT-C-R4-01: previously absolute paths were returned as-is,
+        // bypassing the FsScope sandbox and `create_dir_all`-ing
+        // arbitrary parent directories (an LLM-supplied
+        // `/tmp/alice/.ssh/authorized_keys` would have created `.ssh/`
+        // and let the agent write a public key there). Now we always
+        // anchor under the workspace output dir; only the file name is
+        // taken from the model. This brings pdf_generate in line with
+        // what file_ops::check_and_resolve_path does for read/write.
         if output_path.is_absolute() {
-            return Ok(output_path.to_path_buf());
+            let filename = output_path.file_name().ok_or_else(|| {
+                ToolError::InvalidArgs(
+                    "absolute output path has no file name component".to_string(),
+                )
+            })?;
+            // Inline the base-dir resolution (the existing relative-path
+            // branch below) so the absolute and `~` cases anchor under
+            // the same FsScope / workspace as everything else. BT-C-R4-01
+            // closes the prior bypass where absolute paths wrote
+            // anywhere on the host.
+            let output_dir = self.choose_output_dir().await?;
+            return Ok(output_dir.join(filename));
         }
 
         if let Some(s) = output_path.to_str() {
             if s.starts_with('~') {
-                let home = dirs::home_dir().ok_or_else(|| {
-                    ToolError::Execution("Cannot resolve '~': home directory not found".to_string())
+                // BT-C-R4-01: same — take only the file name component and
+                // anchor under the workspace, so `~/foo.pdf` resolves to
+                // `<workspace>/foo.pdf` not `~/foo.pdf`.
+                let filename = output_path.file_name().ok_or_else(|| {
+                    ToolError::InvalidArgs(
+                        "~-prefixed path has no file name component".to_string(),
+                    )
                 })?;
-                return Ok(PathBuf::from(s.replacen('~', &home.to_string_lossy(), 1)));
+                let output_dir = self.choose_output_dir().await?;
+                return Ok(output_dir.join(filename));
             }
         }
 
@@ -147,6 +177,26 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
         };
 
         Ok(output_dir.join(output_path))
+    }
+
+    /// BT-C-R4-01: helper that returns the workspace base directory used
+    /// for relative-path anchoring. Extracted so the absolute / `~` cases
+    /// can reuse the exact same FsScope / ToolContext precedence rules.
+    async fn choose_output_dir(&self) -> std::result::Result<PathBuf, ToolError> {
+        if let Some(scope) = crate::tools::fs_scope::current() {
+            Ok(scope.base)
+        } else if let Some(ref handle) = self.tool_context_handle {
+            let ctx = handle.read().await;
+            Ok(ctx.output_dir.join("documents"))
+        } else {
+            crate::utils::paths::get_workspaces_dir()
+                .map_err(|_| {
+                    ToolError::Execution(
+                        "Cannot determine home directory for output path".to_string(),
+                    )
+                })
+                .map(|p| p.join("main").join("output").join("documents"))
+        }
     }
 }
 
