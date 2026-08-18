@@ -15,6 +15,8 @@
 //! `ThemeToggle` popover and the Appearance settings page consume this module,
 //! so the read/apply/persist logic lives in exactly one place.
 
+use crate::i18n::{t_string, Locale};
+use leptos_i18n::I18nContext;
 use wasm_bindgen::JsCast;
 use web_sys::{Document, HtmlElement, Storage};
 
@@ -42,12 +44,19 @@ pub enum ThemeMode {
 impl ThemeMode {
     pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
 
+    /// Localised display name.
+    ///
+    /// Takes the context rather than returning a key: `t_string!` resolves a
+    /// *static* path at compile time, so a runtime key would have to be
+    /// re-matched by every caller — which is how the Chinese literals that
+    /// used to live here reached both the phone and the desktop Appearance
+    /// screens while the phone i18n census stayed green.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
-            Self::System => "跟随系统",
-            Self::Light => "明亮",
-            Self::Dark => "暗黑",
+            Self::System => t_string!(i18n, appearance.mode.system).to_string(),
+            Self::Light => t_string!(i18n, appearance.mode.light).to_string(),
+            Self::Dark => t_string!(i18n, appearance.mode.dark).to_string(),
         }
     }
 
@@ -109,14 +118,21 @@ impl Accent {
         }
     }
 
+    /// Localised display name.
+    ///
+    /// Takes the context rather than returning a key: `t_string!` resolves a
+    /// *static* path at compile time, so a runtime key would have to be
+    /// re-matched by every caller — which is how the Chinese literals that
+    /// used to live here reached both the phone and the desktop Appearance
+    /// screens while the phone i18n census stayed green.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
-            Self::Mauve => "魅紫",
-            Self::Ocean => "海蓝",
-            Self::Forest => "森绿",
-            Self::Sunset => "暖橙",
-            Self::Rose => "玫瑰",
+            Self::Mauve => t_string!(i18n, appearance.accent.mauve).to_string(),
+            Self::Ocean => t_string!(i18n, appearance.accent.ocean).to_string(),
+            Self::Forest => t_string!(i18n, appearance.accent.forest).to_string(),
+            Self::Sunset => t_string!(i18n, appearance.accent.sunset).to_string(),
+            Self::Rose => t_string!(i18n, appearance.accent.rose).to_string(),
         }
     }
 
@@ -170,12 +186,19 @@ impl Material {
         }
     }
 
+    /// Localised display name.
+    ///
+    /// Takes the context rather than returning a key: `t_string!` resolves a
+    /// *static* path at compile time, so a runtime key would have to be
+    /// re-matched by every caller — which is how the Chinese literals that
+    /// used to live here reached both the phone and the desktop Appearance
+    /// screens while the phone i18n census stayed green.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
-            Self::Luxe => "奢华磨砂",
-            Self::Liquid => "液态玻璃",
-            Self::Aurora => "极光浓雾",
+            Self::Luxe => t_string!(i18n, appearance.material.luxe).to_string(),
+            Self::Liquid => t_string!(i18n, appearance.material.liquid).to_string(),
+            Self::Aurora => t_string!(i18n, appearance.material.aurora).to_string(),
         }
     }
 
@@ -239,14 +262,21 @@ impl FontScale {
         Self::Largest,
     ];
 
+    /// Localised display name.
+    ///
+    /// Takes the context rather than returning a key: `t_string!` resolves a
+    /// *static* path at compile time, so a runtime key would have to be
+    /// re-matched by every caller — which is how the Chinese literals that
+    /// used to live here reached both the phone and the desktop Appearance
+    /// screens while the phone i18n census stayed green.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
-            Self::Compact => "紧凑",
-            Self::Default => "标准",
-            Self::Cozy => "舒适",
-            Self::Large => "大",
-            Self::Largest => "特大",
+            Self::Compact => t_string!(i18n, appearance.font_scale.compact).to_string(),
+            Self::Default => t_string!(i18n, appearance.font_scale.default).to_string(),
+            Self::Cozy => t_string!(i18n, appearance.font_scale.cozy).to_string(),
+            Self::Large => t_string!(i18n, appearance.font_scale.large).to_string(),
+            Self::Largest => t_string!(i18n, appearance.font_scale.largest).to_string(),
         }
     }
 
@@ -306,14 +336,21 @@ impl Roundness {
         Self::Extra,
     ];
 
+    /// Localised display name.
+    ///
+    /// Takes the context rather than returning a key: `t_string!` resolves a
+    /// *static* path at compile time, so a runtime key would have to be
+    /// re-matched by every caller — which is how the Chinese literals that
+    /// used to live here reached both the phone and the desktop Appearance
+    /// screens while the phone i18n census stayed green.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
-            Self::Sharp => "直角",
-            Self::Slight => "微圆",
-            Self::Default => "标准",
-            Self::Round => "圆润",
-            Self::Extra => "极圆",
+            Self::Sharp => t_string!(i18n, appearance.roundness.sharp).to_string(),
+            Self::Slight => t_string!(i18n, appearance.roundness.slight).to_string(),
+            Self::Default => t_string!(i18n, appearance.roundness.default).to_string(),
+            Self::Round => t_string!(i18n, appearance.roundness.round).to_string(),
+            Self::Extra => t_string!(i18n, appearance.roundness.extra).to_string(),
         }
     }
 
@@ -368,12 +405,19 @@ pub enum Density {
 impl Density {
     pub const ALL: [Self; 3] = [Self::Compact, Self::Cozy, Self::Spacious];
 
+    /// Localised display name.
+    ///
+    /// Takes the context rather than returning a key: `t_string!` resolves a
+    /// *static* path at compile time, so a runtime key would have to be
+    /// re-matched by every caller — which is how the Chinese literals that
+    /// used to live here reached both the phone and the desktop Appearance
+    /// screens while the phone i18n census stayed green.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self, i18n: I18nContext<Locale>) -> String {
         match self {
-            Self::Compact => "紧凑",
-            Self::Cozy => "适中",
-            Self::Spacious => "宽松",
+            Self::Compact => t_string!(i18n, appearance.density.compact).to_string(),
+            Self::Cozy => t_string!(i18n, appearance.density.cozy).to_string(),
+            Self::Spacious => t_string!(i18n, appearance.density.spacious).to_string(),
         }
     }
 

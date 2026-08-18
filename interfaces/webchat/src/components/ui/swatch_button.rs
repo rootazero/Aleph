@@ -19,10 +19,15 @@ pub fn SwatchButton(
     /// `ring-offset-*` class matching the surface the picker sits on.
     ring_offset: &'static str,
     /// Tooltip + accessible name.
-    title: &'static str,
+    ///
+    /// Reactive, not a snapshot: every caller feeds this from an appearance
+    /// enum's localised `label`, and a `&'static str` captured at render time
+    /// would keep showing the language the popover was first opened in.
+    #[prop(into)]
+    title: Signal<String>,
     /// Caption below the chip; omit to render the chip alone.
-    #[prop(optional)]
-    label: Option<&'static str>,
+    #[prop(optional, into)]
+    label: Option<Signal<String>>,
     #[prop(into)] active: Signal<bool>,
     on_pick: impl Fn(web_sys::MouseEvent) + 'static,
 ) -> impl IntoView {

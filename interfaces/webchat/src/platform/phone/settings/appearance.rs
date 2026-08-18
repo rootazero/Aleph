@@ -17,39 +17,39 @@ pub fn PhoneAppearance() -> impl IntoView {
     view! {
         <PhoneShell title="Appearance" back="/settings">
             <SelectGroup
-                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_theme).to_string())
+                header=Signal::derive(move || t_string!(i18n, appearance.section.mode).to_string())
                 items=ThemeMode::ALL.to_vec()
                 current=read_mode()
-                label=|m: ThemeMode| m.label()
+                label=move |m: ThemeMode| m.label(i18n)
                 on_pick=|m| apply_mode(m)
             />
             <AccentGroup/>
             <SelectGroup
-                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_material).to_string())
+                header=Signal::derive(move || t_string!(i18n, appearance.section.material).to_string())
                 items=Material::ALL.to_vec()
                 current=read_material()
-                label=|m: Material| m.label()
+                label=move |m: Material| m.label(i18n)
                 on_pick=|m| apply_material(m)
             />
             <SelectGroup
-                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_font_size).to_string())
+                header=Signal::derive(move || t_string!(i18n, appearance.section.font).to_string())
                 items=FontScale::ALL.to_vec()
                 current=read_font_scale()
-                label=|m: FontScale| m.label()
+                label=move |m: FontScale| m.label(i18n)
                 on_pick=|m| apply_font_scale(m)
             />
             <SelectGroup
-                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_radius).to_string())
+                header=Signal::derive(move || t_string!(i18n, appearance.section.radius).to_string())
                 items=Roundness::ALL.to_vec()
                 current=read_roundness()
-                label=|m: Roundness| m.label()
+                label=move |m: Roundness| m.label(i18n)
                 on_pick=|m| apply_roundness(m)
             />
             <SelectGroup
-                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_density).to_string())
+                header=Signal::derive(move || t_string!(i18n, appearance.section.density).to_string())
                 items=Density::ALL.to_vec()
                 current=read_density()
-                label=|m: Density| m.label()
+                label=move |m: Density| m.label(i18n)
                 on_pick=|m| apply_density(m)
             />
         </PhoneShell>
@@ -68,7 +68,7 @@ fn SelectGroup<T, L, P>(
 ) -> impl IntoView
 where
     T: Copy + PartialEq + Send + Sync + 'static,
-    L: Fn(T) -> &'static str + Copy + 'static,
+    L: Fn(T) -> String + Copy + Send + Sync + 'static,
     P: Fn(T) + Copy + 'static,
 {
     let selected = RwSignal::new(current);
@@ -83,7 +83,7 @@ where
                             class:cell-selected=move || selected.get() == item
                             on:click=move |_| { on_pick(item); selected.set(item); }
                         >
-                            <div class="cell-body"><div class="cell-title">{label(item)}</div></div>
+                            <div class="cell-body"><div class="cell-title">{move || label(item)}</div></div>
                             <svg class="cell-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
                         </div>
                     }
@@ -100,7 +100,7 @@ fn AccentGroup() -> impl IntoView {
     let selected = RwSignal::new(read_accent());
     view! {
         <div>
-            <div class="list-header">{t!(i18n, settings.phone.appearance_accent)}</div>
+            <div class="list-header">{t!(i18n, appearance.section.accent)}</div>
             <div class="list">
                 <div class="cell" style="align-items:center;">
                     <div class="cell-body"><div class="cell-title">"Accent"</div></div>
@@ -112,7 +112,7 @@ fn AccentGroup() -> impl IntoView {
                                     class="swatch"
                                     class:swatch-active=move || selected.get() == a
                                     style=style
-                                    title=a.label()
+                                    title=a.label(i18n)
                                     on:click=move |_| { apply_accent(a); selected.set(a); }
                                 ></span>
                             }

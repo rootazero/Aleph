@@ -13,7 +13,7 @@ use crate::api::system::SystemApi;
 use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
-use crate::i18n::{t_string, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::agent_identity::agent_color_for_id;
@@ -1377,7 +1377,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                 >
                                     "▾"
                                 </span>
-                                {format!("群聊 {count}")}
+                                {t!(i18n, chat.group_chats_count, count = move || count)}
                             </button>
                             // Group rows (shown only when expanded) — plain if/else, no <Show>,
                             // so the inner iterator closure stays in the outer reactive block.
