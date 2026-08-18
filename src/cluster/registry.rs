@@ -17,8 +17,14 @@ use serde_json::Value;
 
 use crate::cluster::ReverseRpcChannel;
 
-/// A command declared by a node (name + self-describing schema). 0b does not
-/// parse the schema — passed through as-is.
+/// A command declared by a node (name + schema placeholder). The `schema`
+/// field is a placeholder for the node's self-declared JSON schema; it is
+/// stored verbatim, surfaced in `environments.list` / `node_list`, and
+/// preserved across reconnect. **It is NOT validated against `args`** — the
+/// allowlist ([`CommandTable`]) is the only authoritative gate on the
+/// node side, and the center passes `args` straight through to the command's
+/// `run`. Every shipped node command declares `{"type":"object"}` with no
+/// `properties`, so the field is informational today.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandDescriptor {
     pub name: String,
@@ -337,8 +343,12 @@ impl NodeRegistry {
 
     /// Same multi-level match as [`resolve`], but returns only the `node_id` —
     /// `cluster.deregister` uses this to map an operator-supplied name/id to a
-    /// unique node identity before evicting + revoking the token.
-    pub fn resolve_id(&self, name_or_id: &str) -> std::result::Result<String, ResolveError> {
+    /// unique node identity before evicting + revoking the token. `pub(crate)`
+    /// because every current caller lives inside this crate
+    /// (`enrollment::deregister_node` and its tests); a single test outside
+    /// the crate (`src/gateway/handlers/cluster.rs:269`) references this
+    /// function by doc comment only and does not call it.
+    pub(crate) fn resolve_id(&self, name_or_id: &str) -> std::result::Result<String, ResolveError> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         Self::match_id(&inner, name_or_id)
     }
@@ -476,6 +486,13 @@ pub(crate) fn normalize_node_key(value: &str) -> String {
 /// when `role == Some("node")`. `params` is the connect frame's params
 /// (extracts `device_name` + commands). Returns whether registration occurred.
 /// Extracted as a pure function for unit testing and to keep `handler.rs` thin.
+///
+/// The `role` gate is currently dead in production: the single live caller
+/// (`gateway/server/handler.rs:1344`) passes a hardcoded `Some("node")` after
+/// upstream shape detection. The gate is kept as a defensive parameter so
+/// future call sites cannot register a non-node connection by accident; the
+/// contract is "call this only for `role == Some("node")`", and the unit
+/// test `maybe_register_node_registers_only_for_node_role` enforces it.
 pub fn maybe_register_node(
     registry: &NodeRegistry,
     role: Option<&str>,

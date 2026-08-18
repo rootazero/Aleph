@@ -110,28 +110,30 @@ enum NameMatch {
 ///
 /// Name normalization shares the same source of truth as online addressing
 /// [`normalize_node_key`], so a pre-enrolled "GPU Box" in the Panel and a node
-/// dialing in as `--name gpu-box` merge into the same record. A store read
-/// failure degrades to [`NameMatch::None`] (P7: the caller still gets a usable
-/// identity; the only cost is one row in the offline view).
-fn match_by_name(store: &SecurityStore, node_name: &str) -> NameMatch {
+/// dialing in as `--name gpu-box` merge into the same record.
+///
+/// Store read failures are surfaced as `Err` so callers that mint new rows
+/// on `NameMatch::None` (notably [`enroll_node_device`]) cannot accidentally
+/// mint a duplicate while the store is wedged — the previous silent
+/// fall-through to `None` would create a second `role=node` row under the
+/// same name, which the by-name fallback could no longer disambiguate.
+fn match_by_name(store: &SecurityStore, node_name: &str) -> Result<NameMatch, rusqlite::Error> {
     let key = normalize_node_key(node_name);
     if key.is_empty() {
-        return NameMatch::None;
+        return Ok(NameMatch::None);
     }
-    let Ok(devices) = store.list_devices() else {
-        return NameMatch::None;
-    };
+    let devices = store.list_devices()?;
     let mut hits = devices
         .into_iter()
         .filter(|d| d.role == "node" && normalize_node_key(&d.device_name) == key);
     let Some(first) = hits.next() else {
-        return NameMatch::None;
+        return Ok(NameMatch::None);
     };
     let extra = hits.count();
     if extra > 0 {
-        NameMatch::Ambiguous(extra + 1)
+        Ok(NameMatch::Ambiguous(extra + 1))
     } else {
-        NameMatch::Unique(first.device_id)
+        Ok(NameMatch::Unique(first.device_id))
     }
 }
 
@@ -156,11 +158,15 @@ pub fn enroll_node_device(
     node_name: &str,
 ) -> Result<(String, bool), String> {
     match match_by_name(store, node_name) {
-        NameMatch::Unique(id) => Ok((id, false)),
-        NameMatch::None => mint_node_device(store, node_name).map(|id| (id, true)),
-        NameMatch::Ambiguous(n) => Err(format!(
+        Ok(NameMatch::Unique(id)) => Ok((id, false)),
+        Ok(NameMatch::None) => mint_node_device(store, node_name).map(|id| (id, true)),
+        Ok(NameMatch::Ambiguous(n)) => Err(format!(
             "{n} enrolled nodes already share the name '{node_name}'; \
              deregister the duplicates by id first"
+        )),
+        Err(e) => Err(format!(
+            "enroll_node_device: store read failed for name '{node_name}' \
+             (refusing to mint a duplicate row): {e}"
         )),
     }
 }
@@ -250,8 +256,15 @@ pub fn admit_node(
 
     // First boot: adopt an operator's pre-enrolled row for this name if there is
     // exactly one, else mint. Either way the node persists what we hand back.
+    //
+    // If the store is wedged during the read we treat the situation as "no
+    // pre-enrolled row visible" and mint fresh — same graceful degradation
+    // as the rest of `admit_node` (the node still gets a usable identity; the
+    // only cost is one fewer record in the offline view), and unlike the
+    // operator enroll path, a fresh mint cannot collide with an existing row
+    // the operator cannot see.
     match match_by_name(store, node_name) {
-        NameMatch::Unique(existing) => {
+        Ok(NameMatch::Unique(existing)) => {
             return NodeAdmission::Admitted {
                 node_id: existing,
                 minted: true,
@@ -261,12 +274,17 @@ pub fn admit_node(
         // this node is, and mint it a distinct identity. (Unlike the operator
         // path, a dialling node has nobody to ask; refusing it outright would
         // take the machine offline over a bookkeeping mess.)
-        NameMatch::Ambiguous(n) => warn!(
+        Ok(NameMatch::Ambiguous(n)) => warn!(
             node_name,
             count = n,
             "multiple enrolled nodes share this name; minting a fresh node id"
         ),
-        NameMatch::None => {}
+        Ok(NameMatch::None) => {}
+        Err(e) => warn!(
+            node_name,
+            error = %e,
+            "match_by_name store read failed; minting a fresh node id"
+        ),
     }
     match mint_node_device(store, node_name) {
         Ok(node_id) => NodeAdmission::Admitted {
@@ -310,8 +328,23 @@ pub struct DeregisterOutcome {
 /// operator removing a machine should name it precisely — but name equality
 /// uses the same [`normalize_node_key`] as online addressing, so "GPU Box" is
 /// removable as "gpu-box" whether it is online or not.
+///
+/// A store read failure is logged and surfaces as `None` (NotFound to the
+/// operator). The previous `.ok()?` made the same call look identical to
+/// "no row matches", so an operator told "no online or enrolled node
+/// matches" could not distinguish a real miss from a wedged store.
 fn resolve_enrolled_node(store: &SecurityStore, q: &str) -> Option<String> {
-    let devices = store.list_devices().ok()?;
+    let devices = match store.list_devices() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                query = %q,
+                error = %e,
+                "resolve_enrolled_node: store read failed; reporting as not-found"
+            );
+            return None;
+        }
+    };
     if let Some(d) = devices
         .iter()
         .find(|d| d.role == "node" && d.device_id == q)
@@ -319,8 +352,16 @@ fn resolve_enrolled_node(store: &SecurityStore, q: &str) -> Option<String> {
         return Some(d.device_id.clone());
     }
     match match_by_name(store, q) {
-        NameMatch::Unique(id) => Some(id),
-        NameMatch::None | NameMatch::Ambiguous(_) => None,
+        Ok(NameMatch::Unique(id)) => Some(id),
+        Ok(NameMatch::None | NameMatch::Ambiguous(_)) => None,
+        Err(e) => {
+            tracing::warn!(
+                query = %q,
+                error = %e,
+                "resolve_enrolled_node: name-lookup store read failed; reporting as not-found"
+            );
+            None
+        }
     }
 }
 

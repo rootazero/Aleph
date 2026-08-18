@@ -43,6 +43,14 @@ async fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, St
     // to `/etc`, and every subsequent `starts_with(&root)` check would
     // happily admit `/etc/passwd`. `symlink_metadata` does NOT follow
     // symlinks, so we can refuse the symlink root before canonicalizing.
+    //
+    // NOTE: this narrows the race window but does not close it. Between the
+    // `symlink_metadata` and `canonicalize` calls below, an attacker who can
+    // win that race can still swap the root to a symlink and have it
+    // resolved through. Closing the window entirely requires pinning a root
+    // directory fd and using `openat` / `O_NOFOLLOW` on every descendant
+    // operation (see `FileWriteCommand::run` for the leaf-level
+    // `O_NOFOLLOW` work item — same class of fix).
     let root_meta = tokio::fs::symlink_metadata(workspace_dir)
         .await
         .map_err(|e| format!("workspace root unresolved: {e}"))?;
@@ -124,10 +132,24 @@ impl NodeCommand for FileWriteCommand {
         // `try_exists` → `tokio::fs::write` pair that had a TOCTOU window where
         // a concurrent file.write with `overwrite=false` could observe "absent"
         // and then succeed over a freshly-arrived file.
+        //
+        // On Unix we additionally refuse to follow a symlink at the leaf:
+        // `resolve_in_jail` canonicalized and containment-checked `dest`, but
+        // a writer with workspace-internal access could swap the leaf to a
+        // symlink pointing outside the jail between that check and this open.
+        // `O_NOFOLLOW` makes the open itself fail if `dest` is a symlink, so
+        // the swap is never silently followed. (`resolve_in_jail` already
+        // rejects a symlink at the workspace root; this closes the same
+        // class of issue at the leaf.)
         let mut opts = tokio::fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true);
         if !overwrite {
             opts.create_new(true);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.customize(libc::O_NOFOLLOW);
         }
         let open_result = opts.open(&dest).await;
         let mut file = match open_result {

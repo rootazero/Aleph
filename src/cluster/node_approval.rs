@@ -27,7 +27,7 @@ pub type ApprovalSlot = Arc<RwLock<Option<ReverseRpcChannel>>>;
 /// center's `DEFAULT_APPROVAL_TIMEOUT_MS` (120s) so the center decides first and
 /// returns an explicit `"timeout"` outcome; this is only a transport-death
 /// backstop.
-pub const NODE_APPROVAL_TIMEOUT_MS: u64 = 130_000;
+pub(crate) const NODE_APPROVAL_TIMEOUT_MS: u64 = 130_000;
 
 /// Map the center's outcome string back to an `ApprovalOutcome`. Any unknown
 /// value (including `"denied"`) is fail-closed `Denied`. The canonical

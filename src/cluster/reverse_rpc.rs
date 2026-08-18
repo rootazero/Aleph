@@ -5,7 +5,7 @@
 //! request; has `result` / `error` = response), not by id — so reverse RPC ids
 //! and the client's own id space can overlap without routing conflicts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::sync_primitives::{Arc, Mutex};
@@ -25,14 +25,6 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 pub struct PendingInvokes {
     counter: AtomicU64,
     waiters: Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>,
-    /// (B3-02) Set of ids this table has ever held, retained across
-    /// `cancel()` / `cancel_all()` so `remembered()` can distinguish "the
-    /// receiver was already dropped (we handled it)" from "we have never
-    /// heard of this id". Bounded by the `u64` counter wrap horizon (~584M
-    /// years at 1 register/ms), so this set grows unboundedly for the
-    /// lifetime of the connection; that is acceptable — `drop` on disconnect
-    /// releases it.
-    seen_ids: Mutex<HashSet<String>>,
 }
 
 impl PendingInvokes {
@@ -54,23 +46,22 @@ impl PendingInvokes {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), tx);
-        // (B3-02) Track every id we've ever handed out so a late response
-        // for an already-cancelled/receiver-dropped id can be distinguished
-        // from a never-seen id.
-        self.seen_ids
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id.clone());
         (id, rx)
     }
 
     /// Route a response to the caller waiting on that id.
-    /// Returns `true` if an entry existed for this id (even if its receiver was
-    /// already dropped, e.g. the caller timed out — still counts as a handled
-    /// reverse RPC response); `false` means no such id (unknown / already resolved).
-    pub fn resolve(&self, id: &Value, response: JsonRpcResponse) -> bool {
+    ///
+    /// If no waiter exists for this id (unknown id, the receiver was already
+    /// dropped, or the waiter was cancelled), the response is silently dropped
+    /// and a `warn!` is logged. The previous `bool` return on this method was
+    /// severed: the sole production caller (`gateway/server/handler.rs:699`)
+    /// discarded the result, so a misrouted response could be swallowed
+    /// without any log line. Moving the diagnostic into the callee makes the
+    /// signal observable without requiring callers to opt in.
+    pub fn resolve(&self, id: &Value, response: JsonRpcResponse) {
         let Some(key) = id.as_str() else {
-            return false;
+            tracing::warn!("reverse-rpc resolve received non-string id; dropping response");
+            return;
         };
         let sender = self
             .waiters
@@ -80,12 +71,16 @@ impl PendingInvokes {
         match sender {
             Some(tx) => {
                 // Best-effort delivery: a dropped receiver (caller timed out)
-                // still counts as a known id — return true so callers treat the
-                // frame as a handled reverse-RPC response, not an unknown frame.
+                // is still a known-id response, not an unknown frame.
                 let _ = tx.send(response);
-                true
             }
-            None => false,
+            None => {
+                tracing::warn!(
+                    id = %key,
+                    "reverse-rpc resolve received response for unknown id \
+                     (already resolved, cancelled, or never registered)"
+                );
+            }
         }
     }
 
@@ -97,25 +92,6 @@ impl PendingInvokes {
             .unwrap_or_else(|e| e.into_inner())
             .remove(id)
             .is_some()
-    }
-
-    /// (B3-02) Test whether this id has been registered at any point in the
-    /// table's lifetime. The inbound loop uses this to distinguish "we
-    /// remember this id but the receiver was already dropped (e.g. the
-    /// caller timed out)" from "we have never heard of this id". The first
-    /// is a known-handled response, the second is a routing bug worth a
-    /// warning. Cheap O(1) lookup; the table also retains an internal
-    /// `seen_ids` set so the answer survives `cancel()` / `cancel_all()`.
-    ///
-    /// Allowed-dead-code: the inbound-loop caller lives in
-    /// `src/gateway/server/handler.rs` (out of scope for the cluster static
-    /// review batch); once that wiring lands the `#[allow]` can be removed.
-    #[allow(dead_code)]
-    pub(crate) fn remembered(&self, id: &str) -> bool {
-        self.seen_ids
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(id)
     }
 
     /// Drop **all** waiters (used for connection disconnect cleanup). Returns the
@@ -358,18 +334,22 @@ mod tests {
         assert!(id.starts_with("rpc-"));
 
         let resp = JsonRpcResponse::success(Some(json!(id)), json!({"ok": true}));
-        let routed = pending.resolve(&json!(id), resp);
-        assert!(routed, "resolve should find the pending entry");
+        pending.resolve(&json!(id), resp);
 
         let got = rx.await.expect("sender should not be dropped");
         assert!(got.is_success());
     }
 
     #[tokio::test]
-    async fn resolve_unknown_id_returns_false() {
+    async fn resolve_unknown_id_drops_response_silently() {
+        // Unknown id: response is dropped (no waiter to deliver to) but no
+        // panic, and no observable side effect on the PendingInvokes state.
         let pending = PendingInvokes::new();
         let resp = JsonRpcResponse::success(Some(json!("rpc-999")), json!(null));
-        assert!(!pending.resolve(&json!("rpc-999"), resp));
+        pending.resolve(&json!("rpc-999"), resp);
+        // No waiter was registered, so cancel_all returns 0 — the resolve
+        // did not synthesize a phantom entry.
+        assert_eq!(pending.cancel_all(), 0);
     }
 
     #[tokio::test]

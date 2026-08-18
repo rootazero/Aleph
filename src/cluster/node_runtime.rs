@@ -40,7 +40,20 @@ impl CommandTable {
     }
 
     pub fn register(&mut self, name: impl Into<String>, cmd: Arc<dyn NodeCommand>) {
-        self.commands.insert(name.into(), cmd);
+        let name = name.into();
+        if self.commands.contains_key(&name) {
+            // A second `register` for the same name shadows the previous
+            // command. With `register_file_commands` and `with_bash` both
+            // callable from the same setup path, a misordered init could
+            // bind `file.read` / `file.write` to a different jail root than
+            // the one an operator has already pointed at; warn so that
+            // shows up in logs instead of being silently overwritten.
+            tracing::warn!(
+                command = %name,
+                "CommandTable::register overwriting an existing entry"
+            );
+        }
+        self.commands.insert(name, cmd);
     }
 
     /// Command catalog declared to the center on node connect. **Sorted by
@@ -78,7 +91,10 @@ impl CommandTable {
 }
 
 /// `bash` as a node command: delegates to `BashExecTool` under a fixed session scope.
-pub struct BashNodeCommand {
+/// `pub(crate)` because `node_runtime` is a private module and the type is not
+/// re-exported from `cluster/mod.rs`; widening to `pub` would expose it across
+/// the crate boundary with no consumer.
+pub(crate) struct BashNodeCommand {
     bash: BashExecTool,
     session: SessionKey,
 }
