@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::memory::extensions::types::CaptureCtx;
+use crate::memory::extensions::types::{CaptureCtx, CaptureDecision};
 use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{
