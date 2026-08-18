@@ -5,9 +5,15 @@
 #   ./qa/picker_nav/run.sh          # boot an isolated server, print the checklist
 #   KEEP=1 ./qa/picker_nav/run.sh   # keep the scratch dir for post-mortem
 #
-# BOOTS AND WAITS. Every item is Panel-side interaction, so there is no mock
-# provider and no agent turn here — what the fixture supplies is a realistic
-# catalogue (two presets configured, fifty-odd not) and three widths.
+# BOOTS AND WAITS. Every item but 12 is Panel-side interaction, so there is no
+# agent turn here — what the fixture supplies is a realistic catalogue (presets
+# configured, fifty-odd not) and three widths.
+#
+# Item 12 is the exception and gets a stub: "test connection" is *entirely* a
+# round-trip that leaves the process, so a Panel-only fixture cannot reach it
+# at all. `mock_provider.py` answers the probe locally, which keeps the run
+# offline and keyless while still exercising the real client stack; the failure
+# arm is a provider aimed at a closed port, so that refusal is real too.
 #
 # Items 1-13 and 16-18 run as loopback operator, which the fixture boots into
 # directly. Items 14-15 cannot: loopback is *always* operator, so the refusal
@@ -16,6 +22,27 @@
 # Test/Delete buttons are wired through — needs a LAN bind, TLS and a member
 # credential. `member_seed.py` turns the seeding half of that into one command;
 # the browser half stays manual, which is the point of a real-machine QA.
+#
+# ## Instrument caveats (2026-08-18, cost real time — read before driving)
+#
+#   * Drive the phone items with chrome-devtools-mcp `emulate`
+#     (`390x844x3,mobile,touch`), NOT a window resize. `resize_window` reports
+#     success and leaves `innerWidth` unchanged (macOS enforces a window
+#     minimum well above 390), so every phone item silently runs against the
+#     WIDE layout and passes or fails for the wrong reason. `resize_page` gets
+#     under the 640px breakpoint but stops around 500px; only viewport
+#     emulation reaches 390 exactly.
+#   * `fill(uid, "")` sets `.value` WITHOUT dispatching `input`, so the Leptos
+#     filter keeps the previous list and the picker looks stuck on the old
+#     query. That is the instrument, not the product — a real Backspace
+#     re-filters correctly. Clear the box with keystrokes (or dispatch
+#     `new Event('input')` yourself) before reporting a filter bug.
+#   * A connected browser that reports `isLocal: true` may still be unable to
+#     reach this machine's loopback at all (seen 2026-08-18: three navigations
+#     to 127.0.0.1 / localhost / :18797/health all ERR_CONNECTION_REFUSED while
+#     `curl` on the same port answered 200). CLAUDE.md's rule is "the giveaway
+#     is the source IP in the server log"; its degenerate case is that NO
+#     request arrives. Check the server log before believing the Panel is broken.
 #
 # The three widths are the point of the round's QA, not a formality. The
 # desktop settings master-detail folds at `@media (max-width: 720px)`
@@ -34,6 +61,9 @@ REPO="$(cd "$HERE/../.." && pwd)"
 QA_ROOT="${QA_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/aleph-qa-picker-XXXXXX")}"
 KEEP="${KEEP:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-18797}"
+# The stub item 12 probes, and a port nothing listens on for the failure arm.
+MOCK_PORT="${MOCK_PORT:-18798}"
+DEAD_PORT="${DEAD_PORT:-18799}"
 
 . "$HERE/../lib/scratch_home.sh"
 qa_redirect_home "$QA_ROOT"
@@ -46,13 +76,16 @@ TARGET_DIR="$(cd "$REPO" && HOME="$REAL_HOME" cargo metadata --no-deps --format-
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)"
 BIN="${TARGET_DIR:-$REPO/target}/debug/aleph-server"
 SERVER_PID=""
+MOCK_PID=""
 
 say() { printf '\n=== %s ===\n' "$*"; }
 
 cleanup() {
+  [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
   sleep 1
   [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
+  [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
 trap cleanup EXIT
@@ -78,8 +111,29 @@ for _ in $(seq 1 50); do [ -f "$CONFIG" ] && break; sleep 0.5; done
 kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null
 [ -f "$CONFIG" ] || { echo "no config generated at $CONFIG"; tail -20 "$QA_ROOT/gen.log"; exit 1; }
 
-say "patch config (inert daemon, two configured catalogue presets)"
-python3 "$HERE/patch_config.py" "$CONFIG" --gateway-port "$GATEWAY_PORT" || exit 1
+say "patch config (inert daemon, configured presets + the two item-12 rows)"
+python3 "$HERE/patch_config.py" "$CONFIG" --gateway-port "$GATEWAY_PORT" \
+  --mock-port "$MOCK_PORT" --dead-port "$DEAD_PORT" || exit 1
+
+# The failure arm needs $DEAD_PORT to stay closed. Checked in python rather
+# than with `nc`, because a missing `nc` would make the guard answer "not
+# occupied" for a reason that has nothing to do with the port — and this whole
+# fixture exists to stop items passing for the wrong reason.
+say "check the failure-arm port is closed"
+if ! python3 -c "
+import socket, sys
+s = socket.socket()
+s.settimeout(0.5)
+sys.exit(1 if s.connect_ex(('127.0.0.1', $DEAD_PORT)) == 0 else 0)
+"; then
+  echo "DEAD_PORT $DEAD_PORT is occupied — item 12's failure arm would be testing the wrong refusal" >&2
+  exit 1
+fi
+
+say "start mock provider (item 12 success arm)"
+python3 "$HERE/mock_provider.py" "$MOCK_PORT" "$QA_ROOT/probes.jsonl" \
+  >"$QA_ROOT/mock.log" 2>&1 &
+MOCK_PID=$!
 
 say "start server"
 "$BIN" start >"$QA_ROOT/server.log" 2>&1 &
@@ -133,37 +187,64 @@ cat <<'CHECKLIST'
       断言: `.aleph-md` 的 flex-direction === 'column'
    8. 该形态下 1/2/3 全部仍成立（渐隐 + ↑/↓ + 滚入视野）
 
-  phone (390x844) — /settings/providers（iOS 形态）
+  phone (390x844) — /settings/providers（iOS 形态）  [2026-08-18 全部真机 PASS]
    9. 「添加提供商」cell 展开 → 搜索 → 选一个未配置的预设 → 填模型 + 密钥 → 添加
       断言: 列表出现该 provider 且展开；config.toml 里多出 [providers.<id>]
+      实测: 选 Mistral AI + 填密钥 → 行出现且**已展开**（设为默认/启用/API 密钥/
+            保存/测试连接/删除提供商 六格齐），config.toml 落 [providers.mistral]
+            （base_url 来自预设、protocol=openai、verified=false、api_key 不在
+            config 里）。密钥进了保管库的旁证: 该行密钥框此后显示
+            「••••••••（已设置，输入新值覆盖）」
   10. 选一个已配置的预设（groq / deepseek，带「已配置」角标）
       断言: 不进入设置表单，直接关闭 picker 并展开那一行现有的编辑区
+      实测: 点 Groq（带「已配置」）→ 无「配置 Groq」表单、picker 关闭、
+            groq 行展开、上一次展开的 mistral 行收起
   11. 长列表底部渐隐同 1
+      实测: 三态与几何一致 — 全表 sh3637/ch388 → 有 .aleph-scroll-more；
+            搜到 1 行 → 无（且无可滚容器）；滚到底 remainder=0.5 → 无
 
-  ✅ 9 / 10 / 12 / 13 于 2026-08-18 在受控浏览器上真机跑通（视口 606x774，手机形态）:
-     9  → 建了 mistral，`[providers.mistral]` 落盘，行自动展开
-     10 → 点「已配置」的 Groq **不进** setup 表单，picker 关闭、现有行展开
-     12 → 「测试中」→ 绿色「连接成功」，`verified` false→true；折叠后展开 groq
-           **没有**上一行的判定（判定按 provider 键控）
-     13 → 「确认删除？」+ 说明 + 「取消」；取消回单格；确认后行消失且配置段消失
-     ⚠️ 12 必须先把该 provider 的 `base_url` 指向本地 stub —— `providers.test` 发的是
-     **真的一轮 chat completion**（`probe_provider` 里的 "ping"），照原样点会去拨
-     api.mistral.ai。stub 要按 `stream:true` 发 **SSE**，usage 走空 choices 尾块；
-     回普通 JSON 会得到一条读起来像"连不上"的失败。
-
-  phone (390x844) — 本轮新增的两个按钮（loopback = operator）
-  12. 展开一个已配置 provider → 点「测试连接」
-      断言: 标题变「测试中...」→ 右侧出现绿色「连接成功」或红色「连接失败」；
-            成功后重新加载，config.toml 里该 provider 的 verified = true
-            （verified 的唯一写者就是 providers.test —— 手机端此前无路可写）
-      断言(串味): 折叠该行、展开另一个 provider → 新行右侧**没有**上一行的判定
-                  （判定按 provider 名字键控，不是一个裸 bool）
-  13. 同一行点「删除提供商」→ 出现红色「确认删除？」+ 说明 + 「取消」两格
+  phone (390x844) — 新增的两个按钮（loopback = operator）  [2026-08-18 真机 PASS]
+  12. 展开 qa-mock → 点「测试连接」（它指向本地 stub，全程离线、无需密钥）
+      ⚠️ stub 协议要点（2026-08-18 受控浏览器那次踩过）: `providers.test` 发的是
+            真的一轮 chat completion（probe_provider 里的 "ping"），照原样点真实
+            provider 会去拨它的外网 base_url。stub 必须按 `stream:true` 回 **SSE**、
+            usage 走空 choices 尾块；回普通 JSON 会得到一条读起来像"连不上"的失败。
+            mock_provider.py 两种形态都实现，就是为了不吃这个亏。
+      断言: 标题变「测试中...」→ 右侧出现绿色「连接成功」
+            成功后重新加载，config.toml 里 qa-mock 的 verified 从 **false 变 true**
+            （verified 的唯一写者就是 providers.test —— 手机端此前无路可写。
+             这一行刻意不预置 true，否则这条断言什么也没证明）
+      断言(真的拨出去了): $QA_ROOT/probes.jsonl 多一行且 model == "qa-mock-model"
+            （探针在 wire 上不带 provider 名字，只带那一行配置里的 model；
+             所以"我点的是这一行"只有这个文件答得了，按钮自己的回执两种情况同形）
+      失败臂: 展开 qa-dead（指向一个没人监听的端口）→ 点「测试连接」
+            断言: 右侧出现红色「连接失败」；probes.jsonl **不增行**
+      断言(串味): 在 qa-mock（成功）与 qa-dead（失败）之间折叠/展开来回走
+            → 每行右侧只出现它自己的判定，绝不继承上一行的
+            （两行判定相反是这条断言成立的前提；两个成功分不出陈旧与新鲜）
+  13. 在 item 9 新建的那一行点「删除提供商」→ 出现红色「确认删除？」+ 说明 + 「取消」两格
       断言: 点「取消」回到单格；点「确认删除？」后该行消失、
             config.toml 里 [providers.<id>] 段消失
+      （刻意删 item 9 建的那行而不是 qa-mock/qa-dead：那两行是 item 12 的夹具，
+        删掉它们会让重跑 12 需要重启 fixture）
+
+  12/13 实测 2026-08-18:
+      12 ✓ 用 MutationObserver 在点击**之前**布好, 抓到 TESTING→OK 的过渡帧
+           （本地往返太快, 事后轮询会漏掉「测试中」而把它读成"没出现过"）
+         ✓ 「连接成功」颜色 oklch(0.60 0.15 142) / qa-dead「连接失败」颜色
+           var(--color-danger, oklch(0.58 0.20 25))
+         ✓ config.toml: qa-mock verified false→**true**, 而 qa-dead 仍 false
+           —— 写的是那一行, 不是一次通盘保存
+         ✓ probes.jsonl 恰好 1 行 model="qa-mock-model"; 失败臂**不增行**
+           （拨的是死端口, 根本没到 stub）
+         ✓ 串味两个方向都试了: qa-mock 成功后展开 qa-dead → 裸「测试连接」;
+           qa-dead 失败后回到 qa-mock → 仍是裸「测试连接」
+      13 ✓ 两格确认（红色「确认删除？」+「删除后该提供商的密钥与设置都会移除。」
+           + 「取消」）→ 点「取消」回到单格 → 再点开并确认 → 行消失且
+           config.toml 的 [providers.mistral] 段消失
 
   member（需要 LAN + TLS，见下方 member 段）— 本轮此前从未真机跑过的那一半
-  14. member 打开 /settings/providers（phone）
+  14. member 打开 /settings/providers（phone）  [2026-08-18 真机 PASS，四条断言全过]
       断言 a: 顶部是**被分类过的**那句话（settings.admin_refusal.read_config,
             「该设置页需要 operator 权限…」），不是裸协议串
       断言 b: **没有**「暂无配置的 Provider」。2026-08-18 首跑时它和 a 同屏出现,
@@ -174,8 +255,21 @@ cat <<'CHECKLIST'
             **不是**「没有匹配的提供商」——目录不是空的,是被拒了
       对照(operator, loopback): 同一块代码在真为空时必须仍说「没有匹配的提供商」。
             少了这一半,修复就可能是把一句谎话换成另一句
+      实测 2026-08-18（0.0.0.0 + TLS + 一次性配对票, 从本机 LAN IP 打开,
+      TOFU 接受自签证书）:
+            a ✓「该设置页需要 operator 权限,当前连接的角色无法读取服务器全局配置。」
+              全屏无任何裸协议串 / 错误码
+            b ✓ 无「暂无配置的 Provider」, 而 seeder 同一时刻报
+              operator_sees_providers = [groq, qa-dead, deepseek, qa-mock]
+              —— 空状态有东西可撒谎却没撒
+            c ✓「未能读取提供商目录。」, 且**搜索框根本没渲染**
+            对照 ✓ operator 在 loopback 同一屏搜 "zzzzzz" → 仍说「没有匹配的提供商」
+              两句话对应两个事实, 不是一句谎话换成另一句
+      ⚠️ 跑完把 host 改回 127.0.0.1、TLS 关掉再收工 —— 这一段会把一个端口
+         摆到局域网上, 而 fixture 的 trap 只杀进程不改配置
   15. ⚠️ **member 在这个屏幕上结构性到不了写路径**（2026-08-18 实测结论,
-      不是没跑）: providers.list 与 providers.catalog 都被 ADMIN_PREFIXES 拒掉,
+      同日 LAN+TLS 复验仍成立: member 屏上 测试连接/删除提供商/保存 各 0 个、
+      provider 行 0 个 —— 不是没跑）: providers.list 与 providers.catalog 都被 ADMIN_PREFIXES 拒掉,
       于是没有任何 provider 行、也没有任何目录行可以作用 ——「测试连接」/
       「删除提供商」/「保存」三个按钮一个都渲染不出来。
       要覆盖 settings_write_error 那条臂,得换一个 member 读得到、写不了的
@@ -216,8 +310,9 @@ cat <<EOF
 
   Panel:    http://127.0.0.1:$GATEWAY_PORT
   scratch:  $QA_ROOT   (config: $CONFIG)
-  logs:     $QA_ROOT/server.log · \$ALEPH_HOME/logs/
+  logs:     $QA_ROOT/server.log · $QA_ROOT/mock.log · \$ALEPH_HOME/logs/
   item 9/12/13 的落盘断言:  grep -A6 '^\[providers\.' $CONFIG
+  item 12 的拨号证据:       cat $QA_ROOT/probes.jsonl   (一行一次探针, 带 model)
   item 18:                  ./qa/channels/run.sh   (自带断言, 退出码=失败条数)
 
   member 段 (items 14-15) — 需要 LAN + TLS，因为 loopback 恒为 operator:
