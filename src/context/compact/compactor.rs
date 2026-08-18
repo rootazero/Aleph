@@ -298,6 +298,29 @@ impl ContextCompactor {
     ///
     /// The `fresh_tail` parameter overrides `config.fresh_tail` when larger.
     ///
+    /// `transient_tail` is how many messages at the END of `messages` are
+    /// synthetic and were never persisted — the `<system-reminder>` nudges
+    /// `build_prompt` appends plus the per-run recall strand. It is **added**
+    /// to the protected tail rather than max'd into it, and it is a separate
+    /// required argument precisely so no call site can forget to answer the
+    /// question.
+    ///
+    /// Why it cannot be folded into `fresh_tail`: `fresh_tail` is a count of
+    /// *persisted* messages ("leave the last N turns of the conversation
+    /// verbatim"), while the vector this runs on ends with up to five entries
+    /// that are recomputed every Think and belong to no turn. Sharing one
+    /// budget between them meant a run where all four nudges fired protected
+    /// **one** real message out of a configured six. Three things broke at
+    /// once, all silently: the model lost the verbatim tail it had just been
+    /// shown; [`latest_user_task`] scanned a tail that was almost entirely
+    /// scaffolding and returned `None`, dropping `<conversation_focus>`; and
+    /// `cut_end` moved with the nudge count, so the fingerprint cache's
+    /// `c.end <= cut_end` test failed on exactly the turns where nudges fired
+    /// — purging the entry, re-paying the summarization call, and re-keying
+    /// the provider's prefix cache, which is the thrash this cache exists to
+    /// prevent. `PreflightPipeline` was taught the same lesson in §2.18; the
+    /// compactor was not told.
+    ///
     /// # Flow
     ///
     /// 1. Determine the compression window (everything before the fresh tail).
@@ -314,9 +337,12 @@ impl ContextCompactor {
         &self,
         messages: &mut Vec<UnifiedMessage>,
         fresh_tail: usize,
+        transient_tail: usize,
         session_id: Option<&str>,
     ) -> anyhow::Result<CompactResult> {
-        let result = self.compact_inner(messages, fresh_tail, session_id).await?;
+        let result = self
+            .compact_inner(messages, fresh_tail, transient_tail, session_id)
+            .await?;
         // A compaction that actually rewrote the message list legitimately
         // breaks the provider prompt cache. Tell the process-wide monitor so
         // its consecutive-miss warning doesn't fire spuriously on the next
@@ -344,9 +370,15 @@ impl ContextCompactor {
         &self,
         messages: &mut Vec<UnifiedMessage>,
         fresh_tail: usize,
+        transient_tail: usize,
         session_id: Option<&str>,
     ) -> anyhow::Result<CompactResult> {
-        let effective_tail = fresh_tail.max(self.config.fresh_tail);
+        // `max` picks the stricter of the two *persisted* tail requests; the
+        // transient count is then ADDED, because those messages are not turns
+        // and must not spend the turn budget. See `compact`'s doc.
+        let effective_tail = fresh_tail
+            .max(self.config.fresh_tail)
+            .saturating_add(transient_tail);
 
         // Step 1: determine compression window
         if messages.len() <= effective_tail {
@@ -465,11 +497,18 @@ impl ContextCompactor {
                 SessionSummarySource::new(reuse.backend.clone(), sid, reuse.agent_id.clone());
             // Captured before `try_reuse` drains the window out from under us —
             // it owns its own drain/insert and cannot be handed the preserved
-            // turns after the fact.
+            // turns after the fact. The carried artifacts (execution list, file
+            // ledger) are captured here for the same reason: this is the FIFTH
+            // drain site, and it used to re-attach the user's turns while
+            // silently dropping everything `splice_preserved` carries — so the
+            // zero-API-cost path was the one path where the model lost its own
+            // checklist. Whatever a drain hands forward, every drain hands
+            // forward.
             let preserved = preserved_user_messages(
                 &messages[window_start..window_end],
                 PRESERVED_USER_TOKEN_BUDGET,
             );
+            let carriers = carried_artifacts(&messages[window_start..window_end]);
             if let Some(reuse_result) = source.try_reuse(messages, window_start, window_end).await {
                 if let Some(text) = first_message_text(&messages[window_start]) {
                     // The cache cover must be the hashed+drained range
@@ -480,9 +519,15 @@ impl ContextCompactor {
                     // miss on every rebuild.
                     self.store_cache(window_start, window_end, window_hash, text.to_string());
                 }
-                // Re-attach ABOVE the summary `try_reuse` just inserted — after
+                // Re-attach around the summary `try_reuse` just inserted — after
                 // `store_cache` has read it, since that read addresses the
-                // summary by position.
+                // summary by position. Carriers go in first, directly BELOW the
+                // summary (they are live state the model acts on next turn);
+                // the user's turns then go in ABOVE it. Doing it in this order
+                // keeps both splice indices expressed against the summary's
+                // known position instead of a running offset.
+                let below = window_start + 1;
+                messages.splice(below..below, carriers);
                 messages.splice(window_start..window_start, preserved);
                 tracing::info!(
                     tokens_before = reuse_result.tokens_before,
@@ -676,20 +721,30 @@ impl ContextCompactor {
         // so preserving over the gap too would duplicate them.
         let preserved =
             preserved_user_messages(&messages[c.start..c.end], PRESERVED_USER_TOKEN_BUDGET);
-        let summary_idx = c.start + preserved.len();
-        let inserted = preserved.len() + 1;
-        splice_preserved(
+        // Taken from the splice itself, never recomputed: the carriers it
+        // appends below the summary are conditional, and a hand-rolled
+        // `preserved.len() + 1` under-counts by one for every window that still
+        // holds an unfinished execution list (or a file ledger). The gap
+        // coordinates below are derived from this number, and an under-count
+        // there is silent context loss — the last gap message never reaches the
+        // summarizer while `store_cache` records a cover that includes it.
+        let inserted = splice_preserved(
             messages,
             c.start..c.end,
             preserved,
             UnifiedMessage::user(c.summary.clone()),
         );
+        // First message of the un-summarized gap in MUTATED coordinates. Derived
+        // from `inserted` (which counts preserved turns + summary + carriers)
+        // rather than from `summary_idx + 1`, so a carrier below the summary is
+        // never mistaken for gap content and fed back to the summarizer.
+        let gap_start = c.start + inserted;
 
         // Mutated coordinates: the gap between the reapplied summary and the
         // fresh tail.
         let cut_end_m = cut_end - replaced + inserted;
-        let gap_msgs = cut_end_m - (summary_idx + 1);
-        let gap_text: String = messages[summary_idx + 1..cut_end_m]
+        let gap_msgs = cut_end_m - gap_start;
+        let gap_text: String = messages[gap_start..cut_end_m]
             .iter()
             .map(|m| m.text_content())
             .collect::<Vec<_>>()
@@ -721,7 +776,7 @@ impl ContextCompactor {
         // (hermes `previousSummary` / pi `UPDATE_SUMMARIZATION_PROMPT` parity).
         let prompt = match strip_context_summary_prefix(&c.summary) {
             Some(prior) => {
-                let gap_transcript = serialize_transcript(&messages[summary_idx + 1..cut_end_m]);
+                let gap_transcript = serialize_transcript(&messages[gap_start..cut_end_m]);
                 build_summary_update_prompt(prior, &gap_transcript, token_budget, focus.as_deref())
             }
             None => build_window_summary_prompt(&transcript, token_budget, focus.as_deref()),
@@ -740,7 +795,7 @@ impl ContextCompactor {
                 // the summary is truncated; the preserved user turns ahead of
                 // it are re-attached below anyway.
                 let prior = strip_context_summary_prefix(&c.summary).unwrap_or(&c.summary);
-                let gap = deterministic_truncation(&messages[summary_idx + 1..cut_end_m]);
+                let gap = deterministic_truncation(&messages[gap_start..cut_end_m]);
                 (
                     format!("{prior}\n{gap}"),
                     CompactStrategy::DeterministicTruncation,
@@ -841,30 +896,59 @@ impl ContextCompactor {
 
 // === Helper functions ===
 
-/// Replace `range` with `[preserved user turns…, summary, execution list?]` —
-/// the single shape every compaction drain site produces. The user's own words
-/// stay verbatim and chronological ABOVE the summary that swallows everything
-/// else, so a head-anchored window can no longer summarize the original
-/// instruction away on its very first pass.
+/// Replace `range` with `[preserved user turns…, summary, carried artifacts…]`
+/// — the single shape every compaction drain site produces. The user's own
+/// words stay verbatim and chronological ABOVE the summary that swallows
+/// everything else, so a head-anchored window can no longer summarize the
+/// original instruction away on its very first pass.
 ///
-/// The execution list rides *below* the summary because it is live state the
-/// model acts on next turn, not history: it belongs as close to the read head
-/// as the drained region allows. It is `None` whenever the drained range held
-/// no unfinished plan, which is the common case.
+/// The carriers ([`carried_artifacts`]) ride *below* the summary because they
+/// are live state the model acts on next turn, not history: they belong as
+/// close to the read head as the drained region allows. Each is absent whenever
+/// the drained range held nothing of its kind, which is the common case.
+///
+/// Returns **how many messages were actually inserted**. Callers that go on to
+/// address the mutated list need that number, and only this function can know
+/// it: the carriers below the summary are conditional, so any caller-side
+/// arithmetic is a second — and eventually wrong — answer to the same question.
+/// `reapply_cached` used to compute `preserved.len() + 1` by hand and was off
+/// by one on every window that still held an unfinished execution list, which
+/// silently dropped the newest message of the merged gap out of the summarizer
+/// input while the cache entry claimed to cover it.
 fn splice_preserved(
     messages: &mut Vec<UnifiedMessage>,
     range: std::ops::Range<usize>,
     preserved: Vec<UnifiedMessage>,
     summary: UnifiedMessage,
-) {
-    let carry = super::plan_carry::plan_carry_message(&messages[range.clone()]);
+) -> usize {
+    let carriers = carried_artifacts(&messages[range.clone()]);
+    let inserted = preserved.len() + 1 + carriers.len();
     messages.splice(
         range,
         preserved
             .into_iter()
             .chain(std::iter::once(summary))
-            .chain(carry),
+            .chain(carriers),
     );
+    inserted
+}
+
+/// The deterministic artifacts a drained window must hand forward *below* the
+/// summary — facts the model acts on next turn that a lossy prose summary is
+/// not trusted to reproduce.
+///
+/// One function so every drain site carries the same set: the LLM-summary path,
+/// the truncation fallback, both extend-merge legs, and the zero-cost
+/// session-memory reuse path. Each entry is `None` in the common case, so calm
+/// windows pay nothing.
+fn carried_artifacts(window: &[UnifiedMessage]) -> Vec<UnifiedMessage> {
+    [
+        super::plan_carry::plan_carry_message(window),
+        super::file_carry::file_carry_message(window),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Advance a proposed cut index forward past any contiguous run of `ToolResult`
@@ -1198,7 +1282,7 @@ mod tests {
         .with_cheap_provider(Some(metered));
 
         let mut messages = make_messages(12);
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
 
         let events = sink.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -1229,7 +1313,7 @@ mod tests {
         let compactor = ContextCompactor::new(provider, config);
 
         let mut messages = make_messages(12);
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
 
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
         assert!(result.tokens_after < result.tokens_before);
@@ -1262,7 +1346,7 @@ mod tests {
         let mut messages = make_messages(12);
         messages[0] = UnifiedMessage::user(original);
 
-        compactor.compact(&mut messages, 6, None).await.unwrap();
+        compactor.compact(&mut messages, 6, 0, None).await.unwrap();
 
         assert_eq!(
             messages[0].text_content(),
@@ -1295,14 +1379,14 @@ mod tests {
         base[0] = UnifiedMessage::user(original);
 
         let mut turn1 = base.clone();
-        compactor.compact(&mut turn1, 6, None).await.unwrap();
+        compactor.compact(&mut turn1, 6, 0, None).await.unwrap();
         assert_eq!(turn1[0].text_content(), original);
 
         // Turn 2: rebuilt prompt (compaction is not persisted) + a new exchange.
         let mut turn2 = base.clone();
         turn2.push(UnifiedMessage::assistant("new assistant turn"));
         turn2.push(UnifiedMessage::user("new user turn"));
-        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+        let r2 = compactor.compact(&mut turn2, 6, 0, None).await.unwrap();
 
         assert_eq!(r2.strategy_used, CompactStrategy::CacheReuse);
         assert_eq!(
@@ -1334,7 +1418,7 @@ mod tests {
         let c1 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
             .with_cache_carryover(key);
         let mut turn1 = base.clone();
-        c1.compact(&mut turn1, 6, None).await.unwrap();
+        c1.compact(&mut turn1, 6, 0, None).await.unwrap();
         assert_eq!(provider.call_count(), 1);
 
         // Run 2: NEW compactor instance (run boundary) — seeds from the slot.
@@ -1343,7 +1427,7 @@ mod tests {
         let mut turn2 = base.clone();
         turn2.push(UnifiedMessage::assistant("new assistant turn"));
         turn2.push(UnifiedMessage::user("new user turn"));
-        let r2 = c2.compact(&mut turn2, 6, None).await.unwrap();
+        let r2 = c2.compact(&mut turn2, 6, 0, None).await.unwrap();
         assert_eq!(r2.strategy_used, CompactStrategy::CacheReuse);
         assert_eq!(
             provider.call_count(),
@@ -1366,14 +1450,14 @@ mod tests {
         let c1 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
             .with_cache_carryover(key);
         let mut turn1 = make_messages(12);
-        c1.compact(&mut turn1, 6, None).await.unwrap();
+        c1.compact(&mut turn1, 6, 0, None).await.unwrap();
         assert!(carryover_get(&COMPACTION_CARRYOVER, key).is_some());
 
         let c2 = ContextCompactor::new(provider.clone(), CompactorConfig::default())
             .with_cache_carryover(key);
         let mut rewritten = make_messages(12);
         rewritten[2] = UnifiedMessage::assistant("history rewritten between runs");
-        let r2 = c2.compact(&mut rewritten, 6, None).await.unwrap();
+        let r2 = c2.compact(&mut rewritten, 6, 0, None).await.unwrap();
         assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
         assert_eq!(
             provider.call_count(),
@@ -1455,7 +1539,7 @@ mod tests {
         messages[1] = UnifiedMessage::assistant("OLDEST_MARKER first task");
         messages[45] = UnifiedMessage::user("MIDGAP_MARKER newer pre-tail turn");
 
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
 
         let joined: String = messages
@@ -1485,7 +1569,7 @@ mod tests {
 
         let mut messages = make_messages(4);
         let original_len = messages.len();
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
 
         assert!(matches!(
             result.strategy_used,
@@ -1505,7 +1589,7 @@ mod tests {
         let compactor = ContextCompactor::new(provider, config);
 
         let mut messages = make_messages(12);
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
 
         assert_eq!(
             result.strategy_used,
@@ -1536,7 +1620,7 @@ mod tests {
             messages.push(UnifiedMessage::assistant(format!("turn {i}")));
         }
 
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
         assert_eq!(
             result.strategy_used,
             CompactStrategy::DeterministicTruncation
@@ -1586,7 +1670,7 @@ mod tests {
                 .to_string(),
         );
 
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
         assert_eq!(
             result.strategy_used,
             CompactStrategy::DeterministicTruncation
@@ -1642,7 +1726,7 @@ mod tests {
         messages.push(UnifiedMessage::user(sentinel));
 
         let result = compactor
-            .compact(&mut messages, 0, Some("test-session"))
+            .compact(&mut messages, 0, 0, Some("test-session"))
             .await
             .unwrap();
         assert_eq!(
@@ -1698,7 +1782,7 @@ mod tests {
         }
         // Total: 8 messages. cut_end = 8 - 6 = 2. First starts with [Context Summary] and cut_end <= 2.
         let original_len = messages.len();
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
 
         assert!(matches!(
             result.strategy_used,
@@ -1720,7 +1804,7 @@ mod tests {
         let compactor = ContextCompactor::new(provider, CompactorConfig::default());
 
         let mut messages = make_messages(12);
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
 
         // Must recover via truncation, not report a phantom LlmSummary success.
         assert_eq!(
@@ -1814,7 +1898,7 @@ mod tests {
         let mut messages = make_messages(12);
         messages[10] = UnifiedMessage::user("LIVE_TASK: migrate the vector store");
 
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
 
         let prompt = provider.prompt();
@@ -1846,7 +1930,7 @@ mod tests {
             messages.push(UnifiedMessage::assistant(format!("turn {i}")));
         }
 
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
 
         let prompt = provider.prompt();
@@ -1901,7 +1985,7 @@ mod tests {
 
         let base = make_messages(12);
         let mut turn1 = base.clone();
-        let r1 = compactor.compact(&mut turn1, 6, None).await.unwrap();
+        let r1 = compactor.compact(&mut turn1, 6, 0, None).await.unwrap();
         assert_eq!(r1.strategy_used, CompactStrategy::LlmSummary);
         assert_eq!(provider.call_count(), 1);
 
@@ -1909,7 +1993,7 @@ mod tests {
         let mut turn2 = base.clone();
         turn2.push(UnifiedMessage::assistant("new assistant turn"));
         turn2.push(UnifiedMessage::user("new user turn"));
-        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+        let r2 = compactor.compact(&mut turn2, 6, 0, None).await.unwrap();
 
         assert_eq!(r2.strategy_used, CompactStrategy::CacheReuse);
         assert_eq!(
@@ -1929,7 +2013,7 @@ mod tests {
 
         let base = make_messages(12);
         let mut turn1 = base.clone();
-        compactor.compact(&mut turn1, 6, None).await.unwrap();
+        compactor.compact(&mut turn1, 6, 0, None).await.unwrap();
         assert_eq!(provider.call_count(), 1);
 
         // Turn N: the un-summarized gap behind the summary has grown past the
@@ -1940,7 +2024,7 @@ mod tests {
         for i in 0..(CACHE_EXTEND_MIN_MESSAGES + 2) {
             turn2.push(UnifiedMessage::assistant(format!("extra turn {i}")));
         }
-        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+        let r2 = compactor.compact(&mut turn2, 6, 0, None).await.unwrap();
 
         assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
         assert_eq!(provider.call_count(), 2);
@@ -1958,7 +2042,7 @@ mod tests {
             turn3.push(UnifiedMessage::assistant(format!("extra turn {i}")));
         }
         turn3.push(UnifiedMessage::user("fresh question"));
-        let r3 = compactor.compact(&mut turn3, 6, None).await.unwrap();
+        let r3 = compactor.compact(&mut turn3, 6, 0, None).await.unwrap();
         assert_eq!(r3.strategy_used, CompactStrategy::CacheReuse);
         assert_eq!(provider.call_count(), 2);
     }
@@ -1972,7 +2056,7 @@ mod tests {
 
         let base = make_messages(12);
         let mut turn1 = base.clone();
-        compactor.compact(&mut turn1, 6, None).await.unwrap();
+        compactor.compact(&mut turn1, 6, 0, None).await.unwrap();
         assert_eq!(provider.call_count(), 1);
 
         // A preflight pass rewrote a message inside the covered range — the
@@ -1981,7 +2065,7 @@ mod tests {
         turn2[2] = UnifiedMessage::user("rewritten by a cheap pass");
         turn2.push(UnifiedMessage::assistant("another turn"));
         turn2.push(UnifiedMessage::user("another question"));
-        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+        let r2 = compactor.compact(&mut turn2, 6, 0, None).await.unwrap();
 
         assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
         assert_eq!(provider.call_count(), 2, "stale fingerprint must recompact");
@@ -2021,7 +2105,7 @@ mod tests {
         let base = make_messages(16);
         let mut turn1 = base.clone();
         let r1 = compactor
-            .compact(&mut turn1, 6, Some("sess-1"))
+            .compact(&mut turn1, 6, 0, Some("sess-1"))
             .await
             .unwrap();
         assert_eq!(r1.strategy_used, CompactStrategy::SessionMemoryReuse);
@@ -2030,7 +2114,7 @@ mod tests {
         // must reapply via the zero-cost fast path, not recompact.
         let mut turn2 = base.clone();
         let r2 = compactor
-            .compact(&mut turn2, 6, Some("sess-1"))
+            .compact(&mut turn2, 6, 0, Some("sess-1"))
             .await
             .unwrap();
         assert_eq!(
@@ -2060,7 +2144,7 @@ mod tests {
             messages.push(UnifiedMessage::assistant(format!("turn {i}")));
         }
 
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
 
         let prompt = provider.prompt();
@@ -2088,13 +2172,304 @@ mod tests {
             messages.push(UnifiedMessage::user(format!("Fresh message {}", i)));
         }
         let original_len = messages.len();
-        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, 0, None).await.unwrap();
 
         assert!(matches!(
             result.strategy_used,
             CompactStrategy::Skipped { reason } if reason.contains("already compacted")
         ));
         assert_eq!(messages.len(), original_len);
+    }
+
+    /// A `scratchpad` tool result carrying an unfinished execution list — the
+    /// thing `plan_carry` re-emits below the summary, and therefore the reason
+    /// a drain can insert more messages than `preserved.len() + 1`.
+    fn unfinished_plan_result(call_id: &str) -> UnifiedMessage {
+        UnifiedMessage::ToolResult {
+            tool_call_id: call_id.into(),
+            tool_name: "scratchpad".into(),
+            content: vec![ContentBlock::Json {
+                value: serde_json::json!({
+                    "snapshot": {
+                        "objective": "ship the importer",
+                        "items": [
+                            {"text": "write the parser", "status": "completed"},
+                            {"text": "wire the writer", "status": "pending"},
+                        ]
+                    }
+                }),
+            }],
+            is_error: false,
+        }
+    }
+
+    fn tool_call_msg(call_id: &str, name: &str, args: serde_json::Value) -> UnifiedMessage {
+        UnifiedMessage::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                thought_signature: None,
+                id: call_id.into(),
+                name: name.into(),
+                arguments: args,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn the_protected_tail_counts_transient_scaffolding_on_top_of_the_conversation() {
+        // §2.18 taught `PreflightPipeline` that the vector it rewrites ends with
+        // up to five entries that were never persisted — four `<system-reminder>`
+        // nudges plus the recall strand. The compactor was never told. With a
+        // configured `fresh_tail` of 6 and all five firing, exactly ONE real turn
+        // stayed verbatim and the summarizer swallowed the five the model had
+        // just been shown.
+        //
+        // Forced-failure provider + truncation fallback, so the summary is a
+        // deterministic function of the drained window: any sentinel that reaches
+        // it was drained.
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor = ContextCompactor::new(
+            provider,
+            CompactorConfig {
+                fallback_to_truncation: true,
+                ..Default::default() // fresh_tail: 6
+            },
+        );
+
+        let mut messages: Vec<UnifiedMessage> = (0..12)
+            .map(|i| UnifiedMessage::user(format!("PERSISTED_{i}")))
+            .collect();
+        for i in 0..5 {
+            messages.push(UnifiedMessage::user(format!(
+                "<system-reminder>\nsynthetic nudge {i}\n</system-reminder>"
+            )));
+        }
+        let protected: Vec<String> = messages[6..]
+            .iter()
+            .map(UnifiedMessage::text_content)
+            .collect();
+
+        let result = compactor.compact(&mut messages, 0, 5, None).await.unwrap();
+        assert_eq!(
+            result.strategy_used,
+            CompactStrategy::DeterministicTruncation
+        );
+
+        let kept: Vec<String> = messages[messages.len() - protected.len()..]
+            .iter()
+            .map(UnifiedMessage::text_content)
+            .collect();
+        assert_eq!(
+            kept, protected,
+            "six persisted turns AND five transient entries must survive verbatim"
+        );
+        let summary = summary_text(&messages);
+        for i in 6..12 {
+            assert!(
+                !summary.contains(&format!("PERSISTED_{i}")),
+                "the transient tail must not spend the conversation's protection budget; \
+                 PERSISTED_{i} was drained into:\n{summary}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_extend_merge_feeds_the_whole_gap_when_a_carrier_rides_below_the_summary() {
+        // `reapply_cached` derived the gap's coordinates from a hand-rolled
+        // `preserved.len() + 1`, but `splice_preserved` also inserts the carried
+        // artifacts below the summary. Every window still holding an unfinished
+        // execution list therefore shifted the gap by one: the NEWEST gap message
+        // never reached the summarizer, while `store_cache` recorded a cover that
+        // included it — so on the next rebuild the cached summary replaced a
+        // message that no summary had ever seen. Silent, permanent context loss.
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Progress\nmerged\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        // Prefix the cached summary will cover: a user turn, a scratchpad call,
+        // its unfinished-plan result, then filler.
+        let prefix = |()| -> Vec<UnifiedMessage> {
+            let mut v = vec![
+                UnifiedMessage::user("ORIGINAL TASK: build the importer"),
+                tool_call_msg(
+                    "c0",
+                    "scratchpad",
+                    serde_json::json!({"action": "set_plan"}),
+                ),
+                unfinished_plan_result("c0"),
+            ];
+            for i in 0..7 {
+                v.push(UnifiedMessage::assistant(format!("PREFIX_{i}")));
+            }
+            v
+        };
+        let tail = |()| -> Vec<UnifiedMessage> {
+            (0..6)
+                .map(|i| UnifiedMessage::user(format!("TAIL_{i}")))
+                .collect()
+        };
+
+        // Turn 1 — full compaction, stores the cache over [0, 10).
+        let mut turn1 = prefix(());
+        turn1.extend(tail(()));
+        let r1 = compactor.compact(&mut turn1, 6, 0, None).await.unwrap();
+        assert_eq!(r1.strategy_used, CompactStrategy::LlmSummary);
+
+        // Turn 2 — same prefix rebuilt from the log, plus ten new turns behind
+        // the cached summary. That gap is over `CACHE_EXTEND_MIN_MESSAGES`, so
+        // the extend-merge runs.
+        let mut turn2 = prefix(());
+        for i in 0..10 {
+            turn2.push(UnifiedMessage::assistant(format!("GAP_{i}")));
+        }
+        turn2.extend(tail(()));
+        let r2 = compactor.compact(&mut turn2, 6, 0, None).await.unwrap();
+        assert_eq!(
+            r2.strategy_used,
+            CompactStrategy::LlmSummary,
+            "the widened gap must trigger the extend-merge, not a bare cache reuse"
+        );
+
+        let prompt = provider.prompt();
+        assert!(
+            prompt.contains("GAP_9"),
+            "the newest gap message must reach the summarizer; got:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("[Execution list preserved across context compaction]"),
+            "the carrier is not gap content and must not be re-summarized; got:\n{prompt}"
+        );
+        // And the carrier itself is still in the prompt the model will see.
+        let carried = turn2.iter().any(|m| {
+            m.text_content()
+                .contains("[Execution list preserved across context compaction]")
+        });
+        assert!(
+            carried,
+            "the execution list must ride forward past the merge"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_compaction_hands_the_file_ledger_forward() {
+        // pi appends `<read-files>` / `<modified-files>` to the summary text.
+        // Aleph carries them instead, so they survive the paths where no
+        // summarizer ran at all — here the truncation fallback.
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
+        let compactor = ContextCompactor::new(
+            provider,
+            CompactorConfig {
+                fallback_to_truncation: true,
+                ..Default::default()
+            },
+        );
+
+        let mut messages = vec![
+            UnifiedMessage::user("port the store"),
+            tool_call_msg(
+                "c1",
+                "file_edit",
+                serde_json::json!({"file_path": "src/store.rs"}),
+            ),
+            UnifiedMessage::tool_result("c1", "file_edit", "1 edit applied", false),
+            tool_call_msg(
+                "c2",
+                "file_read",
+                serde_json::json!({"path": "src/types.rs"}),
+            ),
+            UnifiedMessage::tool_result("c2", "file_read", "pub struct T;", false),
+        ];
+        for i in 0..8 {
+            messages.push(UnifiedMessage::assistant(format!("step {i}")));
+        }
+
+        compactor.compact(&mut messages, 6, 0, None).await.unwrap();
+
+        let ledger = messages
+            .iter()
+            .map(UnifiedMessage::text_content)
+            .find(|t| t.contains("[Files touched, preserved across context compaction]"))
+            .expect("the drain must hand the file ledger forward");
+        assert!(ledger.contains("M src/store.rs"), "got:\n{ledger}");
+        assert!(ledger.contains("R src/types.rs"), "got:\n{ledger}");
+    }
+
+    #[tokio::test]
+    async fn the_zero_cost_reuse_path_carries_what_every_other_drain_carries() {
+        // The session-memory reuse path is the FIFTH drain site. It re-attached
+        // the user's verbatim turns and then dropped everything else the other
+        // four hand forward — so the one path that costs nothing was the one path
+        // where the model lost its own checklist and its file ledger.
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+        let raw = RawMemory::new(
+            "Earlier turns: scaffolded the importer.".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-x")
+        .with_session("sess-reuse")
+        .with_path("aleph://session/sess-reuse/d0/0");
+        backend.insert_raw_memory(&raw).await.unwrap();
+
+        let provider = Arc::new(MockProvider::new("unused"));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default())
+            .with_summary_reuse(backend, "agent-x");
+
+        let mut messages = vec![
+            UnifiedMessage::user("ORIGINAL TASK: build the importer"),
+            tool_call_msg(
+                "c0",
+                "scratchpad",
+                serde_json::json!({"action": "set_plan"}),
+            ),
+            unfinished_plan_result("c0"),
+            tool_call_msg(
+                "c1",
+                "file_edit",
+                serde_json::json!({"file_path": "src/store.rs"}),
+            ),
+            UnifiedMessage::tool_result("c1", "file_edit", "1 edit applied", false),
+        ];
+        for i in 0..7 {
+            messages.push(UnifiedMessage::assistant(format!("PREFIX_{i}")));
+        }
+        for i in 0..6 {
+            messages.push(UnifiedMessage::user(format!("TAIL_{i}")));
+        }
+
+        let result = compactor
+            .compact(&mut messages, 6, 0, Some("sess-reuse"))
+            .await
+            .unwrap();
+        assert_eq!(result.strategy_used, CompactStrategy::SessionMemoryReuse);
+
+        let rendered: Vec<String> = messages.iter().map(UnifiedMessage::text_content).collect();
+        let user_turn = rendered
+            .iter()
+            .position(|t| t.contains("ORIGINAL TASK"))
+            .expect("the user's own turn is re-attached");
+        let summary = rendered
+            .iter()
+            .position(|t| t.starts_with("[Context Summary (from session memory)]"))
+            .expect("the reuse summary is inserted");
+        let plan = rendered
+            .iter()
+            .position(|t| t.contains("[Execution list preserved across context compaction]"))
+            .expect("the execution list must ride the zero-cost path too");
+        let files = rendered
+            .iter()
+            .position(|t| t.contains("[Files touched, preserved across context compaction]"))
+            .expect("the file ledger must ride the zero-cost path too");
+
+        assert!(
+            user_turn < summary && summary < plan && plan < files,
+            "order must match every other drain: user turns, summary, then carriers \
+             (got user={user_turn} summary={summary} plan={plan} files={files})"
+        );
     }
 
     #[test]
@@ -2240,7 +2615,7 @@ mod tests {
         )); // index 8
         messages.push(UnifiedMessage::user("end")); // index 9
 
-        compactor.compact(&mut messages, 2, None).await.unwrap();
+        compactor.compact(&mut messages, 2, 0, None).await.unwrap();
 
         // Whatever the boundary, no ToolResult may exist without its ToolCall.
         let call_ids: std::collections::HashSet<String> = messages

@@ -341,6 +341,11 @@
 - **任何按 HashMap 迭代序进 prompt 的集合都是缓存炸弹**；**任何"重建整个配置结构体"的 RPC 都会静默吃掉 DTO 表达不了的字段** → §2.18
 - **`CacheMonitor` 的判据必须是读主导（`reads >= writes`）** —— "任何非零 read 就清零 streak"在实际布局下永远攒不到告警 → §2.18
 - **提示词散文里点名的工具，是那个工具名的第二份拷贝，而且是模型真正照做的那一份** —— 它没有编译器也没有调用点，所以工具改名 / 从来就没有过这个名字，两种都不会红：`agent_catalog` 的引导句让**每一个** Full 模式提示词去调 `delegate`（那是 `groups.rs` 的一个工具**分类 id**，真名 `subagent`），住在 Stable 块里，代价是模型每次照做都换来一次 tool-not-found。守卫要**解析句中每一个反引号名字逐个对真工具表求解**，不是断言"句子里含 subagent"——后者是列举法，加第二个工具引用当天就失明 → §4.11 round-12
+- **一个"最后 N 条"的保护尾，只有在它数的东西和被保护的东西是同一类时才成立** —— `fresh_tail` 数的是**持久化的回合**，而 compactor 与地板作用的那个向量尾部还挂着最多 5 条**从不落盘**的合成消息（≤4 条 `<system-reminder>` nudge + recall 串）。共用一个预算 ⇒ 6 条的配置在提示全点火时只护住 **1 条**真实消息，而提示恰恰只在长的、失败密集的 run 里点火——也就是压缩真正跑起来的那种 run。**三件事同时坏，方向各不相同**：模型丢掉上一轮刚读过的原文；`latest_user_task` 扫到的尾几乎全是脚手架 ⇒ `<conversation_focus>` **整个消失**（§2.19 修的是「锚到了脚手架」，这是同一个洞的另一半）；`cut_end` 随本轮点火几条提示而抖动 ⇒ 指纹缓存的 `c.end <= cut_end` 在那些轮失配、条目被清、重付一次摘要并用新措辞把 provider 前缀重键——**正是这个缓存存在的理由**。判据三句：① 数之前先问**这个计数里混进了别的类吗**（两类就该是两个数，且是 `+` 不是 `max`）；② 同一课 §2.18 已经在 `PreflightPipeline` 上过一遍，**第二层没被通知**是这一族的常态形状——修一处时 grep 还有谁在用同一个数；③ 传下去的方式要是**必填参数**而不是默认值，编译错误强于登记表 → §2.20 ①
+- **手算"我插入了几条"，会在插入条数变成条件性的那天错，而错法是静默丢一条消息** —— `splice_preserved` 插的是 `[用户原话…, 摘要, 载体…]`，载体（执行清单 / 文件台账）**只在窗口里有东西时才出现**；调用方自己写的 `preserved.len() + 1` 因此少 1。下游用它算 gap 坐标 ⇒ 合并窗口少收**最新那条** gap 消息，而 `store_cache` 记的覆盖**包含**它 ⇒ 下一轮缓存命中、整段被摘要替换，**那条消息从此不在上下文里、也从未进过任何摘要**。判据：**只有做插入的那个函数知道它插了几条，就让它返回**——调用方侧的算术是同一个问题的第二个答案，而第二个答案迟早是错的 → §2.20 ②
+- **`User` 角色不等于"用户说的"** —— 摘要、执行清单载体、以及 `orphan_tool_result_note` 把孤儿 tool_result 降级成的纯文本（正文就是一整条工具结果）全都骑在这个角色上。逐字保真只跳过摘要 ⇒ 后两者被当成用户原话整条回贴，最贵的一条能吃掉 20k 用户预算，吃的正是摘要此刻在替换的那段。判据：**"这段字是谁写的"要有单一源**（`nudges::is_synthetic_reminder`），且**刻意不能按 fence 一刀切**——`user_interjection_note` 用同一道 fence 包真实用户 steering → §2.20 ③
+- **"每个 drain site 都会做 X"这句话，要数一遍 drain site 有几个** —— `splice_preserved` 覆盖四个，SessionMemoryReuse 是**第五个**（它自己 drain、自己 insert），于是**唯一不花钱的那条压缩路径，正是模型丢掉自己执行清单的那条**。同族于「收敛写者时要数一遍写者」，只是这次漏的那个是因为它**没有走那个共用函数**——grep 共用函数的调用点找不到它 → §2.20 ④
+- **不写进摘要正文的东西，才在摘要器失败时还在** —— 确定性事实（用户原话 / 执行清单 / 文件读写台账）做成**载体消息**而不是拼进摘要字符串：pi 把 `<read-files>`/`<modified-files>` 附在摘要文本里，一次摘要器失败就一起丢。配套两条：**失败的调用不是事实**（写失败没改文件、读失败没拿到字节，谎报会让模型据以行动），**载体必须有界**（它在预算算完之后才被插进去，即窗口已经超预算的那一刻）→ §2.20 ⑤
 - **环境信封只有一个事实源 `RuntimeContext`** —— prompt layer 不许自己读 `std::env`；per-run 字节进可缓存前缀 = 整段会话缓存作废 → §2.3
 - **往 `<tag>` 里插用户/模型正文前先 `xml_util::escape_xml`**；**外层转义 ≠ 内层格式安全**（行式块里 `\n` 原样穿过，能伪造权威行）→ §2.3 §4.12
 - **「这条尾部消息是不是脚手架」在仓里被三层各自回答过**（provider 缓存断点 / harness 条数 / context 摘要锚）—— 单一源必须落在**产地**：`thinker/nudges.rs::is_synthetic_reminder` / `providers/moa/prompts.rs::carries_advisory_guidance`；防漂移守卫必须断言在**源码**上。⚠️ 一刀切按 fence 是错的——`user_interjection_note` 用同一道 fence 包**真实**用户 steering 消息 → §2.19
@@ -558,7 +563,7 @@
 | 你要动的目录 | 先读 |
 |---|---|
 | `src/harness/` | [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) · `src/harness/CLAUDE.md` · FEATURE_LOCATOR §3.1 |
-| `src/thinker/` `src/context/` | 判据清单 §1 · FEATURE_LOCATOR §2.3 §2.18 §2.19 |
+| `src/thinker/` `src/context/` | 判据清单 §1 · FEATURE_LOCATOR §2.1 §2.3 §2.18 §2.19 §2.20 |
 | `src/tool_output/` | 判据清单 §2 · FEATURE_LOCATOR §2.7 §3.14 |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · §3.2–§3.14 |
 | `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §5.6 §5.18 §6.9 · **改 `interfaces/<channel>/` 或通道接线前跑 `qa/channels/run.sh`**（16 条断言：三个通道真被构造 · msteams 对照组 · feishu `start()` 对 mock Lark 真拨号 · webhook 事件→agent 回合→回复打回 `im/v1/messages`） |

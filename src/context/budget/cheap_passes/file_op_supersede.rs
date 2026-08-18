@@ -45,11 +45,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
-use serde_json::Value;
 
 use crate::context::budget::preflight::PreflightStage;
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::budget::ContextPressure;
+use crate::context::file_ops::{self, FileOp};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 
 /// Default fill-ratio gate (60%) below which the stage is a no-op — the
@@ -64,80 +64,31 @@ const DEFAULT_MIN_PRESSURE_RATIO: f64 = 0.60;
 /// Sensible production defaults via [`FileOpSupersedeStage::default`]; tune
 /// the pressure gate via [`FileOpSupersedeStage::with_min_pressure_ratio`].
 pub struct FileOpSupersedeStage {
-    /// Tool names treated as "read" file ops (input: path → output: bytes).
-    /// Default covers Aleph (`file_read`) plus upstream / MCP-bridged
-    /// aliases (`Read`, `read_file`) so cross-system conversations pair.
-    pub read_tools: Vec<String>,
-    /// Tool names treated as "write" file ops (overwrite at path).
-    pub write_tools: Vec<String>,
-    /// Tool names treated as "edit" file ops. Edits behave like writes for
-    /// supersession — a later edit replaces earlier reads / writes / edits
-    /// on the same canonical path.
-    pub edit_tools: Vec<String>,
     /// Minimum context fill ratio (`pressure.ratio`) before the stage fires.
     /// Below this the stage returns 0 without touching messages.
     pub min_pressure_ratio: f64,
-    /// Minimum number of ops on the same path required to consider it for
-    /// supersession. Default 2 (one obsolete + one current).
-    pub min_ops_per_path: usize,
 }
 
 impl Default for FileOpSupersedeStage {
     fn default() -> Self {
         Self {
-            read_tools: vec![
-                "file_read".to_string(),
-                "Read".to_string(),
-                "read_file".to_string(),
-            ],
-            write_tools: vec![
-                "file_write".to_string(),
-                "Write".to_string(),
-                "write_file".to_string(),
-            ],
-            edit_tools: vec![
-                "file_edit".to_string(),
-                "apply_patch".to_string(),
-                "Edit".to_string(),
-                "edit_file".to_string(),
-            ],
             min_pressure_ratio: DEFAULT_MIN_PRESSURE_RATIO,
-            min_ops_per_path: 2,
         }
     }
 }
 
-/// Classification of a file op for supersession ordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FileOpKind {
-    Read,
-    Write,
-    Edit,
-}
-
-impl FileOpKind {
-    /// True when this op kind invalidates earlier reads / writes / edits on
-    /// the same path. Both `Write` and `Edit` are state-mutating from the
-    /// LLM's perspective.
-    const fn is_mutating(self) -> bool {
-        matches!(self, Self::Write | Self::Edit)
-    }
-}
-
-/// One file op pinned to a specific `(msg_index, call_id)` coordinate.
-#[derive(Debug)]
-struct FileOpRef {
-    msg_index: usize,
-    call_id: String,
-    kind: FileOpKind,
-    /// Tool name from the `ToolCall` block — a superseder's name is quoted
-    /// in the stub written over the results it invalidates.
-    tool_name: String,
-}
+/// Minimum number of ops on the same path required to consider it for
+/// supersession (one obsolete + one current).
+///
+/// A `pub` field until the compaction file ledger arrived and made the tool
+/// tables a shared concern: nothing outside this file had ever written it, or
+/// the three tool-name `Vec`s beside it, so all four were withdrawn (R10). The
+/// tables now live in [`crate::context::file_ops`], where the ledger reads the
+/// same ones — a second copy is exactly the drift this consolidation prevents.
+const MIN_OPS_PER_PATH: usize = 2;
 
 impl FileOpSupersedeStage {
-    /// Override just the pressure gate, keeping the default tool-name allowlist
-    /// and `min_ops_per_path`. Production wires this from
+    /// Override just the pressure gate. Production wires this from
     /// [`ContextBudgetConfig::preventive_floor`](crate::context::budget::ContextBudgetConfig::preventive_floor)
     /// so all three cheap passes share one config-derived band instead of this
     /// stage carrying its own hardcoded ratio.
@@ -147,54 +98,17 @@ impl FileOpSupersedeStage {
         self
     }
 
-    /// Classify a tool name against the configured allowlist. Returns
-    /// `None` for tools outside the file-op universe (the algorithm only
-    /// reasons about file paths).
-    fn classify(&self, tool_name: &str) -> Option<FileOpKind> {
-        if self.read_tools.iter().any(|n| n == tool_name) {
-            Some(FileOpKind::Read)
-        } else if self.write_tools.iter().any(|n| n == tool_name) {
-            Some(FileOpKind::Write)
-        } else if self.edit_tools.iter().any(|n| n == tool_name) {
-            Some(FileOpKind::Edit)
-        } else {
-            None
-        }
-    }
-
-    /// Walk the message vector and build a `path → ops` index. Only
-    /// assistant `ToolCall` blocks contribute; tool results are paired
-    /// later via `tool_call_id`. The `Vec` for each path is in ascending
-    /// message order because we iterate `messages` linearly.
-    fn index_file_ops(&self, messages: &[UnifiedMessage]) -> BTreeMap<String, Vec<FileOpRef>> {
-        let mut by_path: BTreeMap<String, Vec<FileOpRef>> = BTreeMap::new();
-        for (idx, msg) in messages.iter().enumerate() {
-            let UnifiedMessage::Assistant { content } = msg else {
-                continue;
-            };
-            for block in content {
-                let ContentBlock::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                    ..
-                } = block
-                else {
-                    continue;
-                };
-                let Some(kind) = self.classify(name) else {
-                    continue;
-                };
-                let Some(path) = canonical_path(arguments) else {
-                    continue;
-                };
-                by_path.entry(path).or_default().push(FileOpRef {
-                    msg_index: idx,
-                    call_id: id.clone(),
-                    kind,
-                    tool_name: name.clone(),
-                });
-            }
+    /// Group the window's file ops by canonical path, ascending message order
+    /// within each path.
+    ///
+    /// The scan itself is [`file_ops::index_file_ops`] — shared with the
+    /// compaction file ledger so "which calls are file ops, and what path do
+    /// they name" has exactly one answer in the repo. Only the grouping is
+    /// local, because only supersession needs it.
+    fn ops_by_path(messages: &[UnifiedMessage]) -> BTreeMap<String, Vec<FileOp>> {
+        let mut by_path: BTreeMap<String, Vec<FileOp>> = BTreeMap::new();
+        for op in file_ops::index_file_ops(messages) {
+            by_path.entry(op.path.clone()).or_default().push(op);
         }
         by_path
     }
@@ -215,14 +129,13 @@ impl FileOpSupersedeStage {
     /// 4. Obsolete entries inside `fresh_tail_start..` are dropped — the
     ///    fresh tail is sacred.
     fn obsolete_call_ids(
-        &self,
-        by_path: &BTreeMap<String, Vec<FileOpRef>>,
+        by_path: &BTreeMap<String, Vec<FileOp>>,
         successful: &BTreeSet<String>,
         fresh_tail_start: usize,
     ) -> BTreeMap<String, String> {
         let mut obsolete: BTreeMap<String, String> = BTreeMap::new();
         for ops in by_path.values() {
-            if ops.len() < self.min_ops_per_path {
+            if ops.len() < MIN_OPS_PER_PATH {
                 continue;
             }
             let Some(last_mut) = ops
@@ -246,24 +159,6 @@ impl FileOpSupersedeStage {
     }
 }
 
-/// Collect the `tool_call_id`s whose `ToolResult` arrived with
-/// `is_error == false`. A mutating call whose result is missing or failed
-/// never changed the file, so only ids in this set may supersede prior ops.
-fn successful_result_ids(messages: &[UnifiedMessage]) -> BTreeSet<String> {
-    let mut ok: BTreeSet<String> = BTreeSet::new();
-    for msg in messages {
-        if let UnifiedMessage::ToolResult {
-            tool_call_id,
-            is_error: false,
-            ..
-        } = msg
-        {
-            ok.insert(tool_call_id.clone());
-        }
-    }
-    ok
-}
-
 #[async_trait]
 impl PreflightStage for FileOpSupersedeStage {
     fn name(&self) -> &'static str {
@@ -279,10 +174,10 @@ impl PreflightStage for FileOpSupersedeStage {
         if pressure.ratio < self.min_pressure_ratio {
             return 0;
         }
-        let by_path = self.index_file_ops(messages);
+        let by_path = Self::ops_by_path(messages);
         let fresh_tail_start = messages.len().saturating_sub(fresh_tail_count);
-        let successful = successful_result_ids(messages);
-        let obsolete = self.obsolete_call_ids(&by_path, &successful, fresh_tail_start);
+        let successful = file_ops::successful_result_ids(messages);
+        let obsolete = Self::obsolete_call_ids(&by_path, &successful, fresh_tail_start);
         if obsolete.is_empty() {
             return 0;
         }
@@ -382,30 +277,6 @@ fn joined_text(blocks: &[ContentBlock]) -> String {
 }
 
 /// Extract the canonical file path from a `ToolCall.arguments` value.
-/// Tries `path` first (matches `file_read`), then `file_path` (matches
-/// `file_write` / `file_edit`). Returns `None` for inputs that don't
-/// resolve to a string — those calls are excluded from the supersession
-/// graph rather than guessed at.
-fn canonical_path(args: &Value) -> Option<String> {
-    let raw = args
-        .get("path")
-        .and_then(Value::as_str)
-        .or_else(|| args.get("file_path").and_then(Value::as_str))?;
-    Some(canonicalize_path_string(raw))
-}
-
-/// Reduce `./` prefixes and trim whitespace so two callers addressing the
-/// same logical path produce the same key. Full filesystem
-/// `canonicalize()` is intentionally avoided — we are running against the
-/// message log, not the live FS, and the file may have been renamed since.
-fn canonicalize_path_string(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if let Some(rest) = trimmed.strip_prefix("./") {
-        return rest.to_string();
-    }
-    trimmed.to_string()
-}
-
 /// Stub text written into superseded `ToolResult` bodies. The message
 /// names the SUPERSEDING tool so the LLM, on rare replays, can see *which
 /// later operation* made these bytes stale instead of treating the empty
@@ -828,16 +699,16 @@ mod tests {
     #[test]
     fn canonical_path_strips_dot_slash_prefix() {
         assert_eq!(
-            canonical_path(&json!({ "path": "./relative.txt" })).as_deref(),
+            file_ops::canonical_path(&json!({ "path": "./relative.txt" })).as_deref(),
             Some("relative.txt"),
         );
     }
 
     #[test]
     fn canonical_path_returns_none_for_non_string_path() {
-        assert_eq!(canonical_path(&json!({})), None);
-        assert_eq!(canonical_path(&json!({ "path": 42 })), None);
-        assert_eq!(canonical_path(&json!({ "other": "x" })), None);
+        assert_eq!(file_ops::canonical_path(&json!({})), None);
+        assert_eq!(file_ops::canonical_path(&json!({ "path": 42 })), None);
+        assert_eq!(file_ops::canonical_path(&json!({ "other": "x" })), None);
     }
 
     /// Integration: exercise `FileOpSupersedeStage` inside a real
