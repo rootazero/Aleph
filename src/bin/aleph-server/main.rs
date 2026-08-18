@@ -229,16 +229,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// future alone measures ~350 KB — and an unoptimized build allocates a
 /// full-size stack temporary for every nested future it constructs, with none
 /// of the slot reuse LLVM applies at `opt-level > 0`. Measured on the minimal
-/// `chat.send` path (2026-07-27): a debug build overflows at both the 2 MB
-/// platform default and at 4 MB, and clears at 8 MB; a release build fits in
-/// the default. Real runs go deeper than that measurement (tool execution,
-/// larger contexts, sub-agents), so the floor below is the value the manual
-/// `RUST_MIN_STACK=33554432` workaround had already proven in daily use.
+/// `chat.send` path: a debug build overflowed the 2 MB platform default and
+/// 4 MB on 2026-07-27, then overflowed the 32 MB floor itself on 2026-08-09
+/// (multi-user round-3 QA — that session ran entirely under
+/// `RUST_MIN_STACK=268435456`, the value now used as the debug floor); a
+/// release build fits in the platform default. Real runs go deeper than that
+/// measurement (tool execution, larger contexts, sub-agents), so each floor
+/// is a multiple of its build's proven-insufficient mark.
 ///
-/// Applied unconditionally rather than under `debug_assertions`: thread stacks
-/// are reserved address space, committed lazily page by page, so an untouched
-/// 32 MB reservation costs a release build nothing while giving it the same
-/// headroom against a future layer being added to the chain.
+/// The floors differ by profile rather than one value covering both: the old
+/// "unconditional" argument was written when 32 MB served a release build at
+/// zero cost, but reserving 256 MB for a build that fits in 2 MB buys
+/// nothing — thread stacks are reserved address space committed lazily, so
+/// the debug-only raise costs a release build literally nothing either way.
 ///
 /// One setting covers both thread kinds — tokio launches multi-thread workers
 /// through the blocking pool's spawner, which is where `thread_stack_size` is
@@ -248,6 +251,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// overrides std's default outright, so taking the max keeps that escape hatch
 /// from silently becoming a downgrade.
 fn worker_stack_size() -> usize {
+    #[cfg(debug_assertions)]
+    const FLOOR: usize = 256 * 1024 * 1024;
+    #[cfg(not(debug_assertions))]
     const FLOOR: usize = 32 * 1024 * 1024;
     std::env::var("RUST_MIN_STACK")
         .ok()
