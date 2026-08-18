@@ -307,14 +307,14 @@ impl AlephTool for A2AAgentsTool {
                 // `upsert` (not the `AgentResolver::register` trait method) so
                 // the auth token is preserved — outbound calls need it.
                 registry
-                    .upsert(RegisteredAgent {
-                        card: card.clone(),
-                        trust_level: trust,
-                        base_url: url.clone(),
-                        last_seen: chrono::Utc::now(),
-                        health: AgentHealth::Healthy,
-                        auth_token: args.token.clone(),
-                    })
+                    .upsert(RegisteredAgent::new(
+                        card.clone(),
+                        trust,
+                        url.clone(),
+                        chrono::Utc::now(),
+                        AgentHealth::Healthy,
+                        args.token.clone(),
+                    ))
                     .await;
 
                 let agents = list_summaries(registry).await?;
@@ -397,27 +397,28 @@ mod tests {
 
     /// A minimal `RegisteredAgent` for seeding the test registry.
     fn sample_registered(id: &str, name: &str, url: &str) -> RegisteredAgent {
-        RegisteredAgent {
-            card: AgentCard {
-                id: id.to_string(),
-                name: name.to_string(),
-                version: "1.0".to_string(),
-                description: None,
-                provider: None,
-                documentation_url: None,
-                interfaces: vec![],
-                skills: vec![],
-                security: vec![],
-                extensions: vec![],
-                default_input_modes: vec![],
-                default_output_modes: vec![],
-            },
-            trust_level: TrustLevel::Trusted,
-            base_url: url.to_string(),
-            last_seen: chrono::Utc::now(),
-            health: AgentHealth::Healthy,
-            auth_token: None,
-        }
+        let card = AgentCard {
+            id: id.to_string(),
+            name: name.to_string(),
+            version: "1.0".to_string(),
+            description: None,
+            provider: None,
+            documentation_url: None,
+            interfaces: vec![],
+            skills: vec![],
+            security: vec![],
+            extensions: vec![],
+            default_input_modes: vec![],
+            default_output_modes: vec![],
+        };
+        RegisteredAgent::new(
+            card,
+            TrustLevel::Trusted,
+            url.to_string(),
+            chrono::Utc::now(),
+            AgentHealth::Healthy,
+            None,
+        )
     }
 
     #[test]
