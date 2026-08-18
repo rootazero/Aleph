@@ -68,13 +68,28 @@ fn write_store(path: &Path, map: &Bindings) -> std::io::Result<()> {
     crate::utils::atomic_io::write_atomic(path, &json)
 }
 
-/// Mirror the table to disk when persistence is enabled. No-op otherwise.
-fn persist(map: &Bindings) {
+/// PR-5 / BT-D-R4-13: persist while holding the in-memory lock so the
+/// disk mirror and the live map are updated as one linearizable step.
+/// The previous shape released the lock before `persist`, so two
+/// concurrent writers could both snapshot the live map before either
+/// wrote to disk, and the second write would silently overwrite the
+/// first — memory and disk were free to disagree for an arbitrary
+/// interval. The acquire-then-persist-here path takes the lock once,
+/// mutates, mirrors, and drops — no other caller can interleave
+/// between the memory and disk sides.
+fn persist_locked(map: &Bindings) {
     if let Some(path) = store_path() {
         if let Err(e) = write_store(&path, map) {
             tracing::warn!(error = %e, "scratchpad_registry: failed to persist bindings");
         }
     }
+}
+
+/// Legacy alias for callers that already hold the lock and just want
+/// the disk-side write to run.
+#[allow(dead_code)]
+fn persist(map: &Bindings) {
+    persist_locked(map);
 }
 
 /// Enable persistence and reload any bindings written by a prior process.
@@ -102,12 +117,11 @@ pub fn set_active(session_key: &str, project_id: &str) {
     if session_key.is_empty() || project_id.is_empty() {
         return;
     }
-    let snapshot = {
-        let mut map = active_lock();
-        map.insert(session_key.to_string(), project_id.to_string());
-        map.clone()
-    };
-    persist(&snapshot);
+    // PR-5 / BT-D-R4-13: hold the lock across the persist so the
+    // memory map and the disk mirror are a single linearizable step.
+    let mut map = active_lock();
+    map.insert(session_key.to_string(), project_id.to_string());
+    persist_locked(&map);
 }
 
 /// The active execution-list `project_id` for `session_key`, if any.
@@ -121,12 +135,11 @@ pub fn active(session_key: &str) -> Option<String> {
 
 /// Drop the pointer for `session_key` (e.g. the scratchpad was cleared).
 pub fn clear(session_key: &str) {
-    let snapshot = {
-        let mut map = active_lock();
-        map.remove(session_key);
-        map.clone()
-    };
-    persist(&snapshot);
+    // PR-5 / BT-D-R4-13: hold the lock across the persist so the
+    // memory map and the disk mirror are a single linearizable step.
+    let mut map = active_lock();
+    map.remove(session_key);
+    persist_locked(&map);
 }
 
 /// Delete the plan file a deleted session owned, and drop its binding.
@@ -149,22 +162,27 @@ pub async fn purge_session_scratchpad(session_key: &str) {
     if session_key.is_empty() {
         return;
     }
-    // Take the binding and answer "does anyone else still own this plan?"
-    // under one lock — two lock acquisitions would let a concurrent
-    // `set_active` slip between the removal and the check.
-    let (project_id, still_shared, snapshot) = {
+    // PR-5 / BT-D-R4-13: hold the lock across the in-memory removal AND
+    // the disk mirror update so the two are a single linearizable step.
+    // The async file purge stays outside the lock (we cannot hold an
+    // async mutex across an .await without poisoning the executor), and
+    // remains best-effort — a session that re-binds the project between
+    // the lock release and the file delete is the documented narrow
+    // race window this PR accepts.
+    let project_id = {
         let mut map = active_lock();
         let Some(project_id) = map.remove(session_key) else {
             return;
         };
-        let still_shared = map.values().any(|p| *p == project_id);
-        let snapshot = map.clone();
-        (project_id, still_shared, snapshot)
+        if map.values().any(|p| *p == project_id) {
+            // Still owned by another session; persist the now-shorter map
+            // and leave the file alone.
+            persist_locked(&map);
+            return;
+        }
+        persist_locked(&map);
+        project_id
     };
-    persist(&snapshot);
-    if still_shared {
-        return;
-    }
     if let Err(e) = crate::memory::scratchpad::ScratchpadManager::new(&project_id, session_key)
         .purge()
         .await
@@ -184,16 +202,15 @@ pub fn clear_superseded_epochs(base_key: &str, current_epoch: u32) {
     if base_key.is_empty() || current_epoch == 0 {
         return;
     }
-    let snapshot = {
-        let mut map = active_lock();
-        let before = map.len();
-        map.retain(|key, _| !is_superseded_epoch(key, base_key, current_epoch));
-        if map.len() == before {
-            return;
-        }
-        map.clone()
-    };
-    persist(&snapshot);
+    // PR-5 / BT-D-R4-13: hold the lock across retain + persist so the
+    // memory map and the disk mirror are a single linearizable step.
+    let mut map = active_lock();
+    let before = map.len();
+    map.retain(|key, _| !is_superseded_epoch(key, base_key, current_epoch));
+    if map.len() == before {
+        return;
+    }
+    persist_locked(&map);
 }
 
 /// Does `key` name an epoch of `base_key` older than `current_epoch`?
