@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::media::detect::{detect_by_extension, detect_from_path};
@@ -106,8 +105,25 @@ Examples:
         // 1. Build MediaInput from args
         let (input, media_type) = match (&args.file_path, &args.url, &args.base64_data) {
             (Some(path), None, None) => {
-                let path = PathBuf::from(path);
-                let mt = match detect_from_path(&path).await {
+                // BT-C-R4-08: previously the file_path branch took the
+                // model-supplied path as-is and read it directly. An
+                // LLM-supplied `/etc/shadow`, `~/.ssh/id_rsa`, or
+                // `<workspace>/.git/HEAD` (no denylist gate) would be
+                // opened and its bytes forwarded to the media provider.
+                // Use the same file_ops canonicalize-and-resolve path the
+                // `file_read` tool uses: denied paths, FsScope-anchored,
+                // and the same deny-read-globs that govern file reads.
+                let resolved = crate::builtin_tools::file_ops::check_and_resolve_path(
+                    std::path::Path::new(path),
+                    &crate::builtin_tools::file_ops::get_denied_paths(),
+                    None,
+                )
+                .map_err(|e| {
+                    crate::error::AlephError::tool(format!(
+                        "media_understand `file_path` rejected by path guard: {e}"
+                    ))
+                })?;
+                let mt = match detect_from_path(&resolved).await {
                     Ok(mt) => mt,
                     Err(e) => {
                         return Ok(MediaUnderstandOutput::err(format!(
@@ -115,7 +131,7 @@ Examples:
                         )))
                     }
                 };
-                (MediaInput::FilePath { path }, mt)
+                (MediaInput::FilePath { path: resolved }, mt)
             }
             (None, Some(url), None) => {
                 // BT-C-R4-02: validate the URL against the SSRF policy
