@@ -978,7 +978,6 @@ static FEISHU_FIELDS: &[FieldDef] = &[
 // Static channel registry
 // ---------------------------------------------------------------------------
 
-/// All supported messaging channel definitions, ordered for the overview grid.
 // LINE, WeChat and QQ were configurable from the server's side long before
 // they had a card here — `[channels.line]` came up fine, the settings screen
 // simply had no entry for it. That asymmetry is why
@@ -1299,6 +1298,7 @@ static QQ_FIELDS: &[FieldDef] = &[
     },
 ];
 
+/// All supported messaging channel definitions, ordered for the overview grid.
 pub static ALL_CHANNELS: &[ChannelDefinition] = &[
     // Telegram
     ChannelDefinition {

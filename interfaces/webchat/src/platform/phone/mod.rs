@@ -25,32 +25,7 @@ pub mod teams;
 #[cfg(test)]
 mod i18n_census {
     use crate::disposed_reads::{rust_sources, src_dir};
-
-    /// A character that only appears in this codebase inside Chinese copy.
-    ///
-    /// Han ideographs plus the two punctuation blocks that travel with them
-    /// (`。，、（）` and the fullwidth forms). `…` is deliberately absent — it is
-    /// used in English strings here too, so flagging it would train the next
-    /// author to weaken the rule rather than obey it.
-    fn is_chinese(c: char) -> bool {
-        matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3000}'..='\u{303F}' | '\u{FF01}'..='\u{FF60}')
-    }
-
-    /// Production half of a source file: everything before its test module,
-    /// minus whole-line comments.
-    ///
-    /// `\r` is stripped first. A `"\n#[cfg(test)]"` split matches nothing on a
-    /// CRLF checkout, which silently turns "production prefix" into "the whole
-    /// file" — the scanner then reads its own fixtures and reports them.
-    fn production_lines(src: &str) -> Vec<(usize, String)> {
-        let src = src.replace('\r', "");
-        let head = src.split("#[cfg(test)]").next().unwrap_or(&src).to_string();
-        head.lines()
-            .enumerate()
-            .map(|(i, l)| (i + 1, l.to_string()))
-            .filter(|(_, l)| !l.trim_start().starts_with("//"))
-            .collect()
-    }
+    use crate::i18n_census::offending_lines;
 
     /// Every crate module a phone module names in a `use crate::…` line,
     /// resolved one hop at module granularity.
@@ -133,9 +108,12 @@ mod i18n_census {
     /// `t!` / `t_string!`, which `leptos_i18n` checks at compile time — a
     /// missing key is a build error, not a silent fallback.
     ///
-    /// ⚠️ Still **not** a crate-wide rule: 224 such literals remain across
-    /// `platform/wide/` and `components/` as of 2026-08-18. They are a
-    /// separate round, not an exemption held open here.
+    /// ⚠️ Still **not** a crate-wide rule — but the complement is no longer
+    /// unmeasured. The copy outside this walk's reach (126 lines across
+    /// `platform/wide/` and `components/` as of 2026-08-18) is held by
+    /// [`crate::i18n_census`]'s ratchet, which shares this guard's detector so
+    /// the two cannot drift apart on what "Chinese copy" means. Zero here,
+    /// only-shrinking there.
     #[test]
     fn no_module_a_phone_screen_reaches_hardcodes_chinese_copy() {
         let root = src_dir().join("platform").join("phone");
@@ -163,14 +141,9 @@ mod i18n_census {
             let Ok(src) = std::fs::read_to_string(path) else {
                 continue;
             };
-            for (line, text) in production_lines(&src) {
-                // A `"` narrows this to literals; Chinese in a trailing comment
-                // is a different rule (CLAUDE.md: comments are English) and not
-                // this guard's business.
-                if text.contains('"') && text.chars().any(is_chinese) {
-                    let rel = path.strip_prefix(src_dir()).unwrap_or(path);
-                    offenders.push(format!("{}:{line}", rel.display()));
-                }
+            for line in offending_lines(&src) {
+                let rel = path.strip_prefix(src_dir()).unwrap_or(path);
+                offenders.push(format!("{}:{line}", rel.display()));
             }
         }
         assert!(
@@ -178,38 +151,6 @@ mod i18n_census {
             "hard-coded Chinese copy on a phone screen's reachable path — move it \
              to locales/{{zh,en}}.json and read it with t!/t_string!:\n  {}",
             offenders.join("\n  "),
-        );
-    }
-
-    /// The detector itself, on input the tree no longer contains.
-    ///
-    /// Without this, `no_module_a_phone_screen_reaches_hardcodes_chinese_copy` goes green the
-    /// day `is_chinese` or `production_lines` stops matching anything, and a
-    /// scanner that sees nothing is indistinguishable from a clean tree.
-    #[test]
-    fn the_detector_still_recognises_what_it_removed() {
-        let sample = "let a = \"保存中…\";\n// 这行是注释\nlet b = \"Save\";\n";
-        let hits: Vec<usize> = production_lines(sample)
-            .into_iter()
-            .filter(|(_, t)| t.contains('"') && t.chars().any(is_chinese))
-            .map(|(n, _)| n)
-            .collect();
-        assert_eq!(
-            hits,
-            vec![1],
-            "detector missed the literal or ate the comment"
-        );
-    }
-
-    /// CRLF does not turn the production prefix into the whole file.
-    #[test]
-    fn the_test_module_is_cut_off_on_a_crlf_checkout() {
-        let sample = "let a = \"ok\";\r\n#[cfg(test)]\r\nmod t { const X: &str = \"保存\"; }\r\n";
-        assert!(
-            !production_lines(sample)
-                .iter()
-                .any(|(_, t)| t.chars().any(is_chinese)),
-            "the #[cfg(test)] cut missed on CRLF, so the scanner reads test fixtures",
         );
     }
 }

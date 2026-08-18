@@ -972,7 +972,7 @@ fn ProviderDetailPanel(
                                                         class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                                                     />
                                                     <p class="mt-1 text-xs text-text-tertiary">
-                                                        "逗号分隔的上游引擎，把搜索钉在抗限流引擎上（如 bing,baidu），避免某引擎被限流/被墙导致空结果。Comma-separated upstream engines to pin."
+                                                        {t!(i18n, settings.search.engines_hint)}
                                                     </p>
                                                 </div>
                                             }.into_any()
@@ -1650,10 +1650,10 @@ fn FetchProvidersSection() -> impl IntoView {
     view! {
         <div>
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                "Fetch 供应商"
+                {t!(i18n, settings.fetch.title)}
             </h2>
             <p class="text-xs text-text-tertiary mb-3">
-                "URL → Markdown 抓取后端，供 web_fetch 工具使用。"
+                {t!(i18n, settings.fetch.description)}
             </p>
 
             // ── Section header: master toggle + default-provider selector ─────
@@ -1666,16 +1666,16 @@ fn FetchProvidersSection() -> impl IntoView {
                         class="w-4 h-4 rounded"
                     />
                     <div>
-                        <span class="text-sm text-text-primary">"启用 Fetch 供应商"</span>
+                        <span class="text-sm text-text-primary">{t!(i18n, settings.fetch.enable)}</span>
                         <p class="text-xs text-text-tertiary">
-                            "开启后 web_fetch 优先使用所选默认供应商，失败时自动回退其它已配置供应商，再回退内置抓取"
+                            {t!(i18n, settings.fetch.enable_desc)}
                         </p>
                     </div>
                 </label>
 
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                        "默认供应商"
+                        {t!(i18n, settings.fetch.default_provider)}
                     </label>
                     <div class="space-y-2">
                         <label class="flex items-center gap-2 cursor-pointer">
@@ -1718,7 +1718,7 @@ fn FetchProvidersSection() -> impl IntoView {
                                         .then(|| {
                                             view! {
                                                 <span class="text-xs text-text-tertiary">
-                                                    "（请先在 Search 里配置 Firecrawl）"
+                                                    {t!(i18n, settings.fetch.configure_firecrawl_first_inline)}
                                                 </span>
                                             }
                                         })}
@@ -1754,7 +1754,7 @@ fn FetchProvidersSection() -> impl IntoView {
                         if verified {
                             view! {
                                 <span class="px-2 py-0.5 bg-success-subtle text-success text-xs font-medium rounded">
-                                    "✓ 已验证"
+                                    {t!(i18n, settings.fetch.verified)}
                                 </span>
                             }
                             .into_any()
@@ -1777,7 +1777,7 @@ fn FetchProvidersSection() -> impl IntoView {
                         class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                     />
                     <p class="mt-1 text-xs text-text-tertiary">
-                        "crawl4ai 实例地址，如 http://10.0.0.1:11235"
+                        {t!(i18n, settings.fetch.crawl4ai_url_hint)}
                     </p>
                 </div>
 
@@ -1789,14 +1789,16 @@ fn FetchProvidersSection() -> impl IntoView {
                     <ProviderKeyField
                         value=form_api_key
                         has_api_key=form_has_api_key.into()
-                        hint="可选 — 若 crawl4ai 实例开启了认证".to_string()
+                        hint=t_string!(i18n, settings.fetch.crawl4ai_token_hint).to_string()
                     />
                 </div>
 
                 // Timeout (seconds)
                 <div>
                     <div class="flex items-center justify-between mb-1">
-                        <label class="text-sm font-medium text-text-secondary">"超时（秒）"</label>
+                        <label class="text-sm font-medium text-text-secondary">
+                            {t!(i18n, settings.fetch.timeout_seconds)}
+                        </label>
                         <span class="text-sm text-text-primary font-mono">
                             {move || form_timeout.get()} "s"
                         </span>
@@ -1844,7 +1846,7 @@ fn FetchProvidersSection() -> impl IntoView {
                                         d="M5 13l4 4L19 7"
                                     />
                                 </svg>
-                                "保存成功"
+                                {t!(i18n, settings.fetch.saved)}
                             </div>
                         }
                     })
@@ -1904,14 +1906,26 @@ fn FetchProvidersSection() -> impl IntoView {
                         prop:disabled=move || testing.get()
                         class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium text-sm"
                     >
-                        {move || if testing.get() { "测试中…" } else { "测试连接" }}
+                        {move || {
+                            if testing.get() {
+                                t_string!(i18n, settings.search.testing).to_string()
+                            } else {
+                                t_string!(i18n, settings.search.test_connection).to_string()
+                            }
+                        }}
                     </button>
                     <button
                         on:click=on_save
                         prop:disabled=move || saving.get()
                         class="flex-1 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                     >
-                        {move || if saving.get() { "保存中…" } else { "保存" }}
+                        {move || {
+                            if saving.get() {
+                                t_string!(i18n, common.saving).to_string()
+                            } else {
+                                t_string!(i18n, common.save_short).to_string()
+                            }
+                        }}
                     </button>
                 </div>
             </div>
@@ -1940,13 +1954,13 @@ fn FetchProvidersSection() -> impl IntoView {
                                         "Firecrawl"
                                     </div>
                                     <div class="text-xs text-text-tertiary">
-                                        "复用 Search 里的 Firecrawl 配置"
+                                        {t!(i18n, settings.fetch.reuse_firecrawl)}
                                     </div>
                                 </div>
                                 {if fc_verified {
                                     view! {
                                         <span class="px-2 py-0.5 bg-success-subtle text-success text-xs font-medium rounded">
-                                            "✓ 已验证"
+                                            {t!(i18n, settings.fetch.verified)}
                                         </span>
                                     }
                                     .into_any()
@@ -1981,7 +1995,13 @@ fn FetchProvidersSection() -> impl IntoView {
                                 prop:disabled=move || fc_testing.get()
                                 class="w-full px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium text-sm"
                             >
-                                {move || if fc_testing.get() { "测试中…" } else { "测试连接" }}
+                                {move || {
+                                    if fc_testing.get() {
+                                        t_string!(i18n, settings.search.testing).to_string()
+                                    } else {
+                                        t_string!(i18n, settings.search.test_connection).to_string()
+                                    }
+                                }}
                             </button>
                         </div>
                     }
@@ -1999,7 +2019,7 @@ fn FetchProvidersSection() -> impl IntoView {
                                         "Firecrawl (shared)"
                                     </div>
                                     <div class="text-xs text-text-tertiary">
-                                        "请先在上方 Search 里配置 Firecrawl"
+                                        {t!(i18n, settings.fetch.configure_firecrawl_first)}
                                     </div>
                                 </div>
                             </div>

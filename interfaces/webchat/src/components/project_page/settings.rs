@@ -25,6 +25,7 @@ use super::ProjectsTabState;
 use crate::api::projects::{ProjectInfo, ProjectsApi};
 use crate::components::directory_browser::DirectoryBrowser;
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string, use_i18n};
 use crate::state::user_directory::UserDirectoryState;
 
 /// `Ok(())` on success (the child re-fetches via `refresh`); `Err(message)`
@@ -95,12 +96,13 @@ fn RenameSection(
     dash: DashboardState,
     on_done: OnDone,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let name = RwSignal::new(project.name.clone());
     let id = StoredValue::new(project.id.clone());
     let original = StoredValue::new(project.name.clone());
     view! {
         <section>
-            <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">"名称"</h3>
+            <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">{t!(i18n, project_room.name)}</h3>
             <Show
                 when=move || is_owner.get()
                 fallback=move || view! { <p class="text-sm text-text-primary">{project.name.clone()}</p> }
@@ -127,7 +129,7 @@ fn RenameSection(
                             });
                         }
                     >
-                        "保存"
+                        {t!(i18n, common.save_short)}
                     </button>
                 </div>
             </Show>
@@ -143,6 +145,7 @@ fn RosterSection(
     dir: UserDirectoryState,
     on_done: OnDone,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let owner_id = project.owner_user_id.clone();
     let members = StoredValue::new(project.member_ids.clone());
     let project_id = StoredValue::new(project.id.clone());
@@ -151,12 +154,12 @@ fn RosterSection(
     view! {
         <section>
             <div class="flex items-center justify-between mb-2">
-                <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider">"成员"</h3>
+                <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider">{t!(i18n, project_room.members)}</h3>
                 <Show when=move || is_owner.get()>
                     <button
                         type="button"
                         class="text-text-tertiary hover:text-text-primary text-base leading-none w-5 h-5 flex items-center justify-center rounded hover:bg-surface-sunken"
-                        title="添加成员"
+                        title=move || t_string!(i18n, project_room.add_member).to_string()
                         on:click=move |_| picking.update(|v| *v = !*v)
                     >
                         "+"
@@ -180,7 +183,12 @@ fn RosterSection(
                             .filter(|(uid, _)| !members.contains(uid))
                             .collect();
                         if list.is_empty() {
-                            view! { <p class="px-3 py-2 text-xs text-text-tertiary">"没有可添加的用户"</p> }.into_any()
+                            view! {
+                                <p class="px-3 py-2 text-xs text-text-tertiary">
+                                    {t!(i18n, project_room.no_users_to_add)}
+                                </p>
+                            }
+                                .into_any()
                         } else {
                             list.into_iter().map(|(uid, name)| {
                                 let uid = StoredValue::new(uid);
@@ -219,13 +227,13 @@ fn RosterSection(
                             <span class="text-sm text-text-primary">{display}</span>
                             <span class="flex items-center gap-2">
                                 <Show when=move || is_the_owner>
-                                    <span class="text-[10px] uppercase tracking-wide text-text-tertiary">"所有者"</span>
+                                    <span class="text-[10px] uppercase tracking-wide text-text-tertiary">{t!(i18n, project_room.owner)}</span>
                                 </Show>
                                 <Show when=move || is_owner.get() && !is_the_owner>
                                     <button
                                         type="button"
                                         class="text-text-tertiary hover:text-danger text-xs px-1"
-                                        title="移除成员"
+                                        title=move || t_string!(i18n, project_room.remove_member).to_string()
                                         on:click=move |_| {
                                             let uid = uid.get_value();
                                             let project_id = project_id.get_value();
@@ -237,7 +245,7 @@ fn RosterSection(
                                             });
                                         }
                                     >
-                                        "移除"
+                                        {t!(i18n, project_room.remove)}
                                     </button>
                                 </Show>
                             </span>
@@ -256,6 +264,7 @@ fn WorkspaceSection(
     dash: DashboardState,
     on_done: OnDone,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let id = StoredValue::new(project.id.clone());
     let current = project.workspace_path.clone();
     let has_current = current.is_some();
@@ -273,9 +282,15 @@ fn WorkspaceSection(
 
     view! {
         <section>
-            <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">"工作区绑定"</h3>
+            <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">{t!(i18n, project_room.workspace_binding)}</h3>
             <p class="text-sm text-text-primary mb-2">
-                {current.unwrap_or_else(|| "未绑定 — 房间内的对话使用 agent 默认工作区".to_string())}
+                {move || {
+                    current
+                        .clone()
+                        .unwrap_or_else(|| {
+                            t_string!(i18n, project_room.workspace_unbound).to_string()
+                        })
+                }}
             </p>
             <Show when=move || is_owner.get()>
                 <div class="flex items-center gap-2">
@@ -284,7 +299,13 @@ fn WorkspaceSection(
                         class="px-3 py-1.5 rounded-md text-sm bg-primary/15 text-primary hover:bg-primary/25"
                         on:click=move |_| browser_open.set(true)
                     >
-                        {if has_current { "更换文件夹" } else { "绑定文件夹" }}
+                        {move || {
+                            if has_current {
+                                t_string!(i18n, project_room.change_folder).to_string()
+                            } else {
+                                t_string!(i18n, project_room.bind_folder).to_string()
+                            }
+                        }}
                     </button>
                     <Show when=move || has_current>
                         <button
@@ -298,15 +319,15 @@ fn WorkspaceSection(
                                 });
                             }
                         >
-                            "解绑"
+                            {t!(i18n, project_room.unbind)}
                         </button>
                     </Show>
                 </div>
                 <DirectoryBrowser
                     open=browser_open
                     on_pick=on_pick
-                    title="绑定项目工作区"
-                    confirm_label="绑定此目录"
+                    title=t_string!(i18n, project_room.browser_title).to_string()
+                    confirm_label=t_string!(i18n, project_room.browser_confirm).to_string()
                 />
             </Show>
         </section>
@@ -320,12 +341,13 @@ fn ArchiveSection(
     dash: DashboardState,
     on_done: OnDone,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let id = StoredValue::new(project.id.clone());
     let confirming = RwSignal::new(false);
     view! {
         <Show when=move || is_owner.get()>
             <section class="border-t border-border-subtle pt-6">
-                <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">"危险操作"</h3>
+                <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">{t!(i18n, project_room.danger_zone)}</h3>
                 <Show
                     when=move || confirming.get()
                     fallback=move || view! {
@@ -334,12 +356,14 @@ fn ArchiveSection(
                             class="px-3 py-1.5 rounded-md text-sm text-danger hover:bg-danger/10"
                             on:click=move |_| confirming.set(true)
                         >
-                            "归档项目"
+                            {t!(i18n, project_room.archive)}
                         </button>
                     }
                 >
                     <div class="flex items-center gap-2">
-                        <span class="text-sm text-text-secondary">"确认归档？成员和记忆会保留，但项目会从列表中隐藏。"</span>
+                        <span class="text-sm text-text-secondary">
+                            {t!(i18n, project_room.archive_confirm)}
+                        </span>
                         <button
                             type="button"
                             class="px-3 py-1.5 rounded-md text-sm bg-danger text-white hover:bg-danger/90"
@@ -351,14 +375,14 @@ fn ArchiveSection(
                                 });
                             }
                         >
-                            "确认"
+                            {t!(i18n, common.confirm)}
                         </button>
                         <button
                             type="button"
                             class="px-3 py-1.5 rounded-md text-sm text-text-tertiary"
                             on:click=move |_| confirming.set(false)
                         >
-                            "取消"
+                            {t!(i18n, common.cancel)}
                         </button>
                     </div>
                 </Show>

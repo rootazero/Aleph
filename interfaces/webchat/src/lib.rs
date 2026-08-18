@@ -25,6 +25,11 @@ pub mod context;
 mod disposed_reads;
 pub mod generation;
 pub mod i18n;
+// Source-level guard only — no production consumer, so it does not ship.
+// Sibling of `disposed_reads`: that one covers signals read after disposal,
+// this one covers copy that ignores the locale.
+#[cfg(test)]
+mod i18n_census;
 pub mod memory_graph;
 pub mod models;
 pub mod panic_overlay;

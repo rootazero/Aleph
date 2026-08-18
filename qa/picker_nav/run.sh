@@ -171,7 +171,8 @@ cat <<'CHECKLIST'
             QQConfig::from_wire 归一化；qa/channels/run.sh 在真实开机路径上验它
   18. → 已搬走：`./qa/channels/run.sh`
       这一项从 2026-08-18 起是一个**可执行 fixture**，不再是人工清单条目。
-      它跑 16 条断言：feishu / line / qq 各自被工厂构造；msteams 作为对照组
+      条数以 fixture 自己的输出为准——散文里抄一个数，它第一次就漂了
+      （这里写 16，屏幕上是 18）。它断言：feishu / line / qq 各自被工厂构造；msteams 作为对照组
       被 resolved_channels() 丢弃**并出声**；feishu 的 start() 对着本地
       mock Lark 真拨号（取 token → 取 bot info → 起 webhook server）；
       一条签名事件进 webhook → agent 回合 → 回复从真正的 Feishu 发送路径

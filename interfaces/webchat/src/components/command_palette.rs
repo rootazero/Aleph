@@ -26,7 +26,7 @@ use crate::appearance::{apply_mode, ThemeMode};
 use crate::components::picker_nav::{
     publish_more_below, row_dom_id, scroll_row_into_view, step_highlight,
 };
-use crate::i18n::{t_string, use_i18n};
+use crate::i18n::{t_string, use_i18n, I18nCtx};
 use crate::state::hotkey::HotkeyState;
 use leptos::ev::keydown;
 use leptos::html::Div;
@@ -45,11 +45,15 @@ enum Group {
 }
 
 impl Group {
-    const fn label(self) -> &'static str {
+    /// Localised heading. The palette's own copy was English-only while its
+    /// `keywords` below are deliberately bilingual — the census that found
+    /// this file counts Chinese literals, so it saw the aliases (data) and
+    /// missed these headings (copy). See `crate::i18n_census`.
+    fn label(self, i18n: I18nCtx) -> String {
         match self {
-            Self::Navigation => "Navigation",
-            Self::Theme => "Theme",
-            Self::Diagnostics => "Diagnostics",
+            Self::Navigation => t_string!(i18n, command_palette.group_navigation).to_string(),
+            Self::Theme => t_string!(i18n, command_palette.group_theme).to_string(),
+            Self::Diagnostics => t_string!(i18n, command_palette.group_diagnostics).to_string(),
         }
     }
 
@@ -82,6 +86,16 @@ fn reload_page() {
 
 /// Build the action list. Called fresh every render so dynamic labels
 /// (i18n) re-resolve and `use_navigate` is captured inside a live owner.
+/// `Theme: Light` and friends, built from the Appearance screen's own mode
+/// names so "Light" has one translation in this product, not two.
+fn theme_label(i18n: I18nCtx, mode: ThemeMode) -> String {
+    format!(
+        "{}: {}",
+        t_string!(i18n, command_palette.theme_prefix),
+        mode.label(i18n)
+    )
+}
+
 fn build_actions() -> Vec<Action> {
     let i18n = use_i18n();
     let navigate = use_navigate();
@@ -148,28 +162,28 @@ fn build_actions() -> Vec<Action> {
         ),
         Action {
             id: "theme.light",
-            label: "Theme: Light".to_string(),
+            label: theme_label(i18n, ThemeMode::Light),
             keywords: &["theme", "light", "明亮"],
             group: Group::Theme,
             run: Box::new(|| apply_mode(ThemeMode::Light)),
         },
         Action {
             id: "theme.dark",
-            label: "Theme: Dark".to_string(),
+            label: theme_label(i18n, ThemeMode::Dark),
             keywords: &["theme", "dark", "暗黑"],
             group: Group::Theme,
             run: Box::new(|| apply_mode(ThemeMode::Dark)),
         },
         Action {
             id: "theme.system",
-            label: "Theme: System".to_string(),
+            label: theme_label(i18n, ThemeMode::System),
             keywords: &["theme", "system", "auto", "跟随系统"],
             group: Group::Theme,
             run: Box::new(|| apply_mode(ThemeMode::System)),
         },
         Action {
             id: "diag.reload",
-            label: "Reload Panel".to_string(),
+            label: t_string!(i18n, command_palette.reload_panel).to_string(),
             keywords: &["reload", "refresh", "重载", "刷新"],
             group: Group::Diagnostics,
             run: Box::new(reload_page),
@@ -264,6 +278,7 @@ fn run_by_id(id: &'static str) {
 #[component]
 #[must_use]
 pub fn CommandPalette() -> impl IntoView {
+    let i18n = use_i18n();
     let hotkey = expect_context::<HotkeyState>();
     let open = hotkey.palette_open;
 
@@ -360,7 +375,7 @@ pub fn CommandPalette() -> impl IntoView {
                 <input
                     type="text"
                     autofocus
-                    placeholder="Type a command or search…"
+                    placeholder=move || t_string!(i18n, command_palette.placeholder).to_string()
                     class="w-full px-4 py-3 bg-transparent outline-none border-b border-border \
                            text-text-primary placeholder:text-text-tertiary text-sm"
                     on:input=move |ev| query.set(event_target_value(&ev))
@@ -372,7 +387,7 @@ pub fn CommandPalette() -> impl IntoView {
                     class="max-h-[50vh] overflow-y-auto py-2"
                     class:aleph-scroll-more=move || more_below.get()
                 >
-                    {move || rows.with(|r| render_list(r, selected.get(), open))}
+                    {move || rows.with(|r| render_list(i18n, r, selected.get(), open))}
                 </div>
                 <div class="px-4 py-2 border-t border-border flex items-center gap-3 text-[10px] text-text-tertiary">
                     <span class="font-mono">"↑↓"</span>" navigate"
@@ -385,11 +400,11 @@ pub fn CommandPalette() -> impl IntoView {
 }
 
 /// Render the grouped row list with the current selection highlighted.
-fn render_list(rows: &[Row], selected_idx: usize, open: RwSignal<bool>) -> AnyView {
+fn render_list(i18n: I18nCtx, rows: &[Row], selected_idx: usize, open: RwSignal<bool>) -> AnyView {
     if rows.is_empty() {
         return view! {
             <div class="px-4 py-8 text-center text-sm text-text-tertiary">
-                "No matching commands."
+                {t_string!(i18n, command_palette.no_matches).to_string()}
             </div>
         }
         .into_any();
@@ -401,7 +416,7 @@ fn render_list(rows: &[Row], selected_idx: usize, open: RwSignal<bool>) -> AnyVi
 
     for (idx, row) in rows.iter().enumerate() {
         if last_group != Some(row.group) {
-            let heading = row.group.label();
+            let heading = row.group.label(i18n);
             out.push(
                 view! {
                     <div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-widest text-text-tertiary">
