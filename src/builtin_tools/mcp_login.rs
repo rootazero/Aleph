@@ -12,9 +12,12 @@
 //! callback — the user may be on a remote channel (Telegram, Slack) where
 //! the approval happens minutes later (R5: no blocking interaction).
 
+use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Mutex;
 
 use futures::Future;
+use once_cell::sync::Lazy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +28,44 @@ use crate::mcp::manager::{McpManagerHandle, McpTransportType};
 use crate::sync_primitives::Arc;
 use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use crate::tools::AlephToolDyn;
+
+/// BT-D-R4-23: per-server in-flight OAuth tracker. Without this, two
+/// concurrent `mcp_login` calls for the same `server_id` would each return
+/// their own authorization URL, each spawn a callback listener on a
+/// different port, each write a pending state to the shared storage, and
+/// race to overwrite each other's PKCE verifier. The user receives two
+/// URLs and only one can succeed; the other flow's `finish_authorization`
+/// sees a state mismatch and silently fails, leaving the user confused.
+///
+/// The tracker is process-local and keyed by `server_id`. Acquiring the
+/// lock for the duration of `start_authorization` (and releasing it on
+/// `Drop` of the guard after the background task is spawned) ensures that
+/// at most one in-flight OAuth flow exists per server at any moment. A
+/// concurrent call gets an explicit error rather than a duplicate URL.
+static IN_FLIGHT: Lazy<Mutex<HashMap<String, Arc<()>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// RAII guard that releases the in-flight slot on drop.
+struct InFlightGuard {
+    server_id: String,
+    permit: Arc<()>,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = IN_FLIGHT.lock() {
+            // Only remove if the permit is the same one we inserted. A new
+            // flow may have raced to acquire it after the previous guard
+            // was created (shouldn't happen with the current usage, but
+            // defending against the pointer-equal swap keeps the map
+            // honest across future refactors).
+            if let Some(current) = map.get(&self.server_id) {
+                if Arc::ptr_eq(current, &self.permit) {
+                    map.remove(&self.server_id);
+                }
+            }
+        }
+    }
+}
 
 /// Arguments for `mcp_login` tool
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -109,6 +150,28 @@ impl AlephToolDyn for McpLoginTool {
             let args: McpLoginArgs = serde_json::from_value(args)?;
             let server_id = args.server;
 
+            // BT-D-R4-23: acquire the per-server in-flight permit. The
+            // permit is held until the spawned background task completes
+            // (the guard is moved into the task), so a second concurrent
+            // call for the same server gets a clean error instead of a
+            // duplicate URL that races to overwrite the PKCE state.
+            let _guard = {
+                let mut map = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+                if map.contains_key(&server_id) {
+                    return Err(AlephError::IoError(format!(
+                        "MCP OAuth login already in progress for server '{server_id}'; \
+                         wait for the existing flow to complete or time out before \
+                         starting another one."
+                    )));
+                }
+                let permit = Arc::new(());
+                map.insert(server_id.clone(), permit.clone());
+                InFlightGuard {
+                    server_id: server_id.clone(),
+                    permit,
+                }
+            };
+
             // Resolve the server's URL from its managed configuration.
             let detail = self.handle.get_status(&server_id).await?.ok_or_else(|| {
                 AlephError::NotFound(format!("MCP server not found: {server_id}"))
@@ -144,9 +207,13 @@ impl AlephToolDyn for McpLoginTool {
 
             // Complete the exchange in the background; the callback server
             // shuts itself down after one callback or the timeout.
+            // BT-D-R4-23: move the in-flight guard into the task so the
+            // permit is held for the full flow lifetime. Drop happens on
+            // task exit (success, error, panic — all paths).
             let handle = self.handle.clone();
             let task_server = server_id.clone();
             tokio::spawn(async move {
+                let _guard = _guard;
                 match callback.wait_for_callback().await {
                     Ok(cb) => {
                         match provider

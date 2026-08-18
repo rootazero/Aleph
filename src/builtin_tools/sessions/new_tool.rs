@@ -101,19 +101,37 @@ impl AlephTool for SessionNewTool {
         // Close old session
         let legacy_key = LegacySessionKey::from_key_string(session_key_str);
         if let Some(ref lk) = legacy_key {
-            if let Err(e) = self
-                .session_store
+            // BT-D-R4-19: surfacing close failure is required — a silent
+            // warn-and-continue leaves the caller believing the old session
+            // was closed while it actually remains open, and any subsequent
+            // `get_or_create` race can resurrect messages from the old
+            // session into the new one. Propagate as a tool error so the
+            // agent (and the user) can react.
+            self.session_store
                 .close_session(lk, args.topic.as_deref())
                 .await
-            {
-                warn!("session_new: failed to close old session: {}", e);
-            }
+                .map_err(|e| {
+                    warn!("session_new: failed to close old session: {}", e);
+                    crate::error::AlephError::tool(format!(
+                        "session_new: failed to close old session: {e}"
+                    ))
+                })?;
         }
 
         // Create the new session.
-        if let Err(e) = self.session_store.get_or_create(&new_routing_key).await {
-            warn!("session_new: failed to create new session: {}", e);
-        }
+        // BT-D-R4-19: same — a silent failure here returns Ok to the
+        // caller with a new_session_key that the store never accepted.
+        // Future writes go to a session that doesn't exist; reads on the
+        // new key come back empty. Propagate the error.
+        self.session_store
+            .get_or_create(&new_routing_key)
+            .await
+            .map_err(|e| {
+                warn!("session_new: failed to create new session: {}", e);
+                crate::error::AlephError::tool(format!(
+                    "session_new: failed to create new session: {e}"
+                ))
+            })?;
 
         info!(
             old = %session_key_str,
