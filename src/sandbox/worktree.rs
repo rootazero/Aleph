@@ -319,16 +319,21 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         // worktree-isolated job would have polled blind. Two defects from one
         // cause: a second host for the same behaviour.
         //
-        // `timeout: None` means "no wall-clock limit", which the shared drain
-        // expresses as a `Duration` rather than an `Option`. A year is not a
-        // timeout anyone waits out; it is the sentinel for "unbounded", chosen
-        // to stay far inside tokio's timer range instead of `Duration::MAX`,
-        // which saturates.
-        const NO_WALL_CLOCK_LIMIT: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+        // SECURITY: honour the per-call `command.timeout` rather than silently
+        // substituting a 1-year sentinel. Without this, a `cargo build` or
+        // `npm install` in a worktree-isolated sub-agent ran forever, bypassing
+        // the harness-wide tool timeout that the tool dispatcher relies on.
+        // Fall back to a 60s default (matches `sandbox::config::
+        // default_timeout_seconds`) when the caller passes `None`. See
+        // DISPATCHER-10.
+        const DEFAULT_TOOL_BUDGET_SECS: u64 = 60;
+        let effective_timeout = command
+            .timeout
+            .unwrap_or(Duration::from_secs(DEFAULT_TOOL_BUDGET_SECS));
         let result = crate::sandbox::platforms::common::run_child_with_drain(
             child,
             command.stdin.as_deref(),
-            command.timeout.unwrap_or(NO_WALL_CLOCK_LIMIT),
+            effective_timeout,
             MAX_OUTPUT_BYTES,
         )
         .await;

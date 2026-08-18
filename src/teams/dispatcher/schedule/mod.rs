@@ -454,14 +454,26 @@ impl TeamDispatcher {
                 self.fail_or_retry(&task, &err).await;
                 tracing::info!(task_id = %task_id, "dispatcher: target agent busy; attempt deferred without spending retry budget");
             }
-            // U2 — a run the cancel sweep stopped takes the same split as
-            // `Busy`: re-dispatched through `fail_or_retry`, but the run row
-            // was written `Abandoned`, so the retry budget is untouched. The
-            // cancellation judged nothing about the work.
+            // U2 — a run the cancel sweep stopped. DO NOT route through `fail_or_retry`:
+            // that path resets the task to `Pending` with a backoff stamp, which
+            // would silently undo the operator's cancel. A cancellation is a
+            // terminal verdict; the task stays `Cancelled` and we just release
+            // the lock so the row stops being claimed. See DISPATCHER-13.
             MemberRunStatus::Cancelled => {
                 let err = outcome.error.unwrap_or_else(|| "run cancelled".to_string());
-                self.fail_or_retry(&task, &err).await;
-                tracing::info!(task_id = %task_id, "dispatcher: member run cancelled; attempt deferred without spending retry budget");
+                let _ = self
+                    .coord_store
+                    .update_task(
+                        &task_id,
+                        crate::agents::swarm::tasks::CoordTaskUpdate {
+                            status: Some(crate::agents::swarm::tasks::CoordTaskStatus::Cancelled),
+                            result: Some(format!("cancelled: {err}")),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                let _ = self.coord_store.release_lock(&task_id).await;
+                tracing::info!(task_id = %task_id, "dispatcher: member run cancelled; task left in Cancelled (terminal, sticky)");
             }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {
                 let err = outcome.error.unwrap_or_else(|| "unknown error".to_string());
