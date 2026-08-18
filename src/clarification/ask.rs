@@ -186,7 +186,12 @@ impl RetireOnAbandon {
     /// The receiver to park on — borrowed, never moved out, so [`Drop`] still
     /// owns it (see the field docs).
     fn receiver(&mut self) -> &mut oneshot::Receiver<ClarificationResult> {
-        self.rx.as_mut().expect("invariant: taken only by Drop")
+        // Internal invariant: `rx` is `Some` until [`Drop`] takes it. The
+        // panic here is the defense-in-depth guard against any future
+        // caller that hands the receiver out twice.
+        self.rx
+            .as_mut()
+            .expect("invariant: RetireOnAbandon rx is owned by Drop until disarm")
     }
 
     /// Every path that returns has already retired the entry — answered or

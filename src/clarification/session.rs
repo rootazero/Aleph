@@ -333,8 +333,15 @@ impl ClarificationManager {
     /// `AskUser` frame is a one-shot push, so a Panel that connects (or
     /// reloads) mid-question would otherwise never learn a tool is parked on
     /// its answer and would strand it until its timeout.
+    ///
+    /// Results are sorted by `session_key` so the snapshot is stable across
+    /// calls — the underlying map is a `HashMap<String, PendingEntry>` whose
+    /// iteration order is per-process-random, and a list that reorders
+    /// between refreshes would jitter the Panel cards (and any future caller
+    /// asserting on card order) for no reason.
     pub async fn list_pending(&self) -> Vec<PendingClarification> {
-        self.pending
+        let mut out: Vec<PendingClarification> = self
+            .pending
             .read()
             .await
             .iter()
@@ -354,7 +361,9 @@ impl ClarificationManager {
                     answered: e.answers.len(),
                 }
             })
-            .collect()
+            .collect();
+        out.sort_unstable_by(|a, b| a.session_key.cmp(&b.session_key));
+        out
     }
 
     /// Resolve one question from the user's reply.

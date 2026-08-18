@@ -221,23 +221,29 @@ impl ClarificationRequest {
     /// The first question. Every request has one by construction.
     #[must_use]
     pub fn first(&self) -> &ClarificationQuestion {
+        // The invariant ("every request has one question by construction") is
+        // enforced by `new()`; the panic here is the defense-in-depth guard
+        // for any future caller that tries to bypass `new()` by mutating the
+        // (still pub) field directly. Prefer `new()` over hand-rolling a
+        // `ClarificationRequest`.
         self.questions
             .first()
-            .expect("invariant: a ClarificationRequest is never empty")
+            .expect("invariant: a ClarificationRequest built via new() is never empty")
     }
 
     /// How many questions are outstanding in total.
+    #[allow(clippy::len_without_is_empty)] // see is_empty doc below — answer is genuinely 'never'
     #[must_use]
     pub fn len(&self) -> usize {
         self.questions.len()
     }
 
-    /// Always false — kept so `len()` reads naturally next to it and clippy
-    /// stays quiet; a request with no questions cannot be constructed.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.questions.is_empty()
-    }
+    // `is_empty()` was cut in the 2026-08-18 audit (sw-clarification-03):
+    // zero non-test callers repo-wide, and the doc already admitted the
+    // value was always false (the field is invariantly non-empty by
+    // construction). The `len_without_is_empty` clippy lint is allowed
+    // locally because the answer is genuinely 'never' — a request with
+    // no questions is unrepresentable.
 }
 
 /// Id given to the single question of [`ClarificationRequest::text`] /
