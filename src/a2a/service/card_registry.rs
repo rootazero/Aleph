@@ -72,14 +72,14 @@ impl CardRegistry {
                 default_output_modes: vec!["text".to_string()],
             };
 
-            let agent = RegisteredAgent {
+            let agent = RegisteredAgent::new(
                 card,
                 trust_level,
-                base_url: entry.url.clone(),
-                last_seen: Utc::now(),
-                health: AgentHealth::Healthy,
-                auth_token: entry.token.clone(),
-            };
+                entry.url.clone(),
+                Utc::now(),
+                AgentHealth::Healthy,
+                entry.token.clone(),
+            );
 
             // Upsert: remove existing with same ID to avoid duplicates on config reload
             agents.retain(|a| a.card.id != agent.card.id);
@@ -137,14 +137,14 @@ impl AgentResolver for CardRegistry {
         let mut agents = self.agents.write().await;
         // Remove existing with same ID (upsert semantics)
         agents.retain(|a| a.card.id != card.id);
-        agents.push(RegisteredAgent {
+        agents.push(RegisteredAgent::new(
             card,
             trust_level,
-            base_url: base_url.to_string(),
-            last_seen: Utc::now(),
-            health: AgentHealth::Healthy,
-            auth_token: None,
-        });
+            base_url.to_string(),
+            Utc::now(),
+            AgentHealth::Healthy,
+            None,
+        ));
         Ok(())
     }
 
@@ -326,35 +326,35 @@ mod tests {
     async fn upsert_preserves_auth_token_and_replaces_by_url() {
         let registry = CardRegistry::new();
         registry
-            .upsert(RegisteredAgent {
-                card: sample_card("real-id", "Helper"),
-                trust_level: TrustLevel::Trusted,
-                base_url: "https://h.example.com".to_string(),
-                last_seen: Utc::now(),
-                health: AgentHealth::Healthy,
-                auth_token: Some("tok-abc".to_string()),
-            })
+            .upsert(RegisteredAgent::new(
+                sample_card("real-id", "Helper"),
+                TrustLevel::Trusted,
+                "https://h.example.com".to_string(),
+                Utc::now(),
+                AgentHealth::Healthy,
+                Some("tok-abc".to_string()),
+            ))
             .await;
 
         let agents = registry.list_agents().await.unwrap();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].auth_token.as_deref(), Some("tok-abc"));
+        assert_eq!(agents[0].auth_token(), Some("tok-abc"));
 
         // Re-upsert at the same base URL with a different card id replaces in
         // place (no duplicate) — the placeholder-vs-real-id case.
         registry
-            .upsert(RegisteredAgent {
-                card: sample_card("new-id", "Helper v2"),
-                trust_level: TrustLevel::Trusted,
-                base_url: "https://h.example.com".to_string(),
-                last_seen: Utc::now(),
-                health: AgentHealth::Healthy,
-                auth_token: Some("tok-xyz".to_string()),
-            })
+            .upsert(RegisteredAgent::new(
+                sample_card("new-id", "Helper v2"),
+                TrustLevel::Trusted,
+                "https://h.example.com".to_string(),
+                Utc::now(),
+                AgentHealth::Healthy,
+                Some("tok-xyz".to_string()),
+            ))
             .await;
         let agents = registry.list_agents().await.unwrap();
         assert_eq!(agents.len(), 1, "same base_url must replace, not duplicate");
         assert_eq!(agents[0].card.id, "new-id");
-        assert_eq!(agents[0].auth_token.as_deref(), Some("tok-xyz"));
+        assert_eq!(agents[0].auth_token(), Some("tok-xyz"));
     }
 }

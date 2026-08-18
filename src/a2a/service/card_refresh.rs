@@ -19,14 +19,14 @@ use crate::a2a::domain::AgentCard;
 use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
 
 fn rebuilt_agent(agent: &RegisteredAgent, card: AgentCard, health: AgentHealth) -> RegisteredAgent {
-    RegisteredAgent {
+    RegisteredAgent::new(
         card,
-        trust_level: agent.trust_level,
-        base_url: agent.base_url.clone(),
-        last_seen: chrono::Utc::now(),
+        agent.trust_level,
+        agent.base_url.clone(),
+        chrono::Utc::now(),
         health,
-        auth_token: agent.auth_token.clone(),
-    }
+        agent.auth_token().map(str::to_string),
+    )
 }
 
 /// Fetch the real Agent Card for every registered agent and upsert it.
@@ -44,7 +44,7 @@ pub async fn refresh_all_cards(registry: &CardRegistry) -> usize {
 
     let mut refreshed = 0usize;
     for agent in agents {
-        let client = match &agent.auth_token {
+        let client = match agent.auth_token() {
             Some(token) => A2AClient::with_auth(&agent.base_url, token),
             None => A2AClient::new(&agent.base_url),
         };

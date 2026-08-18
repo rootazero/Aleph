@@ -92,7 +92,7 @@ fn client_matches(client: &A2AClient, agent: &RegisteredAgent) -> bool {
     // Compare token *values*, not just presence — a rotated token with the
     // same presence would otherwise keep serving stale credentials.
     client.base_url() == agent.base_url.trim_end_matches('/')
-        && client.auth_token_matches(agent.auth_token.as_deref())
+        && client.auth_token_matches(agent.auth_token())
 }
 
 #[cfg(test)]
