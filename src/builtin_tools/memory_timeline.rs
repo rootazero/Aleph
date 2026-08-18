@@ -50,18 +50,48 @@ impl MemoryTimelineTool {
     ) -> std::result::Result<MemoryTimelineOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        let args_summary = format!("fact timeline: {}", &args.fact_id);
+        // BT-D-R4-05 (partial fix): validate the fact_id format up-front.
+        // The full fix — per-agent authorization at the traveler — is
+        // tracked separately because the underlying MemoryTimeTraveler
+        // API does not yet take an agent id (see sev-wire-2026-08-19-r4
+        // builtin_tools-d/REPORT.md). Without per-agent gating, any
+        // caller that learns or guesses another corpus's fact id can
+        // read its lifecycle and current content; this validation
+        // bounds the input surface but does not close that gap.
+        let fact_id = args.fact_id.trim();
+        if fact_id.is_empty() {
+            return Err(ToolError::InvalidArgs(
+                "memory_timeline requires a non-empty fact_id".to_string(),
+            ));
+        }
+        if fact_id.len() > 256 {
+            return Err(ToolError::InvalidArgs(format!(
+                "fact_id is {} bytes; max 256",
+                fact_id.len()
+            )));
+        }
+        if fact_id
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '/' || c == '\\' || c == '`' || c == '$')
+        {
+            return Err(ToolError::InvalidArgs(
+                "fact_id contains an invalid character (whitespace, control, /, \\, `, or $)"
+                    .to_string(),
+            ));
+        }
+
+        let args_summary = format!("fact timeline: {}", &fact_id);
         notify_tool_start(Self::NAME, &args_summary);
 
         let explanation = self
             .traveler
-            .explain_fact(&args.fact_id)
+            .explain_fact(fact_id)
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to explain fact: {e}")))?;
 
         notify_tool_result(
             Self::NAME,
-            &format!("fact_id={}, valid={}", args.fact_id, explanation.is_valid),
+            &format!("fact_id={}, valid={}", fact_id, explanation.is_valid),
             true,
         );
 
