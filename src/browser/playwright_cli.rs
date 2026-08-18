@@ -33,7 +33,7 @@ const SESSION_START_TIMEOUT_SECS: u64 = 60;
 
 /// Output of a single `playwright-cli` invocation.
 #[derive(Debug, Clone)]
-pub struct CliOutput {
+pub(crate) struct CliOutput {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
@@ -42,7 +42,7 @@ pub struct CliOutput {
 
 /// Metadata extracted from the `### Page / URL / Title / Snapshot` header.
 #[derive(Debug, Clone, Default)]
-pub struct PageMeta {
+pub(crate) struct PageMeta {
     pub url: String,
     pub title: String,
     pub snapshot_file: Option<PathBuf>,
@@ -396,7 +396,7 @@ fn classify_failure(
 /// carrying a line `### Error` could make every read of itself fail. The CLI
 /// writes its own header first, which the page cannot precede.
 #[must_use]
-pub fn parse_error_section(stdout: &str) -> Option<String> {
+pub(crate) fn parse_error_section(stdout: &str) -> Option<String> {
     let mut body = String::new();
     let mut in_error = false;
     for line in stdout.lines() {
@@ -424,7 +424,7 @@ pub fn parse_error_section(stdout: &str) -> Option<String> {
 
 /// Parse stdout for `### Page / URL / Title / Snapshot [path]` header.
 #[must_use]
-pub fn parse_page_meta(stdout: &str) -> Option<PageMeta> {
+pub(crate) fn parse_page_meta(stdout: &str) -> Option<PageMeta> {
     let mut meta = PageMeta::default();
     let mut in_page_section = false;
     let mut found_any = false;
@@ -485,7 +485,7 @@ pub fn parse_page_meta(stdout: &str) -> Option<PageMeta> {
 /// Returns `None` when there is no `### Result` section — an `### Error`
 /// transcript, notably, which carries no echoed source either and so is safe for
 /// the caller to hand on raw.
-pub fn parse_result_value(stdout: &str) -> Option<String> {
+pub(crate) fn parse_result_value(stdout: &str) -> Option<String> {
     let mut lines = stdout.lines();
     lines.by_ref().find(|l| l.trim() == "### Result")?;
     let mut value = String::new();

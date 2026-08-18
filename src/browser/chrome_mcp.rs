@@ -53,7 +53,7 @@ fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>) -> Vec<String> {
 }
 
 /// Manages Chrome `DevTools` MCP sessions with lazy creation and profile-keyed caching.
-pub struct ChromeMcpDriver {
+pub(crate) struct ChromeMcpDriver {
     sessions: RwLock<HashMap<String, Arc<ChromeMcpSession>>>,
     config: ChromeMcpConfig,
     /// Per-profile browser configuration (engine preference, proxy,
@@ -81,7 +81,7 @@ pub struct ChromeMcpDriver {
 
 impl ChromeMcpDriver {
     #[must_use]
-    pub fn new(config: ChromeMcpConfig, profiles: HashMap<String, ProfileConfig>) -> Self {
+    pub(crate) fn new(config: ChromeMcpConfig, profiles: HashMap<String, ProfileConfig>) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
             config,
@@ -95,7 +95,7 @@ impl ChromeMcpDriver {
     /// Get (or lazily create) the per-profile serialization lock. The returned
     /// `Arc<Mutex>` is held by the backend across a `select_page` → action
     /// sequence so concurrent operations on the same profile cannot interleave.
-    pub fn profile_lock(&self, profile_name: &str) -> Arc<AsyncMutex<()>> {
+    pub(crate) fn profile_lock(&self, profile_name: &str) -> Arc<AsyncMutex<()>> {
         let mut map = self.profile_locks.lock().unwrap_or_else(|e| e.into_inner());
         map.entry(profile_name.to_string())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
@@ -104,7 +104,7 @@ impl ChromeMcpDriver {
 
     /// Call a tool on the Chrome `DevTools` MCP server for the given profile.
     /// Creates the session lazily if it doesn't exist.
-    pub async fn call_tool(
+    pub(crate) async fn call_tool(
         &self,
         profile_name: &str,
         tool_name: &str,
@@ -416,7 +416,7 @@ impl ChromeMcpDriver {
     /// Whether a live session exists for `profile_name`. Best-effort: returns
     /// `false` on lock contention rather than awaiting — intended for the
     /// idle reaper and liveness reporting, where a skipped sweep is harmless.
-    pub fn has_session(&self, profile_name: &str) -> bool {
+    pub(crate) fn has_session(&self, profile_name: &str) -> bool {
         match self.sessions.try_read() {
             Ok(sessions) => sessions.contains_key(profile_name),
             Err(_) => false,
@@ -424,7 +424,7 @@ impl ChromeMcpDriver {
     }
 
     /// Destroy a session (for cleanup after transport errors).
-    pub async fn destroy_session(&self, profile_name: &str) {
+    pub(crate) async fn destroy_session(&self, profile_name: &str) {
         let session = {
             let mut sessions = self.sessions.write().await;
             sessions.remove(profile_name)
