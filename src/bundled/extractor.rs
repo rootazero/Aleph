@@ -541,7 +541,20 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
         }
         if let Err(e) = std::fs::rename(&tmp, &dest) {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
-                let _ = std::fs::remove_file(&dest);
+                // BUNDLED-R4-02: destination may be a directory (not a file),
+                // which `remove_file` cannot delete and would cause the
+                // rename to fail and the skill to be marked `version: None`
+                // forever. Distinguish file vs dir and use the matching
+                // removal primitive.
+                let remove_result = match std::fs::symlink_metadata(&dest) {
+                    Ok(m) if m.is_dir() => std::fs::remove_dir_all(&dest),
+                    Ok(_) => std::fs::remove_file(&dest),
+                    Err(e2) => Err(e2),
+                };
+                if let Err(rm_err) = remove_result {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(rm_err);
+                }
                 if let Err(e) = std::fs::rename(&tmp, &dest) {
                     let _ = std::fs::remove_file(&tmp);
                     return Err(e);
