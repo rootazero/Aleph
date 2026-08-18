@@ -185,6 +185,21 @@ pub async fn handle_approve(
 
     match store.approve(channel, code, user_id.as_deref()).await {
         Ok(req) => {
+            // Authority-change audit (round-5 ⑦): approving a sender binds a
+            // channel credential to a principal — one of the two independent
+            // credential axes. The sender id comes from the approved request;
+            // the code itself is credential material and is never logged.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!(
+                        "channel.pairing.approve: {}:{} bound to {}",
+                        channel,
+                        req.sender_id,
+                        user_id.as_deref().unwrap_or("(owner default)")
+                    ),
+                ));
+            }
             let response: PairingRequestResponse = req.into();
             JsonRpcResponse::success(
                 request.id,
@@ -349,14 +364,25 @@ pub async fn handle_revoke(
     debug!("Handling pairing.revoke for {}:{}", channel, sender_id);
 
     match store.revoke(channel, sender_id).await {
-        Ok(()) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "revoked": true,
-                "channel": channel,
-                "sender_id": sender_id,
-            }),
-        ),
+        Ok(()) => {
+            // Authority-change audit (round-5 ⑦): withdrawing a channel
+            // credential — SECURITY.md names this verb as the way to cut a
+            // person off a channel, and it left no record of itself.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!("channel.pairing.revoke: {}:{}", channel, sender_id),
+                ));
+            }
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "revoked": true,
+                    "channel": channel,
+                    "sender_id": sender_id,
+                }),
+            )
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,

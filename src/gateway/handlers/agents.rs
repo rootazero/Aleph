@@ -303,6 +303,21 @@ pub async fn handle_update(
                         crate::config::types::normalized_allowed_users(users),
                     )
                     .await;
+                // Authority-change audit (round-5 ⑦): `allowed_users` is the
+                // fence around a per-agent permission set — rewriting it is a
+                // grant/revoke. Logged on the RPC face; the tool face
+                // (`agent_update`) logs its own.
+                if let Some(log) = crate::security::audit::global() {
+                    log.log(crate::security::audit::AuditEntry::authority_change(
+                        crate::gateway::caller_identity::current_caller_user(),
+                        format!(
+                            "agents.update: allowed_users {} → [{}] (live={})",
+                            params.id,
+                            users.join(", "),
+                            allowed_users_applied_live
+                        ),
+                    ));
+                }
             }
 
             let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {

@@ -28,6 +28,20 @@ pub enum AuditEventType {
     /// accountability half — the read left no trace of itself anywhere. This
     /// variant is that trace. Reading your OWN content is not an event, so on
     /// a single-user box nothing is ever recorded here.
+    /// A write that changes who can do what: principal created, role
+    /// promoted/demoted, principal deactivated/reactivated, room roster
+    /// add/remove, `allowed_users` rewritten, channel sender approved with a
+    /// user binding, device revoked, bootstrap ticket minted.
+    ///
+    /// `ScopedContentRead` made cross-user READS accountable; the writes that
+    /// move the boundary itself were silent until this variant — every one of
+    /// them succeeded, took effect immediately, and left no record anywhere
+    /// (round-4 ledger item ⑦). One variant, not one per verb: the `detail`
+    /// names the verb and its target, and a single `event_type` answers the
+    /// post-incident question "what authority changed, in order" with one
+    /// `WHERE` clause. Never carries secrets (ticket codes, device tokens) —
+    /// it names the object of the change, not the credential.
+    AuthorityChange,
     ScopedContentRead,
 }
 
@@ -40,6 +54,7 @@ impl fmt::Display for AuditEventType {
             Self::EnvInjectionDetected => "env_injection",
             Self::PiiDetected => "pii_detected",
             Self::LeakWarning => "leak_warning",
+            Self::AuthorityChange => "authority_change",
             Self::ScopedContentRead => "scoped_content_read",
         };
         write!(f, "{s}")
@@ -109,6 +124,28 @@ impl AuditEntry {
         }
     }
 
+    /// An authenticated principal changed who can do what — see
+    /// [`AuditEventType::AuthorityChange`].
+    ///
+    /// `actor_user` is the caller who performed the change (`None` only for
+    /// in-process/test producers with no resolved caller — the gateway
+    /// producers all run on the request task, where `CALLER_USER` is alive).
+    /// `detail` is `"<verb>: <target> [<before>→<after>]"` — enough to
+    /// reconstruct what moved, never the credential material itself.
+    /// Severity is `Warn` for the same reason as `ScopedContentRead`: these
+    /// are ratified operations being made accountable, not violations.
+    #[must_use]
+    pub fn authority_change(actor_user: Option<String>, detail: impl Into<String>) -> Self {
+        Self {
+            event_type: AuditEventType::AuthorityChange,
+            severity: AuditSeverity::Warn,
+            source_ip: None,
+            session_id: None,
+            actor_user,
+            detail: detail.into(),
+        }
+    }
+
     /// A remote connection failed the Gateway-token login wall at `connect`.
     /// `source_ip` is the socket peer; `detail` names the rejected path.
     #[must_use]
@@ -142,6 +179,67 @@ impl AuditEntry {
 pub struct SecurityAuditLog {
     sender: mpsc::Sender<AuditEntry>,
     pub(crate) dropped_count: Arc<AtomicU64>,
+}
+
+/// Process-wide handle for the authority-change producers.
+///
+/// `GatewayServer::set_audit_log` + captured clones serve the two producers
+/// that live next to the server (WS auth path, trace handlers). The
+/// `AuthorityChange` producers are eight call sites across five handler
+/// families (`users` / `projects` / `pairing` / `gateway_ticket` / agent
+/// `allowed_users`) registered from different builder files — threading an
+/// `Option` through each registration is the "seven construction points"
+/// shape this repo has already paid for twice (the seventh `SecretMasker::
+/// new()` site; the `install_operator_patterns` fix), so the handle is
+/// installed once at boot instead, exactly like `identity::ledger::install`
+/// and the `goal::global()` / `looping::global()` / `cron::global()` trio
+/// `freeze_owned_background_work` already reads.
+static GLOBAL_AUDIT: std::sync::RwLock<Option<SecurityAuditLog>> =
+    std::sync::RwLock::new(None);
+
+/// Install the process-wide handle. Called once at boot, immediately after
+/// `GatewayServer::set_audit_log`, with a clone of the same log. Returns
+/// `false` if already installed (a second server in one process keeps the
+/// first handle rather than silently splitting the trail).
+pub fn install_global(log: &SecurityAuditLog) -> bool {
+    let mut guard = GLOBAL_AUDIT.write().unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        return false;
+    }
+    *guard = Some(log.clone());
+    true
+}
+
+/// The process-wide handle, `None` before boot installs it (unit tests,
+/// probe servers) — producers treat `None` as "no trail", matching the
+/// `Option<SecurityAuditLog>` semantics of the threaded path.
+#[must_use]
+pub fn global() -> Option<SecurityAuditLog> {
+    GLOBAL_AUDIT
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Serialises the audit-asserting tests: each swaps in its own log, so two
+/// running concurrently would steal each other's entries. Take this lock,
+/// then [`replace_global_for_test`].
+#[cfg(test)]
+pub(crate) static AUDIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Swap the installed handle (test-only — production installs exactly once).
+/// The caller must hold [`AUDIT_TEST_LOCK`] and MUST call
+/// [`clear_global_for_test`] before releasing it, so a later non-audit test
+/// never observes a handle whose receiver was dropped.
+#[cfg(test)]
+pub(crate) fn replace_global_for_test(log: &SecurityAuditLog) {
+    *GLOBAL_AUDIT.write().unwrap_or_else(|e| e.into_inner()) = Some(log.clone());
+}
+
+/// See [`replace_global_for_test`].
+#[cfg(test)]
+pub(crate) fn clear_global_for_test() {
+    *GLOBAL_AUDIT.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 impl SecurityAuditLog {

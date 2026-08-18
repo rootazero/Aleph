@@ -724,7 +724,17 @@ pub async fn handle_member_add(
         return denial;
     }
     match store.add_member(&params.id, &params.user_id) {
-        Ok(()) => member_list_response(request.id, &store, &params.id),
+        Ok(()) => {
+            // Authority-change audit (round-5 ⑦): the roster IS the
+            // visibility predicate, so adding a member is a grant.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!("projects.member.add: {} → {}", params.user_id, params.id),
+                ));
+            }
+            member_list_response(request.id, &store, &params.id)
+        }
         Err(e) => project_error_response(request.id, e),
     }
 }
@@ -757,7 +767,18 @@ pub async fn handle_member_remove(
         );
     }
     match store.remove_member(&params.id, &params.user_id) {
-        Ok(()) => member_list_response(request.id, &store, &params.id),
+        Ok(()) => {
+            // Authority-change audit (round-5 ⑦): removing a member revokes
+            // their view of the room — effective immediately, previously
+            // unrecorded.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!("projects.member.remove: {} ← {}", params.user_id, params.id),
+                ));
+            }
+            member_list_response(request.id, &store, &params.id)
+        }
         Err(e) => project_error_response(request.id, e),
     }
 }

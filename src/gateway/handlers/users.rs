@@ -167,6 +167,18 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -
     let user_id = format!("u-{}", uuid::Uuid::new_v4());
     match store.create_user(&user_id, &params.display_name, role) {
         Ok(()) => {
+            // Authority-change audit (round-5 ⑦): a principal appearing is a
+            // change to who can do what; it used to leave no record anywhere.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    format!(
+                        "users.create: created {} role={}",
+                        user_id,
+                        role.as_str()
+                    ),
+                ));
+            }
             let view = UserView {
                 user_id,
                 display_name: params.display_name,
@@ -267,6 +279,13 @@ pub async fn handle_update(
         }
     }
 
+    // Read the prior state BEFORE the write: the transition detail
+    // (`active→deactivated`) is what the audit entry and the receipt both
+    // report, and after `update_user` commits there is nothing left to diff
+    // against. A missing row here is not an error — `update_user`'s row count
+    // below stays the sole not-found arbiter.
+    let prior = store.get_user(&params.user_id).ok().flatten();
+
     let rows = match store.update_user(
         &params.user_id,
         params.display_name.as_deref(),
@@ -297,26 +316,92 @@ pub async fn handle_update(
         restamp_live_connections(&store, &kick, &params.user_id, new_role).await;
     }
 
+    // Authority-change audit (round-5 ⑦): role and status transitions change
+    // what this principal can do; both used to commit silently.
+    let audit = crate::security::audit::global();
+    let actor = crate::gateway::caller_identity::current_caller_user();
+    if let (Some(log), Some(new_role)) = (audit.as_ref(), role) {
+        let old_role = prior.as_ref().map(|u| u.role.as_str()).unwrap_or("?");
+        if old_role != new_role.as_str() {
+            log.log(crate::security::audit::AuditEntry::authority_change(
+                actor.clone(),
+                format!(
+                    "users.update: role {} {}→{}",
+                    params.user_id,
+                    old_role,
+                    new_role.as_str()
+                ),
+            ));
+        }
+    }
+
     let mut revoked_senders: Vec<Value> = Vec::new();
+    let mut revoked_devices = 0usize;
+    let mut freeze = FreezeReport::default();
+    // The pipeline runs on EVERY deactivation write, not only on the
+    // transition: each leg is best-effort, so a repeated
+    // `status="deactivated"` is the operator's retry after a partial failure.
     if status == Some(UserStatus::Deactivated) {
-        deactivate_devices(&store, &kick, &params.user_id).await;
+        // …but the audit entry fires only on the transition — a retry of an
+        // already-deactivated principal changes nothing and records nothing.
+        if prior.as_ref().map(|u| u.status) != Some(UserStatus::Deactivated) {
+            if let Some(log) = audit.as_ref() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    actor.clone(),
+                    format!("users.update: status {} →deactivated", params.user_id),
+                ));
+            }
+        }
+        revoked_devices = deactivate_devices(&store, &kick, &params.user_id).await;
         revoked_senders = revoke_channel_bindings(&kick, &params.user_id).await;
-        freeze_owned_background_work(&params.user_id).await;
+        freeze = freeze_owned_background_work(&params.user_id).await;
+    }
+    // Reactivation is a bare store write: devices stay revoked, channel
+    // senders stay withdrawn, goals/loops/crons stay paused. The receipt says
+    // so — `status: "active"` alone read as if everything had come back.
+    let reactivated = status == Some(UserStatus::Active)
+        && prior.as_ref().map(|u| u.status) == Some(UserStatus::Deactivated);
+    if reactivated {
+        if let Some(log) = audit.as_ref() {
+            log.log(crate::security::audit::AuditEntry::authority_change(
+                actor.clone(),
+                format!("users.update: status {} deactivated→active", params.user_id),
+            ));
+        }
     }
 
     match store.get_user(&params.user_id) {
-        Ok(Some(user)) => JsonRpcResponse::success(
-            request.id,
-            // The revoked bindings are named in the response because they are
-            // the one deactivation effect with no other surface: devices show
-            // up as closed connections and frozen goals/loops are listable,
-            // while a withdrawn channel approval is only visible as traffic
-            // that stopped arriving.
-            json!({
+        Ok(Some(user)) => {
+            // The revoked/frozen counts are named in the response because
+            // they are the deactivation effects with no other surface:
+            // devices show up only as closed connections, frozen background
+            // work as runs that stopped happening, and a withdrawn channel
+            // approval as traffic that stopped arriving.
+            let mut out = json!({
                 "user": UserView::from(user),
                 "revoked_channel_senders": revoked_senders,
-            }),
-        ),
+            });
+            if status == Some(UserStatus::Deactivated) {
+                out["revoked_devices"] = json!(revoked_devices);
+                out["frozen_background_work"] = json!({
+                    "goals": freeze.goals,
+                    "loops": freeze.loops,
+                    "crons": freeze.crons,
+                });
+            }
+            if reactivated {
+                // The write above flipped one column; everything the
+                // deactivation tore down stays down. Name the recovery verbs
+                // rather than implying them — "active" alone reads as if the
+                // principal were whole again.
+                out["reactivation_effects"] = json!({
+                    "devices": "remain revoked — issue a new bootstrap ticket (`pair --user`) per device",
+                    "channel_senders": "remain withdrawn — re-approve via channel.pairing.approve",
+                    "background_work": "goals/loops/crons remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle)",
+                });
+            }
+            JsonRpcResponse::success(request.id, out)
+        }
         Ok(None) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -421,11 +506,15 @@ async fn restamp_live_connections(
 /// the shared [`revoke_device_and_kick`] pipeline. Best-effort: a single
 /// device's revoke failing, or coming back a no-op for a device the store
 /// just listed as live, is logged and does not abort the rest.
+///
+/// Returns the number of devices actually revoked — the deactivation receipt
+/// (`users.update` response) names it because a revoked device has no other
+/// surface: the Panel just sees a closed connection.
 async fn deactivate_devices(
     store: &Arc<SecurityStore>,
     kick: &UserDeactivationKick,
     user_id: &str,
-) {
+) -> usize {
     let device_ids = match store.list_device_ids_for_user(user_id) {
         Ok(ids) => ids,
         Err(e) => {
@@ -434,10 +523,12 @@ async fn deactivate_devices(
                 error = %e,
                 "users.update: failed to list devices for deactivation"
             );
-            return;
+            return 0;
         }
     };
 
+    let total = device_ids.len();
+    let mut revoked = 0usize;
     let device_token_mgr = DeviceTokenManager::new(store.clone());
     for device_id in device_ids {
         match revoke_device_and_kick(
@@ -448,7 +539,7 @@ async fn deactivate_devices(
         )
         .await
         {
-            Ok(true) => {}
+            Ok(true) => revoked += 1,
             // `list_device_ids_for_user` just reported this device as live
             // (`revoked_at IS NULL`), so a no-op here means
             // `revoke_panel_device` didn't recognize it as a panel device —
@@ -473,6 +564,15 @@ async fn deactivate_devices(
             }
         }
     }
+    if revoked < total {
+        tracing::warn!(
+            user_id = %user_id,
+            revoked,
+            total,
+            "users.update: deactivation revoked fewer devices than it listed"
+        );
+    }
+    revoked
 }
 
 /// Withdraw every approved channel sender bound to `user_id`, returning one
@@ -533,6 +633,16 @@ async fn revoke_channel_bindings(kick: &UserDeactivationKick, user_id: &str) -> 
     }
 }
 
+/// What the deactivation freeze actually froze — the counts the `users.update`
+/// receipt reports (round-4 ledger item ⑧: the receipt used to say only
+/// `status: "deactivated"` while three subsystems changed state underneath).
+#[derive(Debug, Default, Clone, Copy)]
+struct FreezeReport {
+    goals: usize,
+    loops: usize,
+    crons: usize,
+}
+
 /// Deactivation freeze (spec §10): pause every goal and loop OWNED BY
 /// `user_id`, mirroring [`deactivate_devices`]'s best-effort shape (a scan
 /// failure for one subsystem must not abort the other, and neither aborts
@@ -558,17 +668,20 @@ async fn revoke_channel_bindings(kick: &UserDeactivationKick, user_id: &str) -> 
 /// its goals, loops or crons (spec is silent on auto-resume) — each owner
 /// session resumes its own via `goal(action='update', status='active')` /
 /// `loop(action='resume')` / `cron_manage(action='toggle')`.
-async fn freeze_owned_background_work(user_id: &str) {
+async fn freeze_owned_background_work(user_id: &str) -> FreezeReport {
+    let mut report = FreezeReport::default();
     if let Some(store) = crate::goal::global() {
         match store.pause_all_owned_by(user_id) {
-            Ok(count) if count > 0 => {
-                tracing::warn!(
-                    user_id = %user_id,
-                    count,
-                    "users.update: deactivation paused owned goals"
-                );
+            Ok(count) => {
+                report.goals = count;
+                if count > 0 {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        count,
+                        "users.update: deactivation paused owned goals"
+                    );
+                }
             }
-            Ok(_) => {}
             Err(e) => {
                 tracing::warn!(
                     user_id = %user_id,
@@ -580,6 +693,7 @@ async fn freeze_owned_background_work(user_id: &str) {
     }
     if let Some(registry) = crate::looping::global() {
         let count = registry.pause_all_owned_by(user_id);
+        report.loops = count;
         if count > 0 {
             tracing::warn!(
                 user_id = %user_id,
@@ -590,14 +704,16 @@ async fn freeze_owned_background_work(user_id: &str) {
     }
     if let Some(cron) = crate::tasks::cron::global() {
         match cron.lock().await.pause_all_owned_by(user_id).await {
-            Ok(count) if count > 0 => {
-                tracing::warn!(
-                    user_id = %user_id,
-                    count,
-                    "users.update: deactivation disabled owned cron jobs"
-                );
+            Ok(count) => {
+                report.crons = count;
+                if count > 0 {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        count,
+                        "users.update: deactivation disabled owned cron jobs"
+                    );
+                }
             }
-            Ok(_) => {}
             Err(e) => {
                 tracing::warn!(
                     user_id = %user_id,
@@ -607,6 +723,7 @@ async fn freeze_owned_background_work(user_id: &str) {
             }
         }
     }
+    report
 }
 
 #[cfg(test)]
@@ -1303,5 +1420,160 @@ mod tests {
             .expect("owner exists");
         assert_eq!(owner.status, UserStatus::Active);
         assert_eq!(owner.role, UserRole::Admin);
+    }
+
+    /// The deactivation receipt (round-5 ⑧): `users.update` must NAME what it
+    /// tore down — devices revoked, background work frozen — because none of
+    /// those effects has any other surface.
+    #[tokio::test]
+    async fn deactivation_receipt_reports_devices_and_frozen_work() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        upsert_panel_device(&store, "dev-a1", "u-alice");
+        upsert_panel_device(&store, "dev-a2", "u-alice");
+
+        let resp = handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "status": "deactivated"}),
+            ),
+            store.clone(),
+            test_kick_sink(),
+        )
+        .await;
+
+        let v = response_json(&resp);
+        assert_eq!(v["revoked_devices"], json!(2));
+        let frozen = &v["frozen_background_work"];
+        for key in ["goals", "loops", "crons"] {
+            assert!(
+                frozen.get(key).is_some(),
+                "the receipt must report the {key} count even when it is zero"
+            );
+        }
+        assert!(
+            v.get("reactivation_effects").is_none(),
+            "a deactivation receipt must not carry reactivation guidance"
+        );
+    }
+
+    /// The reactivation receipt (round-5 ⑧): flipping `status` back is a bare
+    /// store write — devices stay revoked, channel senders stay withdrawn,
+    /// background work stays paused. The response must say so, because
+    /// `status: "active"` alone reads as if the principal were whole again.
+    #[tokio::test]
+    async fn reactivation_receipt_names_what_stays_down() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+
+        handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "status": "deactivated"}),
+            ),
+            store.clone(),
+            test_kick_sink(),
+        )
+        .await;
+        let resp = handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "status": "active"}),
+            ),
+            store.clone(),
+            test_kick_sink(),
+        )
+        .await;
+
+        let v = response_json(&resp);
+        let effects = v
+            .get("reactivation_effects")
+            .expect("reactivation must name what did NOT come back");
+        for key in ["devices", "channel_senders", "background_work"] {
+            assert!(
+                effects[key].as_str().is_some_and(|s| !s.is_empty()),
+                "reactivation_effects.{key} must name the recovery path"
+            );
+        }
+        assert!(
+            v.get("revoked_devices").is_none(),
+            "a reactivation did not revoke anything — the deactivation fields must not appear"
+        );
+    }
+
+    /// Authority-change audit (round-5 ⑦): create / role transition /
+    /// deactivation each append exactly one `authority_change` entry naming
+    /// actor, verb and target. Serialised under `AUDIT_TEST_LOCK` because the
+    /// handle is process-global.
+    #[tokio::test]
+    async fn authority_changes_are_audited() {
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        crate::security::audit::replace_global_for_test(&log);
+
+        let store = seeded_store();
+        let created = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-owner".to_string()),
+                handle_create(
+                    rpc_request("users.create", json!({"display_name": "Alice"})),
+                    store.clone(),
+                ),
+            )
+            .await;
+        let new_id = response_json(&created)["user"]["user_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-owner".to_string()),
+                handle_update(
+                    rpc_request(
+                        "users.update",
+                        json!({"user_id": new_id, "role": "admin", "status": "deactivated"}),
+                    ),
+                    store.clone(),
+                    test_kick_sink(),
+                ),
+            )
+            .await;
+
+        let mut details = Vec::new();
+        while let Ok(entry) = rx.try_recv() {
+            assert_eq!(
+                entry.event_type,
+                crate::security::audit::AuditEventType::AuthorityChange
+            );
+            details.push((entry.actor_user, entry.detail));
+        }
+        crate::security::audit::clear_global_for_test();
+
+        // Concurrent tests in this process may legitimately emit their own
+        // entries into the installed handle while it is up (the lock
+        // serialises audit-ASSERTING tests, not every producer) — keep only
+        // this test's principal, whose id is a fresh uuid, and only those
+        // entries carry this test's scoped caller.
+        let mine: Vec<String> = details
+            .into_iter()
+            .filter(|(_, d)| d.contains(&new_id))
+            .map(|(actor, d)| {
+                assert_eq!(actor.as_deref(), Some("u-owner"));
+                d
+            })
+            .collect();
+        assert_eq!(mine.len(), 3, "create + role + status: {mine:?}");
+        assert!(mine[0].starts_with("users.create: created u-"));
+        assert!(mine[0].contains("role=member"));
+        assert_eq!(mine[1], format!("users.update: role {new_id} member→admin"));
+        assert_eq!(
+            mine[2],
+            format!("users.update: status {new_id} →deactivated")
+        );
     }
 }

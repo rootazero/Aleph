@@ -691,6 +691,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let (gw_audit_log, gw_audit_rx) = alephcore::security::audit::SecurityAuditLog::new(256);
     let _gw_audit_drain =
         alephcore::security::spawn_audit_drain(gw_audit_rx, auth_bundle.security_store.clone());
+    // Process-wide handle for the `AuthorityChange` producers (users/projects/
+    // pairing/ticket/allowed_users) — see `security::audit::install_global`.
+    alephcore::security::audit::install_global(&gw_audit_log);
     server.set_audit_log(gw_audit_log);
 
     // Per-agent signing identities + the signed operation ledger. Installed
