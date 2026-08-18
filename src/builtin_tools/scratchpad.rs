@@ -567,9 +567,9 @@ impl AlephTool for ScratchpadTool {
         // Resolve the effective project id: explicit, else derive from the
         // live chat session so single-chat todos need no project name.
         let session_key = self.current_session_key().await;
-        let project_id = match args.project_id.clone() {
-            Some(p) if !p.trim().is_empty() => p,
-            _ => derive_default_project_id(&session_key),
+        let (project_id, explicit) = match args.project_id.clone() {
+            Some(p) if !p.trim().is_empty() => (p, true),
+            _ => (derive_default_project_id(&session_key), false),
         };
 
         info!(
@@ -590,6 +590,23 @@ impl AlephTool for ScratchpadTool {
                 "Invalid project_id: must not contain path separators, '..', null bytes, or start with '.'".to_string(),
             ));
         }
+
+        // Multi-user namespacing (round-5 ⑤, product decision — previously
+        // the answer was given by accident): an EXPLICIT project_id is
+        // model-chosen and used to resolve against one flat, install-global
+        // directory, so any principal could name — and read — another's
+        // named scratchpad. Explicit ids are now namespaced by the asking
+        // actor: the owner (and caller-less legacy paths) keep the flat path
+        // byte-identically, every other principal gets `<id>__<actor>`, the
+        // memory-partition suffix shape. Derived ids need no suffix: they
+        // come from the session key, which already separates personal
+        // sessions, and deliberately shares a room's — matching the room's
+        // shared memory partition.
+        let project_id = if explicit {
+            namespace_explicit_project_id(&project_id)
+        } else {
+            project_id
+        };
 
         // Registry binding (unchanged semantics, now keyed on resolved id).
         if !session_key.is_empty() {
@@ -996,6 +1013,36 @@ fn require_item_index(index: Option<usize>, action: &str) -> Result<usize> {
 
 /// Derive a filesystem-safe default scratchpad project id from the live
 /// session key, for single-chat ad-hoc todos where the model omits
+/// Namespace an explicit, model-chosen `project_id` by the asking principal
+/// (round-5 ⑤). The owner and caller-less paths (single-user installs,
+/// loopback before P1, tests) return the id unchanged — the flat legacy path
+/// is byte-identical there. Any other principal gets `<id>__<actor>`, so two
+/// members naming the same scratchpad land in different directories instead
+/// of sharing one by accident. The actor slug is sanitized the same way
+/// `derive_default_project_id` sanitizes session keys, so the namespaced id
+/// still passes the path-traversal guard above.
+fn namespace_explicit_project_id(project_id: &str) -> String {
+    match crate::gateway::visibility::ambient_actor() {
+        Some(actor)
+            if actor != crate::gateway::security::store::OWNER_USER_ID
+                && !actor.is_empty() =>
+        {
+            let slug: String = actor
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            format!("{project_id}__{slug}")
+        }
+        _ => project_id.to_string(),
+    }
+}
+
 /// `project_id`. Keeps only `[A-Za-z0-9_-]`, prefixes `chat-` (so it never
 /// starts with `.` and never collides with the path-traversal guard).
 fn derive_default_project_id(session_key: &str) -> String {
@@ -1332,6 +1379,50 @@ mod tests {
             }],
         };
         assert!(plan_snapshot_dto(&snap).complete);
+    }
+
+    /// Round-5 ⑤: an explicit, model-chosen `project_id` is namespaced by the
+    /// asking principal — two members naming the same scratchpad must not
+    /// land in one shared directory by accident.
+    #[tokio::test]
+    async fn explicit_project_id_is_namespaced_per_non_owner_actor() {
+        // No caller (single-user / legacy / tests): flat, byte-identical.
+        assert_eq!(namespace_explicit_project_id("roadmap"), "roadmap");
+
+        // The owner keeps the flat legacy path.
+        let flat = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some(crate::gateway::security::store::OWNER_USER_ID.to_string()),
+                async { namespace_explicit_project_id("roadmap") },
+            )
+            .await;
+        assert_eq!(flat, "roadmap");
+
+        // A member gets their own suffix — and two members differ.
+        let bob = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                async { namespace_explicit_project_id("roadmap") },
+            )
+            .await;
+        let alice = crate::gateway::caller_identity::CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                async { namespace_explicit_project_id("roadmap") },
+            )
+            .await;
+        assert_eq!(bob, "roadmap__u-bob");
+        assert_eq!(alice, "roadmap__u-alice");
+        // The suffix must survive the ingress path-traversal guard.
+        for id in [&bob, &alice] {
+            assert!(
+                !id.contains("..")
+                    && !id.contains('/')
+                    && !id.contains('\\')
+                    && !id.starts_with('.'),
+                "namespaced id must pass the ingress guard: {id}"
+            );
+        }
     }
 
     /// The `_Session:` line is the plan file's only record of who owns it, and

@@ -43,15 +43,17 @@ pub fn build_cron_executor_fn(
     agent_registry: Arc<AgentRegistry>,
     channel_registry_cell: ChannelRegistryCell,
     default_max_iterations: Option<u32>,
+    users_store: Option<Arc<crate::gateway::security::store::SecurityStore>>,
 ) -> JobExecutorFn {
     Arc::new(move |snapshot: JobSnapshot| {
         let adapter = Arc::clone(&execution_adapter);
         let registry = Arc::clone(&agent_registry);
         let ch_cell = Arc::clone(&channel_registry_cell);
         let max_iter = default_max_iterations;
-        Box::pin(
-            async move { execute_cron_job(adapter, registry, ch_cell, snapshot, max_iter).await },
-        )
+        let users = users_store.clone();
+        Box::pin(async move {
+            execute_cron_job(adapter, registry, ch_cell, snapshot, max_iter, users).await
+        })
     })
 }
 
@@ -107,6 +109,39 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
     })
 }
 
+/// Fire-time owner liveness (round-5 ④ — the qm `run-trigger.ts` criterion:
+/// re-classify the owner at TRIGGER time, not only at write time). The
+/// deactivation sweep (`CronService::pause_all_owned_by`) is the primary;
+/// this is the backstop for anything it structurally cannot cover — a second
+/// admin re-enabling a walled principal's job, a freeze that raced the
+/// clock. Returns `Some(reason)` only on a CONFIRMED walled or dangling
+/// owner; the reason doubles as the fire-log record of why the job stopped.
+///
+/// Three deliberate asymmetries:
+/// - Legacy jobs (`owner_user_id: None`) predate the users table and are
+///   never checked — byte-identical to `build_cron_metadata`'s legacy arm.
+/// - A store READ error is not proof of anything: it warns and lets the job
+///   run. The sweep remains the enforcement of record, and a transient store
+///   failure must not silently stop every owned job in the install.
+/// - `None` users store (tests, minimal servers) means no check at all.
+fn walled_owner_reason(
+    users_store: Option<&crate::gateway::security::store::SecurityStore>,
+    snapshot: &JobSnapshot,
+) -> Option<String> {
+    let (users, owner) = (users_store?, snapshot.owner_user_id.as_deref()?);
+    match users.get_user(owner) {
+        Ok(Some(u)) if u.status == crate::gateway::security::store::UserStatus::Active => None,
+        Ok(Some(_)) | Ok(None) => Some(format!(
+            "owner {owner} is deactivated or gone — job disabled at fire time"
+        )),
+        Err(e) => {
+            warn!(job_id = %snapshot.id, owner, error = %e,
+                "cron: owner liveness check failed to read the users store — letting the job run");
+            None
+        }
+    }
+}
+
 /// Resolve which agent instance to run a cron job with. When `requested` is
 /// missing from the registry, fall back to the registry's default agent
 /// (the built-in "main", which cannot be deleted). Returns the resolved
@@ -135,8 +170,36 @@ async fn execute_cron_job(
     channel_registry_cell: ChannelRegistryCell,
     snapshot: JobSnapshot,
     max_iterations_override: Option<u32>,
+    users_store: Option<Arc<crate::gateway::security::store::SecurityStore>>,
 ) -> ExecutionResult {
     let started_at = chrono::Utc::now().timestamp_millis();
+
+    // Fire-time owner liveness (round-5 ④ — the qm `run-trigger.ts`
+    // criterion: re-classify the owner at TRIGGER time, not only at write
+    // time). The deactivation sweep (`pause_all_owned_by`) is the primary;
+    // this is the backstop for anything it structurally cannot cover — a
+    // second admin re-enabling a walled principal's job, a freeze that raced
+    // the clock. Legacy jobs (`owner_user_id: None`) predate the users table
+    // and are never checked, byte-identical to `build_cron_metadata`'s
+    // legacy arm. A store READ error is not proof of anything, so it warns
+    // and lets the job run — the sweep remains the enforcement of record;
+    // only a CONFIRMED walled or dangling owner disables the job (and this
+    // result is the fire log that says why).
+    if let Some(reason) = walled_owner_reason(users_store.as_deref(), &snapshot) {
+        warn!(job_id = %snapshot.id, "cron: walled owner at fire time, disabling job");
+        if let Some(svc) = crate::tasks::cron::global() {
+            if let Err(e) = svc.lock().await.disable_walled_owner_job(&snapshot.id).await {
+                warn!(job_id = %snapshot.id, error = %e, "cron: failed to disable walled-owner job");
+            }
+        }
+        return make_error_result(
+            started_at,
+            reason.clone(),
+            ErrorReason::Permanent(reason),
+            RetryHint::permanent(),
+            snapshot.trigger_source,
+        );
+    }
 
     // Resolve agent, defaulting to "main" when unset and gracefully falling
     // back to the built-in default when the bound agent was deleted.
@@ -757,6 +820,46 @@ mod tests {
         );
     }
 
+    /// Fire-time owner liveness (round-5 ④): only a CONFIRMED walled or
+    /// dangling owner produces a reason; every other shape lets the job run.
+    #[test]
+    fn walled_owner_reason_fires_only_on_a_confirmed_walled_owner() {
+        use crate::gateway::security::store::{SecurityStore, UserRole, UserStatus};
+        let store = SecurityStore::in_memory().unwrap();
+        store
+            .create_user("u-active", "Active", UserRole::Member)
+            .unwrap();
+        store
+            .create_user("u-walled", "Walled", UserRole::Member)
+            .unwrap();
+        store
+            .update_user("u-walled", None, None, Some(UserStatus::Deactivated))
+            .unwrap();
+
+        let mut snapshot = make_test_snapshot();
+
+        // Legacy job: no owner column, never checked.
+        assert!(walled_owner_reason(Some(&store), &snapshot).is_none());
+
+        // Active owner: runs.
+        snapshot.owner_user_id = Some("u-active".to_string());
+        assert!(walled_owner_reason(Some(&store), &snapshot).is_none());
+
+        // Deactivated owner: the reason doubles as the fire-log record.
+        snapshot.owner_user_id = Some("u-walled".to_string());
+        let reason = walled_owner_reason(Some(&store), &snapshot).expect("walled owner");
+        assert!(reason.contains("u-walled"));
+        assert!(reason.contains("deactivated or gone"));
+
+        // Dangling owner (no such row): same verdict.
+        snapshot.owner_user_id = Some("u-ghost".to_string());
+        assert!(walled_owner_reason(Some(&store), &snapshot).is_some());
+
+        // No store wired (tests, minimal servers): no check at all.
+        snapshot.owner_user_id = Some("u-walled".to_string());
+        assert!(walled_owner_reason(None, &snapshot).is_none());
+    }
+
     /// `build_cron_metadata` rehydrates owner/scope from the job snapshot's
     /// persisted fields — the fire path has no completing run to inherit
     /// metadata from, so it must reconstruct attribution itself.
@@ -790,6 +893,7 @@ mod tests {
     }
 
     /// Fail-closed: an owner present with an unparseable/incoherent scope_id
+
     /// must not emit a half-written attribution (mirrors
     /// `ScopeAttribution::from_persisted`'s own "never guess" contract).
     #[test]

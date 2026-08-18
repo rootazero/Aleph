@@ -2380,6 +2380,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // D2: thread the cron-default iteration cap so each job's
                 // RunRequest carries it as max_iterations_override.
                 cron_state.config.default_max_iterations,
+                // Fire-time owner liveness (round-5 ④): the executor re-asks
+                // the users table at trigger time.
+                Some(auth_bundle.security_store.clone()),
             );
             // Route cron failure alerts through the shared delivery engine so
             // Webhook / Memory alert targets work (not just Gateway). Same

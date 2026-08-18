@@ -206,6 +206,34 @@ impl CronService {
         Ok(paused.len())
     }
 
+    /// Fire-time liveness enforcement (round-5 ④, the qm `run-trigger.ts`
+    /// criterion): the executor has just confirmed this job's owner is
+    /// deactivated or gone, so the job is disabled BEFORE it would fire —
+    /// the write-time sweep (`pause_all_owned_by`) is the primary, this is
+    /// the backstop for anything it could miss (a job re-enabled by a second
+    /// admin after the owner was walled, a freeze that raced the clock).
+    ///
+    /// Set-to-disabled, never toggle, for the same reason as the sweep:
+    /// this path must be idempotent. Returns `false` when the job is already
+    /// disabled (nothing changed, no frame emitted).
+    pub async fn disable_walled_owner_job(&self, job_id: &str) -> Result<bool, TaskError> {
+        let changed = {
+            let mut store = self.state.store.lock().await;
+            match store.get_job_mut(job_id) {
+                Some(job) if job.enabled => {
+                    job.enabled = false;
+                    store.persist().map_err(TaskError::internal)?;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.emit_change(job_id, crate::gateway::events::ChangeKind::Updated);
+        }
+        Ok(changed)
+    }
+
     // ── Write operations ────────────────────────────────────────────
 
     /// Add a new job. Returns the job ID.
