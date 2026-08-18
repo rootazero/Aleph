@@ -40,7 +40,7 @@ impl A2AClientPool {
         }
 
         // Slow path: create new client under write lock
-        let client = Arc::new(match &agent.auth_token {
+        let client = Arc::new(match agent.auth_token() {
             Some(token) => A2AClient::with_auth(&agent.base_url, token),
             None => A2AClient::new(&agent.base_url),
         });
@@ -102,27 +102,21 @@ mod tests {
     use chrono::Utc;
 
     fn make_agent(id: &str, url: &str) -> RegisteredAgent {
-        RegisteredAgent {
-            card: AgentCard {
-                id: id.to_string(),
-                name: format!("Agent {}", id),
-                version: "1.0.0".to_string(),
-                description: Some("Test agent".to_string()),
-                provider: None,
-                documentation_url: None,
-                interfaces: vec![],
-                skills: vec![],
-                security: vec![],
-                extensions: vec![],
-                default_input_modes: vec!["text".to_string()],
-                default_output_modes: vec!["text".to_string()],
-            },
-            trust_level: TrustLevel::Local,
-            base_url: url.to_string(),
-            last_seen: Utc::now(),
-            health: AgentHealth::Healthy,
-            auth_token: None,
-        }
+        let card = AgentCard {
+            id: id.to_string(),
+            name: format!("Agent {}", id),
+            version: "1.0.0".to_string(),
+            description: Some("Test agent".to_string()),
+            provider: None,
+            documentation_url: None,
+            interfaces: vec![],
+            skills: vec![],
+            security: vec![],
+            extensions: vec![],
+            default_input_modes: vec!["text".to_string()],
+            default_output_modes: vec!["text".to_string()],
+        };
+        RegisteredAgent::new(card, TrustLevel::Local, url.to_string(), Utc::now(), AgentHealth::Healthy, None)
     }
 
     // NOTE: `len`/`is_empty` were cut as unused accessors (`dafc57bc6`). Pool

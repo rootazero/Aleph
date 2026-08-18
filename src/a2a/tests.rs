@@ -771,27 +771,28 @@ fn e2e_make_agent(
     description: Option<&str>,
     skills: Vec<AgentSkill>,
 ) -> RegisteredAgent {
-    RegisteredAgent {
-        card: AgentCard {
-            id: id.to_string(),
-            name: name.to_string(),
-            version: "1.0.0".to_string(),
-            description: description.map(|s| s.to_string()),
-            provider: None,
-            documentation_url: None,
-            interfaces: vec![],
-            skills,
-            security: vec![],
-            extensions: vec![],
-            default_input_modes: vec!["text".to_string()],
-            default_output_modes: vec!["text".to_string()],
-        },
-        trust_level: TrustLevel::Trusted,
-        base_url: format!("http://localhost:9000/{}", id),
-        last_seen: Utc::now(),
-        health: AgentHealth::Healthy,
-        auth_token: None,
-    }
+    let card = AgentCard {
+        id: id.to_string(),
+        name: name.to_string(),
+        version: "1.0.0".to_string(),
+        description: description.map(|s| s.to_string()),
+        provider: None,
+        documentation_url: None,
+        interfaces: vec![],
+        skills,
+        security: vec![],
+        extensions: vec![],
+        default_input_modes: vec!["text".to_string()],
+        default_output_modes: vec!["text".to_string()],
+    };
+    RegisteredAgent::new(
+        card,
+        TrustLevel::Trusted,
+        format!("http://localhost:9000/{}", id),
+        Utc::now(),
+        AgentHealth::Healthy,
+        None,
+    )
 }
 
 // ============================================================

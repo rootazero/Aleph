@@ -15,7 +15,7 @@ pub enum AgentHealth {
 }
 
 /// A registered remote agent with metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RegisteredAgent {
     pub card: AgentCard,
     pub trust_level: TrustLevel,
@@ -23,8 +23,48 @@ pub struct RegisteredAgent {
     pub last_seen: DateTime<Utc>,
     pub health: AgentHealth,
     /// Auth token for outbound requests to this agent
+    ///
+    /// SECURITY: never logged, never serialized through Debug. Callers that
+    /// need the raw token must go through `auth_token()` (which is gated to
+    /// trusted callers). Public-field access is intentionally avoided to
+    /// prevent accidental leakage via `{:?}` or `serde_json::to_string`.
+    /// See A2A-R3-21.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_token: Option<String>,
+    auth_token: Option<String>,
+}
+
+impl std::fmt::Debug for RegisteredAgent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredAgent")
+            .field("card", &self.card)
+            .field("trust_level", &self.trust_level)
+            .field("base_url", &self.base_url)
+            .field("last_seen", &self.last_seen)
+            .field("health", &self.health)
+            .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+impl RegisteredAgent {
+    /// Construct a `RegisteredAgent` (used by registry / tests).
+    pub fn new(
+        card: AgentCard,
+        trust_level: TrustLevel,
+        base_url: String,
+        last_seen: DateTime<Utc>,
+        health: AgentHealth,
+        auth_token: Option<String>,
+    ) -> Self {
+        Self { card, trust_level, base_url, last_seen, health, auth_token }
+    }
+
+    /// Read-only accessor for the auth token. Only callers that actually
+    /// need to authenticate outbound calls should use this.
+    #[must_use]
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
+    }
 }
 
 /// Port for discovering and managing remote A2A agents.

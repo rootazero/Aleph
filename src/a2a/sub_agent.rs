@@ -462,27 +462,28 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn streaming_registered(name: &str, url: &str) -> RegisteredAgent {
-        RegisteredAgent {
-            card: AgentCard {
-                id: "streamer".to_string(),
-                name: name.to_string(),
-                version: "1.0".to_string(),
-                description: None,
-                provider: None,
-                documentation_url: None,
-                interfaces: vec![],
-                skills: vec![],
-                security: vec![],
-                extensions: vec![],
-                default_input_modes: vec![],
-                default_output_modes: vec![],
-            },
-            trust_level: TrustLevel::Trusted,
-            base_url: url.to_string(),
-            last_seen: chrono::Utc::now(),
-            health: AgentHealth::Healthy,
-            auth_token: None,
-        }
+        let card = AgentCard {
+            id: "streamer".to_string(),
+            name: name.to_string(),
+            version: "1.0".to_string(),
+            description: None,
+            provider: None,
+            documentation_url: None,
+            interfaces: vec![],
+            skills: vec![],
+            security: vec![],
+            extensions: vec![],
+            default_input_modes: vec![],
+            default_output_modes: vec![],
+        };
+        RegisteredAgent::new(
+            card,
+            TrustLevel::Trusted,
+            url.to_string(),
+            chrono::Utc::now(),
+            AgentHealth::Healthy,
+            None,
+        )
     }
 
     fn sse_completed_body(answer: &str) -> String {
@@ -704,8 +705,8 @@ mod spec1_tests {
 
         let registry = Arc::new(CardRegistry::new());
         registry
-            .upsert(RegisteredAgent {
-                card: AgentCard {
+            .upsert(RegisteredAgent::new(
+                AgentCard {
                     id: "remote".to_string(),
                     name: "Remote".to_string(),
                     version: "1.0".to_string(),
@@ -719,12 +720,12 @@ mod spec1_tests {
                     default_input_modes: vec![],
                     default_output_modes: vec![],
                 },
-                trust_level: TrustLevel::Trusted,
-                base_url: server.uri(),
-                last_seen: chrono::Utc::now(),
-                health: AgentHealth::Healthy,
-                auth_token: None,
-            })
+                TrustLevel::Trusted,
+                server.uri(),
+                chrono::Utc::now(),
+                AgentHealth::Healthy,
+                None,
+            ))
             .await;
 
         let fake = Arc::new(FakeWriter::default());
