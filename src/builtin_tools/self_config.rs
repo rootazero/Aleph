@@ -213,13 +213,17 @@ impl SelfConfigTool {
 // =============================================================================
 
 impl SelfConfigTool {
-    fn list_files(&self) -> Result<SelfConfigOutput> {
+    // BT-B-R4-04: these were sync `fn`s doing blocking std::fs::* on the
+    // runtime thread every time the tool was called from the async `call`
+    // path. Now async + tokio::fs::* so the work runs on the I/O reactor
+    // instead of blocking the runtime.
+    async fn list_files(&self) -> Result<SelfConfigOutput> {
         use crate::thinker::identity_files::IDENTITY_FILE_NAMES;
 
         let mut entries = Vec::new();
         for &name in IDENTITY_FILE_NAMES {
             let path = self.agent_dir.join(name);
-            let (exists, size) = match std::fs::metadata(&path) {
+            let (exists, size) = match tokio::fs::metadata(&path).await {
                 Ok(meta) => (true, meta.len()),
                 Err(_) => (false, 0),
             };
@@ -243,10 +247,10 @@ impl SelfConfigTool {
         })
     }
 
-    fn read_file(&self, file_name: &str) -> Result<SelfConfigOutput> {
+    async fn read_file(&self, file_name: &str) -> Result<SelfConfigOutput> {
         validate_identity_file_name(file_name).map_err(ToolError::InvalidArgs)?;
         let path = self.agent_dir.join(file_name);
-        match std::fs::read_to_string(&path) {
+        match tokio::fs::read_to_string(&path).await {
             Ok(content) => Ok(SelfConfigOutput {
                 success: true,
                 message: format!("Read {} ({} bytes)", file_name, content.len()),
@@ -262,7 +266,7 @@ impl SelfConfigTool {
         }
     }
 
-    fn write_file(&self, file_name: &str, content: &str) -> Result<SelfConfigOutput> {
+    async fn write_file(&self, file_name: &str, content: &str) -> Result<SelfConfigOutput> {
         // MEMORY.md is owned entirely by the curated-memory module, not by the
         // identity-file path. It is not one of IDENTITY_FILE_NAMES, so this guard
         // must run BEFORE validate_file_name — otherwise the generic "Invalid
@@ -291,7 +295,7 @@ impl SelfConfigTool {
             });
         }
 
-        if let Err(e) = std::fs::create_dir_all(&self.agent_dir) {
+        if let Err(e) = tokio::fs::create_dir_all(&self.agent_dir).await {
             return Ok(SelfConfigOutput {
                 success: false,
                 message: format!("Failed to create agent directory: {e}"),
@@ -308,7 +312,7 @@ impl SelfConfigTool {
         // never blocks the write itself.
         let backup = backup_identity_file(&self.agent_dir, file_name, &path);
 
-        match std::fs::write(&path, content) {
+        match tokio::fs::write(&path, content).await {
             Ok(()) => {
                 let bytes = content.len();
                 let backup_note = backup
@@ -802,10 +806,10 @@ impl AlephTool for SelfConfigTool {
         }
 
         let result = match args {
-            SelfConfigArgs::ListFiles => self.list_files(),
-            SelfConfigArgs::ReadFile { file_name } => self.read_file(&file_name),
+            SelfConfigArgs::ListFiles => self.list_files().await,
+            SelfConfigArgs::ReadFile { file_name } => self.read_file(&file_name).await,
             SelfConfigArgs::WriteFile { file_name, content } => {
-                self.write_file(&file_name, &content)
+                self.write_file(&file_name, &content).await
             }
             SelfConfigArgs::ReadConfig { config_path } => self.read_config(&config_path).await,
             SelfConfigArgs::UpdateConfig {
