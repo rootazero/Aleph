@@ -219,6 +219,16 @@ Examples:
                 ActionType::DesktopType,
                 args.body.clone().unwrap_or_default(),
             )),
+            // BT-A-R4-03: previously `clipboard_read` fell through the
+            // `_ => None` arm while `clipboard_write` was gated. The
+            // disclosure risk (passwords, 2FA codes, copied secrets) is
+            // symmetric. Default Allow keeps today's behaviour; a policy
+            // that needs Ask/Deny for clipboard can tighten this and
+            // `clipboard_write` independently.
+            "clipboard_read" => Some((
+                ActionType::DesktopReadClipboard,
+                args.body.clone().unwrap_or_default(),
+            )),
             _ => None,
         };
         if let Some((action_type, target)) = gated {

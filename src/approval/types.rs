@@ -81,6 +81,14 @@ pub enum ActionType {
     DesktopType,
     DesktopKeyCombo,
     DesktopLaunchApp,
+    /// BT-A-R4-03: read-side counterpart to [`Self::DesktopType`]. The
+    /// user's clipboard routinely holds credentials (password manager
+    /// copies, 2FA codes, single-use tokens) — reading it has the same
+    /// disclosure surface as writing it, so it deserves its own gate
+    /// rather than sliding through the `_ => None` arm of the system
+    /// tool's policy check. Default Allow preserves today's behaviour for
+    /// honest callers; a deny-by-default policy tightens both at once.
+    DesktopReadClipboard,
     /// Run an automation script (AppleScript/JXA/shell/PowerShell) or a named
     /// Shortcut — arbitrary code execution on the host.
     DesktopAutomation,
@@ -147,6 +155,7 @@ impl fmt::Display for ActionType {
             Self::DesktopType => "desktop type",
             Self::DesktopKeyCombo => "desktop key combo",
             Self::DesktopLaunchApp => "desktop launch app",
+            Self::DesktopReadClipboard => "desktop read clipboard",
             Self::DesktopAutomation => "desktop automation script",
             Self::PimWrite => "personal-information write",
             Self::MediaCapture => "camera/microphone capture",

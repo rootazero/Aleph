@@ -219,8 +219,32 @@ impl HubInstallRunTool {
         let mut secret_refs: HashMap<String, String> = HashMap::new();
         let mut plain_values: HashMap<String, String> = HashMap::new();
         for (name, raw) in config_values {
-            let Some(val) = value_to_string(raw) else {
-                continue;
+            // BT-A-R4-02: previously `value_to_string` returned None for any
+            // non-scalar (array/object/null) and the caller `continue`d
+            // silently — the install proceeded with the field missing, and
+            // the misconfiguration surfaced as a runtime failure deep
+            // inside the new MCP server / skill. Now we surface the mismatch
+            // up-front so the model can fix the install call.
+            let val = match raw {
+                Value::Null => {
+                    return Err(AlephError::tool(format!(
+                        "config field '{name}' is null; pass a string, number, or boolean"
+                    )));
+                }
+                Value::Array(_) => {
+                    return Err(AlephError::tool(format!(
+                        "config field '{name}' is a JSON array; hub install accepts only scalar config values"
+                    )));
+                }
+                Value::Object(_) => {
+                    return Err(AlephError::tool(format!(
+                        "config field '{name}' is a JSON object; hub install accepts only scalar config values"
+                    )));
+                }
+                _ => match value_to_string(raw) {
+                    Some(v) => v,
+                    None => continue,
+                },
             };
             if secret_names.contains(name.as_str()) {
                 let key = field_key(entry.kind, &entry.id, name);

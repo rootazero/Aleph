@@ -555,18 +555,105 @@ fn expand_input_path(
     // First, expand environment variables in the path string
     let path_str = path.to_string_lossy();
     let expanded_str = if path_str.contains('$') {
-        let mut result = path_str.to_string();
-        // Expand $HOME
-        if let Some(home) = dirs::home_dir() {
-            result = result.replace("$HOME", &home.to_string_lossy());
+        // BT-A-R4-04: anchor the $HOME / $USER substitution so substrings
+        // like `$HOMEBREW`, `$USERDATA`, `$(HOME)`, or a `path=$HOME/foo`
+        // embedded inside a longer identifier are NOT mangled. The previous
+        // `String::replace` swapped every literal occurrence, turning
+        // `/opt/$HOMEBREW/bin/foo` into `/opt//home/aliceBREW/bin/foo`,
+        // which then failed canonicalize() and surfaced as a generic
+        // "file not found" with no hint at the real cause.
+        //
+        // Walk the string token by token: only `$NAME` (followed by a
+        // non-identifier byte) or `${NAME}` (followed by `}`) is treated
+        // as a substitution candidate. The allowlist remains `HOME` and
+        // `USER` — arbitrary env-var expansion stays off so a hostile
+        // shell cannot inject a path via $IFS / $PATH / $LD_PRELOAD.
+        let mut out = String::with_capacity(path_str.len());
+        let bytes = path_str.as_bytes();
+        let mut i = 0;
+        let home_str = dirs::home_dir().map(|h| h.to_string_lossy().into_owned());
+        let user_str = std::env::var("USER").ok();
+        while i < bytes.len() {
+            if bytes[i] == b'$' {
+                let after = &bytes[i + 1..];
+                if let Some(rest) = after.strip_prefix(b"{") {
+                    if let Some(close) = rest.iter().position(|&b| b == b'}') {
+                        let name = std::str::from_utf8(&rest[..close]).unwrap_or("");
+                        match name {
+                            "HOME" => {
+                                if let Some(ref h) = home_str {
+                                    out.push_str(h);
+                                } else {
+                                    out.push_str("${HOME}");
+                                }
+                                i += 1 + 1 + close + 1;
+                                continue;
+                            }
+                            "USER" => {
+                                if let Some(ref u) = user_str {
+                                    out.push_str(u);
+                                } else {
+                                    out.push_str("${USER}");
+                                }
+                                i += 1 + 1 + close + 1;
+                                continue;
+                            }
+                            _ => {
+                                // Unknown braced var: pass through verbatim
+                                // so the operator sees the literal in any
+                                // later error.
+                                let end = i + 1 + 1 + close + 1;
+                                out.push_str(&path_str[i..end]);
+                                i = end;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                // Unbraced: read identifier characters [A-Za-z0-9_].
+                let id_end = after
+                    .iter()
+                    .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+                    .count();
+                if id_end > 0 {
+                    let name = std::str::from_utf8(&after[..id_end]).unwrap_or("");
+                    match name {
+                        "HOME" => {
+                            if let Some(ref h) = home_str {
+                                out.push_str(h);
+                            } else {
+                                out.push('$');
+                                out.push_str(name);
+                            }
+                            i += 1 + id_end;
+                            continue;
+                        }
+                        "USER" => {
+                            if let Some(ref u) = user_str {
+                                out.push_str(u);
+                            } else {
+                                out.push('$');
+                                out.push_str(name);
+                            }
+                            i += 1 + id_end;
+                            continue;
+                        }
+                        _ => {
+                            // Pass through — do NOT replace.
+                            out.push('$');
+                            out.push_str(name);
+                            i += 1 + id_end;
+                            continue;
+                        }
+                    }
+                }
+            }
+            // Push the current UTF-8 character (bytes[i..] may be multi-byte).
+            let ch_end = i + path_str[i..].chars().next().map_or(1, |c| c.len_utf8());
+            out.push_str(&path_str[i..ch_end]);
+            i = ch_end;
         }
-        // Expand $USER
-        if let Ok(user) = std::env::var("USER") {
-            result = result.replace("$USER", &user);
-        }
-        // Only expand $HOME and $USER for security — arbitrary env var expansion
-        // could allow path injection via attacker-controlled environment variables.
-        PathBuf::from(result)
+        PathBuf::from(out)
     } else {
         path.to_path_buf()
     };

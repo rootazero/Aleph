@@ -61,6 +61,22 @@ pub(super) struct ReadCache {
     inner: Arc<Mutex<HashMap<ReadKey, ReadFingerprint>>>,
 }
 
+/// BT-A-R4-01: cap on the number of distinct `(path, offset, limit)` windows
+/// tracked simultaneously. The map is keyed by the window identity, so a
+/// long-lived session that reads millions of distinct windows accumulates
+/// one row per window — the fingerprint is small (~64 bytes including the
+/// string key + fingerprint), but the map itself, the hash table, and the
+/// Arc/Mutex wrapper all grow linearly. 10 000 entries is ~1 MB of state
+/// and covers the realistic upper end of any one session's distinct read
+/// windows; older windows are evicted when the cap is hit.
+///
+/// Eviction policy: drop the entry that was least-recently *inserted* (no
+/// recency tracking — this is a fingerprint cache, not an LRU; a true LRU
+/// needs `lru::LruCache` which is not currently a direct dep and adds
+/// nontrivial surface for a marginal accuracy gain). Reads of a window that
+/// gets evicted simply re-render in full on the next observe.
+const MAX_READ_CACHE_ENTRIES: usize = 10_000;
+
 impl ReadCache {
     /// Record this read and decide whether the caller may skip full rendering.
     ///
@@ -106,6 +122,16 @@ impl ReadCache {
                         repeats: 0,
                     },
                 );
+                // BT-A-R4-01: enforce the entry cap. When the map is full we
+                // drop one existing entry (arbitrary choice — any is fine
+                // since the cap is a leak guard, not a correctness
+                // requirement) before inserting the new window. The dropped
+                // window simply re-renders in full on its next observe.
+                if map.len() > MAX_READ_CACHE_ENTRIES {
+                    if let Some(evicted) = map.keys().next().cloned() {
+                        map.remove(&evicted);
+                    }
+                }
                 ReadCacheDecision::Fresh
             }
         }
