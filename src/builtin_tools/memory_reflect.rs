@@ -117,8 +117,18 @@ impl AlephTool for MemoryReflectTool {
 
         let session_id = self.current_session_id();
 
+        // PR-3 / BT-D-R4-04: read the actor from the turn context
+        // rather than the construction-time self.agent_id. Production
+        // hardcodes self.agent_id = "main", so without this every
+        // non-main agent's reflection was synthesised from main's
+        // owner namespace and filed under main. acting_agent_id()
+        // reads the turn context if the dispatcher set TURN_CONTEXT;
+        // otherwise it falls back to self.agent_id so older call sites
+        // (tests, headless tooling) keep working.
+        let actor = crate::builtin_tools::acting_agent::acting_agent_id(&self.agent_id);
+
         let opts = ReflectOpts {
-            agent_id: self.agent_id.clone(),
+            agent_id: actor.clone(),
             namespace: NamespaceScope::Owner,
             max_tokens: None,
             session_id: session_id.clone(),
@@ -128,7 +138,7 @@ impl AlephTool for MemoryReflectTool {
 
         // Fire-and-forget: file the query without blocking the reflect return path.
         if let Some(qf) = self.query_filer.clone() {
-            let agent = self.agent_id.clone();
+            let agent = actor.clone();
             let q = args.query.clone();
             let synth = synthesis.clone();
             let sid = session_id.clone();
