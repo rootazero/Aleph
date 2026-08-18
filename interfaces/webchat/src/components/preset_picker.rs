@@ -43,19 +43,24 @@
 //!
 //! # One owner for the highlight index
 //!
-//! [`step_highlight`] is the only thing that moves the selection, and it
-//! clamps. The alternative — bumping an unbounded counter on ↓ and clamping
-//! again at the point of use — is what [`super::command_palette`] does, and
-//! there the two clamps disagree: pressing ↓ past the end walks the highlight
-//! off the list while Enter still runs the last row, so what is lit is not what
-//! fires.
+//! [`super::picker_nav::step_highlight`] is the only thing that moves the
+//! selection, in this component and in the three others that walk a list — see
+//! that module for what a per-surface answer cost the palette.
 
-use leptos::html::Input;
+use leptos::html::{Div, Input};
 use leptos::prelude::*;
 
+use crate::components::picker_nav::{
+    publish_more_below, row_dom_id, scroll_row_into_view, step_highlight,
+};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::i18n::{t, t_string, use_i18n};
+
+/// Namespace for this component's row ids. One picker of each kind is mounted
+/// at a time, but the namespace is what makes that structural rather than
+/// remembered — see [`row_dom_id`].
+const LIST: &str = "picker";
 
 /// One offerable row, reduced to what a picker draws.
 ///
@@ -78,46 +83,6 @@ pub struct PickerRow {
     /// so a deleted provider can be set up again.
     pub configured: bool,
     pub badge: BadgeState,
-}
-
-/// Move the highlight by `delta`, clamped to the list.
-///
-/// Returns 0 for an empty list: there is no row to light, and every caller
-/// checks emptiness before indexing anyway.
-#[must_use]
-pub fn step_highlight(len: usize, cur: usize, delta: isize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    cur.saturating_add_signed(delta).min(len - 1)
-}
-
-/// DOM id of the highlighted row, so ↓ past the fold scrolls rather than
-/// walking the selection out of sight.
-///
-/// A bare document id, deliberately: no page mounts two of these at once, and
-/// a namespace parameter for a collision that does not exist is an abstraction
-/// with zero consumers.
-fn row_dom_id(index: usize) -> String {
-    format!("aleph-picker-row-{index}")
-}
-
-/// Bring the highlighted row into view. Best-effort: a missing element simply
-/// means the list re-rendered underneath us, which the next keypress fixes.
-///
-/// `block: nearest` scrolls the row's own list and stops. The argument-less
-/// overload aligns to an edge and walks **every** scrollable ancestor, so each
-/// ArrowDown would also jerk the settings panel this disclosure sits inside.
-fn scroll_row_into_view(index: usize) {
-    let Some(el) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id(&row_dom_id(index)))
-    else {
-        return;
-    };
-    let opts = web_sys::ScrollIntoViewOptions::new();
-    opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
-    el.scroll_into_view_with_scroll_into_view_options(&opts);
 }
 
 /// Button + the searchable catalogue it reveals.
@@ -167,6 +132,25 @@ pub fn PresetPicker(
         }
     });
 
+    // The scroll well and whether it still has rows under its bottom edge.
+    // Measured rather than derived from `rows.len()`: how many rows fit depends
+    // on the rendered row height, which the badge column and a wrapped subtitle
+    // both change, and a row-count threshold picked here would be wrong on the
+    // first page that styles its rows differently.
+    let list_ref = NodeRef::<Div>::new();
+    let more_below = RwSignal::new(false);
+    let remeasure = move || publish_more_below(list_ref, more_below);
+
+    // Re-measure whenever the list or the disclosure changes, on the frame
+    // *after* the change: Leptos effects are queued off the render pass, so
+    // reading `scrollHeight` synchronously here would measure the list as it
+    // was before this keystroke narrowed it.
+    Effect::new(move |_| {
+        rows.track();
+        open.track();
+        request_animation_frame(remeasure);
+    });
+
     let choose = move |row: &PickerRow| {
         on_choose(row.id.clone());
         open.set(false);
@@ -194,13 +178,13 @@ pub fn PresetPicker(
                 ev.prevent_default();
                 let next = step_highlight(len, highlight.get_untracked(), 1);
                 highlight.set(next);
-                scroll_row_into_view(next);
+                scroll_row_into_view(LIST, next);
             }
             "ArrowUp" => {
                 ev.prevent_default();
                 let next = step_highlight(len, highlight.get_untracked(), -1);
                 highlight.set(next);
-                scroll_row_into_view(next);
+                scroll_row_into_view(LIST, next);
             }
             "Enter" => {
                 ev.prevent_default();
@@ -263,7 +247,12 @@ pub fn PresetPicker(
                     // both the container above them and the configured-provider
                     // rows below, so scanning the column meant tracking an edge
                     // that kept stepping in and out.
-                    <div class="max-h-96 overflow-y-auto">
+                    <div
+                        node_ref=list_ref
+                        on:scroll=move |_| remeasure()
+                        class="max-h-96 overflow-y-auto"
+                        class:aleph-scroll-more=move || more_below.get()
+                    >
                         {move || {
                             let items = rows.get();
                             if items.is_empty() {
@@ -290,7 +279,7 @@ pub fn PresetPicker(
                                             // button back to full width, which
                                             // is what the sibling sections get
                                             // by being direct grid children.
-                                            <div id=row_dom_id(idx) class="grid">
+                                            <div id=row_dom_id(LIST, idx) class="grid">
                                                 <ProviderRowCard
                                                     flush=true
                                                     name=row.name.clone()
@@ -322,39 +311,5 @@ pub fn PresetPicker(
                 </div>
             </Show>
         </div>
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stepping_past_the_end_stays_on_the_last_row() {
-        assert_eq!(step_highlight(3, 2, 1), 2);
-    }
-
-    #[test]
-    fn stepping_before_the_first_row_stays_on_the_first() {
-        assert_eq!(step_highlight(3, 0, -1), 0);
-    }
-
-    #[test]
-    fn stepping_walks_one_row_at_a_time() {
-        assert_eq!(step_highlight(5, 1, 1), 2);
-        assert_eq!(step_highlight(5, 3, -1), 2);
-    }
-
-    #[test]
-    fn stepping_an_empty_list_is_zero() {
-        assert_eq!(step_highlight(0, 4, 1), 0);
-        assert_eq!(step_highlight(0, 0, -1), 0);
-    }
-
-    #[test]
-    fn a_shrinking_list_pulls_the_highlight_back_in_range() {
-        // The query narrowed the list under a highlight that was past its new
-        // end; a delta of 0 is the read-side clamp Enter performs.
-        assert_eq!(step_highlight(2, 9, 0), 1);
     }
 }

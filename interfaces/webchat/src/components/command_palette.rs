@@ -10,13 +10,31 @@
 //! Open/close is driven by `crate::state::hotkey::HotkeyState` so the same
 //! signal can be flipped from anywhere (currently only the ⌘K listener and
 //! the inner Esc handler).
+//!
+//! # One list, one highlight owner
+//!
+//! The filtered rows are a [`Memo`] read by both the renderer and the keyboard
+//! handler, and the highlight moves only through
+//! [`crate::components::picker_nav::step_highlight`]. Before that, ↓ bumped an
+//! unbounded counter and every *reader* clamped it: the lit row and the row
+//! Enter fired always agreed (both clamped to the last), so nothing ever
+//! mis-fired — but after pressing ↓ past the end, ↑ had to be pressed just as
+//! many times before anything moved. It read as a dead key, which is why no
+//! test and no bug report found it.
 
 use crate::appearance::{apply_mode, ThemeMode};
+use crate::components::picker_nav::{
+    publish_more_below, row_dom_id, scroll_row_into_view, step_highlight,
+};
 use crate::i18n::{t_string, use_i18n};
 use crate::state::hotkey::HotkeyState;
 use leptos::ev::keydown;
+use leptos::html::Div;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
+
+/// Namespace for this palette's row ids — see [`row_dom_id`].
+const LIST: &str = "palette";
 
 /// Category bucket for grouping in the rendered list.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -192,6 +210,11 @@ pub(crate) fn score(query: &str, label: &str, keywords: &[&str]) -> u32 {
 }
 
 /// One filtered row in display order.
+///
+/// `Clone + PartialEq` so the whole list can live in a [`Memo`]: the renderer
+/// and the keyboard handler must index into the *same* list, and two calls to
+/// `filter_and_group` are two lists that happen to agree today.
+#[derive(Clone, PartialEq, Eq)]
 struct Row {
     id: &'static str,
     label: String,
@@ -230,22 +253,6 @@ fn filter_and_group(actions: &[Action], query: &str) -> Vec<Row> {
         .collect()
 }
 
-/// Run the action at `selected_idx` from a freshly-built snapshot. The
-/// Enter keyboard handler only knows the index; mouse clicks know the id
-/// directly (see `run_by_id`).
-fn run_selected(query: String, selected_idx: usize) {
-    let mut actions = build_actions();
-    let rows = filter_and_group(&actions, &query);
-    if rows.is_empty() {
-        return;
-    }
-    let safe = selected_idx.min(rows.len() - 1);
-    let target_id = rows[safe].id;
-    if let Some(a) = actions.iter_mut().find(|a| a.id == target_id) {
-        (a.run)();
-    }
-}
-
 /// Run a specific action by id (mouse-click path).
 fn run_by_id(id: &'static str) {
     let mut actions = build_actions();
@@ -262,33 +269,70 @@ pub fn CommandPalette() -> impl IntoView {
 
     let query = RwSignal::new(String::new());
     let selected = RwSignal::new(0usize);
+    let list_ref = NodeRef::<Div>::new();
+    let more_below = RwSignal::new(false);
+
+    // The one list. Both the renderer below and the keyboard handler read it,
+    // so "which row is lit" and "which row Enter runs" cannot come apart.
+    let rows = Memo::new(move |_| filter_and_group(&build_actions(), &query.get()));
 
     // Reset on close.
     Effect::new(move |_| {
         if !open.get() {
             query.set(String::new());
-            selected.set(0);
         }
+    });
+
+    // A new list means a new first row, and a bare Enter takes the first row.
+    // Tracks `rows` rather than `query` so a keystroke that leaves the filtered
+    // set identical does not throw the highlight away, and so a locale switch
+    // (which rebuilds labels, hence rows) is covered too.
+    Effect::new(move |_| {
+        rows.track();
+        selected.set(0);
+    });
+
+    let remeasure = move || publish_more_below(list_ref, more_below);
+    Effect::new(move |_| {
+        rows.track();
+        open.track();
+        request_animation_frame(remeasure);
     });
 
     // Inner keydown listener — only acts while the palette is open. ↑/↓
     // walks the filtered list; Enter runs the selected action; Esc closes.
+    //
+    // `window_event_listener` registers no cleanup, which is only survivable
+    // because this component is mounted at the app root for the process's
+    // lifetime. Anything that unmounts must scope its handler to its own
+    // subtree — see `preset_picker`.
     window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
         if !open.get_untracked() {
             return;
         }
+        let current = rows.get_untracked();
         match ev.key().as_str() {
             "ArrowDown" => {
                 ev.prevent_default();
-                selected.update(|i| *i = i.saturating_add(1));
+                let next = step_highlight(current.len(), selected.get_untracked(), 1);
+                selected.set(next);
+                scroll_row_into_view(LIST, next);
             }
             "ArrowUp" => {
                 ev.prevent_default();
-                selected.update(|i| *i = i.saturating_sub(1));
+                let next = step_highlight(current.len(), selected.get_untracked(), -1);
+                selected.set(next);
+                scroll_row_into_view(LIST, next);
             }
             "Enter" => {
                 ev.prevent_default();
-                run_selected(query.get_untracked(), selected.get_untracked());
+                // Clamp on read as well: the query may still have been in
+                // flight when the last arrow key landed.
+                if let Some(row) =
+                    current.get(step_highlight(current.len(), selected.get_untracked(), 0))
+                {
+                    run_by_id(row.id);
+                }
                 open.set(false);
             }
             _ => {}
@@ -316,18 +360,16 @@ pub fn CommandPalette() -> impl IntoView {
                     placeholder="Type a command or search…"
                     class="w-full px-4 py-3 bg-transparent outline-none border-b border-border \
                            text-text-primary placeholder:text-text-tertiary text-sm"
-                    on:input=move |ev| {
-                        query.set(event_target_value(&ev));
-                        selected.set(0);
-                    }
+                    on:input=move |ev| query.set(event_target_value(&ev))
                     prop:value=move || query.get()
                 />
-                <div class="max-h-[50vh] overflow-y-auto py-2">
-                    {move || render_list(
-                        &filter_and_group(&build_actions(), &query.get()),
-                        selected.get(),
-                        open,
-                    )}
+                <div
+                    node_ref=list_ref
+                    on:scroll=move |_| remeasure()
+                    class="max-h-[50vh] overflow-y-auto py-2"
+                    class:aleph-scroll-more=move || more_below.get()
+                >
+                    {move || rows.with(|r| render_list(r, selected.get(), open))}
                 </div>
                 <div class="px-4 py-2 border-t border-border flex items-center gap-3 text-[10px] text-text-tertiary">
                     <span class="font-mono">"↑↓"</span>" navigate"
@@ -379,6 +421,7 @@ fn render_list(rows: &[Row], selected_idx: usize, open: RwSignal<bool>) -> AnyVi
             view! {
                 <button
                     type="button"
+                    id=row_dom_id(LIST, idx)
                     class=row_class
                     on:click=move |_| {
                         run_by_id(id);

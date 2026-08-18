@@ -27,14 +27,14 @@ mod list;
 mod model_ladder;
 mod picker;
 
-use crate::api::{CatalogEntry, CatalogView, ProviderInfo, ProvidersApi};
+use crate::api::{is_configured, CatalogEntry, CatalogView, ProviderInfo, ProvidersApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use detail_panel::ProviderDetailPanel;
-use list::{is_configured, ConfiguredList, SubscriptionLoginSection};
+use list::{ConfiguredList, SubscriptionLoginSection};
 use picker::CatalogPicker;
 
 #[component]

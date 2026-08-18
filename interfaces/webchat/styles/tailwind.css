@@ -1135,6 +1135,17 @@ html[data-material="aurora"].dark {
   }
   .aleph-session-tabs { background-color: var(--color-surface) !important; }
   .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
+  /* `.aleph-scroll-more` is NOT simply nulled here. The chat fade is
+     decorative — content dissolving under a chrome band — so dropping it costs
+     nothing. This one carries a fact (the list continues), and a reduced-
+     transparency reader needs that fact more than most, because the mask is
+     exactly the kind of effect they asked us to stop drawing. Keep the signal,
+     change the rendering: an opaque bottom rule instead of a gradient. */
+  .aleph-scroll-more {
+    mask-image: none !important;
+    -webkit-mask-image: none !important;
+    box-shadow: inset 0 -3px 0 -1px var(--color-border);
+  }
   /* Voice orb — drop blend trickery, stage becomes opaque surface. */
   .voice-orb-flow, .voice-orb-sheen { mix-blend-mode: normal; }
   .voice-stage { background: var(--color-surface); }
@@ -1615,6 +1626,18 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 .chat-scroll-fade {
   mask-image: linear-gradient(180deg, transparent 0, #000 26px);
   -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 26px);
+}
+
+/* Bottom fade — "there are more rows below the fold".
+   Applied by the component ONLY while `picker_nav::has_more_below` is true,
+   never as a permanent decoration: a mask that keeps dimming the final row of
+   a list that has already ended is an affordance that lies, and a reader who
+   catches it lying once stops reading it. That is also why the class carries
+   no `overflow` of its own — it decorates a scroll well, it does not create
+   one. */
+.aleph-scroll-more {
+  mask-image: linear-gradient(180deg, #000 calc(100% - 28px), transparent 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 28px), transparent 100%);
 }
 
 /* --- Empty-state hero --- */

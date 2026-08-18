@@ -479,6 +479,9 @@
 - **只由终局帧驱动的客户端结算，跨不过连接中断** —— `settle_run` 只由 `run_complete`/`run_error` 驱动 ⇒ core 重启前那一轮永不结算，composer 卡在 Stop、红点常亮到刷新页面为止。修法是重连后拿服务端的权威集对账；**结算不等于判决**（可能已完成 / 已被 resume 成新 run / 已死），用 `settle_abandoned_run` 这种"停止认为它在飞"的形状，不用 `complete_run`/`fail_run`；**算不出归属的一律跳过而不是结算** → §6.9 ④
 - **守卫证明过的前提，在 body 里不是证明** —— `<Show when=…>` 与它的 body 是**两个反应式作用域**：信号被清空时 body 可以在守卫重算并卸载它**之前**先跑一次新值，于是一句 `expect("visible implies Some")` 把一次再普通不过的调度顺序变成**整页崩溃**（`todo_panel.rs` 每当计划跑到 100%：`settle_plan` 先 Show、**紧接着一条语句** archive 做 `set(None)`）。修法不是把 `expect` 换成默认值，而是**取消守卫/body 的分裂**——单次读 + `Option` 视图（`None` 天然什么都不渲染），body 自己判定自己的可见性。⚠️ 这是竞态：**同一条路径在另一次观察里不崩**，所以"修完跑一次没崩"证明力有限，保证来自崩溃点不再存在 → §3.13 ⑦
 - **两个客户端拿到同一份数据 ≠ 落在同一个状态** —— 上一条的孪生，也是「把持久事实喂给冷客户端」这类连线的通用收尾判据。把 `plan` 送到冷加载路径之后，落地那一行手搓了 `apply_plan_update(projection(..))`，而"结算"是**两步**（对账 + **把已完成的沉进 transcript**）：少了第二步，冷客户端顶着一条 100% 的清单，而 live 客户端那边它早已沉成一枚归档胶囊——**同一个对话的两个客户端看到不同的东西，正是这条连线本来要消灭的缺陷**，且下一回合会把它再沉一次（重复胶囊）。判据两句：① 接好数据后再问**"live 客户端此刻停在哪个状态"**，冷路径要落在那个状态上；② **一个两步动作，别把第一步单独 `pub` 出去**——投影暴露在外就是在邀请下一个人只做一半（`plan_settlement` 现 `pub(super)`，唯一入口 `ChatState::settle_plan`）→ §3.13 ⑧
+- **一个「无界计数器 + 每个读者各夹一次」的高亮，不会错触发——所以没有任何测试会红，症状出现在反方向的那个键上** —— 命令面板的 ↓ 撞 `saturating_add(1)`、渲染与 Enter 各自 `min(len-1)`，两者**始终一致**（都夹到最后一行），于是「亮的不是触发的」这个常见判据在这里恒为假；真正的缺陷是 ↓ 按过头之后 **↑ 要按同样多次才动一格**，读起来像键坏了而不像 bug。⚠️ 这条同时是**判据本身会被抄错**的例子：`preset_picker` 的模块 doc 拿「两处 clamp 互相矛盾」论证自己为什么共享一个夹取函数，而那句话对被它引用的那个文件从来不成立——**引用另一个模块的缺陷来论证自己的设计时，去那个模块确认它现在（和当初）是不是那样坏的**。修法是让高亮**只在写侧**经 `picker_nav::step_highlight` 移动（四个 surface 共用），读侧的夹取保留但已是同一个函数
+- **一个「下面还有」的渐隐必须是条件性的，常驻的那种在列表已经到底时仍在压暗最后一行** —— 判据不是「加不加渐隐」而是**它说的话什么时候是假的**：读者抓到它撒谎一次就此不再读它。故 `.aleph-scroll-more` 由 `picker_nav::publish_more_below` 逐帧测量后挂载/摘除，且 `has_more_below` **模块私有**——够到它就意味着你自己读了几何量，而在该测量的那个 deferred 回调里读几何量正是下一条要防的 panic。⚠️ 配套：`prefers-reduced-transparency` 下**不能照抄 `.chat-scroll-fade` 的 null 掉**——那个是装饰（内容溶进 chrome 带），这个**携带事实**，要换渲染（不透明底边）而不是删信息
+- **`request_animation_frame` 回调里的 `get_untracked()` 与 `spawn_local` 里 `.await` 之后的那个是同一类 panic，而 `disposed_reads` 的块识别器看不见它** —— rAF 回调晚一帧执行，这一帧足够组件卸载（换路由/关抽屉），`NodeRef::get_untracked` 会 unwrap ⇒ 整页掉进恢复覆盖层。**且这里没有文本规则可写**：回调常是别处定义的具名闭包，扫描器跟不过去。结构性修法是**让这件事只有一种拼写**（测量收进 `publish_more_below`，谓词私有），不是加一条只认得内联 `move ||` 形式的半盲守卫——那种守卫会给你正在用的那个形状发合格证
 - **Panel UI 编译期嵌入二进制**（`rust_embed`）—— 改完看不到效果 = 漏了重编 server；⚠️ **debug 构建例外**：`rust_embed` 在 debug 下从磁盘读，所以只改 Panel 时重跑 wasm+bindgen 即可、无需重编 server（release 才是真嵌入）→ [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md)
 
 ### 8. 配置 · 诊断 · 自管理 · Hook
@@ -561,7 +564,7 @@
 | `src/identity/` | [AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) · §5.17 |
 | `src/config/` `src/diagnostics/` | §5.8 §5.9 §5.10 · §5.24（扩展调用记录 → `ext/idle-extensions`）|
 | `desktop/` | [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) · [LINUX_DESKTOP.md](docs/reference/LINUX_DESKTOP.md) · [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) · §7.1–§7.4 |
-| `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 §6.9 |
+| `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · §4.7 §6.8 §6.9 · 真机 QA `qa/picker_nav/run.sh`（键盘 walk / 条件渐隐 / 手机端加 provider，三档宽度各带效果断言）|
 | `src/canvas/` `interfaces/webchat/src/platform/wide/views/canvas/` | [CANVAS.md](docs/reference/CANVAS.md) · §6.10 · 真机 QA `qa/canvas/run.sh`（九项清单每条带效果断言） |
 | `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | 判据清单 §0（跨 crate wire 契约）· FEATURE_LOCATOR §5.4（`providers.*` 契约 + 搜索匹配器）· §5.11 §5.13 §5.23 |
 | `src/agents/` `src/teams/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) · §4.4 §4.5 §4.13a–c |

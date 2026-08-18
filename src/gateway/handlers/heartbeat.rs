@@ -582,6 +582,11 @@ pub async fn handle_runs(
 
 #[cfg(test)]
 mod tests {
+    // Lost when `f338c833c` severed the dead handlers above this module; the
+    // helper itself has two live callers (`parse_interval` at lines 205/356),
+    // so the test was orphaned, not obsolete.
+    use super::parse_interval;
+
     #[test]
     fn test_parse_interval() {
         assert_eq!(parse_interval("5m").unwrap(), 300_000);

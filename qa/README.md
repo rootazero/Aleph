@@ -31,7 +31,17 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run
 
 ./qa/leftovers/run.sh            # converged tool DESCRIPTIONs + relocated-ALEPH_HOME hooks + [agents.defaults] roots
+
+./qa/picker_nav/run.sh           # keyboard walk + conditional bottom fade + phone add-a-provider,
+                                 # at three widths (1440 / 700 folded / 390 phone)
 ```
+
+`picker_nav` needs **no mock provider** at all: every item is Panel-side
+interaction, so nothing in the run needs a model. What it does need is three
+widths, because the desktop master-detail folds at `max-width: 720px` while the
+switch to the phone UI is at 640px — 641–720px renders the desktop screens in
+their stacked form, and a round that only tested 1440x900 tested neither that
+band nor the phone screens at all.
 
 `browser_managed` needs **no mock provider** in every scenario but
 `exec-offload`: it drives `tools.invoke`, which runs a tool without an agent

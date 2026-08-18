@@ -27,11 +27,9 @@ use leptos::prelude::*;
 
 use aleph_protocol::providers::search::filter_catalog;
 
-use crate::api::{AuthKind, CatalogEntry, ProviderInfo};
+use crate::api::{configured_key, is_configured, AuthKind, CatalogEntry, ProviderInfo};
 use crate::components::preset_picker::{PickerRow, PresetPicker};
 use crate::components::provider_badge::BadgeState;
-
-use super::list::{configured_key, is_configured};
 
 /// The rows the picker offers, in the order it shows them.
 ///
