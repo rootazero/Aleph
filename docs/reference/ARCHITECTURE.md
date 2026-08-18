@@ -269,6 +269,7 @@ pattern.
 | **group_chat** | `src/group_chat/` | Group chat management |
 | **intent** | `src/intent/` | Intent recognition |
 | **logging** | `src/logging/` | Logging infrastructure |
+| **loop_graph** | `src/loop_graph/` | Loop-governance topology (who watches/audits/anchors whom) — scaffolding only, adjudication stays in LLM turns ([GRAPH_LAYER.md](./GRAPH_LAYER.md)) |
 | **markdown** | `src/markdown/` | Markdown processing |
 | **media** | `src/media/` | Media processing |
 | **metrics** | `src/metrics/` | Metrics collection |

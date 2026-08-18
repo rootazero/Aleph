@@ -460,6 +460,20 @@ impl LoopGraphTool {
                 out.push_str(&format!("⚠ {f}\n"));
             }
         }
+        // Audit-trail liveness, live-joined like every other arm above: the
+        // topology event bus has exactly one sanctioned consumer — the
+        // boot-spawned persister that appends every mutation to the snapshot
+        // store's `events` table. If that task dies (or was never spawned),
+        // the bus keeps accepting publishes but nothing lands in the audit
+        // log, and `action='events'` would read a table that quietly stopped
+        // growing — an audit trail that certifies its own absence. The bus's
+        // `subscriber_count` was built for precisely this question and had no
+        // production consumer until now. Bus absent (tests, early boot) says
+        // nothing — same discipline as the cron roster arm.
+        if let Some(bus) = crate::loop_graph::event_bus() {
+            out.push_str("\n\n== 审计落盘 ==\n");
+            out.push_str(&audit_trail_liveness_line(bus.subscriber_count()));
+        }
         out.push_str(
             "\n历史裁决：检索 tags 含 `graph-audit` 的记忆 note（审计判决书）与 \
              `reference-proposal`（待裁参照提案）。",
@@ -1328,6 +1342,21 @@ fn render_diff_line(d: &crate::loop_graph::TopologyDiff) -> String {
     }
 }
 
+/// The `status` audit-trail line, pure so the arm selection is testable
+/// without the process-global bus (a OnceCell parallel tests share — its
+/// subscriber count at assert time is not the count at render time).
+/// Zero subscribers means the boot persister is dead or never spawned:
+/// publishes still succeed, but the `events` table has stopped growing.
+fn audit_trail_liveness_line(subscribers: usize) -> String {
+    if subscribers == 0 {
+        "⚠ 事件总线 0 订阅者——审计 persister 未在听：拓扑变更照常发布，\n\
+         但 events 表已停止增长（审计断链）。重启 daemon 可重挂 persister。"
+            .to_string()
+    } else {
+        format!("live（{subscribers} 订阅者，拓扑变更经 persister 落盘 events 表）")
+    }
+}
+
 fn require(v: Option<String>, action: &str, field: &str) -> Result<String> {
     v.filter(|s| !s.trim().is_empty())
         .ok_or_else(|| AlephError::tool(format!("loop_graph {action}: '{field}' is required")))
@@ -1760,6 +1789,50 @@ mod tests {
             rendered.contains("⚠ target missing（workflow 模板已消失）"),
             "a vanished template must be a finding the audit roll call sees: {rendered}"
         );
+    }
+
+    /// The status render's audit-trail liveness section tracks the GLOBAL
+    /// event bus: bus installed ⇒ the section renders with one of the two
+    /// arms; bus absent ⇒ no section at all. The bus is a process OnceCell
+    /// shared by parallel tests and its subscriber count can move between
+    /// render and assert, so this test asserts the presence correlation and
+    /// lets the pure `audit_trail_liveness_line` test own arm selection.
+    #[tokio::test]
+    async fn status_audit_trail_section_tracks_global_bus_presence() {
+        let (_d, t) = tool();
+        let mut a = args(LoopGraphAction::Node);
+        a.id = Some("daemon:audit-trail-probe".into());
+        a.kind = Some(NodeKind::Daemon);
+        a.label = Some("probe".into());
+        t.call(a).await.unwrap();
+
+        let out = t.call(args(LoopGraphAction::Status)).await.unwrap();
+        let rendered = out.rendered.unwrap();
+        if crate::loop_graph::event_bus().is_some() {
+            assert!(
+                rendered.contains("== 审计落盘 =="),
+                "bus installed ⇒ liveness section renders: {rendered}"
+            );
+            assert!(
+                rendered.contains("live（") || rendered.contains("0 订阅者"),
+                "exactly one liveness arm renders: {rendered}"
+            );
+        } else {
+            assert!(
+                !rendered.contains("审计落盘"),
+                "bus absent ⇒ section stays silent: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn audit_trail_liveness_line_selects_arm_by_subscriber_count() {
+        let dead = audit_trail_liveness_line(0);
+        assert!(dead.contains('⚠'));
+        assert!(dead.contains("0 订阅者"));
+        let live = audit_trail_liveness_line(2);
+        assert!(live.contains("live（2 订阅者"));
+        assert!(!live.contains('⚠'));
     }
 
     /// End-to-end wiring: a `node` action on the tool publishes a

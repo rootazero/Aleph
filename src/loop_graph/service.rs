@@ -546,16 +546,27 @@ pub(crate) fn render_session_topology_in(
     store: &crate::loop_graph::LoopGraphStore,
     session: &str,
 ) -> Option<String> {
-    // `.flatten()`, not `?`: BOTH the store error and a genuine "not a
-    // registered node" collapse to `None` here, deliberately. This is the
+    // `.flatten()`'s two `None`s stay collapsed, deliberately: this is the
     // prompt-rendering path — an unreadable store must render nothing rather
     // than break the turn. Callers that need to tell the two apart (doctor,
     // lint, tests) want the strict variant — it lives under `#[cfg(test)]`
     // today because tests are its only consumer; promote it the day a
-    // production caller appears. (Behaviourally identical to `.ok()?` — both
-    // fold the same two `None`s — but written as `.flatten()` so the intent
-    // is named.)
-    render_session_topology_inner(store, session).ok().flatten()
+    // production caller appears.
+    //
+    // Fail-open, but not SILENT fail-open: until 2026-08-18 the Err arm
+    // vanished without a trace, so a busy store mid-write rendered a
+    // governed session as ungoverned (no watchers, no owns_reference line,
+    // no root body) and nothing anywhere recorded that it happened — the
+    // exact observability gap the graph layer exists to close, one level
+    // down. The turn still renders; the miss is now in the log.
+    match render_session_topology_inner(store, session) {
+        Ok(rendered) => rendered,
+        Err(e) => {
+            tracing::warn!(session, error = %e,
+                "loop_graph: topology read failed — rendering this turn as ungoverned (fail-open)");
+            None
+        }
+    }
 }
 
 /// Strict variant of [`render_session_topology_in`] — propagates the store
