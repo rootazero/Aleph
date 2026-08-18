@@ -635,6 +635,27 @@ fn validate_wait_args(args: &GoalArgs, goal: &Goal) -> Result<()> {
             "wait_for_task requires a non-empty coordination task id.".to_string(),
         ));
     }
+    // BT-B-R4-02: cap the wait_for_task id length and reject control bytes.
+    // The id is later passed to the team / coord-task store for lookup; a
+    // multi-megabyte string would sit in the validation path until the
+    // store call returns, and a control-byte-laden id could confuse the
+    // store's display layer when the wake-up banner is rendered.
+    // Existence is checked at the wait-barrier arm (where we have access
+    // to the store) so this layer only needs to bound the input.
+    if let Some(task_id) = args.wait_for_task.as_deref() {
+        if task_id.len() > 256 {
+            return Err(AlephError::tool(format!(
+                "wait_for_task id is {} bytes; max 256",
+                task_id.len()
+            )));
+        }
+        if task_id.chars().any(|c| c.is_control()) {
+            return Err(AlephError::tool(
+                "wait_for_task id contains a control byte; expected a printable coord task id"
+                    .to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
