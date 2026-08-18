@@ -292,15 +292,6 @@ impl AgentRegistry {
         // delegatable id but never shadows a builtin/user/project one.
         plugin_subagents().iter().find(|a| a.id == id).cloned()
     }
-
-    /// Remove an agent by ID
-    pub fn unregister(&self, id: &str) -> Option<AgentDef> {
-        let mut agents = self.agents.write().unwrap_or_else(|e| {
-            warn!("AgentRegistry lock poisoned during unregister, recovering");
-            e.into_inner()
-        });
-        agents.remove(id)
-    }
 }
 
 /// Canonicalize a built-in `agent_type` selector, tolerating casing and the
@@ -547,16 +538,6 @@ mod tests {
         let subagents = registry.list_subagents();
         assert_eq!(subagents.len(), 2);
         assert!(subagents.iter().all(|a| a.mode == AgentMode::SubAgent));
-    }
-
-    #[test]
-    fn test_registry_unregister() {
-        let registry = AgentRegistry::new();
-        registry.register(AgentDef::new("test", AgentMode::SubAgent));
-
-        let removed = registry.unregister("test");
-        assert!(removed.is_some());
-        assert!(registry.get("test").is_none());
     }
 
     #[test]
