@@ -72,22 +72,58 @@ fn looks_like_transport_error(s: &str) -> bool {
     false
 }
 
-fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>) -> Vec<String> {
+fn chrome_launch_args(
+    profile_cfg: Option<&ProfileConfig>,
+    profile_name: &str,
+) -> Vec<String> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
     ];
+    // BROWSER-R4-05: when the profile leaves user_data_dir unset, the
+    // bootstrap-launched Chrome used to fall through to the user's
+    // daily Chrome profile (~/.config/google-chrome on Linux,
+    // %LOCALAPPDATA%\Google\Chrome\User Data on Windows) — silently
+    // reading/writing the user's cookies, history, and logins.
+    // Default to a per-profile Aleph-private path under $ALEPH_DATA
+    // (or $HOME/.aleph) so the bootstrap clone is isolated. The
+    // override `cfg.user_data_dir` still wins when configured.
+    let default_user_data_dir = default_user_data_dir_for(profile_name);
     if let Some(cfg) = profile_cfg {
         if let Some(proxy) = &cfg.proxy {
             args.push(format!("--proxy-server={proxy}"));
         }
-        if let Some(dir) = &cfg.user_data_dir {
-            args.push(format!("--user-data-dir={dir}"));
+        match &cfg.user_data_dir {
+            Some(dir) => args.push(format!("--user-data-dir={dir}")),
+            None => args.push(format!("--user-data-dir={default_user_data_dir}")),
         }
         args.extend(cfg.extra_args.iter().cloned());
+    } else {
+        args.push(format!("--user-data-dir={default_user_data_dir}"));
     }
     args
+}
+
+/// BROWSER-R4-05: helper that computes the per-profile Aleph-private
+/// Chrome user-data-dir default. Honors `$ALEPH_DATA` so an operator
+/// with a non-default data root still gets a clean path; falls back
+/// to `$HOME/.aleph` for the common case. Returns a String rather
+/// than a PathBuf so the caller can hand it straight to Chrome's
+/// `--user-data-dir` flag without extra PathBuf formatting.
+fn default_user_data_dir_for(profile_name: &str) -> String {
+    let root = std::env::var("ALEPH_DATA")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            dirs::home_dir().map(|h| {
+                h.join(".aleph")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        })
+        .unwrap_or_else(|| "/tmp/.aleph".to_string());
+    format!("{root}/browser/chrome-mcp/{profile_name}/user-data-dir")
 }
 
 /// Manages Chrome `DevTools` MCP sessions with lazy creation and profile-keyed caching.
@@ -391,7 +427,7 @@ impl ChromeMcpDriver {
             chrome_path.display()
         );
 
-        let args = chrome_launch_args(profile_cfg);
+        let args = chrome_launch_args(profile_cfg, profile_name);
 
         let mut cmd = Command::new(&chrome_path);
         for a in &args {
@@ -595,7 +631,7 @@ mod tests {
             user_data_dir: Some("/tmp/aleph-profile".into()),
             ..Default::default()
         };
-        let args = chrome_launch_args(Some(&cfg));
+        let args = chrome_launch_args(Some(&cfg), "default");
         assert!(args.contains(&"--proxy-server=socks5://127.0.0.1:1080".to_string()));
         assert!(args.contains(&"--user-data-dir=/tmp/aleph-profile".to_string()));
         // Baseline flags still lead the argv.
@@ -613,7 +649,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let args = chrome_launch_args(Some(&cfg));
+        let args = chrome_launch_args(Some(&cfg), "default");
         let n = args.len();
         assert_eq!(args[n - 2], "--disable-gpu");
         assert_eq!(args[n - 1], "--proxy-server=http://override:1");
@@ -625,8 +661,8 @@ mod tests {
     fn chrome_launch_args_default_profile_matches_baseline() {
         // A profile with no proxy/user-data/extra args must not change the argv.
         assert_eq!(
-            chrome_launch_args(Some(&ProfileConfig::default())),
-            chrome_launch_args(None)
+            chrome_launch_args(Some(&ProfileConfig::default()), "default"),
+            chrome_launch_args(None, "default")
         );
     }
 
