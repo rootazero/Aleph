@@ -411,17 +411,20 @@ pub fn init_and_reconcile(dir: PathBuf) -> usize {
             tombstoned += 1;
             index.insert(tombstone.id, tombstone);
         } else if is_undelivered_completion(&record, now) {
-            // Finished naturally, and the notice promised at spawn died with
-            // the previous daemon. Stamp it delivered in this same pass —
-            // otherwise a second restart before the parent turn lands repeats
-            // it forever — and stash it for the async handback.
-            let delivered = JobRecord {
-                announced: true,
-                ..record
-            };
-            write_state(&dir, &delivered);
-            undelivered.push(delivered.clone());
-            index.insert(delivered.id, delivered);
+            // BT-D-R4-16: stamp the row announced=true only AFTER the
+            // boot-time broadcast succeeds, not in this reconcile pass.
+            // Previously we stamped here "so a second restart before the
+            // parent turn lands repeats it forever", but the stamp ran
+            // BEFORE the actual broadcast in init_and_announce. If this
+            // daemon crashed between the stamp and the broadcast, the
+            // completion was marked delivered on disk but never delivered
+            // — silent loss. Now we leave announced=false on disk, push
+            // the record to the handback queue, and let init_and_announce
+            // call record_announced() after broadcast returns Ok. A
+            // crash mid-broadcast leaves the row stamped=false, and the
+            // next boot retries the handback (no silent loss).
+            undelivered.push(record.clone());
+            index.insert(record.id, record);
         } else {
             index.insert(record.id, record);
         }
@@ -490,6 +493,12 @@ pub async fn init_and_announce(dir: PathBuf) -> usize {
             "process_journal: announcing a background job that finished before the previous daemon stopped"
         );
         super::process_completion::broadcast(&session, event).await;
+        // BT-D-R4-16: stamp announced=true AFTER broadcast returns. A
+        // crash mid-broadcast leaves the row stamped=false on disk so
+        // the next boot retries the handback. Previously the stamp ran
+        // in init_and_reconcile (before this broadcast was reached),
+        // which silently lost completions on a crash in the gap.
+        record_announced(job.record.id);
     }
     tombstoned
 }
