@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use crate::error::Result;
 use crate::media::detect::{detect_by_extension, detect_from_path};
 use crate::media::{MediaInput, MediaPipeline, MediaType};
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -117,6 +118,35 @@ Examples:
                 (MediaInput::FilePath { path }, mt)
             }
             (None, Some(url), None) => {
+                // BT-C-R4-02: validate the URL against the SSRF policy
+                // before the pipeline fetches it. The media pipeline
+                // (downstream provider) performs its own fetch and was
+                // not previously gated, so a model-supplied URL like
+                // `http://169.254.169.254/latest/meta-data/iam/security-credentials/`
+                // or `http://127.0.0.1:8123/` would be retrieved, the
+                // image sent to the provider for analysis, and any
+                // credentials / internal-state leak extracted into the
+                // model's context. Mirror the policy check `media_send`
+                // and `web_fetch` use, so the operator's existing
+                // `[security] ssrf` config covers this surface too.
+                let url_parsed = url::Url::parse(url).map_err(|e| {
+                    crate::error::AlephError::tool(format!("`url` is not a valid URL: {e}"))
+                })?;
+                let scheme = url_parsed.scheme();
+                if scheme != "http" && scheme != "https" {
+                    return Ok(MediaUnderstandOutput::err(format!(
+                        "`url` must be http:// or https:// (got '{scheme}://')"
+                    )));
+                }
+                validate_url_async(url, &SsrfPolicy::default())
+                    .await
+                    .map_err(|e| {
+                        crate::error::AlephError::tool(format!(
+                            "`url` blocked by SSRF policy ({e}); \
+                             media_understand rejects private/loopback hosts \
+                             unless the operator widens the policy"
+                        ))
+                    })?;
                 // Try format_hint first, then extract extension from URL.
                 // Strip any ?query / #fragment before reading the extension,
                 // otherwise "photo.png?v=2" yields ext "png?v=2" and is rejected.
