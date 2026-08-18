@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, warn};
+
+/// Monotonic counter for unique tmp filenames in `save()`. Process-local; the
+/// (pid, counter, nanos) triple is unique-by-construction so two concurrent
+/// saves in the same process (or a crash-leftover from a prior save) cannot
+/// collide on the tmp path.
+static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallRegistry {
@@ -77,7 +84,21 @@ impl InstallRegistry {
         use std::io::Write;
         let path = skills_dir.join("manifest.json");
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        let tmp_path = path.with_extension("tmp");
+        // BUNDLED-R4-01 + BUNDLED-R4-07: unique-per-call tmp name avoids both
+        // the symlink-planting race (attacker plants a symlink at a fixed
+        // tmp path to redirect the write) and the stale-tmp crash-leftover
+        // (a previous crash leaves a fixed tmp name on disk, blocking all
+        // future saves). Each save now picks its own atomic-counter+nanos
+        // tmp name, eliminating both surfaces.
+        let tmp_path = skills_dir.join(format!(
+            ".manifest.tmp.{}.{}.{}",
+            std::process::id(),
+            SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
         // `create_new(true)` refuses on a pre-existing tmp file, so the writer
         // gets a unique-by-construction handle even when two startups race.
         match std::fs::OpenOptions::new()
