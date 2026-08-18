@@ -59,9 +59,17 @@ impl NoteOrientTool {
         agent_id: &str,
         args: NoteOrientArgs,
     ) -> Result<NoteOrientOutput, AlephError> {
-        let budget = TokenBudget {
-            max_tokens: args.max_tokens.unwrap_or(self.default_budget.max_tokens),
-        };
+        // BT-C-R4-12: clamp the per-call max_tokens. Without the cap a
+        // model-supplied usize::MAX would make `read_snapshot` walk the
+        // entire corpus and emit every byte into the prompt — a prompt
+        // blow-up + memory spike on the snapshot render path. The cap
+        // matches the upper bound the upstream NoteOrientation already
+        // documents (64K tokens is far above any sensible "orient me on
+        // this agent's notes" budget).
+        const MAX_ORIENT_TOKENS: usize = 64 * 1024;
+        let requested = args.max_tokens.unwrap_or(self.default_budget.max_tokens);
+        let max_tokens = requested.min(MAX_ORIENT_TOKENS);
+        let budget = TokenBudget { max_tokens };
         let snap = self.wiki.read_snapshot(agent_id, budget).await?;
         Ok(NoteOrientOutput {
             schema: snap.schema_text,
