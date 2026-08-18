@@ -34,5 +34,3 @@ pub(super) async fn build_loop_history(
     }
     msgs
 }
-
-

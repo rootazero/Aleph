@@ -18,9 +18,7 @@ mod types;
 mod tests;
 
 pub use handler::{EventContext, EventHandler, HandlerError};
-pub use types::{
-    AlephEvent, EventType, ProcessCompletionEvent, SubAgentCompletionEvent,
-};
+pub use types::{AlephEvent, EventType, ProcessCompletionEvent, SubAgentCompletionEvent};
 
 // Event filtering for subscription-based routing
 pub use filter::EventFilter;

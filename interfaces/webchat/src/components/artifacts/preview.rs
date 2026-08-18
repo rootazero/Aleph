@@ -110,13 +110,26 @@ pub(super) fn Preview(target: RwSignal<Option<PreviewTarget>>) -> impl IntoView 
     let text = RwSignal::new(Option::<TextPreview>::None);
     let text_error = RwSignal::new(Option::<String>::None);
 
+    // The handle is kept and dropped on cleanup, and the read is untracked.
+    //
+    // Both halves were missing until 2026-08-18 and together they were a
+    // reproducible whole-Panel crash, not a leak: `window_event_listener`
+    // registers **no** cleanup, and this component lives in the right rail,
+    // which unmounts whenever the layout mode changes or the viewport crosses
+    // the phone breakpoint. The orphaned closure then ran `target.get()` — a
+    // *tracked* read, in a DOM callback that is not a reactive context — on a
+    // signal its owner had already disposed, so the next `Escape` after
+    // narrowing the window panicked the app into the recovery overlay.
+    //
+    // Same hazard `preset_picker` documents; same fix `canvas::present` uses.
     {
         use leptos::ev::keydown;
-        window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
-            if ev.key() == "Escape" && target.get().is_some() {
+        let esc_handle = window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
+            if ev.key() == "Escape" && target.get_untracked().is_some() {
                 target.set(None);
             }
         });
+        on_cleanup(move || esc_handle.remove());
     }
 
     // Fetch when the target becomes (or changes to) text. Clears first so the

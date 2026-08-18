@@ -5,6 +5,7 @@
 
 use crate::api::{EmbeddingProviderConfig, EmbeddingProviderEntry, EmbeddingProvidersApi};
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -77,7 +78,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                     }
                     Err(e) => error.set(Some(
                         crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
-                            format!("加载失败: {e}")
+                            format!("{}: {e}", t_string!(i18n, settings.phone.load_failed))
                         }),
                     )),
                 }
@@ -107,7 +108,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
             // Loading state
             {move || loading.get().then(|| view! {
                 <div style="text-align:center; color:var(--color-text-tertiary); font-size:14px; padding:24px 0;">
-                    "加载中…"
+                    {t!(i18n, common.loading)}
                 </div>
             })}
 
@@ -117,7 +118,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                 if list.is_empty() && !loading.get() {
                     return view! {
                         <div style="text-align:center; color:var(--color-text-tertiary); font-size:14px; padding:24px 0;">
-                            "暂无配置的 Embedding Provider"
+                            {t!(i18n, settings.phone.no_embedding_providers)}
                         </div>
                     }.into_any();
                 }
@@ -141,11 +142,11 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                 let entry = entry.clone();
                                 move || {
                                     if entry.is_active {
-                                        "活跃".to_string()
+                                        t_string!(i18n, settings.phone.active).to_string()
                                     } else if entry.enabled {
-                                        "已启用".to_string()
+                                        t_string!(i18n, settings.embedding.enabled).to_string()
                                     } else {
-                                        "已禁用".to_string()
+                                        t_string!(i18n, settings.phone.disabled).to_string()
                                     }
                                 }
                             };
@@ -227,7 +228,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                                     Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
                                                         i18n,
                                                         &e,
-                                                        |e| format!("设置活跃失败: {e}"),
+                                                        |e| format!("{}: {e}", t_string!(i18n, settings.phone.set_active_failed)),
                                                     ))),
                                                 }
                                                 active_saving.set(false);
@@ -236,7 +237,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                     >
                                         <div class="cell-body">
                                             <div class="cell-title" style="color:var(--color-primary);">
-                                                {move || if active_saving.get() { "设置中…" } else { "设为活跃" }}
+                                                {move || if active_saving.get() { t_string!(i18n, settings.embedding.setting_default).to_string() } else { t_string!(i18n, settings.phone.set_active).to_string() }}
                                             </div>
                                         </div>
                                         {move || entry_for_active.get_value().is_active.then(|| view! {
@@ -249,7 +250,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                     // "Enabled" toggle row
                                     <div class="cell" style="cursor:default;">
                                         <div class="cell-body">
-                                            <div class="cell-title">"启用"</div>
+                                            <div class="cell-title">{t!(i18n, settings.phone.enable)}</div>
                                         </div>
                                         <button
                                             class="ios-switch"
@@ -271,7 +272,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                                         Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
                                                             i18n,
                                                             &e,
-                                                            |e| format!("更新失败: {e}"),
+                                                            |e| format!("{}: {e}", t_string!(i18n, settings.phone.update_failed)),
                                                         ))),
                                                     }
                                                 });
@@ -284,11 +285,11 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                     // "API Key" inline input row
                                     <div style="padding:10px 16px; display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--color-border);">
                                         <div style="font-size:13px; color:var(--color-text-secondary); font-weight:500;">
-                                            "API Key"
+                                            {t!(i18n, settings.embedding.api_key)}
                                         </div>
                                         <input
                                             type="password"
-                                            placeholder=move || if entry_for_key.get_value().has_api_key { "••••••••（已设置，输入新值覆盖）" } else { "输入 API Key" }
+                                            placeholder=move || if entry_for_key.get_value().has_api_key { t_string!(i18n, settings.phone.key_set_placeholder).to_string() } else { t_string!(i18n, settings.phone.key_enter_placeholder).to_string() }
                                             prop:value=move || key_input.get()
                                             on:input=move |ev| key_input.set(event_target_value(&ev))
                                             style="width:100%; padding:8px 10px; background:var(--color-surface-sunken); border:1px solid var(--color-border); border-radius:8px; font-size:14px; color:var(--color-text-primary); outline:none; box-sizing:border-box;"
@@ -314,7 +315,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                                         Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
                                                             i18n,
                                                             &e,
-                                                            |e| format!("保存失败: {e}"),
+                                                            |e| format!("{}: {e}", t_string!(i18n, settings.phone.save_failed)),
                                                         ))),
                                                     }
                                                     key_saving.set(false);
@@ -322,7 +323,7 @@ pub fn PhoneEmbeddings() -> impl IntoView {
                                             }
                                             style="align-self:flex-end; padding:7px 18px; background:var(--color-primary); color:#fff; border:0; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; opacity: 1;"
                                         >
-                                            {move || if key_saving.get() { "保存中…" } else { "保存" }}
+                                            {move || if key_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, settings.phone.save).to_string() }}
                                         </button>
                                     </div>
                                 </Show>

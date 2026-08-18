@@ -306,6 +306,9 @@ pub fn CommandPalette() -> impl IntoView {
     // because this component is mounted at the app root for the process's
     // lifetime. Anything that unmounts must scope its handler to its own
     // subtree — see `preset_picker`.
+    // window-listener-permanent: mounted at the app root (app.rs) and never
+    // unmounted, which is the only reason the no-handle form is survivable
+    // here — see the paragraph above.
     window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
         if !open.get_untracked() {
             return;

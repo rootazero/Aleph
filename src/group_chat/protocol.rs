@@ -6,7 +6,6 @@
 
 use std::fmt;
 
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

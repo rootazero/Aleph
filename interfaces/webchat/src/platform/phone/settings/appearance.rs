@@ -6,16 +6,18 @@ use crate::appearance::{
     read_accent, read_density, read_font_scale, read_material, read_mode, read_roundness, Accent,
     Density, FontScale, Material, Roundness, ThemeMode,
 };
+use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
 
 #[component]
 #[must_use]
 pub fn PhoneAppearance() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     view! {
         <PhoneShell title="Appearance" back="/settings">
             <SelectGroup
-                header="主题"
+                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_theme).to_string())
                 items=ThemeMode::ALL.to_vec()
                 current=read_mode()
                 label=|m: ThemeMode| m.label()
@@ -23,28 +25,28 @@ pub fn PhoneAppearance() -> impl IntoView {
             />
             <AccentGroup/>
             <SelectGroup
-                header="材质"
+                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_material).to_string())
                 items=Material::ALL.to_vec()
                 current=read_material()
                 label=|m: Material| m.label()
                 on_pick=|m| apply_material(m)
             />
             <SelectGroup
-                header="字号"
+                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_font_size).to_string())
                 items=FontScale::ALL.to_vec()
                 current=read_font_scale()
                 label=|m: FontScale| m.label()
                 on_pick=|m| apply_font_scale(m)
             />
             <SelectGroup
-                header="圆角"
+                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_radius).to_string())
                 items=Roundness::ALL.to_vec()
                 current=read_roundness()
                 label=|m: Roundness| m.label()
                 on_pick=|m| apply_roundness(m)
             />
             <SelectGroup
-                header="紧凑度"
+                header=Signal::derive(move || t_string!(i18n, settings.phone.appearance_density).to_string())
                 items=Density::ALL.to_vec()
                 current=read_density()
                 label=|m: Density| m.label()
@@ -58,7 +60,7 @@ pub fn PhoneAppearance() -> impl IntoView {
 /// chosen value. Generic over any `Copy + PartialEq` appearance enum.
 #[component]
 fn SelectGroup<T, L, P>(
-    header: &'static str,
+    header: Signal<String>,
     items: Vec<T>,
     current: T,
     label: L,
@@ -94,10 +96,11 @@ where
 /// Accent picker — swatch row (mirrors the landing's Accent cell).
 #[component]
 fn AccentGroup() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let selected = RwSignal::new(read_accent());
     view! {
         <div>
-            <div class="list-header">"主题色"</div>
+            <div class="list-header">{t!(i18n, settings.phone.appearance_accent)}</div>
             <div class="list">
                 <div class="cell" style="align-items:center;">
                     <div class="cell-body"><div class="cell-title">"Accent"</div></div>

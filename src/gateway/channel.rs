@@ -962,8 +962,9 @@ pub fn paradigm_for_channel_type(
     match channel_type {
         "cli" => InteractionParadigm::CLI,
         "webchat" | "webrich" | "web" | "webhook" => InteractionParadigm::WebRich,
-        "telegram" | "feishu" | "slack" | "whatsapp" | "discord" | "irc" | "msteams" | "wechat"
-        | "line" => InteractionParadigm::Messaging,
+        "telegram" | "feishu" | "slack" | "whatsapp" | "discord" | "irc" | "wechat" | "line" => {
+            InteractionParadigm::Messaging
+        }
         _ => InteractionParadigm::Background,
     }
 }

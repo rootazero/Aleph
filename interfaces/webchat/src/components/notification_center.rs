@@ -55,8 +55,17 @@ pub fn NotificationCenter() -> impl IntoView {
         visible_alerts(&a, &d)
     });
 
-    // ESC closes the popover. Mirrors the command_palette pattern.
-    window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
+    // ESC closes the popover.
+    //
+    // NOT the command_palette pattern, despite what this comment used to say:
+    // the palette is mounted at the app root and never unmounts, while this
+    // component sits under `<Show when=not_phone>` and is torn down every time
+    // the viewport crosses the phone breakpoint. `window_event_listener`
+    // registers no cleanup, so each crossing left another orphaned closure
+    // holding `is_open` — a signal whose owner is gone — and every later
+    // Escape ran `.set()` on it. Same defect `artifacts::preview` was crashing
+    // on; found by the guard written for that one.
+    let esc_handle = window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
         if !is_open.get_untracked() {
             return;
         }
@@ -65,6 +74,7 @@ pub fn NotificationCenter() -> impl IntoView {
             is_open.set(false);
         }
     });
+    on_cleanup(move || esc_handle.remove());
 
     view! {
         <Show when=move || bell_visible.get() fallback=|| ()>

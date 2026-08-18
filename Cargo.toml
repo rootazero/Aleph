@@ -503,15 +503,6 @@ name = "nostr_fixture_test"
 name = "nostr_protocol_test"
 
 [[test]]
-name = "msteams_contract_test"
-
-[[test]]
-name = "msteams_fixture_test"
-
-[[test]]
-name = "msteams_protocol_test"
-
-[[test]]
 name = "qq_contract_test"
 
 [[test]]

@@ -17,6 +17,7 @@ pub mod artifact;
 pub mod auth;
 pub mod canvas;
 pub mod channel_pairing;
+pub mod channels;
 pub mod desktop_bridge;
 pub mod events;
 pub mod extension_usage;

@@ -77,29 +77,34 @@ fn test_resolved_channels_mixed_old_and_new_format() {
 
 #[test]
 fn test_resolved_channels_all_known_platforms() {
+    // Derived, not hand-copied. This test used to spell out fourteen names of
+    // its own next to a private `KNOWN_CHANNEL_TYPES` that spelled out fifteen
+    // — a hand-copied list asserting against a hand-copied list, which is only
+    // ever a statement about serde. It passed for months while `line` and
+    // `wechat` (both fully registered, both configurable) were missing from
+    // the production list, so `[channels.line]` was silently skipped unless the
+    // user also wrote `type = "line"`; and its own copy had already lost
+    // `feishu`, so it could not have noticed either way.
+    use aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES;
+
     let mut config = Config::default();
-    let platforms = [
-        "telegram",
-        "discord",
-        "whatsapp",
-        "slack",
-        "imessage",
-        "email",
-        "matrix",
-        "signal",
-        "mattermost",
-        "irc",
-        "webhook",
-        "xmpp",
-        "nostr",
-        "qq",
-    ];
-    for name in &platforms {
-        config.channels.insert(name.to_string(), json!({}));
+    for name in CONFIGURABLE_CHANNEL_TYPES {
+        config.channels.insert((*name).to_string(), json!({}));
     }
 
     let instances = config.resolved_channels();
-    assert_eq!(instances.len(), platforms.len());
+    let resolved: Vec<&str> = instances.iter().map(|i| i.channel_type.as_str()).collect();
+    let missing: Vec<&&str> = CONFIGURABLE_CHANNEL_TYPES
+        .iter()
+        .filter(|t| !resolved.contains(*t))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "`[channels.{missing:?}]` does not infer its type from the section key, so the block is \
+         skipped with a warn that only reaches the file log — the user sees a channel that \
+         silently does not exist",
+    );
+    assert_eq!(instances.len(), CONFIGURABLE_CHANNEL_TYPES.len());
 }
 
 #[test]

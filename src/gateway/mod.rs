@@ -190,7 +190,6 @@ pub use webhook_receiver::{
     WebhookHandler, WebhookMount, WebhookMountTable, WebhookReceiver, WEBHOOK_ROUTE_PREFIX,
 };
 
-
 // Shared scanners for the source-level census pins in this directory.
 #[cfg(test)]
 mod source_census;

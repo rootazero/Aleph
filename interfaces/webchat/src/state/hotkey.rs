@@ -73,6 +73,9 @@ impl HotkeyState {
 /// (Esc to close, ↑↓ to navigate, Enter to run) — the global listener
 /// stays out of the way so it doesn't fight the inner input element.
 pub fn install(state: HotkeyState) {
+    // window-listener-permanent: `install` is called once at App start and the
+    // listener is leaked on purpose (see the doc above) — it must outlive every
+    // route and layout change.
     window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
         // ⌘K / Ctrl+K — match either modifier so the same key works on
         // every platform without branching on user-agent.

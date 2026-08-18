@@ -199,6 +199,12 @@ pub struct GlobalBus {
 // Singleton instance
 static GLOBAL_BUS: Lazy<GlobalBus> = Lazy::new(GlobalBus::new);
 
+impl Default for GlobalBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlobalBus {
     /// Create a new `GlobalBus` instance.
     ///

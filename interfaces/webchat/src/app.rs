@@ -223,6 +223,9 @@ fn AppContent() -> impl IntoView {
     {
         use leptos::ev::keydown;
         let mem_for_key = expect_context::<MemoryState>();
+        // window-listener-permanent: installed in the app root's setup, which
+        // is never torn down while the page lives, so there is no owner to
+        // outlive and nothing to clean up.
         window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
             if ev.key() == "Escape" && mem_for_key.sidebar_collapsed.get() {
                 mem_for_key.sidebar_collapsed.set(false);

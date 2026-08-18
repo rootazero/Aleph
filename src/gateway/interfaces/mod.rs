@@ -40,7 +40,6 @@ pub mod irc;
 pub mod line;
 pub mod matrix;
 pub mod mattermost;
-
 pub mod nostr;
 pub mod qq;
 pub mod signal;
@@ -59,12 +58,11 @@ pub use imessage::{
 
 pub use discord::{DiscordChannel, DiscordChannelFactory, DiscordConfig};
 pub use email::{EmailChannel, EmailChannelFactory, EmailConfig};
-pub use feishu::{FeishuChannel, FeishuConfig};
+pub use feishu::{FeishuChannel, FeishuChannelFactory, FeishuConfig};
 pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
 pub use line::{LineChannel, LineChannelFactory, LineConfig};
 pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
 pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
-
 pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
 pub use qq::{QQChannel, QQChannelFactory, QQConfig, QQDmPolicy, QQGroupPolicy};
 pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
@@ -120,6 +118,7 @@ pub fn register_channel_plugins() {
 
     register_plain_channel!("discord", DiscordChannelFactory);
     register_plain_channel!("email", EmailChannelFactory);
+    register_plain_channel!("feishu", FeishuChannelFactory);
     register_plain_channel!("irc", IrcChannelFactory);
     register_plain_channel!("matrix", MatrixChannelFactory);
     register_plain_channel!("mattermost", MattermostChannelFactory);
@@ -132,41 +131,99 @@ pub fn register_channel_plugins() {
 
 #[cfg(test)]
 mod register_tests {
-    /// Every adapter that is meant to be configurable is reachable from config.
+    use aleph_protocol::channels::{CONFIGURABLE_CHANNEL_TYPES, FACTORY_TABLE_BYPASS};
+
+    /// The factory table is exactly the configurable set, minus the bypass.
     ///
-    /// This is a tripwire against REGRESSION — someone dropping a line from
-    /// `register_channel_plugins`, or renaming a config type — not against a
-    /// future adapter forgetting to register: nothing here can enumerate
-    /// `impl ChannelFactory`, so a new name has to be added to this list by
-    /// hand. That is the same manual step as the registration itself, which is
-    /// why the list is spelled out rather than derived.
+    /// This replaced a hand-spelled list of fifteen names on 2026-08-18. The
+    /// old one asserted only one direction — "each of these fifteen is
+    /// registered" — and its own doc admitted it could not catch a future
+    /// adapter that forgot to register. It could not, and it did not: `feishu`
+    /// shipped a complete adapter with no factory struct, so the back-fill
+    /// sweep (which enumerated `impl ChannelFactory`) never saw it, this
+    /// tripwire never mentioned it, and `[channels.feishu]` was inert for four
+    /// months while the Panel rendered a full Feishu settings card.
+    ///
+    /// Equality is the point. A subset assertion is structurally blind to the
+    /// thing that actually went wrong — something missing from *both* the
+    /// registration and the list reads as a pass.
     #[test]
-    fn every_configurable_channel_type_is_registered() {
+    fn the_factory_table_matches_the_configurable_channel_set() {
         super::register_channel_plugins();
-        let types = super::plugin::channel_types();
-        for expected in [
-            "discord",
-            "email",
-            "irc",
-            "line",
-            "matrix",
-            "mattermost",
-            "nostr",
-            "qq",
-            "signal",
-            "slack",
-            "telegram",
-            "webhook",
-            "wechat",
-            "whatsapp",
-            "xmpp",
-        ] {
-            assert!(
-                types.contains(&expected),
-                "channel type `{expected}` has a ChannelFactory but is not registered, so \
-                 `[channels.{expected}]` silently does nothing",
-            );
-        }
+        let registered = super::plugin::channel_types();
+
+        let mut expected: Vec<&str> = CONFIGURABLE_CHANNEL_TYPES
+            .iter()
+            .copied()
+            .filter(|t| !FACTORY_TABLE_BYPASS.contains(t))
+            .collect();
+        expected.sort_unstable();
+
+        let missing: Vec<&str> = expected
+            .iter()
+            .copied()
+            .filter(|t| !registered.contains(t))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "channel type(s) {missing:?} are advertised as configurable but have no entry in \
+             the factory table, so `[channels.<type>]` resolves to None and boot logs one \
+             `Failed to create channel` line — exactly the state feishu shipped in",
+        );
+
+        let unlisted: Vec<&str> = registered
+            .iter()
+            .copied()
+            .filter(|t| !expected.contains(t))
+            .collect();
+        assert!(
+            unlisted.is_empty(),
+            "channel type(s) {unlisted:?} are registered but absent from \
+             aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES — the Panel reconciles \
+             its cards against that list, so an unlisted type can never grow a settings card",
+        );
+    }
+
+    /// The feishu entry actually builds a channel, not just resolves a name.
+    ///
+    /// `the_factory_table_matches_the_configurable_channel_set` asserts a key
+    /// is in a `HashMap` — that is the producer side, and a table entry whose
+    /// `create` rejects every config is byte-identical to a working one from
+    /// where that test stands. This walks the path `initialize_channels`
+    /// actually walks: resolve the factory, hand it a `[channels.feishu]` body,
+    /// get a live `Channel` back. Nothing here touches the network — `start()`
+    /// is what dials Lark, and this stops one step short of it.
+    #[tokio::test]
+    async fn the_feishu_factory_builds_a_channel_from_a_config_block() {
+        use crate::gateway::channel::ChannelConfig;
+
+        super::register_channel_plugins();
+
+        // The two fields `FeishuConfig::validate` requires; everything else has
+        // a serde default, and the default `connection_mode` is not `webhook`,
+        // so no verification_token/encrypt_key is needed.
+        let body = serde_json::json!({
+            "app_id": "cli_qa_app_id",
+            "app_secret": "qa_app_secret",
+        });
+
+        let factory = super::plugin::create(
+            "feishu",
+            ChannelConfig {
+                id: "feishu".into(),
+                channel_type: "feishu".into(),
+                enabled: true,
+                config: body.clone(),
+            },
+        )
+        .expect("feishu is registered, so the table must hand back a factory");
+        assert_eq!(factory.channel_type(), "feishu");
+
+        let channel = factory
+            .create(body)
+            .await
+            .expect("a minimally valid [channels.feishu] block must produce a channel");
+        assert_eq!(channel.info().channel_type, "feishu");
     }
 
     /// Registration is idempotent — `register` refuses duplicates and the call

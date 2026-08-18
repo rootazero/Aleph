@@ -3,6 +3,7 @@
 //! `PhoneMemoryState`; reuses the memory data layer (R4). Tapping a cell stores
 //! the note and drills into `/memory/note`.
 
+use crate::i18n::{t, t_string};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 use leptos_router::NavigateOptions;
@@ -29,6 +30,7 @@ const FACETS: [(&str, MemoryFacet); 4] = [
 #[component]
 #[must_use]
 pub fn PhoneMemoryList() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let st = expect_context::<PhoneMemoryState>();
     let navigate = use_navigate();
@@ -57,7 +59,7 @@ pub fn PhoneMemoryList() -> impl IntoView {
             <input
                 class="field"
                 type="text"
-                placeholder="搜索记忆…"
+                placeholder=move || t_string!(i18n, memory.phone_search_placeholder).to_string()
                 prop:value=move || st.query.get()
                 on:input=move |ev| st.query.set(event_target_value(&ev))
             />
@@ -83,10 +85,10 @@ pub fn PhoneMemoryList() -> impl IntoView {
 
             <div style="display:flex; align-items:center; justify-content:space-between; padding:0 2px;">
                 <span style="font-size:12px; font-weight:600; letter-spacing:0.03em; text-transform:uppercase; color:var(--color-text-tertiary);">
-                    {move || format!("{} 条记忆", visible().len())}
+                    {move || format!("{} {}", visible().len(), t_string!(i18n, memory.phone_count_suffix))}
                 </span>
                 {move || (st.window.get().len() >= NOTE_WINDOW).then(|| view! {
-                    <span style="font-size:11px; color:var(--color-text-tertiary);">"显示前 1000 条"</span>
+                    <span style="font-size:11px; color:var(--color-text-tertiary);">{t!(i18n, memory.phone_capped)}</span>
                 })}
             </div>
 

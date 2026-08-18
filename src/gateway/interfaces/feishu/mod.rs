@@ -14,8 +14,9 @@ use async_trait::async_trait;
 use tokio::sync::watch;
 
 use crate::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
-    ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage, SendResult,
+    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
 };
 
 use api::FeishuApi;
@@ -292,5 +293,35 @@ impl Channel for FeishuChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
         ops.delete(conversation_id, message_id).await
+    }
+}
+
+/// Factory for creating Feishu/Lark channels.
+///
+/// Written 2026-08-18, four months after the adapter. The back-fill that made
+/// the ten pre-table adapters reachable (`643c47bf9`) swept for
+/// `impl ChannelFactory`, and feishu — a complete adapter that simply never
+/// had a factory struct — was structurally invisible to that sweep. So
+/// `[channels.feishu]` resolved to `None` in `create_channel_from_config` from
+/// the day the table landed while the Panel shipped a full Feishu settings
+/// card, and no test could see it: every feishu test constructs
+/// `FeishuChannel::for_test` directly, which never consults the table.
+///
+/// `FeishuChannel::new` already runs `FeishuConfig::validate`, so there is no
+/// second validate call here — a second one would be a second answer to
+/// "is this config usable".
+pub struct FeishuChannelFactory;
+
+#[async_trait]
+impl ChannelFactory for FeishuChannelFactory {
+    fn channel_type(&self) -> &str {
+        "feishu"
+    }
+
+    async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        let config: FeishuConfig = serde_json::from_value(config)
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Feishu config: {e}")))?;
+
+        Ok(Box::new(FeishuChannel::new("feishu", config)?))
     }
 }

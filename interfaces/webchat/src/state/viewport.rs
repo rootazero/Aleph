@@ -79,6 +79,9 @@ impl FormFactorState {
         // Keep in sync with resizes — which is also how a rotation arrives.
         // Fire-and-forget for the app lifetime — mirrors the shell-root
         // listeners in app.rs (handle not retained).
+        // window-listener-permanent: this is the signal that *drives* mounting
+        // and unmounting. Removing it on any cleanup would freeze the form
+        // factor at whatever it was when that subtree went away.
         window_event_listener(leptos::ev::resize, move |_| {
             let now = measure_form_factor();
             if form_factor.get_untracked() != now {

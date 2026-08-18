@@ -178,8 +178,6 @@ fn get_runtime_path(cmd: &str) -> Option<String> {
         })
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +240,4 @@ mod tests {
         assert_eq!(result.kind, RuntimeKind::Node);
         // available could be true or false depending on system
     }
-
-    }
+}

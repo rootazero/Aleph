@@ -75,7 +75,7 @@ impl ReplyEmitterConfig {
     ///
     /// The `EditBased` arm may only widen and it runs first; the capability
     /// floor runs last and may only narrow. Note the two declarations are
-    /// independent: `slack`/`mattermost`/`msteams` can edit while declaring
+    /// independent: `slack`/`mattermost` can edit while declaring
     /// `StreamProtocol::None` (they stream, and keep streaming), and
     /// `line`/`wechat` used to declare `EditBased` while their `edit` returns
     /// `UnsupportedFeature` (they were forced *into* the broken path by the

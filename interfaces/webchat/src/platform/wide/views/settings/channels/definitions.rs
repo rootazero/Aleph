@@ -60,7 +60,7 @@ impl ChannelDefinition {
 
 const ICON_TELEGRAM: &str = r#"<path d="M21.2 4.4L2.9 11.3c-1.2.5-1.2 1.2-.2 1.5l4.7 1.5 1.8 5.6c.2.6.1.8.7.8.4 0 .6-.2.9-.4l2.1-2.1 4.4 3.3c.8.4 1.4.2 1.6-.8L22.4 5.6c.3-1.2-.5-1.7-1.2-1.2zM8.5 13.5l9.4-5.9c.4-.3.8-.1.5.2l-7.8 7-.3 3.2-1.8-4.5z"/>"#;
 
-const ICON_DISCORD: &str = r#"<path d="M18.59 5.89c-1.23-.57-2.54-.99-3.92-1.23-.17.3-.37.71-.5 1.03-1.46-.22-2.91-.22-4.34 0-.14-.32-.34-.73-.51-1.03-1.38.24-2.69.66-3.92 1.23C2.18 10.73 1.34 15.44 1.76 20.09A18.07 18.07 0 0 0 7.2 22.5c.44-.6.83-1.24 1.17-1.91-.64-.24-1.26-.54-1.84-.89.15-.11.3-.23.45-.34a12.84 12.84 0 0 0 10.04 0c.15.12.3.23.45.34-.58.35-1.2.65-1.84.89.34.67.73 1.31 1.17 1.91a18 18 0 0 0 5.44-2.41c.49-5.15-.84-9.82-3.65-13.61zM8.35 17.24c-1.18 0-2.15-1.09-2.15-2.42s.95-2.42 2.15-2.42 2.17 1.09 2.15 2.42c0 1.33-.95 2.42-2.15 2.42zm6.3 0c-1.18 0-2.15-1.09-2.15-2.42s.95-2.42 2.15-2.42 2.17 1.09 2.15 2.42c0 1.33-.95 2.42-2.15 2.42z"/>"#;
+pub(crate) const ICON_DISCORD: &str = r#"<path d="M18.59 5.89c-1.23-.57-2.54-.99-3.92-1.23-.17.3-.37.71-.5 1.03-1.46-.22-2.91-.22-4.34 0-.14-.32-.34-.73-.51-1.03-1.38.24-2.69.66-3.92 1.23C2.18 10.73 1.34 15.44 1.76 20.09A18.07 18.07 0 0 0 7.2 22.5c.44-.6.83-1.24 1.17-1.91-.64-.24-1.26-.54-1.84-.89.15-.11.3-.23.45-.34a12.84 12.84 0 0 0 10.04 0c.15.12.3.23.45.34-.58.35-1.2.65-1.84.89.34.67.73 1.31 1.17 1.91a18 18 0 0 0 5.44-2.41c.49-5.15-.84-9.82-3.65-13.61zM8.35 17.24c-1.18 0-2.15-1.09-2.15-2.42s.95-2.42 2.15-2.42 2.17 1.09 2.15 2.42c0 1.33-.95 2.42-2.15 2.42zm6.3 0c-1.18 0-2.15-1.09-2.15-2.42s.95-2.42 2.15-2.42 2.17 1.09 2.15 2.42c0 1.33-.95 2.42-2.15 2.42z"/>"#;
 
 const ICON_WHATSAPP: &str = r#"<path d="M17.47 14.38c-.29-.14-1.7-.84-1.96-.94-.27-.1-.46-.14-.65.14-.2.29-.75.94-.92 1.13-.17.2-.34.22-.63.07-.29-.14-1.22-.45-2.32-1.43-.86-.77-1.44-1.71-1.61-2-.17-.29-.02-.45.13-.59.13-.13.29-.34.44-.51.14-.17.2-.29.29-.48.1-.2.05-.37-.02-.51-.07-.15-.65-1.56-.89-2.14-.24-.56-.48-.49-.65-.49-.17 0-.37-.02-.56-.02-.2 0-.51.07-.78.37-.27.29-1.02 1-1.02 2.43 0 1.43 1.04 2.82 1.19 3.01.14.2 2.05 3.13 4.97 4.39.7.3 1.24.48 1.66.61.7.22 1.33.19 1.83.12.56-.08 1.7-.7 1.94-1.37.24-.68.24-1.26.17-1.38-.07-.12-.27-.2-.56-.34zM12 2C6.48 2 2 6.48 2 12c0 1.77.46 3.43 1.27 4.88L2 22l5.23-1.37A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/>"#;
 
@@ -88,8 +88,6 @@ const ICON_XMPP: &str = r#"<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 
 const ICON_NOSTR: &str = r#"<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>"#;
 
 const ICON_FEISHU: &str = r#"<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-3 12H7v-2h10v2zm0-3H7V9h10v2zm0-3H7V6h10v2z"/>"#;
-
-const ICON_MSTEAMS: &str = r#"<path d="M19.2 6.4a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zm3.6 5.6v-4a1.2 1.2 0 0 0-1.2-1.2h-4.8a3.58 3.58 0 0 1 .6 2v4a4.8 4.8 0 0 1-.86 2.74A3.6 3.6 0 0 0 20.4 12zM14.4 4a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM18 8.8a1.6 1.6 0 0 0-1.6-1.6H8.8A1.6 1.6 0 0 0 7.2 8.8v4a6 6 0 0 0 10.8 3.6A6 6 0 0 0 18 12.8v-4z"/>"#;
 
 // ---------------------------------------------------------------------------
 // Per-channel field definitions
@@ -970,79 +968,6 @@ static FEISHU_FIELDS: &[FieldDef] = &[
     },
 ];
 
-static MSTEAMS_FIELDS: &[FieldDef] = &[
-    FieldDef {
-        key: "app_id",
-        label: "App ID",
-        kind: FieldKind::Text,
-        placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-        help: "Azure Bot registration App ID (from Azure Portal)",
-        required: true,
-        default_value: "",
-        options: &[],
-    },
-    FieldDef {
-        key: "app_password",
-        label: "App Password",
-        kind: FieldKind::Secret,
-        placeholder: "Enter client secret...",
-        help: "Azure Bot registration client secret",
-        required: true,
-        default_value: "",
-        options: &[],
-    },
-    FieldDef {
-        key: "tenant_id",
-        label: "Tenant ID",
-        kind: FieldKind::Text,
-        placeholder: "common",
-        help: "Azure AD Tenant ID (\"common\" for multi-tenant)",
-        required: false,
-        default_value: "common",
-        options: &[],
-    },
-    FieldDef {
-        key: "webhook_path",
-        label: "Webhook Path",
-        kind: FieldKind::Text,
-        placeholder: "/msteams/messages",
-        help: "Path where Teams sends incoming activities",
-        required: false,
-        default_value: "/msteams/messages",
-        options: &[],
-    },
-    FieldDef {
-        key: "groups_allowed",
-        label: "Allow Group/Team Chats",
-        kind: FieldKind::Toggle,
-        placeholder: "",
-        help: "Accept messages from group chats and team channels",
-        required: false,
-        default_value: "true",
-        options: &[],
-    },
-    FieldDef {
-        key: "send_typing",
-        label: "Send Typing Indicator",
-        kind: FieldKind::Toggle,
-        placeholder: "",
-        help: "Show typing indicator while processing",
-        required: false,
-        default_value: "true",
-        options: &[],
-    },
-    FieldDef {
-        key: "allowed_users",
-        label: "Allowed Users",
-        kind: FieldKind::TagList,
-        placeholder: "Add AAD user ID...",
-        help: "Azure AD user IDs allowed to interact (empty = all)",
-        required: false,
-        default_value: "",
-        options: &[],
-    },
-];
-
 // ---------------------------------------------------------------------------
 // Static channel registry
 // ---------------------------------------------------------------------------
@@ -1105,16 +1030,6 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         docs_url: "https://open.feishu.cn/document/home/index",
     },
     // 6. MS Teams
-    ChannelDefinition {
-        id: "msteams",
-        name: "MS Teams",
-        description: "Connect to Microsoft Teams via Bot Framework",
-        icon_svg: ICON_MSTEAMS,
-        brand_color: "#6264A7",
-        config_section: "channels.msteams",
-        fields: MSTEAMS_FIELDS,
-        docs_url: "https://learn.microsoft.com/en-us/microsoftteams/platform/bots/what-are-bots",
-    },
     // 7. Slack
     ChannelDefinition {
         id: "slack",
@@ -1216,22 +1131,71 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
     },
 ];
 
-// ---------------------------------------------------------------------------
-// Named references into ALL_CHANNELS (index-based)
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod reconciliation_tests {
+    use super::ALL_CHANNELS;
+    use aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES;
 
-pub static TELEGRAM: &ChannelDefinition = &ALL_CHANNELS[0];
-pub static DISCORD: &ChannelDefinition = &ALL_CHANNELS[1];
-pub static WHATSAPP: &ChannelDefinition = &ALL_CHANNELS[2];
-pub static IMESSAGE: &ChannelDefinition = &ALL_CHANNELS[3];
-pub static FEISHU: &ChannelDefinition = &ALL_CHANNELS[4];
-pub static MSTEAMS: &ChannelDefinition = &ALL_CHANNELS[5];
-pub static SLACK: &ChannelDefinition = &ALL_CHANNELS[6];
-pub static EMAIL: &ChannelDefinition = &ALL_CHANNELS[7];
-pub static MATRIX: &ChannelDefinition = &ALL_CHANNELS[8];
-pub static SIGNAL: &ChannelDefinition = &ALL_CHANNELS[9];
-pub static MATTERMOST: &ChannelDefinition = &ALL_CHANNELS[10];
-pub static IRC: &ChannelDefinition = &ALL_CHANNELS[11];
-pub static WEBHOOK: &ChannelDefinition = &ALL_CHANNELS[12];
-pub static XMPP: &ChannelDefinition = &ALL_CHANNELS[13];
-pub static NOSTR: &ChannelDefinition = &ALL_CHANNELS[14];
+    /// Every card the channels grid renders is a channel that can actually
+    /// come up.
+    ///
+    /// The grid is unconditional — `overview.rs` iterates `ALL_CHANNELS` — so a
+    /// card whose id has no factory behind it hands the user a complete
+    /// settings form, accepts the credentials, writes `[channels.<id>]`, and
+    /// then nothing happens: boot logs one `Failed to create channel` line and
+    /// moves on. Two cards were in that state until 2026-08-18. `msteams`
+    /// never had a factory and its adapter was severed the day before;
+    /// `feishu` never had one either and got one in the same change as this
+    /// test.
+    ///
+    /// Note what this does NOT assert: the reverse direction. `line`, `wechat`
+    /// and `qq` are configurable and have no card, which is a missing feature,
+    /// not a lie — and pinning it would mean either writing three cards or
+    /// parking an exemption list, which is a permission slip with nothing to
+    /// make it shrink.
+    #[test]
+    fn every_channel_card_is_a_configurable_channel() {
+        let unreachable: Vec<&str> = ALL_CHANNELS
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| !CONFIGURABLE_CHANNEL_TYPES.contains(id))
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "channel card(s) {unreachable:?} render a settings form for a channel the server \
+             cannot construct — see aleph_protocol::channels",
+        );
+    }
+
+    /// `config_section` is the config path the form writes; it has to name the
+    /// same channel the card claims to be, or the credentials land under a key
+    /// no factory reads.
+    #[test]
+    fn every_card_writes_the_config_section_its_id_names() {
+        for def in ALL_CHANNELS {
+            assert_eq!(
+                def.config_section,
+                format!("channels.{}", def.id),
+                "card `{}` writes `{}`, which is not where `[channels.{}]` is read from",
+                def.id,
+                def.config_section,
+                def.id,
+            );
+        }
+    }
+
+    /// Ids are the lookup key for `ChannelDefinition::find`, so a duplicate
+    /// makes one of the two cards permanently unreachable by name.
+    #[test]
+    fn card_ids_are_unique() {
+        let mut ids: Vec<&str> = ALL_CHANNELS.iter().map(|d| d.id).collect();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            total,
+            "duplicate channel card id in ALL_CHANNELS"
+        );
+    }
+}

@@ -7,6 +7,7 @@
 
 use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -129,13 +130,13 @@ pub fn PhoneModelRoute() -> impl IntoView {
                     disabled=move || saving.get()
                     on:click=save
                 >
-                    {move || if saving.get() { "保存中…" } else { "应用" }}
+                    {move || if saving.get() { t_string!(i18n, settings.route.saving).to_string() } else { t_string!(i18n, settings.route.apply).to_string() }}
                 </button>
             </div>
 
             // Feedback row
             <Show when=move || saved.get()>
-                <div style="padding:0 16px 6px; font-size:13px; color:oklch(0.60 0.15 142);">"已应用"</div>
+                <div style="padding:0 16px 6px; font-size:13px; color:oklch(0.60 0.15 142);">{t!(i18n, settings.phone.applied)}</div>
             </Show>
             <Show when=move || error.get().is_some()>
                 <div style="padding:0 16px 6px; font-size:13px; color:oklch(0.55 0.20 27);">
@@ -145,13 +146,13 @@ pub fn PhoneModelRoute() -> impl IntoView {
 
             // Loading state
             <Show when=move || loading.get()>
-                <div style="padding:0 16px; font-size:14px; color:var(--color-text-secondary);">"加载中…"</div>
+                <div style="padding:0 16px; font-size:14px; color:var(--color-text-secondary);">{t!(i18n, settings.route.loading)}</div>
             </Show>
 
             <Show when=move || !loading.get()>
                 // ① Mode — 3-row single-select list
                 <div>
-                    <div class="list-header">"模式"</div>
+                    <div class="list-header">{t!(i18n, settings.phone.mode)}</div>
                     <div class="list">
                         {MODE_KEYS.iter().map(|key| {
                             let key = *key;
@@ -178,7 +179,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
 
                 // ② Load Balancing — single-select list over LB_KEYS
                 <div>
-                    <div class="list-header">"负载均衡"</div>
+                    <div class="list-header">{t!(i18n, settings.route.load_balance)}</div>
                     <div class="list">
                         {LB_KEYS.iter().map(|key| {
                             let key = *key;
@@ -209,10 +210,10 @@ pub fn PhoneModelRoute() -> impl IntoView {
                 // ③ Cloud Escalation toggle — only when mode == "always_local"
                 <Show when=move || mode.get() == "always_local">
                     <div>
-                        <div class="list-header">"云升级"</div>
+                        <div class="list-header">{t!(i18n, settings.phone.escalation)}</div>
                         <div class="list">
                             <div class="cell">
-                                <div class="cell-body"><div class="cell-title">"允许云升级"</div></div>
+                                <div class="cell-body"><div class="cell-title">{t!(i18n, settings.phone.allow_escalation)}</div></div>
                                 <button
                                     class="ios-switch"
                                     attr:aria-pressed=move || allow_escalation.get().to_string()
@@ -227,14 +228,14 @@ pub fn PhoneModelRoute() -> impl IntoView {
 
                 // ④ Preferred providers — local + cloud single-select lists
                 <ProviderPinGroup
-                    header="本地供应商"
+                    header=Signal::derive(move || t_string!(i18n, settings.phone.local_providers).to_string())
                     tier="local".to_string()
                     providers=providers
                     selected=local_provider
                     on_change=move |_| saved.set(false)
                 />
                 <ProviderPinGroup
-                    header="云供应商"
+                    header=Signal::derive(move || t_string!(i18n, settings.phone.cloud_providers).to_string())
                     tier="cloud".to_string()
                     providers=providers
                     selected=cloud_provider
@@ -244,7 +245,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                 // ⑤ Rate Limit — per-provider rpm/tpm inline number inputs
                 <Show when=move || !providers.get().is_empty()>
                     <div>
-                        <div class="list-header">"限流"</div>
+                        <div class="list-header">{t!(i18n, settings.route.rate_limits)}</div>
                         <div class="list">
                             {move || providers.get().into_iter().map(|p| {
                                 let name = p.name.clone();
@@ -268,7 +269,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                                                 type="number"
                                                 min="0"
                                                 style="flex:1; background:var(--color-surface); border:1px solid var(--color-border); border-radius:8px; padding:6px 10px; font-size:13px; color:var(--color-text-primary);"
-                                                placeholder="rpm (无限)"
+                                                placeholder=move || t_string!(i18n, settings.phone.rpm_placeholder).to_string()
                                                 prop:value=rpm_val
                                                 on:input=move |ev| {
                                                     let v = parse_limit(&event_target_value(&ev));
@@ -285,7 +286,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                                                 type="number"
                                                 min="0"
                                                 style="flex:1; background:var(--color-surface); border:1px solid var(--color-border); border-radius:8px; padding:6px 10px; font-size:13px; color:var(--color-text-primary);"
-                                                placeholder="tpm (无限)"
+                                                placeholder=move || t_string!(i18n, settings.phone.tpm_placeholder).to_string()
                                                 prop:value=tpm_val
                                                 on:input=move |ev| {
                                                     let v = parse_limit(&event_target_value(&ev));
@@ -314,7 +315,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
 /// Empty selection = "Configured Order" (no pin / use configured order).
 #[component]
 fn ProviderPinGroup<F>(
-    header: &'static str,
+    header: Signal<String>,
     tier: String,
     providers: RwSignal<Vec<RouteProviderInfo>>,
     selected: RwSignal<String>,
@@ -323,6 +324,7 @@ fn ProviderPinGroup<F>(
 where
     F: Fn(()) + Copy + Send + 'static,
 {
+    let i18n = crate::i18n::use_i18n();
     let tier_for_filter = tier;
     let matching = Signal::derive(move || {
         providers
@@ -342,7 +344,7 @@ where
                     class:cell-selected=move || selected.get().is_empty()
                     on:click=move |_| { selected.set(String::new()); on_change(()); }
                 >
-                    <div class="cell-body"><div class="cell-title">"配置顺序"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, settings.phone.configured_order)}</div></div>
                     <svg class="cell-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="20 6 9 17 4 12"></polyline>
                     </svg>

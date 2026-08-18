@@ -357,3 +357,102 @@ mod tests {
         );
     }
 }
+
+/// Every `window_event_listener` either cleans itself up or says why it never
+/// has to.
+///
+/// `leptos_dom::helpers::window_event_listener` registers **no** cleanup: the
+/// returned handle has to be `.remove()`d by hand, and dropping it on the floor
+/// leaves the closure attached to `window` forever. In a component that can
+/// unmount, that is not a leak — it is a crash. The orphaned closure keeps
+/// reading signals its owner has disposed, and the next matching key event
+/// panics the whole app into the recovery overlay.
+///
+/// That happened: `components/artifacts/preview.rs` attached an Escape handler
+/// with no handle. The right rail unmounts whenever the layout mode changes or
+/// the viewport crosses the phone breakpoint, so — reproduced on a real machine
+/// 2026-08-18 — loading the Panel wide, narrowing the window past 640px, and
+/// pressing Escape *once* took the Panel down every time. `preset_picker.rs`
+/// had already written the hazard down in a doc comment; prose does not fail a
+/// build.
+///
+/// A call site satisfies this rule one of two ways:
+///
+/// * bind the handle (`let h = window_event_listener(..)`) and `h.remove()`
+///   somewhere in the same file — in practice inside `on_cleanup`; or
+/// * carry a `// window-listener-permanent:` note within the six lines above
+///   it, stating why that listener outlives every owner (app-root installs).
+///
+/// The annotation is deliberately **local** rather than a central allowlist.
+/// A list in this file would be a permission slip nothing shrinks; a comment at
+/// the call site is read by whoever touches the code, and a new site cannot
+/// inherit someone else's justification without writing its own.
+#[cfg(test)]
+mod window_listener_tests {
+    use super::{rust_sources, src_dir};
+
+    #[test]
+    fn every_window_listener_is_removed_or_declared_permanent() {
+        let files = rust_sources(&src_dir());
+        assert!(
+            files.len() > 50,
+            "found {} sources — the walk is broken, not the code",
+            files.len(),
+        );
+
+        let mut offenders = Vec::new();
+        let mut checked = 0usize;
+        for path in &files {
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            // CRLF checkouts: anchor nothing to a bare `\n`.
+            let src = raw.replace('\r', "");
+            let prod = src.split("#[cfg(test)]").next().unwrap_or(&src);
+            let lines: Vec<&str> = prod.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || !line.contains("window_event_listener(") {
+                    continue;
+                }
+                checked += 1;
+
+                let permanent = lines[i.saturating_sub(6)..i]
+                    .iter()
+                    .any(|l| l.contains("window-listener-permanent:"));
+                if permanent {
+                    continue;
+                }
+
+                // `let <name> = window_event_listener(` … and `<name>.remove()`
+                // later in the same file.
+                let bound = line
+                    .split_once("let ")
+                    .and_then(|(_, rest)| rest.split_once('='))
+                    .map(|(name, _)| name.trim().to_string())
+                    .filter(|n| {
+                        !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    });
+
+                let removed = bound
+                    .as_ref()
+                    .is_some_and(|n| prod.contains(&format!("{n}.remove()")));
+
+                if !removed {
+                    let rel = path.strip_prefix(src_dir()).unwrap_or(path);
+                    offenders.push(format!("{}:{}", rel.display(), i + 1));
+                }
+            }
+        }
+
+        assert!(
+            checked >= 8,
+            "only {checked} window_event_listener call sites seen — the scan stopped early",
+        );
+        assert!(
+            offenders.is_empty(),
+            "window_event_listener with no cleanup and no `// window-listener-permanent:` note \
+             — an orphaned closure reads disposed signals and panics the app:\n  {}",
+            offenders.join("\n  "),
+        );
+    }
+}

@@ -5,6 +5,7 @@
 //! reads/writes `MemoryState` only; `mem.agents` is populated by the PhoneMemory
 //! router's agent-bootstrap Effect.
 
+use crate::i18n::t;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 use leptos_router::NavigateOptions;
@@ -15,6 +16,7 @@ use crate::state::memory::MemoryState;
 #[component]
 #[must_use]
 pub fn PhoneMemoryMenu() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let mem = expect_context::<MemoryState>();
     let navigate = use_navigate();
     let go = move |path: &'static str| {
@@ -86,20 +88,20 @@ pub fn PhoneMemoryMenu() -> impl IntoView {
 
         // ── Views group ──
         <div style="margin-top:20px;">
-            <div class="list-header">"视图"</div>
+            <div class="list-header">{t!(i18n, memory.phone_view)}</div>
             <div class="list">
                 <div class="cell" on:click=go("/memory/graph")>
                     <span class="cell-leading">
                         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"></circle><circle cx="19" cy="6" r="2"></circle><circle cx="12" cy="18" r="2"></circle><line x1="6.6" y1="7.4" x2="10.6" y2="16.4"></line><line x1="17.4" y1="7.4" x2="13.4" y2="16.4"></line><line x1="7" y1="6" x2="17" y2="6"></line></svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"星系图"</div><div class="cell-sub">"关系网络可视化"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, memory.phone_graph)}</div><div class="cell-sub">{t!(i18n, memory.phone_graph_sub)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/memory/list")>
                     <span class="cell-leading">
                         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"列表"</div><div class="cell-sub">"Vault 笔记列表"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, memory.phone_list)}</div><div class="cell-sub">{t!(i18n, memory.phone_list_sub)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
             </div>

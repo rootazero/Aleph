@@ -48,7 +48,6 @@ impl ToolDefinition {
         self.strict = strict;
         self
     }
-
 }
 
 #[cfg(test)]

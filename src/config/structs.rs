@@ -274,25 +274,6 @@ pub struct Config {
 // ChannelInstanceConfig
 // =============================================================================
 
-/// Known platform names for type auto-inference from channel config keys.
-const KNOWN_CHANNEL_TYPES: &[&str] = &[
-    "telegram",
-    "discord",
-    "whatsapp",
-    "slack",
-    "imessage",
-    "email",
-    "matrix",
-    "signal",
-    "mattermost",
-    "irc",
-    "webhook",
-    "xmpp",
-    "nostr",
-    "feishu",
-    "qq",
-];
-
 /// A resolved channel instance from the channels config `HashMap`.
 #[derive(Debug, Clone)]
 pub struct ChannelInstanceConfig {
@@ -311,12 +292,22 @@ impl Config {
     /// 1. If value has a `type` string field -> use it as `channel_type`
     /// 2. If no `type` field and key is a known platform name -> infer type = key
     /// 3. Otherwise -> warn and skip
+    ///
+    /// Step 2 reads [`aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES`]
+    /// rather than a local list. It used to be a private `KNOWN_CHANNEL_TYPES`
+    /// copy, deleted 2026-08-18 — it was the *third* spelling of "which
+    /// channels exist" (after the factory table and the Panel's `ALL_CHANNELS`)
+    /// and it had drifted: `line` and `wechat` register factories and are fully
+    /// configurable, but were absent here, so `[channels.line]` was skipped
+    /// unless the user also wrote `type = "line"`. The skip warns at `warn!`,
+    /// which lands in the file log and never on stdout, so from the console it
+    /// looked like the section had simply been ignored.
     pub fn resolved_channels(&self) -> Vec<ChannelInstanceConfig> {
         let mut instances = Vec::new();
         for (key, value) in &self.channels {
             let channel_type = if let Some(t) = value.get("type").and_then(|v| v.as_str()) {
                 t.to_string()
-            } else if KNOWN_CHANNEL_TYPES.contains(&key.as_str()) {
+            } else if aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES.contains(&key.as_str()) {
                 key.clone()
             } else {
                 tracing::warn!(

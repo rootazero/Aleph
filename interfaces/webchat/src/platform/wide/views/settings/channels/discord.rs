@@ -131,7 +131,7 @@ pub fn DiscordChannelView() -> impl IntoView {
                                 stroke-width="2"
                                 stroke-linecap="round"
                                 stroke-linejoin="round"
-                                inner_html=super::definitions::DISCORD.icon_svg
+                                inner_html=super::definitions::ICON_DISCORD
                             />
                         </div>
                         <div>

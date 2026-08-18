@@ -1,9 +1,14 @@
 //! iOS Providers screen.
 //!
 //! Scope: add a provider from the preset catalogue, list configured providers,
-//! set-default, toggle-enable, edit API key.
-//! Out of scope: remove providers, model-picker, subscription login,
-//! connectivity checks.
+//! set-default, toggle-enable, edit API key, test the connection, delete.
+//! Out of scope: model-picker, subscription login.
+//!
+//! Test and delete arrived 2026-08-18. Both server halves (`providers.test`,
+//! `providers.delete`) had shipped long before, and `providers.test` is the
+//! *only* writer of `verified` — so a phone-only owner could add a provider and
+//! never find out whether the key worked, and could never undo a typo in the
+//! id. Neither gap failed anywhere; the screen simply had no button.
 //!
 //! # Why "add" is not optional here
 //!
@@ -166,6 +171,17 @@ pub fn PhoneProviders() -> impl IntoView {
     let key_input = RwSignal::new(String::new());
     let key_saving = RwSignal::new(false);
     let default_saving = RwSignal::new(false);
+    let testing = RwSignal::new(false);
+    // Keyed by provider name, not a bare bool: only one row is open at a time
+    // today, but an unkeyed verdict is the "per-session state in a singleton"
+    // shape — collapse one row, open the next, and it inherits a green tick it
+    // never earned.
+    let test_result = RwSignal::new(Option::<(String, bool)>::None);
+    let deleting = RwSignal::new(false);
+    // Which row is asking "are you sure". Delete is the only destructive action
+    // on this screen and a phone has no hover, so the confirm is a second cell
+    // rather than a tooltip — and collapsing the row cancels it.
+    let confirm_delete = RwSignal::new(Option::<String>::None);
 
     // Every preset the core ships. `All`, not `Configured`: the point of the
     // disclosure below is offering providers nobody has set up yet.
@@ -181,17 +197,32 @@ pub fn PhoneProviders() -> impl IntoView {
     let add_list_ref = NodeRef::<Div>::new();
     let add_more_below = RwSignal::new(false);
 
+    // Whether each dataset was actually *read*, as opposed to merely being
+    // empty. Only an `Ok` sets these.
+    //
+    // Without them both empty states told a member a confident lie: every
+    // `providers.*` verb is admin-gated (`ADMIN_PREFIXES`), so on a member's
+    // phone the list came back refused, stayed an empty `Vec`, and the screen
+    // rendered "no providers configured" — directly under a banner correctly
+    // explaining that it was not allowed to look. Real-machine QA on
+    // 2026-08-18 caught both stories on screen at once while the operator
+    // control group held two providers. `Err` may only ever say "I don't
+    // know"; only `Ok` may assert about the thing it read.
+    let list_loaded = RwSignal::new(false);
+    let catalog_loaded = RwSignal::new(false);
+
     let reload = {
         move || {
             spawn_local(async move {
                 match ProvidersApi::list(&state).await {
                     Ok(list) => {
                         providers.set(list);
+                        list_loaded.set(true);
                         error.set(None);
                     }
                     Err(e) => error.set(Some(
                         crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
-                            format!("加载失败: {e}")
+                            format!("{}: {e}", t_string!(i18n, settings.phone.load_failed))
                         }),
                     )),
                 }
@@ -208,10 +239,13 @@ pub fn PhoneProviders() -> impl IntoView {
             reload();
             spawn_local(async move {
                 // A catalogue this screen could not fetch costs the add path
-                // and nothing else, so it does not touch the error banner the
-                // provider list owns — the disclosure reports its own emptiness.
+                // and nothing else, so it still does not touch the error banner
+                // the provider list owns. What it may **not** do is let the
+                // disclosure report "no matching providers": that sentence is
+                // an assertion about a catalogue nobody read.
                 if let Ok(items) = ProvidersApi::catalog(&state, CatalogView::All).await {
                     catalog.set(items);
+                    catalog_loaded.set(true);
                 }
             });
         }
@@ -261,7 +295,7 @@ pub fn PhoneProviders() -> impl IntoView {
                 }
                 Err(e) => error.set(Some(
                     crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                        format!("添加失败: {e}")
+                        format!("{}: {e}", t_string!(i18n, settings.phone.add_failed))
                     }),
                 )),
             }
@@ -348,7 +382,11 @@ pub fn PhoneProviders() -> impl IntoView {
                                     if rows.is_empty() {
                                         return view! {
                                             <div style="text-align:center; color:var(--color-text-tertiary); font-size:14px; padding:20px 0;">
-                                                {t!(i18n, settings.picker.empty)}
+                                                {move || if catalog_loaded.get() {
+                                                    t_string!(i18n, settings.picker.empty).to_string()
+                                                } else {
+                                                    t_string!(i18n, settings.phone.catalog_unavailable).to_string()
+                                                }}
                                             </div>
                                         }.into_any();
                                     }
@@ -480,7 +518,7 @@ pub fn PhoneProviders() -> impl IntoView {
             // Loading state
             {move || loading.get().then(|| view! {
                 <div style="text-align:center; color:var(--color-text-tertiary); font-size:14px; padding:24px 0;">
-                    "加载中…"
+                    {t!(i18n, common.loading)}
                 </div>
             })}
 
@@ -488,9 +526,15 @@ pub fn PhoneProviders() -> impl IntoView {
             {move || {
                 let list = providers.get();
                 if list.is_empty() && !loading.get() {
+                    // Silent when the read never landed — the refusal banner
+                    // above is already the honest answer, and a second line
+                    // saying "none" would contradict it.
+                    if !list_loaded.get() {
+                        return ().into_any();
+                    }
                     return view! {
                         <div style="text-align:center; color:var(--color-text-tertiary); font-size:14px; padding:24px 0;">
-                            "暂无配置的 Provider"
+                            {t!(i18n, settings.phone.no_providers)}
                         </div>
                     }.into_any();
                 }
@@ -514,11 +558,11 @@ pub fn PhoneProviders() -> impl IntoView {
                                 let info = info.clone();
                                 move || {
                                     if info.is_default {
-                                        "默认".to_string()
+                                        t_string!(i18n, settings.providers.badge_default).to_string()
                                     } else if info.enabled {
-                                        "已启用".to_string()
+                                        t_string!(i18n, settings.providers.enabled).to_string()
                                     } else {
-                                        "已禁用".to_string()
+                                        t_string!(i18n, settings.phone.disabled).to_string()
                                     }
                                 }
                             };
@@ -527,6 +571,10 @@ pub fn PhoneProviders() -> impl IntoView {
                             // string (never pre-fill secrets — mirrors desktop behaviour).
                             let on_expand = move |_| {
                                 let currently_open = expanded.get();
+                                // Both are about the row being left, not the
+                                // one being entered.
+                                test_result.set(None);
+                                confirm_delete.set(None);
                                 if currently_open.as_deref() == Some(name_for_expand.as_str()) {
                                     expanded.set(None);
                                 } else {
@@ -547,6 +595,15 @@ pub fn PhoneProviders() -> impl IntoView {
                             let name_for_default = StoredValue::new(name_for_default);
                             let name_for_enable = StoredValue::new(name_for_enable);
                             let name_for_key_save = StoredValue::new(name_for_key_save);
+                            let name_for_test = StoredValue::new(name.clone());
+                            let name_for_test_view = StoredValue::new(name.clone());
+                            let name_for_delete = StoredValue::new(name.clone());
+                            let name_for_delete_view = StoredValue::new(name.clone());
+                            let info_for_test = StoredValue::new(info.clone());
+                            let state_for_test = state;
+                            let state_for_delete = state;
+                            let reload_for_test = StoredValue::new(reload);
+                            let reload_for_delete = StoredValue::new(reload);
 
                             view! {
                                 // Collapsed summary row — tap to expand/collapse.
@@ -601,7 +658,7 @@ pub fn PhoneProviders() -> impl IntoView {
                                                     Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
                                                         i18n,
                                                         &e,
-                                                        |e| format!("设置默认失败: {e}"),
+                                                        |e| format!("{}: {e}", t_string!(i18n, settings.phone.set_default_failed)),
                                                     ))),
                                                 }
                                                 default_saving.set(false);
@@ -610,7 +667,7 @@ pub fn PhoneProviders() -> impl IntoView {
                                     >
                                         <div class="cell-body">
                                             <div class="cell-title" style="color:var(--color-primary);">
-                                                {move || if default_saving.get() { "设置中…" } else { "设为默认" }}
+                                                {move || if default_saving.get() { t_string!(i18n, settings.providers.setting_default).to_string() } else { t_string!(i18n, settings.providers.set_as_default).to_string() }}
                                             </div>
                                         </div>
                                         {move || info_for_default.get_value().is_default.then(|| view! {
@@ -623,7 +680,7 @@ pub fn PhoneProviders() -> impl IntoView {
                                     // "Enabled" toggle row
                                     <div class="cell" style="cursor:default;">
                                         <div class="cell-body">
-                                            <div class="cell-title">"启用"</div>
+                                            <div class="cell-title">{t!(i18n, settings.phone.enable)}</div>
                                         </div>
                                         <button
                                             class="ios-switch"
@@ -645,7 +702,7 @@ pub fn PhoneProviders() -> impl IntoView {
                                                         Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
                                                             i18n,
                                                             &e,
-                                                            |e| format!("更新失败: {e}"),
+                                                            |e| format!("{}: {e}", t_string!(i18n, settings.phone.update_failed)),
                                                         ))),
                                                     }
                                                 });
@@ -658,11 +715,11 @@ pub fn PhoneProviders() -> impl IntoView {
                                     // "API Key" inline input row
                                     <div style="padding:10px 16px; display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--color-border);">
                                         <div style="font-size:13px; color:var(--color-text-secondary); font-weight:500;">
-                                            "API Key"
+                                            {t!(i18n, settings.providers.api_key)}
                                         </div>
                                         <input
                                             type="password"
-                                            placeholder=move || if info_for_key.get_value().has_api_key { "••••••••（已设置，输入新值覆盖）" } else { "输入 API Key" }
+                                            placeholder=move || if info_for_key.get_value().has_api_key { t_string!(i18n, settings.phone.key_set_placeholder).to_string() } else { t_string!(i18n, settings.phone.key_enter_placeholder).to_string() }
                                             prop:value=move || key_input.get()
                                             on:input=move |ev| key_input.set(event_target_value(&ev))
                                             style="width:100%; padding:8px 10px; background:var(--color-surface-sunken); border:1px solid var(--color-border); border-radius:8px; font-size:14px; color:var(--color-text-primary); outline:none; box-sizing:border-box;"
@@ -688,7 +745,7 @@ pub fn PhoneProviders() -> impl IntoView {
                                                         Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
                                                             i18n,
                                                             &e,
-                                                            |e| format!("保存失败: {e}"),
+                                                            |e| format!("{}: {e}", t_string!(i18n, settings.phone.save_failed)),
                                                         ))),
                                                     }
                                                     key_saving.set(false);
@@ -696,9 +753,151 @@ pub fn PhoneProviders() -> impl IntoView {
                                             }
                                             style="align-self:flex-end; padding:7px 18px; background:var(--color-primary); color:#fff; border:0; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; opacity: 1;"
                                         >
-                                            {move || if key_saving.get() { "保存中…" } else { "保存" }}
+                                            {move || if key_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, settings.phone.save).to_string() }}
                                         </button>
                                     </div>
+
+                                    // "Test connection" action row.
+                                    //
+                                    // The server half (`providers.test`) has
+                                    // shipped all along and is the only writer
+                                    // of `verified`; without this button a
+                                    // phone-only owner could configure a
+                                    // provider but never learn whether the key
+                                    // works, and the desktop's verified dot
+                                    // stayed dark forever.
+                                    <div
+                                        class="cell"
+                                        style="cursor:pointer;"
+                                        on:click=move |_| {
+                                            if testing.get() { return; }
+                                            let info = info_for_test.get_value();
+                                            let name = name_for_test.get_value();
+                                            let state = state_for_test;
+                                            let reload = reload_for_test.get_value();
+                                            testing.set(true);
+                                            test_result.set(None);
+                                            spawn_local(async move {
+                                                let cfg = passthrough(&info);
+                                                match ProvidersApi::test_connection(&state, Some(name.as_str()), cfg).await {
+                                                    Ok(r) => {
+                                                        test_result.set(Some((name, r.success)));
+                                                        error.set(None);
+                                                        // `verified` is persisted by the
+                                                        // server on success, so refetch —
+                                                        // otherwise the badge lags a screen.
+                                                        reload();
+                                                    }
+                                                    Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                        i18n,
+                                                        &e,
+                                                        |e| format!("{}: {e}", t_string!(i18n, settings.phone.test_failed)),
+                                                    ))),
+                                                }
+                                                testing.set(false);
+                                            });
+                                        }
+                                    >
+                                        <div class="cell-body">
+                                            <div class="cell-title" style="color:var(--color-primary);">
+                                                {move || if testing.get() {
+                                                    t_string!(i18n, settings.providers.testing).to_string()
+                                                } else {
+                                                    t_string!(i18n, settings.providers.test_connection).to_string()
+                                                }}
+                                            </div>
+                                        </div>
+                                        {move || {
+                                            let this = name_for_test_view.get_value();
+                                            test_result.get()
+                                                .filter(|(who, _)| *who == this)
+                                                .map(|(_, ok)| {
+                                                    let (text, colour) = if ok {
+                                                        (t_string!(i18n, settings.providers.connection_successful).to_string(),
+                                                         "oklch(0.60 0.15 142)")
+                                                    } else {
+                                                        (t_string!(i18n, settings.providers.connection_failed).to_string(),
+                                                         "var(--color-danger, oklch(0.58 0.20 25))")
+                                                    };
+                                                    view! {
+                                                        <span class="cell-value" style=format!("color:{colour};")>{text}</span>
+                                                    }
+                                                })
+                                        }}
+                                    </div>
+
+                                    // "Delete" — two taps, because a phone has
+                                    // no hover and no undo. The second cell is
+                                    // the confirm; leaving the row cancels.
+                                    {move || {
+                                        let this = name_for_delete_view.get_value();
+                                        let armed = confirm_delete.get().as_deref() == Some(this.as_str());
+                                        if armed {
+                                            view! {
+                                                <div
+                                                    class="cell"
+                                                    style="cursor:pointer;"
+                                                    on:click=move |_| {
+                                                        if deleting.get() { return; }
+                                                        let name = name_for_delete.get_value();
+                                                        let state = state_for_delete;
+                                                        let reload = reload_for_delete.get_value();
+                                                        deleting.set(true);
+                                                        spawn_local(async move {
+                                                            match ProvidersApi::delete(&state, name).await {
+                                                                Ok(()) => {
+                                                                    confirm_delete.set(None);
+                                                                    expanded.set(None);
+                                                                    error.set(None);
+                                                                    reload();
+                                                                }
+                                                                Err(e) => error.set(Some(crate::components::admin_refusal::settings_write_error(
+                                                                    i18n,
+                                                                    &e,
+                                                                    |e| format!("{}: {e}", t_string!(i18n, settings.phone.delete_failed)),
+                                                                ))),
+                                                            }
+                                                            deleting.set(false);
+                                                        });
+                                                    }
+                                                >
+                                                    <div class="cell-body">
+                                                        <div class="cell-title" style="color:var(--color-danger, oklch(0.58 0.20 25));">
+                                                            {move || if deleting.get() {
+                                                                t_string!(i18n, settings.providers.deleting).to_string()
+                                                            } else {
+                                                                t_string!(i18n, common.confirm_delete).to_string()
+                                                            }}
+                                                        </div>
+                                                        <div class="cell-sub">{t!(i18n, settings.phone.delete_confirm)}</div>
+                                                    </div>
+                                                </div>
+                                                <div
+                                                    class="cell"
+                                                    style="cursor:pointer;"
+                                                    on:click=move |_| confirm_delete.set(None)
+                                                >
+                                                    <div class="cell-body">
+                                                        <div class="cell-title">{t!(i18n, settings.providers.cancel)}</div>
+                                                    </div>
+                                                </div>
+                                            }.into_any()
+                                        } else {
+                                            view! {
+                                                <div
+                                                    class="cell"
+                                                    style="cursor:pointer;"
+                                                    on:click=move |_| confirm_delete.set(Some(this.clone()))
+                                                >
+                                                    <div class="cell-body">
+                                                        <div class="cell-title" style="color:var(--color-danger, oklch(0.58 0.20 25));">
+                                                            {t!(i18n, settings.phone.delete_provider)}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }.into_any()
+                                        }
+                                    }}
                                 </Show>
                             }
                         }).collect::<Vec<_>>()}

@@ -24,7 +24,7 @@ use async_trait::async_trait;
 /// this context, and `EventHandlerRegistry` was the only consumer of the
 /// abort flag). The struct is kept because the `EventHandler` trait still
 /// carries an `&EventContext` parameter for forward compatibility.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct EventContext;
 
 impl EventContext {

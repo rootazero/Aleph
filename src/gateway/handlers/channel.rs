@@ -10,9 +10,7 @@ use tracing::debug;
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
-use crate::gateway::channel::{
-    ChannelId, ChannelInfo, ChannelStatus, OutboundMessage,
-};
+use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
@@ -25,7 +23,6 @@ pub const CHANNEL_SECRET_FIELDS: &[&str] = &[
     "bot_token",     // telegram, discord, slack
     "app_token",     // slack
     "app_secret",    // feishu
-    "app_password",  // msteams
     "access_token",  // matrix
     "password",      // xmpp, irc, email
     "private_key",   // nostr
@@ -796,8 +793,6 @@ pub async fn handle_delete(
         }),
     )
 }
-
-
 
 #[cfg(test)]
 mod tests {

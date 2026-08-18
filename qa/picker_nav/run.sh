@@ -9,6 +9,14 @@
 # provider and no agent turn here — what the fixture supplies is a realistic
 # catalogue (two presets configured, fifty-odd not) and three widths.
 #
+# Items 1-13 and 16-18 run as loopback operator, which the fixture boots into
+# directly. Items 14-15 cannot: loopback is *always* operator, so the refusal
+# half of these screens — the only path that reaches
+# `admin_refusal::settings_write_error`, which is what this round's new
+# Test/Delete buttons are wired through — needs a LAN bind, TLS and a member
+# credential. `member_seed.py` turns the seeding half of that into one command;
+# the browser half stays manual, which is the point of a real-machine QA.
+#
 # The three widths are the point of the round's QA, not a formality. The
 # desktop settings master-detail folds at `@media (max-width: 720px)`
 # (`.aleph-md` in styles/tailwind.css), while the *form factor* switch to the
@@ -113,6 +121,62 @@ cat <<'CHECKLIST'
   10. 选一个已配置的预设（groq / deepseek，带「已配置」角标）
       断言: 不进入设置表单，直接关闭 picker 并展开那一行现有的编辑区
   11. 长列表底部渐隐同 1
+
+  phone (390x844) — 本轮新增的两个按钮（loopback = operator）
+  12. 展开一个已配置 provider → 点「测试连接」
+      断言: 标题变「测试中...」→ 右侧出现绿色「连接成功」或红色「连接失败」；
+            成功后重新加载，config.toml 里该 provider 的 verified = true
+            （verified 的唯一写者就是 providers.test —— 手机端此前无路可写）
+      断言(串味): 折叠该行、展开另一个 provider → 新行右侧**没有**上一行的判定
+                  （判定按 provider 名字键控，不是一个裸 bool）
+  13. 同一行点「删除提供商」→ 出现红色「确认删除？」+ 说明 + 「取消」两格
+      断言: 点「取消」回到单格；点「确认删除？」后该行消失、
+            config.toml 里 [providers.<id>] 段消失
+
+  member（需要 LAN + TLS，见下方 member 段）— 本轮此前从未真机跑过的那一半
+  14. member 打开 /settings/providers（phone）
+      断言 a: 顶部是**被分类过的**那句话（settings.admin_refusal.read_config,
+            「该设置页需要 operator 权限…」），不是裸协议串
+      断言 b: **没有**「暂无配置的 Provider」。2026-08-18 首跑时它和 a 同屏出现,
+            而 seeder 的 operator_sees_providers 是 ["deepseek","groq"] ——
+            一个正确的拒绝横幅底下压着一句自信的假话,正是「被拒不许读作没有」。
+            已修: 空状态改为只在 list_loaded（只有 Ok 会置位）时才敢断言
+      断言 c: 展开「添加提供商」后显示「未能读取提供商目录。」,
+            **不是**「没有匹配的提供商」——目录不是空的,是被拒了
+      对照(operator, loopback): 同一块代码在真为空时必须仍说「没有匹配的提供商」。
+            少了这一半,修复就可能是把一句谎话换成另一句
+  15. ⚠️ **member 在这个屏幕上结构性到不了写路径**（2026-08-18 实测结论,
+      不是没跑）: providers.list 与 providers.catalog 都被 ADMIN_PREFIXES 拒掉,
+      于是没有任何 provider 行、也没有任何目录行可以作用 ——「测试连接」/
+      「删除提供商」/「保存」三个按钮一个都渲染不出来。
+      要覆盖 settings_write_error 那条臂,得换一个 member 读得到、写不了的
+      surface（本轮未做）
+
+  i18n（本轮把 phone 平台 53 处硬编码中文换成 t!）
+  16. 桌面「设置 → 通用」把语言切到 English，再回到 phone 宽度
+      断言: /settings/providers · /settings/embeddings · /settings/model-route ·
+            /settings/appearance · /settings/connection · /memory 五屏
+            全英文；不残留任何中文
+      断言(实时): 不刷新页面切换语言，列表分组标题（Theme/Material/…）当场变
+            （这些标题是 Signal<String>，快照式 &'static str 会卡在旧语言）
+
+  通道设置（本轮切掉 MS Teams 卡片、给飞书补了工厂）
+  17. wide /settings/channels
+      断言: 网格里**没有** Microsoft Teams 卡片；**有** Feishu / Lark 卡片
+  18. 配 [channels.feishu] + [channels.line]（占位凭据即可）并重启 server
+      ⚠️ 断言写在**正确的那条线**上——2026-08-18 真机跑之前这一项的断言是错的：
+         「工厂缺失」在这条路径上**不会**打 `Failed to create channel`，
+         也不会打在 stdout 上。unknown 通道在更早的 `resolved_channels()` 就被
+         丢掉了，warn 只进 $ALEPH_HOME/logs/aleph-server.log.*
+      断言(stdout): `Registered channel: feishu (feishu)` 与
+            `Registered channel: line (line)` 各出现一次
+      断言(stdout): feishu 随后 `✗ Channel feishu failed: … Token acquisition
+            failed: … code=10003` —— 这才是「工厂接上了、只是凭据是假的」的证据；
+            **没有这行**说明它压根没被构造
+      断言(file log): `Channel 'X' has no 'type' field` 只剩 msteams
+            （已切除，本就不该存在）；feishu / line 都不许出现在这里
+      对照组必须有: 同时配一个 [channels.msteams]。只断言「没有失败行」是弱的——
+            先证明这条探针**测得出**它要找的失败
 CHECKLIST
 
 cat <<EOF
@@ -120,7 +184,18 @@ cat <<EOF
   Panel:    http://127.0.0.1:$GATEWAY_PORT
   scratch:  $QA_ROOT   (config: $CONFIG)
   logs:     $QA_ROOT/server.log · \$ALEPH_HOME/logs/
-  item 9 的落盘断言:  grep -A3 '^\[providers\.' $CONFIG
+  item 9/12/13 的落盘断言:  grep -A6 '^\[providers\.' $CONFIG
+  item 18 的断言:           grep -E 'Registered channel|Channel .* failed' \$QA_ROOT/server.log
+                            grep -rh "has no 'type' field" \$ALEPH_HOME/logs/
+
+  member 段 (items 14-15) — 需要 LAN + TLS，因为 loopback 恒为 operator:
+    1) 停掉 server, 编辑 $CONFIG:
+         [gateway] host = "0.0.0.0"      [gateway.tls] enabled = true
+    2) 重启 server, 然后对着 **loopback** 跑 seeder (它需要 operator):
+         python3 $HERE/member_seed.py $GATEWAY_PORT --tls
+    3) 从本机 LAN IP（不是 127.0.0.1）打开它打印的 member URL, TOFU 接受自签证书
+    4) seeder 打印的 operator_sees_providers 就是 item 14 的对照组 ——
+       它非空而 member 屏幕说「暂无配置的 Provider」, 即为缺陷
 
   Server stays up until Ctrl-C (scratch root removed on exit; KEEP=1 keeps it).
 EOF

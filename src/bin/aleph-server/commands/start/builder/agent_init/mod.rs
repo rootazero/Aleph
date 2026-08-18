@@ -817,7 +817,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             defer_mcp_tools: app_config.tools.defer_mcp_tools,
             max_runs_global: app_config.execution.max_runs_global.max(1),
             max_runs_per_agent: app_config.execution.max_runs_per_agent.max(1),
-            ..Default::default()
         };
         let resilience_db: Option<Arc<alephcore::resilience::StateDatabase>> = {
             use alephcore::utils::paths::get_data_dir;

@@ -2,6 +2,7 @@
 //! same `location.host` + loopback logic as the wide ConnectionSection
 //! (connection form is decided by build, not toggled here — R4 pure I/O).
 
+use crate::i18n::t;
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;
 
@@ -27,6 +28,7 @@ pub(crate) fn is_loopback_host(host: &str) -> bool {
 #[component]
 #[must_use]
 pub fn PhoneConnection() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let host = current_host();
     let host_present = !host.is_empty();
     let remote = host_present && !is_loopback_host(&host);
@@ -39,7 +41,7 @@ pub fn PhoneConnection() -> impl IntoView {
     view! {
         <PhoneShell title="Connection" back="/settings">
             <div>
-                <div class="list-header">"连接"</div>
+                <div class="list-header">{t!(i18n, settings.phone.connection)}</div>
                 <div class="list">
                     <div class="cell">
                         <div class="cell-body"><div class="cell-title">"Core"</div></div>
