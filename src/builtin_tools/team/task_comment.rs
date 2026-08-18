@@ -12,6 +12,7 @@ use tracing::debug;
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::builtin_tools::acting_agent::acting_agent_id;
 use crate::error::Result;
+use crate::hub::trust::scan_for_injection;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -89,6 +90,28 @@ impl AlephTool for TaskCommentTool {
                 message: "task_comment: body must not be empty".into(),
                 suggestion: Some("Pass a non-empty `body` describing the handoff context".into()),
             });
+        }
+
+        // BT-C-R4-03: scan the body for prompt-injection sentinels before
+        // persisting it. task_comment bodies are rendered verbatim into the
+        // panel Comments drawer that a reviewer (human or another agent)
+        // later reads; an LLM-supplied body carrying "ignore previous",
+        // invisible Unicode, or other sentinels would have free reach into
+        // the reviewer's context. Refuse when any high-confidence finding
+        // is present (mirrors the gate hub trust-scan applies to install
+        // disclosures).
+        let findings = scan_for_injection(body);
+        if !findings.is_empty() {
+            let detail = findings
+                .iter()
+                .map(|f| format!("{} ({})", f.kind, f.detail))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(crate::error::AlephError::tool(format!(
+                "task_comment: body rejected by prompt-injection scan: {detail}. \
+                 Comments persist into the panel Comments drawer that reviewers \
+                 read verbatim; rewrite the note without sentinels."
+            )));
         }
 
         // Ownership gate. This tool wrote by id without ever reading the task,
