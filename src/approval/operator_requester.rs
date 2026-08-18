@@ -54,6 +54,7 @@ use async_trait::async_trait;
 
 use crate::exec::decision::ApprovalRequest;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
+use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester, ApprovalResponse};
@@ -182,7 +183,24 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 tool_call_id,
             })
         {
+            // Initial publish failure is fatal for this approval: the operator
+            // was never notified, so a "waiting" card never appeared in their
+            // surface. Mirror the channel-bridge contract (`exec/approval/
+            // channel_bridge.rs`) — wake the waiter with `Deny` so the caller
+            // learns the user was not reached, and remove the pending entry.
+            // See APPROVAL-R3-003.
             tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
+            self.manager.resolve(
+                &approval_id,
+                ApprovalDecisionType::Deny,
+                Some("unavailable".to_string()),
+            );
+            return Ok(ApprovalResponse {
+                outcome: ApprovalOutcome::Denied,
+                deny_reason: Some(
+                    "approval notification could not be delivered to the operator surface".to_string(),
+                ),
+            });
         }
 
         // Phase 3b-2b: surface an in-band "waiting for operator approval" notice

@@ -429,11 +429,17 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     }
 
     async fn record(&self, request: &ActionRequest, decision: &ApprovalDecision) {
+        // SECURITY: route both the target and the context through secret redaction
+        // before logging. The `target` field already gets `redact_target`, but
+        // `context` is built by `audit_identity` from a raw user-supplied target
+        // (e.g. clipboard text, keystrokes) and was previously logged verbatim.
+        // See APPROVAL-R3-001.
+        let masker = crate::exec::masker::SecretMasker::new();
         info!(
             action = ?request.action_type,
             target = %redact_target(&request.target),
             agent = %request.agent_id,
-            context = %request.context,
+            context = %masker.mask(&request.context),
             decision = ?decision,
             "Approval decision recorded"
         );
