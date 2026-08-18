@@ -74,6 +74,23 @@ fn verify_exported_file(
     path: &str,
     pins: &alephcore::identity::ExportPins,
 ) -> Result<(), Box<dyn Error>> {
+    // BIN-R4-04: refuse to slurp an oversized export. A 4 GiB file would
+    // OOM the CLI; a maliciously-pointed `path` would read whatever the
+    // daemon user can read. The cap matches what `ExportPin` and the
+    // export writer document (a chain export is bounded by the number
+    // of records, each ~256 B signed + a few metadata fields; 256 MiB
+    // is far above any plausible export and well below OOM territory).
+    const MAX_EXPORT_BYTES: u64 = 256 * 1024 * 1024;
+    let meta = std::fs::metadata(path)
+        .map_err(|e| format!("cannot stat {path}: {e}"))?;
+    if meta.len() > MAX_EXPORT_BYTES {
+        return Err(format!(
+            "{path} is {} bytes; export cap is {MAX_EXPORT_BYTES} bytes (256 MiB). \
+             Refusing to read an oversized file as a chain export.",
+            meta.len()
+        )
+        .into());
+    }
     let body = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
     let doc: alephcore::identity::ChainExport =
         serde_json::from_str(&body).map_err(|e| format!("{path} is not a chain export: {e}"))?;
