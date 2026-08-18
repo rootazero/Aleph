@@ -77,6 +77,59 @@ pub(crate) struct ChromeMcpDriver {
     /// while calling a tool, which is what triggers session creation — sharing
     /// one lock for both would deadlock.
     session_create_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// BROWSER-R4-01: PIDs of Chrome processes Aleph launched itself when
+    /// no user Chrome was running. The `tokio::process::Child` handle is
+    /// intentionally dropped after the bootstrap-spawn (the MCP server's
+    /// `--autoConnect` is what keeps Chrome alive), so without this list
+    /// the launched Chrome is reparented to PID 1 and outlives the
+    /// daemon. Drop below kills each PID so a daemon stop cleans up.
+    /// PIDs are recorded on launch and removed when the driver shuts
+    /// the session down explicitly; the Drop covers everything else.
+    launched_pids: Mutex<Vec<u32>>,
+}
+
+impl Drop for ChromeMcpDriver {
+    /// BROWSER-R4-01: reap Chrome processes Aleph bootstrapped. The
+    /// async-friendly `tokio::process::Child::start_kill` requires a
+    /// runtime handle we do not have in a sync Drop; send SIGKILL via
+    /// `libc::kill` on Unix / `taskkill /F` on Windows instead. Failures
+    /// (already exited, owned by another user) are logged and ignored —
+    /// the reaper on process exit will pick up orphans.
+    fn drop(&mut self) {
+        let pids = self
+            .launched_pids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if pids.is_empty() {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            for pid in pids {
+                // SAFETY: kill(2) with a stored pid is well-defined for
+                // any process the daemon's user can signal; ESRCH /
+                // EPERM are expected outcomes and logged, not propagated.
+                let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                if rc != 0 {
+                    let err = std::io::Error::last_os_error();
+                    tracing::warn!(
+                        pid,
+                        error = %err,
+                        "ChromeMcpDriver::drop: failed to SIGKILL launched Chrome"
+                    );
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            for pid in pids {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/PID", &pid.to_string()])
+                    .output();
+            }
+        }
+    }
 }
 
 impl ChromeMcpDriver {
@@ -89,6 +142,7 @@ impl ChromeMcpDriver {
             chrome_launch_lock: tokio::sync::Mutex::new(()),
             profile_locks: Mutex::new(HashMap::new()),
             session_create_locks: Mutex::new(HashMap::new()),
+            launched_pids: Mutex::new(Vec::new()),
         }
     }
 
@@ -315,6 +369,18 @@ impl ChromeMcpDriver {
             .no_window()
             .spawn()
             .map_err(|e| BrowserError::LaunchFailed(format!("Failed to launch Chrome: {e}")))?;
+
+        // BROWSER-R4-01: record the bootstrap-launched PID so Drop can
+        // SIGKILL it on daemon shutdown. The handle is intentionally
+        // dropped right below (the MCP server's --autoConnect keeps
+        // Chrome alive), so without this list the launched process
+        // outlives the daemon.
+        if let Some(pid) = child.id() {
+            self.launched_pids
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(pid);
+        }
 
         // Verify the process did not immediately exit instead of blind-sleeping.
         tokio::time::sleep(Duration::from_millis(100)).await;
