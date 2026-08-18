@@ -85,33 +85,20 @@ const TOLERATED: &[Tolerated] = &[
     // ---- Retired: knobs removed with their config kept parsing on purpose.
     // `[agent]` and `[cowork]` were removed entirely in 2026-08-17 wire audit
     // (config-002 + config-007). Both spellings are now just unknown top-level
-    // sections — serde drops them silently. The entries below document the
-    // retirement so a future audit does not re-flag them as missing fields.
+    // sections, so `serde_ignored` reports them AT THE SECTION ROOT (`agent`,
+    // not `agent.subagents`) — serde never descends into a section the schema
+    // no longer has. The tolerated paths must therefore be the section roots;
+    // the per-key entries this replaces could never match, which is exactly
+    // why `a_retired_key_is_not_reported_dead` was red on main.
     Tolerated {
-        path: "agent.subagents",
-        why: "retired with the rest of the decorative sub-agent surface; see config-002 in the \
-              2026-08-17 wire audit",
+        path: "agent",
+        why: "the whole [agent] section was retired in the 2026-08-17 wire audit (config-002); \
+              reported at the root because serde no longer descends into it",
     },
     Tolerated {
-        path: "agent.require_confirmation",
-        why: "retired; see config-002 in the 2026-08-17 wire audit",
-    },
-    Tolerated {
-        path: "agent.max_parallelism",
-        why: "retired; see config-002 in the 2026-08-17 wire audit",
-    },
-    Tolerated {
-        path: "agent.planner_provider",
-        why: "retired — value parsed and validated (key existence check) but never propagated; \
-              see config-002 in the 2026-08-17 wire audit",
-    },
-    Tolerated {
-        path: "agent.file_ops.*",
-        why: "retired — file-IO gating duplicates `tool_permissions`; see config-002",
-    },
-    Tolerated {
-        path: "agent.code_exec.*",
-        why: "retired — code-exec gating duplicates `tool_permissions` + sandbox; see config-002",
+        path: "cowork",
+        why: "the whole [cowork] section was retired in the 2026-08-17 wire audit (config-007); \
+              reported at the root because serde no longer descends into it",
     },
     Tolerated {
         path: "profiles.*.cache_strategy",
