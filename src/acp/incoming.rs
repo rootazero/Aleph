@@ -252,20 +252,45 @@ impl IncomingHandler {
     // --- path confinement --------------------------------------------------
 
     /// Resolve `requested` against the workspace root and verify it stays
-    /// inside the subtree. Lexical (no symlink resolution) so it works for
-    /// not-yet-existing write targets.
-    fn confine(&self, requested: &str) -> Result<PathBuf, HandlerOutcome> {
+    /// Confinement check + canonicalisation. **Async** since the underlying
+    /// `confine_blocking` performs blocking `std::fs::*` syscalls
+    /// (`canonicalize`, `symlink_metadata`, `read_link`) that must NOT run on
+    /// a tokio worker thread — every concurrent ACP request and unrelated
+    /// async task sharing the runtime would otherwise stall behind them.
+    /// Runs in `spawn_blocking` to keep the runtime responsive. See ACP-02.
+    async fn confine(&self, requested: &str) -> Result<PathBuf, HandlerOutcome> {
+        let root = self.root.clone();
+        let req = requested.to_string();
+        match tokio::task::spawn_blocking(move || confine_blocking(&root, &req)).await {
+            Ok(Ok(p)) => Ok(p),
+            Ok(Err(e)) => Err(e),
+            Err(join_err) => {
+                warn!(
+                    requested,
+                    error = %join_err,
+                    "ACP incoming: spawn_blocking join failed (canonicalize)"
+                );
+                Err(HandlerOutcome::internal(format!(
+                    "fs canonicalize task panicked: {join_err}"
+                )))
+            }
+        }
+    }
+
+    /// Synchronous confinement + canonicalisation. Mirrors `confine` but
+    /// callable from `spawn_blocking`. See ACP-02.
+    fn confine_blocking(root: &Path, requested: &str) -> Result<PathBuf, HandlerOutcome> {
         let raw = Path::new(requested);
         let joined = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
-            self.root.join(raw)
+            root.join(raw)
         };
         let normalized = lexical_normalize(&joined);
-        if !normalized.starts_with(&self.root) {
+        if !normalized.starts_with(root) {
             warn!(
                 requested,
-                root = %self.root.display(),
+                root = %root.display(),
                 "ACP incoming: filesystem access denied outside workspace"
             );
             return Err(HandlerOutcome::Error {
@@ -273,12 +298,12 @@ impl IncomingHandler {
                 message: format!("path '{requested}' is outside the session workspace"),
             });
         }
-        match canonicalize_within_root(&self.root, &normalized) {
+        match canonicalize_within_root(root, &normalized) {
             Ok(canonical) => Ok(canonical),
             Err(e) => {
                 warn!(
                     requested,
-                    root = %self.root.display(),
+                    root = %root.display(),
                     error = %e,
                     "ACP incoming: filesystem access denied (symlink resolution)"
                 );

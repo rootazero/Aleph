@@ -128,6 +128,47 @@ impl AcpAdapterManager {
         Ok(entry)
     }
 
+    /// Look up an existing `SessionEntry` WITHOUT spawning a new subprocess.
+    ///
+    /// Returns `Ok(Some(entry))` if a live entry exists in the pool,
+    /// `Ok(None)` if no entry is registered for this (harness, cwd, name)
+    /// tuple, and an error only if the pool lookup itself fails.
+    ///
+    /// `set_mode` / `set_model` / `set_config_option` / `authenticate` use
+    /// this instead of `acquire_live_entry` so that a missing session does
+    /// NOT silently leak a child process that the next call to
+    /// `require_session_id` is going to reject anyway (see ACP-01).
+    async fn lookup_existing_entry(
+        &self,
+        harness_id: &str,
+        cwd: &str,
+        session_name: Option<&str>,
+    ) -> Result<Option<SessionEntry>> {
+        let key = SessionKey::with_name(harness_id, cwd, session_name);
+        let existing = self.sessions.read().await.get(&key).cloned();
+        let Some(entry) = existing else {
+            return Ok(None);
+        };
+        let is_live = {
+            let mut s = entry.session.lock().await;
+            s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
+        };
+        if !is_live {
+            // Evict the dead entry so the next caller (or a `prompt_named`
+            // with `reuse_session: false`) starts cleanly. Match the eviction
+            // policy of `acquire_live_entry`.
+            let mut sessions = self.sessions.write().await;
+            match sessions.get(&key) {
+                Some(cur) if Arc::ptr_eq(&cur.session, &entry.session) => {
+                    sessions.remove(&key);
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+        Ok(Some(entry))
+    }
+
     /// Send a prompt to the specified harness, using the appropriate mode.
     ///
     /// - **`NativeAcp`**: Extracts session from pool (brief lock), uses it, re-inserts if alive.
@@ -269,13 +310,27 @@ impl AcpAdapterManager {
                         Ok(text)
                     }
                     Err(e) => {
-                        if session.is_alive() {
+                        // Only kill + evict on retryable errors
+                        // (`SessionDead`, `Timeout`, `SpawnFailed`). Application-
+                        // level rejections (`ModeUnsupported`,
+                        // `SessionControlUnsupported`, `AuthRequired`, ...) are
+                        // NOT a sign the subprocess is broken — leave it alive
+                        // so the next retry can succeed without respawning.
+                        // The `From<AcpOperationError> for AlephError` impl
+                        // preserves the `is_retryable()` bit on
+                        // `AlephError::AcpError { retryable, .. }`, so we
+                        // read it back here without downcasting. See ACP-04.
+                        let retryable = match &e {
+                            crate::error::AlephError::AcpError { retryable, .. } => *retryable,
+                            _ => false,
+                        };
+                        if retryable && session.is_alive() {
                             session.kill().await;
                         }
                         drop(session);
                         // Only remove the entry if it is still the same session
                         // we used; a concurrent caller may have respawned it.
-                        if self.remove_if_same(&key, &entry).await {
+                        if retryable && self.remove_if_same(&key, &entry).await {
                             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                                 harness_id: harness_id.to_string(),
                                 cwd: cwd.to_string(),
@@ -441,9 +496,22 @@ impl AcpAdapterManager {
             })?;
             harness.build_config(Some(cwd)).timeout
         };
+        // Use `lookup_existing_entry` (NOT `acquire_live_entry`) so a missing
+        // session returns `Ok(None)` instead of silently spawning a fresh
+        // subprocess that the next `require_session_id` is going to reject.
+        // See ACP-01.
         let entry = self
-            .acquire_live_entry(harness_id, cwd, session_name)
-            .await?;
+            .lookup_existing_entry(harness_id, cwd, session_name)
+            .await?
+            .ok_or_else(|| {
+                AcpOperationError::new(
+                    AcpErrorCode::SessionDead,
+                    format!(
+                        "ACP session for harness '{harness_id}' (cwd '{cwd}') was not started; \
+                         call prompt_named first"
+                    ),
+                )
+            })?;
         Ok((entry, timeout))
     }
 

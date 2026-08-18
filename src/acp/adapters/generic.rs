@@ -29,6 +29,7 @@ pub struct GenericAcpAdapter {
     native_acp_args: Vec<String>,
     output_format: OutputFormat,
     timeout: Duration,
+    trust_level: crate::config::types::acp::TrustLevel,
 }
 
 impl GenericAcpAdapter {
@@ -53,6 +54,7 @@ impl GenericAcpAdapter {
             native_acp_args: vec!["--acp".to_string()],
             output_format: OutputFormat::from(&entry.output_format),
             timeout: Duration::from_secs(entry.timeout_seconds.max(1)),
+            trust_level: entry.trust_level.clone(),
         }
     }
 
@@ -109,11 +111,20 @@ impl AcpAdapter for GenericAcpAdapter {
     }
 
     fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
+        let permission_policy = match self.trust_level {
+            crate::config::types::acp::TrustLevel::Full => {
+                crate::acp::incoming::PermissionPolicy::ApproveAll
+            }
+            crate::config::types::acp::TrustLevel::Disabled => {
+                crate::acp::incoming::PermissionPolicy::DenyAll
+            }
+        };
         AdapterConfig {
             executable: self.executable.clone(),
             args: self.resolve_args(self.default_mode),
             cwd: cwd.map(String::from),
             timeout: self.timeout.max(Duration::from_secs(1)),
+            permission_policy,
             ..Default::default()
         }
     }
@@ -134,11 +145,20 @@ impl AcpAdapter for GenericAcpAdapter {
 
     async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
         let timeout = self.timeout.max(Duration::from_secs(1));
+        let permission_policy = match self.trust_level {
+            crate::config::types::acp::TrustLevel::Full => {
+                crate::acp::incoming::PermissionPolicy::ApproveAll
+            }
+            crate::config::types::acp::TrustLevel::Disabled => {
+                crate::acp::incoming::PermissionPolicy::DenyAll
+            }
+        };
         let config = AdapterConfig {
             executable: self.executable.clone(),
             args: self.native_acp_args.clone(),
             cwd: cwd.map(String::from),
             timeout,
+            permission_policy,
             ..Default::default()
         };
         let mut session = AcpSession::spawn(self.id(), &config).await?;

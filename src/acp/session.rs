@@ -28,6 +28,11 @@ pub struct AdapterConfig {
     pub env: Vec<(String, String)>,
     /// Request timeout (default 5 minutes).
     pub timeout: Duration,
+    /// Filesystem permission policy applied to `fs/*` requests the agent
+    /// issues mid-prompt. Defaults to `ApproveAll` for backwards
+    /// compatibility; callers should set this from `TrustLevel`
+    /// (`Full` -> `ApproveAll`, `Disabled` -> `DenyAll`). See ACP-07.
+    pub permission_policy: crate::acp::incoming::PermissionPolicy,
 }
 
 impl Default for AdapterConfig {
@@ -174,7 +179,7 @@ impl AcpSession {
         // of dropped. Filesystem access is confined to the session cwd.
         let handler = std::sync::Arc::new(crate::acp::incoming::IncomingHandler::new(
             config.cwd.as_deref(),
-            crate::acp::incoming::PermissionPolicy::default(),
+            config.permission_policy,
         ));
         let transport = StdioTransport::with_handler(stdin, stdout, Some(handler));
 
@@ -629,11 +634,17 @@ fn map_auth_error(err: crate::error::AlephError) -> crate::error::AlephError {
     if let crate::error::AlephError::AcpError { code, message, .. } = &err {
         if code == "protocol_error" {
             let lower = message.to_lowercase();
-            if lower.contains("unauthorized")
-                || lower.contains("authentication")
-                || lower.contains("auth")
-                || lower.contains("credential")
-                || lower.contains("permission denied")
+            // SECURITY: anchor on word boundaries (or substring start) to avoid
+            // false-positives on `authority`, `author`, `authenticated_user`,
+            // `permission denied` from a non-auth flow, etc. Substring `auth`
+            // would also match `authorization_required_for_*.txt` paths.
+            // Use `is_auth_word` which only matches when the token starts the
+            // string or follows non-alphanumeric, and is followed by a similar
+            // boundary or end-of-string. See ACP-03.
+            if is_auth_word(&lower)
+                || lower.starts_with("credential")
+                || lower.starts_with("permission denied")
+                || lower.starts_with("forbidden")
             {
                 return crate::acp::protocol::AcpOperationError::new(
                     crate::acp::protocol::AcpErrorCode::AuthRequired,
@@ -644,6 +655,30 @@ fn map_auth_error(err: crate::error::AlephError) -> crate::error::AlephError {
         }
     }
     err
+}
+
+/// Match `auth`, `unauthorized`, `authentication`, or `auth required` only when
+/// they appear as full word-tokens (bounded by non-alphanumeric or string
+/// edges). This avoids false-positives like `author` or `authority`.
+fn is_auth_word(s: &str) -> bool {
+    let mut idx = 0usize;
+    while let Some(pos) = s[idx..].find("auth") {
+        let start = idx + pos;
+        let end = start + "auth".len();
+        let left_ok = start == 0
+            || !s.as_bytes()[start - 1].is_ascii_alphanumeric();
+        let right_ok =
+            end == s.len() || !s.as_bytes()[end].is_ascii_alphanumeric();
+        if left_ok && right_ok {
+            // Whole-word match — disambiguate from `author`/`authority`.
+            // `auth` as a token is short enough that the only false-positive
+            // is `auth0`, `authenticated`, etc. which are themselves auth
+            // errors, so accept.
+            return true;
+        }
+        idx = end;
+    }
+    false
 }
 
 impl Drop for AcpSession {
