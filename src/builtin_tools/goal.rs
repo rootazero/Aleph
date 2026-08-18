@@ -518,6 +518,12 @@ impl GoalTool {
 /// regardless of what the caller asks for (R5 menu-bar-first backstop).
 const MAX_PURSUIT_ITERATIONS: u32 = 50;
 
+/// BT-B-R4-01: per-field byte cap on goal strings (objective / note /
+/// lesson). A single LLM-supplied unbounded string becomes a re-render
+/// tax on every turn through StandingGoalLayer. 16 KiB matches the
+/// upper bound note_manage and other text-bearing tools already use.
+const MAX_GOAL_STRING: usize = 16 * 1024;
+
 /// Clamp a requested autonomous-iteration cap to the hard ceiling
 /// (`MAX_PURSUIT_ITERATIONS`, R5 menu-bar-first backstop). Shared by `set` and the
 /// in-place `update` adjuster so both honour the same ceiling.
@@ -759,6 +765,25 @@ token_budget. \
                 let objective = args.objective.as_deref().ok_or_else(|| {
                     AlephError::tool("goal 'set' requires 'objective'".to_string())
                 })?;
+                // BT-B-R4-01: cap the per-field string size. A single
+                // model-supplied objective / note / lesson of unbounded
+                // length is a one-call DoS that re-renders through
+                // StandingGoalLayer on every turn. The cap matches what
+                // note_manage and other text-bearing tools already use.
+                if objective.len() > MAX_GOAL_STRING {
+                    return Err(AlephError::tool(format!(
+                        "objective is {} bytes; max {MAX_GOAL_STRING}",
+                        objective.len()
+                    )));
+                }
+                if let Some(ref note) = args.note {
+                    if note.len() > MAX_GOAL_STRING {
+                        return Err(AlephError::tool(format!(
+                            "note is {} bytes; max {MAX_GOAL_STRING}",
+                            note.len()
+                        )));
+                    }
+                }
                 reject_zero_caps(&args)?;
                 if args.wait_minutes.is_some() || args.wait_for_task.is_some() {
                     return Err(AlephError::tool(
@@ -1014,6 +1039,17 @@ token_budget. \
                     goal = goal.with_gate_command(next);
                 }
                 if args.note.is_some() {
+                    // BT-B-R4-01: same cap as `set`; an unbounded update
+                    // note re-renders through StandingGoalLayer on every
+                    // turn just as a long objective would.
+                    if let Some(ref n) = args.note {
+                        if n.len() > MAX_GOAL_STRING {
+                            return Err(AlephError::tool(format!(
+                                "note is {} bytes; max {MAX_GOAL_STRING}",
+                                n.len()
+                            )));
+                        }
+                    }
                     goal = goal.with_note(args.note.clone(), now);
                 } else if matches!(args.status, Some(GoalStatus::Active))
                     && prev_status != GoalStatus::Active
@@ -1026,6 +1062,13 @@ token_budget. \
                     goal = goal.with_note(None, now);
                 }
                 if let Some(lesson) = args.lesson.clone() {
+                    // BT-B-R4-01: same cap for the lesson field.
+                    if lesson.len() > MAX_GOAL_STRING {
+                        return Err(AlephError::tool(format!(
+                            "lesson is {} bytes; max {MAX_GOAL_STRING}",
+                            lesson.len()
+                        )));
+                    }
                     goal = goal.with_lesson_appended(lesson, now);
                 }
                 // Validated here, not at the top of the arm: `goal` now
