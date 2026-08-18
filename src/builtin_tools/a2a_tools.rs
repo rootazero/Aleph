@@ -21,6 +21,7 @@ use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
 use crate::a2a::service::CardRegistry;
 use crate::a2a::sub_agent::A2ASubAgent;
 use crate::error::{AlephError, Result};
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -290,6 +291,36 @@ impl AlephTool for A2AAgentsTool {
                     Self::NAME,
                     &format!("add {}", crate::utils::text_format::truncate_text(&url, 60)),
                 );
+
+                // BT-B-R4-05: validate the URL against the SSRF policy
+                // before any outbound connection. Previously the URL was
+                // passed straight to A2AClient::new / with_auth with no
+                // host-policy gate, so an LLM-supplied url like
+                // `http://169.254.169.254/latest/meta-data/` or
+                // `http://127.0.0.1:8123/` would be happily registered and
+                // called on every smart-route, with the persisted token
+                // attached. validate_url_async returns the same
+                // host-policy decision web_fetch uses, so the operator's
+                // existing config controls both surfaces.
+                let url_for_card = url::Url::parse(&url).map_err(|e| {
+                    AlephError::tool(format!("`url` is not a valid URL: {e}"))
+                })?;
+                let scheme = url_for_card.scheme();
+                if scheme != "http" && scheme != "https" {
+                    return Err(AlephError::tool(format!(
+                        "`url` must be http:// or https:// (got '{scheme}://'); \
+                         refusing to register a non-HTTP A2A agent"
+                    )));
+                }
+                validate_url_async(&url, &SsrfPolicy::default())
+                    .await
+                    .map_err(|e| {
+                        AlephError::tool(format!(
+                            "`url` blocked by SSRF policy ({e}); \
+                             A2A `add` rejects private/loopback hosts unless \
+                             the operator widens the policy"
+                        ))
+                    })?;
 
                 // Fetch the remote Agent Card so smart routing knows its skills.
                 let client = match args.token.clone() {
