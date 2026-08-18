@@ -129,6 +129,16 @@ impl MemoryTraceTool {
 
     /// Execute the evidence-chain walk.
     pub async fn call_impl(&self, args: MemoryTraceArgs) -> anyhow::Result<TraceResult> {
+        // BT-D-R4-09: cap the evidence walk. The previous shape had no
+        // upper bound — notes_citing for ProfileSection could return
+        // thousands of paths, each triggering another DB round-trip
+        // (sources_of, get_raws_by_ids), each accumulating evidence
+        // items that grew the response without bound. 500 evidence
+        // items is far above any sensible "trace a claim" request
+        // and caps the wall-time at ~500 small DB reads. Earlier
+        // entries are preserved; later ones are dropped.
+        const MAX_TRACE_EVIDENCE: usize = 500;
+        let mut evidence = Vec::with_capacity(MAX_TRACE_EVIDENCE.min(64));
         let agent = &self.agent_id;
 
         // 1. Resolve the set of note paths to inspect.
@@ -177,8 +187,10 @@ impl MemoryTraceTool {
         };
 
         // 2. Each note → its source raw ids → fetch rows (graceful prune for missing).
-        let mut evidence = Vec::new();
         for note in &notes {
+            if evidence.len() >= MAX_TRACE_EVIDENCE {
+                break;
+            }
             let raw_ids = self
                 .db
                 .sources_of(agent, note)
@@ -190,6 +202,9 @@ impl MemoryTraceTool {
                 .await
                 .map_err(|e| anyhow::anyhow!("get_raws_by_ids: {e}"))?;
             for rid in &raw_ids {
+                if evidence.len() >= MAX_TRACE_EVIDENCE {
+                    break;
+                }
                 let found = fetched.iter().find(|r| &r.id == rid);
                 evidence.push(EvidenceItem {
                     raw_id: rid.clone(),
