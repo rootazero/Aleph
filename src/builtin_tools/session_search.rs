@@ -49,6 +49,16 @@ const fn default_max_results() -> usize {
     5
 }
 
+/// BT-D-R4-08: hard cap on max_results. The user-supplied value drives
+/// the top-N selector (candidates x4 for the lazy fallback, plus one
+/// LLM synthesis call per primary survivor, plus potentially one per
+/// lazy hit). An unbounded value (a model passing usize::MAX, or
+/// repeatedly retrying with the same value) is a slow-burn cost
+/// amplifier — the LLM-synthesis path can fire dozens of times per
+/// call. 100 is far above any sensible cross-session recall request
+/// and well below the cost becoming a real concern.
+const MAX_SESSION_SEARCH_RESULTS: usize = 100;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub enum SummarySource {
     /// Reused from the existing `session_compactor` d{depth}/{seq} facts.
@@ -146,6 +156,14 @@ impl SessionSearchTool {
     ) -> std::result::Result<SessionSearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
+        // BT-D-R4-08: clamp the user-supplied max_results. The previous
+        // shape trusted args.max_results verbatim, so the top-N
+        // selector and the lazy fallback (which fetches
+        // max_results*4) both inherited any value the model passed.
+        // Clamp to MAX_SESSION_SEARCH_RESULTS at the tool boundary so
+        // the same value is used everywhere downstream.
+        let max_results = args.max_results.clamp(1, MAX_SESSION_SEARCH_RESULTS);
+
         notify_tool_start("session_search", &format!("搜索历史对话: {}", &args.query));
 
         let mut hits: Vec<SessionSearchHit> = Vec::new();
@@ -208,7 +226,7 @@ impl SessionSearchTool {
                 .collect();
 
             // ② Per-session dedup + cap.
-            let survivors = top_per_session(candidates, args.max_results.max(1));
+            let survivors = top_per_session(candidates, max_results);
 
             // ③ Build hits, fetching evidence_quotes per surviving session.
             for c in &survivors {
@@ -247,7 +265,7 @@ impl SessionSearchTool {
         let raw_hits = self
             .context
             .session_store()
-            .search_messages(&args.query, args.max_results.saturating_mul(4))
+            .search_messages(&args.query, max_results.saturating_mul(4))
             .await
             .map_err(|e| ToolError::Execution(format!("session_store fallback: {e}")))?;
 
@@ -268,7 +286,7 @@ impl SessionSearchTool {
             {
                 continue;
             }
-            if hits.len() >= args.max_results {
+            if hits.len() >= max_results {
                 break;
             }
 
@@ -297,7 +315,7 @@ impl SessionSearchTool {
         debug!(
             caller = %self.caller_agent_id,
             returned = total_hits,
-            requested = args.max_results,
+            requested = max_results,
             "session_search: summary-driven results"
         );
 
