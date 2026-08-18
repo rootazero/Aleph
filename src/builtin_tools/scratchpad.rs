@@ -609,11 +609,19 @@ impl AlephTool for ScratchpadTool {
         };
 
         // Registry binding (unchanged semantics, now keyed on resolved id).
+        // BT-D-R4-12: previously this updated the registry BEFORE the file
+        // operation ran. A failed write (disk full, permission denied,
+        // concurrent removal) would leave the registry pointing at a
+        // project whose scratchpad does not exist on disk, and the next
+        // Read or Plan lookup would silently resolve to a missing file.
+        // Capture the intended binding here and only commit it after the
+        // action match returns Ok.
+        let mut pending_registry_bind: Option<(String, String)> = None;
         if !session_key.is_empty() {
             match args.action {
                 ScratchpadAction::Read => {}
                 ScratchpadAction::Clear => scratchpad_registry::clear(&session_key),
-                _ => scratchpad_registry::set_active(&session_key, &project_id),
+                _ => pending_registry_bind = Some((session_key.clone(), project_id.clone())),
             }
         }
 
@@ -624,7 +632,11 @@ impl AlephTool for ScratchpadTool {
         // already resolved above — hand it the real one.
         let manager = ScratchpadManager::new(&project_id, &session_key);
 
-        match args.action {
+        // The action match below may return early via `?`. A guard type
+        // would be more idiomatic, but a one-call `pending_registry_bind`
+        // commit at the successful exit keeps the diff local and avoids
+        // a new struct.
+        let result = match args.action {
             ScratchpadAction::Initialize => {
                 let existed = manager.exists();
                 if !existed {
@@ -781,7 +793,17 @@ impl AlephTool for ScratchpadTool {
                     feedback: None,
                 })
             }
+        };
+        // BT-D-R4-12: commit the deferred registry binding now that the
+        // file operation completed successfully. If we got here, the
+        // scratchpad file exists (or was just created) for `project_id`,
+        // so the registry can safely point at it. Any error in the action
+        // match above propagated via `?` before reaching this line, so the
+        // binding is only ever written on a verified-Ok path.
+        if let Some((session, project)) = pending_registry_bind {
+            scratchpad_registry::set_active(&session, &project);
         }
+        result
     }
 }
 
