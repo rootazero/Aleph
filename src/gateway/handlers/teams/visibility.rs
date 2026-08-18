@@ -114,7 +114,7 @@ pub async fn gate_task(
         // the same adoption-by-absence rule everywhere else in P1. Waving it
         // through unconditionally would hand every member the entire
         // team-less coord DAG through the `teams.task.*` verbs.
-        return if crate::teams::team_visible(None) {
+        return if crate::teams::team_visible(None, None) {
             Ok(task)
         } else {
             Err(task_not_found(id, task_id))

@@ -81,6 +81,21 @@ pub struct Team {
     /// what it did before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<String>,
+    /// The scope this team was created in (P2 project rooms, round-5).
+    ///
+    /// `Some("project:p-…")` marks a team created inside a project room: its
+    /// visibility predicate is the room's ROSTER (`owner_and_scope_visible_to`
+    /// checks scope before owner), so every member can see and run it — this
+    /// is the column that lets a room-created team belong to the room instead
+    /// of only to whoever happened to create it. `Some("personal:u-…")` and
+    /// `None` (legacy / out-of-scope creation) both fall through to
+    /// owner-equality, byte-identical to pre-P2 behaviour. Same additive
+    /// nullable-column contract as `owner_user_id` above, and deliberately NOT
+    /// backfilled for legacy rows: a pre-migration team created inside a room
+    /// is indistinguishable from a personal one on the row itself, so legacy
+    /// room teams stay creator-owned rather than being guessed into a room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -255,4 +270,8 @@ pub struct TeamSummary {
     /// re-fetching every team. Same adoption-by-absence rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<String>,
+    /// The scope stamp [`Team::scope_id`] carries, projected onto the summary
+    /// so list filtering asks the same predicate body as a fetched row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
 }

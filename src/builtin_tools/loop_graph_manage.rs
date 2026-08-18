@@ -379,8 +379,9 @@ impl LoopGraphTool {
                             // `Ok(None)` is TWO answers here and this render
                             // cannot tell them apart: the `TeamStore` in hand
                             // is `ScopedTeamStore`, whose `get_team` filters
-                            // through `team_visible` → `ambient_owner_visible`,
-                            // an owner-keyed and role-BLIND predicate. So a
+                            // through `team_visible` →
+                            // `owner_and_scope_visible_to` on `ambient_actor`,
+                            // an owner/room-keyed and role-BLIND predicate. So a
                             // second admin auditing a ring whose `team:` node
                             // belongs to another admin gets a refusal that used
                             // to read as "记录已消失" — and AUDIT_TEMPLATE step 5
