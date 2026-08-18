@@ -78,14 +78,17 @@ pub fn visible_owner_filter() -> Option<String> {
 ///
 /// # Owner-only is the P2 boundary here, not an unfinished predicate
 ///
-/// This predicate and [`ambient_owner_visible`] are **owner-only by design**,
-/// and that is a product boundary rather than a gap: **a project room does not
-/// own its members' background work.** A loop, goal, cron job or group-chat
-/// session created inside a room stays visible to the person who started it,
-/// never to the room's roster. SECURITY.md's P2 section enumerates exactly four
-/// roster-answered questions — session visibility, memory-partition visibility,
-/// event delivery, RPC access — and background work is deliberately not among
-/// them. Ruled 2026-08-07.
+/// This predicate is **owner-only by design**, and that is a product boundary
+/// rather than a gap: **a project room does not own its members' background
+/// work.** A loop, goal, cron job or group-chat session created inside a room
+/// stays visible to the person who started it, never to the room's roster.
+/// SECURITY.md's P2 section enumerates exactly four roster-answered questions
+/// — session visibility, memory-partition visibility, event delivery, RPC
+/// access — and background work is deliberately not among them. Ruled
+/// 2026-08-07. (Teams were the one exception, ratified 2026-08-18: a team
+/// created inside a room belongs to the room — `teams::scoped::team_visible`
+/// is the scope-aware sibling this block predicted, built on
+/// [`owner_and_scope_visible_to`] as prescribed below.)
 ///
 /// The scope fact needed to answer otherwise is already **persisted, and
 /// deliberately unread by these predicates**: `looping::LoopState::scope_id`,
@@ -117,34 +120,13 @@ pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
     }
 }
 
-/// [`stamped_owner_visible`]'s sibling for records reachable from BOTH the
-/// gateway and an agent run's tools — currently team ownership.
-///
-/// Same rule, same [`owner_or_legacy`] derivation; the only difference is the
-/// resolver: [`crate::scope::ambient_owner`] instead of
-/// [`visible_owner_filter`]. That difference is load-bearing and deliberate.
-/// `CALLER_USER` is dead inside a spawned run, so a team predicate built on
-/// [`stamped_owner_visible`] would be fail-open for every `team_*` tool call —
-/// the Panel half would be enforced and the chat half wide open, which is not
-/// "tightened", it is a different-looking hole. Records reachable ONLY through
-/// the gateway keep using [`stamped_owner_visible`]: the connection identity is
-/// the stronger claim, and widening every predicate to accept a run-seeded
-/// scope would be a silent semantics change to surfaces that never needed it.
-#[must_use]
-pub fn ambient_owner_visible(owner_user_id: Option<&str>) -> bool {
-    match crate::scope::ambient_owner() {
-        None => true,
-        Some(actor) => actor == owner_or_legacy(owner_user_id),
-    }
-}
-
 /// The user a visibility check made from INSIDE an agent run acts for — the
 /// run-side twin of [`visible_owner_filter`].
 ///
 /// `CALLER_USER` is dead past the `tokio::spawn` every run crosses, so a
 /// predicate built on [`visible_owner_filter`] alone is fail-OPEN for every
-/// tool call (see [`ambient_owner_visible`], which exists for the same reason).
-/// The resolution order is the one the rest of the crate already established:
+/// tool call. The resolution order is the one the rest of the crate already
+/// established:
 ///
 /// 1. [`crate::scope::ambient_room_author`] — this turn's SPEAKER, when the run
 ///    is a project room. In a room the ambient scope's `owner_user_id` names the
@@ -1021,7 +1003,7 @@ mod tests {
         ),
         (
             "src/gateway/visibility.rs",
-            "`ambient_owner_visible` (owner-keyed background work) and `ambient_actor`'s fallback arm",
+            "`ambient_actor`'s fallback arm (the deleted `ambient_owner_visible` lived here too — teams moved to `owner_and_scope_visible_to` in round-5)",
         ),
         (
             "src/projects/store.rs",

@@ -153,7 +153,7 @@ use tokio::sync::RwLock;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::types::SessionMetadata;
 use crate::gateway::session_store::SessionStore;
-use crate::gateway::visibility::{owner_and_scope_visible_to, owner_or_legacy};
+use crate::gateway::visibility::owner_and_scope_visible_to;
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
 use crate::utils::fifo_cache::remember;
@@ -564,23 +564,23 @@ struct OwnershipCache {
     map: HashMap<String, Option<SessionOwnership>>,
 }
 
-/// Cached team→owner stamps for [`SessionIdentity::ByTeamId`].
+/// Cached team→(owner, scope) stamps for [`SessionIdentity::ByTeamId`].
 ///
-/// The value is the team row's `owner_user_id` VERBATIM, so `None` here means
-/// a legacy/unstamped team — which reads as the operator's through
-/// `visibility::owner_or_legacy` and ADMITS them. An id that could not be
-/// resolved at all (absent team, store error) is deliberately not stored:
-/// there is no invalidation hook on this cache, so a cached "unresolvable"
-/// would outlive its cause. It is denied per frame and re-resolved on the next
-/// one, exactly like an absent session row.
+/// The value is the team row's `owner_user_id`/`scope_id` pair VERBATIM, so
+/// `(None, None)` here means a legacy/unstamped team — which reads as the
+/// operator's through `visibility::owner_or_legacy` and ADMITS them. An id
+/// that could not be resolved at all (absent team, store error) is
+/// deliberately not stored: there is no invalidation hook on this cache, so a
+/// cached "unresolvable" would outlive its cause. It is denied per frame and
+/// re-resolved on the next one, exactly like an absent session row.
 ///
-/// A team's owner is stamped once in `SqliteTeamStore::create_team` and no
-/// `TeamStore` method rewrites it, which is what makes the fact cacheable for
-/// the process lifetime.
+/// A team's owner and scope are stamped once in
+/// `SqliteTeamStore::create_team` and no `TeamStore` method rewrites either,
+/// which is what makes the pair cacheable for the process lifetime.
 #[derive(Default)]
 struct TeamOwnerCache {
     order: VecDeque<String>,
-    map: HashMap<String, Option<String>>,
+    map: HashMap<String, (Option<String>, Option<String>)>,
 }
 
 /// Process-shared (via `GatewaySharedState`/`ConnectionContext`, one
@@ -957,34 +957,47 @@ impl EventVisibilityIndex {
         caller: &str,
         teams: Option<&Arc<dyn TeamStore>>,
     ) -> bool {
-        if let Some(cached) = {
+        if let Some((owner, scope)) = {
             let inner = self.team_owners.read().await;
             inner.map.get(team_id).cloned()
         } {
-            return owner_or_legacy(cached.as_deref()) == caller;
+            return crate::gateway::visibility::owner_and_scope_visible_to(
+                owner.as_deref(),
+                scope.as_deref(),
+                caller,
+            );
         }
 
         // No team database wired ⇒ nothing can answer "whose team is this".
         let Some(store) = teams else {
             return false;
         };
-        let owner = match store.get_team(team_id).await {
-            Ok(Some(team)) => team.owner_user_id,
+        let (owner, scope) = match store.get_team(team_id).await {
+            Ok(Some(team)) => (team.owner_user_id, team.scope_id),
             // Absent (deleted mid-fan-out, or an id from a producer this
             // deployment does not have) or a store error: deny this frame and
             // re-resolve on the next, never cache the denial (see
             // `TeamOwnerCache`).
             Ok(None) | Err(_) => return false,
         };
-        self.cache_team_owner(team_id.to_string(), owner.clone())
+        self.cache_team_owner(team_id.to_string(), owner.clone(), scope.clone())
             .await;
-        owner_or_legacy(owner.as_deref()) == caller
+        crate::gateway::visibility::owner_and_scope_visible_to(
+            owner.as_deref(),
+            scope.as_deref(),
+            caller,
+        )
     }
 
-    async fn cache_team_owner(&self, team_id: String, owner: Option<String>) {
+    async fn cache_team_owner(
+        &self,
+        team_id: String,
+        owner: Option<String>,
+        scope: Option<String>,
+    ) {
         let mut inner = self.team_owners.write().await;
         let TeamOwnerCache { order, map } = &mut *inner;
-        remember(order, map, team_id, owner, MAX_CACHED_TEAM_OWNERS);
+        remember(order, map, team_id, (owner, scope), MAX_CACHED_TEAM_OWNERS);
     }
 
     #[cfg(test)]

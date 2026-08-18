@@ -110,6 +110,21 @@ impl Channel for QQChannel {
             .await;
         tracing::info!("Starting QQ channel...");
 
+        // Only the first account is ever started. Saying so out loud matters:
+        // a `[[channels.qq.accounts]]` block past the first is a config the
+        // operator wrote, saw accepted, and would otherwise never learn was
+        // dropped.
+        if self.config.accounts.len() > 1 {
+            let ignored: Vec<&str> = self.config.accounts[1..]
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect();
+            tracing::warn!(
+                "QQ channel starts one account; ignoring {} further account(s): {}",
+                ignored.len(),
+                ignored.join(", "),
+            );
+        }
         let account = &self.config.accounts[0];
         if !account.enabled {
             return Err(ChannelError::ConfigError(
@@ -222,8 +237,9 @@ impl ChannelFactory for QQChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let qq_config: QQConfig = serde_json::from_value(config)
-            .map_err(|e| ChannelError::ConfigError(format!("Invalid QQ config: {e}")))?;
+        // `from_wire` is the one place the two accepted `[channels.qq]`
+        // spellings collapse into `accounts`; see its docs.
+        let qq_config = QQConfig::from_wire(config).map_err(ChannelError::ConfigError)?;
         Ok(Box::new(QQChannel::new("qq", qq_config)))
     }
 }

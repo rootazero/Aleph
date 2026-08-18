@@ -170,6 +170,18 @@ pub struct MemberRunOutcome {
 /// resolves through `OperatorApprovalRequester` to a Panel card that the user
 /// who dispatched the team can answer. The marker would auto-deny that working
 /// human-in-the-loop path.
+///
+/// Attribution triple, mirroring `broadcast::member_run_metadata` (MU4-03,
+/// adjudicated 2026-08-18): the interactive caller (`team_delegate`) reaches
+/// here with the leader run's task-locals still alive — `run_loop` scopes the
+/// whole run future and this function executes before the spawn below — so
+/// without these stamps a member's delegated run wrote its session row
+/// NULL/NULL (adopted by the operator), skipped the exec-tier ceiling
+/// (`role_is_operator(None)` is `true` by design), and in a room answered
+/// "who is asking" with the room OWNER. The autonomous dispatcher
+/// (`schedule/mod.rs`) spawns bare, so every read there is `None`, nothing is
+/// stamped, and behaviour is byte-identical to before — that path genuinely
+/// has no live caller.
 fn task_run_metadata(
     team_id: &str,
     task_id: &str,
@@ -180,6 +192,33 @@ fn task_run_metadata(
     m.insert("team_id".to_string(), team_id.to_string());
     m.insert("task_id".to_string(), task_id.to_string());
     crate::teams::run_mode::stamp(&mut m);
+    // `run_loop` rebuilds the run's scope from `request.metadata` and NOTHING
+    // else, and `ensure_session_under_request_scope` stamps the session row
+    // from the same map — the task-local alone does not cross the spawn.
+    if let Some(attr) = crate::scope::current_scope() {
+        crate::scope::stamp_metadata(&mut m, &attr);
+    }
+    // `TURN_CONTEXT` is the reliable read in tool context (`ScopedToolService`
+    // scopes it around every dispatch, per `sessions_send`'s build_sub_metadata);
+    // the `caller_identity` task-local covers non-tool callers. An absent role
+    // is read as "local/internal, trusted" (`role_is_operator(None)` is true),
+    // so a member's delegated run otherwise skips the exec-tier ceiling.
+    let caller_role = crate::tools::turn_context::current_turn_context()
+        .and_then(|t| t.caller_role.clone())
+        .or_else(crate::gateway::caller_identity::current_caller_role);
+    if let Some(role) = caller_role {
+        m.insert("caller_role".to_string(), role);
+    }
+    // `with_request_scope` seeds the room author from `AUTHOR_USER_KEY`
+    // specifically and derives nothing about it from the scope — in a room
+    // those are different people, and losing it downgrades `ambient_actor()`
+    // to the room's creator.
+    if let Some(author) = crate::scope::current_room_author() {
+        m.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            author,
+        );
+    }
     // Per-step effort override (workflow `effort`): the execution engine's
     // `resolve_turn_think_level` reads this request-carried key first, so the
     // member run thinks at the step's declared depth.
@@ -844,5 +883,42 @@ mod tests {
                 .map(String::as_str),
             Some("high")
         );
+    }
+
+    /// MU4-03: the interactive path (`team_delegate`) reaches
+    /// `task_run_metadata` with the leader run's task-locals alive, so the
+    /// attribution triple must be stamped into the metadata — `run_loop`
+    /// rebuilds the run's scope from `request.metadata` and nothing else.
+    #[tokio::test]
+    async fn task_run_metadata_stamps_the_attribution_triple_under_a_live_scope() {
+        let attr = crate::scope::ScopeAttribution::personal("u-bob");
+        let m = crate::scope::with_scope(
+            Some(attr),
+            crate::scope::with_room_author(
+                Some("u-bob".to_string()),
+                async { task_run_metadata("t1", "task-9", None, None) },
+            ),
+        )
+        .await;
+        let expected = crate::scope::scope_from_metadata(&m)
+            .expect("scope pair must be stamped into the metadata");
+        assert_eq!(expected.owner_user_id, "u-bob");
+        assert_eq!(
+            m.get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+                .map(String::as_str),
+            Some("u-bob"),
+            "the room author must ride the metadata — with_request_scope seeds it from this key alone"
+        );
+    }
+
+    /// The autonomous dispatcher (`schedule/mod.rs`) spawns bare: no scope,
+    /// no turn context, no role — nothing may be stamped, byte-identical to
+    /// the pre-fix behaviour.
+    #[test]
+    fn task_run_metadata_without_a_caller_stamps_nothing() {
+        let m = task_run_metadata("t1", "task-9", None, None);
+        assert!(crate::scope::scope_from_metadata(&m).is_none());
+        assert!(!m.contains_key("caller_role"));
+        assert!(!m.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
     }
 }

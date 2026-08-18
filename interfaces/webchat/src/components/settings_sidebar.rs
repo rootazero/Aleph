@@ -189,7 +189,7 @@ impl SettingsGroup {
             "Channels" => t_string!(i18n, settings.groups.channels).to_string(),
             "Extensions" => t_string!(i18n, settings.groups.extensions).to_string(),
             "Advanced" => t_string!(i18n, settings.groups.advanced).to_string(),
-            "Network" => "服务与集群".to_string(),
+            "Network" => t_string!(i18n, settings.groups.network).to_string(),
             other => other.to_string(),
         }
     }

@@ -42,12 +42,32 @@ use super::types::{NewTeam, NewTeamMember, Team, TeamMember, TeamSummary};
 
 /// Whether a team's stamp admits the current execution context.
 ///
-/// Delegates the whole rule — including adoption-by-absence — to
-/// [`crate::gateway::visibility::ambient_owner_visible`]. Do not inline an
-/// `owner == caller` comparison here or at any call site.
+/// The rule body is the SAME one sessions use —
+/// [`crate::gateway::visibility::owner_and_scope_visible_to`]: a
+/// project-scoped team asks the room's roster, anything else falls through
+/// to owner-equality (with adoption-by-absence for legacy rows). The actor
+/// is [`crate::gateway::visibility::ambient_actor`] — the SPEAKER in a room,
+/// not `ambient_owner`, which there answers the room's creator identically
+/// for every member. Those two facts together are what let a room-created
+/// team belong to the room (round-3's deferred teams semantics, landed in
+/// round-5 with the `teams.scope_id` column); swapping in the resolver alone
+/// — without the column — was the change round-3 refused to half-do, because
+/// a room team stamped only with its creator would vanish for every other
+/// member.
+///
+/// `None` actor (cron / background sweep / in-process test) is unrestricted,
+/// matching every sibling predicate. Do not inline an `owner == caller`
+/// comparison here or at any call site.
 #[must_use]
-pub fn team_visible(owner_user_id: Option<&str>) -> bool {
-    crate::gateway::visibility::ambient_owner_visible(owner_user_id)
+pub fn team_visible(owner_user_id: Option<&str>, scope_id: Option<&str>) -> bool {
+    match crate::gateway::visibility::ambient_actor() {
+        None => true,
+        Some(actor) => crate::gateway::visibility::owner_and_scope_visible_to(
+            owner_user_id,
+            scope_id,
+            &actor,
+        ),
+    }
 }
 
 /// Whether the team owning a coord task admits the current execution context —
@@ -94,7 +114,7 @@ pub async fn task_team_reachable(
 ) -> bool {
     let Some(store) = store else { return true };
     match team_id {
-        None => team_visible(None),
+        None => team_visible(None, None),
         Some(id) => matches!(store.get_team(id).await, Ok(Some(_))),
     }
 }
@@ -119,7 +139,9 @@ impl ScopedTeamStore {
     /// here would turn a locked SQLite connection into an open door.
     async fn admits(&self, team_id: &str) -> crate::error::Result<()> {
         match self.inner.get_team(team_id).await {
-            Ok(Some(t)) if team_visible(t.owner_user_id.as_deref()) => Ok(()),
+            Ok(Some(t)) if team_visible(t.owner_user_id.as_deref(), t.scope_id.as_deref()) => {
+                Ok(())
+            }
             Ok(_) => Err(team_not_found(team_id)),
             Err(e) => Err(e),
         }
@@ -138,7 +160,7 @@ impl TeamStore for ScopedTeamStore {
             .inner
             .get_team(id)
             .await?
-            .filter(|t| team_visible(t.owner_user_id.as_deref())))
+            .filter(|t| team_visible(t.owner_user_id.as_deref(), t.scope_id.as_deref())))
     }
 
     async fn get_team_by_name(&self, name: &str) -> crate::error::Result<Option<Team>> {
@@ -146,12 +168,12 @@ impl TeamStore for ScopedTeamStore {
             .inner
             .get_team_by_name(name)
             .await?
-            .filter(|t| team_visible(t.owner_user_id.as_deref())))
+            .filter(|t| team_visible(t.owner_user_id.as_deref(), t.scope_id.as_deref())))
     }
 
     async fn list_teams(&self) -> crate::error::Result<Vec<TeamSummary>> {
         let mut teams = self.inner.list_teams().await?;
-        teams.retain(|t| team_visible(t.owner_user_id.as_deref()));
+        teams.retain(|t| team_visible(t.owner_user_id.as_deref(), t.scope_id.as_deref()));
         Ok(teams)
     }
 
@@ -182,7 +204,7 @@ impl TeamStore for ScopedTeamStore {
 
     async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<TeamSummary>> {
         let mut teams = self.inner.get_agent_teams(agent_id).await?;
-        teams.retain(|t| team_visible(t.owner_user_id.as_deref()));
+        teams.retain(|t| team_visible(t.owner_user_id.as_deref(), t.scope_id.as_deref()));
         Ok(teams)
     }
 
@@ -279,6 +301,89 @@ mod tests {
         let alice = Some(ScopeAttribution::personal("u-alice"));
         let seen = with_scope(alice, s.get_team(&t.id)).await.unwrap().unwrap();
         assert_eq!(seen.name, "Alpha");
+    }
+
+    /// Round-5, the room half of the teams semantics: a team created INSIDE a
+    /// project room is stamped `scope_id = project:<id>` and belongs to the
+    /// ROOM — every roster member sees it, runs it, and lists it, while a
+    /// non-member does not. This is the change round-3 refused to half-do
+    /// (resolver swap without the column would have hidden room-created teams
+    /// from the room).
+    #[tokio::test]
+    async fn a_room_created_team_belongs_to_the_room() {
+        let _guard = crate::projects::roster::TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let projects = crate::projects::ProjectStore::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        );
+        projects.create_schema().unwrap();
+        let room = projects.create("room", Some("u-alice"), None).unwrap();
+        projects.add_member(&room.id, "u-bob").unwrap();
+
+        let s = store().await;
+        let room_attr = Some(ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project(room.id.clone()),
+        });
+        let t = with_scope(room_attr.clone(), s.create_team(new_team("RoomTeam")))
+            .await
+            .unwrap();
+        assert_eq!(
+            t.scope_id.as_deref(),
+            Some(format!("project:{}", room.id)).as_deref(),
+            "a team created inside a room run must carry the room's scope stamp"
+        );
+        assert_eq!(t.owner_user_id.as_deref(), Some("u-alice"));
+
+        // Bob — a member, NOT the creator — speaking in the room: sees it,
+        // lists it, reaches its members. The speaker is the actor
+        // (`with_room_author`), not the room's creator.
+        let bob_speaking = crate::scope::with_room_author(
+            Some("u-bob".to_string()),
+            with_scope(room_attr.clone(), async {
+                let direct = s.get_team(&t.id).await.unwrap();
+                let listed = s.list_teams().await.unwrap();
+                let members = s.get_members(&t.id).await.is_ok();
+                (direct, listed, members)
+            }),
+        )
+        .await;
+        assert!(bob_speaking.0.is_some(), "a member must see a room team");
+        assert_eq!(bob_speaking.1.len(), 1, "a member must list a room team");
+        assert!(bob_speaking.2, "a member must reach a room team's members");
+
+        // Carol — not on the roster — gets the fail-closed answer even with
+        // the room's scope ambient.
+        let carol = crate::scope::with_room_author(
+            Some("u-carol".to_string()),
+            with_scope(room_attr, s.get_team(&t.id)),
+        )
+        .await
+        .unwrap();
+        assert!(carol.is_none(), "a non-member must not see a room team");
+
+        // And alice's PERSONAL team stays hers even when bob is the speaker
+        // in a room they share — the scopeless/legacy arm falls through to
+        // owner-equality against the SPEAKER, not the room's creator.
+        let personal = create_as(&s, "u-alice", "AlicePersonal").await;
+        assert_eq!(personal.scope_id.as_deref(), Some("personal:u-alice"));
+        let bob_in_room = crate::scope::with_room_author(
+            Some("u-bob".to_string()),
+            with_scope(
+                Some(ScopeAttribution {
+                    owner_user_id: "u-alice".to_string(),
+                    scope: crate::scope::ScopeId::Project(room.id.clone()),
+                }),
+                s.get_team(&personal.id),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            bob_in_room.is_none(),
+            "the room must not leak the creator's personal teams to members"
+        );
     }
 
     /// No existence oracle: the denial is byte-identical to a genuinely

@@ -119,9 +119,12 @@ fn tab_for_path(path: &str) -> Option<SettingsTab> {
 /// screen prints. Everything else (provider name, embedding model, route model)
 /// lives behind an async RPC and belongs on its own screen — a constant here
 /// would be the fiction this module just deleted.
-fn live_value(tab: SettingsTab) -> Option<String> {
+fn live_value(
+    tab: SettingsTab,
+    i18n: leptos_i18n::I18nContext<crate::i18n::Locale>,
+) -> Option<String> {
     match tab {
-        SettingsTab::Appearance => Some(crate::appearance::read_mode().label().to_string()),
+        SettingsTab::Appearance => Some(crate::appearance::read_mode().label(i18n)),
         SettingsTab::Network => {
             let host = self::connection::current_host();
             if host.is_empty() {
@@ -150,7 +153,7 @@ pub fn PhoneSettings() -> impl IntoView {
                     let path = tab.path();
                     let label = tab.i18n_label(i18n);
                     let icon = tab.icon_svg();
-                    let value = live_value(tab);
+                    let value = live_value(tab, i18n);
                     // `use_navigate` returns a Clone-able Fn; each row gets its own.
                     let navigate = navigate.clone();
                     view! {

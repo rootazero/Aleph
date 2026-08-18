@@ -194,6 +194,7 @@ mod tests {
                 disbanded_at: None,
                 protocol: None,
                 owner_user_id: None,
+                scope_id: None,
             },
             members: vec![],
             tasks: vec![],

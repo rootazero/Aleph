@@ -14,6 +14,7 @@ use crate::appearance::{
     Material, ThemeMode,
 };
 use crate::components::ui::SwatchButton;
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
@@ -92,6 +93,7 @@ fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) 
 #[component]
 #[must_use]
 pub fn ThemeToggle() -> impl IntoView {
+    let i18n = use_i18n();
     let mode = RwSignal::new(read_mode());
     let accent = RwSignal::new(read_accent());
     let material = RwSignal::new(read_material());
@@ -106,7 +108,7 @@ pub fn ThemeToggle() -> impl IntoView {
                 on:click=move |_| open.update(|v| *v = !*v)
                 class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-text-secondary
                        hover:text-text-primary hover:bg-surface-sunken transition-all duration-200"
-                title="主题"
+                title=move || t_string!(i18n, appearance.popover_title).to_string()
             >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -138,7 +140,7 @@ pub fn ThemeToggle() -> impl IntoView {
                     // Mode
                     <div>
                         <p class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
-                            "外观"
+                            {t!(i18n, appearance.title)}
                         </p>
                         <div class="grid grid-cols-3 gap-1">
                             {ThemeMode::ALL
@@ -163,7 +165,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 }
                                             }
                                         >
-                                            {m.label()}
+                                            {move || m.label(i18n)}
                                         </button>
                                     }
                                 })
@@ -174,7 +176,7 @@ pub fn ThemeToggle() -> impl IntoView {
                     // Material
                     <div>
                         <p class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
-                            "材质"
+                            {t!(i18n, appearance.section.material)}
                         </p>
                         <div class="grid grid-cols-3 gap-1">
                             {Material::ALL
@@ -200,7 +202,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                 }
                                             }
                                         >
-                                            {m.label()}
+                                            {move || m.label(i18n)}
                                         </button>
                                     }
                                 })
@@ -211,7 +213,7 @@ pub fn ThemeToggle() -> impl IntoView {
                     // Accent
                     <div>
                         <p class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
-                            "强调色"
+                            {t!(i18n, appearance.section.accent)}
                         </p>
                         <div class="flex items-center justify-between px-1">
                             {Accent::ALL.into_iter().map(|a| {
@@ -221,7 +223,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                         background=a.swatch()
                                         face="w-6 h-6 rounded-full transition-transform group-hover:scale-110"
                                         ring_offset="ring-offset-surface-overlay"
-                                        title=a.label()
+                                        title=Signal::derive(move || a.label(i18n))
                                         active=Signal::derive(is_active)
                                         on_pick=move |ev: web_sys::MouseEvent| {
                                             let x = ev.client_x() as f64;

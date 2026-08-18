@@ -228,6 +228,20 @@ impl AlephTool for AgentUpdateTool {
             {
                 applied_live.push("allowed_users");
             }
+            // Authority-change audit (round-5 ⑦): same verb as the RPC face
+            // (`agents.update`), reached through the tool. The actor resolver
+            // is `ambient_actor()` — this runs inside a spawned run where
+            // `CALLER_USER` is dead.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::visibility::ambient_actor(),
+                    format!(
+                        "agent_update: allowed_users {} → [{}]",
+                        args.agent_id,
+                        users.join(", ")
+                    ),
+                ));
+            }
         }
 
         // 3. Persist the patch to TOML when the manager is wired. We always

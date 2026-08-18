@@ -406,7 +406,12 @@ pub(in crate::commands::start) async fn initialize_channels(
             }
 
             if inst.channel_type == "qq" {
-                match serde_json::from_value::<alephcore::gateway::interfaces::qq::QQConfig>(
+                // `from_wire`, not `from_value`: `[channels.qq]` has two accepted
+                // spellings and this is the second place one is parsed. Reading
+                // it raw here would keep the factory-built channel for every
+                // flat config the Panel card writes — the instance-id rebuild
+                // below would silently not happen.
+                match alephcore::gateway::interfaces::qq::QQConfig::from_wire(
                     config_with_secrets.clone(),
                 ) {
                     Ok(qq_config) => {
@@ -694,6 +699,30 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // The config a gating arm must parse, with vault-held secrets injected —
+    // the same view `create_channel_from_config` is given above.
+    //
+    // The gating arms only read policy fields, so needing this looks wrong
+    // until you notice what the vault migration does: it *removes*
+    // `bot_token` / `app_secret` from `config.toml` once a channel has been
+    // saved through the Panel, and both `TelegramConfigV2::bot_token` and
+    // `FeishuConfig::app_secret` are required. The parse then fails, the arm
+    // logs one warn, and the router silently reverts to
+    // `ChannelConfig::default()` — which is precisely the fallback these
+    // bridges exist to prevent. Telegram's arm had carried that bug since the
+    // migration landed; it surfaced in the 2026-08-18 channel fixture as a
+    // feishu group message refused with "Mention required in group" on a
+    // config that said `require_mention = false`.
+    //
+    // One closure rather than two call sites spelling it out, so a third
+    // channel's arm cannot forget.
+    let gating_config = |id: &str, raw: &serde_json::Value| {
+        use alephcore::gateway::handlers::channel::inject_channel_secrets;
+        let mut with_secrets = raw.clone();
+        inject_channel_secrets(id, &mut with_secrets, &vault);
+        with_secrets
+    };
+
     // Wire Telegram gating config into the central permission layer (R4: the
     // inbound router is the single source of truth for Telegram access). The
     // `From<&TelegramConfigV2>` conversion maps dm_policy / group_policy /
@@ -707,7 +736,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             if inst.channel_type != "telegram" {
                 continue;
             }
-            match parse_telegram_channel_config(inst.config.clone()) {
+            match parse_telegram_channel_config(gating_config(&inst.id, &inst.config)) {
                 Ok(tg_config) => {
                     let mut channel_config =
                         alephcore::gateway::inbound_router::ChannelConfig::from(&tg_config);
@@ -738,6 +767,56 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to parse telegram config '{}' for gating: {}",
+                        inst.id,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    // Wire Feishu gating config into the central permission layer, for the same
+    // reason as Telegram above. feishu became configurable end-to-end on
+    // 2026-08-18; until this arm existed its card collected `dm_allowed`,
+    // `groups_allowed`, `group_policy`, `group_allowlist` and `require_mention`
+    // and the router decided with `ChannelConfig::default()` instead. See the
+    // `From<&FeishuConfig>` impl for why every arm of that mapping narrows.
+    if let Some(ref cfg_arc) = app_config {
+        let cfg = cfg_arc.read().await;
+        for inst in cfg.resolved_channels() {
+            if inst.channel_type != "feishu" {
+                continue;
+            }
+            match serde_json::from_value::<alephcore::gateway::interfaces::feishu::FeishuConfig>(
+                gating_config(&inst.id, &inst.config),
+            ) {
+                Ok(feishu_config) => {
+                    let mut channel_config =
+                        alephcore::gateway::inbound_router::ChannelConfig::from(&feishu_config);
+                    let slash_access = serde_json::from_value::<
+                        alephcore::gateway::inbound_router::SlashAccessConfig,
+                    >(inst.config.clone())
+                    .unwrap_or_default();
+                    let policy = serde_json::from_value::<
+                        alephcore::gateway::inbound_router::ChannelPolicyConfig,
+                    >(inst.config.clone())
+                    .unwrap_or_default();
+                    channel_config.slash_access = slash_access;
+                    channel_config.permission_level = policy.permission_level;
+                    channel_config.default_workspace = policy.default_workspace;
+                    channel_config.busy_input_mode = policy.busy_input_mode;
+                    channel_config.tool_permissions = policy.tool_permissions;
+                    inbound_router.register_channel_config(&inst.id, channel_config);
+                    if !daemon {
+                        println!(
+                            "  Inbound router: Feishu gating config registered for '{}'",
+                            inst.id
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse feishu config '{}' for gating: {}",
                         inst.id,
                         e
                     );
@@ -778,7 +857,10 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         for inst in cfg.resolved_channels() {
-            if inst.channel_type == "imessage" || inst.channel_type == "telegram" {
+            if matches!(
+                inst.channel_type.as_str(),
+                "imessage" | "telegram" | "feishu"
+            ) {
                 continue; // handled by the dedicated full-config paths above
             }
             let slash_access = serde_json::from_value::<

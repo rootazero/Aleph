@@ -194,6 +194,10 @@ pub use webhook_receiver::{
 #[cfg(test)]
 mod source_census;
 
+// The registered-RPC-method → role-classification census (round-5 ⑥).
+#[cfg(test)]
+mod method_census;
+
 // Property-based tests
 #[cfg(test)]
 mod proptest_channel;

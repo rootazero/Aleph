@@ -13,11 +13,13 @@ use crate::appearance::{
     Density, FontScale, Material, Roundness, ThemeMode,
 };
 use crate::components::ui::SwatchButton;
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 
 #[component]
 #[must_use]
 pub fn AppearanceView() -> impl IntoView {
+    let i18n = use_i18n();
     let mode = RwSignal::new(read_mode());
     let accent = RwSignal::new(read_accent());
     let material = RwSignal::new(read_material());
@@ -43,21 +45,22 @@ pub fn AppearanceView() -> impl IntoView {
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-4xl mx-auto">
             <div class="mb-8">
-                <h1 class="text-3xl font-bold mb-2 text-text-primary">"外观"</h1>
+                <h1 class="text-3xl font-bold mb-2 text-text-primary">{t!(i18n, appearance.title)}</h1>
                 <p class="text-text-secondary">
-                    "调整主题、强调色、字号、圆角与紧凑度。所有设置保存在本机浏览器，立即生效。"
+                    {t!(i18n, appearance.subtitle)}
                 </p>
             </div>
 
             <div class="space-y-6">
                 // --- Theme mode -------------------------------------------------
-                <SettingCard title="主题模式" desc="界面明暗。「跟随系统」交由操作系统决定。">
+                <SettingCard title=Signal::derive(move || t_string!(i18n, appearance.section.mode).to_string())
+                    desc=Signal::derive(move || t_string!(i18n, appearance.desc.mode).to_string())>
                     <div class="flex flex-wrap gap-2">
                         {ThemeMode::ALL.into_iter().map(|m| {
                             let active = move || mode.get() == m;
                             view! {
                                 <ChoiceButton
-                                    label=m.label()
+                                    label=Signal::derive(move || m.label(i18n))
                                     active=Signal::derive(active)
                                     on_pick=move || { apply_mode(m); mode.set(m); }
                                 />
@@ -67,7 +70,8 @@ pub fn AppearanceView() -> impl IntoView {
                 </SettingCard>
 
                 // --- Material --------------------------------------------------
-                <SettingCard title="材质" desc="界面的玻璃材质风格：奢华磨砂克制内敛，液态玻璃通透鲜活，极光浓雾色彩弥漫。">
+                <SettingCard title=Signal::derive(move || t_string!(i18n, appearance.section.material).to_string())
+                    desc=Signal::derive(move || t_string!(i18n, appearance.desc.material).to_string())>
                     <div class="flex flex-wrap gap-4">
                         {Material::ALL.into_iter().map(|m| {
                             let active = move || material.get() == m;
@@ -76,8 +80,8 @@ pub fn AppearanceView() -> impl IntoView {
                                     background=m.preview()
                                     face="w-14 h-9 rounded-lg transition-transform group-hover:scale-105"
                                     ring_offset="ring-offset-surface-raised"
-                                    title=m.label()
-                                    label=m.label()
+                                    title=Signal::derive(move || m.label(i18n))
+                                    label=Signal::derive(move || m.label(i18n))
                                     active=Signal::derive(active)
                                     on_pick=move |_| { apply_material(m); material.set(m); }
                                 />
@@ -87,7 +91,8 @@ pub fn AppearanceView() -> impl IntoView {
                 </SettingCard>
 
                 // --- Accent -----------------------------------------------------
-                <SettingCard title="强调色" desc="按钮、链接与高亮采用的主色调。">
+                <SettingCard title=Signal::derive(move || t_string!(i18n, appearance.section.accent).to_string())
+                    desc=Signal::derive(move || t_string!(i18n, appearance.desc.accent).to_string())>
                     <div class="flex flex-wrap gap-4">
                         {Accent::ALL.into_iter().map(|a| {
                             let active = move || accent.get() == a;
@@ -96,8 +101,8 @@ pub fn AppearanceView() -> impl IntoView {
                                     background=a.swatch()
                                     face="w-9 h-9 rounded-full transition-transform group-hover:scale-110"
                                     ring_offset="ring-offset-surface-raised"
-                                    title=a.label()
-                                    label=a.label()
+                                    title=Signal::derive(move || a.label(i18n))
+                                    label=Signal::derive(move || a.label(i18n))
                                     active=Signal::derive(active)
                                     on_pick=move |_| { apply_accent(a); accent.set(a); }
                                 />
@@ -107,13 +112,14 @@ pub fn AppearanceView() -> impl IntoView {
                 </SettingCard>
 
                 // --- Font scale -------------------------------------------------
-                <SettingCard title="字号" desc="整体界面文字缩放，便于无障碍阅读。">
+                <SettingCard title=Signal::derive(move || t_string!(i18n, appearance.section.font).to_string())
+                    desc=Signal::derive(move || t_string!(i18n, appearance.desc.font).to_string())>
                     <div class="flex flex-wrap gap-2">
                         {FontScale::ALL.into_iter().map(|f| {
                             let active = move || font_scale.get() == f;
                             view! {
                                 <ChoiceButton
-                                    label=f.label()
+                                    label=Signal::derive(move || f.label(i18n))
                                     active=Signal::derive(active)
                                     on_pick=move || { apply_font_scale(f); font_scale.set(f); }
                                 />
@@ -123,13 +129,14 @@ pub fn AppearanceView() -> impl IntoView {
                 </SettingCard>
 
                 // --- Roundness --------------------------------------------------
-                <SettingCard title="圆角" desc="卡片、按钮与输入框的边角弧度。">
+                <SettingCard title=Signal::derive(move || t_string!(i18n, appearance.section.radius).to_string())
+                    desc=Signal::derive(move || t_string!(i18n, appearance.desc.radius).to_string())>
                     <div class="flex flex-wrap gap-2">
                         {Roundness::ALL.into_iter().map(|r| {
                             let active = move || roundness.get() == r;
                             view! {
                                 <ChoiceButton
-                                    label=r.label()
+                                    label=Signal::derive(move || r.label(i18n))
                                     active=Signal::derive(active)
                                     on_pick=move || { apply_roundness(r); roundness.set(r); }
                                 />
@@ -139,13 +146,14 @@ pub fn AppearanceView() -> impl IntoView {
                 </SettingCard>
 
                 // --- Density ----------------------------------------------------
-                <SettingCard title="紧凑度" desc="界面留白与控件间距。「紧凑」更省空间，单屏显示更多内容。">
+                <SettingCard title=Signal::derive(move || t_string!(i18n, appearance.section.density).to_string())
+                    desc=Signal::derive(move || t_string!(i18n, appearance.desc.density).to_string())>
                     <div class="flex flex-wrap gap-2">
                         {Density::ALL.into_iter().map(|d| {
                             let active = move || density.get() == d;
                             view! {
                                 <ChoiceButton
-                                    label=d.label()
+                                    label=Signal::derive(move || d.label(i18n))
                                     active=Signal::derive(active)
                                     on_pick=move || { apply_density(d); density.set(d); }
                                 />
@@ -156,14 +164,14 @@ pub fn AppearanceView() -> impl IntoView {
 
                 // --- Live preview ----------------------------------------------
                 <div class="bg-surface-raised border border-border rounded-xl p-6">
-                    <h2 class="text-sm font-semibold text-text-tertiary uppercase tracking-wider mb-3">"预览"</h2>
+                    <h2 class="text-sm font-semibold text-text-tertiary uppercase tracking-wider mb-3">{t!(i18n, appearance.preview.heading)}</h2>
                     <div class="flex items-center gap-3 flex-wrap">
-                        <button class="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium">"主按钮"</button>
-                        <button class="px-4 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-primary">"次按钮"</button>
-                        <span class="px-3 py-1 rounded-full bg-primary-subtle text-primary text-xs">"标签"</span>
+                        <button class="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium">{t!(i18n, appearance.preview.primary)}</button>
+                        <button class="px-4 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-primary">{t!(i18n, appearance.preview.secondary)}</button>
+                        <span class="px-3 py-1 rounded-full bg-primary-subtle text-primary text-xs">{t!(i18n, appearance.preview.tag)}</span>
                         <input
                             class="px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-primary"
-                            placeholder="输入框"
+                            placeholder=move || t_string!(i18n, appearance.preview.input).to_string()
                         />
                     </div>
                 </div>
@@ -175,7 +183,7 @@ pub fn AppearanceView() -> impl IntoView {
                         class="px-4 py-2 text-sm font-medium text-text-secondary hover:text-text-primary
                                border border-border rounded-lg hover:bg-surface-sunken transition-colors"
                     >
-                        "恢复默认"
+                        {t!(i18n, appearance.reset)}
                     </button>
                 </div>
             </div>
@@ -185,7 +193,11 @@ pub fn AppearanceView() -> impl IntoView {
 
 /// A titled settings card matching the styling used across the settings pages.
 #[component]
-fn SettingCard(title: &'static str, desc: &'static str, children: Children) -> impl IntoView {
+fn SettingCard(
+    #[prop(into)] title: Signal<String>,
+    #[prop(into)] desc: Signal<String>,
+    children: Children,
+) -> impl IntoView {
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
             <h2 class="text-xl font-semibold text-text-primary mb-1">{title}</h2>
@@ -199,7 +211,7 @@ fn SettingCard(title: &'static str, desc: &'static str, children: Children) -> i
 /// applies the choice (mutating the DOM + persisting) on click.
 #[component]
 fn ChoiceButton(
-    label: &'static str,
+    #[prop(into)] label: Signal<String>,
     #[prop(into)] active: Signal<bool>,
     on_pick: impl Fn() + 'static,
 ) -> impl IntoView {

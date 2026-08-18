@@ -322,7 +322,9 @@
     "team_roster_done": "完成",
     "team_roster_error": "错误",
     "team_tasks_title": "团队任务",
-    "team_unread": "有新消息"
+    "team_unread": "有新消息",
+    "group_chats_count_one": "群聊 {{ count }}",
+    "group_chats_count_other": "群聊 {{ count }}"
   },
   "canvas": {
     "title": "画布",
@@ -558,7 +560,8 @@
       "ai": "AI",
       "channels": "频道",
       "extensions": "扩展",
-      "advanced": "高级"
+      "advanced": "高级",
+      "network": "服务与集群"
     },
     "tabs": {
       "general": "通用",
@@ -1664,12 +1667,6 @@
       "local_providers": "本地供应商",
       "cloud_providers": "云供应商",
       "connection": "连接",
-      "appearance_theme": "主题",
-      "appearance_material": "材质",
-      "appearance_font_size": "字号",
-      "appearance_radius": "圆角",
-      "appearance_density": "紧凑度",
-      "appearance_accent": "主题色",
       "catalog_unavailable": "未能读取提供商目录。"
     }
   },
@@ -2317,5 +2314,70 @@
     "moa_spend": "顾问开销",
     "moa_billed": "位计费",
     "moa_turn_trace_preset": "MoA 单轮追踪 — 预设"
+  },
+  "appearance": {
+    "mode": {
+      "system": "跟随系统",
+      "light": "明亮",
+      "dark": "暗黑"
+    },
+    "accent": {
+      "mauve": "魅紫",
+      "ocean": "海蓝",
+      "forest": "森绿",
+      "sunset": "暖橙",
+      "rose": "玫瑰"
+    },
+    "material": {
+      "luxe": "奢华磨砂",
+      "liquid": "液态玻璃",
+      "aurora": "极光浓雾"
+    },
+    "font_scale": {
+      "compact": "紧凑",
+      "default": "标准",
+      "cozy": "舒适",
+      "large": "大",
+      "largest": "特大"
+    },
+    "roundness": {
+      "sharp": "直角",
+      "slight": "微圆",
+      "default": "标准",
+      "round": "圆润",
+      "extra": "极圆"
+    },
+    "density": {
+      "compact": "紧凑",
+      "cozy": "适中",
+      "spacious": "宽松"
+    },
+    "section": {
+      "mode": "主题模式",
+      "material": "材质",
+      "accent": "强调色",
+      "font": "字号",
+      "radius": "圆角",
+      "density": "紧凑度"
+    },
+    "desc": {
+      "mode": "界面明暗。「跟随系统」交由操作系统决定。",
+      "material": "界面的玻璃材质风格：奢华磨砂克制内敛，液态玻璃通透鲜活，极光浓雾色彩弥漫。",
+      "accent": "按钮、链接与高亮采用的主色调。",
+      "font": "整体界面文字缩放，便于无障碍阅读。",
+      "radius": "卡片、按钮与输入框的边角弧度。",
+      "density": "界面留白与控件间距。「紧凑」更省空间，单屏显示更多内容。"
+    },
+    "preview": {
+      "heading": "预览",
+      "primary": "主按钮",
+      "secondary": "次按钮",
+      "tag": "标签",
+      "input": "输入框"
+    },
+    "title": "外观",
+    "subtitle": "调整主题、强调色、字号、圆角与紧凑度。所有设置保存在本机浏览器，立即生效。",
+    "reset": "恢复默认",
+    "popover_title": "主题"
   }
 }

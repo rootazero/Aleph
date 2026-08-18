@@ -221,6 +221,21 @@ pub async fn handle_ticket_create(
         .create_bootstrap_ticket(ttl_ms, user_id.as_deref())
     {
         Ok(ticket) => {
+            // Authority-change audit (round-5 ⑦): a bootstrap ticket IS an
+            // unpaired device credential — whoever redeems an UNBOUND one
+            // becomes the owner, which is exactly why the binding (or its
+            // absence) is what gets recorded. The ticket string itself is
+            // credential material and never enters the log.
+            if let Some(log) = crate::security::audit::global() {
+                log.log(crate::security::audit::AuditEntry::authority_change(
+                    crate::gateway::caller_identity::current_caller_user(),
+                    match user_id.as_deref() {
+                        Some(uid) => format!("gateway.ticket.create: bound to {uid}"),
+                        None => "gateway.ticket.create: UNBOUND (redeemer becomes owner)"
+                            .to_string(),
+                    },
+                ));
+            }
             // Expiration is 5 minutes from now by default; compute client-facing value.
             let ttl_ms = ttl_ms.unwrap_or(5 * 60 * 1000);
             let expires_at = current_timestamp_ms() + ttl_ms;

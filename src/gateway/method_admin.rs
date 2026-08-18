@@ -26,9 +26,12 @@
 //! Every one of them has a ruling in this file: a family is admin iff it
 //! prefix-matches [`ADMIN_PREFIXES`] and is not listed in
 //! [`MEMBER_CARVE_OUTS`]; every other family is open, and the non-obvious
-//! open rulings are written out below. There is no second table anywhere —
-//! re-running the sweep above and diffing it against these two constants is
-//! the whole audit.
+//! open rulings are written out below. There is no second table anywhere.
+//! The sweep is no longer prose: `gateway::method_census` (round-5 ⑥) runs
+//! it as a test — scraping the same patterns, erroring on receivers it does
+//! not recognise, and pinning every swept method's current ruling — so a new
+//! method without a recorded ruling, a table entry matching nothing, or a
+//! ruling flipped on one side only all fail there by name.
 //!
 //! The brief's seed prefix list named `hub.` as the extension-install
 //! family; no `hub.` method is registered anywhere — the real family is
@@ -435,6 +438,18 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
 /// on the other side of the file. The two tables naming the same method is a
 /// contradiction, and `no_admin_method_is_also_a_carve_out` fails on it.
 const ADMIN_METHODS: &[&str] = &["memory.compress", "memory.reembed", "memory.reembed.cancel"];
+
+/// The three classification tables with their names, for the ghost-entry
+/// census in [`crate::gateway::method_census`]: an entry that matches no
+/// registered method is a gate over nothing that reads as a gate over
+/// something. `pub(crate)` for that test only — the enforcement path reads
+/// the tables directly.
+#[cfg(test)]
+pub(crate) const GHOST_CHECK_TABLES: &[(&str, &[&str])] = &[
+    ("ADMIN_PREFIXES", ADMIN_PREFIXES),
+    ("ADMIN_METHODS", ADMIN_METHODS),
+    ("MEMBER_CARVE_OUTS", MEMBER_CARVE_OUTS),
+];
 
 #[must_use]
 pub fn method_requires_admin(method: &str) -> bool {

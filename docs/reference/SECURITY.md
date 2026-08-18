@@ -1838,10 +1838,16 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   and the chat half wide open". `ScopedTeamStore::wrap` is applied at the
   single construction site (`builder::agent_init::coord_stores`); publishing
   the raw store anywhere else is the bypass.
-  - The resolver is `scope::ambient_owner()` — the gateway `CALLER_USER`
-    identity first, falling back to the run-seeded `ScopeAttribution`.
-    `CALLER_USER` alone is dead inside a spawned run, so a team predicate
-    built on `visible_owner_filter()` would be fail-open for every tool call.
+  - The resolver is `visibility::ambient_actor()` — the SPEAKER in a room,
+    falling back to the gateway `CALLER_USER` / run-seeded `ScopeAttribution`
+    outside one — and the rule body is the same one sessions use
+    (`visibility::owner_and_scope_visible_to`): since 2026-08-18 (round-5)
+    `Team` also carries `scope_id`, so a team created inside a project room
+    is stamped `project:<id>` and is visible to the room's whole roster,
+    while personal/legacy rows fall through to owner-equality exactly as
+    before. `CALLER_USER` alone is dead inside a spawned run, so a team
+    predicate built on `visible_owner_filter()` would be fail-open for every
+    tool call.
   - The gateway still gates explicitly
     (`handlers::teams::visibility::{gate_team, gate_task}`) for the two things
     a decorator cannot do: produce the byte-identical `not_found` response,
@@ -2562,6 +2568,12 @@ attribution, and a bound workspace as the room's default cwd.
      onto the three directory-choosing binding writers — the config-tier
      gate above is the only fence. Layering it on would change existing
      picker behaviour; a separate product decision.
+  5. Teams created inside a room BEFORE the `teams.scope_id` column existed
+     (2026-08-18, round-5) keep their pre-column semantics: the row cannot
+     say whether it was made in a room, so it is not backfilled and stays
+     creator-owned. New room-created teams carry `project:<id>` and belong
+     to the roster. If a legacy room team must be shared, recreate it from
+     inside the room.
 
 ### Network boundary = reachability
 

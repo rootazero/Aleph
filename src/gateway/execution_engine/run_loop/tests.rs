@@ -331,8 +331,8 @@ const RUN_REQUEST_PRODUCERS: &[(&str, &str, &str)] = &[
     ),
     (
         "src/teams/dispatcher/runner.rs",
-        "unattributed",
-        "background task dispatcher with no live caller; a team carries an owner but no scope column, see SECURITY.md P2 open items",
+        "stamps",
+        "from the ambient scope/turn-context when a live caller exists (team_delegate reaches task_run_metadata before the spawn); the autonomous dispatcher reads None and stamps nothing — MU4-03 adjudicated 2026-08-18",
     ),
     (
         "src/tasks/heartbeat/executor.rs",

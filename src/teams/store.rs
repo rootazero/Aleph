@@ -225,6 +225,15 @@ impl SqliteTeamStore {
         // as the org-era single operator's without touching a single row.
         add_column_if_missing(&conn, "teams", "owner_user_id", "TEXT")?;
 
+        // Additive migration: P2 scope stamp (round-5). Same rules as
+        // `owner_user_id` above — NULL means legacy/personal and reads
+        // through owner-equality; a room-created team carries
+        // `project:p-…` and is visible to the room's roster. Deliberately
+        // NOT backfilled: a legacy row does not say whether it was created
+        // inside a room, so guessing would hand personal teams to rooms or
+        // room teams to creators at random.
+        add_column_if_missing(&conn, "teams", "scope_id", "TEXT")?;
+
         // Team-name uniqueness, scoped to the owner.
         //
         // The database-layer constraint exists so concurrent `create_team`
@@ -324,10 +333,12 @@ fn read_team_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Team> {
         status: row.get(4)?,
         created_at: row.get(5)?,
         disbanded_at: row.get(6)?,
-        // Columns 7-8 (`protocol`, `owner_user_id`) are additive nullable
-        // columns; `.ok()` tolerates legacy rows / SELECTs that predate them.
+        // Columns 7-9 (`protocol`, `owner_user_id`, `scope_id`) are additive
+        // nullable columns; `.ok()` tolerates legacy rows / SELECTs that
+        // predate them.
         protocol: row.get::<_, Option<String>>(7).ok().flatten(),
         owner_user_id: row.get::<_, Option<String>>(8).ok().flatten(),
+        scope_id: row.get::<_, Option<String>>(9).ok().flatten(),
     })
 }
 
@@ -355,6 +366,7 @@ fn read_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamSummary> {
         disbanded_at: row.get(6)?,
         member_count: row.get(7)?,
         owner_user_id: row.get::<_, Option<String>>(8).ok().flatten(),
+        scope_id: row.get::<_, Option<String>>(9).ok().flatten(),
     })
 }
 
@@ -384,14 +396,22 @@ impl TeamStore for SqliteTeamStore {
         // `NewTeam { .. }` literals. `None` (internal / cron / test, no ambient
         // owner) stays NULL and reads back as the legacy owner.
         let owner_user_id = crate::scope::ambient_owner();
+        // The scope half of the same stamp (round-5): a team created inside a
+        // project-room run carries `project:p-…`, which is what lets the
+        // room's roster see and run it (`team_visible` checks scope before
+        // owner). The ambient task-local is the ONLY honest source — the RPC
+        // path (`teams.create` from the Panel) has no room context and stays
+        // personal/legacy, which is the correct ruling for a team created
+        // outside any room.
+        let scope_id = crate::scope::current_scope().map(|attr| attr.scope.render());
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_epoch();
 
         conn.execute(
             r#"
-            INSERT INTO teams (id, name, description, leader_id, status, created_at, owner_user_id)
-            VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6)
+            INSERT INTO teams (id, name, description, leader_id, status, created_at, owner_user_id, scope_id)
+            VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7)
             "#,
             params![
                 id,
@@ -399,7 +419,8 @@ impl TeamStore for SqliteTeamStore {
                 input.description,
                 input.leader_id,
                 now,
-                owner_user_id
+                owner_user_id,
+                scope_id
             ],
         )
         .map_err(|e| match e {
@@ -444,6 +465,7 @@ impl TeamStore for SqliteTeamStore {
             // — and its 20+ call-site literals — unchanged).
             protocol: None,
             owner_user_id,
+            scope_id,
         })
     }
 
@@ -451,7 +473,7 @@ impl TeamStore for SqliteTeamStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id FROM teams WHERE id = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id, scope_id FROM teams WHERE id = ?1",
             )
             .map_err(db_err)?;
         stmt.query_row(params![id], read_team_row)
@@ -463,7 +485,7 @@ impl TeamStore for SqliteTeamStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id FROM teams WHERE name = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id, scope_id FROM teams WHERE name = ?1",
             )
             .map_err(db_err)?;
         stmt.query_row(params![name], read_team_row)
@@ -480,7 +502,8 @@ impl TeamStore for SqliteTeamStore {
                 SELECT t.id, t.name, t.description, t.leader_id, t.status,
                        t.created_at, t.disbanded_at,
                        COUNT(DISTINCT m.agent_id) AS member_count,
-                       t.owner_user_id
+                       t.owner_user_id,
+                       t.scope_id
                 FROM teams t
                 LEFT JOIN team_members m ON m.team_id = t.id
                 GROUP BY t.id
@@ -684,7 +707,7 @@ impl TeamStore for SqliteTeamStore {
         // Check team exists and is active
         let team = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id FROM teams WHERE id = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol, owner_user_id, scope_id FROM teams WHERE id = ?1",
             )
             .map_err(db_err)?
             .query_row(params![team_id], read_team_row)
@@ -744,7 +767,8 @@ impl TeamStore for SqliteTeamStore {
                 SELECT t.id, t.name, t.description, t.leader_id, t.status,
                        t.created_at, t.disbanded_at,
                        COUNT(DISTINCT am.agent_id) AS member_count,
-                       t.owner_user_id
+                       t.owner_user_id,
+                       t.scope_id
                 FROM teams t
                 LEFT JOIN team_members fm ON fm.team_id = t.id AND fm.agent_id = ?1
                 LEFT JOIN team_members am ON am.team_id = t.id

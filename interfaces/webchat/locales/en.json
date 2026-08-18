@@ -322,7 +322,9 @@
     "team_roster_done": "Done",
     "team_roster_error": "Error",
     "team_tasks_title": "Team Tasks",
-    "team_unread": "New messages"
+    "team_unread": "New messages",
+    "group_chats_count_one": "Group chats {{ count }}",
+    "group_chats_count_other": "Group chats {{ count }}"
   },
   "canvas": {
     "title": "Canvas",
@@ -558,7 +560,8 @@
       "ai": "AI",
       "channels": "Channels",
       "extensions": "Extensions",
-      "advanced": "Advanced"
+      "advanced": "Advanced",
+      "network": "Services & Cluster"
     },
     "tabs": {
       "general": "General",
@@ -1664,12 +1667,6 @@
       "local_providers": "Local providers",
       "cloud_providers": "Cloud providers",
       "connection": "Connection",
-      "appearance_theme": "Theme",
-      "appearance_material": "Material",
-      "appearance_font_size": "Text size",
-      "appearance_radius": "Corner radius",
-      "appearance_density": "Density",
-      "appearance_accent": "Accent colour",
       "catalog_unavailable": "Couldn't load the provider catalogue."
     }
   },
@@ -2317,5 +2314,70 @@
     "moa_spend": "Advisor spend",
     "moa_billed": "billed",
     "moa_turn_trace_preset": "MoA turn trace — preset"
+  },
+  "appearance": {
+    "mode": {
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "accent": {
+      "mauve": "Mauve",
+      "ocean": "Ocean",
+      "forest": "Forest",
+      "sunset": "Sunset",
+      "rose": "Rose"
+    },
+    "material": {
+      "luxe": "Luxe Frost",
+      "liquid": "Liquid Glass",
+      "aurora": "Aurora Haze"
+    },
+    "font_scale": {
+      "compact": "Compact",
+      "default": "Default",
+      "cozy": "Cozy",
+      "large": "Large",
+      "largest": "Largest"
+    },
+    "roundness": {
+      "sharp": "Sharp",
+      "slight": "Slight",
+      "default": "Default",
+      "round": "Round",
+      "extra": "Extra"
+    },
+    "density": {
+      "compact": "Compact",
+      "cozy": "Cozy",
+      "spacious": "Spacious"
+    },
+    "section": {
+      "mode": "Theme",
+      "material": "Material",
+      "accent": "Accent colour",
+      "font": "Text size",
+      "radius": "Corner radius",
+      "density": "Density"
+    },
+    "desc": {
+      "mode": "Light or dark surfaces. “System” follows the operating system.",
+      "material": "Glass material family: Luxe Frost is restrained, Liquid Glass is clear and lively, Aurora Haze is colour-diffused.",
+      "accent": "The colour used for buttons, links and highlights.",
+      "font": "Scales all interface text for readability.",
+      "radius": "Corner radius of cards, buttons and inputs.",
+      "density": "Whitespace and control spacing. “Compact” fits more on one screen."
+    },
+    "preview": {
+      "heading": "Preview",
+      "primary": "Primary",
+      "secondary": "Secondary",
+      "tag": "Tag",
+      "input": "Input"
+    },
+    "title": "Appearance",
+    "subtitle": "Theme, accent, text size, corner radius and density. Stored in this browser and applied instantly.",
+    "reset": "Reset to defaults",
+    "popover_title": "Theme"
   }
 }

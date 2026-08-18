@@ -87,6 +87,12 @@ const ICON_XMPP: &str = r#"<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 
 
 const ICON_NOSTR: &str = r#"<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>"#;
 
+const ICON_LINE: &str = r#"<path d="M12 2C6.48 2 2 5.94 2 10.8c0 4.35 3.6 7.99 8.47 8.68.33.07.78.22.89.5.1.26.07.66.03.92l-.14.86c-.04.26-.2 1.01.89.55s5.87-3.46 8.01-5.92C21.6 14.77 22 12.86 22 10.8 22 5.94 17.52 2 12 2zM8.2 13.4H6.1c-.16 0-.29-.13-.29-.29V8.9c0-.16.13-.29.29-.29h.5c.16 0 .29.13.29.29v3.42H8.2c.16 0 .29.13.29.29v.5c0 .16-.13.29-.29.29zm1.6-.29c0 .16-.13.29-.29.29h-.5a.29.29 0 0 1-.29-.29V8.9c0-.16.13-.29.29-.29h.5c.16 0 .29.13.29.29v4.21zm4.7 0c0 .16-.13.29-.29.29h-.5a.29.29 0 0 1-.23-.12l-1.93-2.6v2.43c0 .16-.13.29-.29.29h-.5a.29.29 0 0 1-.29-.29V8.9c0-.16.13-.29.29-.29h.55l1.91 2.62V8.9c0-.16.13-.29.29-.29h.5c.16 0 .29.13.29.29v4.21zm3.4-3.71c0 .16-.13.29-.29.29h-1.51v.58h1.51c.16 0 .29.13.29.29v.5c0 .16-.13.29-.29.29h-1.51v.58h1.51c.16 0 .29.13.29.29v.5c0 .16-.13.29-.29.29H15.5a.29.29 0 0 1-.29-.29V8.9c0-.16.13-.29.29-.29h2.31c.16 0 .29.13.29.29v.5z"/>"#;
+
+const ICON_WECHAT: &str = r#"<path d="M8.7 3C4.99 3 2 5.53 2 8.65c0 1.79 1 3.38 2.55 4.42l-.64 1.93 2.24-1.12c.8.22 1.65.34 2.55.34.22 0 .43-.01.64-.02a5.2 5.2 0 0 1-.2-1.42c0-2.94 2.85-5.32 6.37-5.32.23 0 .45.01.67.03C15.55 4.85 12.44 3 8.7 3zM6.4 7.4a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8zm4.6 0a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8zM22 12.78c0-2.62-2.55-4.75-5.7-4.75s-5.7 2.13-5.7 4.75 2.55 4.75 5.7 4.75c.71 0 1.39-.11 2.02-.3l1.85.94-.52-1.6C21.14 15.7 22 14.33 22 12.78zm-7.6-.9a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5zm3.8 0a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5z"/>"#;
+
+const ICON_QQ: &str = r#"<path d="M12 2c-2.9 0-5.3 2.2-5.3 5.2 0 .6-.3 1.5-.7 2.2-.7 1.2-1.3 2.4-1.3 3.7 0 .6.4 1 .9 1 .3 0 .6-.2.8-.5.2.7.6 1.3 1.1 1.8-.7.3-1.2.8-1.2 1.4 0 1.2 1.9 2.2 4.2 2.2h2.9c2.3 0 4.2-1 4.2-2.2 0-.6-.5-1.1-1.2-1.4.5-.5.9-1.1 1.1-1.8.2.3.5.5.8.5.5 0 .9-.4.9-1 0-1.3-.6-2.5-1.3-3.7-.4-.7-.7-1.6-.7-2.2C17.3 4.2 14.9 2 12 2zm-2.4 5.4a.85.85 0 1 1 0-1.7.85.85 0 0 1 0 1.7zm4.8 0a.85.85 0 1 1 0-1.7.85.85 0 0 1 0 1.7z"/>"#;
+
 const ICON_FEISHU: &str = r#"<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-3 12H7v-2h10v2zm0-3H7V9h10v2zm0-3H7V6h10v2z"/>"#;
 
 // ---------------------------------------------------------------------------
@@ -973,8 +979,328 @@ static FEISHU_FIELDS: &[FieldDef] = &[
 // ---------------------------------------------------------------------------
 
 /// All supported messaging channel definitions, ordered for the overview grid.
+// LINE, WeChat and QQ were configurable from the server's side long before
+// they had a card here — `[channels.line]` came up fine, the settings screen
+// simply had no entry for it. That asymmetry is why
+// `aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES` could only be
+// asserted in one direction; with these three the set is closed and the
+// reconciliation below asserts equality both ways.
+//
+// Fields that `FieldDef` cannot express are deliberately absent rather than
+// approximated. `wechat`'s `send_chunk_delay_seconds` is an `f64` and
+// `FieldKind::Number` carries `i32` bounds, so rendering it would round a
+// 0.35s pacing knob to whole seconds; `data_dir` is a path this screen has no
+// picker for. Omission is non-destructive: the form seeds its values from
+// `config.get` and patches the whole map back, so keys it does not render
+// round-trip untouched.
+
+static LINE_FIELDS: &[FieldDef] = &[
+    FieldDef {
+        key: "channel_access_token",
+        label: "Channel Access Token",
+        kind: FieldKind::Secret,
+        placeholder: "Enter channel access token...",
+        help: "Long-lived token from LINE Developers Console → Messaging API",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "channel_secret",
+        label: "Channel Secret",
+        kind: FieldKind::Secret,
+        placeholder: "Enter channel secret...",
+        help: "Used to verify the X-Line-Signature on every webhook delivery",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "webhook_host",
+        label: "Webhook Host",
+        kind: FieldKind::Text,
+        placeholder: "0.0.0.0",
+        help: "Interface the LINE webhook server binds to",
+        required: false,
+        default_value: "0.0.0.0",
+        options: &[],
+    },
+    FieldDef {
+        key: "webhook_port",
+        label: "Webhook Port",
+        kind: FieldKind::Number { min: 1, max: 65535 },
+        placeholder: "8080",
+        help: "Port the LINE webhook server listens on",
+        required: false,
+        default_value: "8080",
+        options: &[],
+    },
+    FieldDef {
+        key: "webhook_path",
+        label: "Webhook Path",
+        kind: FieldKind::Text,
+        placeholder: "line/webhook",
+        help: "Path component of the webhook URL registered with LINE",
+        required: false,
+        default_value: "line/webhook",
+        options: &[],
+    },
+    FieldDef {
+        key: "dm_policy",
+        label: "Direct Message Policy",
+        kind: FieldKind::Select,
+        placeholder: "",
+        help: "How direct messages from strangers are handled",
+        required: false,
+        default_value: "pairing",
+        options: &[
+            ("pairing", "Require pairing code"),
+            ("allowlist", "Allowlist only"),
+            ("open", "Open to anyone"),
+            ("disabled", "Reject all DMs"),
+        ],
+    },
+    FieldDef {
+        key: "group_policy",
+        label: "Group Policy",
+        kind: FieldKind::Select,
+        placeholder: "",
+        help: "How group messages are handled",
+        required: false,
+        default_value: "allowlist",
+        options: &[
+            ("allowlist", "Allowlist only"),
+            ("open", "Open to any group"),
+            ("disabled", "Reject all groups"),
+        ],
+    },
+    FieldDef {
+        key: "allowed_users",
+        label: "Allowed Users",
+        kind: FieldKind::TagList,
+        placeholder: "Add LINE user ID...",
+        help: "LINE user IDs allowed to DM (empty = all)",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "allowed_groups",
+        label: "Allowed Groups",
+        kind: FieldKind::TagList,
+        placeholder: "Add LINE group ID...",
+        help: "LINE group IDs allowed to interact (empty = all)",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "send_typing",
+        label: "Send Typing Indicator",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Show the loading animation while a turn is running",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+];
+
+static WECHAT_FIELDS: &[FieldDef] = &[
+    FieldDef {
+        key: "account_id",
+        label: "Account ID",
+        kind: FieldKind::Text,
+        placeholder: "my-wechat-bot",
+        help: "Identifier for this WeChat instance",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "token",
+        label: "iLink Bot Token",
+        kind: FieldKind::Secret,
+        placeholder: "Enter iLink bot token...",
+        help: "Bot token issued by the iLink platform",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "base_url",
+        label: "iLink API Base URL",
+        kind: FieldKind::Url,
+        placeholder: "https://ilinkai.weixin.qq.com",
+        help: "Override only for a private iLink deployment",
+        required: false,
+        default_value: "https://ilinkai.weixin.qq.com",
+        options: &[],
+    },
+    FieldDef {
+        key: "cdn_base_url",
+        label: "Media CDN Base URL",
+        kind: FieldKind::Url,
+        placeholder: "https://novac2c.cdn.weixin.qq.com/c2c",
+        help: "Where inbound media attachments are downloaded from",
+        required: false,
+        default_value: "https://novac2c.cdn.weixin.qq.com/c2c",
+        options: &[],
+    },
+    FieldDef {
+        key: "dm_policy",
+        label: "Direct Message Policy",
+        kind: FieldKind::Select,
+        placeholder: "",
+        help: "How direct messages are handled",
+        required: false,
+        default_value: "open",
+        options: &[
+            ("open", "Open to anyone"),
+            ("allowlist", "Allowlist only"),
+            ("disabled", "Reject all DMs"),
+        ],
+    },
+    FieldDef {
+        key: "group_policy",
+        label: "Group Policy",
+        kind: FieldKind::Select,
+        placeholder: "",
+        help: "How group messages are handled",
+        required: false,
+        default_value: "disabled",
+        options: &[
+            ("disabled", "Reject all groups"),
+            ("open", "Open to any group"),
+            ("allowlist", "Allowlist only"),
+        ],
+    },
+    FieldDef {
+        key: "allow_from",
+        label: "Allowed Users",
+        kind: FieldKind::TagList,
+        placeholder: "Add user ID...",
+        help: "User IDs allowed to DM when the DM policy is Allowlist",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "group_allow_from",
+        label: "Allowed Groups",
+        kind: FieldKind::TagList,
+        placeholder: "Add group ID...",
+        help: "Group IDs allowed when the group policy is Allowlist",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "split_multiline_messages",
+        label: "Split Long Messages",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Send multi-paragraph replies as separate messages",
+        required: false,
+        default_value: "false",
+        options: &[],
+    },
+    FieldDef {
+        key: "send_chunk_retries",
+        label: "Chunk Send Retries",
+        kind: FieldKind::Number { min: 0, max: 10 },
+        placeholder: "2",
+        help: "Retries for an individual chunk that fails to send",
+        required: false,
+        default_value: "2",
+        options: &[],
+    },
+];
+
+// QQ's config is stored as `accounts = [{ ... }]`, but only the first entry is
+// ever started. This card writes the flat, single-account spelling that
+// `QQConfig::from_wire` normalises into that array — see its docs for why the
+// second spelling exists rather than growing the renderer a repeated-group
+// field kind for a list whose tail is ignored anyway.
+static QQ_FIELDS: &[FieldDef] = &[
+    FieldDef {
+        key: "app_id",
+        label: "App ID",
+        kind: FieldKind::Text,
+        placeholder: "102XXXXXX",
+        help: "From QQ Open Platform → Bot → Development settings",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "client_secret",
+        label: "Client Secret",
+        kind: FieldKind::Secret,
+        placeholder: "Enter client secret...",
+        help: "From QQ Open Platform → Bot → Development settings",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "enabled",
+        label: "Enabled",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "A disabled account refuses to start rather than connecting idle",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "dm_policy",
+        label: "Direct Message Policy",
+        kind: FieldKind::Select,
+        placeholder: "",
+        help: "How direct messages are handled",
+        required: false,
+        default_value: "allowlist",
+        options: &[("allowlist", "Allowlist only"), ("open", "Open to anyone")],
+    },
+    FieldDef {
+        key: "group_policy",
+        label: "Group Policy",
+        kind: FieldKind::Select,
+        placeholder: "",
+        help: "How group messages are handled",
+        required: false,
+        default_value: "allowlist",
+        options: &[
+            ("allowlist", "Allowlist only"),
+            ("mention_only", "Only when @mentioned"),
+            ("open", "Open to any group"),
+        ],
+    },
+    FieldDef {
+        key: "allowed_users",
+        label: "Allowed Users",
+        kind: FieldKind::TagList,
+        placeholder: "Add QQ user openid...",
+        help: "User openids allowed to DM when the DM policy is Allowlist",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "allowed_groups",
+        label: "Allowed Groups",
+        kind: FieldKind::TagList,
+        placeholder: "Add QQ group openid...",
+        help: "Group openids allowed when the group policy is Allowlist",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+];
+
 pub static ALL_CHANNELS: &[ChannelDefinition] = &[
-    // 1. Telegram
+    // Telegram
     ChannelDefinition {
         id: "telegram",
         name: "Telegram",
@@ -985,7 +1311,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: TELEGRAM_FIELDS,
         docs_url: "https://core.telegram.org/bots/api",
     },
-    // 2. Discord
+    // Discord
     ChannelDefinition {
         id: "discord",
         name: "Discord",
@@ -996,7 +1322,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: DISCORD_FIELDS,
         docs_url: "https://discord.com/developers/docs",
     },
-    // 3. WhatsApp
+    // WhatsApp
     ChannelDefinition {
         id: "whatsapp",
         name: "WhatsApp",
@@ -1007,7 +1333,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: WHATSAPP_FIELDS,
         docs_url: "https://developers.facebook.com/docs/whatsapp",
     },
-    // 4. iMessage
+    // iMessage
     ChannelDefinition {
         id: "imessage",
         name: "iMessage",
@@ -1018,7 +1344,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: IMESSAGE_FIELDS,
         docs_url: "https://support.apple.com/messages",
     },
-    // 5. Feishu/Lark
+    // Feishu/Lark
     ChannelDefinition {
         id: "feishu",
         name: "Feishu / Lark",
@@ -1029,8 +1355,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: FEISHU_FIELDS,
         docs_url: "https://open.feishu.cn/document/home/index",
     },
-    // 6. MS Teams
-    // 7. Slack
+    // Slack
     ChannelDefinition {
         id: "slack",
         name: "Slack",
@@ -1041,7 +1366,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: SLACK_FIELDS,
         docs_url: "https://api.slack.com/apis/socket-mode",
     },
-    // 8. Email
+    // Email
     ChannelDefinition {
         id: "email",
         name: "Email",
@@ -1052,7 +1377,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: EMAIL_FIELDS,
         docs_url: "https://datatracker.ietf.org/doc/html/rfc3501",
     },
-    // 9. Matrix
+    // Matrix
     ChannelDefinition {
         id: "matrix",
         name: "Matrix",
@@ -1063,7 +1388,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: MATRIX_FIELDS,
         docs_url: "https://spec.matrix.org/latest/client-server-api/",
     },
-    // 10. Signal
+    // Signal
     ChannelDefinition {
         id: "signal",
         name: "Signal",
@@ -1074,7 +1399,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: SIGNAL_FIELDS,
         docs_url: "https://github.com/bbernhard/signal-cli-rest-api",
     },
-    // 11. Mattermost
+    // Mattermost
     ChannelDefinition {
         id: "mattermost",
         name: "Mattermost",
@@ -1085,7 +1410,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: MATTERMOST_FIELDS,
         docs_url: "https://developers.mattermost.com/integrate/reference/bot/",
     },
-    // 12. IRC
+    // IRC
     ChannelDefinition {
         id: "irc",
         name: "IRC",
@@ -1096,7 +1421,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: IRC_FIELDS,
         docs_url: "https://datatracker.ietf.org/doc/html/rfc2812",
     },
-    // 13. Webhook
+    // Webhook
     ChannelDefinition {
         id: "webhook",
         name: "Webhook",
@@ -1107,7 +1432,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: WEBHOOK_FIELDS,
         docs_url: "https://en.wikipedia.org/wiki/Webhook",
     },
-    // 14. XMPP
+    // XMPP
     ChannelDefinition {
         id: "xmpp",
         name: "XMPP",
@@ -1118,7 +1443,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: XMPP_FIELDS,
         docs_url: "https://xmpp.org/extensions/",
     },
-    // 15. Nostr
+    // Nostr
     ChannelDefinition {
         id: "nostr",
         name: "Nostr",
@@ -1129,6 +1454,39 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: NOSTR_FIELDS,
         docs_url: "https://github.com/nostr-protocol/nips",
     },
+    // LINE
+    ChannelDefinition {
+        id: "line",
+        name: "LINE",
+        description: "Connect to LINE via the Messaging API webhook",
+        icon_svg: ICON_LINE,
+        brand_color: "#06C755",
+        config_section: "channels.line",
+        fields: LINE_FIELDS,
+        docs_url: "https://developers.line.biz/en/docs/messaging-api/",
+    },
+    // WeChat
+    ChannelDefinition {
+        id: "wechat",
+        name: "WeChat",
+        description: "Connect to WeChat through an iLink bot account",
+        icon_svg: ICON_WECHAT,
+        brand_color: "#07C160",
+        config_section: "channels.wechat",
+        fields: WECHAT_FIELDS,
+        docs_url: "https://developers.weixin.qq.com/",
+    },
+    // QQ
+    ChannelDefinition {
+        id: "qq",
+        name: "QQ",
+        description: "Connect to QQ via the official bot gateway",
+        icon_svg: ICON_QQ,
+        brand_color: "#12B7F5",
+        config_section: "channels.qq",
+        fields: QQ_FIELDS,
+        docs_url: "https://bot.q.qq.com/wiki/",
+    },
 ];
 
 #[cfg(test)]
@@ -1136,34 +1494,48 @@ mod reconciliation_tests {
     use super::ALL_CHANNELS;
     use aleph_protocol::channels::CONFIGURABLE_CHANNEL_TYPES;
 
-    /// Every card the channels grid renders is a channel that can actually
-    /// come up.
+    /// The set of cards the grid renders **equals** the set of channels the
+    /// server can bring up.
     ///
-    /// The grid is unconditional — `overview.rs` iterates `ALL_CHANNELS` — so a
-    /// card whose id has no factory behind it hands the user a complete
-    /// settings form, accepts the credentials, writes `[channels.<id>]`, and
-    /// then nothing happens: boot logs one `Failed to create channel` line and
-    /// moves on. Two cards were in that state until 2026-08-18. `msteams`
-    /// never had a factory and its adapter was severed the day before;
-    /// `feishu` never had one either and got one in the same change as this
-    /// test.
+    /// Both directions are load-bearing and they fail differently:
     ///
-    /// Note what this does NOT assert: the reverse direction. `line`, `wechat`
-    /// and `qq` are configurable and have no card, which is a missing feature,
-    /// not a lie — and pinning it would mean either writing three cards or
-    /// parking an exemption list, which is a permission slip with nothing to
-    /// make it shrink.
+    /// * a card with no factory behind it hands the user a complete settings
+    ///   form, accepts the credentials, writes `[channels.<id>]`, and then
+    ///   nothing happens — boot logs one line and moves on. `msteams` and
+    ///   `feishu` both sat there until 2026-08-18;
+    /// * a configurable channel with no card is a feature the product can only
+    ///   be told about by hand-editing `config.toml`. `line`, `wechat` and
+    ///   `qq` sat there until 2026-08-18 as well, and the reverse direction
+    ///   was deliberately left unasserted precisely because pinning it would
+    ///   have needed an exemption list with nothing to make it shrink.
+    ///
+    /// Writing the three missing cards closed the set, so the exemption never
+    /// had to be created and the assertion can be equality — which is the only
+    /// shape that catches the third case, both sides missing the same name.
+    /// That is exactly how `feishu` survived four months under the
+    /// one-way containment check that preceded this one.
     #[test]
-    fn every_channel_card_is_a_configurable_channel() {
-        let unreachable: Vec<&str> = ALL_CHANNELS
+    fn the_card_set_equals_the_configurable_channel_set() {
+        let mut cards: Vec<&str> = ALL_CHANNELS.iter().map(|d| d.id).collect();
+        cards.sort_unstable();
+        let mut configurable: Vec<&str> = CONFIGURABLE_CHANNEL_TYPES.to_vec();
+        configurable.sort_unstable();
+
+        let no_factory: Vec<&&str> = cards
             .iter()
-            .map(|d| d.id)
-            .filter(|id| !CONFIGURABLE_CHANNEL_TYPES.contains(id))
+            .filter(|id| !configurable.contains(id))
             .collect();
-        assert!(
-            unreachable.is_empty(),
-            "channel card(s) {unreachable:?} render a settings form for a channel the server \
-             cannot construct — see aleph_protocol::channels",
+        let no_card: Vec<&&str> = configurable
+            .iter()
+            .filter(|id| !cards.contains(id))
+            .collect();
+
+        assert_eq!(
+            cards, configurable,
+            "channel cards and configurable channels disagree.\n  \
+             card without a factory (settings form for a channel that cannot start): {no_factory:?}\n  \
+             configurable without a card (only reachable by hand-editing config.toml): {no_card:?}\n  \
+             see aleph_protocol::channels",
         );
     }
 
