@@ -318,7 +318,6 @@ impl std::error::Error for AcpError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcpErrorCode {
     HarnessNotFound,
-    HarnessUnavailable,
     HarnessDenied,
     SessionDead,
     Timeout,
@@ -326,7 +325,6 @@ pub enum AcpErrorCode {
         code: i64,
     },
     ModeUnsupported,
-    Cancelled,
     SpawnFailed,
     /// Adapter advertised it requires auth and the caller has no credential.
     AuthRequired,
@@ -345,13 +343,11 @@ impl AcpErrorCode {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::HarnessNotFound => "harness_not_found",
-            Self::HarnessUnavailable => "harness_unavailable",
             Self::HarnessDenied => "harness_denied",
             Self::SessionDead => "session_dead",
             Self::Timeout => "timeout",
             Self::ProtocolError { .. } => "protocol_error",
             Self::ModeUnsupported => "mode_unsupported",
-            Self::Cancelled => "cancelled",
             Self::SpawnFailed => "spawn_failed",
             Self::AuthRequired => "auth_required",
             Self::SessionControlUnsupported => "session_control_unsupported",
@@ -362,10 +358,7 @@ impl AcpErrorCode {
     /// `retryable` flag on `NormalizedOutputError`.
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::SessionDead | Self::Timeout | Self::HarnessUnavailable | Self::SpawnFailed
-        )
+        matches!(self, Self::SessionDead | Self::Timeout | Self::SpawnFailed)
     }
 }
 
@@ -636,12 +629,10 @@ mod tests {
     fn test_acp_error_code_retryable() {
         assert!(AcpErrorCode::SessionDead.is_retryable());
         assert!(AcpErrorCode::Timeout.is_retryable());
-        assert!(AcpErrorCode::HarnessUnavailable.is_retryable());
         assert!(AcpErrorCode::SpawnFailed.is_retryable());
         assert!(!AcpErrorCode::HarnessNotFound.is_retryable());
         assert!(!AcpErrorCode::HarnessDenied.is_retryable());
         assert!(!AcpErrorCode::AuthRequired.is_retryable());
-        assert!(!AcpErrorCode::Cancelled.is_retryable());
         assert!(!AcpErrorCode::SessionControlUnsupported.is_retryable());
     }
 
@@ -652,7 +643,6 @@ mod tests {
         assert_eq!(AcpErrorCode::HarnessNotFound.as_str(), "harness_not_found");
         assert_eq!(AcpErrorCode::Timeout.as_str(), "timeout");
         assert_eq!(AcpErrorCode::SessionDead.as_str(), "session_dead");
-        assert_eq!(AcpErrorCode::Cancelled.as_str(), "cancelled");
         assert_eq!(AcpErrorCode::AuthRequired.as_str(), "auth_required");
         assert_eq!(
             AcpErrorCode::SessionControlUnsupported.as_str(),

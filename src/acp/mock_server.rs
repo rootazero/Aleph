@@ -85,24 +85,7 @@ pub mod mock {
                     })
                 }
 
-                // Support legacy method names for backwards compatibility
-                "prompt" => {
-                    let text = req
-                        .get("params")
-                        .and_then(|p| p.get("text"))
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("");
-                    let reply = format!("[mock] Processed: {}", text);
-                    serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "content": reply
-                        }
-                    })
-                }
-
-                "session/cancel" | "cancel" => serde_json::json!({
+                "session/cancel" => serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
