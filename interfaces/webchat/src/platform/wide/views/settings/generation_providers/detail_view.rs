@@ -328,7 +328,7 @@ pub(super) fn ProviderDetailView(
 
             // Configuration form card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.generation.configuration_header)}</h3>
 
                 // API Key
                 <div>
@@ -346,7 +346,7 @@ pub(super) fn ProviderDetailView(
                         type="text"
                         prop:value=move || form_model.get()
                         on:input=move |ev| form_model.set(event_target_value(&ev))
-                        placeholder="e.g. dall-e-3, stable-diffusion-xl"
+                        placeholder=t_string!(i18n, settings.generation.model_placeholder)
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
@@ -403,7 +403,7 @@ pub(super) fn ProviderDetailView(
 
                 view! {
                     <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                        <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"VOICE CONFIGURATION"</h3>
+                        <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.generation.voice_config_header)}</h3>
 
                         // Default Voice dropdown
                         <div>
@@ -490,7 +490,7 @@ pub(super) fn ProviderDetailView(
 
                         // Voices URL
                         <div>
-                            <label class="block text-sm font-medium text-text-secondary mb-1">"Voices URL"</label>
+                            <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.voices_url)}</label>
                             <input
                                 type="text"
                                 prop:value=move || form_voices_url.get()
@@ -498,12 +498,12 @@ pub(super) fn ProviderDetailView(
                                 placeholder="https://example.com/v1/audio/voices"
                                 class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                             />
-                            <p class="mt-1 text-xs text-text-tertiary">"Optional. Auto-derived from base URL if empty."</p>
+                            <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.voices_url_hint)}</p>
                         </div>
 
                         // Derived Endpoints (read-only info)
                         <div class="bg-surface-sunken rounded-lg p-3 space-y-2">
-                            <h4 class="text-xs font-semibold text-text-tertiary uppercase">"ENDPOINTS (auto-derived)"</h4>
+                            <h4 class="text-xs font-semibold text-text-tertiary uppercase">{t!(i18n, settings.generation.endpoints_header)}</h4>
                             <div class="space-y-1.5 text-xs font-mono">
                                 <div class="flex gap-2">
                                     <span class="text-text-tertiary w-8 shrink-0">"TTS"</span>
@@ -577,7 +577,7 @@ pub(super) fn ProviderDetailView(
 
                 view! {
                     <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
-                        <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"SET AS DEFAULT"</h3>
+                        <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.generation.set_as_default_header)}</h3>
                         <button
                             on:click=move |_| set_default(effective_gen_type)
                             disabled=move || setting_default.get() || is_default || !config_verified

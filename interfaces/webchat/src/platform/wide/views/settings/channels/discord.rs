@@ -10,7 +10,7 @@ use crate::api::DiscordApi;
 use crate::components::forms::ErrorMessageDynamic;
 use crate::components::ui::AgentBindingSelector;
 use crate::context::DashboardState;
-use crate::i18n::{t, use_i18n};
+use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
@@ -213,9 +213,10 @@ pub fn DiscordChannelView() -> impl IntoView {
 
 #[component]
 fn BotIdentitySection(bot_identity: RwSignal<Option<BotIdentity>>) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-xl font-semibold text-text-primary mb-4">"Bot Identity"</h2>
+            <h2 class="text-xl font-semibold text-text-primary mb-4">{t!(i18n, settings.channels.bot_identity)}</h2>
 
             {move || {
                 match bot_identity.get() {
@@ -234,7 +235,7 @@ fn BotIdentitySection(bot_identity: RwSignal<Option<BotIdentity>>) -> impl IntoV
                                         view! {
                                             <img
                                                 src=bot.avatar_url.clone()
-                                                alt="Bot avatar"
+                                                alt=t_string!(i18n, settings.channels.bot_avatar_alt)
                                                 class="w-16 h-16 rounded-full object-cover"
                                             />
                                         }.into_any()
@@ -266,14 +267,14 @@ fn BotIdentitySection(bot_identity: RwSignal<Option<BotIdentity>>) -> impl IntoV
                                             view! {
                                                 <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">
                                                     <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                                                    "Online"
+                                                    {t!(i18n, settings.channels.bot_online)}
                                                 </span>
                                             }.into_any()
                                         } else {
                                             view! {
                                                 <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
                                                     <span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>
-                                                    "Offline"
+                                                    {t!(i18n, settings.channels.bot_offline)}
                                                 </span>
                                             }.into_any()
                                         }}
@@ -292,8 +293,8 @@ fn BotIdentitySection(bot_identity: RwSignal<Option<BotIdentity>>) -> impl IntoV
                                     </svg>
                                 </div>
                                 <div>
-                                    <p class="text-sm">"No bot connected"</p>
-                                    <p class="text-xs text-text-tertiary">"Enter and validate your bot token below"</p>
+                                    <p class="text-sm">{t!(i18n, settings.channels.no_bot_connected)}</p>
+                                    <p class="text-xs text-text-tertiary">{t!(i18n, settings.channels.no_bot_hint)}</p>
                                 </div>
                             </div>
                         }.into_any()
@@ -435,12 +436,12 @@ fn TokenSection(
 
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-xl font-semibold text-text-primary mb-4">"Token Configuration"</h2>
+            <h2 class="text-xl font-semibold text-text-primary mb-4">{t!(i18n, settings.channels.token_config)}</h2>
 
             <div class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                        "Bot Token"
+                        {t!(i18n, settings.channels.bot_token_label)}
                     </label>
                     <div class="flex gap-3">
                         <input
@@ -449,7 +450,7 @@ fn TokenSection(
                             on:input=move |ev| {
                                 token.set(event_target_value(&ev));
                             }
-                            placeholder="Enter your Discord bot token..."
+                            placeholder=t_string!(i18n, settings.channels.bot_token_placeholder)
                             class="flex-1 px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono text-sm"
                         />
                         <button
@@ -457,17 +458,17 @@ fn TokenSection(
                             disabled=move || validating.get() || token.get().is_empty()
                             class="px-4 py-2 bg-primary text-text-inverse rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
                         >
-                            {move || if validating.get() { "Validating..." } else { "Validate" }}
+                            {move || if validating.get() { t_string!(i18n, settings.channels.validating) } else { t_string!(i18n, settings.channels.validate) }}
                         </button>
                         <button
                             on:click=on_reset
                             class="px-4 py-2 bg-surface-sunken border border-border text-text-secondary rounded-lg hover:bg-surface hover:text-text-primary transition-colors text-sm font-medium"
                         >
-                            "Reset"
+                            {t!(i18n, settings.channels.reset)}
                         </button>
                     </div>
                     <p class="mt-2 text-xs text-text-tertiary">
-                        "Your token is sent to the Aleph server for validation and is never stored in the browser."
+                        {t!(i18n, settings.channels.token_privacy_note)}
                     </p>
                 </div>
             </div>
@@ -668,7 +669,7 @@ fn GuildSection(
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
             <div class="flex items-center justify-between mb-4">
-                <h2 class="text-xl font-semibold text-text-primary">"Guild & Channel Management"</h2>
+                <h2 class="text-xl font-semibold text-text-primary">{t!(i18n, settings.channels.guild_channel_management)}</h2>
                 <button
                     on:click=on_refresh
                     disabled=move || loading_guilds.get()
@@ -680,7 +681,7 @@ fn GuildSection(
                         <polyline points="23 4 23 10 17 10"/>
                         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
                     </svg>
-                    {move || if loading_guilds.get() { "Refreshing..." } else { "Refresh" }}
+                    {move || if loading_guilds.get() { t_string!(i18n, settings.channels.refreshing) } else { t_string!(i18n, settings.channels.refresh) }}
                 </button>
             </div>
 
@@ -689,7 +690,7 @@ fn GuildSection(
                 if guild_list.is_empty() && !loading_guilds.get() {
                     view! {
                         <div class="text-center py-8 text-text-tertiary text-sm">
-                            <p>"No guilds available. Validate your bot token first."</p>
+                            <p>{t!(i18n, settings.channels.no_guilds)}</p>
                         </div>
                     }.into_any()
                 } else {
@@ -730,7 +731,7 @@ fn GuildSection(
                                                         view! {
                                                             <img
                                                                 src=url
-                                                                alt="Guild icon"
+                                                                alt=t_string!(i18n, settings.channels.guild_icon_alt)
                                                                 class="w-8 h-8 rounded-full"
                                                             />
                                                         }.into_any()
@@ -751,7 +752,7 @@ fn GuildSection(
                                                     {members.map(|m| {
                                                         view! {
                                                             <div class="text-xs text-text-tertiary">
-                                                                {format!("{m} members")}
+                                                                {t!(i18n, settings.channels.guild_members, count = move || m)}
                                                             </div>
                                                         }
                                                     })}
@@ -766,7 +767,7 @@ fn GuildSection(
                             <div class="w-1/2 border border-border rounded-lg overflow-hidden">
                                 <div class="bg-surface-sunken px-3 py-2 border-b border-border">
                                     <span class="text-xs font-medium text-text-secondary uppercase tracking-wider">
-                                        "Channels"
+                                        {t!(i18n, settings.channels.channel_list)}
                                     </span>
                                 </div>
                                 <div class="overflow-y-auto max-h-[320px]">
@@ -774,13 +775,13 @@ fn GuildSection(
                                         if loading_channels.get() {
                                             view! {
                                                 <div class="p-4 text-center text-text-tertiary text-sm">
-                                                    "Loading channels..."
+                                                    {t!(i18n, settings.channels.loading_channels)}
                                                 </div>
                                             }.into_any()
                                         } else if selected_guild_id.get().is_none() {
                                             view! {
                                                 <div class="p-4 text-center text-text-tertiary text-sm">
-                                                    "Select a guild to view channels"
+                                                    {t!(i18n, settings.channels.select_guild_hint)}
                                                 </div>
                                             }.into_any()
                                         } else {
@@ -788,7 +789,7 @@ fn GuildSection(
                                             if ch_list.is_empty() {
                                                 view! {
                                                     <div class="p-4 text-center text-text-tertiary text-sm">
-                                                        "No channels found"
+                                                        {t!(i18n, settings.channels.no_channels_found)}
                                                     </div>
                                                 }.into_any()
                                             } else {
@@ -855,10 +856,11 @@ fn PermissionAuditSection(
     loading_permissions: RwSignal<bool>,
     selected_guild_id: RwSignal<Option<u64>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
             <div class="flex items-center justify-between mb-4">
-                <h2 class="text-xl font-semibold text-text-primary">"Permission Audit"</h2>
+                <h2 class="text-xl font-semibold text-text-primary">{t!(i18n, settings.channels.permission_audit)}</h2>
 
                 // Overall health badge
                 {move || {
@@ -868,7 +870,7 @@ fn PermissionAuditSection(
                             view! {
                                 <span class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-green-100 text-green-700">
                                     <span class="w-2 h-2 rounded-full bg-green-500"></span>
-                                    "All permissions granted"
+                                    {t!(i18n, settings.channels.perm_all_granted)}
                                 </span>
                             }.into_any()
                         }
@@ -876,7 +878,7 @@ fn PermissionAuditSection(
                             view! {
                                 <span class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700">
                                     <span class="w-2 h-2 rounded-full bg-yellow-500"></span>
-                                    "Partial permissions"
+                                    {t!(i18n, settings.channels.perm_partial)}
                                 </span>
                             }.into_any()
                         }
@@ -884,7 +886,7 @@ fn PermissionAuditSection(
                             view! {
                                 <span class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-red-100 text-red-700">
                                     <span class="w-2 h-2 rounded-full bg-red-500"></span>
-                                    "Missing permissions"
+                                    {t!(i18n, settings.channels.perm_missing)}
                                 </span>
                             }.into_any()
                         }
@@ -892,7 +894,7 @@ fn PermissionAuditSection(
                             view! {
                                 <span class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-gray-100 text-gray-600">
                                     <span class="w-2 h-2 rounded-full bg-gray-400"></span>
-                                    "Not audited"
+                                    {t!(i18n, settings.channels.perm_not_audited)}
                                 </span>
                             }.into_any()
                         }
@@ -904,13 +906,13 @@ fn PermissionAuditSection(
                 if loading_permissions.get() {
                     view! {
                         <div class="py-6 text-center text-text-tertiary text-sm">
-                            "Auditing permissions..."
+                            {t!(i18n, settings.channels.auditing_permissions)}
                         </div>
                     }.into_any()
                 } else if selected_guild_id.get().is_none() {
                     view! {
                         <div class="py-6 text-center text-text-tertiary text-sm">
-                            "Select a guild to audit its permissions"
+                            {t!(i18n, settings.channels.perm_select_guild_hint)}
                         </div>
                     }.into_any()
                 } else {
@@ -918,7 +920,7 @@ fn PermissionAuditSection(
                     if perms.is_empty() {
                         view! {
                             <div class="py-6 text-center text-text-tertiary text-sm">
-                                "No permission data available"
+                                {t!(i18n, settings.channels.perm_no_data)}
                             </div>
                         }.into_any()
                     } else {
@@ -974,7 +976,7 @@ fn PermissionAuditSection(
                                         Some(view! {
                                             <div class="mt-4 p-4 bg-warning-subtle border border-warning/30 rounded-lg">
                                                 <h3 class="text-sm font-semibold text-warning mb-2">
-                                                    "Fix Suggestions"
+                                                    {t!(i18n, settings.channels.perm_fix_suggestions)}
                                                 </h3>
                                                 <ul class="space-y-1 text-xs text-warning">
                                                     {missing.iter().map(|p| {
@@ -991,7 +993,7 @@ fn PermissionAuditSection(
                                                     }).collect_view()}
                                                     <li class="flex items-start gap-2 mt-2 pt-2 border-t border-warning/30">
                                                         <span class="mt-0.5 text-warning">">"</span>
-                                                        <span>"Alternatively, generate an invite link with the required permissions and re-invite the bot."</span>
+                                                        <span>{t!(i18n, settings.channels.invite_link_hint)}</span>
                                                     </li>
                                                 </ul>
                                             </div>

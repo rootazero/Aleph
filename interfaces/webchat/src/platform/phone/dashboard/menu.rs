@@ -8,11 +8,13 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 use leptos_router::NavigateOptions;
 
+use crate::i18n::t;
 use crate::platform::phone::shell::PhoneShell;
 
 #[component]
 #[must_use]
 pub fn PhoneDashboardMenu() -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let navigate = use_navigate();
     // `use_navigate` returns a Clone-able Fn; each handler gets its own clone.
     let go = move |path: &'static str| {
@@ -30,7 +32,7 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                             <polyline points="9 22 9 12 15 12 15 22"></polyline>
                         </svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"Overview"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, dashboard.phone.overview)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/dashboard/trace")>
@@ -39,7 +41,7 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
                         </svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"Agent Trace"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, dashboard.phone.agent_trace)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/dashboard/subagents")>
@@ -51,7 +53,7 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                             <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"></path>
                         </svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"Subagents"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, dashboard.phone.subagents)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/dashboard/tasks")>
@@ -61,7 +63,7 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                             <polyline points="12 6 12 12 16 14"></polyline>
                         </svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"Scheduled Tasks"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, dashboard.phone.scheduled_tasks)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/dashboard/logs")>
@@ -74,7 +76,7 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                             <polyline points="10 9 9 9 8 9"></polyline>
                         </svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"Server Logs"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, dashboard.phone.server_logs)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/dashboard/runtimes")>
@@ -85,7 +87,7 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                             <line x1="12" y1="17" x2="12" y2="21"></line>
                         </svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"Runtimes"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, dashboard.phone.runtimes)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
                 <div class="cell" on:click=go("/dashboard/usage")>
@@ -97,7 +99,7 @@ pub fn PhoneDashboardMenu() -> impl IntoView {
                             <path d="M8 17v-3"></path>
                         </svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title">"Usage"</div></div>
+                    <div class="cell-body"><div class="cell-title">{t!(i18n, dashboard.phone.usage)}</div></div>
                     <svg class="cell-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
                 </div>
             </div>

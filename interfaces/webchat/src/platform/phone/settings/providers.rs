@@ -684,7 +684,7 @@ pub fn PhoneProviders() -> impl IntoView {
                                         </div>
                                         <button
                                             class="ios-switch"
-                                            attr:aria-pressed=move || info_for_enable.get_value().enabled.to_string()
+                                            aria-pressed=move || info_for_enable.get_value().enabled.to_string()
                                             on:click=move |ev| {
                                                 ev.stop_propagation();
                                                 let info = info_for_enable.get_value();

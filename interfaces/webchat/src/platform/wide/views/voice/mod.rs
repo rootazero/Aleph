@@ -22,6 +22,7 @@ use leptos::task::spawn_local;
 
 use crate::api::chat::ChatApi;
 use crate::context::{DashboardState, GatewayEvent};
+use crate::i18n::{t, t_string, use_i18n};
 use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
 use audio::{MicError, MicSession, TtsPlayer};
@@ -93,6 +94,7 @@ pub(crate) fn ImmersiveVoiceView() -> impl IntoView {
 
 #[component]
 fn VoiceSession() -> impl IntoView {
+    let i18n = use_i18n();
     let dash = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let sessions = expect_context::<SessionMap>();
@@ -194,11 +196,11 @@ fn VoiceSession() -> impl IntoView {
                 // "Didn't catch that" is honest for a transcription miss but a lie for a
                 // failed agent run — tell the user which side actually broke.
                 let msg = if ev == VoiceEvent::RunFailed {
-                    "回复出错了，稍等再说一次？"
+                    t_string!(i18n, voice.reply_failed).to_string()
                 } else {
-                    "没听清，再说一次？"
+                    t_string!(i18n, voice.not_heard).to_string()
                 };
-                caption.set(Caption::Error(msg.into()));
+                caption.set(Caption::Error(msg));
                 error_flash.set(true);
                 set_timeout(
                     move || error_flash.set(false),
@@ -570,6 +572,7 @@ fn VoiceSession() -> impl IntoView {
                                         Rc::clone(&speak_gen),
                                         active_run,
                                         Rc::clone(&consecutive_errors),
+                                        t_string!(i18n, voice.repeated_misses).to_string(),
                                     );
                                 }
                             }
@@ -708,9 +711,9 @@ fn VoiceSession() -> impl IntoView {
     });
 
     let status_text = move || match phase.get() {
-        VoicePhase::Listening => "正在聆听".to_string(),
-        VoicePhase::Processing => "正在思考".to_string(),
-        VoicePhase::Speaking => "正在说话 · 开口即可打断".to_string(),
+        VoicePhase::Listening => t_string!(i18n, voice.phase_listening).to_string(),
+        VoicePhase::Processing => t_string!(i18n, voice.phase_processing).to_string(),
+        VoicePhase::Speaking => t_string!(i18n, voice.phase_speaking).to_string(),
     };
     // Mic-open failure replaces the phase hint. A permission denial becomes a
     // click-through to the OS privacy pane (settings_url); other failures (busy
@@ -725,11 +728,11 @@ fn VoiceSession() -> impl IntoView {
                     href=url
                     target="_blank"
                 >
-                    {e.caption(native)}
+                    {e.caption(native, i18n)}
                 </a>
             }
             .into_any(),
-            None => view! { {e.caption(native)} }.into_any(),
+            None => view! { {e.caption(native, i18n)} }.into_any(),
         },
     }
     };
@@ -778,7 +781,7 @@ fn VoiceSession() -> impl IntoView {
                 class="voice-hint mt-10 hover:text-text-primary transition-colors"
                 on:click=move |_| voice_mode.open.set(false)
             >
-                "✕ esc 退出"
+                {t!(i18n, voice.exit_hint)}
             </button>
         </div>
     }
@@ -923,6 +926,10 @@ fn handle_utterance(
     speak_gen: Rc<RefCell<u64>>,
     active_run: StoredValue<Option<String>, LocalStorage>,
     consecutive_errors: Rc<RefCell<u32>>,
+    // Resolved by the caller, which still has a live reactive owner: the read
+    // below sits on the far side of `voice.transcribe`'s `.await`, and that is
+    // where `crate::disposed_reads` says a context lookup may already be gone.
+    repeated_misses_caption: String,
 ) {
     spawn_local(async move {
         let Some((base64, mime)) = session.take_segment_wav() else {
@@ -952,7 +959,7 @@ fn handle_utterance(
             };
             dispatch(VoiceEvent::TranscribeFailed);
             if n >= 3 {
-                caption.set(Caption::Error("连续没听清——可以 esc 退出用文字".into()));
+                caption.set(Caption::Error(repeated_misses_caption));
             }
             return;
         };

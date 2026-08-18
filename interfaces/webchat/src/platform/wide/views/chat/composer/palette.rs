@@ -249,32 +249,26 @@ pub(super) fn SlashPaletteView(
     }
 }
 
-/// Seeded when the user runs `/doctor` — a read-only health check. Mirrors
-/// the `f`-hotkey `DOCTOR_REPAIR_PROMPT` (in `composer/mod.rs`) but never
-/// repairs. The model writes a natural-language report; `DoctorRepairHintLayer`
-/// (WebRich-gated, alephcore) appends the "press f" reminder when problems
-/// remain.
-pub(super) const DOCTOR_DETECT_PROMPT: &str = "运行 doctor 工具只读诊断系统健康状况（fix=false，不要修复任何东西）。如实汇报发现的问题及其严重度。";
-
-/// If `text` is exactly the bare `/doctor` command (trimmed, case-insensitive),
-/// return the detection prompt to send through the normal LLM pipeline instead
-/// of the literal slash command (which would hit the deterministic fast path).
-/// Args are not supported in v1 — `/doctor <anything>` does not match.
-pub(super) fn expand_doctor_command(text: &str) -> Option<String> {
-    if text.trim().eq_ignore_ascii_case("/doctor") {
-        Some(DOCTOR_DETECT_PROMPT.to_string())
-    } else {
-        None
-    }
+/// Is `text` exactly the bare `/doctor` command (trimmed, case-insensitive)?
+///
+/// A predicate, not an expansion: the prompt it stands for is copy
+/// (`chat.doctor_detect_prompt`, the read-only mirror of the `f`-hotkey
+/// `chat.doctor_repair_prompt`), and copy is resolved by the caller, which has
+/// the i18n context this pure fn does not. The prompt itself goes through the
+/// normal LLM pipeline rather than the literal slash command, which would hit
+/// the deterministic fast path and never reach a model. Args are not supported
+/// in v1 — `/doctor <anything>` does not match.
+pub(super) fn is_doctor_command(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("/doctor")
 }
 
 /// Static palette entry so `/doctor` is discoverable when the user types `/`,
 /// even though it is intercepted client-side (not a Gateway tool-backed
 /// command). Merged into the fetched catalogue by `composer::fetch_commands`.
-pub(super) fn doctor_command_info() -> CommandInfo {
+pub(super) fn doctor_command_info(description: String) -> CommandInfo {
     CommandInfo {
         key: "doctor".to_string(),
-        description: "只读检测系统健康，发现问题后可按 f 维修".to_string(),
+        description,
         is_namespace: false,
         param_hint: None,
         children: Vec::new(),
@@ -426,27 +420,23 @@ mod tests {
 
     #[test]
     fn expand_doctor_matches_only_bare_command() {
-        assert!(expand_doctor_command("/doctor").is_some());
-        assert!(expand_doctor_command("/Doctor").is_some()); // case-insensitive
-        assert!(expand_doctor_command("  /doctor  ").is_some()); // trimmed
-        assert_eq!(
-            expand_doctor_command("/doctor").unwrap(),
-            DOCTOR_DETECT_PROMPT
-        );
+        assert!(is_doctor_command("/doctor"));
+        assert!(is_doctor_command("/Doctor")); // case-insensitive
+        assert!(is_doctor_command("  /doctor  ")); // trimmed
     }
 
     #[test]
     fn expand_doctor_rejects_non_matches() {
-        assert!(expand_doctor_command("/doctorx").is_none());
-        assert!(expand_doctor_command("/doctor now").is_none()); // args not supported in v1
-        assert!(expand_doctor_command("/doc").is_none());
-        assert!(expand_doctor_command("hello").is_none());
-        assert!(expand_doctor_command("").is_none());
+        assert!(!is_doctor_command("/doctorx"));
+        assert!(!is_doctor_command("/doctor now")); // args not supported in v1
+        assert!(!is_doctor_command("/doc"));
+        assert!(!is_doctor_command("hello"));
+        assert!(!is_doctor_command(""));
     }
 
     #[test]
     fn doctor_command_info_is_a_leaf() {
-        let info = doctor_command_info();
+        let info = doctor_command_info("read-only health check".to_string());
         assert_eq!(info.key, "doctor");
         assert!(!info.is_namespace);
         assert!(info.children.is_empty());

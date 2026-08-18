@@ -323,7 +323,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         on:change=move |ev| { selected_model.set(event_target_value(&ev)); model_touched.set(true); }
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono text-sm"
                     >
-                        <option value="">"继承系统默认 (inherit system default)"</option>
+                        <option value="">{t!(i18n, agents.overview.model_inherit_default)}</option>
                         {move || {
                             catalog.get().into_iter().flat_map(|entry: CatalogEntry| {
                                 let provider_id = entry.id.clone();
@@ -351,7 +351,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         });
                         (!in_catalog).then(|| view! {
                             <p class="mt-1 text-xs text-danger/80">
-                                "\u{26a0} 当前选中的 model 已失效(provider 被删/禁用),保存后将回退系统默认"
+                                {t!(i18n, agents.overview.model_gone_warning)}
                             </p>
                         })
                     }}

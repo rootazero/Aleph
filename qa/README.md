@@ -35,8 +35,12 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/picker_nav/run.sh           # keyboard walk + conditional bottom fade + phone add-a-provider,
                                  # at three widths (1440 / 700 folded / 390 phone)
 
-./qa/channels/run.sh             # feishu / line / qq really come up; msteams is the control.
-                                 # 16 assertions, exit code = failure count.
+./qa/channels/run.sh             # both phases below
+./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
+./qa/channels/run.sh errors      # Lark throttle / refusal, via mock_lark.py's /__inject queue
+                                 # exit code = failure count; the fixture prints every
+                                 # assertion it ran. Deliberately no count here: the
+                                 # first one drifted (16 in prose, 18 on screen).
 ```
 
 `picker_nav` needs **no mock provider** at all: every item is Panel-side

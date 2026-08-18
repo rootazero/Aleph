@@ -216,7 +216,7 @@ pub fn PhoneModelRoute() -> impl IntoView {
                                 <div class="cell-body"><div class="cell-title">{t!(i18n, settings.phone.allow_escalation)}</div></div>
                                 <button
                                     class="ios-switch"
-                                    attr:aria-pressed=move || allow_escalation.get().to_string()
+                                    aria-pressed=move || allow_escalation.get().to_string()
                                     on:click=move |_| allow_escalation.update(|v| *v = !*v)
                                 >
                                     <span class="ios-knob"></span>

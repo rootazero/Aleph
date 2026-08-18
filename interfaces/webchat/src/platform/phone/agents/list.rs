@@ -10,6 +10,7 @@ use leptos_router::hooks::use_navigate;
 use leptos_router::NavigateOptions;
 
 use crate::api::agents::{AgentSummary, AgentsApi};
+use crate::i18n::{t, t_string};
 use crate::context::DashboardState;
 use crate::platform::phone::shell::PhoneShell;
 
@@ -109,28 +110,28 @@ pub fn PhoneAgentsList() -> impl IntoView {
                     <span class="cell-leading">
                         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                     </span>
-                    <div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">"New Agent"</div></div>
+                    <div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">{t!(i18n, agents.phone_new_agent)}</div></div>
                 </div>
                 {move || show_create.get().then(|| view! {
                     <div style="display:flex; flex-direction:column; gap:8px; padding:12px;">
-                        <input class="field" type="text" placeholder="Agent ID"
+                        <input class="field" type="text" placeholder=t_string!(i18n, agents.phone_agent_id_placeholder)
                             prop:value=move || new_id.get()
                             on:input=move |ev| new_id.set(event_target_value(&ev)) />
-                        <input class="field" type="text" placeholder="Display name"
+                        <input class="field" type="text" placeholder=t_string!(i18n, agents.phone_display_name_placeholder)
                             prop:value=move || new_name.get()
                             on:input=move |ev| new_name.set(event_target_value(&ev)) />
                         <select class="field"
                             prop:value=move || new_archetype.get()
                             on:change=move |ev| new_archetype.set(event_target_value(&ev))>
-                            <option value="assistant">"Assistant"</option>
-                            <option value="expert">"Expert"</option>
-                            <option value="maker">"Maker"</option>
-                            <option value="companion">"Companion"</option>
+                            <option value="assistant">{t!(i18n, agents.phone_persona_assistant)}</option>
+                            <option value="expert">{t!(i18n, agents.phone_persona_expert)}</option>
+                            <option value="maker">{t!(i18n, agents.phone_persona_maker)}</option>
+                            <option value="companion">{t!(i18n, agents.phone_persona_companion)}</option>
                         </select>
                         {move || create_error.get().map(|e| view! {
                             <div class="cell-sub" style="color:var(--color-danger);">{e}</div>
                         })}
-                        <button class="chip" style="align-self:flex-start;" on:click=submit_create>"Create"</button>
+                        <button class="chip" style="align-self:flex-start;" on:click=submit_create>{t!(i18n, agents.phone_create)}</button>
                     </div>
                 })}
             </div>
@@ -144,16 +145,16 @@ pub fn PhoneAgentsList() -> impl IntoView {
                 if let Some(err) = st.error.get() {
                     return view! {
                         <div class="list">
-                            <div class="cell"><div class="cell-body"><div class="cell-title">"Couldn't load agents"</div><div class="cell-sub">{err}</div></div></div>
+                            <div class="cell"><div class="cell-body"><div class="cell-title">{t!(i18n, agents.phone_load_failed)}</div><div class="cell-sub">{err}</div></div></div>
                             <div class="cell" on:click=move |_| st.reload_nonce.update(|n| *n += 1)>
-                                <div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">"Retry"</div></div>
+                                <div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">{t!(i18n, common.retry)}</div></div>
                             </div>
                         </div>
                     }.into_any();
                 }
                 let items = visible();
                 if items.is_empty() {
-                    return view! { <div class="list-header">"No agents"</div> }.into_any();
+                    return view! { <div class="list-header">{t!(i18n, agents.phone_no_agents)}</div> }.into_any();
                 }
                 let binds = st.bindings.get();
                 view! {

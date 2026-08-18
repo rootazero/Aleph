@@ -252,7 +252,7 @@ pub fn DirectoryBrowser(
         if list.is_empty() {
             return view! {
                 <div class="px-4 py-8 text-center text-sm text-text-tertiary">
-                    "未配置 allowed_roots — 请在 config.toml 的 [projects] 段设置可浏览根目录。"
+                    {t!(i18n, common.browser_no_roots)}
                 </div>
             }
             .into_any();
@@ -292,7 +292,7 @@ pub fn DirectoryBrowser(
         if entries.is_empty() {
             return view! {
                 <div class="px-4 py-8 text-center text-sm text-text-tertiary">
-                    "(此目录为空)"
+                    {t!(i18n, common.browser_empty_dir)}
                 </div>
             }
             .into_any();
@@ -345,7 +345,7 @@ pub fn DirectoryBrowser(
     let header_path_label = move || {
         current_path
             .get()
-            .unwrap_or_else(|| "选择一个根目录…".to_string())
+            .unwrap_or_else(|| t_string!(i18n, common.browser_pick_root).to_string())
     };
 
     view! {

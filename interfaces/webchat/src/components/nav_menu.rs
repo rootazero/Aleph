@@ -54,10 +54,7 @@ fn label_of(mode: PanelMode, i18n: I18nContext<Locale>) -> String {
         PanelMode::Canvas => t_string!(i18n, nav.canvas).to_string(),
         PanelMode::Agents => t_string!(i18n, nav.agents).to_string(),
         PanelMode::Teams => t_string!(i18n, nav.teams).to_string(),
-        // Not localized (yet): the new P2 project-rooms surface, like `More`
-        // below, ships with a plain literal rather than a new locale key —
-        // see `components/project_page.rs`'s module doc for the tradeoff.
-        PanelMode::Projects => "项目".to_string(),
+        PanelMode::Projects => t_string!(i18n, nav.projects).to_string(),
         PanelMode::Extensions => t_string!(i18n, nav.extensions).to_string(),
         PanelMode::More => "More".to_string(),
         PanelMode::Settings => t_string!(i18n, nav.settings).to_string(),

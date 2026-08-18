@@ -6,11 +6,17 @@
 use leptos::prelude::*;
 
 use super::plan::{archive_summary, PlanItemStatusView, PlanView};
+use crate::i18n::{t_string, use_i18n};
 
 #[component]
 pub fn PlanArchiveCell(plan: PlanView) -> impl IntoView {
+    let i18n = use_i18n();
     let expanded = RwSignal::new(false);
-    let (glyph, label) = archive_summary(&plan);
+    let (glyph, label) = archive_summary(
+        &plan,
+        t_string!(i18n, chat.plan_archive_done),
+        t_string!(i18n, chat.plan_archive_open),
+    );
     let objective = plan.objective.clone().unwrap_or_default();
     let complete = plan.complete;
     let items = StoredValue::new(plan.items.clone());

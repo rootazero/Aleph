@@ -2,6 +2,7 @@ use crate::sync_primitives::Arc;
 use reqwest::multipart;
 
 use super::auth::TokenManager;
+use super::envelope::{read_checked, throttle_retry_after, Envelope};
 use super::types::{
     BotInfo, BotInfoResponse, CardCreateResponse, ReactionResponse, SendMessageResponse,
     UploadImageResponse, UserInfoResponse, WsEndpointResponse,
@@ -59,18 +60,8 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Bot info request failed: {e}"))?;
 
-        let info: BotInfoResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("Bot info parse failed: {e}"))?;
-
-        if info.code != 0 {
-            return Err(format!(
-                "Bot info error: code={}, msg={}",
-                info.code,
-                info.msg.unwrap_or_default()
-            ));
-        }
+        let info: BotInfoResponse =
+            read_checked(resp, "Bot info").await?;
 
         let bot = info
             .bot
@@ -99,17 +90,8 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("WS endpoint request failed: {e}"))?;
 
-        let ws_resp: WsEndpointResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("WS endpoint parse failed: {e}"))?;
-
-        if ws_resp.code != 0 {
-            return Err(format!(
-                "WS endpoint error: code={}, msg={}",
-                ws_resp.code, ws_resp.msg
-            ));
-        }
+        let ws_resp: WsEndpointResponse =
+            read_checked(resp, "WS endpoint").await?;
 
         let data = ws_resp
             .data
@@ -231,31 +213,51 @@ impl FeishuApi {
         self.parse_send_response(resp).await
     }
 
+    /// The one place a Lark rejection becomes a retryable error.
+    ///
+    /// [`FeishuSendError::RateLimited`] is the only variant anything above this
+    /// channel retries — `ChannelRegistry::send` honours its `retry_after_secs`
+    /// and `delivery_queue::should_enqueue` re-enqueues it, while
+    /// `Other` maps to `ChannelError::SendFailed`, which both treat as
+    /// terminal because a failed send is ambiguous about delivery. So the
+    /// classification here decides whether a throttled reply is retried or
+    /// dropped, and it has to read the *whole* response to make it: the body's
+    /// `code` is half the predicate, which is why the parse now happens before
+    /// the decision rather than after it. See [`envelope`] for the two channels
+    /// Lark answers on.
+    ///
+    /// All four send verbs (`send_text`, `send_image`, `send_card_message`,
+    /// `reply_message`) funnel through here, so there is one answer rather than
+    /// four.
     async fn parse_send_response(
         &self,
         resp: reqwest::Response,
     ) -> Result<String, FeishuSendError> {
-        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(5);
-            return Err(FeishuSendError::RateLimited {
-                retry_after_secs: retry_after,
-            });
+        let env = Envelope::read(resp, "Send")
+            .await
+            .map_err(FeishuSendError::Other)?;
+        let parsed: Option<SendMessageResponse> = serde_json::from_slice(&env.body).ok();
+
+        if let Some(retry_after_secs) =
+            throttle_retry_after(env.status, &env.headers, parsed.as_ref().map(|r| r.code))
+        {
+            return Err(FeishuSendError::RateLimited { retry_after_secs });
         }
 
-        let send_resp: SendMessageResponse = resp
-            .json()
-            .await
-            .map_err(|e| FeishuSendError::Other(format!("Send response parse failed: {e}")))?;
+        let Some(send_resp) = parsed else {
+            return Err(FeishuSendError::Other(format!(
+                "Send response parse failed: HTTP {} — body: {}",
+                env.status.as_u16(),
+                env.excerpt(),
+            )));
+        };
 
         if send_resp.code != 0 {
             return Err(FeishuSendError::Other(format!(
-                "Send error: code={}, msg={}",
-                send_resp.code, send_resp.msg
+                "Send error: code={}, msg={} (HTTP {})",
+                send_resp.code,
+                send_resp.msg,
+                env.status.as_u16(),
             )));
         }
 
@@ -291,17 +293,8 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Upload image failed: {e}"))?;
 
-        let upload_resp: UploadImageResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("Upload response parse failed: {e}"))?;
-
-        if upload_resp.code != 0 {
-            return Err(format!(
-                "Upload error: code={}, msg={}",
-                upload_resp.code, upload_resp.msg
-            ));
-        }
+        let upload_resp: UploadImageResponse =
+            read_checked(resp, "Upload image").await?;
 
         upload_resp
             .data
@@ -348,17 +341,8 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Create streaming card failed: {e}"))?;
 
-        let card_resp: CardCreateResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("Card create response parse failed: {e}"))?;
-
-        if card_resp.code != 0 {
-            return Err(format!(
-                "Card create error: code={}, msg={}",
-                card_resp.code, card_resp.msg
-            ));
-        }
+        let card_resp: CardCreateResponse =
+            read_checked(resp, "Card create").await?;
 
         card_resp
             .data
@@ -560,17 +544,8 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Add reaction failed: {e}"))?;
 
-        let reaction_resp: ReactionResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("Reaction response parse failed: {e}"))?;
-
-        if reaction_resp.code != 0 {
-            return Err(format!(
-                "Reaction error: code={}, msg={}",
-                reaction_resp.code, reaction_resp.msg
-            ));
-        }
+        let reaction_resp: ReactionResponse =
+            read_checked(resp, "Add reaction").await?;
 
         reaction_resp
             .data
@@ -616,10 +591,14 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("User info request failed: {e}"))?;
 
-        let user_resp: UserInfoResponse = resp
-            .json()
-            .await
-            .map_err(|e| format!("User info parse failed: {e}"))?;
+        // Deliberately *not* `read_checked`: a missing or unreadable profile is
+        // a display detail, so a non-zero code degrades to `Ok(None)` rather
+        // than failing the message it decorates. The parse still reports the
+        // status, because "the body was not JSON" and "the user is unknown" are
+        // different answers and only one of them is benign.
+        let user_resp: UserInfoResponse = Envelope::read(resp, "User info")
+            .await?
+            .parse("User info")?;
 
         if user_resp.code != 0 {
             tracing::debug!(

@@ -15,6 +15,27 @@ Every request is appended to an observations file, one JSON object per line,
 so the fixture can assert on what the channel actually *sent* rather than on
 what its logs say it did.
 
+# Error injection
+
+`POST /__inject` queues canned failures for a path, so the fixture can drive
+the paths a happy-path mock structurally cannot reach: a throttle, a refusal, a
+gateway page where JSON was expected. Those were the last uncovered half of
+this channel — the note in `feishu_inbound/crypto.rs` says so in as many words
+("what this still does not cover, and cannot without an app credential: how the
+client behaves against a live 429 or a live permission error") — and they are
+exactly the paths where the client used to be wrong: a throttle that Lark
+reports on its legacy 400 shape never became `FeishuSendError::RateLimited`, so
+`ChannelRegistry` never retried it and the reply was dropped in silence.
+
+    POST /__inject {"path": "/open-apis/im/v1/messages", "times": 2,
+                    "status": 400, "headers": {"x-ogw-ratelimit-reset": "1"},
+                    "body": {"code": 99991400, "msg": "request trigger frequency limit"}}
+
+Directives are consumed one per matching request, oldest first; when the queue
+for a path empties the mock goes back to answering normally. That is what lets
+one assertion span "rejected twice, then accepted" — a fixed failure could only
+ever prove the client gives up.
+
 Usage:  mock_lark.py <port> <observations-path>
 """
 import json
@@ -27,10 +48,59 @@ OBS_PATH = sys.argv[2]
 
 _lock = threading.Lock()
 
+# path -> [directive, ...], consumed oldest-first.
+_injected = {}
 
-def record(method, path, body):
+
+def record(method, path, body, injected=None):
+    """Append one observation.
+
+    `injected` carries the status this request was *answered* with when a
+    directive fired. The assertions need it because the request itself looks
+    identical either way — without it "the client retried after a throttle" and
+    "the client sent three unrelated messages" are the same observation.
+    """
+    entry = {"method": method, "path": path, "body": body}
+    if injected is not None:
+        entry["injected_status"] = injected
     with _lock, open(OBS_PATH, "a") as fh:
-        fh.write(json.dumps({"method": method, "path": path, "body": body}) + "\n")
+        fh.write(json.dumps(entry) + "\n")
+
+
+def take_injection(path):
+    """Pop the next queued failure for `path`, if any."""
+    with _lock:
+        queue = _injected.get(path)
+        if not queue:
+            return None
+        directive = queue.pop(0)
+    return directive
+
+
+def queue_injection(directive):
+    times = int(directive.get("times", 1))
+    path = directive["path"]
+    with _lock:
+        _injected.setdefault(path, []).extend([directive] * times)
+
+
+def pending_injections():
+    with _lock:
+        return {k: len(v) for k, v in _injected.items() if v}
+
+
+def reset_injections():
+    """Drop every queued directive and report what was dropped.
+
+    Cases must not inherit each other's leftovers. A case that ends with
+    directives still queued has already failed; carrying them forward makes the
+    *next* case answer a throttle it never asked for, so one regression prints
+    as several unrelated ones and the first real cause is buried.
+    """
+    with _lock:
+        left = {k: len(v) for k, v in _injected.items() if v}
+        _injected.clear()
+    return left
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -39,13 +109,31 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_a):  # keep the fixture's stdout readable
         pass
 
-    def _reply(self, payload, status=200):
-        raw = json.dumps(payload).encode()
+    def _reply(self, payload, status=200, headers=None, raw_body=None):
+        raw = raw_body.encode() if raw_body is not None else json.dumps(payload).encode()
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        ctype = "application/json; charset=utf-8" if raw_body is None else "text/html"
+        self.send_header("Content-Type", ctype)
+        for k, v in (headers or {}).items():
+            self.send_header(k, str(v))
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+    def _serve_injection(self, path, method, body):
+        """Answer with a queued failure if one is due. Returns True if it fired."""
+        directive = take_injection(path)
+        if directive is None:
+            return False
+        status = int(directive.get("status", 500))
+        record(method, path, body, injected=status)
+        self._reply(
+            directive.get("body"),
+            status=status,
+            headers=directive.get("headers"),
+            raw_body=directive.get("raw_body"),
+        )
+        return True
 
     def _read_body(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -72,6 +160,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
+        if path == "/__pending":
+            raw = json.dumps(pending_injections()).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        if self._serve_injection(path, "GET", None):
+            return
         record("GET", path, None)
         if path == "/open-apis/bot/v3/info":
             # `BotInfo` only reads app_name and open_id; open_id is latched into
@@ -87,6 +185,24 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?", 1)[0]
         body = self._read_body()
+        if path == "/__reset":
+            raw = json.dumps(reset_injections()).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        if path == "/__inject":
+            # Directives are not recorded as observations: they are the
+            # fixture's own traffic, and counting them would make every
+            # "how many calls did the channel make" assertion off by one.
+            for directive in body if isinstance(body, list) else [body]:
+                queue_injection(directive)
+            self._reply({"queued": pending_injections()})
+            return
+        if self._serve_injection(path, "POST", body):
+            return
         record("POST", path, body)
         if path == "/open-apis/auth/v3/app_access_token/internal":
             # `TokenManager::refresh_token` reads code / app_access_token /

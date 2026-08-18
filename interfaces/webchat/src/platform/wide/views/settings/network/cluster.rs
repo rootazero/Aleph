@@ -22,6 +22,7 @@
 
 use crate::api::cluster::{ClusterApi, EnrollResult, Environment};
 use crate::context::DashboardState;
+use crate::i18n::{t, t_string, td_string, use_i18n, Locale};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -40,15 +41,24 @@ fn center_host() -> String {
 }
 
 /// Render Unix seconds as a coarse-grained "how long ago". Offline nodes only need magnitude, not precise timestamps.
-fn last_seen_label(last_seen_at: Option<i64>, now_unix: i64) -> String {
+///
+/// Takes a `Locale` rather than the context: this is a pure function with host
+/// unit tests, and `td_string!` resolves against a locale value, so the tests
+/// can assert both languages without standing up a reactive owner.
+///
+/// The magnitude is composed as `{n} {unit}` rather than interpolated into a
+/// sentence, which sidesteps plural forms entirely — `t_string!` cannot take a
+/// plural key, and "1 minutes ago" is the alternative. Both languages put the
+/// number first, so the composition is not smuggling in an English word order.
+fn last_seen_label(locale: Locale, last_seen_at: Option<i64>, now_unix: i64) -> String {
     let Some(ts) = last_seen_at else {
-        return "从未连入".to_string();
+        return td_string!(locale, cluster.never_connected).to_string();
     };
     match (now_unix - ts).max(0) {
-        s if s < 60 => "刚刚".to_string(),
-        s if s < 3600 => format!("{} 分钟前", s / 60),
-        s if s < 86_400 => format!("{} 小时前", s / 3600),
-        s => format!("{} 天前", s / 86_400),
+        s if s < 60 => td_string!(locale, cluster.just_now).to_string(),
+        s if s < 3600 => format!("{} {}", s / 60, td_string!(locale, cluster.minutes_ago)),
+        s if s < 86_400 => format!("{} {}", s / 3600, td_string!(locale, cluster.hours_ago)),
+        s => format!("{} {}", s / 86_400, td_string!(locale, cluster.days_ago)),
     }
 }
 
@@ -84,22 +94,44 @@ fn now_unix() -> i64 {
 /// row's `注销`. Two of those are writes, and both told the operator their
 /// WRITE had failed to read something. The verdict is shared; the sentence
 /// describing what was refused is not.
-fn fleet_error_label(err: &str, action: &str) -> String {
-    crate::components::admin_refusal::labeled(
-        err,
-        &format!("集群管理需要 operator 权限,当前连接的角色无法{action}。"),
-    )
+fn fleet_error_label(locale: Locale, err: &str, action: FleetAction) -> String {
+    crate::components::admin_refusal::labeled(err, &action.refusal(locale))
 }
 
-/// The three things this page asks the server to do. Named so the call sites
-/// read as verbs and a fourth one cannot quietly borrow a third one's sentence.
-const ACTION_READ_FLEET: &str = "读取节点拓扑";
-const ACTION_ENROLL: &str = "登记新节点";
-const ACTION_DEREGISTER: &str = "注销节点";
+/// The three things this page asks the server to do. An enum rather than three
+/// `&str` constants so the call sites still read as verbs *and* a fourth one
+/// cannot quietly borrow a third one's sentence — with a `match` that has to
+/// be exhaustive, adding a verb without giving it copy stops compiling.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FleetAction {
+    ReadFleet,
+    Enroll,
+    Deregister,
+}
+
+impl FleetAction {
+    /// The whole refusal sentence, not a verb spliced into a shared frame.
+    ///
+    /// One frame plus an interpolated verb would need `interpolate_display`
+    /// (a crate-wide leptos_i18n feature) for the sake of a single string, and
+    /// it assumes every language can build this sentence by substitution —
+    /// verb agreement does not survive that in general. Three complete
+    /// sentences also make the property this enum exists for structural rather
+    /// than argued: a fourth verb cannot borrow a third one's sentence,
+    /// because there is no shared sentence to borrow.
+    fn refusal(self, locale: Locale) -> String {
+        match self {
+            Self::ReadFleet => td_string!(locale, cluster.refused_read_fleet).to_string(),
+            Self::Enroll => td_string!(locale, cluster.refused_enroll).to_string(),
+            Self::Deregister => td_string!(locale, cluster.refused_deregister).to_string(),
+        }
+    }
+}
 
 #[component]
 pub fn ClusterSection() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let nodes = RwSignal::new(Vec::<Environment>::new());
     // Already-classified copy. The fleet READ and a row's deregister both land
     // here and one sentence cannot honestly describe both, so each write picks
@@ -120,13 +152,14 @@ pub fn ClusterSection() -> impl IntoView {
     let enrolled_name = RwSignal::new(String::new());
 
     let load = move || {
+        let locale = i18n.get_locale_untracked();
         spawn_local(async move {
             match ClusterApi::list_environments(&state).await {
                 Ok(list) => {
                     nodes.set(list);
                     error.set(None);
                 }
-                Err(e) => error.set(Some(fleet_error_label(&e, ACTION_READ_FLEET))),
+                Err(e) => error.set(Some(fleet_error_label(locale, &e, FleetAction::ReadFleet))),
             }
             loading.set(false);
         });
@@ -154,9 +187,10 @@ pub fn ClusterSection() -> impl IntoView {
     on_cleanup(move || state.unsubscribe_events(sub_id));
 
     let submit_enroll = move |_| {
+        let locale = i18n.get_locale_untracked();
         let name = enroll_name.get();
         if name.trim().is_empty() {
-            enroll_err.set(Some("请先填写节点名称".to_string()));
+            enroll_err.set(Some(td_string!(locale, cluster.name_required).to_string()));
             return;
         }
         enroll_err.set(None);
@@ -173,7 +207,7 @@ pub fn ClusterSection() -> impl IntoView {
                 // used to run twice — once here and once at the render below —
                 // which is exactly the shape that made the wrong sentence hard
                 // to see.
-                Err(e) => enroll_err.set(Some(fleet_error_label(&e, ACTION_ENROLL))),
+                Err(e) => enroll_err.set(Some(fleet_error_label(locale, &e, FleetAction::Enroll))),
             }
         });
     };
@@ -182,9 +216,9 @@ pub fn ClusterSection() -> impl IntoView {
         <section class="space-y-4">
             <div class="flex items-center justify-between">
                 <div>
-                    <h2 class="text-lg font-semibold text-text-primary mb-1">"Aleph 集群"</h2>
+                    <h2 class="text-lg font-semibold text-text-primary mb-1">{t!(i18n, cluster.title)}</h2>
                     <p class="text-sm text-text-secondary">
-                        "本服务作为 center 登记并管理的 node 执行臂。"
+                        {t!(i18n, cluster.subtitle)}
                     </p>
                 </div>
                 <button
@@ -202,7 +236,7 @@ pub fn ClusterSection() -> impl IntoView {
 
             <div class="bg-surface-raised rounded-lg border border-border p-6">
                 <Show when=move || loading.get()>
-                    <p class="text-text-secondary text-sm">"加载中…"</p>
+                    <p class="text-text-secondary text-sm">{t!(i18n, common.loading)}</p>
                 </Show>
                 // "Nothing here" only means an empty fleet when the read
                 // actually succeeded — with an error in hand it would be a
@@ -210,7 +244,7 @@ pub fn ClusterSection() -> impl IntoView {
                 <Show when=move || {
                     !loading.get() && nodes.get().is_empty() && error.get().is_none()
                 }>
-                    <p class="text-text-secondary text-sm">"暂无已登记节点。"</p>
+                    <p class="text-text-secondary text-sm">{t!(i18n, cluster.empty)}</p>
                 </Show>
                 <For
                     each=move || nodes.get()
@@ -218,7 +252,11 @@ pub fn ClusterSection() -> impl IntoView {
                     children=move |node: Environment| {
                         let online = node.is_online();
                         let tags = node.tags.clone();
-                        let last_seen = last_seen_label(node.last_seen_at, now_unix());
+                        let last_seen = last_seen_label(
+                            i18n.get_locale_untracked(),
+                            node.last_seen_at,
+                            now_unix(),
+                        );
                         let cmd_count = node.commands.len();
                         view! {
                             <div class="flex items-center justify-between py-3 border-b border-border last:border-0">
@@ -270,7 +308,11 @@ pub fn ClusterSection() -> impl IntoView {
                                         fallback={
                                             let seen = last_seen.clone();
                                             move || {
-                                                view! { <span title="最近一次在线">{seen.clone()}</span> }
+                                                view! {
+                                                    <span title=move || {
+                                                        t_string!(i18n, cluster.last_seen_title).to_string()
+                                                    }>{seen.clone()}</span>
+                                                }
                                             }
                                         }
                                     >
@@ -282,16 +324,24 @@ pub fn ClusterSection() -> impl IntoView {
                                             let id = node.id.clone();
                                             move || removing.get().as_deref() == Some(id.as_str())
                                         }
-                                        title="注销该节点(驱逐会话并吊销设备记录;它无法再连回来)"
+                                        title=move || t_string!(i18n, cluster.deregister_title).to_string()
                                         on:click={
                                             let node_id = node.id;
                                             move |_| {
+                                                let locale = i18n.get_locale_untracked();
                                                 let node_id = node_id.clone();
                                                 removing.set(Some(node_id.clone()));
                                                 spawn_local(async move {
                                                     match ClusterApi::deregister_node(&state, node_id).await {
                                                         Ok(()) => error.set(None),
-                                                        Err(e) => error.set(Some(fleet_error_label(&e, ACTION_DEREGISTER))),
+                                                        Err(e) => {
+                                                            error
+                                                                .set(
+                                                                    Some(
+                                                                        fleet_error_label(locale, &e, FleetAction::Deregister),
+                                                                    ),
+                                                                )
+                                                        }
                                                     }
                                                     removing.set(None);
                                                     load();
@@ -299,7 +349,7 @@ pub fn ClusterSection() -> impl IntoView {
                                             }
                                         }
                                     >
-                                        "注销"
+                                        {t!(i18n, cluster.deregister)}
                                     </button>
                                 </div>
                             </div>
@@ -318,7 +368,7 @@ pub fn ClusterSection() -> impl IntoView {
             <Show when=move || show_enroll.get()>
                 <div class="aleph-scrim fixed inset-0 bg-black/40 flex items-center justify-center z-50">
                     <div class="glass bg-surface-overlay/85 rounded-lg border border-border p-6 max-w-lg w-full space-y-4">
-                        <h3 class="text-text-primary font-semibold">"登记新节点"</h3>
+                        <h3 class="text-text-primary font-semibold">{t!(i18n, cluster.enroll_heading)}</h3>
                         <Show
                             when=move || enroll_result.get().is_none()
                             fallback=move || {
@@ -327,7 +377,7 @@ pub fn ClusterSection() -> impl IntoView {
                                 view! {
                                     <div class="space-y-2">
                                         <p class="text-sm text-text-secondary">
-                                            "在目标机器上运行这条命令,节点会自己接入(无需 token):"
+                                            {t!(i18n, cluster.run_command)}
                                         </p>
                                         <textarea
                                             readonly=true
@@ -336,7 +386,7 @@ pub fn ClusterSection() -> impl IntoView {
                                             prop:value=cmd
                                         ></textarea>
                                         <p class="text-xs text-text-tertiary">
-                                            "追加 --tag gpu --tag region=us 可给节点打标签(node_invoke_many 按标签扇出)。"
+                                            {t!(i18n, cluster.tag_hint)}
                                         </p>
                                         <p class="text-xs text-text-tertiary">"node_id: " {r.node_id}</p>
                                         // Enroll is idempotent: re-enrolling a name returns its
@@ -347,7 +397,7 @@ pub fn ClusterSection() -> impl IntoView {
                                             move || reused
                                         }>
                                             <p class="text-xs text-text-tertiary">
-                                                "这个名字此前已登记过,沿用原有 node_id(未新建节点)。"
+                                                {t!(i18n, cluster.name_reused)}
                                             </p>
                                         </Show>
                                     </div>
@@ -356,7 +406,7 @@ pub fn ClusterSection() -> impl IntoView {
                         >
                             <input
                                 type="text"
-                                placeholder="node 名称(须与 --name 一致)"
+                                placeholder=move || t_string!(i18n, cluster.name_placeholder).to_string()
                                 class="w-full px-3 py-2 bg-surface border border-border rounded-lg text-text-primary"
                                 prop:value=move || enroll_name.get()
                                 on:input=move |ev| enroll_name.set(event_target_value(&ev))
@@ -377,14 +427,14 @@ pub fn ClusterSection() -> impl IntoView {
                                     load();
                                 }
                             >
-                                "关闭"
+                                {t!(i18n, cluster.close)}
                             </button>
                             <Show when=move || enroll_result.get().is_none()>
                                 <button
                                     class="px-4 py-2 bg-primary text-white rounded-lg"
                                     on:click=submit_enroll
                                 >
-                                    "登记"
+                                    {t!(i18n, cluster.enroll)}
                                 </button>
                             </Show>
                         </div>
@@ -397,10 +447,8 @@ pub fn ClusterSection() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        fleet_error_label, join_command, last_seen_label, ACTION_DEREGISTER, ACTION_ENROLL,
-        ACTION_READ_FLEET,
-    };
+    use super::{fleet_error_label, join_command, last_seen_label, FleetAction};
+    use crate::i18n::Locale;
     // The production code no longer names this constant — recognition moved to
     // `components::admin_refusal`. The tests still feed the SERVER's own words
     // in, which is what keeps them able to fail on a drift.
@@ -413,7 +461,7 @@ mod tests {
     /// the refusal falls through to the raw string and `assert_ne!` fires.
     #[test]
     fn a_refused_fleet_read_renders_as_a_role_explanation() {
-        let label = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_READ_FLEET);
+        let label = fleet_error_label(Locale::en, ADMIN_REQUIRED_MESSAGE, FleetAction::ReadFleet);
         assert!(
             label.contains("operator"),
             "the refusal must be explained, not echoed as a bare protocol \
@@ -431,19 +479,32 @@ mod tests {
     /// topology" — a sentence about a read, printed under a write.
     #[test]
     fn each_refused_action_is_described_as_the_action_it_was() {
-        let read = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_READ_FLEET);
-        let enroll = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_ENROLL);
-        let deregister = fleet_error_label(ADMIN_REQUIRED_MESSAGE, ACTION_DEREGISTER);
+        // Both locales: the verb is now a locale lookup, so a key that resolves
+        // in one language and falls back in the other would put the read's
+        // sentence under a write again — in exactly one of the two languages.
+        for locale in [Locale::en, Locale::zh] {
+            let read = fleet_error_label(locale, ADMIN_REQUIRED_MESSAGE, FleetAction::ReadFleet);
+            let enroll = fleet_error_label(locale, ADMIN_REQUIRED_MESSAGE, FleetAction::Enroll);
+            let deregister =
+                fleet_error_label(locale, ADMIN_REQUIRED_MESSAGE, FleetAction::Deregister);
 
-        assert!(enroll.contains(ACTION_ENROLL), "{enroll}");
-        assert!(deregister.contains(ACTION_DEREGISTER), "{deregister}");
-        for (label, name) in [(&enroll, "enroll"), (&deregister, "deregister")] {
-            assert!(
-                !label.contains(ACTION_READ_FLEET),
-                "a refused {name} must not be described as a failed read: {label}"
+            for (label, name) in [(&enroll, "enroll"), (&deregister, "deregister")] {
+                assert_ne!(label, &read, "{name} must not reuse the read's sentence");
+            }
+            assert_ne!(
+                enroll, deregister,
+                "the two writes must not share a sentence"
             );
-            assert_ne!(label, &read, "{name} must not reuse the read's sentence");
         }
+
+        // The English sentences must each name their own verb. Asserting on the
+        // words is the point: this is the locale an operator sees when the
+        // Chinese original was the only copy that existed.
+        let en = |a: FleetAction| fleet_error_label(Locale::en, ADMIN_REQUIRED_MESSAGE, a);
+        assert!(en(FleetAction::ReadFleet).contains("read the node topology"));
+        assert!(en(FleetAction::Enroll).contains("enroll"));
+        assert!(en(FleetAction::Deregister).contains("deregister"));
+        {}
     }
 
     #[test]
@@ -459,9 +520,13 @@ mod tests {
             "Internal error: failed to read enrolled node devices",
             "请先填写节点名称",
         ] {
-            for action in [ACTION_READ_FLEET, ACTION_ENROLL, ACTION_DEREGISTER] {
+            for action in [
+                FleetAction::ReadFleet,
+                FleetAction::Enroll,
+                FleetAction::Deregister,
+            ] {
                 assert_eq!(
-                    fleet_error_label(raw, action),
+                    fleet_error_label(Locale::en, raw, action),
                     raw,
                     "{raw} must pass through"
                 );
@@ -499,18 +564,51 @@ mod tests {
 
     #[test]
     fn never_connected_node_says_so() {
-        assert_eq!(last_seen_label(None, 1_700_000_000), "从未连入");
+        assert_eq!(last_seen_label(Locale::zh, None, 1_700_000_000), "从未连入");
+        assert_eq!(
+            last_seen_label(Locale::en, None, 1_700_000_000),
+            "Never connected"
+        );
     }
 
     #[test]
     fn last_seen_buckets_by_magnitude() {
         let now = 1_700_000_000;
-        assert_eq!(last_seen_label(Some(now - 30), now), "刚刚");
-        assert_eq!(last_seen_label(Some(now - 600), now), "10 分钟前");
-        assert_eq!(last_seen_label(Some(now - 7200), now), "2 小时前");
-        assert_eq!(last_seen_label(Some(now - 172_800), now), "2 天前");
+        assert_eq!(last_seen_label(Locale::zh, Some(now - 30), now), "刚刚");
+        assert_eq!(
+            last_seen_label(Locale::zh, Some(now - 600), now),
+            "10 分钟前"
+        );
+        assert_eq!(
+            last_seen_label(Locale::zh, Some(now - 7200), now),
+            "2 小时前"
+        );
+        assert_eq!(
+            last_seen_label(Locale::zh, Some(now - 172_800), now),
+            "2 天前"
+        );
         // A clock skew that puts last_seen in the future must not underflow.
-        assert_eq!(last_seen_label(Some(now + 500), now), "刚刚");
+        assert_eq!(last_seen_label(Locale::zh, Some(now + 500), now), "刚刚");
+    }
+
+    /// The English bucket labels are the reason this page was localised at all:
+    /// an operator who picked English used to read the fleet's ages in Chinese.
+    #[test]
+    fn the_buckets_speak_english_too() {
+        let now = 1_700_000_000;
+        assert_eq!(last_seen_label(Locale::en, Some(now - 30), now), "Just now");
+        assert_eq!(
+            last_seen_label(Locale::en, Some(now - 600), now),
+            "10 min ago"
+        );
+        assert_eq!(
+            last_seen_label(Locale::en, Some(now - 7200), now),
+            "2 h ago"
+        );
+        assert_eq!(
+            last_seen_label(Locale::en, Some(now - 172_800), now),
+            "2 d ago"
+        );
     }
 
     #[test]

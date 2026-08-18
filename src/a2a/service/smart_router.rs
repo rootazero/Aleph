@@ -207,8 +207,8 @@ mod tests {
     // --- Test helpers ---
 
     fn make_agent(name: &str, skills: Vec<AgentSkill>, health: AgentHealth) -> RegisteredAgent {
-        RegisteredAgent {
-            card: AgentCard {
+        RegisteredAgent::new(
+            AgentCard {
                 id: format!("{}-id", name.to_lowercase().replace(' ', "-")),
                 name: name.to_string(),
                 version: "1.0.0".to_string(),
@@ -222,12 +222,12 @@ mod tests {
                 default_input_modes: vec![],
                 default_output_modes: vec![],
             },
-            trust_level: TrustLevel::Trusted,
-            base_url: format!("http://localhost:8080/{}", name.to_lowercase()),
-            last_seen: Utc::now(),
+            TrustLevel::Trusted,
+            format!("http://localhost:8080/{}", name.to_lowercase()),
+            Utc::now(),
             health,
-            auth_token: None,
-        }
+            None,
+        )
     }
 
     fn make_skill(id: &str, name: &str, aliases: Option<Vec<String>>) -> AgentSkill {

@@ -44,7 +44,7 @@ use crate::api::agents::AgentsApi;
 use crate::api::projects::{ProjectInfo, ProjectsApi};
 use crate::components::chat_sidebar::hydrate_and_follow;
 use crate::context::DashboardState;
-use crate::i18n::use_i18n;
+use crate::i18n::{t, t_string, use_i18n, I18nCtx};
 use crate::platform::wide::views::chat::composer::InputArea;
 use crate::platform::wide::views::chat::messages::MessageList;
 use crate::platform::wide::views::chat::state::ChatState;
@@ -62,6 +62,22 @@ enum RoomSubTab {
     Kanban,
     Workspace,
     Memory,
+}
+
+impl RoomSubTab {
+    /// The tab strip's label. Lives on the variant rather than at the call
+    /// site so a tab cannot be rendered under one name here and another name
+    /// anywhere else — and so adding a sub-tab has to answer "what is it
+    /// called" in both languages before it compiles.
+    fn label(self, i18n: I18nCtx) -> String {
+        match self {
+            Self::Chat => t_string!(i18n, project_room.tab_chat).to_string(),
+            Self::Settings => t_string!(i18n, project_room.tab_settings).to_string(),
+            Self::Kanban => t_string!(i18n, project_room.tab_kanban).to_string(),
+            Self::Workspace => t_string!(i18n, project_room.tab_workspace).to_string(),
+            Self::Memory => t_string!(i18n, project_room.tab_memory).to_string(),
+        }
+    }
 }
 
 /// Shared signals for the Projects mode — mirrors `views::teams::TeamsTabState`.
@@ -108,9 +124,10 @@ pub fn ProjectsView() -> impl IntoView {
 
 #[component]
 fn EmptyState() -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="flex-1 flex items-center justify-center text-text-tertiary text-sm">
-            "从左侧选择一个项目，或创建一个新项目"
+            {t!(i18n, project_room.empty_state)}
         </div>
     }
 }
@@ -189,6 +206,7 @@ fn ProjectRoomPage(project_id: String) -> impl IntoView {
 
 #[component]
 fn RoomHeader(project: ProjectInfo, sub_tab: RwSignal<RoomSubTab>) -> impl IntoView {
+    let i18n = use_i18n();
     // Owner/member badge — a lighter-weight echo of the settings tab's own
     // "所有者" row, so the viewer's standing in the room is visible without
     // switching tabs. `use_context` (not `expect_context`): harmless to omit
@@ -205,26 +223,29 @@ fn RoomHeader(project: ProjectInfo, sub_tab: RwSignal<RoomSubTab>) -> impl IntoV
             <div class="flex items-center gap-2">
                 <h2 class="text-lg font-semibold text-text-primary truncate">{project.name.clone()}</h2>
                 <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-sunken text-text-tertiary">
-                    {move || if is_owner() { "所有者" } else { "成员" }}
+                    {move || {
+                        if is_owner() {
+                            t_string!(i18n, project_room.owner).to_string()
+                        } else {
+                            t_string!(i18n, project_room.member).to_string()
+                        }
+                    }}
                 </span>
             </div>
             <nav class="mt-3 flex items-center gap-1 -mb-px">
-                <RoomTabButton label="群聊" current=sub_tab target=RoomSubTab::Chat />
-                <RoomTabButton label="设置" current=sub_tab target=RoomSubTab::Settings />
-                <RoomTabButton label="看板" current=sub_tab target=RoomSubTab::Kanban />
-                <RoomTabButton label="工作区浏览" current=sub_tab target=RoomSubTab::Workspace />
-                <RoomTabButton label="记忆浏览" current=sub_tab target=RoomSubTab::Memory />
+                <RoomTabButton current=sub_tab target=RoomSubTab::Chat />
+                <RoomTabButton current=sub_tab target=RoomSubTab::Settings />
+                <RoomTabButton current=sub_tab target=RoomSubTab::Kanban />
+                <RoomTabButton current=sub_tab target=RoomSubTab::Workspace />
+                <RoomTabButton current=sub_tab target=RoomSubTab::Memory />
             </nav>
         </div>
     }
 }
 
 #[component]
-fn RoomTabButton(
-    label: &'static str,
-    current: RwSignal<RoomSubTab>,
-    target: RoomSubTab,
-) -> impl IntoView {
+fn RoomTabButton(current: RwSignal<RoomSubTab>, target: RoomSubTab) -> impl IntoView {
+    let i18n = use_i18n();
     let is_active = move || current.get() == target;
     view! {
         <button
@@ -238,16 +259,17 @@ fn RoomTabButton(
                 }
             }
         >
-            {label}
+            {move || target.label(i18n)}
         </button>
     }
 }
 
 #[component]
 fn PlaceholderTab() -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="px-6 py-10 text-center text-sm text-text-tertiary">
-            "即将推出"
+            {t!(i18n, project_room.coming_soon)}
         </div>
     }
 }

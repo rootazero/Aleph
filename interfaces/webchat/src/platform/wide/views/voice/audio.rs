@@ -32,6 +32,7 @@ use wasm_bindgen_futures::JsFuture;
 
 use super::wav;
 use crate::context::DashboardState;
+use crate::i18n::{t_string, I18nCtx};
 
 /// Pre-roll lead-in retained ahead of every segment so the first syllable is
 /// never clipped.
@@ -205,25 +206,18 @@ impl MicError {
 
     /// Human-facing caption for the immersive view. `native` selects the right
     /// remediation for a denial (OS TCC vs. browser per-site permission).
-    pub(crate) fn caption(&self, native: bool) -> String {
+    pub(crate) fn caption(&self, native: bool, i18n: I18nCtx) -> String {
         match self {
-            Self::Denied if native => "需要麦克风权限：系统设置 → 隐私与安全 → 麦克风".to_string(),
+            Self::Denied if native => t_string!(i18n, voice.mic_denied_native).to_string(),
             // Browser: the block is the site permission, not the OS — sending the
             // user to macOS Settings (where the browser is already allowed) is the
             // dead end they reported.
-            Self::Denied => {
-                "麦克风被浏览器拒绝：点击地址栏的权限图标，把本站麦克风改为「允许」，然后刷新页面"
-                    .to_string()
-            }
-            Self::NotFound => "未检测到麦克风设备".to_string(),
-            Self::NotReadable => {
-                "麦克风被占用或无法读取，关闭其他占用麦克风的程序后重试".to_string()
-            }
-            Self::Unsupported => {
-                "当前环境不支持麦克风（需安全上下文：https 或 localhost）".to_string()
-            }
-            Self::AudioContext => "音频上下文启动失败".to_string(),
-            Self::Other(s) => format!("麦克风打开失败：{s}"),
+            Self::Denied => t_string!(i18n, voice.mic_denied_browser).to_string(),
+            Self::NotFound => t_string!(i18n, voice.mic_not_found).to_string(),
+            Self::NotReadable => t_string!(i18n, voice.mic_not_readable).to_string(),
+            Self::Unsupported => t_string!(i18n, voice.mic_unsupported).to_string(),
+            Self::AudioContext => t_string!(i18n, voice.mic_audio_context).to_string(),
+            Self::Other(s) => t_string!(i18n, voice.mic_other, error = s.clone()).to_string(),
         }
     }
 

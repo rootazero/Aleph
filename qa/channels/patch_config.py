@@ -79,6 +79,12 @@ def set_key(text, section, key, value):
 for section, key, value in [
     ("gateway", "host", '"127.0.0.1"'),
     ("gateway", "port", args.gateway_port),
+    # Pinned rather than inherited: `drive_lark_errors.py` asserts "throttled
+    # twice, then accepted", which is only the expected shape while the budget
+    # is >= 2. Riding on `SendRetryPolicy::default()` would let a change there
+    # turn a real regression into a fixture that quietly asserts something else.
+    ("gateway.send_retry", "max_rate_limit_retries", "2"),
+    ("gateway.send_retry", "max_retry_after_secs", "30"),
     ("cron", "enabled", "false"),
     ("heartbeat", "enabled", "false"),
     ("mcp", "enabled", "false"),

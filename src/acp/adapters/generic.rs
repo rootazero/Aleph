@@ -220,6 +220,7 @@ mod tests {
             vec!["exec".to_string()],
             vec!["--acp".to_string()],
             OutputFormat::PlainText,
+            crate::config::types::acp::TrustLevel::Disabled,
         );
 
         let config = harness.build_config(Some("/tmp"));
@@ -238,6 +239,7 @@ mod tests {
             vec!["exec".to_string()],
             vec!["--acp".to_string()],
             OutputFormat::PlainText,
+            crate::config::types::acp::TrustLevel::Disabled,
         );
 
         let config = harness.build_config(None);
@@ -274,6 +276,7 @@ mod tests {
             vec!["exec".to_string()],
             vec!["--acp".to_string()],
             OutputFormat::PlainText,
+            crate::config::types::acp::TrustLevel::Disabled,
         );
 
         let config = harness.build_config(None);

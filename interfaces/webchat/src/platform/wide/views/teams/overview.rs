@@ -126,7 +126,7 @@ pub fn OverviewView() -> impl IntoView {
                 web_sys::console::error_1(&format!("Disband failed: {e}").into());
                 error_msg.set(Some(
                     crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                        format!("解散失败: {e}")
+                        t_string!(i18n, teams.disband_failed, error = e).to_string()
                     }),
                 ));
                 return;
@@ -160,7 +160,7 @@ pub fn OverviewView() -> impl IntoView {
                 web_sys::console::error_1(&format!("Delete failed: {e}").into());
                 error_msg.set(Some(
                     crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                        format!("删除失败: {e}")
+                        t_string!(i18n, teams.delete_failed, error = e).to_string()
                     }),
                 ));
                 return;

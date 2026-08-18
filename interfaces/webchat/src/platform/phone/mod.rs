@@ -22,35 +22,139 @@ pub mod settings;
 pub mod shell;
 pub mod teams;
 
+/// The iOS switch renders its "on" state from an attribute, so the markup has
+/// to actually set one.
+///
+/// `styles/ios.css` styles the on state as `.ios-switch[aria-pressed="true"]`
+/// — both the track colour and the knob's `translateX`. There is no other
+/// signal: without that attribute the control is not "unstyled", it is
+/// **indistinguishable from off**.
+///
+/// All three call sites shipped with `attr:aria-pressed=…`. That prefix is for
+/// forwarding attributes onto a *component*'s root element; on a plain
+/// `<button>` the macro accepts it and emits nothing, so the DOM carried no
+/// `aria-pressed` at all — confirmed on a running Panel, where
+/// `document.querySelectorAll('.ios-switch')[0].getAttribute('aria-pressed')`
+/// answered `null` for a provider whose `enabled = true` sat on disk two
+/// panes away.
+///
+/// The cost was not cosmetic. Every provider, every embedding entry and the
+/// model-route escalation toggle read as **off** on the phone regardless of
+/// their real state, and the click handler flips `!enabled` — so the first tap
+/// on a switch that looked off *disabled* an enabled provider. The three
+/// working spellings elsewhere in this crate (`components/ui/swatch_button.rs`,
+/// `components/theme_toggle.rs`, `views/settings/appearance.rs`) all write the
+/// bare `aria-pressed=`; these three were the only ones that did not.
+///
+/// The guard is source-level because the runtime cannot tell the two apart:
+/// an element that never sets the attribute and an element whose state is
+/// genuinely `false` produce byte-identical DOM.
+#[cfg(test)]
+mod switch_state {
+    use crate::disposed_reads::{rust_sources, src_dir};
+
+    /// The selector the stylesheet actually keys the on-state off.
+    ///
+    /// Asserted separately below: if someone restyles the switch to use a
+    /// class, the rule under it stops describing anything and would otherwise
+    /// keep passing forever.
+    const ON_STATE_SELECTOR: &str = r#".ios-switch[aria-pressed="true"]"#;
+
+    /// Lines of `src` that open an `.ios-switch`, paired with the rest of that
+    /// element's opening tag.
+    ///
+    /// The window ends at the tag's own `>`, not after a fixed number of
+    /// lines: a count would run into whatever the next element declares and
+    /// happily accept its attributes as this one's. A tag that never closes is
+    /// reported rather than skipped.
+    ///
+    /// Production lines only, via [`crate::i18n_census::production_lines`] —
+    /// the same cut the two i18n guards use. The first draft scanned raw text
+    /// and its first run reported *this module's own fixture literal*, which is
+    /// the failure mode that cut exists to prevent. Sharing it rather than
+    /// re-deriving it also means a CRLF checkout is handled in one place.
+    fn switch_tags(src: &str) -> Vec<(usize, String, bool)> {
+        let lines = crate::i18n_census::production_lines(src);
+        let mut out = Vec::new();
+        for (idx, (number, text)) in lines.iter().enumerate() {
+            if !text.contains(r#"class="ios-switch""#) {
+                continue;
+            }
+            let mut body = String::new();
+            let mut closed = false;
+            for (_, l) in &lines[idx..] {
+                body.push_str(l);
+                body.push('\n');
+                if l.trim() == ">" || l.trim_end().ends_with("/>") {
+                    closed = true;
+                    break;
+                }
+            }
+            out.push((*number, body, closed));
+        }
+        out
+    }
+
+    #[test]
+    fn the_stylesheet_still_keys_the_on_state_off_aria_pressed() {
+        let css = std::fs::read_to_string(
+            src_dir().parent().expect("src has a parent").join("styles/ios.css"),
+        )
+        .expect("styles/ios.css is readable");
+        assert!(
+            css.contains(ON_STATE_SELECTOR),
+            "`{ON_STATE_SELECTOR}` is gone from styles/ios.css, so the rule below \
+             no longer describes how this control shows its state. Re-derive it \
+             from whatever replaced it rather than deleting it.",
+        );
+    }
+
+    /// Falsified by restoring the `attr:` prefix on any one call site: this
+    /// reddens naming that file and line.
+    #[test]
+    fn every_ios_switch_really_sets_aria_pressed() {
+        let mut offenders = Vec::new();
+        let mut seen = 0usize;
+        for path in rust_sources(&src_dir()) {
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for (line, tag, closed) in switch_tags(&src) {
+                seen += 1;
+                let rel = path
+                    .strip_prefix(src_dir())
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                if !closed {
+                    offenders.push(format!("{rel}:{line} (opening tag never closes)"));
+                } else if tag.contains("attr:aria-pressed") {
+                    offenders.push(format!("{rel}:{line} (attr: prefix emits nothing here)"));
+                } else if !tag.contains("aria-pressed") {
+                    offenders.push(format!("{rel}:{line} (no aria-pressed at all)"));
+                }
+            }
+        }
+        assert!(
+            seen >= 3,
+            "found {seen} `.ios-switch` call sites; the scan is broken, not the \
+             crate — a guard that matches nothing passes for the wrong reason",
+        );
+        assert!(
+            offenders.is_empty(),
+            "these `.ios-switch` controls cannot render their on state: {}.\n\
+             `{ON_STATE_SELECTOR}` is the only thing that turns the track and \
+             knob on, so a switch without the attribute is not unstyled — it \
+             looks exactly like off, for every value.",
+            offenders.join(", "),
+        );
+    }
+}
+
 #[cfg(test)]
 mod i18n_census {
     use crate::disposed_reads::{rust_sources, src_dir};
-
-    /// A character that only appears in this codebase inside Chinese copy.
-    ///
-    /// Han ideographs plus the two punctuation blocks that travel with them
-    /// (`。，、（）` and the fullwidth forms). `…` is deliberately absent — it is
-    /// used in English strings here too, so flagging it would train the next
-    /// author to weaken the rule rather than obey it.
-    fn is_chinese(c: char) -> bool {
-        matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3000}'..='\u{303F}' | '\u{FF01}'..='\u{FF60}')
-    }
-
-    /// Production half of a source file: everything before its test module,
-    /// minus whole-line comments.
-    ///
-    /// `\r` is stripped first. A `"\n#[cfg(test)]"` split matches nothing on a
-    /// CRLF checkout, which silently turns "production prefix" into "the whole
-    /// file" — the scanner then reads its own fixtures and reports them.
-    fn production_lines(src: &str) -> Vec<(usize, String)> {
-        let src = src.replace('\r', "");
-        let head = src.split("#[cfg(test)]").next().unwrap_or(&src).to_string();
-        head.lines()
-            .enumerate()
-            .map(|(i, l)| (i + 1, l.to_string()))
-            .filter(|(_, l)| !l.trim_start().starts_with("//"))
-            .collect()
-    }
+    use crate::i18n_census::offending_lines;
 
     /// Every crate module a phone module names in a `use crate::…` line,
     /// resolved one hop at module granularity.
@@ -133,9 +237,12 @@ mod i18n_census {
     /// `t!` / `t_string!`, which `leptos_i18n` checks at compile time — a
     /// missing key is a build error, not a silent fallback.
     ///
-    /// ⚠️ Still **not** a crate-wide rule: 224 such literals remain across
-    /// `platform/wide/` and `components/` as of 2026-08-18. They are a
-    /// separate round, not an exemption held open here.
+    /// ⚠️ Still **not** a crate-wide rule — but the complement is no longer
+    /// unmeasured. The copy outside this walk's reach (126 lines across
+    /// `platform/wide/` and `components/` as of 2026-08-18) is held by
+    /// [`crate::i18n_census`]'s ratchet, which shares this guard's detector so
+    /// the two cannot drift apart on what "Chinese copy" means. Zero here,
+    /// only-shrinking there.
     #[test]
     fn no_module_a_phone_screen_reaches_hardcodes_chinese_copy() {
         let root = src_dir().join("platform").join("phone");
@@ -163,14 +270,9 @@ mod i18n_census {
             let Ok(src) = std::fs::read_to_string(path) else {
                 continue;
             };
-            for (line, text) in production_lines(&src) {
-                // A `"` narrows this to literals; Chinese in a trailing comment
-                // is a different rule (CLAUDE.md: comments are English) and not
-                // this guard's business.
-                if text.contains('"') && text.chars().any(is_chinese) {
-                    let rel = path.strip_prefix(src_dir()).unwrap_or(path);
-                    offenders.push(format!("{}:{line}", rel.display()));
-                }
+            for line in offending_lines(&src) {
+                let rel = path.strip_prefix(src_dir()).unwrap_or(path);
+                offenders.push(format!("{}:{line}", rel.display()));
             }
         }
         assert!(
@@ -178,38 +280,6 @@ mod i18n_census {
             "hard-coded Chinese copy on a phone screen's reachable path — move it \
              to locales/{{zh,en}}.json and read it with t!/t_string!:\n  {}",
             offenders.join("\n  "),
-        );
-    }
-
-    /// The detector itself, on input the tree no longer contains.
-    ///
-    /// Without this, `no_module_a_phone_screen_reaches_hardcodes_chinese_copy` goes green the
-    /// day `is_chinese` or `production_lines` stops matching anything, and a
-    /// scanner that sees nothing is indistinguishable from a clean tree.
-    #[test]
-    fn the_detector_still_recognises_what_it_removed() {
-        let sample = "let a = \"保存中…\";\n// 这行是注释\nlet b = \"Save\";\n";
-        let hits: Vec<usize> = production_lines(sample)
-            .into_iter()
-            .filter(|(_, t)| t.contains('"') && t.chars().any(is_chinese))
-            .map(|(n, _)| n)
-            .collect();
-        assert_eq!(
-            hits,
-            vec![1],
-            "detector missed the literal or ate the comment"
-        );
-    }
-
-    /// CRLF does not turn the production prefix into the whole file.
-    #[test]
-    fn the_test_module_is_cut_off_on_a_crlf_checkout() {
-        let sample = "let a = \"ok\";\r\n#[cfg(test)]\r\nmod t { const X: &str = \"保存\"; }\r\n";
-        assert!(
-            !production_lines(sample)
-                .iter()
-                .any(|(_, t)| t.chars().any(is_chinese)),
-            "the #[cfg(test)] cut missed on CRLF, so the scanner reads test fixtures",
         );
     }
 }

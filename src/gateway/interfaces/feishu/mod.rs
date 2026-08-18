@@ -2,6 +2,7 @@ pub(crate) mod api;
 pub(crate) mod api_handle;
 pub(crate) mod auth;
 pub(crate) mod config;
+pub(crate) mod envelope;
 pub(crate) mod message_ops;
 pub(crate) mod types;
 

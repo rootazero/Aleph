@@ -14,6 +14,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
 
+use crate::i18n::t;
 use crate::api::moa::{MoaApi, MoaConfigDto, MoaPresetDto, MoaSlotDto};
 use crate::api::{CatalogEntry, CatalogView, ModelOverride, ProvidersApi};
 use crate::context::DashboardState;
@@ -37,7 +38,7 @@ pub fn MoaView() -> impl IntoView {
     // Only consumer so far is the refused-load copy below; this page's own
     // strings are still hard-coded English.
     let i18n = crate::i18n::use_i18n();
-    // B1 "Use in chat": arm the preset on the chat session's model selector,
+    // B1 {t!(i18n, settings.moa.use_in_chat)}: arm the preset on the chat session's model selector,
     // then navigate to chat. `ChatState` is provided at app root (Copy);
     // `navigate` is stored so per-card callbacks can invoke it.
     let chat = expect_context::<ChatState>();
@@ -157,7 +158,7 @@ pub fn MoaView() -> impl IntoView {
                 <div>
                     <h1 class="text-2xl font-semibold text-text-primary">"MoA"</h1>
                     <p class="mt-1 text-sm text-text-secondary">
-                        "Mixture-of-Agents: multiple advisor models consult before one aggregator model responds."
+                        {t!(i18n, settings.moa.page_desc)}
                     </p>
                 </div>
                 <label class="flex items-center gap-2 text-sm text-text-secondary shrink-0">
@@ -167,7 +168,7 @@ pub fn MoaView() -> impl IntoView {
                         on:change=toggle_save_traces
                         class="w-4 h-4"
                     />
-                    "Save advisor traces"
+                    {t!(i18n, settings.moa.save_traces)}
                 </label>
             </div>
 
@@ -205,7 +206,7 @@ pub fn MoaView() -> impl IntoView {
                 } else if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12 text-text-tertiary">
-                            "Loading…"
+                            {t!(i18n, settings.moa.loading)}
                         </div>
                     }.into_any()
                 } else {
@@ -219,7 +220,7 @@ pub fn MoaView() -> impl IntoView {
                             {if names.is_empty() {
                                 view! {
                                     <div class="p-6 bg-surface-raised border border-border rounded-xl text-center text-text-secondary text-sm">
-                                        "No MoA presets yet. Create one to enable multi-model consultation."
+                                        {t!(i18n, settings.moa.no_presets)}
                                     </div>
                                 }.into_any()
                             } else {
@@ -263,7 +264,7 @@ pub fn MoaView() -> impl IntoView {
                             {if !can_create {
                                 view! {
                                     <div class="p-3 bg-warning-subtle border border-warning/20 rounded-lg text-warning text-xs">
-                                        "Configure at least 2 models across your providers (Settings → Providers) before creating a MoA preset."
+                                        {t!(i18n, settings.moa.need_two_models)}
                                     </div>
                                 }.into_any()
                             } else {
@@ -275,7 +276,7 @@ pub fn MoaView() -> impl IntoView {
                                 prop:disabled=move || !can_create
                                 class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:text-text-secondary transition-colors"
                             >
-                                "+ New preset"
+                                {t!(i18n, settings.moa.new_preset)}
                             </button>
                         </div>
                     }.into_any()
@@ -296,6 +297,7 @@ fn PresetCard(
     on_delete: impl Fn() + 'static + Send,
     on_activate: impl Fn() + 'static + Send,
 ) -> impl IntoView {
+    let i18n = crate::i18n::use_i18n();
     let slot_chip = |slot: &MoaSlotDto| format!("{} / {}", slot.provider, slot.model);
     let aggregator_chip = slot_chip(&preset.aggregator);
     let enabled = preset.enabled;
@@ -330,7 +332,7 @@ fn PresetCard(
                     {if is_default {
                         view! {
                             <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-primary/15 text-primary shrink-0">
-                                "Default"
+                                {t!(i18n, settings.moa.badge_default)}
                             </span>
                         }.into_any()
                     } else {
@@ -339,7 +341,7 @@ fn PresetCard(
                     {if !enabled {
                         view! {
                             <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-surface-sunken text-text-tertiary shrink-0">
-                                "Disabled"
+                                {t!(i18n, settings.moa.badge_disabled)}
                             </span>
                         }.into_any()
                     } else {
@@ -365,7 +367,7 @@ fn PresetCard(
                                 on:click=move |_| on_set_default()
                                 class="text-xs text-text-secondary hover:text-primary"
                             >
-                                "Set default"
+                                {t!(i18n, settings.moa.set_default_action)}
                             </button>
                         }.into_any()
                     } else {
@@ -375,19 +377,19 @@ fn PresetCard(
                         on:click=move |_| on_edit()
                         class="text-xs text-text-secondary hover:text-primary"
                     >
-                        "Edit"
+                        {t!(i18n, settings.moa.edit)}
                     </button>
                     <button
                         on:click=move |_| on_duplicate()
                         class="text-xs text-text-secondary hover:text-primary"
                     >
-                        "Duplicate"
+                        {t!(i18n, settings.moa.duplicate)}
                     </button>
                     <button
                         on:click=move |_| on_delete()
                         class="text-xs text-danger hover:underline"
                     >
-                        "Delete"
+                        {t!(i18n, settings.moa.delete)}
                     </button>
                 </div>
             </div>
