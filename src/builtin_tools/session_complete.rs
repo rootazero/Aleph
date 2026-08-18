@@ -137,7 +137,24 @@ impl AlephTool for SessionCompleteTool {
                 session_id: session_id.clone(),
                 source_hint: "session_end".into(),
             };
-            insert_with_capture_filter(&store, registry, &ctx, raw).await?;
+            // BT-D-R4-03: a capture-filter `Block` is Ok(CaptureDecision::Block)
+            // and means the extension refused to record this retrospective.
+            // Returning ok: true here would lie to the agent (and the user)
+            // that the completion was persisted. Surface the block as an
+            // explicit non-OK result so the caller can react.
+            match insert_with_capture_filter(&store, registry, &ctx, raw).await? {
+                CaptureDecision::Allow => {}
+                CaptureDecision::Block { reason } => {
+                    return Ok(SessionCompleteResult {
+                        ok: false,
+                        message: format!(
+                            "Task completion NOT recorded: capture-filter blocked this entry ({reason}). \
+                             Retrospective extraction skipped for agent '{}'.",
+                            self.agent_id
+                        ),
+                    });
+                }
+            }
         } else {
             self.db.insert_raw_memory(&raw).await?;
         }

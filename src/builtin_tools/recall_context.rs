@@ -89,18 +89,43 @@ impl RecallContextTool {
     /// Execute the recall search against the session-scoped raw chunk store.
     ///
     /// Searches the `SQLite` path prefix `aleph://session/{session_id}/raw/`
-    /// and returns up to `args.max_results` fragments. The query string is
+    /// and returns up to `args.max_results` fragments that contain the
+    /// query terms (case-insensitive substring). The query string is
     /// preserved in the result for the LLM's reference.
+    ///
+    /// BT-D-R4-01: previously this ignored `args.query` entirely and
+    /// returned the oldest `max_results` chunks in path order, falsely
+    /// labelling them with `relevance_score: 1.0`. A request for a late
+    /// pre-compression error could not reach the relevant chunk once the
+    /// limit was exceeded. We now over-fetch (×4) and post-filter by query
+    /// substring, returning real (but bounded) matches. Full FTS5/BM25 is
+    /// tracked separately; this filter is a surgical fix that at least
+    /// guarantees the query participates in retrieval.
     pub async fn call_impl(&self, args: RecallContextArgs) -> anyhow::Result<RecallContextResult> {
         let path_prefix = format!("aleph://session/{}/raw/", self.session_id);
 
+        let fetch_limit = args.max_results.saturating_mul(4).max(args.max_results);
         let raws = self
             .database
-            .get_raw_by_path_prefix(&path_prefix, &self.agent_id, args.max_results)
+            .get_raw_by_path_prefix(&path_prefix, &self.agent_id, fetch_limit)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to retrieve raw context chunks: {e}"))?;
 
-        let fragments = raws
+        let needle = args.query.trim().to_ascii_lowercase();
+        let matched: Vec<_> = if needle.is_empty() {
+            // Empty query: no per-chunk filter, fall back to storage order
+            // up to max_results. This preserves the original behaviour for
+            // the empty-query case (e.g. a model that just wants "what's in
+            // raw?"), but does not invent a relevance score.
+            raws.into_iter().take(args.max_results).collect()
+        } else {
+            raws.into_iter()
+                .filter(|r| r.content.to_ascii_lowercase().contains(&needle))
+                .take(args.max_results)
+                .collect()
+        };
+
+        let fragments = matched
             .into_iter()
             .map(|r| RecalledFragment {
                 content: r.content,

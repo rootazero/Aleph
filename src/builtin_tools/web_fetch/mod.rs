@@ -149,14 +149,33 @@ impl WebFetchTool {
         // inside the network the SSRF policy exists to protect, using its own
         // HTTP client that we do not control.
         if !self.fetch_providers.is_empty() {
-            validate_url_async(&args.url, &self.ssrf_policy)
-                .await
-                .map(|(_, _pinned)| ())
-                .map_err(|e| {
+            // BT-D-R4-22: validate_url_async returns (Url, SocketAddr)
+            // where the SocketAddr is the DNS pin we use for the built-in
+            // reqwest path. The fetch-provider path here does not (yet)
+            // thread that pin into the provider — the provider resolves DNS
+            // again inside its own HTTP client, so a provider fetch is
+            // exposed to DNS-rebinding in the gap between this validate and
+            // the provider's connection. The validate still gates on host
+            // policy (block list / private-range) so a provider cannot
+            // reach a denied host outright, but it cannot guarantee the
+            // exact IP the provider will connect to. Log the gap so
+            // operators see it, until the provider API learns to accept a
+            // pre-resolved pin.
+            match validate_url_async(&args.url, &self.ssrf_policy).await {
+                Ok((_url, _pinned)) => {
+                    warn!(
+                        url = %args.url,
+                        "fetch provider path does not thread the validated DNS pin; \
+                         provider performs its own resolution (SSRF host-policy gate enforced, \
+                         IP-pin TOCTOU window remains)"
+                    );
+                }
+                Err(e) => {
                     let msg = format!("Fetch blocked or failed: {e}");
                     notify_tool_result(Self::NAME, &msg, false);
-                    ToolError::Network(msg)
-                })?;
+                    return Err(ToolError::Network(msg));
+                }
+            }
             for provider in &self.fetch_providers {
                 match provider.fetch(&args.url).await {
                     Ok(markdown) => {

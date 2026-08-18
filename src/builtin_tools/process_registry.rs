@@ -73,6 +73,16 @@ const MAX_ENTRIES: usize = 64;
 /// to reap, the registry just enforces the resource floor).
 const MAX_RUNNING_PER_SESSION: usize = 8;
 
+/// BT-D-R4-17: per-daemon ceiling on *running* background processes across
+/// all sessions. Without this gate, N sessions each at the per-session cap
+/// still produce N*8 detached OS processes + N*8 detached `tokio::task`s
+/// inside one daemon, which is a slow-burn DoS for the host (file
+/// descriptors, kernel process table, scheduler) and a memory leak for the
+/// daemon's own tables. We refuse to register once the daemon is already
+/// hosting this many running jobs; the model should poll/kill across
+/// sessions before spawning more.
+const MAX_RUNNING_GLOBAL: usize = 32;
+
 /// Longest command preview we keep for `list` display.
 const COMMAND_PREVIEW_MAX: usize = 120;
 
@@ -257,14 +267,28 @@ impl ProcessRegistry {
     ) -> RegisterOutcome {
         let (id, preview) = {
             let mut procs = self.lock();
-            let running = procs
-                .values()
-                .filter(|e| {
-                    e.session_label.as_deref() == session_label.as_deref()
-                        && matches!(e.state, ProcState::Running)
-                })
-                .count();
-            if running >= MAX_RUNNING_PER_SESSION {
+            // BT-D-R4-17: count BOTH per-session and global running jobs in
+            // one pass so a single lock acquisition enforces both caps
+            // atomically. The earlier code only checked the per-session
+            // count, which let any number of sessions each at the per-session
+            // cap accumulate a slow-burn resource leak.
+            let mut per_session_running = 0usize;
+            let mut global_running = 0usize;
+            for e in procs.values() {
+                if !matches!(e.state, ProcState::Running) {
+                    continue;
+                }
+                global_running += 1;
+                if e.session_label.as_deref() == session_label.as_deref() {
+                    per_session_running += 1;
+                }
+            }
+            if global_running >= MAX_RUNNING_GLOBAL {
+                return RegisterOutcome::TooManyRunning {
+                    limit: MAX_RUNNING_GLOBAL,
+                };
+            }
+            if per_session_running >= MAX_RUNNING_PER_SESSION {
                 return RegisterOutcome::TooManyRunning {
                     limit: MAX_RUNNING_PER_SESSION,
                 };
