@@ -495,6 +495,25 @@ impl ChromeMcpDriver {
             let mut sessions = self.sessions.write().await;
             sessions.remove(profile_name)
         };
+        // BROWSER-R4-06: prune the per-profile serialization locks for
+        // this profile. Without this, every distinct profile_name ever
+        // seen leaves a permanent `Arc<AsyncMutex<()>>` entry — each
+        // roughly 96 bytes of heap + Arc bookkeeping. A long-lived
+        // daemon serving dynamic profile names (test sessions,
+        // customer-id-based names, names from error logs) accumulates
+        // entries forever. Same fix as the session_create_locks below:
+        // remove on explicit destroy. The destroy_session path is
+        // typically reached on session teardown, which is the right
+        // moment — no other profile operation can be holding the lock
+        // past destroy.
+        self.profile_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(profile_name);
+        self.session_create_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(profile_name);
         if let Some(session) = session {
             let _ = session.client.stop_all().await;
             tracing::info!(
