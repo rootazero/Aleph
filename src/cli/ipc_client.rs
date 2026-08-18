@@ -50,7 +50,10 @@ where
         let text = resp
             .text()
             .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
-        anyhow::bail!("authentication failed — bearer token rejected by server: {text}");
+        anyhow::bail!(
+            "authentication failed — bearer token rejected by server: {}",
+            truncate_error_body(text)
+        );
     }
     finalize::<T>(resp)
 }
