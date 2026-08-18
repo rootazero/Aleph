@@ -259,6 +259,49 @@ impl EmulateOptions {
                 return Err(format!("cpu_throttle {rate} out of range [1, 20]"));
             }
         }
+        // BROWSER-R4-18: validate extra_http_headers. A model-supplied
+        // header map flows into `mcp::external::call_tool` un-checked:
+        // no upper bound on count, no character whitelist on names
+        // (RFC 7230 token = letters / digits / a small punctuation set),
+        // no length cap on values. An `Authorization: sk-ant-...` value
+        // passes through `redact_content` egress, but the *emulation*
+        // itself is not gated. CRLF in a value name could in theory
+        // split headers depending on the MCP implementation.
+        if let Some(headers) = &self.extra_http_headers {
+            const MAX_HEADERS: usize = 32;
+            const MAX_VALUE_BYTES: usize = 4096;
+            if headers.len() > MAX_HEADERS {
+                return Err(format!(
+                    "extra_http_headers has {} entries; max {MAX_HEADERS}",
+                    headers.len()
+                ));
+            }
+            for (name, value) in headers {
+                if name.is_empty() {
+                    return Err("extra_http_headers contains an empty name".into());
+                }
+                if !name.bytes().all(|b| {
+                    b.is_ascii_alphanumeric()
+                        || matches!(b, b'-' | b'_' | b'.')
+                }) {
+                    return Err(format!(
+                        "extra_http_headers name '{name}' contains an invalid character; \
+                         RFC 7230 token chars are letters / digits / '-' / '_' / '.'"
+                    ));
+                }
+                if value.len() > MAX_VALUE_BYTES {
+                    return Err(format!(
+                        "extra_http_headers value for '{name}' is {} bytes; max {MAX_VALUE_BYTES}",
+                        value.len()
+                    ));
+                }
+                if value.bytes().any(|b| b.is_ascii_control()) {
+                    return Err(format!(
+                        "extra_http_headers value for '{name}' contains a control byte"
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 }
