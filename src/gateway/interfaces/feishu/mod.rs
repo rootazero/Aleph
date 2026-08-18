@@ -1,4 +1,5 @@
 pub(crate) mod api;
+pub(crate) mod api_handle;
 pub(crate) mod auth;
 pub(crate) mod config;
 pub(crate) mod message_ops;
@@ -158,6 +159,10 @@ impl Channel for FeishuChannel {
             .map_err(|e| ChannelError::AuthFailed(format!("Token acquisition failed: {e}")))?;
 
         let api = Arc::new(FeishuApi::new(auth.clone(), &base_url, http.clone()));
+        // The inbound path builds one emitter per message and needs this exact
+        // client; without it it builds a second TokenManager per message. See
+        // `api_handle`.
+        api_handle::publish(self.info.id.as_str(), &api, &self.config);
 
         let bot_info = api
             .get_bot_info()
@@ -219,6 +224,7 @@ impl Channel for FeishuChannel {
         if let Some(mut runtime) = self.runtime.take() {
             runtime.stop().await;
         }
+        api_handle::withdraw(self.info.id.as_str());
         self.api = None;
         self.message_ops = None;
         self.channel_state

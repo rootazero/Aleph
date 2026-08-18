@@ -34,6 +34,9 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 
 ./qa/picker_nav/run.sh           # keyboard walk + conditional bottom fade + phone add-a-provider,
                                  # at three widths (1440 / 700 folded / 390 phone)
+
+./qa/channels/run.sh             # feishu / line / qq really come up; msteams is the control.
+                                 # 16 assertions, exit code = failure count.
 ```
 
 `picker_nav` needs **no mock provider** at all: every item is Panel-side
@@ -216,6 +219,77 @@ out reporting "the run never finished" about a run that finished in 80 ms.
 reminder on every single turn. The first oracle read it and reported
 `announce=no` for a request that was carrying the announce three messages up.
 Membership questions go to the whole request, not to one message.
+
+
+## `channels` — the only end-to-end evidence that a channel *works*
+
+`feishu` got a factory on 2026-08-18 and became configurable end to end. The
+evidence for that was one line in `picker_nav`'s manual checklist, and that
+line's first version asserted the wrong thing: it looked for a
+`Failed to create channel` message which that code path never prints, on a
+stream (stdout) it never reaches. Nobody could have noticed — a paragraph a
+human is asked to read and obey has no failure mode that announces itself.
+
+This fixture is that item, made executable, and it is deeper than the item was:
+
+* **Construction.** `feishu`, `line` and `qq` each appear as
+  `Registered channel: <id> (<type>)`.
+* **The control.** `[channels.msteams]` is configured too, and must be dropped
+  by `resolved_channels()` **with a named warning**. Without it the three
+  assertions above prove nothing: an empty log and a probe pointed at the
+  wrong stream look identical. (That is exactly how the original item failed.)
+* **The flat QQ spelling.** `[channels.qq]` is written the way the Panel card
+  writes it — flat, no `accounts` array — so `QQConfig::from_wire` is exercised
+  on the real boot path. It has no mock, so `start()` must fail; the assertion
+  is on *where*: an auth failure means the config parsed, a config error would
+  mean the spelling was rejected.
+* **`start()` against a real socket.** `FeishuConfig.domain` takes an arbitrary
+  URL, so `mock_lark.py` stands in for the Open Platform and the channel runs
+  its real startup: fetch an app access token, fetch bot info, latch the bot's
+  open_id, spawn the refresher, bring up the webhook server. Every request is
+  recorded, so the assertions read what the channel *sent*, not what it logged.
+* **The whole loop.** A signed `im.message.receive_v1` event is POSTed to the
+  channel's own webhook; the reply must come back out through the real Feishu
+  send path as `POST /open-apis/im/v1/messages`, addressed to the chat the
+  event came from.
+
+### What its first two runs found
+
+Both were green everywhere else — 16k unit tests, both reconciliation suites.
+
+1. **feishu was not constructed at all.** `validate()` demands an `encrypt_key`
+   in webhook mode. That one was the fixture's own config bug, but it is worth
+   keeping in mind that the failure surfaced as a channel silently missing from
+   a list, not as an error anyone would see.
+2. **`require_mention = false` was ignored.** The router decides with
+   `ChannelConfig::default()` for any channel with no
+   `From<&*Config> for ChannelConfig` bridge, so five policy fields the Feishu
+   card collects died between the form and the decider. Fixing it uncovered a
+   third: the gating arms parse the *raw* config block, and the vault migration
+   removes `bot_token` / `app_secret` from it — so **Telegram's bridge had been
+   dead since that migration landed**, reverting to the very default it exists
+   to prevent, with one `warn` and nothing red. Both arms now take their config
+   from one shared `gating_config` closure.
+
+3. **The streaming emitter had never been reachable.** Falsifying the
+   "shared client" assertion produced *no change* — which was the finding.
+   `try_create_feishu_emitter` rebuilds `FeishuConfig` from `Config.channels`,
+   hits the same missing `app_secret`, and returns `None` through an `.ok()?`
+   that says nothing at all. The reply still goes out (plain `ReplyEmitter` →
+   channel → `MessageOps`), so the symptom is zero. The fixture now asserts a
+   `POST /open-apis/cardkit/v1/cards`, which only happens when the emitter
+   exists.
+
+   The methodological half is worth more than the bug: **when a mutation does
+   not turn a guard red, suspect your model of the code before you suspect the
+   guard.** The mutation could not reach the line it targeted.
+
+### Why webhook mode
+
+It is the mode that can be driven from localhost. Note that the Panel's Feishu
+card cannot produce it — the card offers no `connection_mode` or `webhook_*`
+field — so a Panel-configured feishu is always the websocket mode, which this
+fixture does not cover.
 
 ## Why a mock provider rather than a real one
 

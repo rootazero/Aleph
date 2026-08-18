@@ -467,6 +467,151 @@ impl From<&crate::gateway::interfaces::telegram::TelegramConfigV2> for ChannelCo
     }
 }
 
+// Bridge the Feishu channel's access config into the central permission layer,
+// for the same reason the Telegram bridge above exists: without it the router
+// falls back to `ChannelConfig::default()` and the operator's settings are
+// dropped by the layer that actually decides.
+//
+// This became load-bearing on 2026-08-18, when feishu got a factory and became
+// configurable end-to-end. Its Panel card offers `dm_allowed`, `groups_allowed`,
+// `group_policy`, `group_allowlist` and `require_mention` — a form whose values
+// reached the channel's own pre-filter and then died at the router. The
+// real-machine fixture caught it as `Permission denied: Mention required in
+// group` on a config that said `require_mention = false`.
+//
+// # Every arm here narrows or preserves; none widens
+//
+// `dm_allowed` is a boolean pre-filter, not an access policy: it cannot say
+// *who*. So `false` maps to `Disabled` (stricter than today) and `true` keeps
+// today's `Pairing` rather than becoming `Open` — reading a coarse "DMs are on"
+// as "anyone may DM this bot" would silently unlock every existing feishu
+// deployment. The one place behaviour widens is an explicit
+// `require_mention = false`, which is the operator asking for exactly that and
+// is the defect this bridge fixes.
+impl From<&crate::gateway::interfaces::feishu::FeishuConfig> for ChannelConfig {
+    fn from(cfg: &crate::gateway::interfaces::feishu::FeishuConfig) -> Self {
+        let group_policy = if !cfg.groups_allowed {
+            GroupPolicy::Disabled
+        } else if cfg.group_policy.eq_ignore_ascii_case("allowlist")
+            && !cfg.group_allowlist.is_empty()
+        {
+            GroupPolicy::Allowlist
+        } else {
+            // Includes `allowlist` with an empty list: the channel's own
+            // `InboundPolicy` reads that as "allow all", and disagreeing here
+            // would deny groups the channel already let through.
+            GroupPolicy::Open
+        };
+
+        Self {
+            dm_policy: if cfg.dm_allowed {
+                DmPolicy::Pairing
+            } else {
+                DmPolicy::Disabled
+            },
+            group_policy,
+            allow_from: Vec::new(),
+            group_allow_from: cfg.group_allowlist.clone(),
+            require_mention: cfg.require_mention,
+            bot_name: cfg.bot_name.clone(),
+            slash_access: SlashAccessConfig::default(),
+            permission_level: ChannelPermissionLevel::default(),
+            default_workspace: None,
+            busy_input_mode: BusyInputMode::default(),
+            // Boot wiring overlays `tool_permissions` from the instance's flat
+            // config block (same ChannelPolicyConfig parse as other channels).
+            tool_permissions: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod feishu_bridge_tests {
+    use super::*;
+    use crate::gateway::interfaces::feishu::FeishuConfig;
+
+    fn cfg(json: serde_json::Value) -> FeishuConfig {
+        let mut base = serde_json::json!({
+            "app_id": "cli_x",
+            "app_secret": "s",
+        });
+        let (serde_json::Value::Object(b), serde_json::Value::Object(extra)) = (&mut base, json)
+        else {
+            unreachable!("both literals are objects")
+        };
+        b.extend(extra);
+        serde_json::from_value(base).expect("fixture config must parse")
+    }
+
+    /// The exact config the real-machine fixture ran, and the exact reason it
+    /// was refused before this bridge existed.
+    #[test]
+    fn require_mention_false_reaches_the_router() {
+        let c = ChannelConfig::from(&cfg(serde_json::json!({
+            "groups_allowed": true,
+            "require_mention": false,
+        })));
+        assert!(
+            !c.require_mention,
+            "the router kept its own default and denied a group message the \
+             operator had explicitly opened",
+        );
+        assert_eq!(c.group_policy, GroupPolicy::Open);
+    }
+
+    /// A feishu config that says nothing must behave exactly as it did before
+    /// the bridge existed, or this is a silent policy change for every
+    /// deployment that predates it.
+    #[test]
+    fn an_unconfigured_feishu_keeps_todays_behaviour() {
+        let c = ChannelConfig::from(&cfg(serde_json::json!({})));
+        let before = ChannelConfig::default();
+        assert_eq!(
+            c.dm_policy, before.dm_policy,
+            "DMs must still require pairing"
+        );
+        assert_eq!(c.require_mention, before.require_mention);
+        // `groups_allowed` defaults to false, and the channel's own pre-filter
+        // already refused those messages — so Disabled here is the router
+        // agreeing with a decision that was already being made upstream.
+        assert_eq!(c.group_policy, GroupPolicy::Disabled);
+    }
+
+    /// `dm_allowed` cannot name a user, so it must never be read as "open".
+    #[test]
+    fn dm_allowed_never_widens_past_pairing() {
+        assert_eq!(
+            ChannelConfig::from(&cfg(serde_json::json!({ "dm_allowed": true }))).dm_policy,
+            DmPolicy::Pairing,
+        );
+        assert_eq!(
+            ChannelConfig::from(&cfg(serde_json::json!({ "dm_allowed": false }))).dm_policy,
+            DmPolicy::Disabled,
+        );
+    }
+
+    /// An `allowlist` with nothing in it means "allow all" to the channel's own
+    /// `InboundPolicy`; the router's `Allowlist` denies on an empty list. The
+    /// two layers disagreeing would deny groups the channel already accepted —
+    /// the same trap the Telegram bridge documents.
+    #[test]
+    fn an_empty_group_allowlist_stays_open() {
+        let c = ChannelConfig::from(&cfg(serde_json::json!({
+            "groups_allowed": true,
+            "group_policy": "allowlist",
+        })));
+        assert_eq!(c.group_policy, GroupPolicy::Open);
+
+        let c = ChannelConfig::from(&cfg(serde_json::json!({
+            "groups_allowed": true,
+            "group_policy": "allowlist",
+            "group_allowlist": ["oc_one"],
+        })));
+        assert_eq!(c.group_policy, GroupPolicy::Allowlist);
+        assert_eq!(c.group_allow_from, vec!["oc_one".to_string()]);
+    }
+}
+
 #[cfg(test)]
 mod telegram_bridge_tests {
     use super::*;

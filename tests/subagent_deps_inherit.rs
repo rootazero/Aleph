@@ -147,8 +147,10 @@ async fn subagent_base_carries_4_p1_fields() {
             token_estimate_ratio: 3.5,
             fresh_tail_count: 6,
             circuit_breaker_max: 3,
-            diminishing_window: 4,
-            diminishing_threshold: 500,
+            // `diminishing_window` / `diminishing_threshold` were cut from
+            // `ContextBudgetConfig` by a later audit. This literal kept naming
+            // them, which `cargo check` and `--lib` never compile — only
+            // `--all-targets` does, and it had been red since.
             max_splits: 3,
         }),
         // Sentinel `None`: this fixture has no cheap tier to inherit, so the

@@ -18,21 +18,25 @@
 //! msteams until its adapter was severed 2026-08-17, feishu from the day the
 //! factory table landed until 2026-08-18.
 //!
-//! Neither side may spell the set itself any more. Both assert against this
-//! constant, in the two directions that are actually load-bearing:
+//! Neither side may spell the set itself any more. Both assert **set
+//! equality** against this constant:
 //!
-//! * `alephcore`: the registered set **equals** this list (minus the bypass) —
-//!   an adapter listed here but not registered is unconfigurable, and one
+//! * `alephcore`: the registered set equals this list (minus the bypass) — an
+//!   adapter listed here but not registered is unconfigurable, and one
 //!   registered but not listed means this list went stale.
-//! * `aleph-panel`: every card's id is **in** this list — a card outside it is
-//!   the defect above.
+//! * `aleph-panel`: the card set equals this list — a card outside it is the
+//!   defect above, and a name here with no card is a channel only reachable by
+//!   hand-editing `config.toml`.
 //!
-//! The reverse Panel direction is deliberately *not* asserted: `line`,
-//! `wechat` and `qq` are configurable and have no card, which is a missing
-//! feature rather than a lie told to the user. Asserting it would require
-//! either writing those three cards or parking an exemption list here, and an
-//! exemption list with no force to shrink it is just a permanent permission
-//! slip.
+//! Equality on both sides is the point. A containment check can only see
+//! "listed but missing"; it is structurally blind to a name absent from *both*
+//! sides, which is exactly how `feishu` stayed unreachable for four months
+//! with a green test watching it.
+//!
+//! The Panel direction was one-way until 2026-08-18 because `line`, `wechat`
+//! and `qq` were configurable with no card, and pinning that would have meant
+//! parking an exemption list with no force to shrink it. Writing the three
+//! cards closed the set instead, so the exemption never had to exist.
 
 /// Every channel type that a `[channels.<type>]` config block can actually
 /// bring up, sorted so the two reconciliation tests can compare sets cheaply.

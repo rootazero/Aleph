@@ -163,20 +163,23 @@ cat <<'CHECKLIST'
   通道设置（本轮切掉 MS Teams 卡片、给飞书补了工厂）
   17. wide /settings/channels
       断言: 网格里**没有** Microsoft Teams 卡片；**有** Feishu / Lark 卡片
-  18. 配 [channels.feishu] + [channels.line]（占位凭据即可）并重启 server
-      ⚠️ 断言写在**正确的那条线**上——2026-08-18 真机跑之前这一项的断言是错的：
-         「工厂缺失」在这条路径上**不会**打 `Failed to create channel`，
-         也不会打在 stdout 上。unknown 通道在更早的 `resolved_channels()` 就被
-         丢掉了，warn 只进 $ALEPH_HOME/logs/aleph-server.log.*
-      断言(stdout): `Registered channel: feishu (feishu)` 与
-            `Registered channel: line (line)` 各出现一次
-      断言(stdout): feishu 随后 `✗ Channel feishu failed: … Token acquisition
-            failed: … code=10003` —— 这才是「工厂接上了、只是凭据是假的」的证据；
-            **没有这行**说明它压根没被构造
-      断言(file log): `Channel 'X' has no 'type' field` 只剩 msteams
-            （已切除，本就不该存在）；feishu / line 都不许出现在这里
-      对照组必须有: 同时配一个 [channels.msteams]。只断言「没有失败行」是弱的——
-            先证明这条探针**测得出**它要找的失败
+      断言: 也有 LINE / WeChat / QQ 三张卡（2026-08-18 补齐）。补齐它们不是
+            "顺便加功能"——卡片集合从此**等于** CONFIGURABLE_CHANNEL_TYPES，
+            于是那条对账断言两个方向都是集合相等，不需要任何豁免清单
+      断言: 打开 QQ 卡片填 App ID + Client Secret 保存 → config.toml 里
+            [channels.qq] 是**扁平**的（没有 accounts 数组）。服务端由
+            QQConfig::from_wire 归一化；qa/channels/run.sh 在真实开机路径上验它
+  18. → 已搬走：`./qa/channels/run.sh`
+      这一项从 2026-08-18 起是一个**可执行 fixture**，不再是人工清单条目。
+      它跑 16 条断言：feishu / line / qq 各自被工厂构造；msteams 作为对照组
+      被 resolved_channels() 丢弃**并出声**；feishu 的 start() 对着本地
+      mock Lark 真拨号（取 token → 取 bot info → 起 webhook server）；
+      一条签名事件进 webhook → agent 回合 → 回复从真正的 Feishu 发送路径
+      打回 mock 的 im/v1/messages，收件人等于事件来源的 chat。
+      搬走的理由就是这一项自己的历史：它作为一段要人读、要人照做的散文，
+      **第一版断言写错了**（去找一条这条路径根本不会打印的
+      `Failed to create channel`），而错了没有任何东西会告诉你。
+
 CHECKLIST
 
 cat <<EOF
@@ -185,8 +188,7 @@ cat <<EOF
   scratch:  $QA_ROOT   (config: $CONFIG)
   logs:     $QA_ROOT/server.log · \$ALEPH_HOME/logs/
   item 9/12/13 的落盘断言:  grep -A6 '^\[providers\.' $CONFIG
-  item 18 的断言:           grep -E 'Registered channel|Channel .* failed' \$QA_ROOT/server.log
-                            grep -rh "has no 'type' field" \$ALEPH_HOME/logs/
+  item 18:                  ./qa/channels/run.sh   (自带断言, 退出码=失败条数)
 
   member 段 (items 14-15) — 需要 LAN + TLS，因为 loopback 恒为 operator:
     1) 停掉 server, 编辑 $CONFIG:
