@@ -7,10 +7,17 @@ fn main() {
     println!("cargo:rustc-env=ALEPH_VERSION={version}");
     println!("cargo:rerun-if-changed=../../VERSION");
 
+    // `interpolate_display` generates the `Display` impls that let `t_string!`
+    // resolve a key carrying `{{ }}` placeholders. Without it the macro accepts
+    // only plain strings, and a sentence with a number in the middle has to be
+    // split around the number in Rust — which hard-codes English/Chinese word
+    // order at the seam, the exact thing a locale file exists to avoid. It is a
+    // build option rather than a cargo feature in leptos_i18n 0.6.
     let cfg = leptos_i18n_build::Config::new("en")
         .expect("Failed to create i18n config")
         .add_locale("zh")
-        .expect("Failed to add zh locale");
+        .expect("Failed to add zh locale")
+        .parse_options(leptos_i18n_build::ParseOptions::new().interpolate_display(true));
 
     let infos = leptos_i18n_build::TranslationsInfos::parse(cfg)
         .expect("Failed to parse i18n translations");

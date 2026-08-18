@@ -16,14 +16,20 @@ pub use aleph_protocol::plan::{PlanItem as PlanItemView, PlanItemStatus as PlanI
 
 /// Glyph + label for the sunk archive capsule.
 ///
-/// UI copy, so it stays panel-side rather than moving to the protocol crate
-/// with the rest of the (deterministic, language-free) plan arithmetic.
+/// The glyph and the arithmetic are language-free; the *word* is copy, and
+/// this function is a pure projection with no reactive owner to resolve a
+/// locale key from. So the caller — a component, which has the context —
+/// resolves the two words and hands them in, and this stays host-testable.
 #[must_use]
-pub fn archive_summary(plan: &PlanView) -> (&'static str, String) {
+pub fn archive_summary(
+    plan: &PlanView,
+    done_word: &str,
+    open_word: &str,
+) -> (&'static str, String) {
     let (glyph, word) = if plan.complete {
-        ("✓", "任务完成")
+        ("✓", done_word)
     } else {
-        ("◗", "未完成")
+        ("◗", open_word)
     };
     (
         glyph,
@@ -166,9 +172,15 @@ mod tests {
     fn archive_summary_glyph_and_label() {
         use PlanItemStatusView::*;
         let done = pv(&[("a", Completed), ("b", Completed)], true);
-        assert_eq!(archive_summary(&done), ("✓", "任务完成 · 2/2".to_string()));
+        assert_eq!(
+            archive_summary(&done, "done", "open"),
+            ("✓", "done · 2/2".to_string())
+        );
         let partial = pv(&[("a", Completed), ("b", Pending)], false);
-        assert_eq!(archive_summary(&partial), ("◗", "未完成 · 1/2".to_string()));
+        assert_eq!(
+            archive_summary(&partial, "done", "open"),
+            ("◗", "open · 1/2".to_string())
+        );
     }
 
     #[test]

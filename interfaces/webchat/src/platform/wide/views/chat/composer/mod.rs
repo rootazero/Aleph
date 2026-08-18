@@ -30,8 +30,8 @@ use attachments::{read_file_list_into, AttachmentPreviewBar};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use palette::{
-    build_palette_entries, doctor_command_info, expand_doctor_command, parse_command_info,
-    CommandInfo, PaletteEntry, PaletteLabels, SlashPaletteView,
+    build_palette_entries, doctor_command_info, is_doctor_command, parse_command_info, CommandInfo,
+    PaletteEntry, PaletteLabels, SlashPaletteView,
 };
 use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
@@ -43,16 +43,16 @@ use shared_ui_logic::state::{
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-/// Instruction seeded by the `f` hotkey (G1). The doctor tool only diagnoses
-/// and applies safe mechanical repairs; the *reasoning* repair lives entirely
-/// in this prompt (R7/R9), not in any deterministic branch. It tells the LLM
-/// to read the structured findings and route each one: mechanical issues via
-/// `doctor(fix=true)`, everything else through the tool named in the finding's
-/// `fix_hint` (`self_config` / `vault_store` / …), then re-verify.
-const DOCTOR_REPAIR_PROMPT: &str = "运行 doctor 工具诊断系统健康状况。\
-对可机械修复的问题（repairable=true）调用 doctor(fix=true) 修复；\
-对不可机械修复的问题，按其 fix_hint 用 self_config / vault_store 等对应工具修复；\
-全部处理后再次运行 doctor 验证，并简要报告修复结果。";
+// The instruction seeded by the `f` hotkey (G1) lives in
+// `chat.doctor_repair_prompt` — a locale key, not a Rust item, hence `//`. The
+// doctor tool only diagnoses and applies safe mechanical repairs; the
+// *reasoning* repair lives entirely in that prompt (R7/R9), not in any
+// deterministic branch. It tells the LLM to read the structured findings and
+// route each one: mechanical issues via `doctor(fix=true)`, everything else
+// through the tool named in the finding's `fix_hint` (`self_config` /
+// `vault_store` / …), then re-verify. It is copy, not config: it is the
+// *user's* message in the transcript, so a reader who picked English must not
+// be made to send Chinese.
 
 /// Textarea + side buttons + palette popup + injection-guard banner.
 /// Mounted by [`super::view::ChatView`] at the viewport bottom, and (P2 Task
@@ -184,7 +184,11 @@ pub(crate) fn InputArea() -> impl IntoView {
         // the normal LLM pipeline, mirroring the `f`-hotkey repair flow. Done
         // before send so the literal slash command never reaches the gateway
         // fast path (which would run the tool deterministically, no LLM).
-        let text = expand_doctor_command(&raw).unwrap_or(raw);
+        let text = if is_doctor_command(&raw) {
+            t_string!(i18n, chat.doctor_detect_prompt).to_string()
+        } else {
+            raw
+        };
         let files = attachments.get_untracked();
         if text.is_empty() && files.is_empty() {
             return;
@@ -355,7 +359,11 @@ pub(crate) fn InputArea() -> impl IntoView {
     // `ChatState` and clears the composer for the next line of input.
     let enqueue_message = move || {
         let raw = input_text.get_untracked().trim().to_string();
-        let text = expand_doctor_command(&raw).unwrap_or(raw);
+        let text = if is_doctor_command(&raw) {
+            t_string!(i18n, chat.doctor_detect_prompt).to_string()
+        } else {
+            raw
+        };
         let files = attachments.get_untracked();
         if text.is_empty() && files.is_empty() {
             return;
@@ -650,7 +658,7 @@ pub(crate) fn InputArea() -> impl IntoView {
         Effect::new(move |prev_pulse: Option<u32>| {
             let pulse = chat.repair_pulse.get();
             if prev_pulse.is_some() && Some(pulse) != prev_pulse {
-                input_text.set(DOCTOR_REPAIR_PROMPT.to_string());
+                input_text.set(t_string!(i18n, chat.doctor_repair_prompt).to_string());
                 if chat.active_run_id.get_untracked().is_some() {
                     enqueue_message();
                 } else {
@@ -736,6 +744,9 @@ pub(crate) fn InputArea() -> impl IntoView {
         }
         let dash = dashboard;
         let labels = palette_labels();
+        // Resolved before the `.await` — reading a locale key on the far side
+        // of one is the disposed-read hazard `crate::disposed_reads` guards.
+        let doctor_desc = t_string!(i18n, chat.doctor_command_desc).to_string();
         spawn_local(async move {
             // `rpc_call` waits for the handshake itself, so the 50×100 ms poll
             // that used to stand here is gone — see `DashboardState::rpc_call`.
@@ -750,7 +761,7 @@ pub(crate) fn InputArea() -> impl IntoView {
                         }
                     }
                     if !cmds.iter().any(|c| c.key == "doctor") {
-                        cmds.push(doctor_command_info());
+                        cmds.push(doctor_command_info(doctor_desc.clone()));
                     }
                     all_commands.set(cmds.clone());
                     commands_loaded.set(true);
@@ -1347,10 +1358,13 @@ pub(crate) fn InputArea() -> impl IntoView {
                                 <button
                                     class="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
                                            hover:bg-surface-sunken transition-colors flex-shrink-0"
-                                    title="导出对话为 Markdown"
+                                    title=move || t_string!(i18n, chat.export_markdown).to_string()
                                     on:click=move |_| {
                                         let msgs = chat.messages.get_untracked();
-                                        super::transcript::download_transcript(&msgs);
+                                        super::transcript::download_transcript(
+                                            &msgs,
+                                            t_string!(i18n, chat.transcript_heading),
+                                        );
                                     }
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"

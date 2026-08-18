@@ -525,7 +525,7 @@ pub(super) fn VoiceInputButton(
         let key = match state.get() {
             // Idle: the mini orb is the immersive-mode entry; the hint spells
             // out both gestures (tap = immersive, hold = dictate-to-text).
-            RecState::Idle => "点击进入语音模式 · 长按说话转文字".to_string(),
+            RecState::Idle => t_string!(i18n, chat.voice_idle_hint).to_string(),
             RecState::Starting => t_string!(i18n, chat.voice_start).to_string(),
             RecState::Recording => t_string!(i18n, chat.voice_stop).to_string(),
             RecState::Transcribing => t_string!(i18n, chat.voice_transcribing).to_string(),

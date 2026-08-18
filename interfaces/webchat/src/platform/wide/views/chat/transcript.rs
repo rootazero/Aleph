@@ -15,9 +15,13 @@ use super::state::ChatMessage;
 /// the host target. Intermediate "scratch step" bubbles and empty streaming
 /// placeholders are skipped — the export captures the *conversation*, not the
 /// agent's internal step trace (that lives in the workspace pane).
+///
+/// `heading` is the only piece of copy in the output, and it arrives resolved:
+/// keeping the locale lookup at the call site (a component, which has the
+/// context) is what lets this stay a pure host-testable function.
 #[must_use]
-pub fn transcript_markdown(messages: &[ChatMessage]) -> String {
-    let mut out = String::from("# Aleph 对话记录\n\n");
+pub fn transcript_markdown(messages: &[ChatMessage], heading: &str) -> String {
+    let mut out = format!("# {heading}\n\n");
     for msg in messages {
         if msg.is_intermediate {
             continue;
@@ -46,10 +50,10 @@ pub fn transcript_markdown(messages: &[ChatMessage]) -> String {
 /// blob/anchor dance mirrors `views/home.rs` (memory export) verbatim, so the
 /// failure modes (no window/document, blob alloc) are handled identically with
 /// early returns rather than `unwrap`.
-pub fn download_transcript(messages: &[ChatMessage]) {
+pub fn download_transcript(messages: &[ChatMessage], heading: &str) {
     use wasm_bindgen::JsCast;
 
-    let markdown = transcript_markdown(messages);
+    let markdown = transcript_markdown(messages, heading);
     let Some(window) = web_sys::window() else {
         return;
     };
@@ -111,7 +115,7 @@ mod tests {
             msg("user", "hello", false),
             msg("assistant", "hi there", false),
         ];
-        let md = transcript_markdown(&msgs);
+        let md = transcript_markdown(&msgs, "Aleph conversation");
         assert!(md.starts_with("# Aleph"));
         assert!(md.contains("🧑 User"));
         assert!(md.contains("hello"));
@@ -127,7 +131,7 @@ mod tests {
             msg("assistant", "   ", false),
             msg("user", "real question", false),
         ];
-        let md = transcript_markdown(&msgs);
+        let md = transcript_markdown(&msgs, "Aleph conversation");
         assert!(!md.contains("scratch step"));
         assert!(md.contains("real question"));
         // Only the single real turn produces a heading.

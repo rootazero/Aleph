@@ -9,6 +9,7 @@
 //! self-hides until the first usage figure lands.
 
 use super::state::ChatState;
+use crate::i18n::{t_string, use_i18n};
 use leptos::prelude::*;
 
 /// Pick a token-tinted color for the ring by occupancy fraction.
@@ -26,6 +27,7 @@ fn gauge_color(frac: f64) -> &'static str {
 #[component]
 #[must_use]
 pub fn ContextGauge() -> impl IntoView {
+    let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
     view! {
         <Show when=move || chat.context_usage.get().is_some()>
@@ -42,18 +44,27 @@ pub fn ContextGauge() -> impl IntoView {
                 let (label, title) = if usage.is_estimate {
                     (
                         format!("≈{pct}%"),
-                        format!(
-                            "预估上下文占用 {pct}% · {} / {} tokens（首次对话后转为实测）",
-                            usage.used_tokens, usage.window_tokens,
-                        ),
+                        t_string!(
+                            i18n,
+                            chat.context_usage_estimate_title,
+                            pct = pct,
+                            used = usage.used_tokens,
+                            window = usage.window_tokens,
+                        )
+                        .to_string(),
                     )
                 } else {
                     (
                         format!("{pct}%"),
-                        format!(
-                            "上下文占用 {pct}% · {} / {} tokens（本轮累计 {}）",
-                            usage.used_tokens, usage.window_tokens, usage.total_tokens,
-                        ),
+                        t_string!(
+                            i18n,
+                            chat.context_usage_title,
+                            pct = pct,
+                            used = usage.used_tokens,
+                            window = usage.window_tokens,
+                            total = usage.total_tokens,
+                        )
+                        .to_string(),
                     )
                 };
                 Some(view! {
@@ -89,6 +100,7 @@ pub fn ContextGauge() -> impl IntoView {
 #[component]
 #[must_use]
 pub fn CacheStat() -> impl IntoView {
+    let i18n = use_i18n();
     let chat = expect_context::<ChatState>();
     view! {
         <Show when=move || chat.live_cache_pct.get().is_some()>
@@ -102,9 +114,7 @@ pub fn CacheStat() -> impl IntoView {
                 Some(view! {
                     <div
                         class="flex items-center select-none"
-                        title=format!(
-                            "上一次调用的提示词缓存命中率 {pct}% · read / (input + read)（与 TUI 状态栏同口径）"
-                        )
+                        title=t_string!(i18n, chat.cache_hit_title, pct = pct).to_string()
                     >
                         <span class="text-[10px] tabular-nums" style=format!("color: {color}")>
                             {format!("cache {pct}%")}

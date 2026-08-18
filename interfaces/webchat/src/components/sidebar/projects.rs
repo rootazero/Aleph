@@ -1,4 +1,4 @@
-//! Sidebar "项目" section (P2 Task 8) — lists the project rooms the caller
+//! Sidebar "Projects" section (P2 Task 8) — lists the project rooms the caller
 //! is a member of. `projects.list` already filters to the caller's roster
 //! server-side (`gateway::handlers::projects::handle_list` — spec §6.3's
 //! no-oracle contract), so no client-side filtering is needed here.
@@ -11,6 +11,8 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+
+use crate::i18n::{t, t_string};
 
 use crate::api::projects::{ProjectInfo, ProjectsApi};
 use crate::components::project_page::ProjectsTabState;
@@ -91,12 +93,12 @@ pub fn ProjectsSidebar() -> impl IntoView {
         <div class="flex flex-col h-full">
             <div class="px-3 py-3 flex items-center justify-between">
                 <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                    "项目"
+                    {t!(i18n, nav.projects)}
                 </h3>
                 <button
                     type="button"
                     class="text-text-tertiary hover:text-text-primary text-base leading-none w-5 h-5 flex items-center justify-center rounded hover:bg-surface-sunken"
-                    title="新建项目"
+                    title=move || t_string!(i18n, project_room.sidebar_new).to_string()
                     on:click=move |_| creating.update(|v| *v = !*v)
                 >
                     "+"
@@ -107,7 +109,7 @@ pub fn ProjectsSidebar() -> impl IntoView {
                 <div class="px-3 pb-2 flex items-center gap-1.5">
                     <input
                         type="text"
-                        placeholder="项目名称"
+                        placeholder=move || t_string!(i18n, project_room.sidebar_name_placeholder).to_string()
                         class="flex-1 min-w-0 px-2 py-1 rounded-md bg-surface-sunken border border-border text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-primary/60"
                         prop:value=move || new_name.get()
                         on:input=move |ev| new_name.set(event_target_value(&ev))
@@ -122,7 +124,7 @@ pub fn ProjectsSidebar() -> impl IntoView {
                         class="px-2 py-1 rounded-md text-xs bg-primary/15 text-primary hover:bg-primary/25"
                         on:click=move |_| do_create()
                     >
-                        "创建"
+                        {t!(i18n, project_room.sidebar_create)}
                     </button>
                 </div>
             </Show>
@@ -132,7 +134,7 @@ pub fn ProjectsSidebar() -> impl IntoView {
                     when=move || !projects.get().is_empty()
                     fallback=move || view! {
                         <p class="px-1 py-2 text-xs text-text-tertiary">
-                            "暂无项目 — 点击右上角 + 创建一个"
+                            {t!(i18n, project_room.sidebar_empty)}
                         </p>
                     }
                 >
@@ -149,7 +151,9 @@ pub fn ProjectsSidebar() -> impl IntoView {
                             let subtitle = p
                                 .workspace_path
                                 .clone()
-                                .unwrap_or_else(|| "未绑定工作区".to_string());
+                                .unwrap_or_else(|| {
+                                    t_string!(i18n, project_room.workspace_unbound_short).to_string()
+                                });
                             view! {
                                 <button
                                     type="button"

@@ -35,14 +35,26 @@ pub(super) fn ChatHero() -> impl IntoView {
     // hermes-desktop's `ChatEmptyState` suggestion cards. Small fixed set; each
     // tuple is (emoji, short label, seed prompt).
     let suggestions = [
-        ("🔍", "搜索网络", "帮我搜索今天的科技要闻，并总结 3 个重点"),
-        ("📝", "起草文字", "帮我起草一封简短得体的工作邮件"),
+        (
+            "🔍",
+            t_string!(i18n, chat.starter_search_label).to_string(),
+            t_string!(i18n, chat.starter_search_prompt).to_string(),
+        ),
+        (
+            "📝",
+            t_string!(i18n, chat.starter_draft_label).to_string(),
+            t_string!(i18n, chat.starter_draft_prompt).to_string(),
+        ),
         (
             "💻",
-            "解释代码",
-            "解释这段代码的作用，并指出潜在问题：\n\n```\n\n```",
+            t_string!(i18n, chat.starter_code_label).to_string(),
+            t_string!(i18n, chat.starter_code_prompt).to_string(),
         ),
-        ("🧠", "回忆上下文", "我们上次聊到哪了？帮我回顾一下"),
+        (
+            "🧠",
+            t_string!(i18n, chat.starter_recall_label).to_string(),
+            t_string!(i18n, chat.starter_recall_prompt).to_string(),
+        ),
     ];
     view! {
         <div class="h-full flex flex-col items-center justify-center px-6 pb-[var(--composer-clearance,150px)] text-center select-none">

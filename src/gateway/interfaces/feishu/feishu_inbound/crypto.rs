@@ -95,19 +95,55 @@ mod tests {
         assert!(decrypt_event("k", "QUJD").is_err()); // decodes to 3 bytes -> too short
     }
 
+    /// A digest this repository did not compute.
+    ///
+    /// The test this replaced built `expected` by hashing
+    /// `ts | nonce | key | body` with the same `Sha256` calls, in the same
+    /// order, as [`verify_signature`] itself — so it agreed with the
+    /// implementation by construction. Swap two of those four fields in
+    /// production and the test swaps them too: it stays green while every
+    /// callback Lark sends is rejected, and there are no credentials in CI to
+    /// notice.
+    ///
+    /// The literal below is `sha256("1700000000" + "n123" + "enc" + "{\"a\":1}")`
+    /// as computed by `shasum -a 256`, outside this crate. The *order* it
+    /// encodes is Lark's documented one (Feishu Open Platform, "Step 3: Receive
+    /// events" — timestamp, nonce, encrypt_key, body, then SHA-256), which is
+    /// the half of this that no local fixture can establish: a round-trip only
+    /// ever proves we agree with ourselves.
+    ///
+    /// What this still does not cover, and cannot without an app credential:
+    /// how the client behaves against a live 429 or a live permission error.
+    /// The mock Lark in `qa/channels/run.sh` answers every call.
+    const LARK_REFERENCE_DIGEST: &str =
+        "7f4b9dcba215e2a6da178216cc00fed0b591f17058045440240767ba35736c6b";
+
     #[test]
-    fn signature_matches_reference() {
-        let key = "enc";
-        let ts = "1700000000";
-        let nonce = "n123";
-        let body = r#"{"a":1}"#;
-        let mut h = Sha256::new();
-        h.update(ts.as_bytes());
-        h.update(nonce.as_bytes());
-        h.update(key.as_bytes());
-        h.update(body.as_bytes());
-        let expected = hex::encode(h.finalize());
-        assert!(verify_signature(key, ts, nonce, body, &expected));
-        assert!(!verify_signature(key, ts, nonce, body, "deadbeef"));
+    fn signature_matches_an_independently_computed_digest() {
+        assert!(verify_signature(
+            "enc",
+            "1700000000",
+            "n123",
+            r#"{"a":1}"#,
+            LARK_REFERENCE_DIGEST,
+        ));
+    }
+
+    /// Reordering the concatenation must not still verify.
+    ///
+    /// The digest of `ts | key | nonce | body` — the single most likely typo,
+    /// and the one the self-computed test could not see.
+    #[test]
+    fn a_reordered_concatenation_does_not_verify() {
+        const SWAPPED: &str = "ce501b409d730aa46dcb304c772481b2c2b9776792e5cf9b5e4527c53b973545";
+        assert_ne!(SWAPPED, LARK_REFERENCE_DIGEST);
+        assert!(!verify_signature(
+            "enc",
+            "1700000000",
+            "n123",
+            r#"{"a":1}"#,
+            SWAPPED,
+        ));
+        assert!(!verify_signature("enc", "1700000000", "n123", r#"{"a":1}"#, "deadbeef"));
     }
 }

@@ -7,7 +7,8 @@
     "teams": "Teams",
     "extensions": "Aleph Hub",
     "settings": "Settings",
-    "canvas": "Canvas"
+    "canvas": "Canvas",
+    "projects": "Projects"
   },
   "session": {
     "healthy": "Healthy",
@@ -59,6 +60,7 @@
     "browser_cancel": "Cancel",
     "browser_close": "Close",
     "browser_create": "Create",
+    "browser_empty_dir": "(this directory is empty)",
     "browser_go_up": "Go up",
     "browser_go_up_label": "← Up",
     "browser_hidden_files": "Hidden files",
@@ -67,6 +69,8 @@
     "browser_new_name_placeholder": "my-project",
     "browser_new_subdir": "Create subdirectory in current path",
     "browser_new_subdir_label": "+ New subdirectory",
+    "browser_no_roots": "No allowed_roots configured — set the browsable roots in the [projects] section of config.toml.",
+    "browser_pick_root": "Pick a root directory…",
     "browser_show_hidden": "Show hidden files (starting with .)",
     "cancel": "Cancel",
     "channel_connected": "Connected",
@@ -349,7 +353,26 @@
     "team_tasks_title": "Team Tasks",
     "team_unread": "New messages",
     "group_chats_count_one": "Group chats {{ count }}",
-    "group_chats_count_other": "Group chats {{ count }}"
+    "group_chats_count_other": "Group chats {{ count }}",
+    "context_usage_estimate_title": "Estimated context usage {{ pct }}% · {{ used }} / {{ window }} tokens (switches to measured after the first turn)",
+    "context_usage_title": "Context usage {{ pct }}% · {{ used }} / {{ window }} tokens (this turn: {{ total }})",
+    "cache_hit_title": "Prompt-cache hit rate of the last call {{ pct }}% · read / (input + read) (same formula as the TUI status bar)",
+    "starter_search_label": "Search the web",
+    "starter_search_prompt": "Search today's tech headlines and summarise the three that matter most.",
+    "starter_draft_label": "Draft something",
+    "starter_draft_prompt": "Draft a short, well-judged work email for me.",
+    "starter_code_label": "Explain code",
+    "starter_code_prompt": "Explain what this code does and point out anything that could go wrong:\n\n```\n\n```",
+    "starter_recall_label": "Recall context",
+    "starter_recall_prompt": "Where did we leave off last time? Give me a recap.",
+    "plan_archive_done": "Tasks complete",
+    "plan_archive_open": "Incomplete",
+    "transcript_heading": "Aleph conversation",
+    "export_markdown": "Export conversation as Markdown",
+    "doctor_repair_prompt": "Run the doctor tool to diagnose system health. For anything mechanically repairable (repairable=true), call doctor(fix=true) to fix it; for the rest, follow each finding's fix_hint and use the tool it names (self_config / vault_store / …). When everything has been handled, run doctor again to verify and report briefly what was fixed.",
+    "doctor_detect_prompt": "Run the doctor tool as a read-only health check (fix=false — do not repair anything). Report the problems you find and how severe each one is, faithfully.",
+    "doctor_command_desc": "Read-only health check; press f to repair what it finds",
+    "voice_idle_hint": "Tap for voice mode · hold to dictate"
   },
   "canvas": {
     "title": "Canvas",
@@ -560,7 +583,8 @@
       "description": "The Aleph service this Panel is connected to. The full app is fixed to its local core; the panel-only app connects to a remote core.",
       "connected_label": "Connected to:",
       "badge_remote": "Remote core",
-      "badge_local": "Local core"
+      "badge_local": "Local core",
+      "page_title": "Services & Cluster"
     },
     "title": "Settings",
     "welcome": "Welcome to Settings",
@@ -1838,7 +1862,9 @@
       "access_unknown_user": "not a known principal",
       "load_failed": "Could not load this agent",
       "save_disabled_unloaded": "Loading — saving is disabled until this agent's current values are known.",
-      "saved_restart_note": "Name / description / model take effect after aleph-server restarts."
+      "saved_restart_note": "Name / description / model take effect after aleph-server restarts.",
+      "model_inherit_default": "Inherit system default",
+      "model_gone_warning": "⚠ The selected model is gone (its provider was deleted or disabled); saving falls back to the system default"
     },
     "channels": {
       "title": "Channel Binding",
@@ -2128,7 +2154,9 @@
     "replay_journal_decisions": "Decisions",
     "replay_journal_next_steps": "Next steps",
     "replay_journal_artifacts": "Artifacts",
-    "replay_journal_recorded": "exit journal recorded"
+    "replay_journal_recorded": "exit journal recorded",
+    "disband_failed": "Disband failed: {{ error }}",
+    "delete_failed": "Delete failed: {{ error }}"
   },
   "runtimes": {
     "title": "Runtimes",
@@ -2317,6 +2345,10 @@
     "owner": "Owner",
     "remove": "Remove",
     "remove_member": "Remove member",
+    "sidebar_create": "Create",
+    "sidebar_empty": "No projects yet — use + in the top right to create one",
+    "sidebar_name_placeholder": "Project name",
+    "sidebar_new": "New project",
     "tab_chat": "Group chat",
     "tab_kanban": "Kanban",
     "tab_memory": "Memory",
@@ -2324,7 +2356,8 @@
     "tab_workspace": "Workspace",
     "unbind": "Unbind",
     "workspace_binding": "Workspace binding",
-    "workspace_unbound": "Not bound — conversations in this room use the agent's default workspace"
+    "workspace_unbound": "Not bound — conversations in this room use the agent's default workspace",
+    "workspace_unbound_short": "No workspace bound"
   },
   "runtime_deps": {
     "title": "Runtime",
@@ -2456,5 +2489,21 @@
     "placeholder": "Type a command or search…",
     "reload_panel": "Reload Panel",
     "theme_prefix": "Theme"
+  },
+  "voice": {
+    "exit_hint": "✕ esc to exit",
+    "mic_audio_context": "The audio context failed to start",
+    "mic_denied_browser": "The browser blocked the microphone: click the permission icon in the address bar, set this site's microphone to “Allow”, then reload the page",
+    "mic_denied_native": "Microphone permission required: System Settings → Privacy & Security → Microphone",
+    "mic_not_found": "No microphone detected",
+    "mic_not_readable": "The microphone is busy or unreadable — close whatever else is using it and try again",
+    "mic_other": "Could not open the microphone: {{ error }}",
+    "mic_unsupported": "This environment has no microphone support (it needs a secure context: https or localhost)",
+    "not_heard": "Didn't catch that — say it again?",
+    "phase_listening": "Listening",
+    "phase_processing": "Thinking",
+    "phase_speaking": "Speaking · start talking to interrupt",
+    "repeated_misses": "Still not catching it — press esc and use text instead",
+    "reply_failed": "That reply went wrong — try again in a moment?"
   }
 }
