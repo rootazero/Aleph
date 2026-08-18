@@ -81,6 +81,16 @@ pub struct ChannelOutboxArgs {
     /// Maximum dead letters to return (default 10, hard cap 25).
     #[serde(default)]
     pub limit: Option<usize>,
+
+    /// Required confirmation for the destructive `redrive` action. A redrive
+    /// replays permanently-failed outbound messages verbatim to their target
+    /// conversation — a typo'd confirm + dead-letter list = a duplicate
+    /// customer-visible message. Defaults to `false`; the call returns a
+    /// preview of what would be redriven when omitted, and only proceeds when
+    /// the caller explicitly passes `true`. `status` and `dead_letters` ignore
+    /// this flag.
+    #[serde(default)]
+    pub confirm_redrive: Option<bool>,
 }
 
 /// One permanently-undelivered outbound message, as the model sees it.
@@ -312,7 +322,40 @@ impl AlephTool for ChannelOutboxTool {
         Ok(match args.action {
             OutboxAction::Status => self.status(),
             OutboxAction::DeadLetters => self.dead_letters(channel, limit),
-            OutboxAction::Redrive => self.redrive(channel),
+            OutboxAction::Redrive => {
+                // BT-C-R4-07: require explicit confirmation before redrive
+                // replays dead letters. The previous shape used the same
+                // single-arg dispatch as `dead_letters`, so a model could
+                // pass action='redrive' with no confirmation and the loop
+                // would silently send duplicate customer-visible messages
+                // — a one-call DoS for any channel whose outbound queue
+                // has accumulated a few failures. Two-step preview-then-
+                // confirm pattern: when confirm_redrive is not set or
+                // false, return a `status`-shaped preview that names the
+                // dead letters that *would* be replayed and tells the
+                // caller to re-issue with confirm_redrive=true.
+                if !args.confirm_redrive.unwrap_or(false) {
+                    let preview = self.status();
+                    let preview_count = preview.dead_lettered.unwrap_or(0);
+                    let preview_msg = if preview_count == 0 {
+                        "redrive preview: no dead letters to replay; nothing would be sent. \
+                         Pass confirm_redrive=true to issue the (no-op) replay anyway."
+                            .to_string()
+                    } else {
+                        format!(
+                            "redrive preview: {} dead letter(s) would be replayed. \
+                             Pass confirm_redrive=true to proceed; pass action='dead_letters' \
+                             first to inspect the entries.",
+                            preview_count
+                        )
+                    };
+                    return Ok(ChannelOutboxOutput::blank(
+                        preview_msg,
+                        preview.durable_queue,
+                    ));
+                }
+                self.redrive(channel)
+            }
         })
     }
 }
