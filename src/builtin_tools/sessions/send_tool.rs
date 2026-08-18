@@ -642,6 +642,24 @@ impl SessionsSendTool {
                     timeout = args.timeout_seconds,
                     "sessions_send: timed out"
                 );
+                // BT-D-R4-21: dropping the timeout future leaves the engine's
+                // internal run state alive (channels, locks, emitters).
+                // Call the adapter's cancel hook to let the engine transition
+                // the run to Cancelled and emit RunError. Without this, the
+                // target agent stays "busy" until the run eventually completes
+                // on its own and any side-effect in-flight (file writes,
+                // partial tool calls) is never reconciled. cancel() is
+                // fallible (run may have already completed in the gap);
+                // any error is logged at info — the timeout is the primary
+                // signal to the caller.
+                if let Err(e) = execution_adapter.cancel(&run_id).await {
+                    info!(
+                        run_id = %run_id,
+                        error = %e,
+                        "sessions_send: post-timeout cancel attempt returned; \
+                         run may have already completed in the timeout gap"
+                    );
+                }
                 SessionsSendOutput::timeout(run_id, target_key_str)
             }
         }
