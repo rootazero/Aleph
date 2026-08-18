@@ -148,8 +148,11 @@ impl NodeCommand for FileWriteCommand {
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.customize(libc::O_NOFOLLOW);
+            // tokio exposes `custom_flags` directly (the std-only `customize`
+            // method on `std::fs::OpenOptions` does not apply here). O_NOFOLLOW
+            // refuses to follow a symlink at the leaf, closing the TOCTOU
+            // window between `resolve_in_jail`'s canonicalize and this open.
+            opts.custom_flags(libc::O_NOFOLLOW);
         }
         let open_result = opts.open(&dest).await;
         let mut file = match open_result {
