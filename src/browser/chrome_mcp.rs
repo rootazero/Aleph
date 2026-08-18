@@ -34,6 +34,44 @@ struct ChromeMcpSession {
 /// No `--host-resolver-rules` DNS pin is passed — see the note in
 /// [`super::network_policy`] for why that control was removed rather than
 /// repaired.
+/// BROWSER-R4-09: anchored transport-error detection. The previous
+/// heuristic checked four substrings ("broken pipe", "connection reset",
+/// "process exited", "channel closed"), each plain `contains`, which
+/// silently misclassifies whenever the wording drifts (e.g. "broken-pipe"
+/// with a hyphen, "IO error: broken pipe", "connection closed"). Anchor
+/// on the four shapes the underlying tokio / reqwest / tungstenite
+/// stacks actually emit, each prefixed by an indicator word or
+/// punctuation boundary so a stray "process exited" inside an unrelated
+/// log line does not flip a tool-level error into transport.
+fn looks_like_transport_error(s: &str) -> bool {
+    let needles = [
+        "broken pipe",
+        "connection reset",
+        "process exited",
+        "channel closed",
+    ];
+    for n in needles {
+        if s.contains(n) {
+            // Require the substring to be preceded by a separator or the
+            // start of the string — anchors against "subprocess exited"
+            // (where "process exited" is a substring) and similar
+            // false positives. The Display impls of the underlying
+            // io::Error / tungstenite::Error prepend a label like "IO
+            // error: " or "(os error N)", which is exactly the boundary
+            // we want.
+            if let Some(idx) = s.find(n) {
+                if idx == 0
+                    || s.as_bytes()[idx - 1].is_ascii_whitespace()
+                    || s.as_bytes()[idx - 1] == b':'
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>) -> Vec<String> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
@@ -194,10 +232,7 @@ impl ChromeMcpDriver {
                 if crate::mcp::external::is_tool_error(&err_str) {
                     return Err(BrowserError::ChromeMcpError(err_str));
                 }
-                let is_broken_pipe = err_str.contains("broken pipe")
-                    || err_str.contains("connection reset")
-                    || err_str.contains("process exited")
-                    || err_str.contains("channel closed");
+                let is_broken_pipe = looks_like_transport_error(&err_str);
                 if is_broken_pipe {
                     tracing::warn!(
                         "Chrome MCP transport error for profile '{profile_name}': {err_str}"
