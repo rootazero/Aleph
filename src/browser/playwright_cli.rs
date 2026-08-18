@@ -35,8 +35,6 @@ const SESSION_START_TIMEOUT_SECS: u64 = 60;
 #[derive(Debug, Clone)]
 pub(crate) struct CliOutput {
     pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
     pub page_meta: Option<PageMeta>,
 }
 
@@ -180,7 +178,7 @@ impl PlaywrightCliDriver {
     /// across sessions and does not know which profile a session key belongs
     /// to, and only some calls are entitled to create a browser at all — see
     /// [`LaunchPolicy`].
-    pub async fn run(
+    pub(crate) async fn run(
         &self,
         session_key: &str,
         policy: LaunchPolicy<'_>,
@@ -306,12 +304,7 @@ impl PlaywrightCliDriver {
         }
 
         let page_meta = parse_page_meta(&stdout);
-        Ok(CliOutput {
-            stdout,
-            stderr,
-            exit_code,
-            page_meta,
-        })
+        Ok(CliOutput { stdout, page_meta })
     }
 
     pub const fn config(&self) -> &PlaywrightCliConfig {
