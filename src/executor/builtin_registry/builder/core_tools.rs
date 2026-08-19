@@ -143,6 +143,15 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::HooksManageTool::DESCRIPTION,
             schema::<crate::builtin_tools::hooks_manage::HooksManageArgs>("hooks_manage"),
         );
+        // Same argument as hooks_manage: the answer to "why isn't my plugin
+        // working?" is a listing, and an absent tool cannot give it. Plugins
+        // were the only extension kind with no tool face (R8).
+        reg(
+            tools,
+            "plugin_manage",
+            crate::builtin_tools::PluginManageTool::DESCRIPTION,
+            schema::<crate::builtin_tools::plugin_manage::PluginManageArgs>("plugin_manage"),
+        );
         // Always-on: the ledger it reads is a process global installed at boot,
         // so this tool has no service dependency to wait for. It must be
         // reachable even when the ledger is NOT installed — it then says so

@@ -109,6 +109,59 @@ impl PluginVars {
     }
 }
 
+/// Render a plugin's stored configuration as environment variables.
+///
+/// The one translation from "what the operator set" to "what a child process
+/// sees", shared by the MCP server spawn and the hook executor so a plugin
+/// author learns one convention rather than two.
+///
+/// Emits, for a configuration `{"api_key": "sk-1"}`:
+/// * `ALEPH_PLUGIN_CONFIG` — the whole object as JSON, for structured values;
+/// * `CLAUDE_PLUGIN_OPTION_API_KEY` and `ALEPH_PLUGIN_OPTION_API_KEY` — the
+///   scalar, in Claude Code's spelling and Aleph's alias, matching how the
+///   `_ROOT` / `_DATA` pairs already work.
+///
+/// Non-scalar values appear only in the JSON blob: a shell variable holding a
+/// serialized object is a trap, because `$VAR` in a command interpolates
+/// something that looks like data and is not.
+#[must_use]
+pub fn settings_env(settings: &serde_json::Value) -> Vec<(String, String)> {
+    let serde_json::Value::Object(map) = settings else {
+        return Vec::new();
+    };
+    if map.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![("ALEPH_PLUGIN_CONFIG".to_string(), settings.to_string())];
+    for (key, value) in map {
+        let scalar = match value {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => continue,
+        };
+        // Keys come from a plugin manifest's schema; keep only what is legal
+        // in an environment variable name so a crafted key cannot smuggle an
+        // `=` or a NUL into the child's environment.
+        let name: String = key
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        out.push((format!("CLAUDE_PLUGIN_OPTION_{name}"), scalar.clone()));
+        out.push((format!("ALEPH_PLUGIN_OPTION_{name}"), scalar));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +193,36 @@ mod tests {
         assert!(!PluginVars::references_data("${CLAUDE_PLUGIN_ROOT}/x"));
         assert!(PluginVars::references_data("${CLAUDE_PLUGIN_DATA}/x"));
         assert!(PluginVars::references_data("${ALEPH_PLUGIN_DATA}/x"));
+    }
+
+    #[test]
+    fn settings_become_both_a_json_blob_and_per_key_scalars() {
+        let env = settings_env(&serde_json::json!({
+            "api_key": "sk-1",
+            "max results": 5,
+            "nested": {"a": 1}
+        }));
+        let names: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(names.contains(&"ALEPH_PLUGIN_CONFIG"));
+        assert!(names.contains(&"CLAUDE_PLUGIN_OPTION_API_KEY"));
+        assert!(names.contains(&"ALEPH_PLUGIN_OPTION_API_KEY"));
+        // A space is not legal in an env var name.
+        assert!(names.contains(&"CLAUDE_PLUGIN_OPTION_MAX_RESULTS"));
+        // Structured values ride only in the JSON blob.
+        assert!(!names.iter().any(|n| n.ends_with("_NESTED")));
+    }
+
+    #[test]
+    fn no_settings_means_no_environment() {
+        assert!(settings_env(&serde_json::json!({})).is_empty());
+        assert!(settings_env(&serde_json::Value::Null).is_empty());
+    }
+
+    /// A key that cannot become a legal variable name must be dropped, not
+    /// mangled into one that collides with another key.
+    #[test]
+    fn a_key_starting_with_a_digit_is_dropped() {
+        let env = settings_env(&serde_json::json!({"1st": "x"}));
+        assert!(!env.iter().any(|(k, _)| k.ends_with("_1ST")));
     }
 }

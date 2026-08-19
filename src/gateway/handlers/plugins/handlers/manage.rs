@@ -20,6 +20,113 @@ fn is_safe_plugin_name(name: &str) -> bool {
     )
 }
 
+/// Read a plugin's stored configuration (`plugin.config.get`).
+///
+/// A plugin could declare `config_schema` since the manifest types existed and
+/// nothing could read or write a value. Returns the manifest's schema
+/// alongside the values so a client can render a form without a second call —
+/// which is what `config_ui_hints` is for and why it had no consumer outside
+/// the authoring-time linter.
+pub async fn handle_config_get(request: JsonRpcRequest) -> JsonRpcResponse {
+    let Some(name) = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+    else {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'name'");
+    };
+    if !is_safe_plugin_name(name) {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid plugin name");
+    }
+
+    let manager = match get_extension_manager() {
+        Ok(m) => m,
+        Err(e) => return e.with_id(request.id),
+    };
+    if let Err(e) = manager.ensure_loaded().await {
+        tracing::warn!("Failed to load extensions: {}", e);
+    }
+
+    let settings = manager.plugin_settings(name).await;
+    let (schema, hints) = {
+        let registry = manager.get_plugin_registry().await;
+        registry.get_plugin(name).map_or((None, None), |record| {
+            match crate::extension::manifest::parse_manifest_from_dir_cached_global(
+                &record.root_dir,
+            ) {
+                Ok(manifest) => (
+                    manifest.config_schema.clone(),
+                    serde_json::to_value(&manifest.config_ui_hints).ok(),
+                ),
+                Err(_) => (None, None),
+            }
+        })
+    };
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "name": name,
+            "config": settings,
+            "schema": schema,
+            "ui_hints": hints,
+        }),
+    )
+}
+
+/// Replace a plugin's stored configuration (`plugin.config.set`).
+///
+/// Validation happens against the plugin's own `config_schema` and reports
+/// every violation, not the first. The response says whether a reload is
+/// needed rather than reloading implicitly: a reload tears down the plugin's
+/// MCP servers and background services, which is not a side effect a config
+/// write may smuggle in.
+pub async fn handle_config_set(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params = request.params.as_ref();
+    let Some(name) = params
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    else {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'name'");
+    };
+    if !is_safe_plugin_name(&name) {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid plugin name");
+    }
+    let Some(config) = params.and_then(|p| p.get("config")).cloned() else {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'config'");
+    };
+
+    let manager = match get_extension_manager() {
+        Ok(m) => m,
+        Err(e) => return e.with_id(request.id),
+    };
+    if let Err(e) = manager.ensure_loaded().await {
+        tracing::warn!("Failed to load extensions: {}", e);
+    }
+
+    match manager.set_plugin_settings(&name, config).await {
+        Ok(changed) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "name": name,
+                "changed": changed,
+                // A running plugin keeps the configuration it started with.
+                "reload_required": changed,
+            }),
+        ),
+        // Schema violations are the caller's to fix, not a server fault —
+        // INVALID_PARAMS, so the client is told to change the request rather
+        // than to retry it.
+        Err(errors) => JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Configuration rejected:\n  - {}", errors.join("\n  - ")),
+        ),
+    }
+}
+
 /// List all installed plugins
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let manager = match get_extension_manager() {

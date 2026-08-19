@@ -768,7 +768,7 @@ impl AlephTool for CanvasTool {
     /// roots, and that revisions are handled internally.
     const DESCRIPTION: &'static str = r#"Shared whiteboard canvases. The user sees every change live in the Panel's Canvas view, and their edits arrive the same way — treat a canvas as a shared surface, not a private buffer.
 
-get returns a summary (boxes + 80-char text excerpts, no ink points or styles); ask detail="full" only when you need exact geometry. apply takes the same ops as the canvas.apply RPC (upsert_shape / delete_shape / set_doc_meta / upsert_deck / delete_deck); revisions are read and conflict-retried internally — never guess one.
+get returns a summary (boxes + 80-char text excerpts, no ink points or styles); ask detail="full" only when you need exact geometry. apply takes ops (upsert_shape / delete_shape / set_doc_meta / upsert_deck / delete_deck); revisions are read and conflict-retried internally — never guess one.
 
 insert_image accepts location as a data: URL, a local file path (only under the Aleph data dir or the OS temp dir — where generation tools write), or an https URL (10s, 10MB, must serve image/*). insert_html wraps the body in a 16:9 frame. For both, frame_id targets an existing frame: the image replaces the frame in place, the html replaces the frame's html child — that is how an AiImageFrame becomes its finished image. read_asset returns html as text; an image is attached as media for the user, not inlined.
 

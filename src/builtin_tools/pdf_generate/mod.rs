@@ -142,9 +142,7 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
                 // anchor under the workspace, so `~/foo.pdf` resolves to
                 // `<workspace>/foo.pdf` not `~/foo.pdf`.
                 let filename = output_path.file_name().ok_or_else(|| {
-                    ToolError::InvalidArgs(
-                        "~-prefixed path has no file name component".to_string(),
-                    )
+                    ToolError::InvalidArgs("~-prefixed path has no file name component".to_string())
                 })?;
                 let output_dir = self.choose_output_dir().await?;
                 return Ok(output_dir.join(filename));

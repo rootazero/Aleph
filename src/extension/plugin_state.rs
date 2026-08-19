@@ -41,7 +41,9 @@ use serde::{Deserialize, Serialize};
 pub const PLUGINS_CONFIG_FILE: &str = "plugins.toml";
 
 /// Per-plugin persisted preferences.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+// `Eq` is deliberately absent: `settings` holds `toml::Value`, which can
+// contain a float, and float equality is not reflexive.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginEntryConfig {
     /// `None` means "the operator never expressed a preference" — which is not
     /// the same as `Some(true)`. Only an explicit `Some(false)` suppresses a
@@ -49,6 +51,27 @@ pub struct PluginEntryConfig {
     /// accidentally disable it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+
+    /// The operator's answers to the plugin's `config_schema`.
+    ///
+    /// A plugin could declare `config_schema` and `config_ui_hints` since the
+    /// manifest types existed, and nothing could *set* a value: there was no
+    /// store, no RPC, no tool, and the runtime received nothing.
+    /// `validate_config_against_schema` had exactly one caller — the
+    /// authoring-time linter, checking a sample `config.json` the author ships
+    /// — so a declared schema was documentation, not a control. Both reference
+    /// hosts treat per-plugin config as table stakes, and every non-trivial
+    /// community plugin needs at least one value (an API key, an endpoint, a
+    /// workspace root).
+    ///
+    /// `BTreeMap` for the same reason as `entries`: this file is one an
+    /// operator reads and diffs, and it must not reshuffle itself on save.
+    ///
+    /// Secrets do **not** belong here. A value that a hint marks `sensitive`
+    /// is stored as a `{{secret:NAME}}` reference into the vault, following
+    /// the Hub install wizard's precedent — `plugins.toml` is plaintext.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, toml::Value>,
 }
 
 /// Root document persisted as TOML at `<data_dir>/plugins.toml`.
@@ -56,7 +79,7 @@ pub struct PluginEntryConfig {
 /// `BTreeMap` (not `HashMap`) so the emitted file has a deterministic key
 /// order — a config the operator may read and diff should not reshuffle itself
 /// on every save.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginsConfig {
     #[serde(default)]
     pub entries: BTreeMap<String, PluginEntryConfig>,
@@ -138,6 +161,51 @@ impl PluginsConfig {
         true
     }
 
+    /// This plugin's stored configuration, as JSON.
+    ///
+    /// JSON because that is the shape everything downstream speaks: the
+    /// schema it is validated against is a JSON Schema, the WASM guest reads
+    /// it through Extism's config, and the RPC face returns it verbatim.
+    #[must_use]
+    pub fn settings_json(&self, plugin_id: &str) -> serde_json::Value {
+        let Some(entry) = self.entries.get(plugin_id) else {
+            return serde_json::Value::Object(serde_json::Map::new());
+        };
+        let mut map = serde_json::Map::new();
+        for (key, value) in &entry.settings {
+            match serde_json::to_value(value) {
+                Ok(v) => {
+                    map.insert(key.clone(), v);
+                }
+                Err(e) => tracing::warn!(
+                    plugin_id, key, error = %e,
+                    "plugin setting could not be represented as JSON; skipped"
+                ),
+            }
+        }
+        serde_json::Value::Object(map)
+    }
+
+    /// Replace this plugin's configuration. Returns `true` when the stored
+    /// value changed, so a no-op write skips the disk round-trip.
+    ///
+    /// Validation against the plugin's `config_schema` belongs to the caller —
+    /// this type does not know which manifest the id refers to, and doing the
+    /// lookup here would give the store a second reason to read the plugin
+    /// registry.
+    pub fn set_settings(
+        &mut self,
+        plugin_id: &str,
+        settings: BTreeMap<String, toml::Value>,
+    ) -> bool {
+        let entry = self.entries.entry(plugin_id.to_string()).or_default();
+        if entry.settings == settings {
+            return false;
+        }
+        entry.settings = settings;
+        true
+    }
+
     /// Drop a plugin's row — called on uninstall so a later re-install of the
     /// same id does not silently inherit a stale `enabled = false`.
     ///
@@ -206,8 +274,13 @@ mod tests {
     fn an_explicit_false_is_the_only_thing_that_disables() {
         let mut cfg = PluginsConfig::default();
         // A row that exists but records no preference must not disable.
-        cfg.entries
-            .insert("noisy".into(), PluginEntryConfig { enabled: None });
+        cfg.entries.insert(
+            "noisy".into(),
+            PluginEntryConfig {
+                enabled: None,
+                ..Default::default()
+            },
+        );
         assert!(cfg.is_enabled("noisy"));
 
         cfg.set_enabled("noisy", false);

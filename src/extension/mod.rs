@@ -560,6 +560,11 @@ impl ExtensionManager {
     pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
         let mut summary = LoadSummary::default();
 
+        // The loader's copy of every plugin's stored configuration must be
+        // current before anything loads — a plugin started with an empty
+        // config is a plugin the operator configured and cannot tell.
+        self.publish_plugin_settings().await;
+
         // Collect all plugin directories from discovery
         let plugin_dirs = self.collect_plugin_dirs()?;
         *self.hook_executor.write().await =
@@ -1594,6 +1599,7 @@ mod tests {
                 "wakeable".to_string(),
                 crate::extension::plugin_state::PluginEntryConfig {
                     enabled: Some(false),
+                    ..Default::default()
                 },
             )]
             .into_iter()

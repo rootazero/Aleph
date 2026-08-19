@@ -90,6 +90,28 @@ impl WasmRuntime {
         manifest: &PluginManifest,
         resolver: Option<Arc<dyn SecretResolver>>,
     ) -> Result<(), ExtensionError> {
+        self.load_plugin_with(manifest, resolver, &serde_json::Value::Null)
+    }
+
+    /// Load a WASM plugin with a secret resolver and the operator's stored
+    /// configuration.
+    ///
+    /// `settings` reaches the guest through Extism's config map, which is the
+    /// mechanism `extism_pdk::config::get` reads — so a plugin author writes
+    /// `config::get("api_key")` and gets the value the operator set, with no
+    /// Aleph-specific host function. Passing it at build time (rather than as
+    /// a call argument) is what makes it available during the guest's own
+    /// initialisation.
+    ///
+    /// A non-object `settings` (including the `Null` the two-argument form
+    /// passes) means "no configuration", not an error: a plugin with no
+    /// `config_schema` must load exactly as it did before this existed.
+    pub fn load_plugin_with(
+        &mut self,
+        manifest: &PluginManifest,
+        resolver: Option<Arc<dyn SecretResolver>>,
+        settings: &serde_json::Value,
+    ) -> Result<(), ExtensionError> {
         let wasm_path = manifest.entry_path()?;
 
         if !wasm_path.exists() {
@@ -127,8 +149,23 @@ impl WasmRuntime {
         // run forever. Extism interrupts the call once the deadline is hit
         // (the plugin instance cannot continue afterwards and must be
         // reloaded).
-        let extism_manifest =
+        let mut extism_manifest =
             ExtismManifest::new([Wasm::file(&wasm_path)]).with_timeout(call_timeout);
+
+        // The operator's configuration, as Extism config keys. Scalars are
+        // passed in their natural spelling and structured values as JSON, so
+        // `config::get("api_key")` returns the string an operator typed rather
+        // than a quoted one.
+        if let serde_json::Value::Object(map) = settings {
+            for (key, value) in map {
+                let rendered = match value {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => continue,
+                    other => other.to_string(),
+                };
+                extism_manifest = extism_manifest.with_config_key(key, rendered);
+            }
+        }
 
         let plugin = PluginBuilder::new(extism_manifest)
             .with_wasi(true)

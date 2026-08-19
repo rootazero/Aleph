@@ -1046,8 +1046,7 @@ fn require_item_index(index: Option<usize>, action: &str) -> Result<usize> {
 fn namespace_explicit_project_id(project_id: &str) -> String {
     match crate::gateway::visibility::ambient_actor() {
         Some(actor)
-            if actor != crate::gateway::security::store::OWNER_USER_ID
-                && !actor.is_empty() =>
+            if actor != crate::gateway::security::store::OWNER_USER_ID && !actor.is_empty() =>
         {
             let slug: String = actor
                 .chars()
@@ -1422,16 +1421,14 @@ mod tests {
 
         // A member gets their own suffix — and two members differ.
         let bob = crate::gateway::caller_identity::CALLER_USER
-            .scope(
-                Some("u-bob".to_string()),
-                async { namespace_explicit_project_id("roadmap") },
-            )
+            .scope(Some("u-bob".to_string()), async {
+                namespace_explicit_project_id("roadmap")
+            })
             .await;
         let alice = crate::gateway::caller_identity::CALLER_USER
-            .scope(
-                Some("u-alice".to_string()),
-                async { namespace_explicit_project_id("roadmap") },
-            )
+            .scope(Some("u-alice".to_string()), async {
+                namespace_explicit_project_id("roadmap")
+            })
             .await;
         assert_eq!(bob, "roadmap__u-bob");
         assert_eq!(alice, "roadmap__u-alice");

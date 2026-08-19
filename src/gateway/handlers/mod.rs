@@ -313,6 +313,11 @@ impl HandlerRegistry {
         registry.register("plugin.enable", plugins::handle_enable);
         registry.register("plugin.disable", plugins::handle_disable);
         registry.register("plugin.reload", plugins::handle_reload);
+        // Per-plugin configuration. The manifest could declare a
+        // `config_schema` since the type existed; nothing could read or write
+        // a value against it until these two.
+        registry.register("plugin.config.get", plugins::handle_config_get);
+        registry.register("plugin.config.set", plugins::handle_config_set);
 
         // Plugin marketplace handlers
         registry.register("plugin.marketplace.list", plugins::handle_marketplace_list);

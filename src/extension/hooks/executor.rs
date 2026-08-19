@@ -583,6 +583,17 @@ impl HookExecutor {
                 crate::extension::plugin_vars::PluginVars::new(plugin_name, plugin_root.as_path());
             cmd.env("CLAUDE_PLUGIN_DATA", vars.data_dir());
             cmd.env("ALEPH_PLUGIN_DATA", vars.data_dir());
+
+            // The operator's configuration for this plugin, in the same env
+            // spelling the plugin's MCP servers get. A hook and an MCP server
+            // from one plugin reading the same setting under two different
+            // names would be two conventions for one fact.
+            if let Some(manager) = crate::extension::try_extension_manager() {
+                let settings = manager.plugin_settings(plugin_name).await;
+                for (key, value) in crate::extension::plugin_vars::settings_env(&settings) {
+                    cmd.env(key, value);
+                }
+            }
         }
         if let Some(ref tool_name) = context.tool_name {
             cmd.env("TOOL_NAME", tool_name);

@@ -127,6 +127,7 @@ fn default_transport() -> String {
 pub fn read_mcp_json(
     plugin_dir: &Path,
     plugin_id: &str,
+    settings: &serde_json::Value,
 ) -> ExtensionResult<HashMap<String, McpManagerConfig>> {
     let mcp_path = plugin_dir.join(".mcp.json");
     if !mcp_path.exists() {
@@ -137,7 +138,7 @@ pub fn read_mcp_json(
         ExtensionError::config_parse(&mcp_path, format!("Failed to read .mcp.json: {e}"))
     })?;
 
-    parse_mcp_json_content(&content, plugin_dir, plugin_id)
+    parse_mcp_json_content(&content, plugin_dir, plugin_id, settings)
         .map_err(|e| ExtensionError::config_parse(&mcp_path, format!("Invalid .mcp.json: {e}")))
 }
 
@@ -148,9 +149,15 @@ fn parse_mcp_json_content(
     content: &str,
     plugin_dir: &Path,
     plugin_id: &str,
+    settings: &serde_json::Value,
 ) -> Result<HashMap<String, McpManagerConfig>, String> {
     let file: McpJsonFile =
         serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))?;
+
+    // The operator's configuration, in the one env spelling this subsystem
+    // uses. Injected first so an explicit `env` entry in `.mcp.json` wins:
+    // the author's own value beats a convention.
+    let config_env = crate::extension::plugin_vars::settings_env(settings);
 
     let plugin_root = plugin_dir.to_string_lossy();
 
@@ -203,11 +210,13 @@ fn parse_mcp_json_content(
                     .iter()
                     .map(|a| substitute_vars(a, &plugin_root, &plugin_data))
                     .collect();
-                let env: HashMap<String, String> = entry
-                    .env
-                    .iter()
-                    .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root, &plugin_data)))
-                    .collect();
+                let mut env: HashMap<String, String> = config_env.iter().cloned().collect();
+                env.extend(
+                    entry
+                        .env
+                        .iter()
+                        .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root, &plugin_data))),
+                );
                 McpManagerConfig::stdio(&server_id, &display_name, &cmd)
                     .with_args(args)
                     .with_env(env)
@@ -283,9 +292,13 @@ mod tests {
             }
         }"#;
 
-        let result =
-            parse_mcp_json_content(content, Path::new("/plugins/test-plugin"), "test-plugin")
-                .unwrap();
+        let result = parse_mcp_json_content(
+            content,
+            Path::new("/plugins/test-plugin"),
+            "test-plugin",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 1);
 
@@ -318,7 +331,13 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(content, Path::new("/plugins/multi"), "multi").unwrap();
+        let result = parse_mcp_json_content(
+            content,
+            Path::new("/plugins/multi"),
+            "multi",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 2);
         assert!(result.contains_key("plugin:multi/alpha"));
@@ -329,7 +348,13 @@ mod tests {
     fn test_parse_mcp_json_empty_servers() {
         let content = r#"{ "mcpServers": {} }"#;
 
-        let result = parse_mcp_json_content(content, Path::new("/plugins/empty"), "empty").unwrap();
+        let result = parse_mcp_json_content(
+            content,
+            Path::new("/plugins/empty"),
+            "empty",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
 
         assert!(result.is_empty());
     }
@@ -337,7 +362,12 @@ mod tests {
     #[test]
     fn test_parse_mcp_json_invalid_json() {
         let content = "not json at all";
-        let result = parse_mcp_json_content(content, Path::new("/plugins/bad"), "bad");
+        let result = parse_mcp_json_content(
+            content,
+            Path::new("/plugins/bad"),
+            "bad",
+            &serde_json::Value::Null,
+        );
         assert!(result.is_err());
     }
 
@@ -373,7 +403,12 @@ mod tests {
 
     #[test]
     fn test_read_mcp_json_missing_file() {
-        let result = read_mcp_json(Path::new("/nonexistent/dir"), "test").unwrap();
+        let result = read_mcp_json(
+            Path::new("/nonexistent/dir"),
+            "test",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
         assert!(result.is_empty());
     }
 
@@ -385,7 +420,13 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(content, Path::new("/p/a"), "my-plugin").unwrap();
+        let result = parse_mcp_json_content(
+            content,
+            Path::new("/p/a"),
+            "my-plugin",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
 
         // Server ID should be namespaced with plugin ID
         assert!(result.contains_key("plugin:my-plugin/srv"));
@@ -406,7 +447,13 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(content, Path::new("/p/x"), "remote-plugin").unwrap();
+        let result = parse_mcp_json_content(
+            content,
+            Path::new("/p/x"),
+            "remote-plugin",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
 
         let config = result
             .get("plugin:remote-plugin/remote-srv")
@@ -446,7 +493,9 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(content, Path::new("/p/x"), "p").unwrap();
+        let result =
+            parse_mcp_json_content(content, Path::new("/p/x"), "p", &serde_json::Value::Null)
+                .unwrap();
         let header = result
             .get("plugin:p/srv")
             .unwrap()
@@ -493,7 +542,9 @@ mod tests {
             }
         }"#;
 
-        let result = parse_mcp_json_content(content, Path::new("/p/x"), "ev").unwrap();
+        let result =
+            parse_mcp_json_content(content, Path::new("/p/x"), "ev", &serde_json::Value::Null)
+                .unwrap();
         use crate::mcp::McpTransportType;
         let config = result.get("plugin:ev/events").unwrap();
         assert_eq!(config.transport, McpTransportType::Sse);
@@ -511,7 +562,13 @@ mod tests {
                 "legacy": { "command": "node", "args": ["server.js"] }
             }
         }"#;
-        let result = parse_mcp_json_content(content, Path::new("/p/x"), "legacy").unwrap();
+        let result = parse_mcp_json_content(
+            content,
+            Path::new("/p/x"),
+            "legacy",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
         use crate::mcp::McpTransportType;
         let config = result.get("plugin:legacy/legacy").unwrap();
         assert_eq!(config.transport, McpTransportType::Stdio);
@@ -525,7 +582,13 @@ mod tests {
                 "broken": { "args": ["x"] }
             }
         }"#;
-        let err = parse_mcp_json_content(content, Path::new("/p/x"), "broken").unwrap_err();
+        let err = parse_mcp_json_content(
+            content,
+            Path::new("/p/x"),
+            "broken",
+            &serde_json::Value::Null,
+        )
+        .unwrap_err();
         assert!(
             err.contains("missing 'command'"),
             "stdio without command must be a hard error: {err}"
@@ -539,7 +602,13 @@ mod tests {
                 "broken": { "type": "http", "headers": {} }
             }
         }"#;
-        let err = parse_mcp_json_content(content, Path::new("/p/x"), "broken").unwrap_err();
+        let err = parse_mcp_json_content(
+            content,
+            Path::new("/p/x"),
+            "broken",
+            &serde_json::Value::Null,
+        )
+        .unwrap_err();
         assert!(
             err.contains("missing 'url'"),
             "remote without url must be a hard error: {err}"
@@ -553,7 +622,13 @@ mod tests {
                 "broken": { "type": "telnet" }
             }
         }"#;
-        let err = parse_mcp_json_content(content, Path::new("/p/x"), "broken").unwrap_err();
+        let err = parse_mcp_json_content(
+            content,
+            Path::new("/p/x"),
+            "broken",
+            &serde_json::Value::Null,
+        )
+        .unwrap_err();
         assert!(
             err.contains("unknown MCP transport type 'telnet'"),
             "unknown transport must surface a clear error: {err}"
@@ -573,7 +648,13 @@ mod tests {
                 "srv": { "type": "remote", "url": "https://mcp.example.com/api" }
             }
         }"#;
-        let err = parse_mcp_json_content(content, Path::new("/p/x"), "remote-plugin").unwrap_err();
+        let err = parse_mcp_json_content(
+            content,
+            Path::new("/p/x"),
+            "remote-plugin",
+            &serde_json::Value::Null,
+        )
+        .unwrap_err();
         assert!(
             err.contains("unknown MCP transport type 'remote'"),
             "'remote' must be rejected, not silently coerced: {err}"

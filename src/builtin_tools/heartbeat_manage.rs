@@ -219,10 +219,9 @@ impl AlephTool for HeartbeatCreateTool {
         // and `<snake_name>` for builtins; whitespace, control bytes, or
         // `..` (path traversal in a hypothetical file-based lookup)
         // cannot be part of a real tool name.
-        if probe
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == '/' || c == '\\' || c == '`' || c == '$')
-        {
+        if probe.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || c == '/' || c == '\\' || c == '`' || c == '$'
+        }) {
             return Err(crate::error::AlephError::tool(format!(
                 "probe_tool_name contains an invalid character (whitespace, control, /, \\, `, or $); got '{probe}'"
             )));

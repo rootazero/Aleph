@@ -96,7 +96,16 @@ impl AlephTool for ToolUsageTool {
     // States the two things the model cannot read off the output itself: that a
     // `—` count is a different claim from `0`, and that this tool does not
     // remove anything (so it must route removal through the tools that do).
-    const DESCRIPTION: &'static str = "Invocation records for installed MCP servers, plugins and skills — call counts, last-used dates, and what has gone unused: the evidence for deciding what to uninstall. A `—` count (not 0) means that entry has no tool-call channel to measure (e.g. a hooks-only plugin) and is NOT evidence it is unused. Read-only; removal goes through self_config (MCP), plugins.uninstall, or skill_manage.";
+    //
+    // Every name in that last sentence must be a tool the model can call. It
+    // said `plugins.uninstall` until 2026-08-19 — a JSON-RPC method, not a
+    // tool — so one of the three routes it offered was unreachable. Same
+    // defect class as the `delegate`/`subagent` bug in
+    // `agents/subagent_tool/mod.rs`, and the guard written for that one
+    // (`every_tool_the_catalog_names_is_a_real_tool`) resolves only
+    // *backticked* names inside AgentCatalogLayer's sentence, so it is
+    // structurally blind to a bare name in a tool DESCRIPTION.
+    const DESCRIPTION: &'static str = "Invocation records for installed MCP servers, plugins and skills — call counts, last-used dates, and what has gone unused: the evidence for deciding what to uninstall. A `—` count (not 0) means that entry has no tool-call channel to measure (e.g. a hooks-only plugin) and is NOT evidence it is unused. Read-only; it removes nothing. Removal of an MCP server goes through self_config and of a skill through skill_manage; a plugin can be disabled with plugin_manage but uninstalling one stays with the operator.";
 
     type Args = ToolUsageArgs;
     type Output = ToolUsageOutput;

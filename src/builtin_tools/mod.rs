@@ -90,6 +90,7 @@ pub mod partial_output;
 pub mod pdf_generate;
 pub mod permission_tool;
 pub mod pim;
+pub mod plugin_manage;
 pub mod process_completion;
 pub mod process_journal;
 pub mod process_registry;
@@ -251,6 +252,7 @@ pub use pdf_generate::{
 };
 pub use permission_tool::{PermissionArgs, PermissionOutput, PermissionTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
+pub use plugin_manage::{PluginAction, PluginManageArgs, PluginManageOutput, PluginManageTool};
 pub use recall_context::{RecallContextArgs, RecallContextResult, RecallContextTool};
 pub use recall_events::{RecallEventsArgs, RecallEventsOutput, RecallEventsTool};
 pub use remember::{RememberArgs, RememberOutput, RememberTool};

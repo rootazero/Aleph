@@ -231,8 +231,9 @@ pub async fn handle_ticket_create(
                     crate::gateway::caller_identity::current_caller_user(),
                     match user_id.as_deref() {
                         Some(uid) => format!("gateway.ticket.create: bound to {uid}"),
-                        None => "gateway.ticket.create: UNBOUND (redeemer becomes owner)"
-                            .to_string(),
+                        None => {
+                            "gateway.ticket.create: UNBOUND (redeemer becomes owner)".to_string()
+                        }
                     },
                 ));
             }
