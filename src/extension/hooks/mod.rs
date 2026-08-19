@@ -418,20 +418,48 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
 /// Substitute variables in a string
 ///
 /// Supported variables:
-/// - `${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` - Plugin root directory
+/// - `${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` — plugin root directory
+/// - `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` — plugin data directory
 /// - `$ARGUMENTS` / `${ARGUMENTS}` - Tool arguments (JSON)
 /// - `$TOOL_INPUT` / `${TOOL_INPUT}` - Tool input content
 /// - `$FILE` / `${FILE}` - File path
 /// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
 /// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
+///
+/// `owner` is the hook's `plugin_name`: a plugin id for plugin-registered
+/// hooks, or a source label like `user:project` for hooks that came from
+/// settings. Only the former has a data directory, and `validate_plugin_id`
+/// separates them — a label cannot be a plugin id, so the `_DATA` pair is
+/// left unexpanded rather than pointed at an invented directory.
+///
+/// The `_DATA` pair was missing here until 2026-08-19 while
+/// `PLUGIN_SYSTEM.md` claimed all four variables worked on all four surfaces.
+/// A hook that wants durable state has nowhere else to put it:
+/// `${CLAUDE_PLUGIN_ROOT}` is destroyed by `plugin update`, which swaps the
+/// install directory.
 #[must_use]
-pub fn substitute_variables(template: &str, context: &HookContext, plugin_root: &Path) -> String {
+pub fn substitute_variables(
+    template: &str,
+    context: &HookContext,
+    plugin_root: &Path,
+    owner: &str,
+) -> String {
     let mut result = template.to_string();
     let plugin_root_str = plugin_root.to_string_lossy();
 
-    // Plugin root (both formats)
+    // Plugin root (all three spellings)
     result = result.replace("${PLUGIN_ROOT}", &plugin_root_str);
     result = result.replace("${CLAUDE_PLUGIN_ROOT}", &plugin_root_str);
+    result = result.replace("${ALEPH_PLUGIN_ROOT}", &plugin_root_str);
+
+    // Plugin data directory — plugin-owned hooks only.
+    if crate::extension::manifest::validate_plugin_id(owner).is_ok() {
+        let vars = crate::extension::plugin_vars::PluginVars::new(owner, plugin_root);
+        vars.ensure_data_dir_if_referenced(&result);
+        let data = vars.data_dir().to_string_lossy();
+        result = result.replace("${CLAUDE_PLUGIN_DATA}", &data);
+        result = result.replace("${ALEPH_PLUGIN_DATA}", &data);
+    }
 
     // Tool name
     if let Some(ref name) = context.tool_name {
@@ -542,6 +570,7 @@ mod tests {
             "Run ${PLUGIN_ROOT}/script.sh with $ARGUMENTS on $FILE for $TOOL_NAME",
             &context,
             &plugin_root,
+            "test-plugin",
         );
 
         assert!(result.contains("/plugins/my-plugin/script.sh"));
@@ -562,6 +591,7 @@ mod tests {
             "${TOOL_NAME}: ${ARGUMENTS} (${SESSION_ID})",
             &context,
             &plugin_root,
+            "test-plugin",
         );
 
         assert_eq!(result, "Read: test args (session-1)");
@@ -575,7 +605,12 @@ mod tests {
 
         let plugin_root = PathBuf::from("/plugin");
 
-        let result = substitute_variables("$CUSTOM_VAR and ${ANOTHER}", &context, &plugin_root);
+        let result = substitute_variables(
+            "$CUSTOM_VAR and ${ANOTHER}",
+            &context,
+            &plugin_root,
+            "test-plugin",
+        );
 
         assert_eq!(result, "custom_value and another_value");
     }

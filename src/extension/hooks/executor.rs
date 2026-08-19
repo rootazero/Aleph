@@ -403,7 +403,8 @@ impl HookExecutor {
                 .await
             }
             HookAction::Prompt { prompt } => {
-                self.execute_prompt(prompt, context, plugin_root).await
+                self.execute_prompt(prompt, context, plugin_root, plugin_name)
+                    .await
             }
             HookAction::Agent { agent } => self.execute_agent(agent).await,
             HookAction::Http { url, headers } => {
@@ -538,7 +539,7 @@ impl HookExecutor {
         }
 
         // Substitute variables
-        let resolved = substitute_variables(command, context, plugin_root);
+        let resolved = substitute_variables(command, context, plugin_root, plugin_name);
         debug!(plugin = plugin_name, event = ?event, "Executing hook command");
 
         // Determine working directory
@@ -572,6 +573,17 @@ impl HookExecutor {
         // dropped from the env with a marker rather than risking the spawn.
         cmd.env("PLUGIN_ROOT", plugin_root);
         cmd.env("CLAUDE_PLUGIN_ROOT", plugin_root);
+        // The durable half. `CLAUDE_PLUGIN_ROOT` is destroyed by
+        // `plugin update` (stage → backup → swap), so a hook that wants state
+        // that outlives an upgrade had no addressable path until this line
+        // existed. Plugin-owned hooks only — a settings source label such as
+        // `user:project` is not a plugin id and has no data directory.
+        if crate::extension::manifest::validate_plugin_id(plugin_name).is_ok() {
+            let vars =
+                crate::extension::plugin_vars::PluginVars::new(plugin_name, plugin_root.as_path());
+            cmd.env("CLAUDE_PLUGIN_DATA", vars.data_dir());
+            cmd.env("ALEPH_PLUGIN_DATA", vars.data_dir());
+        }
         if let Some(ref tool_name) = context.tool_name {
             cmd.env("TOOL_NAME", tool_name);
         }
@@ -693,8 +705,9 @@ impl HookExecutor {
         prompt: &str,
         context: &HookContext,
         plugin_root: &Path,
+        owner: &str,
     ) -> Result<ActionResult, ExtensionError> {
-        let resolved = substitute_variables(prompt, context, plugin_root);
+        let resolved = substitute_variables(prompt, context, plugin_root, owner);
 
         Ok(ActionResult {
             success: true,
@@ -757,7 +770,7 @@ impl HookExecutor {
             }
         }
 
-        let resolved_url = substitute_variables(url, context, plugin_root);
+        let resolved_url = substitute_variables(url, context, plugin_root, plugin_name);
         let payload = build_event_payload(event, context);
         let effective = self.effective_timeout(timeout_override.map(|d| d.as_secs()));
 
@@ -775,7 +788,7 @@ impl HookExecutor {
         for (k, v) in headers {
             // Only context-env substitution — no process env — so a misconfigured
             // template can't leak `$AWS_SECRET_ACCESS_KEY` etc.
-            let resolved_v = substitute_variables(v, context, plugin_root);
+            let resolved_v = substitute_variables(v, context, plugin_root, plugin_name);
             req = req.header(k.as_str(), resolved_v);
         }
 

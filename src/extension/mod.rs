@@ -40,6 +40,7 @@ pub mod mcp_config;
 mod plugin_ops;
 pub mod plugin_state;
 pub mod plugin_trust;
+pub mod plugin_vars;
 mod projection;
 pub mod registry;
 mod service_manager;

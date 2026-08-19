@@ -99,6 +99,12 @@ impl AdapterRegistry {
     }
 
     /// Try each adapter in priority order; return the first successful parse.
+    ///
+    /// Every adapter's output passes through
+    /// [`expand_plugin_variables`](Self::expand_plugin_variables) here rather
+    /// than inside each adapter: a new adapter inherits the expansion instead
+    /// of having to be told about it, which is the failure mode that left
+    /// `${CLAUDE_PLUGIN_ROOT}` unexpanded in every skill body ever parsed.
     pub fn parse_dir(&self, dir: &Path) -> Result<AdapterOutput> {
         for adapter in &self.adapters {
             if adapter.detect(dir) {
@@ -107,13 +113,62 @@ impl AdapterRegistry {
                     dir = %dir.display(),
                     "Adapter matched"
                 );
-                return adapter.parse(dir);
+                let mut output = adapter.parse(dir)?;
+                Self::expand_plugin_variables(&mut output, dir);
+                return Ok(output);
             }
         }
         Err(anyhow!(
             "No manifest adapter matched directory: {}",
             dir.display()
         ))
+    }
+
+    /// Expand `${*_PLUGIN_ROOT}` / `${*_PLUGIN_DATA}` in the prose a plugin
+    /// contributes.
+    ///
+    /// `Run ${CLAUDE_PLUGIN_ROOT}/scripts/x.py` is the most common idiom in a
+    /// Claude Code `SKILL.md`. Until 2026-08-19 it reached the model verbatim,
+    /// so the model issued a `bash` call against a path containing a literal
+    /// `${CLAUDE_PLUGIN_ROOT}`. `.mcp.json` had its own expander and hooks had
+    /// a third; skill / command / agent bodies had none.
+    ///
+    /// Scope: only the fields whose consumer is the model — bodies and hook
+    /// commands. Names and ids are identifiers, not paths, and expanding them
+    /// would let a manifest smuggle an absolute path into a registry key.
+    fn expand_plugin_variables(output: &mut AdapterOutput, plugin_dir: &Path) {
+        use crate::extension::capability::CapabilityDeclaration;
+        use crate::extension::plugin_vars::PluginVars;
+
+        let vars = PluginVars::new(&output.plugin_id, plugin_dir);
+        for cap in &mut output.capabilities {
+            match cap {
+                CapabilityDeclaration::Skill(skill) => {
+                    vars.ensure_data_dir_if_referenced(&skill.content);
+                    skill.content = vars.expand(&skill.content);
+                }
+                CapabilityDeclaration::Agent(agent) => {
+                    vars.ensure_data_dir_if_referenced(&agent.content);
+                    agent.content = vars.expand(&agent.content);
+                }
+                CapabilityDeclaration::Hook(hook) => {
+                    vars.ensure_data_dir_if_referenced(&hook.handler);
+                    hook.handler = vars.expand(&hook.handler);
+                    for action in &mut hook.actions {
+                        if let crate::extension::types::HookAction::Command { command } = action {
+                            *command = vars.expand(command);
+                        }
+                    }
+                }
+                // Tool parameters are a JSON Schema, services and MCP servers
+                // are handled by their own layers (`mcp_config.rs` expands the
+                // runtime `.mcp.json`), and none of them is prose the model
+                // reads.
+                CapabilityDeclaration::Tool(_)
+                | CapabilityDeclaration::Service(_)
+                | CapabilityDeclaration::McpServer(_) => {}
+            }
+        }
     }
 
     /// Number of registered adapters.
@@ -266,5 +321,88 @@ mod tests {
         registry.register(Box::new(NeverMatchAdapter));
         assert!(!registry.is_empty());
         assert_eq!(registry.len(), 1);
+    }
+
+    /// `Run ${CLAUDE_PLUGIN_ROOT}/scripts/x.py` is the most common idiom in a
+    /// Claude Code `SKILL.md`. Until 2026-08-19 it reached the model as a
+    /// literal, so the model issued a `bash` call against a path containing
+    /// `${CLAUDE_PLUGIN_ROOT}`. This runs through the real adapter chain,
+    /// because the expansion deliberately lives in `parse_dir` rather than in
+    /// each adapter.
+    #[test]
+    fn plugin_variables_are_expanded_in_skill_prose() {
+        use crate::extension::capability::CapabilityDeclaration;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin/plugin.json"),
+            r#"{"name": "vars-plugin"}"#,
+        )
+        .unwrap();
+        let skill_dir = dir.path().join("skills/runner");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: runner\ndescription: d\n---\nRun ${CLAUDE_PLUGIN_ROOT}/scripts/x.py now",
+        )
+        .unwrap();
+
+        let registry = AdapterRegistry::with_defaults();
+        let out = registry.parse_dir(dir.path()).unwrap();
+
+        let body = out
+            .capabilities
+            .iter()
+            .find_map(|c| match c {
+                CapabilityDeclaration::Skill(s) if s.name == "runner" => Some(s.content.clone()),
+                _ => None,
+            })
+            .expect("skill must be parsed");
+        assert!(
+            !body.contains("${CLAUDE_PLUGIN_ROOT}"),
+            "the model must not be shown an unexpanded variable: {body}"
+        );
+        assert!(
+            body.contains(
+                &dir.path()
+                    .join("scripts/x.py")
+                    .to_string_lossy()
+                    .to_string()
+            ),
+            "expected the plugin root to be substituted: {body}"
+        );
+    }
+
+    /// Identifiers are not paths. Expanding a name would let a manifest
+    /// smuggle an absolute path into a registry key.
+    #[test]
+    fn plugin_variables_are_not_expanded_in_identifiers() {
+        use crate::extension::capability::CapabilityDeclaration;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin/plugin.json"),
+            r#"{"name": "ident-plugin"}"#,
+        )
+        .unwrap();
+        let skill_dir = dir.path().join("skills/s");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: ${CLAUDE_PLUGIN_ROOT}\ndescription: d\n---\nbody",
+        )
+        .unwrap();
+
+        let registry = AdapterRegistry::with_defaults();
+        let out = registry.parse_dir(dir.path()).unwrap();
+        assert!(
+            out.capabilities.iter().any(|c| matches!(
+                c,
+                CapabilityDeclaration::Skill(s) if s.name == "${CLAUDE_PLUGIN_ROOT}"
+            )),
+            "a name must be left alone"
+        );
     }
 }

@@ -258,11 +258,10 @@ fn substitute_vars(value: &str, plugin_root: &str, plugin_data: &str) -> String 
 
 /// Whether any value in the manifest asks for the data directory.
 ///
-/// Creating it unconditionally would litter `<plugins_root>/data/` with an
-/// empty directory per installed plugin; creating it only when a plugin names
-/// it keeps the tree meaningful.
+/// Delegates to the subsystem's single expander so "which spellings mean the
+/// data directory" has one answer.
 fn references_plugin_data(content: &str) -> bool {
-    content.contains("${CLAUDE_PLUGIN_DATA}") || content.contains("${ALEPH_PLUGIN_DATA}")
+    crate::extension::plugin_vars::PluginVars::references_data(content)
 }
 
 #[cfg(test)]
