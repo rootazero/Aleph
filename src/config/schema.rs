@@ -20,7 +20,11 @@ pub(crate) fn generate_config_schema() -> Schema {
 pub fn generate_config_schema_json() -> serde_json::Value {
     let schema = generate_config_schema();
     serde_json::to_value(&schema).unwrap_or_else(|e| {
-        panic!(
+        // Unreachable invariant: `Schema` is a transparent wrapper over
+        // `serde_json::Value` with string-only keys, so `to_value` cannot
+        // fail. It can only error on non-string map keys, which the
+        // generated schema never contains.
+        unreachable!(
             "Config schema serialization failed — the schema is generated from the \
              same `Config` struct the validator consumes, so this is a type-system \
              soundness failure, not a recoverable error: {e}"

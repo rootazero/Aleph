@@ -276,100 +276,7 @@ impl AgentManager {
             .get_mut(idx)
             .ok_or_else(|| AlephError::invalid_config(format!("Agent at index {idx} not found")))?;
 
-        // Apply patch fields
-        if let Some(name) = &patch.name {
-            agent_table["name"] = toml_edit::value(name.as_str());
-        }
-
-        if let Some(identity) = &patch.identity {
-            // Merge field-by-field into the EXISTING identity table. A wholesale
-            // replace would wipe any field the patch omits — e.g. the Overview
-            // tab sends only {emoji, description}, so a replace silently drops a
-            // previously-set `avatar`.
-            let ident_item = agent_table
-                .entry("identity")
-                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-            if !ident_item.is_table() {
-                *ident_item = toml_edit::Item::Table(toml_edit::Table::new());
-            }
-            if let Some(t) = ident_item.as_table_mut() {
-                if let Some(ref emoji) = identity.emoji {
-                    t["emoji"] = toml_edit::value(emoji.as_str());
-                }
-                if let Some(ref desc) = identity.description {
-                    t["description"] = toml_edit::value(desc.as_str());
-                }
-                if let Some(ref avatar) = identity.avatar {
-                    t["avatar"] = toml_edit::value(avatar.as_str());
-                }
-            }
-        }
-
-        if let Some(skills) = &patch.skills {
-            let mut arr = Array::new();
-            for s in skills {
-                arr.push(s.as_str());
-            }
-            agent_table["skills"] = toml_edit::value(arr);
-        }
-
-        if let Some(skills_blacklist) = &patch.skills_blacklist {
-            let mut arr = Array::new();
-            for s in skills_blacklist {
-                arr.push(s.as_str());
-            }
-            agent_table["skills_blacklist"] = toml_edit::value(arr);
-        }
-
-        if let Some(subagents) = &patch.subagents {
-            let mut t = toml_edit::Table::new();
-            let mut arr = Array::new();
-            for a in &subagents.allow {
-                arr.push(a.as_str());
-            }
-            t["allow"] = toml_edit::value(arr);
-            agent_table["subagents"] = toml_edit::Item::Table(t);
-        }
-
-        if let Some(allowed_links) = &patch.allowed_links {
-            if allowed_links.is_empty() {
-                // Empty list = all allowed, remove the key
-                agent_table.remove("allowed_links");
-            } else {
-                let mut arr = Array::new();
-                for l in allowed_links {
-                    arr.push(l.as_str());
-                }
-                agent_table["allowed_links"] = toml_edit::value(arr);
-            }
-        }
-
-        if let Some(allowed_users) = &patch.allowed_users {
-            if allowed_users.is_empty() {
-                // Empty list = everyone allowed, remove the key. Writing an
-                // empty array would read, to whoever opens config.toml next,
-                // like "nobody may use this agent" — the opposite of what it
-                // means to `agent_admits_user`.
-                agent_table.remove("allowed_users");
-            } else {
-                let mut arr = Array::new();
-                for u in allowed_users {
-                    arr.push(u.as_str());
-                }
-                agent_table["allowed_users"] = toml_edit::value(arr);
-            }
-        }
-
-        // Model: tri-state — Some(Some)=set, Some(None)=clear, None=untouched
-        match &patch.model {
-            Some(Some(model_ref)) => {
-                agent_table["model"] = super::toml_ops::model_ref_to_item(model_ref);
-            }
-            Some(None) => {
-                agent_table.remove("model");
-            }
-            None => {}
-        }
+        apply_patch_to_table(agent_table, &patch);
 
         self.save_document(&doc)?;
         info!("Updated agent '{}'", id);
@@ -418,29 +325,9 @@ impl AgentManager {
         list.remove(idx);
         self.save_document(&doc)?;
 
-        // Move workspace to trash
-        let ws_dir = self.workspace_root.join(id);
-        if ws_dir.exists() {
-            let trash_dir = self.unique_trash_path(id, "");
-            fs::create_dir_all(&self.trash_root)
-                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {e}")))?;
-            fs::rename(&ws_dir, &trash_dir).map_err(|e| {
-                AlephError::IoError(format!("Failed to move workspace to trash: {e}"))
-            })?;
-            info!("Moved workspace to trash: {}", trash_dir.display());
-        }
-
-        // Move agent state directory to trash
-        let agent_state_dir = self.agents_root.join(id);
-        if agent_state_dir.exists() {
-            let trash_dir = self.unique_trash_path(id, "agent_");
-            fs::create_dir_all(&self.trash_root)
-                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {e}")))?;
-            fs::rename(&agent_state_dir, &trash_dir).map_err(|e| {
-                AlephError::IoError(format!("Failed to move agent state dir to trash: {e}"))
-            })?;
-            info!("Moved agent state to trash: {}", trash_dir.display());
-        }
+        // Move workspace and agent state directories to trash
+        self.move_dir_to_trash(id, &self.workspace_root.join(id), "", "workspace")?;
+        self.move_dir_to_trash(id, &self.agents_root.join(id), "agent_", "agent state dir")?;
 
         info!("Deleted agent '{}'", id);
         Ok(())
@@ -534,6 +421,27 @@ impl AgentManager {
         Ok(())
     }
 
+    /// Move `dir` into the trash root under a unique timestamped name.
+    /// No-op when `dir` does not exist.
+    fn move_dir_to_trash(
+        &self,
+        id: &str,
+        dir: &std::path::Path,
+        prefix: &str,
+        what: &str,
+    ) -> Result<()> {
+        if !dir.exists() {
+            return Ok(());
+        }
+        let trash_dir = self.unique_trash_path(id, prefix);
+        fs::create_dir_all(&self.trash_root)
+            .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {e}")))?;
+        fs::rename(dir, &trash_dir)
+            .map_err(|e| AlephError::IoError(format!("Failed to move {what} to trash: {e}")))?;
+        info!("Moved {} to trash: {}", what, trash_dir.display());
+        Ok(())
+    }
+
     /// Generate a unique trash directory path that will not collide on rapid
     /// consecutive deletes. Uses a timestamp with nanoseconds; if the path
     /// already exists, appends an incrementing counter.
@@ -566,5 +474,106 @@ impl AgentManager {
                 return path;
             }
         }
+    }
+}
+
+/// Apply an [`AgentPatch`] to an existing agent's TOML table, field by field.
+///
+/// Extracted from [`AgentManager::update`] so the update path stays a
+/// load → locate → apply → save pipeline and the per-field merge semantics
+/// live in one place.
+fn apply_patch_to_table(agent_table: &mut toml_edit::Table, patch: &AgentPatch) {
+    if let Some(name) = &patch.name {
+        agent_table["name"] = toml_edit::value(name.as_str());
+    }
+
+    if let Some(identity) = &patch.identity {
+        // Merge field-by-field into the EXISTING identity table. A wholesale
+        // replace would wipe any field the patch omits — e.g. the Overview
+        // tab sends only {emoji, description}, so a replace silently drops a
+        // previously-set `avatar`.
+        let ident_item = agent_table
+            .entry("identity")
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        if !ident_item.is_table() {
+            *ident_item = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        if let Some(t) = ident_item.as_table_mut() {
+            if let Some(ref emoji) = identity.emoji {
+                t["emoji"] = toml_edit::value(emoji.as_str());
+            }
+            if let Some(ref desc) = identity.description {
+                t["description"] = toml_edit::value(desc.as_str());
+            }
+            if let Some(ref avatar) = identity.avatar {
+                t["avatar"] = toml_edit::value(avatar.as_str());
+            }
+        }
+    }
+
+    if let Some(skills) = &patch.skills {
+        let mut arr = Array::new();
+        for s in skills {
+            arr.push(s.as_str());
+        }
+        agent_table["skills"] = toml_edit::value(arr);
+    }
+
+    if let Some(skills_blacklist) = &patch.skills_blacklist {
+        let mut arr = Array::new();
+        for s in skills_blacklist {
+            arr.push(s.as_str());
+        }
+        agent_table["skills_blacklist"] = toml_edit::value(arr);
+    }
+
+    if let Some(subagents) = &patch.subagents {
+        let mut t = toml_edit::Table::new();
+        let mut arr = Array::new();
+        for a in &subagents.allow {
+            arr.push(a.as_str());
+        }
+        t["allow"] = toml_edit::value(arr);
+        agent_table["subagents"] = toml_edit::Item::Table(t);
+    }
+
+    if let Some(allowed_links) = &patch.allowed_links {
+        if allowed_links.is_empty() {
+            // Empty list = all allowed, remove the key
+            agent_table.remove("allowed_links");
+        } else {
+            let mut arr = Array::new();
+            for l in allowed_links {
+                arr.push(l.as_str());
+            }
+            agent_table["allowed_links"] = toml_edit::value(arr);
+        }
+    }
+
+    if let Some(allowed_users) = &patch.allowed_users {
+        if allowed_users.is_empty() {
+            // Empty list = everyone allowed, remove the key. Writing an
+            // empty array would read, to whoever opens config.toml next,
+            // like "nobody may use this agent" — the opposite of what it
+            // means to `agent_admits_user`.
+            agent_table.remove("allowed_users");
+        } else {
+            let mut arr = Array::new();
+            for u in allowed_users {
+                arr.push(u.as_str());
+            }
+            agent_table["allowed_users"] = toml_edit::value(arr);
+        }
+    }
+
+    // Model: tri-state — Some(Some)=set, Some(None)=clear, None=untouched
+    match &patch.model {
+        Some(Some(model_ref)) => {
+            agent_table["model"] = super::toml_ops::model_ref_to_item(model_ref);
+        }
+        Some(None) => {
+            agent_table.remove("model");
+        }
+        None => {}
     }
 }

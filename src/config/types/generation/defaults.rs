@@ -94,52 +94,42 @@ impl GenerationDefaults {
 
     /// Validate the defaults
     pub fn validate(&self, provider_name: &str) -> Result<(), String> {
-        // Validate width/height are reasonable
-        if let Some(width) = self.width {
-            if width == 0 {
-                return Err(format!(
-                    "generation.providers.{provider_name}.defaults.width must be greater than 0"
-                ));
-            }
-            if width > 8192 {
-                tracing::warn!(
-                    provider = provider_name,
-                    width = width,
-                    "Default width is very large (>8192)"
-                );
-            }
-        }
-
-        if let Some(height) = self.height {
-            if height == 0 {
-                return Err(format!(
-                    "generation.providers.{provider_name}.defaults.height must be greater than 0"
-                ));
-            }
-            if height > 8192 {
-                tracing::warn!(
-                    provider = provider_name,
-                    height = height,
-                    "Default height is very large (>8192)"
-                );
-            }
-        }
-
-        // Validate n
-        if let Some(n) = self.n {
-            if n == 0 {
-                return Err(format!(
-                    "generation.providers.{provider_name}.defaults.n must be greater than 0"
-                ));
-            }
-            if n > 10 {
-                tracing::warn!(
-                    provider = provider_name,
-                    n = n,
-                    "Default n is high (>10), may be expensive"
-                );
-            }
-        }
+        // Positive integer fields: must be > 0, warn past a sanity threshold
+        validate_count(
+            self.width,
+            provider_name,
+            "width",
+            8192,
+            "Default width is very large (>8192)",
+        )?;
+        validate_count(
+            self.height,
+            provider_name,
+            "height",
+            8192,
+            "Default height is very large (>8192)",
+        )?;
+        validate_count(
+            self.n,
+            provider_name,
+            "n",
+            10,
+            "Default n is high (>10), may be expensive",
+        )?;
+        validate_count(
+            self.fps,
+            provider_name,
+            "fps",
+            120,
+            "Default fps is very high (>120)",
+        )?;
+        validate_count(
+            self.steps,
+            provider_name,
+            "steps",
+            150,
+            "Default steps is high (>150), generation will be slow",
+        )?;
 
         // Validate speed is in range
         if let Some(speed) = self.speed {
@@ -147,22 +137,6 @@ impl GenerationDefaults {
                 return Err(format!(
                     "generation.providers.{provider_name}.defaults.speed must be between 0.25 and 4.0, got {speed}"
                 ));
-            }
-        }
-
-        // Validate fps
-        if let Some(fps) = self.fps {
-            if fps == 0 {
-                return Err(format!(
-                    "generation.providers.{provider_name}.defaults.fps must be greater than 0"
-                ));
-            }
-            if fps > 120 {
-                tracing::warn!(
-                    provider = provider_name,
-                    fps = fps,
-                    "Default fps is very high (>120)"
-                );
             }
         }
 
@@ -187,22 +161,6 @@ impl GenerationDefaults {
                     provider = provider_name,
                     guidance_scale = scale,
                     "Default guidance_scale is very high (>30)"
-                );
-            }
-        }
-
-        // Validate steps
-        if let Some(steps) = self.steps {
-            if steps == 0 {
-                return Err(format!(
-                    "generation.providers.{provider_name}.defaults.steps must be greater than 0"
-                ));
-            }
-            if steps > 150 {
-                tracing::warn!(
-                    provider = provider_name,
-                    steps = steps,
-                    "Default steps is high (>150), generation will be slow"
                 );
             }
         }
@@ -259,4 +217,31 @@ impl GenerationDefaults {
 
         builder.build()
     }
+}
+
+/// Shared shape for the positive-integer default fields: the value must be
+/// greater than 0, and values past `warn_over` are legal but suspicious.
+fn validate_count(
+    value: Option<u32>,
+    provider_name: &str,
+    field: &str,
+    warn_over: u32,
+    warn_msg: &str,
+) -> Result<(), String> {
+    if let Some(v) = value {
+        if v == 0 {
+            return Err(format!(
+                "generation.providers.{provider_name}.defaults.{field} must be greater than 0"
+            ));
+        }
+        if v > warn_over {
+            tracing::warn!(
+                provider = provider_name,
+                field = field,
+                value = v,
+                "{warn_msg}"
+            );
+        }
+    }
+    Ok(())
 }
