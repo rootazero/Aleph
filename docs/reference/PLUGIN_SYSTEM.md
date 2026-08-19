@@ -88,20 +88,48 @@ filesystem = "read"                         # true | "read" | "write" | false
 shell = false
 background = true                           # [[aleph.services]] 需要此权限
 
-[[aleph.channels]]
-id = "telegram"
-label = "Telegram"
-
-[[aleph.providers]]
-id = "custom-llm"
-name = "Custom LLM"
-
 [[aleph.services]]
 name = "metrics-collector"
 start_handler = "startCollector"
 stop_handler = "stopCollector"
 auto_start = true                           # 默认 true：插件加载后自动启动
+
+# 插件声明的工具（handler = WASM 导出函数名）
+[[aleph.tools]]
+name = "memory_stats"
+description = "Report memory statistics"
+handler = "memory_stats"
+parameters = { type = "object", properties = { window = { type = "string" } } }
+
+# 注入 agent 上下文的提示词文件
+[aleph.prompt]
+file = "SYSTEM.md"
+scope = "system"                            # "system" | "user"
+
+# 用户配置的 JSON Schema + 表单提示
+[aleph.config_schema]
+type = "object"
+properties = { api_key = { type = "string" } }
+
+[aleph.config_ui_hints.api_key]
+label = "API Key"
+sensitive = true
 ```
+
+> **`[aleph]` 是超集的全部落点。** `tools` / `hooks` / `commands` / `prompt` /
+> `config_schema` / `config_ui_hints` / `memory` 在 2026-08-19 之前只存在于**已废弃**的
+> `aleph.plugin.toml`，而 `parse_cc_plugin_toml_content` 把它们硬编码成 `None` —— 于是
+> adapter 里 `if let Some(ref tools) = manifest.tools_v2` 那两条分支不可达，
+> `validation.rs` 的 config-schema 检查与 UI-hint 报告全部空转，
+> `loader.rs::register_memory_extension_if_declared` 从不触发。内置的
+> `plugins/memory-analytics` 从 WASM 导出 `memory_stats` / `memory_timeline`
+> 却带着 `.claude-plugin/plugin.toml`，整个工具面因此不可达。
+> Claude Code 会忽略未知顶层键，所以带超集的 manifest 在两个宿主里都能加载。
+
+> **⚠️ `[[aleph.channels]]` / `[[aleph.providers]]` 从来不存在。** 这两段曾写在这里，
+> 而 manifest 类型上**根本没有这两个字段**（`AlephExtensionsToml` 只有 runtime / entry /
+> permissions / capabilities / services + 上面这几项），声明它们只会被静默忽略。
+> 新增 channel 或 provider 目前只能改 core（`src/gateway/channel*` / `src/providers/`）。
 
 ### 与 Claude Code plugin.json 的对应关系
 
@@ -356,6 +384,9 @@ aleph plugin list
 | `manifest/adapters/auto_discover.rs` | 无 manifest 时自动发现组件 |
 | `manifest/mod.rs` | 统一入口，优先级调度 |
 | `manifest/types.rs` | `PluginManifest`、`AlephExtensions`、`AlephRuntime` |
+| `manifest/declared_sections.rs` | **三个方言共用的**「声明的 section → capability」翻译（`[[tools]]`/`[[hooks]]`/`[[commands]]`/`[[services]]`/`[prompt]`） |
+| `manifest/component_source.rs` | 组件字段的 path / 数组 / 内联三形态，以及内联分支的真消费者 |
+| `plugin_vars.rs` | 四个 `${*_PLUGIN_ROOT}`/`${*_PLUGIN_DATA}` 的**唯一**展开器 + 配置→环境变量的唯一翻译 |
 
 ### Marketplace
 | 文件 | 职责 |
@@ -409,8 +440,30 @@ aleph plugin list
 | `plugin.marketplace.update` | 更新缓存 |
 | `plugin.marketplace.remove` | 移除 marketplace |
 | `plugin.marketplace.install` | 从 marketplace 安装 |
+| `plugin.config.get` | 读插件配置 + 它 manifest 声明的 JSON Schema 与 UI hints |
+| `plugin.config.set` | 整体替换插件配置（按 schema 校验，**报全部**违规；下次 reload 生效）|
 
 `plugin.*`（单数）是 CC 兼容方法名，`plugins.*`（复数）保留作为向后兼容别名。
+
+⚠️ **两个命名空间的能力集并不相等**：`callTool` / `executeCommand` / `load` /
+`unload` **只**在复数上，`update` / `reload` / `config.*` / `marketplace.*` **只**在
+单数上。而 Panel 的插件设置页只说复数，CLI 只说单数——所以 Panel 装插件走的是仅支持
+git URL 的 `handle_install`，CLI 走的是同时支持 marketplace 的
+`handle_install_unified`。**Panel 因此装不了 marketplace 插件，`plugin.marketplace.*`
+五个 RPC 零 Panel 客户端。** 这条尚未修复（见 §3.10 轮次记录的「未做」）。
+
+---
+
+## 模型面：`plugin_manage` 工具
+
+R8 要求每个可配置操作都有对话面。插件曾是唯一没有工具面的扩展类型
+（skills 有 `skill_manage`、hooks 有 `hooks_manage`、Hub 有六个 `hub_*`）。
+
+`plugin_manage` 的动作：`list` / `show` / `enable` / `disable` / `reload` /
+`config_get` / `config_set`。
+
+**它结构上不能装也不能卸**——装插件就是在机主的机器上运行第三方代码，那一步留给人
+和 consent-gated 的 `hub_install_run`。这是 `hooks_manage` 的先例：随便报，永远不批。
 
 ---
 
