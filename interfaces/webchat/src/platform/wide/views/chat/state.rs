@@ -687,6 +687,22 @@ pub struct ChatState {
     pub provider_retry: RwSignal<Option<ProviderRetryNotice>>,
     /// Monotonic counter for generating unique user message IDs.
     next_msg_id: RwSignal<u64>,
+    /// How many messages **this viewer** has sent in this conversation.
+    ///
+    /// Bumped by [`Self::push_user_message`] and nothing else, which is the
+    /// whole point: it is the only signal in this struct that answers "did the
+    /// person at this keyboard just send something", and the transcript cannot
+    /// answer it. A room peer's row is `role == "user"` too
+    /// ([`Self::push_peer_user_message`]), a replayed history row is, and a
+    /// conversation swap replaces the vector wholesale — so every proxy built
+    /// out of the message list mistakes at least one of those for a send. See
+    /// `shared_ui_logic::state::chat_scroll` for the consumer and the bugs that
+    /// cost.
+    ///
+    /// Deliberately not folded into [`Self::next_msg_id`], which is an id
+    /// allocator shared with `archive_active_plan`: a plan capsule retiring
+    /// into the transcript is not a send.
+    pub sends: RwSignal<u64>,
     /// Team chat mode marker. `Some(team_id)` → render 3-pane team view; composer
     /// routes to teams.chat.send. `None` = single-agent chat (zero regression).
     /// NOTE (MVP): not persisted in SessionSnapshot — team mode is ephemeral and
@@ -754,6 +770,7 @@ impl ChatState {
             voice_run_ids: RwSignal::new(Vec::new()),
             provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
+            sends: RwSignal::new(0),
             team_id: RwSignal::new(None),
             team_members: RwSignal::new(Vec::new()),
             team_tasks: RwSignal::new(Vec::new()),
@@ -1017,9 +1034,15 @@ impl ChatState {
     }
 
     /// Append a user message and reset error state.
+    ///
+    /// The single writer of [`Self::sends`] — every surface that lets this
+    /// viewer send (composer, queued-prompt flush, retry, voice, slash command)
+    /// funnels through here, so the counter is covered by construction rather
+    /// than by remembering to bump it per call site.
     pub fn push_user_message(&self, text: &str) {
         let seq = self.next_msg_id.get_untracked();
         self.next_msg_id.set(seq + 1);
+        self.sends.update(|n| *n += 1);
         let id = format!("user-{seq}");
         self.messages.update(|msgs| {
             msgs.push(ChatMessage {
@@ -1715,6 +1738,7 @@ impl ChatState {
             room_project_id: self.room_project_id.get_untracked(),
             selected_model: self.selected_model.get_untracked(),
             next_msg_id: self.next_msg_id.get_untracked(),
+            sends: self.sends.get_untracked(),
             context_usage: self.context_usage.get_untracked(),
             run_costs: self.run_costs.get_untracked(),
             knobs: self.session_knobs(),
@@ -1751,6 +1775,7 @@ impl ChatState {
         self.run_costs.set(snap.run_costs);
         self.apply_session_knobs(snap.knobs);
         self.next_msg_id.set(snap.next_msg_id);
+        self.sends.set(snap.sends);
         // Carried in the snapshot so the occupancy gauge survives a tab swap
         // (None for a fresh/empty tab, which correctly hides the gauge).
         self.context_usage.set(snap.context_usage);
@@ -1797,6 +1822,9 @@ pub struct SessionSnapshot {
     pub room_project_id: Option<String>,
     pub selected_model: Option<crate::api::providers::ModelOverride>,
     pub next_msg_id: u64,
+    /// See [`ChatState::sends`] — carried so a tab swap back into a
+    /// conversation does not read its own restored count as a fresh send.
+    pub sends: u64,
     /// Last completed turn's context-window occupancy, so the gauge survives a
     /// tab swap instead of blanking until the next turn finishes.
     pub context_usage: Option<ContextUsage>,
@@ -1827,6 +1855,61 @@ mod step_tests {
     fn ids(chat: &ChatState) -> Vec<String> {
         chat.messages
             .with(|m| m.iter().map(|x| x.id.clone()).collect())
+    }
+
+    /// Only this viewer's own send moves [`ChatState::sends`], and the count
+    /// travels with the conversation.
+    ///
+    /// It is the input `shared_ui_logic::state::chat_scroll` uses to decide
+    /// whether to yank the viewport to the bottom, so every writer that is
+    /// *not* a send is a viewport hijack: a project-room peer's message and a
+    /// retiring plan capsule both append a row, and the plan capsule shares the
+    /// id allocator this counter was nearly folded into.
+    #[test]
+    fn only_my_own_send_counts_as_a_send() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        assert_eq!(chat.sends.get_untracked(), 0);
+
+        chat.push_user_message("mine");
+        assert_eq!(chat.sends.get_untracked(), 1);
+
+        // A room peer typing is a `role == "user"` row and must not read as
+        // mine.
+        chat.push_peer_user_message(7, "theirs", "u-someone-else", None);
+        assert_eq!(
+            chat.sends.get_untracked(),
+            1,
+            "a peer's message was counted as this viewer's send"
+        );
+
+        // A plan capsule retiring into the transcript bumps `next_msg_id` —
+        // the allocator this counter deliberately does not share.
+        chat.apply_plan_update(PlanUpdate::Show(crate::views::chat::plan::PlanView {
+            objective: Some("Obj".into()),
+            items: vec![crate::views::chat::plan::PlanItemView {
+                text: "step".into(),
+                status: crate::views::chat::plan::PlanItemStatusView::Completed,
+            }],
+            complete: true,
+        }));
+        chat.archive_active_plan(ArchiveGate::Activity);
+        assert_eq!(
+            chat.sends.get_untracked(),
+            1,
+            "an archived plan was counted as a send"
+        );
+
+        // And the count is part of the conversation, not of the tab.
+        let snap = chat.capture_snapshot();
+        chat.clear_session();
+        chat.restore_from(snap);
+        assert_eq!(
+            chat.sends.get_untracked(),
+            1,
+            "the send count did not travel"
+        );
     }
 
     /// Every dial survives a tab swap, and none of them leaks into the next
@@ -2355,7 +2438,7 @@ mod step_tests {
             objective: Some("Ship".into()),
             items: items
                 .iter()
-                .map(|(t, s)| super::super::plan::PlanItemView {
+                .map(|(t, s)| PlanItemView {
                     text: (*t).into(),
                     status: *s,
                 })

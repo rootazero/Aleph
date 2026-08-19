@@ -167,16 +167,31 @@ struct ExploreAcc {
 /// Flush the open explore-group accumulator into one `ExploreGroup` row.
 /// No-op when no group is open. `completed` is true when no tool in the
 /// group is still `running` and none of its source messages are streaming.
+///
+/// A group of **one** degrades to a plain [`TimelineRow::ToolLine`] instead.
+/// Grouping exists to stop a burst of twelve reads from filling the transcript;
+/// applied to a single read it only subtracts. The collapsed header says
+/// "Explored 1 items" — an ungrammatical count in place of the filename, with
+/// the one fact the row exists to convey (which file? which query?) hidden
+/// behind a disclosure triangle, while the equivalent non-read tool one line
+/// above shows its argument inline. Below the threshold the row is exactly what
+/// it was before grouping was introduced.
 fn flush_explore(rows: &mut Vec<TimelineRow>, acc: &mut Option<ExploreAcc>) {
-    if let Some(a) = acc.take() {
-        let completed = !a.streaming && a.tools.iter().all(|t| t.status != "running");
-        rows.push(TimelineRow::ExploreGroup {
-            key: a.key,
+    let Some(mut a) = acc.take() else { return };
+    if a.tools.len() == 1 {
+        rows.push(TimelineRow::ToolLine {
             run_id: a.run_id,
-            tools: a.tools,
-            completed,
+            tool: a.tools.remove(0),
         });
+        return;
     }
+    let completed = !a.streaming && a.tools.iter().all(|t| t.status != "running");
+    rows.push(TimelineRow::ExploreGroup {
+        key: a.key,
+        run_id: a.run_id,
+        tools: a.tools,
+        completed,
+    });
 }
 
 /// Run id behind a message id (`intermediate-{run}-{n}`, `assistant-{run}`, or
@@ -612,23 +627,75 @@ mod tests {
         assert_eq!(group.0, "explore:r1:t1", "key anchors to first tool id");
     }
 
+    /// A lone read is a tool line, not a one-item "group".
+    ///
+    /// The header it used to get read "Explored 1 items" and hid the filename
+    /// behind a triangle — strictly less than the `ToolLine` the same call got
+    /// before grouping existed, and less than the non-read tool rendered
+    /// directly above it.
+    #[test]
+    fn a_lone_read_renders_as_a_tool_line_not_a_group() {
+        let msgs = vec![msg_step_tools(
+            "intermediate-r1-1",
+            1,
+            "",
+            false,
+            vec![tool("t1", "file_read", "completed")],
+        )];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        assert!(
+            matches!(rows.as_slice(), [TimelineRow::ToolLine { tool, .. }] if tool.tool_id == "t1"),
+            "expected a single ToolLine, got {rows:?}"
+        );
+    }
+
+    /// …and two of them still collapse, so the threshold is the only thing
+    /// that changed.
+    #[test]
+    fn two_reads_still_collapse_into_a_group() {
+        let msgs = vec![msg_step_tools(
+            "intermediate-r1-1",
+            1,
+            "",
+            false,
+            vec![
+                tool("t1", "file_read", "completed"),
+                tool("t2", "file_read", "completed"),
+            ],
+        )];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        assert!(
+            matches!(rows.as_slice(), [TimelineRow::ExploreGroup { tools, .. }] if tools.len() == 2),
+            "expected one 2-item ExploreGroup, got {rows:?}"
+        );
+    }
+
     #[test]
     fn narration_flushes_explore_group() {
-        // read -> narration -> read => two ExploreGroups, narration row sandwiched in between
+        // reads -> narration -> reads => two ExploreGroups, narration row
+        // sandwiched in between. Two reads per side, not one: a lone read
+        // degrades to a `ToolLine` (see `flush_explore`), which would make this
+        // a test of the degradation rather than of the flush boundary.
         let msgs = vec![
             msg_step_tools(
                 "intermediate-r1-1",
                 1,
                 "",
                 false,
-                vec![tool("t1", "file_read", "completed")],
+                vec![
+                    tool("t1", "file_read", "completed"),
+                    tool("t1b", "file_read", "completed"),
+                ],
             ),
             msg_step_tools(
                 "intermediate-r1-2",
                 2,
                 "找到了，接着看第二处",
                 false,
-                vec![tool("t2", "file_read", "completed")],
+                vec![
+                    tool("t2", "file_read", "completed"),
+                    tool("t2b", "file_read", "completed"),
+                ],
             ),
         ];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
@@ -652,8 +719,10 @@ mod tests {
             false,
             vec![
                 tool("t1", "file_read", "completed"),
+                tool("t1b", "file_read", "completed"),
                 tool("t2", "file_edit", "completed"),
                 tool("t3", "file_read", "completed"),
+                tool("t3b", "file_read", "completed"),
             ],
         )];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
@@ -675,7 +744,10 @@ mod tests {
             1,
             "",
             true,
-            vec![tool("t1", "file_read", "running")],
+            vec![
+                tool("t1", "file_read", "running"),
+                tool("t2", "file_read", "completed"),
+            ],
         )];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
         let completed = rows.iter().find_map(|r| match r {
@@ -868,11 +940,14 @@ mod tests {
             1,
             "",
             false,
-            vec![tool(
-                "t1",
-                "file_read",
-                crate::views::chat::state::TOOL_STATUS_UNKNOWN,
-            )],
+            vec![
+                tool(
+                    "t1",
+                    "file_read",
+                    crate::views::chat::state::TOOL_STATUS_UNKNOWN,
+                ),
+                tool("t2", "file_read", "completed"),
+            ],
         )];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
         let completed = rows.iter().find_map(|r| match r {
