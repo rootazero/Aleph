@@ -4,9 +4,11 @@
 //! pulling in Leptos or `web_sys`. Side-effectful signal wiring stays in the
 //! individual surfaces; only the *decisions* live here so they stay testable.
 
+pub mod chat_scroll;
 pub mod composer_dials;
 pub mod composer_queue;
 
+pub use chat_scroll::{scroll_action, ListCursor, ScrollAction};
 pub use composer_dials::{session_dials_for_send, SendDials, SessionKnobs};
 pub use composer_queue::{
     merge_recalled_draft, should_auto_drain_on_settle, should_flush_on_turn_boundary,

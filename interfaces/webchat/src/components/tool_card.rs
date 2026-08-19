@@ -211,6 +211,74 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
     order.into_iter().map(|k| (k, counts[&k])).collect()
 }
 
+/// Aggregate outcome of one explore entry, or of a whole explore block.
+///
+/// The block used to carry no outcome at all: its header showed `✓` the moment
+/// nothing in it was `running`, and its body rendered every call as an
+/// undifferentiated grey line. A group of four reads in which two failed and
+/// one settled to `unknown` therefore reported "✓ Explored 4 items" — a
+/// confident claim about work that did not happen, which is worse than the
+/// silence it replaced. `unknown` in particular is the panel's own word for
+/// *the outcome frame was dropped and the run ended*; laundering it into a tick
+/// throws away the one thing that state exists to say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExploreOutcome {
+    /// At least one call has not finished.
+    Running,
+    /// Every call finished and reported success.
+    Ok,
+    /// At least one call failed. Beats `Unknown`: a definite failure is more
+    /// actionable than a missing frame, and hiding it behind "some outcome is
+    /// unknown" is the same laundering in a smaller box.
+    Failed,
+    /// No failures, but at least one outcome never arrived.
+    Unknown,
+}
+
+impl ExploreOutcome {
+    /// Classify one raw `ToolCallEntry::status` word.
+    #[must_use]
+    pub fn of_status(status: &str) -> Self {
+        match status {
+            "running" => Self::Running,
+            "failed" => Self::Failed,
+            "completed" => Self::Ok,
+            // Anything else is the settled-`unknown` word, or a status word a
+            // newer core emits that this panel has not been taught. Both mean
+            // "no outcome I can vouch for", which is exactly `Unknown` — never
+            // `Ok`, which is the direction that lies.
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Fold two outcomes, most-alarming-wins: `Running` ▷ `Failed` ▷ `Unknown`
+    /// ▷ `Ok`.
+    ///
+    /// `Running` outranks everything so a block with one call still in flight
+    /// keeps pulsing rather than settling on a partial verdict, and `Ok` is
+    /// last so it can only ever be reached when every single member said so.
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Running, _) | (_, Self::Running) => Self::Running,
+            (Self::Failed, _) | (_, Self::Failed) => Self::Failed,
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+            (Self::Ok, Self::Ok) => Self::Ok,
+        }
+    }
+
+    /// Fold a whole block. An empty block is `Ok` — it is never rendered
+    /// (`build_rows` emits no group without tools), and `Running` would be a
+    /// worse default for a caller that hits the case anyway.
+    #[must_use]
+    pub fn of_all(statuses: impl IntoIterator<Item: AsRef<str>>) -> Self {
+        statuses
+            .into_iter()
+            .map(|s| Self::of_status(s.as_ref()))
+            .fold(Self::Ok, Self::merge)
+    }
+}
+
 /// One row in the explore block body: consecutive FileRead merged into one (deduplicated filename join),
 /// Search and other read-only tools each get their own row.
 #[derive(Debug, Clone, PartialEq)]
@@ -220,20 +288,36 @@ pub struct ExploreEntry {
     pub label: String,
     /// tool_ids covered by this entry (merged rows contain multiple; click uses first for detail pane).
     pub tool_ids: Vec<String>,
+    /// Aggregate outcome across `tool_ids` — a merged read row is only `Ok`
+    /// when every file in it was read.
+    pub outcome: ExploreOutcome,
+    /// A representative tool name for the row's icon.
+    ///
+    /// Carried because [`tool_icon`] resolves `web_fetch` → 🌐, `skill_*` → 📖
+    /// and `memory_*` → 🧠 from the *name* before falling back to the kind
+    /// glyph; the block used to call it with `""`, so every one of those rows
+    /// silently rendered the generic kind icon instead.
+    pub tool_name: String,
 }
 
 /// Merge consecutive FileRead with dedup: merge consecutive same-kind file reads into one entry,
 /// deduplicated filenames joined by comma; other tools each get their own row.
+///
+/// Each item is `(tool_id, tool_name, headline, status)`; the merged row's
+/// outcome folds its members through [`ExploreOutcome::merge`], so one failed
+/// read inside a five-file merge is still visible on the row.
 #[must_use]
-pub fn explore_entries(items: &[(String, String, Option<String>)]) -> Vec<ExploreEntry> {
+pub fn explore_entries(items: &[(String, String, Option<String>, String)]) -> Vec<ExploreEntry> {
     let mut out: Vec<ExploreEntry> = Vec::new();
-    for (tool_id, name, headline) in items {
+    for (tool_id, name, headline, status) in items {
         let kind = ToolKind::from_name(name);
         let label = headline.clone().unwrap_or_else(|| name.clone());
+        let outcome = ExploreOutcome::of_status(status);
         // Consecutive FileRead merged into the previous entry (label deduped and comma-joined).
         if kind == ToolKind::FileRead {
             if let Some(last) = out.last_mut().filter(|e| e.kind == ToolKind::FileRead) {
                 last.tool_ids.push(tool_id.clone());
+                last.outcome = last.outcome.merge(outcome);
                 if !last.label.split(", ").any(|s| s == label) {
                     last.label.push_str(", ");
                     last.label.push_str(&label);
@@ -245,6 +329,8 @@ pub fn explore_entries(items: &[(String, String, Option<String>)]) -> Vec<Explor
             kind,
             label,
             tool_ids: vec![tool_id.clone()],
+            outcome,
+            tool_name: name.clone(),
         });
     }
     out
@@ -1135,18 +1221,29 @@ mod tests {
         assert_ne!(full_body_key("t1"), full_body_key("t2"));
     }
 
+    /// One `explore_entries` input tuple: `(tool_id, tool_name, headline, status)`.
+    fn entry(
+        id: &str,
+        name: &str,
+        headline: Option<&str>,
+        status: &str,
+    ) -> (String, String, Option<String>, String) {
+        (
+            id.to_string(),
+            name.to_string(),
+            headline.map(str::to_string),
+            status.to_string(),
+        )
+    }
+
     #[test]
     fn explore_entries_merges_consecutive_reads_dedup() {
         let items = vec![
-            ("t1".into(), "file_read".into(), Some("a.rs".to_string())),
-            ("t2".into(), "file_read".into(), Some("b.rs".to_string())),
-            ("t3".into(), "file_read".into(), Some("a.rs".to_string())), // dup 去重
-            (
-                "t4".into(),
-                "web_search".into(),
-                Some("panel bug".to_string()),
-            ),
-            ("t5".into(), "file_read".into(), Some("c.rs".to_string())), // search 打断后新起一条
+            entry("t1", "file_read", Some("a.rs"), "completed"),
+            entry("t2", "file_read", Some("b.rs"), "completed"),
+            entry("t3", "file_read", Some("a.rs"), "completed"), // dup 去重
+            entry("t4", "web_search", Some("panel bug"), "completed"),
+            entry("t5", "file_read", Some("c.rs"), "completed"), // search 打断后新起一条
         ];
         let entries = explore_entries(&items);
         assert_eq!(entries.len(), 3);
@@ -1162,8 +1259,74 @@ mod tests {
 
     #[test]
     fn explore_entries_headline_fallback_is_tool_name() {
-        let items = vec![("t1".into(), "file_read".into(), None)];
+        let items = vec![entry("t1", "file_read", None, "completed")];
         let entries = explore_entries(&items);
         assert_eq!(entries[0].label, "file_read");
+    }
+
+    /// One failed read inside a merged row must reach the row, or a collapsed
+    /// block renders "read a.rs, b.rs, c.rs" with no hint that b.rs errored.
+    #[test]
+    fn a_merged_read_row_reports_its_worst_member() {
+        let items = vec![
+            entry("t1", "file_read", Some("a.rs"), "completed"),
+            entry("t2", "file_read", Some("b.rs"), "failed"),
+            entry("t3", "file_read", Some("c.rs"), "completed"),
+        ];
+        let entries = explore_entries(&items);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].outcome, ExploreOutcome::Failed);
+    }
+
+    #[test]
+    fn explore_entries_carry_the_tool_name_for_their_icon() {
+        // `tool_icon` keys 🌐 / 📖 / 🧠 off the name; the row used to be
+        // rendered with `""`, which could only ever produce the kind glyph.
+        let items = vec![entry("t1", "web_fetch", Some("example.com"), "completed")];
+        let entries = explore_entries(&items);
+        assert_eq!(entries[0].tool_name, "web_fetch");
+        assert_eq!(
+            tool_icon(&entries[0].tool_name, entries[0].kind),
+            "\u{1f310}"
+        );
+    }
+
+    #[test]
+    fn a_block_is_only_ok_when_every_member_is() {
+        assert_eq!(
+            ExploreOutcome::of_all(["completed", "completed"]),
+            ExploreOutcome::Ok
+        );
+        // The headline defect: `completed` was true for all of these, and the
+        // header printed ✓ over every one.
+        assert_eq!(
+            ExploreOutcome::of_all(["completed", "failed"]),
+            ExploreOutcome::Failed
+        );
+        assert_eq!(
+            ExploreOutcome::of_all(["completed", crate::views::chat::state::TOOL_STATUS_UNKNOWN]),
+            ExploreOutcome::Unknown
+        );
+        // A definite failure outranks a missing frame.
+        assert_eq!(
+            ExploreOutcome::of_all(["failed", crate::views::chat::state::TOOL_STATUS_UNKNOWN]),
+            ExploreOutcome::Failed
+        );
+        // In-flight outranks everything, so a block never settles early.
+        assert_eq!(
+            ExploreOutcome::of_all(["failed", "running"]),
+            ExploreOutcome::Running
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_status_word_is_never_read_as_success() {
+        // A status a newer core emits and this panel has not been taught must
+        // land on "I cannot vouch for this", not on a tick.
+        assert_eq!(
+            ExploreOutcome::of_status("cancelled"),
+            ExploreOutcome::Unknown
+        );
+        assert_eq!(ExploreOutcome::of_status(""), ExploreOutcome::Unknown);
     }
 }
