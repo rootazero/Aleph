@@ -485,6 +485,76 @@ impl ExtensionManager {
             .set_all_plugin_settings(snapshot);
     }
 
+    /// Vouch for (or withdraw vouching for) a plugin under the owner trust
+    /// policy, durably, and refresh the live policy so the next load sees it.
+    ///
+    /// Returns whether the stored value changed.
+    ///
+    /// Deliberately does **not** unload a plugin that is already running when
+    /// trust is withdrawn. The trust policy is a *load* gate — it decides what
+    /// gets to start — and making `untrust` also tear down MCP servers and
+    /// background services would give one verb two jobs. The caller is told to
+    /// reload rather than the teardown happening implicitly, which is the same
+    /// contract `set_plugin_settings` already has.
+    ///
+    /// Withdrawing trust therefore does not stop code that is already running;
+    /// say so rather than letting a caller infer otherwise. `disable` is the
+    /// verb that stops a running plugin now.
+    pub async fn set_plugin_trusted(&self, plugin_id: &str, trusted: bool) -> bool {
+        let mut cfg = self.plugins_config.write().await;
+        let changed = cfg.set_trusted(plugin_id, trusted);
+        if changed {
+            if let Err(e) = cfg.save(&self.plugins_config_path).await {
+                tracing::warn!(
+                    plugin_id, error = %e,
+                    "failed to persist plugin trust preference; \
+                     it will not survive a restart"
+                );
+            }
+        }
+        // Re-derive from the document rather than mutating the live policy in
+        // parallel: `OwnerTrustPolicy::trust`/`untrust` exist, and using them
+        // here would make the in-memory allowlist a second copy that can drift
+        // from the file the next boot reads.
+        self.set_owner_trust_policy(cfg.owner_trust_policy());
+        changed
+    }
+
+    /// Turn owner-trust enforcement on or off, durably. Returns whether it
+    /// changed.
+    ///
+    /// Same load-gate semantics as [`Self::set_plugin_trusted`]: switching
+    /// enforcement on does not unload the plugins that would now be refused.
+    pub async fn set_trust_enforced(&self, enforce: bool) -> bool {
+        let mut cfg = self.plugins_config.write().await;
+        let changed = cfg.set_trust_enforced(enforce);
+        if changed {
+            if let Err(e) = cfg.save(&self.plugins_config_path).await {
+                tracing::warn!(
+                    error = %e,
+                    "failed to persist owner trust enforcement; \
+                     it will not survive a restart"
+                );
+            }
+        }
+        self.set_owner_trust_policy(cfg.owner_trust_policy());
+        changed
+    }
+
+    /// The current trust posture, for display: whether enforcement is on and
+    /// which plugin ids are vouched for.
+    pub async fn trust_status(&self) -> (bool, Vec<String>) {
+        let cfg = self.plugins_config.read().await;
+        let mut ids: Vec<String> = cfg
+            .entries
+            .iter()
+            .filter(|(_, e)| e.trusted == Some(true))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        (cfg.trust.enforce, ids)
+    }
+
     /// Enable or disable a plugin: record the operator's preference durably,
     /// then reflect it in the live registry.
     ///

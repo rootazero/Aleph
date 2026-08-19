@@ -123,44 +123,24 @@ pub struct ExtensionConfig {
     #[cfg(test)]
     pub extra_plugin_parents: Vec<PathBuf>,
 
-    /// Owner trust policy for plugin loading. Default is `permissive()`
-    /// (legacy behaviour: every plugin loads). Setting this to `restrictive`
-    /// causes `Workspace`/`Global` plugins to be gated by the supplied
-    /// allowlist — see [`crate::extension::plugin_trust::OwnerTrustPolicy`].
-    /// Wrapped in `Option` because `Default` cannot construct an
-    /// `OwnerTrustPolicy` value from this module without an import seam.
-    pub owner_trust: Option<OwnerTrustPolicyConfig>,
+    // NOTE: there is deliberately no `owner_trust` field here.
+    //
+    // One existed, alongside an `OwnerTrustPolicyConfig` DTO, and had zero
+    // producers: the only production constructor is `with_defaults()`, which
+    // passes `ExtensionConfig::default()`, so the policy was permissive on
+    // every install and `PluginStatus::Blocked` was unreachable. The durable
+    // answer now lives in `plugins.toml` (`[trust] enforce` plus per-entry
+    // `trusted`), which the manager already loads two statements above. Adding
+    // an override here as well would give "may this plugin load" two sources —
+    // and the one an operator edits would be the one that loses.
 }
 
-/// Wire-friendly form of [`crate::extension::plugin_trust::OwnerTrustPolicy`].
-///
-/// We don't deserialize `OwnerTrustPolicy` directly because it is a runtime
-/// stateful object with a method-rich API (`trust`, `untrust`, `allowlist()`);
-/// operators only need the static allowlist + mode. The manager converts this
-/// DTO into the runtime policy in [`ExtensionManager::new`].
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct OwnerTrustPolicyConfig {
-    /// `true` → enforce the allowlist for `Workspace`/`Global` plugins.
-    /// `false` → permissive (legacy).
-    #[serde(default)]
-    pub restrictive: bool,
-    /// Plugin ids that may load from non-trusted origins when restrictive.
-    #[serde(default)]
-    pub allowlist: Vec<String>,
-}
-
-impl OwnerTrustPolicyConfig {
-    /// Materialise the runtime policy. `restrictive=false` ⇒ `permissive()`
-    /// (matches historical default); `restrictive=true` ⇒ `restrictive(allowlist)`.
-    #[must_use]
-    pub fn to_policy(self) -> crate::extension::plugin_trust::OwnerTrustPolicy {
-        if self.restrictive {
-            crate::extension::plugin_trust::OwnerTrustPolicy::restrictive(self.allowlist)
-        } else {
-            crate::extension::plugin_trust::OwnerTrustPolicy::permissive()
-        }
-    }
+/// One directory found by discovery, with the two facts the registry walk
+/// needs and the scan is the only place that knows.
+struct DiscoveredExtensionDir {
+    path: PathBuf,
+    /// Where it came from, per [`PluginOrigin::classify`].
+    origin: PluginOrigin,
 }
 
 /// Extension Manager - main entry point for the extension system
@@ -341,9 +321,15 @@ impl ExtensionManager {
                 .join("data")
                 .join(crate::extension::plugin_state::PLUGINS_CONFIG_FILE)
         });
-        let plugins_config = Arc::new(RwLock::new(
-            crate::extension::plugin_state::PluginsConfig::load(&plugins_config_path),
-        ));
+        let loaded_plugins_config =
+            crate::extension::plugin_state::PluginsConfig::load(&plugins_config_path);
+        // Derived here, once, from the document just read. The policy has a
+        // live handle (`set_owner_trust_policy`) because the trust tool has to
+        // change it without a restart, but its *initial* value has exactly one
+        // source — re-deriving it anywhere else would be a second answer to
+        // "may this plugin load".
+        let owner_trust_policy = loaded_plugins_config.owner_trust_policy();
+        let plugins_config = Arc::new(RwLock::new(loaded_plugins_config));
 
         Ok(Self {
             discovery,
@@ -364,12 +350,7 @@ impl ExtensionManager {
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
-            owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(
-                config
-                    .owner_trust
-                    .map(OwnerTrustPolicyConfig::to_policy)
-                    .unwrap_or_else(crate::extension::plugin_trust::OwnerTrustPolicy::permissive),
-            )),
+            owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
             plugins_config_path,
             #[cfg(test)]
@@ -577,7 +558,8 @@ impl ExtensionManager {
             registry.clear();
             let mut registered_plugin_ids = std::collections::HashSet::new();
 
-            for dir_path in plugin_dirs.iter().rev() {
+            for found in plugin_dirs.iter().rev() {
+                let dir_path = &found.path;
                 match self.adapter_registry.parse_dir(dir_path) {
                     Ok(output) => {
                         // Shadow resolution: dirs are walked highest-priority
@@ -613,6 +595,11 @@ impl ExtensionManager {
                         // Build plugin record from adapter output
                         let mut record =
                             PluginRecord::from_adapter_output(&output, dir_path.clone());
+                        // Overwrite the adapter's hardcoded `Global`. Same
+                        // shape as the `record.kind` override below: the
+                        // adapters answer what a manifest can say, and where
+                        // the plugin was found is not one of those things.
+                        record.origin = found.origin;
                         if let Ok(manifest) =
                             manifest::parse_manifest_from_dir_cached_global(dir_path)
                         {
@@ -1000,11 +987,35 @@ impl ExtensionManager {
         Ok(())
     }
 
-    /// Collect all plugin directories from discovery, deduplicating by canonical path.
+    /// Collect all extension directories from discovery, deduplicating by
+    /// canonical path.
     ///
-    /// Origin is not tracked here — `PluginRecord::from_adapter_output` derives it
-    /// from the `AdapterOutput::source` field set during manifest parsing.
-    fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<PathBuf>> {
+    /// Each entry carries its origin and whether the owner trust policy applies
+    /// to it. This used to return bare paths, and the doc here used to say
+    /// origin was derived later "from the `AdapterOutput::source` field set
+    /// during manifest parsing" — true in form, empty in effect: all six
+    /// manifest adapters hardcode `PluginOrigin::Global` at their construction
+    /// sites, so the only origin any plugin ever had was `Global`.
+    ///
+    /// That was harmless while `PluginOrigin`'s only consumer was `priority()`,
+    /// where a constant answer looks like a working shadowing rule. It stopped
+    /// being harmless the moment the owner trust policy gained a producer.
+    ///
+    /// # What this walk covers, and why the trust policy is still safe
+    ///
+    /// It unions the skill, command and agent directories too, so on a stock
+    /// install ~88 of the ~91 entries are bundled *skills*, not plugins. That
+    /// looks alarming next to a policy that refuses unvouched plugins, and a
+    /// `trust_gated` flag was briefly added here to exempt them.
+    ///
+    /// It was a no-op and has been retracted (R10). A skill directory has no
+    /// plugin manifest, so `adapter_registry.parse_dir` rejects it and the
+    /// registry records an `error` row *before* the trust gate is reached —
+    /// with the gate forced on for every entry, the blocked set was still
+    /// exactly the three planted plugins. Those rows are not `loaded` either
+    /// before or after enforcement, which is also why "0 of 91 loaded" was a
+    /// badly-chosen QA assertion rather than the regression it looked like.
+    fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<DiscoveredExtensionDir>> {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
@@ -1040,7 +1051,7 @@ impl ExtensionManager {
             parents
         };
 
-        // Collect from all discovery sources: skills, commands, agents, plugins
+        // Collect from all discovery sources: skills, commands, agents, plugins.
         let all_dirs = [
             self.discovery.discover_skill_dirs(),
             self.discovery.discover_command_dirs(),
@@ -1059,7 +1070,10 @@ impl ExtensionManager {
                     }
                 };
                 if seen.insert(canonical) {
-                    result.push(d.path);
+                    result.push(DiscoveredExtensionDir {
+                        origin: PluginOrigin::classify(d.source),
+                        path: d.path,
+                    });
                 }
             }
         }
@@ -1522,7 +1536,6 @@ mod tests {
             },
             plugins_config_path: Some(cfg_path.clone()),
             extra_plugin_parents: vec![dir.join("plugins")],
-            owner_trust: None,
         })
         .await
         .unwrap();
@@ -1605,6 +1618,7 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            ..Default::default()
         }
         .save(&cfg_path)
         .await

@@ -70,6 +70,53 @@ impl PluginOrigin {
             Self::Bundled => 1,
         }
     }
+
+    /// Classify a plugin by where it was found on disk.
+    ///
+    /// # Why this exists
+    ///
+    /// Every manifest adapter hardcoded `PluginOrigin::Global`. All six of
+    /// them, at their construction sites — so `Bundled` and `Config` had no
+    /// producer and the *only* value this enum ever took was `Global`.
+    ///
+    /// That was invisible while the enum's only consumer was `priority()`,
+    /// where a constant answer looks like a working shadowing rule, and it
+    /// stopped being invisible the moment `OwnerTrustPolicy` gained a
+    /// producer: an origin nothing produces cannot be exempted, and
+    /// `PluginInfo.origin` reached every client as a constant.
+    ///
+    /// One derivation, from the scanner's own classification -- which
+    /// `collect_plugin_dirs` used to drop on the floor before anything could
+    /// read it.
+    ///
+    /// # `Bundled` and `Config` still have no producer, deliberately
+    ///
+    /// [`crate::extension::plugin_trust::OwnerTrustPolicy::allows`] exempts
+    /// both, so it is worth being exact about why neither is returned here.
+    /// Aleph's shipped plugins are extracted into the official *marketplace
+    /// cache* (`<aleph_home>/plugins/cache/aleph-official/<id>`), which the
+    /// scanner never reaches: it descends one level below a plugin parent and
+    /// that path is two. They become loadable only by being installed, which
+    /// copies them into `plugins/installed/` -- genuinely `Global`, and
+    /// genuinely something an operator chose to install.
+    ///
+    /// Classifying that cache path as `Bundled` would therefore be a branch no
+    /// discovered plugin can take (R10). Enforcement means what it says with
+    /// no asterisk: every plugin needs an explicit vouch, and refused ones are
+    /// listed by id so there is something to vouch for.
+    #[must_use]
+    pub const fn classify(source: crate::discovery::DiscoverySource) -> Self {
+        match source {
+            // A project-local `.aleph/plugins` tree. NOT exempt from the trust
+            // policy -- a checked-out repository can write that directory,
+            // which is precisely the case the policy exists for. The
+            // distinction earns its keep in the refusal message, which can
+            // then say where the plugin came from.
+            crate::discovery::DiscoverySource::Project => Self::Workspace,
+            crate::discovery::DiscoverySource::AlephGlobal
+            | crate::discovery::DiscoverySource::ClaudeGlobal => Self::Global,
+        }
+    }
 }
 
 /// Plugin kind - the type/format of the plugin

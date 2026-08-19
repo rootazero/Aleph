@@ -49,6 +49,15 @@ pub enum PluginAction {
     ConfigGet,
     /// Replace a plugin's stored configuration.
     ConfigSet,
+    /// Show the owner trust policy: whether it is enforced, and which plugins
+    /// are vouched for.
+    TrustStatus,
+    /// Vouch for a plugin, so it may load from an untrusted origin.
+    Trust,
+    /// Withdraw vouching for a plugin.
+    Untrust,
+    /// Turn owner-trust enforcement on or off (`enforce`).
+    TrustEnforce,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -65,6 +74,10 @@ pub struct PluginManageArgs {
     /// merged result, or fields the operator set will disappear.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+
+    /// For `trust_enforce`: whether to enforce the trust allowlist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforce: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -109,6 +122,10 @@ impl AlephTool for PluginManageTool {
          before setting anything; action='config_set' REPLACES the whole configuration object, \
          so read it first and send the merged result. Configuration changes take effect on the \
          next reload — call action='reload' afterwards and say so. \
+         action='trust_status' reports the owner trust policy; when it is enforced, plugins from \
+         workspace/global directories load only if action='trust' vouched for them, and the rest \
+         are listed with status 'blocked'. trust/untrust and trust_enforce are LOAD gates: they \
+         do not stop a plugin that is already running — action='disable' does. \
          This tool cannot install or uninstall plugins: installing runs third-party code, so it \
          stays with the operator (or the consent-gated hub_install_run). Do not claim you \
          installed or removed a plugin.";
@@ -231,6 +248,91 @@ impl AlephTool for PluginManageTool {
                     ))),
                 }
             }
+            PluginAction::TrustStatus => {
+                let (enforced, trusted) = manager.trust_status().await;
+                let summary = if enforced {
+                    format!(
+                        "Owner trust is ENFORCED. {} plugin(s) vouched for; any other plugin \
+                         from a workspace or global directory is refused at load.",
+                        trusted.len()
+                    )
+                } else {
+                    format!(
+                        "Owner trust is NOT enforced — every installed plugin loads. \
+                         {} plugin(s) are already marked trusted and would keep loading if \
+                         you turn enforcement on.",
+                        trusted.len()
+                    )
+                };
+                Ok(PluginManageOutput {
+                    summary,
+                    data: serde_json::json!({ "enforced": enforced, "trusted": trusted }),
+                })
+            }
+            PluginAction::Trust | PluginAction::Untrust => {
+                let name = Self::require_name(&args)?;
+                let trust = matches!(args.action, PluginAction::Trust);
+                let changed = manager.set_plugin_trusted(name, trust).await;
+                let (enforced, _) = manager.trust_status().await;
+                // Two things a caller must not infer: that untrusting stops a
+                // running plugin (it is a load gate — `disable` is the verb
+                // that stops one now), and that trusting matters at all while
+                // enforcement is off.
+                let summary = if trust {
+                    let tail = if enforced {
+                        " It may now load from a workspace or global directory."
+                    } else {
+                        " Note that owner trust is not currently enforced, so this changes \
+                          nothing until you enable it with action='trust_enforce'."
+                    };
+                    format!("Plugin '{name}' is now trusted.{tail}")
+                } else {
+                    format!(
+                        "Plugin '{name}' is no longer trusted. It will be refused at the next \
+                         load; if it is running now, that does not stop it — use \
+                         action='disable' for that."
+                    )
+                };
+                Ok(PluginManageOutput {
+                    summary,
+                    data: serde_json::json!({
+                        "name": name,
+                        "trusted": trust,
+                        "changed": changed,
+                        "enforced": enforced,
+                    }),
+                })
+            }
+            PluginAction::TrustEnforce => {
+                let enforce = args.enforce.ok_or_else(|| {
+                    AlephError::config(
+                        "'enforce' (true/false) is required for trust_enforce. \
+                         Call action='trust_status' first to see the current posture and \
+                         which plugins are already vouched for.",
+                    )
+                })?;
+                let changed = manager.set_trust_enforced(enforce).await;
+                let (_, trusted) = manager.trust_status().await;
+                let summary = if enforce {
+                    format!(
+                        "Owner trust enforcement is ON. {} plugin(s) are vouched for; \
+                         everything else in a workspace or global plugin directory will be \
+                         refused at the next load and listed with status 'blocked'. \
+                         Plugins running now are not stopped.",
+                        trusted.len()
+                    )
+                } else {
+                    "Owner trust enforcement is OFF — every installed plugin loads.".to_string()
+                };
+                Ok(PluginManageOutput {
+                    summary,
+                    data: serde_json::json!({
+                        "enforced": enforce,
+                        "changed": changed,
+                        "trusted": trusted,
+                    }),
+                })
+            }
         }
     }
 }
@@ -250,11 +352,14 @@ mod tests {
             PluginAction::Reload,
             PluginAction::ConfigGet,
             PluginAction::ConfigSet,
+            PluginAction::Trust,
+            PluginAction::Untrust,
         ] {
             let args = PluginManageArgs {
                 action,
                 name: None,
                 config: None,
+                enforce: None,
             };
             assert!(
                 PluginManageTool::require_name(&args).is_err(),
@@ -271,6 +376,7 @@ mod tests {
             action: PluginAction::Show,
             name: Some(String::new()),
             config: None,
+            enforce: None,
         };
         assert!(PluginManageTool::require_name(&args).is_err());
     }

@@ -2147,7 +2147,20 @@ mod tests {
     /// disk; (2) a stronger model cannot guess that this host keeps uninstall
     /// off the tool face; (3) each is the sole statement of its own routing.
     /// `no_tool_description_tells_the_model_to_call_an_rpc_method` holds it.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 104_020;
+    /// Same day again, the owner trust policy: 104_020 -> 104_355 B, pinned to
+    /// the measured figure. The whole delta is `plugin_manage`'s four trust
+    /// sentences (+335 B), which arrive with the policy's first producer — it
+    /// had a full implementation, a `Blocked` status and a three-crate wire
+    /// consumer chain, and no way for anyone to switch it on. Against the three
+    /// questions: (1) runtime facts the schema cannot carry — that enforcement
+    /// is a *deployment posture* the model must read before advising, and that
+    /// trust/untrust are LOAD gates that do not stop a running plugin (the
+    /// distinction between `untrust` and `disable` is not inferable from either
+    /// name); (2) a stronger model cannot guess whether this install enforces,
+    /// and guessing wrong means telling an operator their plugin is blocked
+    /// when it is loading fine, or the reverse; (3) no other tool mentions
+    /// owner trust — `plugin_manage` is its only face.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 104_355;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2415,7 +2428,15 @@ mod tests {
     /// (+1,297 B). Three fields and a seven-variant action enum; the costly
     /// part is the per-variant doc on `PluginAction`, which is what lets the
     /// model pick `config_get` before `config_set` instead of guessing.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 94_095;
+    /// Same day: 94_095 -> 94_661 B (+566 B), the four owner-trust variants on
+    /// `PluginAction` plus the `enforce` field, arriving with the trust
+    /// policy's first producer. Against the three questions: (1) runtime facts
+    /// — `trust_status` is the only way to learn whether this deployment
+    /// enforces, and the variant docs are where "vouch for" and "turn a plugin
+    /// off" stop being synonyms; (2) unguessable, and guessing wrong means
+    /// calling `untrust` when the operator asked for a plugin to stop, which
+    /// leaves it running; (3) no other tool speaks about owner trust.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 94_661;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

@@ -41,7 +41,32 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # exit code = failure count; the fixture prints every
                                  # assertion it ran. Deliberately no count here: the
                                  # first one drifted (16 in prose, 18 on screen).
+
+./qa/plugins/run.sh manifest     # Claude Code manifest + marketplace unions through a real
+                                 # load_all; ${CLAUDE_PLUGIN_ROOT}; per-plugin config across
+                                 # a server restart
+./qa/plugins/run.sh scaffold     # `aleph plugin init --type <rt>` output really installs and
+                                 # loads — the CLI and the server are two authors
+./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
+                                 # withdraw. Three restarts, because the policy is a LOAD gate
 ```
+
+`plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like
+its siblings. The hook inventory elides action labels at 80 characters — a
+documented "what is wired up" listing — and macOS spells `$TMPDIR` as a
+48-character path, so under it the elision lands mid-path and cuts off the very
+plugin id that distinguishes "expanded to this plugin's root" from "expanded to
+something". Don't tidy that back without re-reading phase C.
+
+Two of this fixture's own assertions were wrong before they were right, and both
+mistakes are the kind worth naming. Phase C first read `commands.list`, which
+serves a name/description tree and never a body: "no unexpanded
+`${CLAUDE_PLUGIN_ROOT}` survives" passed there because the string cannot appear
+either way. And the trust scenario first asserted "something is still loaded"
+after enforcement, read 0 of 91, and looked like a regression — but 88 of those
+rows are bundled *skills*, which are not plugin manifests and report `error`
+before and after alike. The claim that actually discriminates is that
+enforcement moves exactly the plugin rows and nothing else.
 
 `picker_nav` needs **no mock provider** at all: every item is Panel-side
 interaction, so nothing in the run needs a model. What it does need is three

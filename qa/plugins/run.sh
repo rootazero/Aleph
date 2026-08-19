@@ -183,8 +183,34 @@ PY
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$RUNTIMES" || RC=$?
   ;;
 
+trust)
+  # The owner trust policy is a LOAD gate, so every claim about it needs a
+  # fresh load to observe. Restarting also settles the durability question in
+  # the same run: the policy is re-derived from `plugins.toml` at construction,
+  # so a policy that did not survive a restart would not be a policy.
+  say "plant plugin trees"
+  python3 "$HERE/plant_plugins.py" "$INSTALLED" "$MARKETPLACES" || exit 1
+
+  say "start server (default posture)"
+  start_server || exit 1
+  python3 "$HERE/drive_trust.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$ALEPH_HOME" baseline || RC=$?
+
+  say "restart with enforcement on and one plugin vouched for"
+  stop_server
+  start_server || exit 1
+  python3 "$HERE/drive_trust.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$ALEPH_HOME" enforced || RC=$?
+
+  say "restart with the vouch withdrawn"
+  stop_server
+  start_server || exit 1
+  python3 "$HERE/drive_trust.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$ALEPH_HOME" blocked || RC=$?
+
+  say "plugins.toml as the operator would read it"
+  cat "$ALEPH_HOME/data/plugins.toml" 2>/dev/null | head -30
+  ;;
+
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"

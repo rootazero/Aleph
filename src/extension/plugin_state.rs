@@ -70,8 +70,42 @@ pub struct PluginEntryConfig {
     /// Secrets do **not** belong here. A value that a hint marks `sensitive`
     /// is stored as a `{{secret:NAME}}` reference into the vault, following
     /// the Hub install wizard's precedent — `plugins.toml` is plaintext.
+    /// Those references are resolved on the runtime edge only; see
+    /// [`crate::extension::plugin_secrets`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub settings: BTreeMap<String, toml::Value>,
+
+    /// Whether the operator vouches for this plugin loading from an untrusted
+    /// origin (`Workspace` / `Global`), when `[trust] enforce` is on.
+    ///
+    /// `None` — the usual state — means "never vouched for", which under
+    /// enforcement is a refusal. Separate from `enabled` on purpose: disabling
+    /// a plugin is "I don't want this right now", trusting it is "this code is
+    /// allowed to run at all", and collapsing them would make re-enabling a
+    /// plugin silently re-grant trust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted: Option<bool>,
+}
+
+/// Fleet-wide half of the owner trust policy.
+///
+/// Lives in `plugins.toml` rather than in a new `[extensions]` block in
+/// `config.toml`: this file is already the plugin subsystem's durable operator
+/// document, it is already loaded by `ExtensionManager`, and the per-plugin
+/// half of the same decision is already an entry here. A second file would
+/// have meant two places to look for one answer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginTrustConfig {
+    /// `false` (the default) loads every plugin, which is what every install
+    /// before this field did. `true` refuses `Workspace` / `Global` plugins
+    /// that no entry marks `trusted`.
+    ///
+    /// Defaulting to off is not a judgement that enforcement is unimportant —
+    /// it is that flipping it on by upgrade would silently stop loading
+    /// plugins an operator installed on purpose, and a security control whose
+    /// first act is to break a working install gets turned off, not adopted.
+    #[serde(default)]
+    pub enforce: bool,
 }
 
 /// Root document persisted as TOML at `<data_dir>/plugins.toml`.
@@ -83,6 +117,10 @@ pub struct PluginEntryConfig {
 pub struct PluginsConfig {
     #[serde(default)]
     pub entries: BTreeMap<String, PluginEntryConfig>,
+
+    /// Owner trust policy. See [`PluginTrustConfig`].
+    #[serde(default)]
+    pub trust: PluginTrustConfig,
 }
 
 impl PluginsConfig {
@@ -147,6 +185,47 @@ impl PluginsConfig {
             .get(plugin_id)
             .and_then(|e| e.enabled)
             .unwrap_or(true)
+    }
+
+    /// Materialise the runtime owner-trust policy from this document.
+    ///
+    /// The single place the two halves — the `[trust] enforce` switch and the
+    /// per-entry `trusted` flags — become one `OwnerTrustPolicy`. Callers that
+    /// need the policy ask here rather than assembling it themselves; two
+    /// assembly sites would be two answers to "may this plugin load".
+    #[must_use]
+    pub fn owner_trust_policy(&self) -> crate::extension::plugin_trust::OwnerTrustPolicy {
+        if !self.trust.enforce {
+            return crate::extension::plugin_trust::OwnerTrustPolicy::permissive();
+        }
+        crate::extension::plugin_trust::OwnerTrustPolicy::restrictive(
+            self.entries
+                .iter()
+                .filter(|(_, e)| e.trusted == Some(true))
+                .map(|(id, _)| id.clone()),
+        )
+    }
+
+    /// Record that the operator does (or does not) vouch for this plugin.
+    ///
+    /// Returns `true` when the stored value changed, so a no-op skips the disk
+    /// write — same contract as [`Self::set_enabled`].
+    pub fn set_trusted(&mut self, plugin_id: &str, trusted: bool) -> bool {
+        let entry = self.entries.entry(plugin_id.to_string()).or_default();
+        if entry.trusted == Some(trusted) {
+            return false;
+        }
+        entry.trusted = Some(trusted);
+        true
+    }
+
+    /// Turn allowlist enforcement on or off. Returns `true` when it changed.
+    pub fn set_trust_enforced(&mut self, enforce: bool) -> bool {
+        if self.trust.enforce == enforce {
+            return false;
+        }
+        self.trust.enforce = enforce;
+        true
     }
 
     /// Record a preference. Returns `true` when the stored value changed, so
@@ -343,5 +422,94 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let loaded = PluginsConfig::load(&dir.path().join("absent.toml"));
         assert_eq!(loaded, PluginsConfig::default());
+    }
+
+    // ---- owner trust ----
+
+    use crate::extension::types::PluginOrigin;
+
+    /// The default posture must be exactly what every install had before the
+    /// field existed. A security control whose first act is to stop loading
+    /// plugins the operator installed on purpose gets switched off, not
+    /// adopted.
+    #[test]
+    fn trust_is_not_enforced_by_default() {
+        let policy = PluginsConfig::default().owner_trust_policy();
+        assert!(policy.allows("anything", PluginOrigin::Global));
+        assert!(policy.allows("anything", PluginOrigin::Workspace));
+    }
+
+    #[test]
+    fn enforcing_refuses_an_unvouched_workspace_or_global_plugin() {
+        let mut cfg = PluginsConfig::default();
+        assert!(cfg.set_trust_enforced(true));
+        let policy = cfg.owner_trust_policy();
+        assert!(!policy.allows("stray", PluginOrigin::Global));
+        assert!(!policy.allows("stray", PluginOrigin::Workspace));
+        // Bundled and Config plugins are there because the operator put them
+        // there; enforcement is about directories anyone can drop a tree into.
+        assert!(policy.allows("stray", PluginOrigin::Bundled));
+        assert!(policy.allows("stray", PluginOrigin::Config));
+    }
+
+    #[test]
+    fn a_vouched_plugin_loads_under_enforcement() {
+        let mut cfg = PluginsConfig::default();
+        cfg.set_trust_enforced(true);
+        assert!(cfg.set_trusted("vouched", true));
+        let policy = cfg.owner_trust_policy();
+        assert!(policy.allows("vouched", PluginOrigin::Global));
+        assert!(!policy.allows("other", PluginOrigin::Global));
+    }
+
+    /// `trusted` and `enabled` are separate answers to separate questions.
+    ///
+    /// Collapsing them would mean re-enabling a plugin silently re-granted
+    /// permission for it to run at all — the operator's "not right now" read
+    /// as "and I still vouch for this code".
+    #[test]
+    fn disabling_a_plugin_does_not_withdraw_trust_and_untrusting_does_not_disable() {
+        let mut cfg = PluginsConfig::default();
+        cfg.set_trust_enforced(true);
+        cfg.set_trusted("p", true);
+        cfg.set_enabled("p", false);
+        assert!(
+            cfg.owner_trust_policy().allows("p", PluginOrigin::Global),
+            "disabling must not withdraw trust"
+        );
+
+        cfg.set_trusted("p", false);
+        assert!(
+            !cfg.is_enabled("p"),
+            "untrusting must not change the enable preference"
+        );
+    }
+
+    /// Both halves must survive a save/load round-trip: a policy that resets
+    /// to permissive on restart is not a policy.
+    #[tokio::test]
+    async fn the_trust_policy_survives_a_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(PLUGINS_CONFIG_FILE);
+
+        let mut cfg = PluginsConfig::default();
+        cfg.set_trust_enforced(true);
+        cfg.set_trusted("vouched", true);
+        cfg.save(&path).await.unwrap();
+
+        let loaded = PluginsConfig::load(&path);
+        let policy = loaded.owner_trust_policy();
+        assert!(policy.allows("vouched", PluginOrigin::Global));
+        assert!(!policy.allows("stray", PluginOrigin::Global));
+    }
+
+    /// A `plugins.toml` written before `[trust]` existed must keep loading
+    /// every plugin — the upgrade path for every install that has one.
+    #[test]
+    fn a_config_predating_the_trust_table_stays_permissive() {
+        let text = "[entries.foo]\nenabled = true\n";
+        let cfg: PluginsConfig = toml::from_str(text).unwrap();
+        assert!(cfg.owner_trust_policy().allows("foo", PluginOrigin::Global));
+        assert!(cfg.owner_trust_policy().allows("bar", PluginOrigin::Global));
     }
 }
