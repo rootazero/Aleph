@@ -37,6 +37,13 @@ type Bindings = HashMap<String, String>;
 
 static ACTIVE: Lazy<Mutex<Bindings>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// PR-8 / BT-D-R4-13: project ids whose on-disk file is being deleted
+/// right now. `set_active` consults this set and refuses to bind a
+/// session to a project that is mid-purge — the in-flight file delete
+/// would otherwise win the race and erase the new owner's plan.
+static IN_PROGRESS_PURGES: Lazy<Mutex<std::collections::HashSet<String>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
+
 /// Disk mirror target. `None` keeps the registry in-memory-only (the
 /// pre-persistence behavior); `init_persistence` sets it at boot.
 static STORE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
@@ -117,6 +124,26 @@ pub fn set_active(session_key: &str, project_id: &str) {
     if session_key.is_empty() || project_id.is_empty() {
         return;
     }
+    // PR-8 / BT-D-R4-13: refuse to bind a session to a project whose
+    // on-disk file is being deleted right now. The in-progress purge
+    // would otherwise race the new binding and delete the freshly-bound
+    // plan. Returning false lets the caller (the scratchpad tool)
+    // surface a clear 'purge in progress' message and let the model
+    // retry; set_active is already infallible at the call site so we
+    // choose fail-closed over panicking.
+    {
+        let purges = IN_PROGRESS_PURGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if purges.contains(project_id) {
+            tracing::warn!(
+                session_key,
+                project_id,
+                "set_active refused: project is being purged"
+            );
+            return;
+        }
+    }
     // PR-5 / BT-D-R4-13: hold the lock across the persist so the
     // memory map and the disk mirror are a single linearizable step.
     let mut map = active_lock();
@@ -162,31 +189,46 @@ pub async fn purge_session_scratchpad(session_key: &str) {
     if session_key.is_empty() {
         return;
     }
-    // PR-5 / BT-D-R4-13: hold the lock across the in-memory removal AND
-    // the disk mirror update so the two are a single linearizable step.
-    // The async file purge stays outside the lock (we cannot hold an
-    // async mutex across an .await without poisoning the executor), and
-    // remains best-effort — a session that re-binds the project between
-    // the lock release and the file delete is the documented narrow
-    // race window this PR accepts.
+    // PR-8 / BT-D-R4-13: claim the in-progress slot for project_id while
+    // we still hold the active_lock, so set_active can reject any
+    // concurrent re-bind. The slot is cleared in the finally block
+    // (success or fail) so a future set_active is free to re-bind the
+    // project after the delete completes. Without this marker, a
+    // concurrent set_active between the lock release and the file
+    // delete would have its freshly-bound plan erased by the
+    // in-flight purge.
     let project_id = {
         let mut map = active_lock();
         let Some(project_id) = map.remove(session_key) else {
             return;
         };
         if map.values().any(|p| *p == project_id) {
-            // Still owned by another session; persist the now-shorter map
-            // and leave the file alone.
+            // Still owned by another session; persist the now-shorter
+            // map and leave the file alone.
             persist_locked(&map);
             return;
         }
         persist_locked(&map);
+        let mut purges = IN_PROGRESS_PURGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        purges.insert(project_id.clone());
         project_id
     };
-    if let Err(e) = crate::memory::scratchpad::ScratchpadManager::new(&project_id, session_key)
+    let purge_result = crate::memory::scratchpad::ScratchpadManager::new(&project_id, session_key)
         .purge()
-        .await
+        .await;
+    // Always release the in-progress slot, even on failure. A failed
+    // delete still erased nothing on disk, so future set_active calls
+    // must be free to retry; a stuck slot would block the project
+    // forever.
     {
+        let mut purges = IN_PROGRESS_PURGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        purges.remove(&project_id);
+    }
+    if let Err(e) = purge_result {
         tracing::warn!(error = %e, session_key, project_id, "failed to purge session scratchpad");
     }
 }
