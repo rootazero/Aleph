@@ -154,7 +154,7 @@ sensitive = true
 | `disabled` | operator 关掉了（`plugins.toml`）| `aleph plugin enable <name>` |
 | `overridden` | 同 id 被更高优先级 scope 的副本遮蔽 | `status_detail` 给出胜出路径 |
 | `error` | manifest 解析失败 | `status_detail` 给出解析错误 |
-| `blocked` | owner trust policy 拒绝了这个 origin | 把 id 加进 allowlist |
+| `blocked` | owner trust policy 拒绝了它 | `plugin_manage(action='trust', name=…)` |
 
 > **2026-08-16 之前只有前两个是真的。** `Overridden` / `Error` 是**零生产者**的枚举变体：
 > 重名插件在 `load_all` 里被 `continue` 静默丢弃，manifest 解析失败只有一句 `debug!`，
@@ -164,6 +164,11 @@ sensitive = true
 >
 > 现在三者都有 registry 行 + `status_detail`。状态词表的单一源是
 > `aleph_protocol::plugins::PluginRuntimeStatus`。
+>
+> **`blocked` 直到 2026-08-19 仍然产生不出来**——不是因为它没有 registry 行，而是
+> 因为整个 owner trust policy 零生产者（见下文「策略住在哪」）。现在它由
+> `[trust] enforce` 产生，且 `qa/plugins/run.sh trust` 真机断言它与「不存在」不同：
+> 被拒的插件**必须留下带 id 的行**，否则 operator 手里没有可以 vouch 的东西。
 
 ## Runtime 模型
 
@@ -530,10 +535,42 @@ secret 名 + 注入策略（Bearer/Basic/Header/Query/UrlPath）。host 端的
 `SecretResolver` 解析 secret 名。Plugin guest 永远不接触明文 secret 值——这是
 **live property**，不再是 goal。
 
-`SecretResolver` trait + `InMemorySecretResolver` / `DenyAllSecretResolver` 实现在
-`src/extension/runtime/wasm/secret_resolver.rs`。生产部署可通过自定义 resolver
-对接 Aleph vault（替换默认的 deny-all）。已修复 `WasmCapabilityKernel` 的 header
-注释中 "NOT yet done" 的过时措辞。
+`SecretResolver` trait 与三个实现在
+`src/extension/runtime/wasm/secret_resolver.rs`。**运行中的 daemon 装的是
+`VaultBackedSecretResolver`**（2026-08-19 接线）；`DenyAllSecretResolver` 是没有
+vault 时的回落——测试二进制从不安装那个进程级 vault，所以它们不必特意选择就保持
+拒绝。
+
+⚠️ **在此之前这一整节描述的是一个不可达的特性**：`load_plugin` 转发的是 `None`，
+而 `load_plugin_with_resolver(_, Some(..))` 全仓零调用点，所以每个
+`[capabilities.http.credentials]` 绑定都把该插件的 `http_fetch` 变成必然的
+`secret not found`。
+
+**闸与线必须同批落地**。`WasmCapabilityKernel::resolve_secret` 一道
+`check_secret_pattern` 都不过，而 `try_http_fetch` 把 `binding.secret_name` 从
+manifest 原样喂给它 —— 真 resolver 一装，`[capabilities.http.credentials]` 就是
+一条点名任意 vault key、绕过 `[capabilities.secrets] allowed_patterns` 的路。闸
+现在住在 `resolve_secret` **里面**而不是它的调用者上（第三个调用者不必知道它存在
+就继承它），未声明 `[capabilities.secrets]` 时 fail-closed。
+
+### `{{secret:NAME}}` 与两种设置形态
+
+`plugins.toml` 是明文，所以 `config_ui_hints` 标 `sensitive` 的值以
+`{{secret:NAME}}` 引用形式存放。**解析只发生在运行时那条边上**
+（`extension/plugin_secrets.rs`）：
+
+| 消费者 | 形态 | 为什么 |
+|--------|------|--------|
+| loader 快照 → WASM guest / MCP 子进程 | 已解析 | 插件代码要真值 |
+| hook 子进程环境 | 已解析 | 同上 |
+| `plugin_manage(config_get / show)` | **存储形态** | 这段文字进模型上下文 |
+| `plugin.config.get` RPC | **存储形态** | 这段文字进 Panel |
+
+在 `plugin_settings` 里解析是一行，代价是把每个配置好的密钥灌进转录和设置页 ——
+所以运行时形态是另一个函数（`plugin_settings_for_runtime`），名字说明它站在哪一边。
+守卫是整目录规则（`builtin_tools/` 与 `gateway/handlers/` 不得读解析形态）。
+解析不了的引用**丢弃这个键**而不是透传占位符：读不到设置的插件走自己的默认值，
+而拿到 `{{secret:...}}` 的插件会把那个字面量当凭据发给远端。
 
 ---
 
@@ -581,11 +618,51 @@ activation planner 删除后按内容更名）。
 Aleph 暴露 `OwnerTrustPolicy::permissive()` (默认) 和
 `OwnerTrustPolicy::restrictive(allowlist)`。restrictive 模式下，`Bundled` 和
 `Config` origin 的插件始终可加载；`Workspace` 和 `Global` origin 的插件必须在
-allowlist 中。`ExtensionManager::set_owner_trust_policy(policy)` 切换策略；
-`current_owner_trust_policy()` 暴露给 operator。`LoadSummary.skipped_by_trust`
-记录被策略跳过的 plugin 数，让 operator 看到"装了但没启用"的 plugin。
+allowlist 中。`LoadSummary.skipped_by_trust` 记录被策略跳过的 plugin 数，让
+operator 看到"装了但没启用"的 plugin。
 
 这对应 openclaw 的 `passesManifestOwnerBasePolicy` + bundled 短路。
+
+### 策略住在哪、谁能拨（2026-08-19 接线）
+
+⚠️ **在此之前这整节描述的是一个零生产者的策略**：唯一的生产构造点传的是
+`ExtensionConfig::default()`，所以每个安装都是 permissive，`PluginStatus::Blocked`
+不可能产生。
+
+耐久答案在 **`plugins.toml`**，不是新造的 `[extensions]` 段：
+
+```toml
+[trust]
+enforce = true          # 默认 false = legacy「全都加载」
+
+[entries.my-plugin]
+trusted = true          # 这一条才让它在 enforce 下通过
+enabled = true          # 与 trusted 正交，见下
+```
+
+选这里而不是 `config.toml`：它已经是插件子系统的耐久操作者文档，manager 在构建
+策略**前两条语句**就加载了它，而同一决定的「按插件」那一半本来就是它的一个 entry。
+`ExtensionConfig.owner_trust` 与它的 DTO 已 **CUT**——"这个插件能不能加载"有两个源
+时，输的会是操作者手动编辑的那个。
+
+**`trusted` 与 `enabled` 刻意分开**：停用是「现在不要」，信任是「这段代码允许运行」。
+合并等于重新启用一个插件时静默重新授予信任。
+
+拨它的是 `plugin_manage` 的四个 action（R8）：`trust_status` / `trust` / `untrust` /
+`trust_enforce`。**这些都是 LOAD 闸**——它们不停止已经在跑的插件，`disable` 才是；
+工具的回复逐字说明这一点，因为两个动词的名字本身分不出来。
+
+**`Bundled` / `Config` 至今没有生产者，这是有意的**。随包插件被解压进 marketplace
+cache（`plugins/cache/aleph-official/<id>`），scanner 只从 plugin parent 下降一层
+而那条路径是两层，所以它们不是「被豁免」而是**根本没被发现**；它们只有被安装进
+`plugins/installed/` 才可加载，那时就是货真价实的 `Global`。所以 enforce 的含义没有
+星号：每个插件都需要一次显式 vouch，被拒的那些按 id 列出来，好让人有东西可 vouch。
+
+`PluginOrigin` 本身在同一轮才有了真生产者：六个 manifest adapter 全部在构造点硬
+编码 `Global`，`collect_plugin_dirs` 又把 scanner 的 `DiscoverySource` 丢了。现在
+它带着走，`PluginOrigin::classify` 是唯一推导。
+
+真机覆盖：`qa/plugins/run.sh trust`（三次重启——LOAD 闸只有在下一次加载时可观测）。
 
 ---
 

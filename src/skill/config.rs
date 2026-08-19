@@ -196,7 +196,7 @@ mod tests {
         let mut config = SkillsConfig::default();
         for i in (0..10).rev() {
             config.apply_update(
-                &SkillId::new(&format!("qa:skill-{i}")),
+                &SkillId::new(format!("qa:skill-{i}")),
                 SkillConfigUpdate::SetEnabled(i % 2 == 0),
             );
         }
