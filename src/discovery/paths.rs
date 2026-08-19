@@ -23,12 +23,14 @@ pub(crate) const MCP_CONFIG_FILE: &str = ".mcp.json";
 
 /// Get the user's home directory. Used by `claude_home_dir` (scanner-internal).
 pub(crate) fn home_dir() -> DiscoveryResult<PathBuf> {
-    crate::utils::paths::get_home_dir().map_err(|e| DiscoveryError::InvalidPath(e.to_string()))
+    // Preserve the structured AlephError (with its actionable "set HOME"
+    // message) instead of flattening it into InvalidPath's string.
+    crate::utils::paths::get_home_dir().map_err(DiscoveryError::HomeDir)
 }
 
 /// Get the Aleph home directory (~/.aleph/)
 pub fn aleph_home_dir() -> DiscoveryResult<PathBuf> {
-    crate::utils::paths::get_config_dir().map_err(|e| DiscoveryError::InvalidPath(e.to_string()))
+    crate::utils::paths::get_config_dir().map_err(DiscoveryError::HomeDir)
 }
 
 /// Get the Claude Code home directory (~/.claude/) — scanner-internal.

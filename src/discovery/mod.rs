@@ -8,8 +8,9 @@ mod scanner;
 mod types;
 
 pub use paths::*;
-pub use scanner::*;
 pub use types::*;
+
+use scanner::DirectoryScanner;
 
 use std::path::PathBuf;
 use thiserror::Error;
@@ -22,6 +23,9 @@ pub enum DiscoveryError {
 
     #[error("Invalid path: {0}")]
     InvalidPath(String),
+
+    #[error("failed to resolve Aleph home directory")]
+    HomeDir(#[source] crate::error::AlephError),
 }
 
 pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
@@ -67,8 +71,11 @@ impl DiscoveryManager {
     }
 
     /// Get the Aleph home directory (~/.aleph/)
+    ///
+    /// Returns the path resolved at construction (honouring the `ALEPH_HOME`
+    /// override), so it cannot disagree with the scanner's own view.
     pub fn aleph_home(&self) -> DiscoveryResult<PathBuf> {
-        aleph_home_dir()
+        Ok(self.scanner.aleph_home().to_path_buf())
     }
 
     /// Discover all skill directories
