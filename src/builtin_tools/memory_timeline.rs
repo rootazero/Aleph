@@ -85,7 +85,7 @@ impl MemoryTimelineTool {
 
         let explanation = self
             .traveler
-            .explain_fact(fact_id)
+            .explain_fact(fact_id, &crate::builtin_tools::acting_agent::acting_agent_id(""))
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to explain fact: {e}")))?;
 
