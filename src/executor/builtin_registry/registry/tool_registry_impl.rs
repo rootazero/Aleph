@@ -1477,6 +1477,19 @@ impl ToolRegistry for BuiltinToolRegistry {
             // to `_ =>` and returned "Unknown tool". select_model/doctor are
             // dependency-free unit structs; config_audit needs the live Config
             // handle (same source as `create_tool_boxed`). (logic-audit fix)
+            //
+            // `plugin_manage` joined them on 2026-08-19 with the same shape and
+            // the same cause: it was added to the catalog, to `create_tool_boxed`
+            // and to `core_tools::reg`, and every one of those makes the model
+            // *see* it — none of them makes a call arrive here. Its description
+            // was billed on every request for a tool whose every invocation
+            // answered "Unknown tool". Registration is not dispatch; the census
+            // in `dispatchable.rs` now says so in a way that fails the build.
+            "plugin_manage" => Box::pin(async move {
+                crate::builtin_tools::plugin_manage::PluginManageTool::new()
+                    .call_json(arguments)
+                    .await
+            }),
             "select_model" => Box::pin(async move {
                 crate::builtin_tools::SelectModelTool
                     .call_json(arguments)

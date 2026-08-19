@@ -15,6 +15,13 @@
 mod builder;
 mod config;
 mod definitions;
+// Source-level census: advertised-but-undispatchable builtins. Test-only, so
+// it is gated here rather than carrying a `#[cfg(test)]` inside the file —
+// an attribute above a `mod` gates whatever item follows it, and inserting a
+// new one between the attribute and its intended target is a documented way
+// to silently move the gate.
+#[cfg(test)]
+mod dispatchable;
 mod groups;
 mod registry;
 
