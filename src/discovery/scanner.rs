@@ -358,8 +358,7 @@ fn classify_entry(
         }
     } else {
         // Also include direct .md files (for commands/agents)
-        meta.file_type().is_file()
-            && path.extension().and_then(|e| e.to_str()) == Some("md")
+        meta.file_type().is_file() && path.extension().and_then(|e| e.to_str()) == Some("md")
     };
     if is_component {
         out.push(DiscoveredPath::new(
