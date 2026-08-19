@@ -105,10 +105,16 @@ impl FileOpSupersedeStage {
     /// compaction file ledger so "which calls are file ops, and what path do
     /// they name" has exactly one answer in the repo. Only the grouping is
     /// local, because only supersession needs it.
-    fn ops_by_path(messages: &[UnifiedMessage]) -> BTreeMap<String, Vec<FileOp>> {
-        let mut by_path: BTreeMap<String, Vec<FileOp>> = BTreeMap::new();
+    fn ops_by_path(messages: &[UnifiedMessage]) -> BTreeMap<String, Vec<FileOp<'_>>> {
+        let mut by_path: BTreeMap<String, Vec<FileOp<'_>>> = BTreeMap::new();
         for op in file_ops::index_file_ops(messages) {
-            by_path.entry(op.path.clone()).or_default().push(op);
+            // Probe before keying: the owned `String` key is paid once per
+            // distinct path, not once per op on an already-seen path.
+            if let Some(ops) = by_path.get_mut(&op.path) {
+                ops.push(op);
+            } else {
+                by_path.insert(op.path.clone(), vec![op]);
+            }
         }
         by_path
     }
@@ -128,12 +134,12 @@ impl FileOpSupersedeStage {
     ///    canonical state.
     /// 4. Obsolete entries inside `fresh_tail_start..` are dropped — the
     ///    fresh tail is sacred.
-    fn obsolete_call_ids(
-        by_path: &BTreeMap<String, Vec<FileOp>>,
-        successful: &BTreeSet<String>,
+    fn obsolete_call_ids<'a>(
+        by_path: &'a BTreeMap<String, Vec<FileOp<'a>>>,
+        successful: &BTreeSet<&str>,
         fresh_tail_start: usize,
-    ) -> BTreeMap<String, String> {
-        let mut obsolete: BTreeMap<String, String> = BTreeMap::new();
+    ) -> BTreeMap<&'a str, &'a str> {
+        let mut obsolete: BTreeMap<&'a str, &'a str> = BTreeMap::new();
         for ops in by_path.values() {
             if ops.len() < MIN_OPS_PER_PATH {
                 continue;
@@ -141,7 +147,7 @@ impl FileOpSupersedeStage {
             let Some(last_mut) = ops
                 .iter()
                 .rev()
-                .find(|op| op.kind.is_mutating() && successful.contains(&op.call_id))
+                .find(|op| op.kind.is_mutating() && successful.contains(op.call_id))
             else {
                 continue;
             };
@@ -152,7 +158,7 @@ impl FileOpSupersedeStage {
                 if op.msg_index >= fresh_tail_start {
                     continue;
                 }
-                obsolete.insert(op.call_id.clone(), last_mut.tool_name.clone());
+                obsolete.insert(op.call_id, last_mut.tool_name);
             }
         }
         obsolete
@@ -182,14 +188,17 @@ impl PreflightStage for FileOpSupersedeStage {
             return 0;
         }
 
-        let mut freed_tokens: usize = 0;
-        let mut stubbed: usize = 0;
-        // Bound the rewrite to messages before the fresh tail: a ToolResult
-        // sits one index after its ToolCall, so a call just below the boundary
-        // can have its result *inside* the protected tail — the obsolete set
-        // only checks the call's index, so the tail must be re-guarded here
-        // (safety contract 3: fresh-tail messages are immune).
-        for msg in messages.iter_mut().take(fresh_tail_start) {
+        let mut decisions: Vec<(usize, String, usize)> = Vec::new();
+        // Decide against an immutable view of `messages`: the `obsolete` index
+        // borrows from it (via `by_path`), and a borrowed lookup cannot live
+        // across the mutation pass that applies the decisions below.
+        //
+        // The rewrite is bounded to messages before the fresh tail: a
+        // ToolResult sits one index after its ToolCall, so a call just below
+        // the boundary can have its result *inside* the protected tail — the
+        // obsolete set only checks the call's index, so the tail must be
+        // re-guarded here (safety contract 3: fresh-tail messages are immune).
+        for (idx, msg) in messages.iter().enumerate().take(fresh_tail_start) {
             let UnifiedMessage::ToolResult {
                 tool_call_id,
                 content,
@@ -227,11 +236,20 @@ impl PreflightStage for FileOpSupersedeStage {
             if new_tokens >= original_tokens {
                 continue;
             }
+            decisions.push((idx, replacement, original_tokens - new_tokens));
+        }
+
+        let mut freed_tokens: usize = 0;
+        let mut stubbed: usize = 0;
+        for (idx, replacement, freed) in decisions {
+            let UnifiedMessage::ToolResult { content, .. } = &mut messages[idx] else {
+                continue;
+            };
             *content = vec![ContentBlock::Text {
                 text: replacement,
                 cache_control: None,
             }];
-            freed_tokens = freed_tokens.saturating_add(original_tokens - new_tokens);
+            freed_tokens = freed_tokens.saturating_add(freed);
             stubbed = stubbed.saturating_add(1);
         }
 

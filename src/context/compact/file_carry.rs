@@ -121,7 +121,7 @@ fn collect(window: &[UnifiedMessage]) -> Ledger {
     let mut ledger = Ledger::default();
 
     for op in file_ops::index_file_ops(window).into_iter().rev() {
-        if successful.contains(&op.call_id) {
+        if successful.contains(op.call_id) {
             ledger.push(op.kind, op.path);
         }
     }

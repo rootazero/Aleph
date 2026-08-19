@@ -221,13 +221,15 @@ impl ContentIndex {
             )?;
             for (i, chunk) in chunks.iter().enumerate() {
                 let title = chunk_title(chunk, title_hint, i);
-                if previews.len() < PREVIEW_COUNT {
-                    previews.push(title.clone());
-                }
                 // Same chunk into both indexes; the (source, chunk_no) pair is
                 // the logical identity used to fuse the two result lists.
                 stmt.execute(params![title, chunk, source, i as i64, session_id])?;
                 stmt_tri.execute(params![title, chunk, source, i as i64, session_id])?;
+                // The writes above only borrow `title`, so the preview list
+                // can take ownership — no per-chunk clone.
+                if previews.len() < PREVIEW_COUNT {
+                    previews.push(title);
+                }
             }
         }
         tx.commit()?;
@@ -565,43 +567,53 @@ struct FusedHit {
 fn rrf_fuse(porter: Vec<RankedRow>, trigram: Vec<RankedRow>) -> Vec<FusedHit> {
     use std::collections::HashMap;
 
-    // `(score, row)` per chunk; `order` preserves first-seen sequence so ties
-    // resolve deterministically in porter-then-trigram precedence.
-    let mut acc: HashMap<(String, i64), (f64, RankedRow)> = HashMap::new();
-    let mut order: Vec<(String, i64)> = Vec::new();
+    // `(score, first_seen, row)` per chunk. `first_seen` records the
+    // first-seen sequence (porter before trigram) inside the map value, so
+    // exact score ties resolve deterministically without a second owned copy
+    // of every `(source, chunk_no)` key in an `order` side vector.
+    let mut acc: HashMap<(String, i64), (f64, usize, RankedRow)> = HashMap::new();
 
     for list in [porter, trigram] {
         for (rank, row) in list.into_iter().enumerate() {
             let key = (row.source.clone(), row.chunk_no);
             let contrib = 1.0 / (RRF_K + (rank as f64 + 1.0));
+            let first_seen = acc.len();
             match acc.entry(key) {
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
                     entry.get_mut().0 += contrib;
                 }
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    order.push(entry.key().clone());
-                    entry.insert((contrib, row));
+                    entry.insert((contrib, first_seen, row));
                 }
             }
         }
     }
 
-    let mut hits: Vec<FusedHit> = order
-        .into_iter()
-        .filter_map(|key| {
-            let (score, row) = acc.remove(&key)?;
-            Some(FusedHit {
-                source: row.source,
-                chunk_no: row.chunk_no,
-                title: row.title,
-                snippet: row.snippet,
-                body: row.body,
-                score,
-            })
+    let mut hits: Vec<(usize, FusedHit)> = acc
+        .into_values()
+        .map(|(score, first_seen, row)| {
+            (
+                first_seen,
+                FusedHit {
+                    source: row.source,
+                    chunk_no: row.chunk_no,
+                    title: row.title,
+                    snippet: row.snippet,
+                    body: row.body,
+                    score,
+                },
+            )
         })
         .collect();
-    sort_by_score_desc(&mut hits);
-    hits
+    // Score descending; exact ties fall back to first-seen order — the same
+    // outcome the old `order` vector produced via the stable sort.
+    hits.sort_by(|a, b| {
+        b.1.score
+            .partial_cmp(&a.1.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    hits.into_iter().map(|(_, hit)| hit).collect()
 }
 
 /// Stable descending sort by fused `score`. Ties keep their incoming order, so
@@ -832,12 +844,12 @@ pub(crate) fn sanitize_fts_query(query: &str) -> Option<String> {
 /// case-insensitive porter/trigram indexes; dedup keeps a repeated keyword from
 /// inflating the coverage denominator.
 fn query_terms(query: &str) -> Vec<String> {
-    use std::collections::HashSet;
-    let mut seen: HashSet<String> = HashSet::new();
+    // A query is a handful of terms, so a linear dedup over the output vector
+    // beats a side `HashSet` plus a defensive clone per distinct term.
     let mut out: Vec<String> = Vec::new();
     for t in split_terms(query) {
         let lc = t.to_ascii_lowercase();
-        if seen.insert(lc.clone()) {
+        if !out.contains(&lc) {
             out.push(lc);
         }
     }
