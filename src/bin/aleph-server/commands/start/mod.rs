@@ -2363,6 +2363,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let mut cron_timer_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut heartbeat_timer_handle: Option<tokio::task::JoinHandle<()>> = None;
 
+    // BIN-R4-13 (complete): hoist the shared delivery engine OUT of the
+    // cron-only block so both the cron and heartbeat timer loops reuse the
+    // same `Arc` rather than constructing two structurally-identical engines.
+    // Two engines would drift the moment a new delivery target is added to
+    // one but not the other; one engine is structurally harder to drift apart.
+    let delivery_engine_shared = build_task_delivery_engine(
+        agent_result
+            .channel_registry_cell
+            .clone()
+            .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new())),
+        memory_db.clone(),
+        webhook_ssrf_policy.clone(),
+    );
+
     // Spawn cron timer loop (after agent handlers, so AgentRegistry is populated)
     if let Some(ref cron_svc) = cron_service {
         if let (Some(ref exec_adapter), Some(ref registry)) = (
@@ -2396,17 +2410,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Route cron failure alerts through the shared delivery engine so
             // Webhook / Memory alert targets work (not just Gateway). Same
             // engine wiring the heartbeat loop uses below.
-            // BIN-R4-13 (complete): declare the engine ONCE outside the
-            // cron-only block so the heartbeat block can reuse the same
-            // `Arc` rather than constructing a second, structurally-
-            // identical engine. Two engines would drift the moment a new
-            // delivery target is added to one but not the other; one
-            // engine is structurally harder to drift apart.
-            let delivery_engine_shared = build_task_delivery_engine(
-                cron_channel_cell,
-                memory_db.clone(),
-                webhook_ssrf_policy.clone(),
-            );
+            // BIN-R4-13 (complete): delivery_engine_shared is declared in
+            // the outer scope above (between the JoinHandle decls and this
+            // block) so the heartbeat block below reuses the same Arc.
             let cron_delivery_engine = delivery_engine_shared.clone();
             let alert_dispatcher_fn =
                 alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(
@@ -2457,7 +2463,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     change_emitter,
                 )
                 .await;
-            });
+            }));
 
             if !args.daemon {
                 println!("Cron timer loop: started");
@@ -2537,16 +2543,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Build the delivery engine with all targets registered so
             // heartbeat L2 results actually reach the user (H2). Without this
             // every deliver() call hits the "target not registered" path.
-            // BIN-R4-13 (complete): reuse the same `delivery_engine` that
-            // the cron alert path already holds. Previously a second
-            // `build_task_delivery_engine` call constructed a separate
-            // engine with the same target set; the comment claimed
-            // "shared" but the code was a fresh `Arc`. Now the heartbeat
-            // block reuses the cron-side engine.
-            let hb_channel_cell = agent_result
-                .channel_registry_cell
-                .clone()
-                .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
+            // BIN-R4-13 (complete): reuse the same `delivery_engine_shared`
+            // declared in the outer scope above so cron and heartbeat share
+            // one engine — previously each block built its own Arc.
             let delivery_engine = delivery_engine_shared.clone();
 
             let tick_ctx = Arc::new(TickContext {
