@@ -12,6 +12,7 @@ pub type ToolStorage = Arc<AsyncRwLock<HashMap<String, UnifiedTool>>>;
 
 /// Result of resolving a user slash command
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ResolvedCommand {
     /// The matched tool
     pub tool: UnifiedTool,

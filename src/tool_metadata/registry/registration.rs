@@ -10,14 +10,14 @@ use crate::skill::SkillInfo;
 use super::super::types::{ToolSource, UnifiedTool};
 use super::conflict::ConflictResolver;
 use super::helpers::{extract_command_name, truncate_description};
-use super::types::ToolStorage;
 
 /// Registration functionality for `ToolCatalog`
+#[derive(Default)]
 pub struct ToolRegistrar;
 
 impl ToolRegistrar {
     /// Create a new registrar
-    pub fn new(_tools: ToolStorage) -> Self {
+    pub const fn new() -> Self {
         Self
     }
 
@@ -217,7 +217,7 @@ impl ToolRegistrar {
     /// Skills have the lowest priority, so they will be renamed if they
     /// conflict with any other tool type.
     ///
-    /// Priority: Builtin > Native > Custom > MCP > Skill
+    /// Priority: Builtin > Native > Custom > MCP > Plugin > Skill
     pub async fn register_skills(
         &self,
         skills: &[SkillInfo],

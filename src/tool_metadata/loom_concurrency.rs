@@ -47,18 +47,18 @@ fn loom_engine_pause_resume_cancel() {
         let cancelled = Arc::new(AtomicBool::new(false));
 
         let p = paused.clone();
-        let control = thread::spawn(move || {
+        let pause_handle = thread::spawn(move || {
             p.store(true, Ordering::SeqCst);
             p.store(false, Ordering::SeqCst);
         });
 
-        let c2 = cancelled.clone();
-        let canceller = thread::spawn(move || {
-            c2.store(true, Ordering::SeqCst);
+        let cancel_flag = cancelled.clone();
+        let cancel_handle = thread::spawn(move || {
+            cancel_flag.store(true, Ordering::SeqCst);
         });
 
-        control.join().unwrap();
-        canceller.join().unwrap();
+        pause_handle.join().unwrap();
+        cancel_handle.join().unwrap();
 
         assert!(cancelled.load(Ordering::SeqCst));
     });

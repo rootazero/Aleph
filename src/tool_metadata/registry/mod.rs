@@ -99,7 +99,7 @@ impl ToolCatalog {
     pub fn with_health(health: Arc<ToolHealthCache>) -> Self {
         let tools: ToolStorage = Arc::new(AsyncRwLock::new(HashMap::new()));
         Self {
-            registrar: ToolRegistrar::new(Arc::clone(&tools)),
+            registrar: ToolRegistrar::new(),
             conflict_resolver: ConflictResolver::new(Arc::clone(&tools)),
             query: ToolQuery::new(Arc::clone(&tools)),
             state: ToolState::new(tools),
