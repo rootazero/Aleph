@@ -343,7 +343,14 @@ pub(crate) fn offending_lines(src: &str) -> Vec<usize> {
 /// was already in the tree: `settings.generation.model_placeholder` translates
 /// `e.g.` to `例如` and leaves `dall-e-3, stable-diffusion-xl` alone. The
 /// remaining 184 lines are the tail: 70 files, none above eight.
-const HARDCODED_ENGLISH_LINE_CEILING: usize = 184;
+///
+/// 2026-08-19: **184 -> 182**. Not a translation round — the plugin install
+/// dialog's three-option source `<select>` was removed because nothing read
+/// its value (all three branches sent the same git-clone RPC), and its two
+/// surviving hardcoded placeholders went with it. Re-pinned rather than left
+/// as slack: a ceiling above the measurement hands the next author that
+/// difference for free.
+const HARDCODED_ENGLISH_LINE_CEILING: usize = 182;
 
 /// Human-facing names the derivation cannot see, because the crate has never
 /// localised one.

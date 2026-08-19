@@ -328,7 +328,6 @@ fn InstallPluginDialog(
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
-    let source = RwSignal::new("git".to_string());
     let url = RwSignal::new(String::new());
     let installing = RwSignal::new(false);
     let dialog_error = RwSignal::new(Option::<String>::None);
@@ -341,11 +340,17 @@ fn InstallPluginDialog(
         dialog_error.set(None);
         let install_url = url.get().trim().to_string();
         spawn_local(async move {
+            // `plugin.install` (singular), not `plugins.install` (plural).
+            // The plural one is the git-clone-only handler; the singular one
+            // classifies the source server-side and routes a bare name to
+            // `plugin.marketplace.install`. Panel spoke only the plural
+            // namespace, which is why no marketplace plugin could be installed
+            // from here — the name went to a git clone and failed.
             match state
                 .rpc_call(
-                    "plugins.install",
+                    "plugin.install",
                     json!({
-                        "url": install_url,
+                        "source": install_url,
                     }),
                 )
                 .await
@@ -376,37 +381,34 @@ fn InstallPluginDialog(
                 </p>
 
                 <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.plugins.source_label)}</label>
-                        <select
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
-                            on:change=move |ev| source.set(event_target_value(&ev))
-                        >
-                            <option value="git">"📦 Git Repository"</option>
-                            <option value="zip">"📁 ZIP Archive"</option>
-                            <option value="local">"💾 Local Folder"</option>
-                        </select>
-                    </div>
-
+                    // One field, because the server accepts one thing and
+                    // classifies it itself.
+                    //
+                    // This used to be a three-option <select> — Git Repository
+                    // / ZIP Archive / Local Folder — whose value was read by
+                    // nothing but the label and placeholder below it. All
+                    // three branches sent the same `plugins.install {url}`,
+                    // the git-clone-only handler, so picking "ZIP Archive" or
+                    // "Local Folder" changed the hint text and then git-cloned
+                    // whatever was typed. Neither had a handler to reach:
+                    // `plugins.installFromZip` takes base64 file bytes rather
+                    // than a URL, and no RPC installs from a local directory
+                    // at all. A control that collects a field nothing decides
+                    // on is worse than no control — it reads as a capability.
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-2">
-                            {move || match source.get().as_str() {
-                                "git" => t_string!(i18n, settings.plugins.repo_url).to_string(),
-                                "zip" => t_string!(i18n, settings.plugins.zip_url).to_string(),
-                                _ => t_string!(i18n, settings.plugins.folder_path).to_string(),
-                            }}
+                            {t!(i18n, settings.plugins.source_label)}
                         </label>
                         <input
                             type="text"
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
-                            placeholder=move || match source.get().as_str() {
-                                "git" => "https://github.com/user/plugin.git",
-                                "zip" => "https://example.com/plugin.zip",
-                                _ => "/path/to/plugin",
-                            }
+                            placeholder="my-plugin  or  https://github.com/user/plugin.git"
                             value=move || url.get()
                             on:input=move |ev| url.set(event_target_value(&ev))
                         />
+                        <p class="mt-2 text-xs text-text-secondary">
+                            {t!(i18n, settings.plugins.source_hint)}
+                        </p>
                     </div>
 
                     {move || dialog_error.get().map(|err| view! {

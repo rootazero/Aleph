@@ -1151,8 +1151,8 @@
       "git_repository": "Git Repository",
       "remove": "Remove",
       "install_plugin_dialog_title": "Install Plugin",
-      "install_plugin_dialog_desc": "Install a plugin from Git repository, ZIP file, or local folder",
-      "source_label": "Source",
+      "install_plugin_dialog_desc": "Give a marketplace plugin name, or a Git repository URL. Aleph decides which it is.",
+      "source_label": "Plugin name or Git URL",
       "repo_url": "Repository URL",
       "zip_url": "ZIP URL or Path",
       "folder_path": "Folder Path",
@@ -1169,7 +1169,8 @@
       "disabled": "Disabled",
       "enable": "Enable",
       "disable": "Disable",
-      "loading": "Loading plugins..."
+      "loading": "Loading plugins...",
+      "source_hint": "A bare name (my-plugin) is looked up in your marketplaces; anything with a / . or : is cloned as a Git URL."
     },
     "skills": {
       "add": "Add",

@@ -161,6 +161,33 @@ async def phase_b(rpc):
     L.check("the unknown arm's own discriminator survives into the message",
             (not ok_future) and "quantum" in detail_future, detail_future)
 
+    # The exact payload Panel's install dialog now sends. Panel spoke only the
+    # PLURAL `plugins.*` namespace, whose install handler is git-clone-only, so
+    # a marketplace plugin name was git-cloned and failed — no marketplace
+    # plugin could ever be installed from Panel. The singular `plugin.install`
+    # classifies server-side.
+    #
+    # Sent verbatim rather than through the `install()` helper above: this is a
+    # cross-crate wire contract (aleph-panel -> alephcore) with no shared type,
+    # and the failure mode of those is a request shape that looks right on both
+    # sides and matches on neither.
+    # Uninstall first: the control install above already put it on disk, and
+    # "already installed" would prove the routing worked while asserting
+    # nothing about a fresh one.
+    await rpc.call("plugin.uninstall", {"name": "qa-mk-string"})
+    msg = await rpc.call("plugin.install", {"source": "qa-mk-string"})
+    L.check("the unified endpoint takes Panel's {source: <bare name>} and routes it "
+            "to the marketplace",
+            "error" not in msg, json.dumps(msg.get("result", msg))[:220])
+
+    # ...and the same endpoint must still classify a URL as a git source. It
+    # cannot succeed here (nothing is served at that address), but "not found in
+    # any marketplace" would mean the classifier sent it the wrong way.
+    msg = await rpc.call("plugin.install", {"source": "https://example.invalid/x.git"})
+    detail = json.dumps(msg.get("error", msg))
+    L.check("a URL is classified as a git source, not looked up in a marketplace",
+            "not found" not in detail.lower(), detail[:220])
+
 
 async def phase_c(rpc):
     L.log("\n--- C. ${CLAUDE_PLUGIN_ROOT} expands to this plugin's own root ---")

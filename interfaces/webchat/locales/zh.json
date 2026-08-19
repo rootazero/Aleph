@@ -1151,8 +1151,8 @@
       "git_repository": "Git 仓库",
       "remove": "移除",
       "install_plugin_dialog_title": "安装插件",
-      "install_plugin_dialog_desc": "从 Git 仓库、ZIP 文件或本地文件夹安装插件",
-      "source_label": "来源",
+      "install_plugin_dialog_desc": "填写市场中的插件名，或 Git 仓库 URL。Aleph 会自动判断是哪一种。",
+      "source_label": "插件名或 Git URL",
       "repo_url": "仓库 URL",
       "zip_url": "ZIP URL 或路径",
       "folder_path": "文件夹路径",
@@ -1169,7 +1169,8 @@
       "disabled": "已禁用",
       "enable": "启用",
       "disable": "禁用",
-      "loading": "加载插件..."
+      "loading": "加载插件...",
+      "source_hint": "纯名称（my-plugin）会在已注册的市场中查找；包含 / . : 的一律按 Git URL 克隆。"
     },
     "skills": {
       "add": "添加",
