@@ -334,6 +334,124 @@ impl ExtensionManager {
         }
     }
 
+    /// This plugin's stored configuration, as JSON.
+    ///
+    /// `{}` for a plugin the operator has never configured — which is not an
+    /// error, and is exactly what a plugin with no `config_schema` should see.
+    pub async fn plugin_settings(&self, plugin_id: &str) -> serde_json::Value {
+        self.plugins_config.read().await.settings_json(plugin_id)
+    }
+
+    /// Replace a plugin's configuration, validating it against the schema the
+    /// plugin's own manifest declares.
+    ///
+    /// This is the first caller `validate_config_against_schema` has ever had
+    /// outside the authoring-time linter. Before it existed a plugin could
+    /// declare a `config_schema` and no surface could write a value against
+    /// it, so the schema described a control that was not there.
+    ///
+    /// Validation is fail-closed and reports **every** violation rather than
+    /// the first: an operator fixing a config one error per round-trip is the
+    /// thing schema validation exists to avoid. A plugin that declares no
+    /// schema accepts anything — refusing would make configuration impossible
+    /// for the plugins that predate the schema field.
+    ///
+    /// Applying it to a *running* plugin needs a reload; the caller is told so
+    /// rather than the reload happening implicitly, because reloading a plugin
+    /// tears down its MCP servers and background services and that is not a
+    /// side effect a config write should smuggle in.
+    pub async fn set_plugin_settings(
+        &self,
+        plugin_id: &str,
+        settings: serde_json::Value,
+    ) -> Result<bool, Vec<String>> {
+        let serde_json::Value::Object(map) = settings else {
+            return Err(vec![
+                "Plugin configuration must be a JSON object of field → value".to_string(),
+            ]);
+        };
+
+        // Validate against the manifest's schema when there is one.
+        let schema = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .get_plugin(plugin_id)
+                .map(|record| record.root_dir.clone())
+        };
+        if let Some(root_dir) = schema {
+            if let Ok(manifest) =
+                crate::extension::manifest::parse_manifest_from_dir_cached_global(&root_dir)
+            {
+                if let Some(ref schema) = manifest.config_schema {
+                    let value = serde_json::Value::Object(map.clone());
+                    let errors =
+                        crate::extension::manifest::validate_config_against_schema(schema, &value);
+                    if !errors.is_empty() {
+                        return Err(errors);
+                    }
+                }
+            }
+        }
+
+        // JSON → TOML. A value JSON can hold but TOML cannot (a bare `null`)
+        // is refused by name rather than silently dropped, which would leave
+        // the operator believing a field was set.
+        let mut converted = std::collections::BTreeMap::new();
+        for (key, value) in map {
+            match toml::Value::try_from(&value) {
+                Ok(v) => {
+                    converted.insert(key, v);
+                }
+                Err(e) => {
+                    return Err(vec![format!(
+                        "Field '{key}' cannot be stored in plugins.toml: {e}. \
+                         (TOML has no null; omit the field instead.)"
+                    )])
+                }
+            }
+        }
+
+        let changed = {
+            let mut cfg = self.plugins_config.write().await;
+            let changed = cfg.set_settings(plugin_id, converted);
+            if changed {
+                if let Err(e) = cfg.save(&self.plugins_config_path).await {
+                    tracing::warn!(
+                        plugin_id, error = %e,
+                        "failed to persist plugin configuration; it will not survive a restart"
+                    );
+                    return Err(vec![format!("Failed to persist configuration: {e}")]);
+                }
+            }
+            changed
+        };
+        if changed {
+            self.publish_plugin_settings().await;
+        }
+        Ok(changed)
+    }
+
+    /// Mirror every plugin's stored configuration into the loader.
+    ///
+    /// Without this the store would be a place values go and never come back:
+    /// `plugins.toml` would hold them, the RPC face would read them back, and
+    /// the plugin runtime would never see one. Called at boot and after each
+    /// config write — the two moments the stored set can differ from the
+    /// loader's copy.
+    pub async fn publish_plugin_settings(&self) {
+        let snapshot: std::collections::HashMap<String, serde_json::Value> = {
+            let cfg = self.plugins_config.read().await;
+            cfg.entries
+                .keys()
+                .map(|id| (id.clone(), cfg.settings_json(id)))
+                .collect()
+        };
+        self.plugin_loader
+            .write()
+            .await
+            .set_all_plugin_settings(snapshot);
+    }
+
     /// Enable or disable a plugin: record the operator's preference durably,
     /// then reflect it in the live registry.
     ///

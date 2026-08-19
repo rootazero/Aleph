@@ -33,6 +33,15 @@ use crate::memory::extensions::{McpMemoryExtension, MemoryExtensionRegistry};
 
 /// Manages loading plugins into appropriate runtimes.
 pub struct PluginLoader {
+    /// The operator's stored configuration per plugin, mirrored from
+    /// `plugins.toml`.
+    ///
+    /// A field rather than a parameter on the four `load_*` signatures: a new
+    /// load path then inherits configuration instead of having to be told
+    /// about it, which is the shape that let `${CLAUDE_PLUGIN_ROOT}` go
+    /// unexpanded across five manifest adapters. Empty means "nothing
+    /// configured", which is what a plugin with no `config_schema` should see.
+    plugin_settings: std::collections::HashMap<String, serde_json::Value>,
     /// WASM runtime (lazy initialized)
     wasm_runtime: Option<WasmRuntime>,
 
@@ -48,6 +57,7 @@ impl PluginLoader {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            plugin_settings: std::collections::HashMap::new(),
             wasm_runtime: None,
             mcp_configs: HashMap::new(),
             loaded_plugins: HashMap::new(),
@@ -113,6 +123,21 @@ impl PluginLoader {
 
     // ===== Loading =====
 
+    /// Mirror the operator's stored plugin configuration into the loader.
+    ///
+    /// Called once when the manager reads `plugins.toml` and again on every
+    /// config write, so a plugin loaded (or reloaded) afterwards sees the
+    /// current values. A plugin already running keeps the configuration it was
+    /// started with until it is reloaded — reloading tears down MCP servers
+    /// and background services, which is not a side effect a config write may
+    /// smuggle in.
+    pub fn set_all_plugin_settings(
+        &mut self,
+        settings: std::collections::HashMap<String, serde_json::Value>,
+    ) {
+        self.plugin_settings = settings;
+    }
+
     /// Load a plugin based on its kind.
     pub fn load_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
         if self.is_loaded(&manifest.id) {
@@ -142,7 +167,12 @@ impl PluginLoader {
             .as_mut()
             .ok_or_else(|| ExtensionError::Runtime("WASM runtime not initialized".to_string()))?;
 
-        runtime.load_plugin(manifest)?;
+        let settings = self
+            .plugin_settings
+            .get(&manifest.id)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        runtime.load_plugin_with(manifest, None, &settings)?;
 
         self.loaded_plugins
             .insert(manifest.id.clone(), PluginKind::Wasm);
@@ -153,7 +183,12 @@ impl PluginLoader {
 
     /// Load an MCP-type plugin.
     fn load_mcp_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
-        let configs = mcp_config::read_mcp_json(&manifest.root_dir, &manifest.id)?;
+        let settings = self
+            .plugin_settings
+            .get(&manifest.id)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let configs = mcp_config::read_mcp_json(&manifest.root_dir, &manifest.id, &settings)?;
 
         if configs.is_empty() {
             warn!(

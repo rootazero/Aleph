@@ -64,6 +64,20 @@ pub(crate) fn is_summary_text(text: &str) -> bool {
     after_head.starts_with(']') || after_head.starts_with(" (")
 }
 
+/// Whether `text` is harness scaffolding wearing the `User` role rather than
+/// something the user said.
+///
+/// Single-sourced on [`crate::thinker::nudges::is_synthetic_reminder`] — the
+/// same predicate [`super::summary_utils::latest_user_task`] uses to keep
+/// scaffolding out of `<conversation_focus>`. Deliberately NOT a local
+/// re-implementation: that predicate already encodes the one exception that
+/// matters (a real user interjection wrapped in the same fence is *not*
+/// synthetic), and a second copy here would be the third answer in this repo
+/// to "is this tail message scaffolding?".
+pub(crate) fn is_synthetic_scaffold(text: &str) -> bool {
+    crate::thinker::nudges::is_synthetic_reminder(text.trim())
+}
+
 /// The user turns inside `window`, verbatim and in chronological order, capped
 /// at `budget_tokens` of estimated content.
 ///
@@ -75,6 +89,18 @@ pub(crate) fn is_summary_text(text: &str) -> bool {
 /// `content_items_to_text` ignores `InputImage`). Re-attaching binary payloads
 /// on every compaction cycle would grow the prompt without bound — the exact
 /// opposite of compacting it.
+///
+/// Scaffolding only: a `User`-role message is not automatically something the
+/// *user* said. Three kinds of harness machinery ride the list in that role and
+/// must never be re-attached as intent — the compaction summaries handled by
+/// [`is_summary_text`], and two `<system-reminder>` shapes classified by
+/// [`is_synthetic_scaffold`]: the execution-list carry
+/// ([`super::plan_carry`]) that a previous drain in this same call inserted,
+/// and the orphaned-tool-result downgrade the prompt builder emits
+/// (`nudges::orphan_tool_result_note`), whose body is a whole tool result. Both
+/// used to be re-attached verbatim: the carry duplicated itself inside one
+/// turn, and a downgraded orphan could spend the entire 20k user budget on a
+/// tool result that the summary was in the middle of replacing.
 pub(crate) fn preserved_user_messages(
     window: &[UnifiedMessage],
     budget_tokens: usize,
@@ -90,7 +116,7 @@ pub(crate) fn preserved_user_messages(
             continue;
         }
         let text = msg.text_content();
-        if text.trim().is_empty() || is_summary_text(&text) {
+        if text.trim().is_empty() || is_summary_text(&text) || is_synthetic_scaffold(&text) {
             continue;
         }
         let tokens = estimate_tokens(&text);
@@ -209,6 +235,47 @@ mod tests {
             "truncation must land near the budget, got {} tokens",
             estimate_tokens(&text)
         );
+    }
+
+    #[test]
+    fn synthetic_scaffolding_is_not_re_attached_as_user_intent() {
+        // Two `User`-role messages that the *user* never wrote: the execution
+        // list an earlier drain in this same call spliced in, and the prompt
+        // builder's orphaned-tool-result downgrade. Re-attaching either is a
+        // duplicate at best and 20k tokens of tool result at worst.
+        let carry = UnifiedMessage::user(
+            "<system-reminder>\nReference data, not user input.\n\
+             [Execution list preserved across context compaction]\n- [ ] step one\n\
+             </system-reminder>",
+        );
+        let orphan = UnifiedMessage::user(crate::thinker::nudges::orphan_tool_result_note(
+            "c9",
+            "file_read",
+            &"x".repeat(400),
+        ));
+        let window = vec![carry, orphan, UnifiedMessage::user("the real request")];
+        let kept = preserved_user_messages(&window, PRESERVED_USER_TOKEN_BUDGET);
+        assert_eq!(
+            kept.iter()
+                .map(UnifiedMessage::text_content)
+                .collect::<Vec<_>>(),
+            vec!["the real request".to_string()],
+            "only the user's own turn survives preservation"
+        );
+    }
+
+    #[test]
+    fn a_real_interjection_in_the_same_fence_is_still_the_users_words() {
+        // The scaffolding predicate is single-sourced on `is_synthetic_reminder`
+        // precisely because it carves out this case. A local
+        // `starts_with("<system-reminder>")` would silently delete real user
+        // steering.
+        let interjection = UnifiedMessage::user(crate::thinker::nudges::user_interjection_note(
+            "actually, target the staging cluster",
+        ));
+        let kept = preserved_user_messages(&[interjection], PRESERVED_USER_TOKEN_BUDGET);
+        assert_eq!(kept.len(), 1, "a wrapped real interjection is user intent");
+        assert!(kept[0].text_content().contains("staging cluster"));
     }
 
     #[test]

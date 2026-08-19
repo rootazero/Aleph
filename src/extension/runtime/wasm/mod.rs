@@ -25,7 +25,7 @@ pub use secret_resolver::{
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::extension::error::ExtensionError;
 use crate::extension::manifest::PluginManifest;
@@ -90,6 +90,60 @@ impl WasmRuntime {
         manifest: &PluginManifest,
         resolver: Option<Arc<dyn SecretResolver>>,
     ) -> Result<(), ExtensionError> {
+        self.load_plugin_with(manifest, resolver, &serde_json::Value::Null)
+    }
+
+    /// Say out loud that a plugin's declared credentials cannot work.
+    ///
+    /// Host-side credential injection is fully implemented and has no
+    /// production caller that installs a resolver, so every
+    /// `[capabilities.http.credentials]` binding turns the plugin's
+    /// `http_fetch` to that host into a guaranteed `secret not found` error.
+    /// Without this line the author discovers it at runtime, from an error
+    /// that names a secret rather than the missing wire.
+    ///
+    /// A warning rather than a refusal: the plugin's other capabilities work,
+    /// and refusing to load it would be a larger change than the gap
+    /// justifies.
+    fn warn_if_credentials_are_unreachable(
+        manifest: &PluginManifest,
+        capabilities: &WasmCapabilities,
+    ) {
+        let declared = capabilities
+            .http
+            .as_ref()
+            .map_or(0, |http| http.credentials.len());
+        if declared == 0 {
+            return;
+        }
+        warn!(
+            plugin = %manifest.id,
+            bindings = declared,
+            "plugin declares http credentials, but no host secret resolver is installed — \
+             every request matching those bindings will fail with `secret not found`. \
+             See extension::runtime::wasm::secret_resolver for what connecting it requires."
+        );
+    }
+
+    /// Load a WASM plugin with a secret resolver and the operator's stored
+    /// configuration.
+    ///
+    /// `settings` reaches the guest through Extism's config map, which is the
+    /// mechanism `extism_pdk::config::get` reads — so a plugin author writes
+    /// `config::get("api_key")` and gets the value the operator set, with no
+    /// Aleph-specific host function. Passing it at build time (rather than as
+    /// a call argument) is what makes it available during the guest's own
+    /// initialisation.
+    ///
+    /// A non-object `settings` (including the `Null` the two-argument form
+    /// passes) means "no configuration", not an error: a plugin with no
+    /// `config_schema` must load exactly as it did before this existed.
+    pub fn load_plugin_with(
+        &mut self,
+        manifest: &PluginManifest,
+        resolver: Option<Arc<dyn SecretResolver>>,
+        settings: &serde_json::Value,
+    ) -> Result<(), ExtensionError> {
         let wasm_path = manifest.entry_path()?;
 
         if !wasm_path.exists() {
@@ -109,8 +163,13 @@ impl WasmRuntime {
         // builder so the kernel can be cloned freely; the default
         // deny-all resolver preserves the legacy "plugin supplies its own
         // credentials" behaviour when no resolver is provided.
-        let resolver: Arc<dyn SecretResolver> =
-            resolver.unwrap_or_else(|| Arc::new(DenyAllSecretResolver));
+        let resolver: Arc<dyn SecretResolver> = match resolver {
+            Some(r) => r,
+            None => {
+                Self::warn_if_credentials_are_unreachable(manifest, &capabilities);
+                Arc::new(DenyAllSecretResolver)
+            }
+        };
         let kernel = Arc::new(
             WasmCapabilityKernel::new(manifest.id.clone(), capabilities, limits)
                 .with_secret_resolver(resolver),
@@ -127,8 +186,23 @@ impl WasmRuntime {
         // run forever. Extism interrupts the call once the deadline is hit
         // (the plugin instance cannot continue afterwards and must be
         // reloaded).
-        let extism_manifest =
+        let mut extism_manifest =
             ExtismManifest::new([Wasm::file(&wasm_path)]).with_timeout(call_timeout);
+
+        // The operator's configuration, as Extism config keys. Scalars are
+        // passed in their natural spelling and structured values as JSON, so
+        // `config::get("api_key")` returns the string an operator typed rather
+        // than a quoted one.
+        if let serde_json::Value::Object(map) = settings {
+            for (key, value) in map {
+                let rendered = match value {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => continue,
+                    other => other.to_string(),
+                };
+                extism_manifest = extism_manifest.with_config_key(key, rendered);
+            }
+        }
 
         let plugin = PluginBuilder::new(extism_manifest)
             .with_wasi(true)

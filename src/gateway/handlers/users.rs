@@ -172,11 +172,7 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -
             if let Some(log) = crate::security::audit::global() {
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
-                    format!(
-                        "users.create: created {} role={}",
-                        user_id,
-                        role.as_str()
-                    ),
+                    format!("users.create: created {} role={}", user_id, role.as_str()),
                 ));
             }
             let view = UserView {

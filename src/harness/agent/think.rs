@@ -469,6 +469,7 @@ impl AgentHarness {
                 tail_start,
                 system_prompt,
                 budget_tool_tokens,
+                transient_tail,
             )
             .await
             {
@@ -490,16 +491,13 @@ impl AgentHarness {
         // text only. Saves the post-hoc C1 grace-turn LLM round-trip in the
         // common case; C1 remains as fail-safe if the model still emits a
         // tool_use. R10-safe: static text, no reasoning, no policy.
-        if let Some(cap) = self.deps.max_iterations {
-            if cap > 0 && iterations.saturating_add(1) >= cap {
-                messages.push(crate::providers::message::UnifiedMessage::User {
-                    content: vec![crate::providers::message::ContentBlock::Text {
-                        text: MAX_STEPS_HINT.to_string(),
-                        cache_control: None,
-                    }],
-                });
-                tracing::debug!(iterations, cap, "max-iterations soft hint injected (G1)",);
-            }
+        // `transient_tail` is bumped with the push so it keeps describing this
+        // vector — the rescue below compacts the same list.
+        let hint_cap = self.deps.max_iterations.filter(|cap| *cap > 0);
+        if hint_cap.is_some_and(|cap| iterations.saturating_add(1) >= cap) {
+            messages.push(UnifiedMessage::user(MAX_STEPS_HINT));
+            transient_tail += 1;
+            tracing::debug!(iterations, ?hint_cap, "max-steps hint injected (G1)");
         }
 
         // 2d. Derive the optional tool-schema reference for the request payload
@@ -537,6 +535,7 @@ impl AgentHarness {
             system_prompt,
             tools: tools_ref,
             budget_tool_tokens,
+            transient_tail,
             started,
             compactor: self.deps.context_compactor.as_deref(),
             budget: self.deps.context_budget.as_ref(),

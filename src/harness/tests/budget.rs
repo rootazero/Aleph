@@ -525,6 +525,17 @@ const BUDGETED: [&str; 12] = [
 ///     provider contract, not of the model. (3) **Four real consumers** on
 ///     day one: `task_traces` persistence, the TUI reasoning feed, the Panel
 ///     trace tree, and the `core/cache-health` doctor check.
+/// ±0 (5101 → 5101, context-compaction round): the transient-tail fix that
+///     Round 10 gave `PreflightPipeline` was extended to the compactor and the
+///     deterministic floor, which cost **+7** here — one argument at the
+///     `apply_budget_directive` call, one field in `RescueCx`, and one
+///     `transient_tail += 1` beside the max-iterations hint push (the count has
+///     to keep describing the vector the rescue later compacts). Paid for, not
+///     absorbed: the hint block was flattened from a nested
+///     `if let Some(cap) { if cap > 0 && … }` plus a six-line `UnifiedMessage`
+///     literal into one `is_some_and` guard plus `UnifiedMessage::user`, **−7**.
+///     Recorded because "the ceiling did not move" and "nothing was added" are
+///     different statements, and only the second one is free.
 const CEILING: usize = 5101;
 
 fn repo_root() -> PathBuf {

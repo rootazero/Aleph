@@ -302,9 +302,8 @@ impl AlephTool for A2AAgentsTool {
                 // attached. validate_url_async returns the same
                 // host-policy decision web_fetch uses, so the operator's
                 // existing config controls both surfaces.
-                let url_for_card = url::Url::parse(&url).map_err(|e| {
-                    AlephError::tool(format!("`url` is not a valid URL: {e}"))
-                })?;
+                let url_for_card = url::Url::parse(&url)
+                    .map_err(|e| AlephError::tool(format!("`url` is not a valid URL: {e}")))?;
                 let scheme = url_for_card.scheme();
                 if scheme != "http" && scheme != "https" {
                     return Err(AlephError::tool(format!(

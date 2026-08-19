@@ -68,6 +68,13 @@ pub struct RescueCx<'a> {
     pub system_prompt: &'a str,
     pub tools: Option<&'a [ToolDefinition]>,
     pub budget_tool_tokens: usize,
+    /// How many messages at the END of the in-flight vector are synthetic
+    /// (`<system-reminder>` nudges + the per-run recall strand) rather than
+    /// persisted turns. Travels with the prompt surroundings because every
+    /// compaction the rescue performs runs on that same vector, and a protected
+    /// tail that counts scaffolding as conversation protects the wrong messages
+    /// — see [`ContextCompactor::compact`]'s doc.
+    pub transient_tail: usize,
     pub started: std::time::Instant,
     pub compactor: Option<&'a ContextCompactor>,
     pub budget: Option<&'a Arc<Mutex<ContextBudget>>>,
@@ -290,7 +297,12 @@ pub async fn try_reactive_compact_and_retry<H: RescueHost>(
     );
     let session_id_str = cx.session_id.to_string();
     if let Err(e) = compactor
-        .compact(messages, 0, Some(session_id_str.as_str()))
+        .compact(
+            messages,
+            0,
+            cx.transient_tail,
+            Some(session_id_str.as_str()),
+        )
         .await
     {
         // LLM compaction failed — fall back to the deterministic floor + one
@@ -394,6 +406,7 @@ async fn reactive_fit_and_retry<H: RescueHost>(
         messages,
         cx.system_prompt,
         cx.budget_tool_tokens,
+        cx.transient_tail,
         false,
     )
     .await;

@@ -176,20 +176,20 @@ pub(super) async fn init_tool_catalog(
             // Register plugin commands (from CC-format plugins' commands/ directories)
             {
                 let commands = ext_manager.get_all_commands().await;
+                // Gate on `plugin_id`, the field every production construction
+                // site actually assigns. This filter read `plugin_name` until
+                // 2026-08-19 — a field with zero producers — so it discarded
+                // every plugin command ever parsed and this block registered
+                // nothing. `qualified_name()` is the registry's own key
+                // derivation, so the dispatch id and the lookup key cannot
+                // drift apart again.
                 let command_skill_infos: Vec<alephcore::skill::SkillInfo> = commands
                     .iter()
-                    .filter(|cmd| cmd.plugin_name.is_some())
-                    .map(|cmd| {
-                        let id = if let Some(ref plugin) = cmd.plugin_name {
-                            format!("{}:{}", plugin, cmd.name)
-                        } else {
-                            cmd.name.clone()
-                        };
-                        alephcore::skill::SkillInfo {
-                            id,
-                            name: cmd.name.clone(),
-                            description: cmd.description.clone(),
-                        }
+                    .filter(|cmd| !cmd.plugin_id.is_empty())
+                    .map(|cmd| alephcore::skill::SkillInfo {
+                        id: cmd.qualified_name(),
+                        name: cmd.name.clone(),
+                        description: cmd.description.clone(),
                     })
                     .collect();
 

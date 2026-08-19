@@ -85,6 +85,13 @@ pub enum PluginKind {
 }
 
 impl PluginKind {
+    /// Every runtime this host can load, in wire spelling.
+    ///
+    /// Ordered to match [`aleph_protocol::plugins::PLUGIN_RUNTIMES`]; the test
+    /// below holds them equal. The vocabulary used to live in three places
+    /// that disagreed — see that constant's doc for what it cost.
+    pub const ALL: [Self; 3] = [Self::Wasm, Self::Mcp, Self::Static];
+
     /// Stable lowercase wire label, matching the serde representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -410,5 +417,35 @@ impl PluginRecord {
     pub fn with_root_dir(mut self, path: PathBuf) -> Self {
         self.root_dir = path;
         self
+    }
+}
+
+#[cfg(test)]
+mod runtime_vocabulary_tests {
+    use super::PluginKind;
+
+    /// The server's serde vocabulary and the wire contract must be the same
+    /// list. When they were not, `aleph plugin init --type nodejs` produced a
+    /// manifest the server rejected with `unknown variant`.
+    #[test]
+    fn plugin_kinds_match_the_wire_contract() {
+        let ours: Vec<&str> = PluginKind::ALL.iter().map(|k| k.as_str()).collect();
+        assert_eq!(
+            ours,
+            aleph_protocol::plugins::PLUGIN_RUNTIMES.to_vec(),
+            "PluginKind::ALL and PLUGIN_RUNTIMES are the same vocabulary"
+        );
+    }
+
+    /// `as_str` must round-trip through serde, or the wire label and the
+    /// stored value diverge silently.
+    #[test]
+    fn every_kind_round_trips_through_its_wire_label() {
+        for kind in PluginKind::ALL {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, format!("\"{}\"", kind.as_str()));
+            let back: PluginKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, kind);
+        }
     }
 }

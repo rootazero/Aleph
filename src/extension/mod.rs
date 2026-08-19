@@ -40,6 +40,7 @@ pub mod mcp_config;
 mod plugin_ops;
 pub mod plugin_state;
 pub mod plugin_trust;
+pub mod plugin_vars;
 mod projection;
 pub mod registry;
 mod service_manager;
@@ -558,6 +559,11 @@ impl ExtensionManager {
     /// Load all extensions.
     pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
         let mut summary = LoadSummary::default();
+
+        // The loader's copy of every plugin's stored configuration must be
+        // current before anything loads — a plugin started with an empty
+        // config is a plugin the operator configured and cannot tell.
+        self.publish_plugin_settings().await;
 
         // Collect all plugin directories from discovery
         let plugin_dirs = self.collect_plugin_dirs()?;
@@ -1593,6 +1599,7 @@ mod tests {
                 "wakeable".to_string(),
                 crate::extension::plugin_state::PluginEntryConfig {
                     enabled: Some(false),
+                    ..Default::default()
                 },
             )]
             .into_iter()

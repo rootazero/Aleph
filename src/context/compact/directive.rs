@@ -35,6 +35,7 @@ pub async fn compact_to_fit_and_note(
     messages: &mut Vec<UnifiedMessage>,
     system_prompt: &str,
     budget_tool_tokens: usize,
+    transient_tail: usize,
     use_llm_compactor: bool,
 ) {
     let Some(budget) = budget else {
@@ -53,6 +54,7 @@ pub async fn compact_to_fit_and_note(
         messages,
         system_prompt,
         budget_tool_tokens,
+        transient_tail,
         Some(session_key_str.as_str()),
     )
     .await;
@@ -83,6 +85,10 @@ pub async fn apply_budget_directive(
     tail_start: usize,
     system_prompt: &str,
     budget_tool_tokens: usize,
+    // How many messages at the end of `messages` are synthetic (nudges +
+    // recall) rather than persisted turns. Required, not defaulted: it is the
+    // difference between protecting the last six turns and protecting one.
+    transient_tail: usize,
 ) -> DirectiveOutcome {
     // 2c. Compact when directive calls for it and a compactor is wired.
     match directive {
@@ -90,7 +96,7 @@ pub async fn apply_budget_directive(
             if let Some(compactor) = compactor {
                 let session_key_str = session_id.to_key_string();
                 match compactor
-                    .compact(messages, 0, Some(session_key_str.as_str()))
+                    .compact(messages, 0, transient_tail, Some(session_key_str.as_str()))
                     .await
                 {
                     Ok(result) => {
@@ -139,6 +145,7 @@ pub async fn apply_budget_directive(
                 messages,
                 system_prompt,
                 budget_tool_tokens,
+                transient_tail,
                 true,
             )
             .await;
@@ -190,6 +197,7 @@ pub async fn apply_budget_directive(
                 messages,
                 system_prompt,
                 budget_tool_tokens,
+                transient_tail,
                 true,
             )
             .await;

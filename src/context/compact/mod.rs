@@ -9,14 +9,20 @@
 
 pub mod compactor;
 pub mod directive;
+/// Cumulative "which files did this conversation read / change" ledger,
+/// re-emitted below the summary at every compaction drain site (pi
+/// `computeFileLists` parity). Private to the compaction module for the same
+/// reason [`plan_carry`] is: the only legitimate producer is a drain.
+mod file_carry;
 pub mod fit;
 /// User-driven `/compact`: summarize the conversation prefix and soft-retire it
 /// from the event log. Orthogonal to the pressure-driven in-turn compaction in
 /// [`compactor`] — that one produces a transient summary for one prompt, this
 /// one edits what every future prompt is rebuilt from.
 pub mod manual;
-/// Verbatim re-attachment of the user's own turns at every compaction drain
-/// site — private to the compaction module, which owns all four of them.
+/// Re-injection of the model's own execution list below the summary at every
+/// compaction drain site — private to the compaction module, which owns all of
+/// them.
 mod plan_carry;
 mod preserve;
 pub mod rescue;

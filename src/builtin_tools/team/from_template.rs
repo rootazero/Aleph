@@ -28,7 +28,7 @@ use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct TeamFromTemplateArgs {
-    /// Template id (e.g. `software-dev`, `code-review`). Use `teams.list_templates`
+    /// Template id (e.g. `software-dev`, `code-review`). List `~/.aleph/teams/templates/`
     /// or the panel template picker to discover available templates.
     pub template: String,
     /// Human-readable team name; used wherever the template references `{team_name}`.
@@ -120,8 +120,8 @@ impl AlephTool for TeamFromTemplateTool {
     const DESCRIPTION: &'static str = "Materialize a team from a TOML blueprint in one shot: \
         leader + worker agents + initial task DAG. Use to stand up a working team without \
         authoring every member and task individually. Templates support `{goal}`, `{team_name}`, \
-        and `{leader}` substitution. Discover available templates via `teams.list_templates` RPC \
-        or the panel template picker. The calling agent becomes the team leader when the \
+        and `{leader}` substitution. Templates are TOML files under `~/.aleph/teams/templates/`; list that \
+        directory to see what is available. The calling agent becomes the team leader when the \
         template's `leader.id = \"self\"` (the common case).";
 
     type Args = TeamFromTemplateArgs;
@@ -138,8 +138,8 @@ impl AlephTool for TeamFromTemplateTool {
         let template = load_template(&args.template).map_err(|e| AlephError::ConfigError {
             message: format!("team_from_template: {e}"),
             suggestion: Some(
-                "List available templates via `teams.list_templates` or place a custom \
-                 TOML at `~/.aleph/teams/templates/<name>.toml`."
+                "List `~/.aleph/teams/templates/` to see the available templates, or \
+                 place a custom TOML at `~/.aleph/teams/templates/<name>.toml`."
                     .into(),
             ),
         })?;

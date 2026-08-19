@@ -25,10 +25,68 @@ pub struct MarketplaceConfig {
 // Index / Manifest Types
 // =============================================================================
 
+/// Where a marketplace entry's plugin lives.
+///
+/// Claude Code's `PluginSourceSchema` is a six-arm union: a path string
+/// relative to the marketplace root, or an object tagged by a `source`
+/// discriminator (`npm` / `pip` / `url` / `github` / `git-subdir`). Aleph
+/// modelled this as a bare `String` until 2026-08-19, and because serde fails
+/// the *whole* struct on a type mismatch, a single object-form entry made the
+/// entire `marketplace.json` unparseable — every plugin in that marketplace
+/// became invisible, not just the one entry.
+///
+/// Aleph installs a marketplace as a directory (local, or a git clone), so the
+/// path form is the one it can serve. The object forms still parse — that is
+/// the point — and turn into a named, per-entry refusal at install time
+/// instead of a whole-manifest rejection. `Unknown` catches arms Claude Code
+/// adds later, so a newer marketplace never bricks an older Aleph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MarketplacePluginSource {
+    /// A path relative to the marketplace root.
+    Path(String),
+    /// One of the object forms, kept verbatim. The `source` discriminator is
+    /// read back out for the refusal message rather than re-modelled here:
+    /// Aleph installs none of them, so modelling their fields would be five
+    /// structs with no consumer (R10).
+    External(serde_json::Value),
+}
+
+impl MarketplacePluginSource {
+    /// The relative path inside the marketplace directory, if this entry has
+    /// one. `None` means the entry points somewhere Aleph does not fetch.
+    #[must_use]
+    pub fn as_relative_path(&self) -> Option<&str> {
+        match self {
+            Self::Path(p) => Some(p.as_str()),
+            Self::External(_) => None,
+        }
+    }
+
+    /// The `source` discriminator of an object form (`"github"`, `"npm"`, …),
+    /// for error messages. Returns `None` for the path form.
+    #[must_use]
+    pub fn external_kind(&self) -> Option<&str> {
+        match self {
+            Self::Path(_) => None,
+            Self::External(v) => v.get("source").and_then(serde_json::Value::as_str),
+        }
+    }
+}
+
+impl std::fmt::Display for MarketplacePluginSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Path(p) => f.write_str(p),
+            Self::External(v) => write!(f, "{v}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplacePluginEntry {
     pub name: String,
-    pub source: String,
+    pub source: MarketplacePluginSource,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
@@ -76,7 +134,13 @@ pub struct MarketplaceManifest {
 pub struct PluginSearchResult {
     pub marketplace_name: String,
     pub plugin: MarketplacePluginEntry,
-    pub plugin_path: PathBuf,
+    /// Where the plugin sits inside the marketplace directory.
+    ///
+    /// `None` when the entry declares one of Claude Code's external source
+    /// forms (`github` / `npm` / …). The entry is still returned so the
+    /// operator gets "this marketplace cannot install that form" rather than
+    /// "no such plugin" — the second one sends them looking for a typo.
+    pub plugin_path: Option<PathBuf>,
 }
 
 // =============================================================================

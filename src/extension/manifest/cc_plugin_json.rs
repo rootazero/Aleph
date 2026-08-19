@@ -10,6 +10,8 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::component_source::{self, ComponentSource};
+use crate::extension::manifest::declared_sections::AlephSuperset;
 use crate::extension::manifest::types::{
     AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
 };
@@ -54,21 +56,22 @@ pub struct CcPluginJson {
     /// Author information (string or object)
     pub author: Option<CcPluginAuthor>,
 
-    // CC-native component path fields (camelCase)
-    /// Path to skills directory
-    pub skills: Option<String>,
+    // CC-native component fields (camelCase). Each accepts a path, an array
+    // of paths, or an inlined object — see `component_source`.
+    /// Skills directory (or directories).
+    pub skills: Option<ComponentSource>,
 
-    /// Path to commands directory (user-triggered `/command`s)
-    pub commands: Option<String>,
+    /// Commands directory (user-triggered `/command`s).
+    pub commands: Option<ComponentSource>,
 
-    /// Path to agents directory
-    pub agents: Option<String>,
+    /// Agents directory (or directories).
+    pub agents: Option<ComponentSource>,
 
-    /// Path to hooks file/directory
-    pub hooks: Option<String>,
+    /// Hooks file, files, or inlined hook configuration.
+    pub hooks: Option<ComponentSource>,
 
-    /// Path to MCP servers configuration
-    pub mcp_servers: Option<String>,
+    /// MCP servers configuration file, files, or inlined server map.
+    pub mcp_servers: Option<ComponentSource>,
 
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<JsonValue>,
@@ -176,7 +179,18 @@ pub fn parse_cc_plugin_json_content(
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
     // Parse [aleph] section from raw JSON value
+    let mut superset = AlephSuperset::default();
     let (kind, entry, aleph_ext, permissions) = if let Some(aleph_val) = json.aleph {
+        // The superset reads the same object. Deserializing twice rather than
+        // widening `AlephExtensions` keeps the runtime type free of parse-only
+        // sections, and unknown keys are ignored by both, so neither view can
+        // reject a manifest the other accepts.
+        superset = serde_json::from_value(aleph_val.clone()).map_err(|e| {
+            ExtensionError::invalid_manifest(
+                &manifest_path,
+                format!("Invalid [aleph] superset section: {e}"),
+            )
+        })?;
         let aleph_ext: AlephExtensions = serde_json::from_value(aleph_val).map_err(|e| {
             ExtensionError::invalid_manifest(
                 &manifest_path,
@@ -224,8 +238,8 @@ pub fn parse_cc_plugin_json_content(
         kind,
         entry: entry.into(),
         root_dir: plugin_dir.to_path_buf(),
-        config_schema: None,
-        config_ui_hints: Default::default(),
+        config_schema: superset.config_schema,
+        config_ui_hints: superset.config_ui_hints,
         permissions,
         author: json.author.map(AuthorInfo::from),
         homepage: json.homepage,
@@ -233,19 +247,21 @@ pub fn parse_cc_plugin_json_content(
         license: json.license,
         keywords: json.keywords.unwrap_or_default(),
         extensions: Vec::new(),
-        // V2 fields not available in CC JSON format
-        tools_v2: None,
-        hooks_v2: None,
-        commands_v2: None,
+        // Superset sections, carried in the `aleph` object (which Claude Code
+        // ignores). `services_v2` stays `None`: services round-trip through
+        // `aleph_extensions.services`, and a second copy would be a second
+        // answer to "what services did this plugin declare".
+        tools_v2: AlephSuperset::non_empty(superset.tools),
+        hooks_v2: AlephSuperset::non_empty(superset.hooks),
+        commands_v2: AlephSuperset::non_empty(superset.commands),
         services_v2: None,
-        prompt_v2: None,
+        prompt_v2: superset.prompt,
         capabilities_v2: None,
         wasm_capabilities,
         wasm_resource_limits: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
-        // Memory extension manifest — not available in CC JSON format
-        memory_manifest: None,
+        memory_manifest: superset.memory,
     };
 
     Ok(manifest)
@@ -303,37 +319,63 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
         let raw: CcPluginJson = serde_json::from_str(&content)
             .map_err(|e| anyhow::anyhow!("JSON re-parse error: {e}"))?;
 
-        // Parse skills
-        let skills_rel = raw.skills.as_deref().unwrap_or("skills");
-        capabilities.extend(parsers::parse_skills_dir(
-            plugin_dir, skills_rel, &plugin_id,
-        )?);
-
-        // Parse commands (user-triggered /commands → Command-typed skills)
-        let commands_rel = raw.commands.as_deref().unwrap_or("commands");
-        capabilities.extend(parsers::parse_commands_dir(
+        // Component fields accept a path, an array of paths, or (for hooks and
+        // mcpServers) an inlined object — see `component_source`.
+        capabilities.extend(component_source::resolve_dirs(
+            raw.skills.as_ref(),
+            "skills",
             plugin_dir,
-            commands_rel,
+            &plugin_id,
+            "skills",
+            parsers::parse_skills_dir,
+        )?);
+        capabilities.extend(component_source::resolve_dirs(
+            raw.commands.as_ref(),
+            "commands",
+            plugin_dir,
+            &plugin_id,
+            "commands",
+            parsers::parse_commands_dir,
+        )?);
+        capabilities.extend(component_source::resolve_dirs(
+            raw.agents.as_ref(),
+            "agents",
+            plugin_dir,
+            &plugin_id,
+            "agents",
+            parsers::parse_agents_dir,
+        )?);
+        capabilities.extend(component_source::resolve_hooks(
+            raw.hooks.as_ref(),
+            plugin_dir,
+            &plugin_id,
+        )?);
+        capabilities.extend(component_source::resolve_mcp_servers(
+            raw.mcp_servers.as_ref(),
+            plugin_dir,
             &plugin_id,
         )?);
 
-        // Parse agents
-        let agents_rel = raw.agents.as_deref().unwrap_or("agents");
-        capabilities.extend(parsers::parse_agents_dir(
-            plugin_dir, agents_rel, &plugin_id,
-        )?);
-
-        // Parse hooks
-        let hooks_rel = raw.hooks.as_deref().unwrap_or("hooks/hooks.json");
-        capabilities.extend(parsers::parse_hooks_file(
-            plugin_dir, hooks_rel, &plugin_id,
-        )?);
-
-        // Parse MCP servers
-        let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
-        capabilities.extend(parsers::parse_mcp_config_file(
-            plugin_dir, mcp_rel, &plugin_id,
-        )?);
+        // Manifest-declared sections from the `aleph` object — the same
+        // translation both the native and CC-TOML dialects use.
+        let no_services: Vec<crate::extension::manifest::ServiceSection> = Vec::new();
+        capabilities.extend(
+            crate::extension::manifest::declared_sections::declared_capabilities(
+                plugin_dir,
+                &plugin_id,
+                &crate::extension::manifest::declared_sections::DeclaredSections {
+                    prompt: manifest.prompt_v2.as_ref(),
+                    tools: manifest.tools_v2.as_deref().unwrap_or(&[]),
+                    hooks: manifest.hooks_v2.as_deref().unwrap_or(&[]),
+                    commands: manifest.commands_v2.as_deref().unwrap_or(&[]),
+                    services: manifest
+                        .aleph_extensions
+                        .as_ref()
+                        .map_or(&no_services, |ext| &ext.services),
+                },
+                &manifest.permissions,
+            ),
+        );
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
@@ -504,5 +546,183 @@ mod tests {
         let dir = PathBuf::from("/plugins/root-test");
         let manifest = parse_cc_plugin_json_content(content, &dir).unwrap();
         assert_eq!(manifest.root_dir, dir);
+    }
+
+    /// The two CC dialects must mean the same thing by the `aleph` superset.
+    ///
+    /// They necessarily have two deserialization structs — `AlephExtensionsToml`
+    /// with typed TOML sections, and a `serde_json::from_value` into
+    /// `AlephSuperset` — so nothing structural forces them to agree.
+    /// `serde(flatten)` would not fix it either: it is unsafe for TOML
+    /// arrays-of-tables. This test is the thing that holds them together.
+    #[test]
+    fn both_cc_dialects_agree_on_the_superset() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let from_json = parse_cc_plugin_json_content(
+            r#"{
+              "name": "twin",
+              "aleph": {
+                "runtime": "wasm",
+                "tools": [{"name": "t", "handler": "h"}],
+                "commands": [{"name": "c", "handler": "h"}],
+                "prompt": {"file": "SYSTEM.md", "scope": "system"},
+                "config_schema": {"type": "object"},
+                "config_ui_hints": {"k": {"label": "K"}}
+              }
+            }"#,
+            dir.path(),
+        )
+        .unwrap();
+
+        let from_toml = crate::extension::manifest::cc_plugin_toml::parse_cc_plugin_toml_content(
+            r#"
+name = "twin"
+
+[aleph]
+runtime = "wasm"
+
+[[aleph.tools]]
+name = "t"
+handler = "h"
+
+[[aleph.commands]]
+name = "c"
+handler = "h"
+
+[aleph.prompt]
+file = "SYSTEM.md"
+scope = "system"
+
+[aleph.config_schema]
+type = "object"
+
+[aleph.config_ui_hints.k]
+label = "K"
+"#,
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(from_json.kind, from_toml.kind);
+        assert_eq!(
+            from_json.tools_v2.as_ref().map(|t| t
+                .iter()
+                .map(|x| (x.name.clone(), x.handler.clone()))
+                .collect::<Vec<_>>()),
+            from_toml.tools_v2.as_ref().map(|t| t
+                .iter()
+                .map(|x| (x.name.clone(), x.handler.clone()))
+                .collect::<Vec<_>>()),
+        );
+        assert_eq!(
+            from_json.commands_v2.as_ref().map(Vec::len),
+            from_toml.commands_v2.as_ref().map(Vec::len)
+        );
+        assert_eq!(
+            from_json.prompt_v2.as_ref().map(|p| p.file.clone()),
+            from_toml.prompt_v2.as_ref().map(|p| p.file.clone())
+        );
+        assert_eq!(from_json.config_schema, from_toml.config_schema);
+        assert_eq!(
+            from_json.config_ui_hints.keys().collect::<Vec<_>>(),
+            from_toml.config_ui_hints.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// camelCase is Claude Code's convention, so a JSON author writing
+    /// `configSchema` must not silently lose the schema.
+    #[test]
+    fn the_json_superset_accepts_camel_case_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse_cc_plugin_json_content(
+            r#"{"name":"camel","aleph":{"configSchema":{"type":"object"},
+                "configUiHints":{"k":{"label":"K"}}}}"#,
+            dir.path(),
+        )
+        .unwrap();
+        assert!(manifest.config_schema.is_some());
+        assert!(manifest.config_ui_hints.contains_key("k"));
+    }
+
+    /// Two of Anthropic's own plugin manifests inline `mcpServers`. Aleph
+    /// declared it `Option<String>`, and serde fails the *whole* struct on a
+    /// type mismatch — so those plugins were registered with
+    /// `PluginStatus::Error` and zero capabilities. Loud, but all-or-nothing.
+    #[test]
+    fn an_inline_mcp_servers_object_no_longer_rejects_the_whole_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse_cc_plugin_json_content(
+            r#"{
+              "name": "chrome-devtools-mcp",
+              "version": "1.0.0",
+              "mcpServers": {
+                "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp"]}
+              }
+            }"#,
+            dir.path(),
+        );
+        assert!(
+            manifest.is_ok(),
+            "inline mcpServers must not reject the manifest: {:?}",
+            manifest.err()
+        );
+
+        // The oracle for why the field is a union: the shape it replaced
+        // cannot read this manifest at all.
+        #[derive(serde::Deserialize)]
+        struct OldShape {
+            #[allow(dead_code)]
+            name: String,
+            #[serde(rename = "mcpServers")]
+            #[allow(dead_code)]
+            mcp_servers: Option<String>,
+        }
+        assert!(
+            serde_json::from_str::<OldShape>(
+                r#"{"name":"x","mcpServers":{"s":{"command":"npx"}}}"#
+            )
+            .is_err(),
+            "if `Option<String>` parses this, the union is no longer load-bearing"
+        );
+    }
+
+    /// An array of component paths is the other shape Claude Code accepts.
+    #[test]
+    fn an_array_of_component_paths_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(parse_cc_plugin_json_content(
+            r#"{"name":"multi","skills":["./a/skills","./b/skills"]}"#,
+            dir.path(),
+        )
+        .is_ok());
+    }
+
+    /// The inline arm must reach a parser, not merely deserialize — otherwise
+    /// widening the type trades a loud rejection for a silent zero-capability
+    /// load, which is worse.
+    #[test]
+    fn an_inline_mcp_servers_object_actually_registers_a_server() {
+        use crate::extension::capability::CapabilityDeclaration;
+        use crate::extension::manifest::adapter::ManifestAdapter;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(CC_PLUGIN_JSON),
+            r#"{
+              "name": "inline-mcp",
+              "mcpServers": {"srv": {"command": "node", "args": ["server.js"]}}
+            }"#,
+        )
+        .unwrap();
+
+        let out = ClaudeCodeJsonAdapter.parse(dir.path()).unwrap();
+        assert!(
+            out.capabilities
+                .iter()
+                .any(|c| matches!(c, CapabilityDeclaration::McpServer(_))),
+            "inline mcpServers must produce an McpServer capability"
+        );
     }
 }

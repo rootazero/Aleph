@@ -66,7 +66,7 @@ impl AlephTool for AcpDelegateTool {
     const NAME: &'static str = "acp_delegate";
     const DESCRIPTION: &'static str = "Delegate a task to an external CLI agent via ACP. \
         Use 'claude-code', 'codex', or 'gemini' as the harness parameter, \
-        or any custom harness registered via acp.create.";
+        or any custom harness the operator has registered.";
 
     type Args = AcpDelegateArgs;
     type Output = AcpDelegateOutput;

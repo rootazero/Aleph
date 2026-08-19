@@ -7,7 +7,7 @@ This guide covers everything you need to build, test, and distribute Aleph plugi
 1. [Overview](#overview)
 2. [Quick Start](#quick-start)
 3. [Manifest Format](#manifest-format)
-4. [Node.js Plugin Development](#nodejs-plugin-development)
+4. [MCP Plugin Development](#mcp-plugin-development-node--typescript--anything)
 5. [WASM Plugin Development](#wasm-plugin-development)
 6. [Static Plugin Development](#static-plugin-development)
 7. [Tools](#tools)
@@ -18,18 +18,26 @@ This guide covers everything you need to build, test, and distribute Aleph plugi
 12. [Testing](#testing)
 13. [Packaging](#packaging)
 14. [Installation & Discovery](#installation--discovery)
+15. [Plugin Variables](#plugin-variables)
 
 ---
 
 ## Overview
 
-Aleph plugins extend the AI assistant with custom **tools**, **hooks**, **skills**, **commands**, **services**, **channels**, **providers**, and **HTTP routes**. Plugins are defined by an `aleph.plugin.toml` manifest and can be implemented using one of three runtimes:
+Aleph plugins extend the AI assistant with custom **tools**, **hooks**,
+**skills**, **commands**, **agents** and background **services**. Plugins are
+defined by a `.claude-plugin/plugin.toml` manifest and use one of three
+runtimes:
 
 | Runtime | Language | Use Case | Sandboxing |
 |---------|----------|----------|------------|
-| **Node.js** | TypeScript/JavaScript | Rich integrations, API clients, dynamic tools | Process-level |
-| **WASM** | Rust (via Extism) | High-performance, security-sensitive, sandboxed | Extism sandbox with capability kernel |
-| **Static** | Markdown | Skills/commands (prompt injection), no code needed | N/A (content only) |
+| **`mcp`** | Anything (Node/TS/Python/…) | Rich integrations, API clients | Process-level; the server is a separate process |
+| **`wasm`** | Rust (via Extism) | High-performance, security-sensitive | Extism sandbox with capability kernel |
+| **`static`** | Markdown | Skills/commands (prompt injection), no code | N/A (content only) |
+
+> Channels, providers and HTTP routes were listed here as contribution points.
+> They are not: the manifest has no field for any of them, so declaring one is
+> silently ignored. Adding a channel or provider means changing core.
 
 ### What Plugins Can Do
 
@@ -54,13 +62,13 @@ Run `aleph plugin doctor` to check your environment:
 aleph plugin doctor
 ```
 
-This checks for Node.js, npm, WASM compilation targets, and plugin directories.
+This checks for Node.js and npm (needed to run MCP-server plugins written in JS/TS), the WASM compilation target, and the global plugin directory.
 
 ### Scaffold a New Plugin
 
 ```bash
-# Node.js plugin (TypeScript)
-aleph plugin init my-plugin --type nodejs
+# MCP server plugin (Node/TypeScript — `nodejs`/`node`/`js`/`ts` are aliases)
+aleph plugin init my-plugin --type mcp
 
 # WASM plugin (Rust)
 aleph plugin init my-wasm-plugin --type wasm
@@ -69,16 +77,18 @@ aleph plugin init my-wasm-plugin --type wasm
 aleph plugin init my-skill --type static
 ```
 
-This creates a directory with `aleph.plugin.toml`, a sample tool definition, and template source files.
+This creates a directory with `.claude-plugin/plugin.toml` and template source
+files. `aleph plugin validate .` reads the same manifest the server will, and
+rejects a runtime the host cannot load — so a green check means the plugin is
+loadable, which it did not before 2026-08-19.
 
 ### Build and Validate
 
 ```bash
 cd my-plugin
 
-# For Node.js plugins:
+# For MCP plugins:
 npm install
-npm run build
 
 # For WASM plugins:
 cargo build --target wasm32-wasi --release
@@ -98,20 +108,46 @@ aleph plugin dev .
 
 ## Manifest Format
 
-Every plugin must have an `aleph.plugin.toml` file at its root. This is the preferred manifest format (Aleph also supports `aleph.plugin.json` and `package.json` with an `aleph` field, but TOML is recommended).
+A plugin's manifest is `.claude-plugin/plugin.toml`. That is Claude Code's
+location with an Aleph superset bolted on: flat top-level fields Claude Code
+understands, plus an optional `[aleph]` block it ignores by design. A manifest
+written this way loads in both hosts.
+
+> **This section said the opposite until 2026-08-19.** It told authors that
+> "every plugin must have an `aleph.plugin.toml`" and called that "the
+> preferred manifest format", while `PLUGIN_SYSTEM.md` called
+> `.claude-plugin/plugin.toml` 首选 and the loader printed a deprecation
+> warning for `aleph.plugin.toml` on every load. `aleph.plugin.toml` still
+> parses; it is deprecated, and it no longer expresses anything the preferred
+> format cannot.
 
 ### Minimal Manifest
 
 ```toml
-[plugin]
-id = "my-plugin"
-name = "My Plugin"
+name = "my-plugin"
 version = "0.1.0"
-kind = "nodejs"
-entry = "dist/index.js"
+
+[aleph]
+runtime = "mcp"        # "mcp" | "wasm" | "static" — omit for "static"
 ```
 
+`runtime` accepts exactly the three values the host can load. `kind = "nodejs"`
+appeared throughout this guide and is **not** one of them: `PluginKind` rejects
+it with `unknown variant`, so a manifest declaring it never loads. There is no
+Node.js plugin runtime — a plugin written in Node runs as an MCP stdio server
+(`runtime = "mcp"` + `.mcp.json`), which is what `aleph plugin init --type
+nodejs` now scaffolds.
+
 ### Full Manifest Reference
+
+> The block below is the **deprecated** `aleph.plugin.toml` dialect, kept
+> because installed plugins still use it. In `.claude-plugin/plugin.toml` the
+> identity fields are flat at the top level and everything under `[plugin]` /
+> `[[tools]]` / `[[hooks]]` / `[[commands]]` / `[[services]]` / `[prompt]`
+> moves inside `[aleph]` — `[[aleph.tools]]`, `[aleph.prompt]`,
+> `[aleph.config_schema]`, and so on. The two dialects mean exactly the same
+> thing; `cc_plugin_json::tests::both_cc_dialects_agree_on_the_superset` holds
+> them equal.
 
 ```toml
 [plugin]
@@ -119,8 +155,8 @@ id = "my-plugin"                    # Required. Lowercase, alphanumeric + hyphen
 name = "My Plugin"                  # Display name (defaults to id)
 version = "1.0.0"                   # Semver version
 description = "What this plugin does"
-kind = "nodejs"                     # "nodejs", "wasm", or "static"
-entry = "dist/index.js"             # Entry point relative to plugin root
+kind = "mcp"                        # "mcp", "wasm", or "static"
+entry = ".mcp.json"                 # Entry point relative to plugin root
 homepage = "https://example.com"
 repository = "https://github.com/user/repo"
 license = "MIT"
@@ -173,25 +209,6 @@ description = "File watcher service"
 start_handler = "startWatcher"
 stop_handler = "stopWatcher"
 
-# --- Channels ---
-[[channels]]
-id = "slack"
-label = "Slack Integration"
-handler = "handleSlackMessage"
-
-# --- Providers ---
-[[providers]]
-id = "custom-llm"
-name = "Custom LLM Provider"
-models = ["custom-7b", "custom-13b"]
-handler = "handleCompletion"
-
-# --- HTTP Routes ---
-[[http_routes]]
-path = "/api/v1/data"
-methods = ["GET", "POST"]
-handler = "handleDataRoute"
-
 # --- System Prompt ---
 [prompt]
 file = "SYSTEM.md"                  # Prompt file injected into AI context
@@ -220,11 +237,6 @@ host_patterns = ["api.example.com"]
 [capabilities.http.credentials.inject]
 type = "bearer"
 
-[capabilities.tool_invoke]
-max_per_execution = 10
-[capabilities.tool_invoke.aliases]
-search = "brave_search"
-
 [capabilities.secrets]
 allowed_patterns = ["my_plugin_*"]
 
@@ -249,150 +261,117 @@ advanced = true
 
 If `entry` is not specified, the default depends on the plugin kind:
 
-| Kind | Default Entry |
-|------|--------------|
+| Runtime | Default Entry |
+|---------|--------------|
 | `wasm` | `plugin.wasm` |
-| `nodejs` | `index.js` |
+| `mcp` | `.mcp.json` |
 | `static` | `.` (the plugin directory itself) |
 
 ### Manifest Priority
 
-When multiple manifest formats exist, Aleph uses this priority:
+When several manifests exist, `parse_manifest_from_dir_sync` picks the first
+of these — the list is the code's order, not an aspiration:
 
-1. `aleph.plugin.toml` (highest)
-2. `aleph.plugin.json`
-3. `package.json` with `aleph` field
-4. `.claude-plugin/plugin.json` (legacy)
+1. `.claude-plugin/plugin.toml` — preferred
+2. `.claude-plugin/plugin.json` — Claude Code's native format
+3. `aleph.plugin.toml` — deprecated; warns on every load
+4. no manifest at all — auto-discovery from `skills/`, `agents/`, `commands/`,
+   `hooks/`, `.mcp.json`
+
+The component fields (`skills`, `commands`, `agents`, `hooks`, `mcp-servers`)
+each accept a path, an array of paths, or — for `hooks` and `mcp-servers` — the
+configuration inlined, matching what Claude Code accepts.
 
 ---
 
-## Node.js Plugin Development
+## MCP Plugin Development (Node / TypeScript / anything)
 
-Node.js plugins run as a subprocess communicating over **JSON-RPC 2.0 via stdio**. Aleph spawns a host process that loads your plugin's entry file and manages the IPC protocol.
+A plugin written in a language that is not Rust runs as an **MCP stdio
+server**. Aleph starts it from `.mcp.json`, speaks MCP to it, and every tool
+the server registers appears in the agent's tool list namespaced
+`<plugin>__<tool>`.
+
+> **This section described a Node.js plugin runtime that does not exist.** It
+> documented a JSON-RPC-over-stdio host process and an `api.registerTool(...)`
+> entry point; `src/extension/runtime/` contains `wasm` and nothing else, and
+> `registerTool` had exactly one occurrence in the whole tree — the scaffolder
+> template that wrote it. `aleph plugin init --type nodejs` produced a plugin
+> that could never load. It now scaffolds what is written below.
 
 ### Project Structure
 
 ```
 my-plugin/
-  aleph.plugin.toml
+  .claude-plugin/
+    plugin.toml
+  .mcp.json
   package.json
-  tsconfig.json
   src/
-    index.ts          # Entry point
-  dist/
-    index.js          # Built output (entry point)
-  .gitignore
+    index.mjs         # the MCP server
 ```
+
+### Manifest
+
+```toml
+name = "my-plugin"
+version = "0.1.0"
+
+[aleph]
+runtime = "mcp"
+entry = ".mcp.json"
+```
+
+### `.mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "my-plugin": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/index.mjs"]
+    }
+  }
+}
+```
+
+`${CLAUDE_PLUGIN_ROOT}` is expanded by the host, so the server runs from the
+install directory wherever the plugin ends up. For state that must survive
+`plugin update` (which swaps the install directory atomically), use
+`${CLAUDE_PLUGIN_DATA}` — see [Plugin Variables](#plugin-variables).
 
 ### Entry Point
 
-Your plugin exports a default async function that receives the plugin API:
+```javascript
+// src/index.mjs
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 
-```typescript
-// src/index.ts
-export default async (api: any) => {
-  // Register tools
-  api.registerTool({
-    name: 'my_tool',
-    description: 'Does something useful',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query' },
-      },
-      required: ['query'],
-    },
-    execute: async (toolCallId: string, params: { query: string }) => {
-      // Your tool logic here
-      const result = await doSomething(params.query);
-      return { result };
-    },
-  });
+const server = new McpServer({ name: "my-plugin", version: "0.1.0" });
 
-  // Register hooks
-  api.on('before_tool_call', async (event: any) => {
-    console.error(`Tool being called: ${event.tool_name}`);
-    // Return modified event or nothing
-  });
-};
+server.tool(
+  "search",
+  "Search something useful",
+  { query: z.string().describe("Search query") },
+  async ({ query }) => ({ content: [{ type: "text", text: `results for ${query}` }] }),
+);
+
+await server.connect(new StdioServerTransport());
 ```
 
-### JSON-RPC Protocol
+### Configuration
 
-Under the hood, Aleph communicates with Node.js plugins using JSON-RPC 2.0 over stdin/stdout:
+Values the operator sets (see [Configuration Schema](#configuration-schema))
+arrive as environment variables: `ALEPH_PLUGIN_CONFIG` holds the whole object
+as JSON, and each scalar field is also exported as
+`CLAUDE_PLUGIN_OPTION_<FIELD>` / `ALEPH_PLUGIN_OPTION_<FIELD>`.
 
-**Request (Aleph to Plugin):**
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "call-1",
-  "method": "plugin.call",
-  "params": {
-    "handler": "handleMyTool",
-    "arguments": { "query": "hello" }
-  }
-}
+```javascript
+const apiKey = process.env.CLAUDE_PLUGIN_OPTION_API_KEY;
 ```
 
-**Response (Plugin to Aleph):**
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "call-1",
-  "result": { "result": "Hello, world!" }
-}
-```
-
-**Registration (Plugin to Aleph, on startup):**
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "plugin.register",
-  "params": {
-    "plugin_id": "my-plugin",
-    "tools": [
-      {
-        "name": "my_tool",
-        "description": "Does something",
-        "parameters": { "type": "object" },
-        "handler": "handleMyTool"
-      }
-    ],
-    "hooks": [],
-    "channels": [],
-    "providers": [],
-    "gateway_methods": []
-  }
-}
-```
-
-**Important:** Use `console.error()` for logging (stderr). Do **not** write to stdout unless sending JSON-RPC messages, as this will corrupt the protocol.
-
-### Hook Handling
-
-Hooks allow your plugin to observe or intercept lifecycle events:
-
-```typescript
-export default async (api: any) => {
-  // Observer hook: read-only, cannot modify the event
-  api.on('session_start', async (event: any) => {
-    console.error('Session started:', event.session_id);
-  });
-
-  // Tool lifecycle hooks
-  api.on('before_tool_call', async (event: any) => {
-    if (event.tool_name === 'Bash') {
-      console.error('Bash command:', event.arguments);
-    }
-  });
-
-  api.on('after_tool_call', async (event: any) => {
-    console.error('Tool result:', event.tool_name);
-  });
-};
-```
-
----
+**Logging:** use `console.error()` (stderr). Anything on stdout that is not an
+MCP message corrupts the protocol.
 
 ## WASM Plugin Development
 
@@ -497,11 +476,6 @@ type = "bearer"
 [capabilities.http.rate_limit]
 requests_per_minute = 60
 requests_per_hour = 1000
-
-[capabilities.tool_invoke]
-max_per_execution = 10
-[capabilities.tool_invoke.aliases]
-search = "brave_search"
 
 [capabilities.secrets]
 allowed_patterns = ["my_plugin_*"]
@@ -631,27 +605,16 @@ description = "Issue labels"
 items = { type = "string" }
 ```
 
-### Dynamic Tool Registration (Node.js)
+### Tools that are not known ahead of time
 
-Plugins with `capabilities.dynamic_tools = true` can register tools at runtime:
+An MCP server decides its own tool list when it starts, so a plugin whose tools
+depend on discovery simply registers them in the server — nothing needs to be
+declared in the manifest.
 
-```typescript
-export default async (api: any) => {
-  // Discover available tools dynamically
-  const tools = await discoverAvailableTools();
-
-  for (const tool of tools) {
-    api.registerTool({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.schema,
-      execute: async (_id: string, params: any) => {
-        return await executeTool(tool, params);
-      },
-    });
-  }
-};
-```
+> The `api.registerTool(...)` example that stood here belonged to the Node.js
+> host process that never existed; `capabilities.dynamic_tools` is parsed and
+> has no consumer. Manifest-declared `[[aleph.tools]]` are for WASM plugins,
+> where `handler` names an exported guest function.
 
 ---
 
@@ -794,6 +757,39 @@ advanced = true
 | `sensitive` | bool | Mask input (for passwords, tokens) |
 | `advanced` | bool | Hide under "Advanced" section |
 | `placeholder` | string | Placeholder text for input |
+
+In `.claude-plugin/plugin.toml` these live under `[aleph.config_schema]` and
+`[aleph.config_ui_hints.<field>]`; the `[plugin.*]` spelling above is the
+deprecated `aleph.plugin.toml` dialect.
+
+### Where the values live, and how they reach the plugin
+
+Values are stored per plugin in `<data_dir>/plugins.toml` and validated against
+`config_schema` on write — every violation is reported, not just the first. A
+plugin that declares no schema accepts anything.
+
+| Runtime | How configuration arrives |
+|---------|---------------------------|
+| `wasm` | Extism config keys — `config::get("api_key")` in `extism-pdk` |
+| `mcp` | environment: `ALEPH_PLUGIN_CONFIG` (whole object as JSON) plus `CLAUDE_PLUGIN_OPTION_<FIELD>` / `ALEPH_PLUGIN_OPTION_<FIELD>` per scalar |
+| hooks | the same environment variables |
+
+An explicit `env` entry in `.mcp.json` wins over an injected one: the author's
+own value beats a convention.
+
+Read and write it over JSON-RPC (`plugin.config.get` / `plugin.config.set`) or
+conversationally with the `plugin_manage` tool
+(`action='config_get'` / `action='config_set'`). `config_set` **replaces** the
+whole object, so read it first and send the merged result. Changes take effect
+on the next `action='reload'` — reloading tears down the plugin's MCP servers
+and background services, so it is never implicit.
+
+> `config_schema` and `config_ui_hints` existed on the manifest type long
+> before any of this, and until 2026-08-19 their only consumer was the
+> authoring-time linter. A declared schema described a control that was not
+> there: no store, no RPC, no tool, and the runtime received nothing. They also
+> could not be declared in the *preferred* manifest at all — only in the
+> deprecated one.
 
 ---
 
@@ -953,42 +949,79 @@ Each subdirectory in the extensions folder is treated as a separate plugin. The 
 
 ---
 
+## Plugin Variables
+
+Four variables are expanded wherever a plugin contributes text or configuration
+— `.mcp.json`, hook commands and hook environment, and the body of every skill,
+command and agent:
+
+| Variable | Points at |
+|----------|-----------|
+| `${CLAUDE_PLUGIN_ROOT}` / `${ALEPH_PLUGIN_ROOT}` | the plugin's install directory |
+| `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}` | `<plugins_root>/data/<plugin-id>/` |
+
+Use `_DATA` for anything that must survive an upgrade: `plugin update` swaps the
+install directory atomically, so everything under `_ROOT` is replaced. The data
+directory is created the first time a plugin names it.
+
+Hooks additionally receive `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` in their
+environment.
+
+> Until 2026-08-19 this table described four surfaces and the code covered one
+> and a half: `_DATA` worked only in `.mcp.json`, and skill / command / agent
+> bodies expanded nothing at all — so `Run ${CLAUDE_PLUGIN_ROOT}/scripts/x.py`
+> in a `SKILL.md` reached the model as a literal and it ran `bash` against a
+> path containing `${CLAUDE_PLUGIN_ROOT}`.
+
+Identifiers are deliberately **not** expanded. A variable in a skill's `name`
+stays a variable, so a manifest cannot smuggle an absolute path into a registry
+key.
+
+---
+
+---
+
 ## Examples
 
-### Minimal Node.js Tool Plugin
+### Minimal MCP Tool Plugin
 
 ```toml
-# aleph.plugin.toml
-[plugin]
-id = "hello-world"
-name = "Hello World"
+# .claude-plugin/plugin.toml
+name = "hello-world"
 version = "0.1.0"
-kind = "nodejs"
-entry = "dist/index.js"
 
-[[tools]]
-name = "hello"
-description = "Say hello"
-handler = "hello"
+[aleph]
+runtime = "mcp"
 ```
 
-```typescript
-// src/index.ts
-export default async (api: any) => {
-  api.registerTool({
-    name: 'hello',
-    description: 'Say hello',
-    parameters: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Name to greet' },
-      },
-    },
-    execute: async (_id: string, params: { name?: string }) => {
-      return { result: `Hello, ${params.name ?? 'world'}!` };
-    },
-  });
-};
+```json
+// .mcp.json
+{
+  "mcpServers": {
+    "hello-world": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/index.mjs"]
+    }
+  }
+}
+```
+
+```javascript
+// src/index.mjs
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "hello-world", version: "0.1.0" });
+
+server.tool(
+  "hello",
+  "Say hello",
+  { name: z.string().optional().describe("Name to greet") },
+  async ({ name }) => ({ content: [{ type: "text", text: `Hello, ${name ?? "world"}!` }] }),
+);
+
+await server.connect(new StdioServerTransport());
 ```
 
 ### Minimal WASM Tool Plugin

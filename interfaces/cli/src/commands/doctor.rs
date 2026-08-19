@@ -829,7 +829,19 @@ fn check_sandbox_summary() -> DoctorCheck {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-fn aleph_home() -> PathBuf {
+/// Aleph's state root, honouring `ALEPH_HOME`.
+///
+/// `interfaces/cli` may not depend on `alephcore`, so it cannot call
+/// `utils::paths::get_config_dir`. It can and must read the same environment
+/// variable: a hand-rolled `dirs::home_dir().join(".aleph")` reports on the
+/// wrong tree in every `ALEPH_HOME`-redirected deployment — which is every QA
+/// run, and any operator running more than one Aleph state directory.
+pub(crate) fn aleph_home() -> PathBuf {
+    if let Some(home) = std::env::var_os("ALEPH_HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home);
+        }
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".aleph")

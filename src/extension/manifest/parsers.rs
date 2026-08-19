@@ -412,8 +412,33 @@ pub fn parse_hooks_file(
     let content = std::fs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read hooks file: {}", file_path.display()))?;
 
-    let config: HooksFileConfig = serde_json::from_str(&content)
-        .with_context(|| format!("Invalid hooks.json: {}", file_path.display()))?;
+    parse_hooks_content(&content, base, plugin_id)
+        .with_context(|| format!("Invalid hooks.json: {}", file_path.display()))
+}
+
+/// Parse hooks JSON *content* into capability declarations.
+///
+/// Split out of [`parse_hooks_file`] so Claude Code's inline `hooks` object —
+/// a legal alternative to a path in `.claude-plugin/plugin.json` — has a real
+/// consumer. Widening the manifest type without this would trade a loud
+/// "manifest rejected" for a silent zero-capability load, which is worse.
+///
+/// Accepts both the wrapped file shape (`{"hooks": {...}}`) and the bare
+/// event map the inline form uses (`{"PreToolUse": [...]}`).
+pub fn parse_hooks_content(
+    content: &str,
+    base: &Path,
+    plugin_id: &str,
+) -> Result<Vec<CapabilityDeclaration>> {
+    let config: HooksFileConfig = match serde_json::from_str::<HooksFileConfig>(content) {
+        Ok(c) if !c.hooks.is_empty() => c,
+        // Either the wrapper was absent or it was present but empty; trying the
+        // bare shape is safe because an empty map yields no capabilities either
+        // way.
+        _ => HooksFileConfig {
+            hooks: serde_json::from_str(content)?,
+        },
+    };
 
     let mut caps = Vec::new();
     for (event, matchers) in config.hooks {
@@ -487,8 +512,23 @@ pub fn parse_mcp_config_file(
     let content = std::fs::read_to_string(&file_path)
         .with_context(|| format!("Failed to read MCP config: {}", file_path.display()))?;
 
-    let config: McpFileConfig = serde_json::from_str(&content)
-        .with_context(|| format!("Invalid .mcp.json: {}", file_path.display()))?;
+    parse_mcp_config_content(&content, base)
+        .with_context(|| format!("Invalid .mcp.json: {}", file_path.display()))
+}
+
+/// Parse MCP-server JSON *content* into capability declarations.
+///
+/// Split out of [`parse_mcp_config_file`] to give Claude Code's inline
+/// `mcpServers` object a consumer — two of Anthropic's own plugin manifests
+/// use that form. Accepts both the wrapped file shape
+/// (`{"mcpServers": {...}}`) and the bare server map.
+pub fn parse_mcp_config_content(content: &str, base: &Path) -> Result<Vec<CapabilityDeclaration>> {
+    let config: McpFileConfig = match serde_json::from_str::<McpFileConfig>(content) {
+        Ok(c) if !c.mcp_servers.is_empty() => c,
+        _ => McpFileConfig {
+            mcp_servers: serde_json::from_str(content)?,
+        },
+    };
 
     let plugin_root = base.to_string_lossy();
     let mut caps = Vec::new();

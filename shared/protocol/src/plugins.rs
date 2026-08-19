@@ -46,6 +46,27 @@ use serde::{Deserialize, Serialize};
 ///
 /// Field names here are the wire names. Renaming one breaks every renderer at
 /// compile time, which is the entire point.
+/// The runtimes a plugin manifest may declare, in wire spelling.
+///
+/// This vocabulary had three holders and no owner: `PluginKind`'s serde
+/// representation in the server, prose in this file's doc comment, and the
+/// CLI's `aleph plugin init --type` template list. They disagreed —
+/// `aleph plugin init --type nodejs` scaffolded `kind = "nodejs"`, which
+/// `PluginKind` rejects with `unknown variant`, so a plugin created by Aleph's
+/// own scaffolder could never be loaded by Aleph. `aleph plugin validate` said
+/// it was fine and `aleph plugin pack` shipped it, because the CLI had its own
+/// weaker schema.
+///
+/// Both sides derive from this constant now, and each holds a test that its
+/// own list equals it.
+pub const PLUGIN_RUNTIMES: [&str; 3] = ["wasm", "mcp", "static"];
+
+/// Whether `runtime` is a runtime the host can actually load.
+#[must_use]
+pub fn is_known_plugin_runtime(runtime: &str) -> bool {
+    PLUGIN_RUNTIMES.contains(&runtime)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PluginRow {
     /// Registry id. Also the key `uninstall` / `enable` / `disable` take, so a
@@ -68,7 +89,7 @@ pub struct PluginRow {
     #[serde(default)]
     pub path: String,
 
-    /// Runtime kind — `"static"`, `"mcp"` or `"wasm"`.
+    /// Runtime kind — one of [`PLUGIN_RUNTIMES`].
     ///
     /// The CLI rendered a `Type` column from a key by this name for as long as
     /// the column existed; the server never sent one. The column was not

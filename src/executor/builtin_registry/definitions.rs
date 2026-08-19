@@ -241,6 +241,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "plugin_manage",
+        description: <crate::builtin_tools::plugin_manage::PluginManageTool as crate::tools::AlephTool>::DESCRIPTION,
+        // Same process-global extension manager as `hooks_manage`.
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "self_config",
         description: <crate::builtin_tools::self_config::SelfConfigTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Requires per-agent agent_id (injected at construction)
@@ -1045,6 +1051,9 @@ pub fn create_tool_boxed(
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "hooks_manage" => Some(Box::new(
             crate::builtin_tools::hooks_manage::HooksManageTool::new(),
+        )),
+        "plugin_manage" => Some(Box::new(
+            crate::builtin_tools::plugin_manage::PluginManageTool::new(),
         )),
         "desktop" => Some(Box::new(DesktopTool::new())),
         "desktop_ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),
@@ -2116,7 +2125,29 @@ mod tests {
     /// deployment admits or that revisions must never be supplied; (3) no
     /// other tool says any of it — `canvas` is the sole owner of the
     /// whiteboard vocabulary.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 102_955;
+    /// 2026-08-19, the plugin management tool: 102_955 -> 103_914 B, pinned
+    /// to the measured figure (no slack). The whole delta is
+    /// `plugin_manage`'s own DESCRIPTION (+959 B). Against the three
+    /// questions: (1) what it states are runtime facts the schema cannot
+    /// carry — that a non-`loaded` status carries its reason in
+    /// `status_detail` (the answer to "why isn't my plugin working?"), that
+    /// `config_set` REPLACES rather than merges, and that a config change
+    /// needs a reload to take effect; (2) a stronger model cannot guess that
+    /// this host refuses install/uninstall from the tool face and routes them
+    /// through `hub_install_run`, nor that configuration is late-bound to
+    /// reload; (3) no other tool says any of it — plugins had no tool face at
+    /// all before this, which is the R8 gap it closes.
+    /// Same day, +106 B net from removing four RPC method names that tool
+    /// DESCRIPTIONs told the model to call (it cannot call any of them):
+    /// `tool_usage` gained the accurate routing sentence (+124), `canvas` shed
+    /// its `canvas.apply RPC` aside (−18), and `acp_delegate` /
+    /// `team_from_template` traded a method name for something the model can
+    /// act on. Against the three questions: (1) all four are runtime facts —
+    /// which surface actually performs a removal, and where templates live on
+    /// disk; (2) a stronger model cannot guess that this host keeps uninstall
+    /// off the tool face; (3) each is the sole statement of its own routing.
+    /// `no_tool_description_tells_the_model_to_call_an_rpc_method` holds it.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 104_020;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2380,7 +2411,11 @@ mod tests {
     /// `BuiltinToolConfig::canvas_store`, so its schema is absent from the
     /// unconditional map this ratchet measures (it is pinned in
     /// `tools_without_an_unconditional_schema_are_pinned` instead).
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 92_798;
+    /// 2026-08-19: 92_798 -> 94_095 B for `plugin_manage`'s argument schema
+    /// (+1,297 B). Three fields and a seven-variant action enum; the costly
+    /// part is the per-variant doc on `PluginAction`, which is what lets the
+    /// model pick `config_get` before `config_set` instead of guessing.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 94_095;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.
@@ -2852,5 +2887,71 @@ mod tests {
                 "Tool description cannot be empty"
             );
         }
+    }
+
+    /// No tool DESCRIPTION may point the model at a JSON-RPC method.
+    ///
+    /// Descriptions ship to the model with the schema, and the model reads
+    /// them as instructions. `tool_usage` told it that "removal goes through
+    /// self_config (MCP), `plugins.uninstall`, or skill_manage" — two tools
+    /// and one JSON-RPC method it has no way to call. That is the same defect
+    /// class as the `delegate` / `subagent` bug in
+    /// `agents/subagent_tool/mod.rs`, and the guard written for that one
+    /// (`every_tool_the_catalog_names_is_a_real_tool`) resolves only
+    /// *backticked* names inside AgentCatalogLayer's sentence, so it was
+    /// structurally blind to a bare name in a tool DESCRIPTION — the class
+    /// recurred in a shape the census did not recognise.
+    ///
+    /// The method list is read from `gateway/method_census.rs` rather than
+    /// restated, so a method added there is covered here without anyone being
+    /// told. Matching on exact registered method names (not on a
+    /// "looks dotted" heuristic) is what keeps `.mcp.json`, `plugin.toml` and
+    /// `hooks.json` out of the way.
+    #[test]
+    fn no_tool_description_tells_the_model_to_call_an_rpc_method() {
+        let census = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/method_census.rs"),
+        )
+        .expect("method census must be readable");
+
+        // Entries look like: ("plugins.uninstall", Class::Admin),
+        let mut methods: Vec<String> = Vec::new();
+        for line in census.lines() {
+            let line = line.trim_start();
+            if !line.starts_with("(\"") {
+                continue;
+            }
+            let Some(rest) = line.strip_prefix("(\"") else {
+                continue;
+            };
+            let Some(name) = rest.split('"').next() else {
+                continue;
+            };
+            if name.contains('.') {
+                methods.push(name.to_string());
+            }
+        }
+        assert!(
+            methods.len() > 50,
+            "only {} methods parsed out of the census — the scanner is not looking where it thinks it is",
+            methods.len()
+        );
+
+        let mut offenders: Vec<String> = Vec::new();
+        for def in BUILTIN_TOOL_DEFINITIONS {
+            for method in &methods {
+                if def.description.contains(method.as_str()) {
+                    offenders.push(format!(
+                        "{}: DESCRIPTION names the RPC method `{method}`, which the model cannot call",
+                        def.name
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "tool descriptions must name tools, not RPC methods:\n  {}",
+            offenders.join("\n  ")
+        );
     }
 }

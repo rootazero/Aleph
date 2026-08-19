@@ -288,6 +288,8 @@ mod tests {
     ("moa.savePreset", Class::Admin),
     ("moa.setDefault", Class::Admin),
     ("moa.setSaveTraces", Class::Admin),
+    ("plugin.config.get", Class::Admin),
+    ("plugin.config.set", Class::Admin),
     ("plugin.disable", Class::Admin),
     ("plugin.enable", Class::Admin),
     ("plugin.install", Class::Admin),

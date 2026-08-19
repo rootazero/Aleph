@@ -115,6 +115,7 @@ pub(crate) async fn compact_to_fit(
     messages: &mut Vec<UnifiedMessage>,
     system_prompt: &str,
     tool_schema_tokens: usize,
+    transient_tail: usize,
     session_id: Option<&str>,
 ) {
     let critical = budget.critical_threshold();
@@ -123,7 +124,12 @@ pub(crate) async fn compact_to_fit(
     // 1. LLM compaction (aggressive: minimal fresh tail). Fail-soft.
     if let Some(c) = compactor {
         if let Err(e) = c
-            .compact(messages, budget.fresh_tail_count(), session_id)
+            .compact(
+                messages,
+                budget.fresh_tail_count(),
+                transient_tail,
+                session_id,
+            )
             .await
         {
             tracing::warn!(error = %e, "compact_to_fit: LLM compaction failed; falling back to floor");
@@ -157,7 +163,19 @@ pub(crate) async fn compact_to_fit(
     let headroom = (budget_tokens as f64 * critical) - p.overhead_tokens as f64;
     // `- 1` keeps it strict: guarantee ratio < critical, not <=.
     let target = ((headroom / factor).floor() as usize).saturating_sub(1);
-    truncate_to_fit(messages, target, budget.fresh_tail_count(), ratio);
+    // `+ transient_tail` for the same reason the compactor above gets it: the
+    // floor's `protected_tail` counts from the END of a vector whose last few
+    // entries are synthetic nudges, so a bare `fresh_tail_count()` spends the
+    // conversation's protection budget on messages that were never part of the
+    // conversation. Adding it can only make the floor evict LESS, so the fit
+    // post-condition is unchanged — `truncate_to_fit` still stops at `tail`
+    // and the caller continues regardless (the Plan-1b pathological case).
+    truncate_to_fit(
+        messages,
+        target,
+        budget.fresh_tail_count().saturating_add(transient_tail),
+        ratio,
+    );
 }
 
 #[cfg(test)]
@@ -338,7 +356,7 @@ mod tests {
             "premise: raw total must sit between the raw and calibrated targets, got {raw}"
         );
 
-        compact_to_fit(None, &budget, &mut msgs, "", 0, None).await;
+        compact_to_fit(None, &budget, &mut msgs, "", 0, 0, None).await;
         let p = budget.peek_pressure(&msgs, "", 0);
         assert!(
             p.ratio < 0.85,
@@ -365,7 +383,7 @@ mod tests {
             text_user(&"b".repeat(20000)),
             text_user("tail"),
         ];
-        compact_to_fit(None, &budget, &mut msgs, "", 0, None).await;
+        compact_to_fit(None, &budget, &mut msgs, "", 0, 0, None).await;
         let p = budget.peek_pressure(&msgs, "", 0);
         assert!(
             p.ratio < 0.85,

@@ -20,18 +20,36 @@
 //! block (Vault HTTP fetch, file read, in-memory map), so the resolver impl
 //! itself owns the I/O strategy.
 //!
-//! ## Default
+//! ## What is actually installed today
 //!
-//! `WasmRuntime::load_plugin` installs an [`InMemorySecretResolver`] as the
-//! default. Production deployments that use Aleph's vault can swap in a
-//! resolver that proxies to `~/.aleph/data/secrets/<name>` (out of scope for
-//! this module — see the future "vault-bound secret resolver" design doc).
+//! [`DenyAllSecretResolver`]. `WasmRuntime::load_plugin` forwards `None`, and
+//! `load_plugin_with_resolver(_, Some(..))` has **zero call sites** in the
+//! repo — production, `#[cfg(test)]` and `tests/` alike. So host-side
+//! credential injection is implemented and unreachable: every
+//! `[capabilities.http.credentials]` binding a plugin declares turns its
+//! `http_fetch` to that host into a guaranteed `secret not found` error.
 //!
-//! ## Test-only stub
+//! This module's doc used to say the opposite — that `load_plugin` installs an
+//! [`InMemorySecretResolver`] "as the default", and that `DenyAllSecretResolver`
+//! is a "test-only stub". Both were false, and a security feature whose
+//! documentation reports it as live is worse than one documented as missing:
+//! it reads as a control in review.
 //!
-//! [`DenyAllSecretResolver`] returns `None` for every name; it preserves the
-//! historical "plugin must supply its own credentials" behaviour for tests
-//! that don't exercise credential injection.
+//! Load emits a warning naming the plugin when it declares credentials, so the
+//! gap is loud rather than a runtime surprise
+//! (`WasmRuntime::warn_if_credentials_are_unreachable`).
+//!
+//! ## Connecting it
+//!
+//! Aleph already owns the missing half (`src/secrets/`, the encrypted vault).
+//! Wiring it is one call site — `PluginLoader::load_wasm_plugin` passing a
+//! vault-backed `Arc<dyn SecretResolver>` — but it must land together with a
+//! `check_secret_pattern` gate inside [`super::WasmCapabilityKernel::resolve_secret`],
+//! which today applies none: `try_http_fetch` feeds it `binding.secret_name`
+//! straight from the manifest, so a real resolver would let
+//! `[capabilities.http.credentials]` name any vault key and bypass
+//! `[capabilities.secrets] allowed_patterns` entirely. That path has never
+//! executed and would run for the first time on the day the wire is connected.
 
 use std::sync::RwLock;
 
@@ -39,10 +57,14 @@ use crate::sync_primitives::Arc;
 
 /// Lookup a named secret and return its plaintext value.
 ///
-/// Returning `None` means "I don't know that secret" — the request is then
-/// allowed through unchanged by [`super::credential_injector::inject_credential`]
-/// (the binding's host-pattern simply didn't match, or the secret name was
-/// not present).
+/// Returning `None` means "I don't know that secret".
+///
+/// That is **not** "the request proceeds unchanged". `inject_credential`
+/// skips a binding whose `host_patterns` do not match the URL, but a binding
+/// that DOES match and whose secret is unknown returns `SecretNotFound`, and
+/// `try_http_fetch` turns that into a hard error before any egress. The
+/// failure direction is closed: there is no unauthenticated request and no
+/// plaintext leak, but the call fails.
 ///
 /// Implementations MUST NOT panic on unknown names; they MUST return `None`
 /// so a misconfigured plugin doesn't take down the kernel.

@@ -248,10 +248,7 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                             ))
                         })?;
                     f.write_all(&bytes).await.map_err(|e| {
-                        AlephError::tool(format!(
-                            "write tmp '{}': {e}",
-                            tmp_path.display()
-                        ))
+                        AlephError::tool(format!("write tmp '{}': {e}", tmp_path.display()))
                     })?;
                     f.sync_all().await.map_err(|e| {
                         AlephError::tool(format!("sync tmp '{}': {e}", tmp_path.display()))

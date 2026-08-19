@@ -1722,10 +1722,12 @@ mod recall_context_identity_tests {
             ..Default::default()
         })));
 
+        // The query participates in retrieval (BT-D-R4-01 substring filter),
+        // so it must be a substring of the seeded chunk.
         let out = TURN_CONTEXT
             .scope(turn_ctx("alice"), async {
                 registry
-                    .execute_tool("recall_context", serde_json::json!({ "query": "anything" }))
+                    .execute_tool("recall_context", serde_json::json!({ "query": "alice chunk" }))
                     .await
             })
             .await
@@ -1770,7 +1772,7 @@ mod recall_context_identity_tests {
         })));
 
         let out = registry
-            .execute_tool("recall_context", serde_json::json!({ "query": "anything" }))
+            .execute_tool("recall_context", serde_json::json!({ "query": "bob chunk" }))
             .await
             .unwrap();
 

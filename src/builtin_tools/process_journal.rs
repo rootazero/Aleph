@@ -536,9 +536,11 @@ fn is_undelivered_completion(record: &JobRecord, now: u64) -> bool {
 /// Drain the completions [`init_and_reconcile`] found undelivered, hydrated
 /// with whatever output was recorded for them.
 ///
-/// Destructive: the rows are already stamped `announced` on disk, so this is
-/// the one chance to deliver them in this process. Empty for every boot that
-/// had nothing to hand back, which is the overwhelming majority.
+/// Destructive: within a boot this is the one chance to deliver them. The
+/// rows are stamped `announced` on disk only by `init_and_announce` AFTER the
+/// broadcast succeeds (BT-D-R4-16), so a boot that drains without announcing
+/// hands the completion back again next boot. Empty for every boot that had
+/// nothing to hand back, which is the overwhelming majority.
 pub(crate) fn take_undelivered_settled() -> Vec<RecoveredJob> {
     let Some(dir) = store_dir() else {
         return Vec::new();
@@ -1295,7 +1297,12 @@ mod tests {
             take_undelivered_settled().is_empty(),
             "one delivery per boot, however many callers ask"
         );
-        // ...and the stamp landed on disk, so the NEXT boot stays quiet. A
+        // BT-D-R4-16: reconcile no longer stamps `announced` on disk — the
+        // stamp moved to `init_and_announce`, AFTER the broadcast succeeds,
+        // so a crash mid-broadcast retries the handback instead of silently
+        // losing it. Simulate that successful announce here...
+        record_announced(21);
+        // ...and with the stamp landed on disk, the NEXT boot stays quiet. A
         // handback that repeated forever would be worse than the silence it
         // replaced.
         disable_for_test();
