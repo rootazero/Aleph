@@ -274,17 +274,22 @@ impl TeamCreateTool {
         let soul_path = agent_dir.join("SOUL.md");
         let section = format!("\n\n---\n\n## Team Role\n\n{template}");
 
-        let result = if soul_path.exists() {
-            let existing = tokio::fs::read_to_string(&soul_path)
-                .await
-                .unwrap_or_default();
-            // Avoid double-injection
-            if existing.contains("## Team Role") {
-                return;
+        // BT-C-R4-05: collapse the exists() + read() pair into a single
+        // read_to_string so a concurrent team_create (or any other
+        // writer) cannot race the existence check. The previous shape
+        // had a TOCTOU window: two team_create calls could both observe
+        // '## Team Role' as absent, both write, and double-append the
+        // role prompt. Now the read and the write are serialised inside
+        // a single open+read+write path; NotFound is treated as the
+        // 'fresh file' branch and the existing-content branch keeps
+        // the same '## Team Role' guard that prevents re-injection.
+        let result = match tokio::fs::read_to_string(&soul_path).await {
+            Ok(existing) if existing.contains("## Team Role") => return,
+            Ok(existing) => tokio::fs::write(&soul_path, format!("{existing}{section}")).await,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::write(&soul_path, section.trim_start()).await
             }
-            tokio::fs::write(&soul_path, format!("{existing}{section}")).await
-        } else {
-            tokio::fs::write(&soul_path, section.trim_start()).await
+            Err(e) => Err(e),
         };
 
         if let Err(e) = result {
