@@ -4,19 +4,24 @@
 //! It has flat top-level fields (name, version, description) plus an optional
 //! `[aleph]` section for Aleph-specific extensions.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::declared_sections::AlephSuperset;
 use crate::extension::manifest::toml_types::{
-    convert_permissions, CapabilitiesSection, PermissionsSection, ServiceSection,
+    convert_permissions, CapabilitiesSection, CommandSection, HookSection, PermissionsSection,
+    PromptSection, ServiceSection, ToolSection,
 };
 use crate::extension::manifest::types::{
-    AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
+    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, PluginManifest,
 };
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::types::PluginKind;
+use crate::memory::extensions::manifest::MemoryManifestSection;
 
 /// Filename for CC-format TOML manifest
 pub const CC_PLUGIN_TOML: &str = ".claude-plugin/plugin.toml";
@@ -127,6 +132,44 @@ pub struct AlephExtensionsToml {
     /// Background services
     #[serde(default)]
     pub services: Vec<ServiceSection>,
+
+    // ── The rest of the Aleph superset ───────────────────────────────────
+    //
+    // Until 2026-08-19 these existed only in the deprecated
+    // `aleph.plugin.toml`, so the *documented-preferred* manifest could not
+    // declare a tool, a prompt or a config schema — and the adapter's
+    // `manifest.tools_v2` / `manifest.prompt_v2` branches were unreachable
+    // because `parse_cc_plugin_toml_content` hardcoded them to `None`.
+    // Claude Code ignores unknown top-level keys, so `[aleph]` is the correct
+    // home for all of them: adding these keeps a manifest loadable by both
+    // hosts.
+    /// Handler-backed tools plus their instruction files.
+    #[serde(default)]
+    pub tools: Vec<ToolSection>,
+
+    /// Event hooks declared inline (as opposed to a `hooks/hooks.json` file).
+    #[serde(default)]
+    pub hooks: Vec<HookSection>,
+
+    /// Handler-backed `/commands` (as opposed to `commands/*.md` files).
+    #[serde(default)]
+    pub commands: Vec<CommandSection>,
+
+    /// System/user prompt file injected into the agent context.
+    #[serde(default)]
+    pub prompt: Option<PromptSection>,
+
+    /// JSON Schema describing this plugin's user configuration.
+    #[serde(default)]
+    pub config_schema: Option<JsonValue>,
+
+    /// Per-field presentation hints for `config_schema`.
+    #[serde(default)]
+    pub config_ui_hints: Option<HashMap<String, ConfigUiHint>>,
+
+    /// Memory extension manifest.
+    #[serde(default)]
+    pub memory: Option<MemoryManifestSection>,
 }
 
 // =============================================================================
@@ -191,11 +234,22 @@ pub fn parse_cc_plugin_toml_content(
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
     // Determine kind and entry from [aleph] section
+    let mut superset = AlephSuperset::default();
     let (kind, entry, aleph_extensions) = if let Some(aleph) = toml.aleph {
         let runtime_str = aleph.runtime.as_deref().unwrap_or("static");
         let kind = runtime_to_kind(runtime_str);
         let entry = aleph.entry.unwrap_or_else(|| default_entry_for_kind(kind));
         let permissions = convert_permissions(&aleph.permissions);
+
+        superset = AlephSuperset {
+            tools: aleph.tools,
+            hooks: aleph.hooks,
+            commands: aleph.commands,
+            prompt: aleph.prompt,
+            config_schema: aleph.config_schema,
+            config_ui_hints: aleph.config_ui_hints.unwrap_or_default(),
+            memory: aleph.memory,
+        };
 
         let aleph_ext = AlephExtensions {
             runtime: runtime_to_aleph_runtime(runtime_str),
@@ -242,8 +296,8 @@ pub fn parse_cc_plugin_toml_content(
         kind,
         entry: entry.into(),
         root_dir: plugin_dir.to_path_buf(),
-        config_schema: None,
-        config_ui_hints: Default::default(),
+        config_schema: superset.config_schema,
+        config_ui_hints: superset.config_ui_hints,
         permissions,
         author: toml.author.map(AuthorInfo::from),
         homepage: toml.homepage,
@@ -251,19 +305,21 @@ pub fn parse_cc_plugin_toml_content(
         license: toml.license,
         keywords: toml.keywords.unwrap_or_default(),
         extensions: Vec::new(),
-        // V2 fields not available in CC TOML format
-        tools_v2: None,
-        hooks_v2: None,
-        commands_v2: None,
+        // Superset sections, carried in `[aleph]` (which Claude Code ignores).
+        // `services_v2` stays `None` because services already round-trip
+        // through `aleph_extensions.services` — a second copy would be a
+        // second answer to "what services did this plugin declare".
+        tools_v2: AlephSuperset::non_empty(superset.tools),
+        hooks_v2: AlephSuperset::non_empty(superset.hooks),
+        commands_v2: AlephSuperset::non_empty(superset.commands),
         services_v2: None,
-        prompt_v2: None,
+        prompt_v2: superset.prompt,
         capabilities_v2: None,
         wasm_capabilities,
         wasm_resource_limits: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
-        // Memory extension manifest — not supported in CC flat format (only in aleph.plugin.toml)
-        memory_manifest: None,
+        memory_manifest: superset.memory,
     };
 
     Ok(manifest)
@@ -353,43 +409,27 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
             plugin_dir, mcp_rel, &plugin_id,
         )?);
 
-        // Parse v2 prompt configuration from manifest (if present)
-        if let Some(ref prompt) = manifest.prompt_v2 {
-            match parsers::parse_v2_prompt(plugin_dir, prompt, &plugin_id) {
-                Ok(cap) => capabilities.push(cap),
-                Err(e) => tracing::debug!("Failed to parse v2 prompt for {}: {}", plugin_id, e),
-            }
-        }
-
-        // Parse v2 tool instruction files (if present)
-        if let Some(ref tools) = manifest.tools_v2 {
-            match parsers::parse_v2_tool_prompts(plugin_dir, tools, &plugin_id) {
-                Ok(caps) => capabilities.extend(caps),
-                Err(e) => {
-                    tracing::debug!("Failed to parse v2 tool prompts for {}: {}", plugin_id, e)
-                }
-            }
-        }
-
-        // Background services declared in the [aleph] section's [[services]] —
-        // gated on the `background` permission so a missing grant degrades to
-        // a warning instead of failing the whole plugin at the registrar.
-        if let Some(ref aleph_ext) = manifest.aleph_extensions {
-            if !aleph_ext.services.is_empty() {
-                if manifest
-                    .permissions
-                    .contains(&crate::extension::manifest::PluginPermission::Background)
-                {
-                    capabilities
-                        .extend(parsers::parse_v2_services(&aleph_ext.services, &plugin_id));
-                } else {
-                    tracing::warn!(
-                        plugin = %plugin_id,
-                        "[[services]] declared but permissions.background is not granted — services skipped"
-                    );
-                }
-            }
-        }
+        // Manifest-declared sections from `[aleph]` — the same translation the
+        // native dialect uses, so `[[aleph.tools]]` in the preferred manifest
+        // means exactly what `[[tools]]` means in `aleph.plugin.toml`.
+        let no_services: Vec<ServiceSection> = Vec::new();
+        capabilities.extend(
+            crate::extension::manifest::declared_sections::declared_capabilities(
+                plugin_dir,
+                &plugin_id,
+                &crate::extension::manifest::declared_sections::DeclaredSections {
+                    prompt: manifest.prompt_v2.as_ref(),
+                    tools: manifest.tools_v2.as_deref().unwrap_or(&[]),
+                    hooks: manifest.hooks_v2.as_deref().unwrap_or(&[]),
+                    commands: manifest.commands_v2.as_deref().unwrap_or(&[]),
+                    services: manifest
+                        .aleph_extensions
+                        .as_ref()
+                        .map_or(&no_services, |ext| &ext.services),
+                },
+                &manifest.permissions,
+            ),
+        );
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
@@ -678,5 +718,95 @@ version = "2.0.0"
             crate::extension::manifest::parse_manifest_from_dir_sync(&plugin_dir).unwrap();
         assert_eq!(manifest.id, "new-id");
         assert_eq!(manifest.version, Some("2.0.0".to_string()));
+    }
+
+    /// The documented-preferred manifest must be able to declare the Aleph
+    /// superset. Until 2026-08-19 `parse_cc_plugin_toml_content` hardcoded
+    /// every one of these to `None`, so a plugin using `.claude-plugin/
+    /// plugin.toml` could not declare a tool, a prompt, a config schema or a
+    /// memory extension — while the guide told authors to use
+    /// `aleph.plugin.toml`, which the loader warns is deprecated.
+    #[test]
+    fn the_preferred_manifest_carries_the_aleph_superset() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse_cc_plugin_toml_content(
+            r#"
+name = "memory-analytics"
+version = "0.1.0"
+
+[aleph]
+runtime = "wasm"
+
+[[aleph.tools]]
+name = "memory_stats"
+description = "Report memory statistics"
+handler = "memory_stats"
+
+[[aleph.commands]]
+name = "stats"
+handler = "memory_stats"
+
+[aleph.prompt]
+file = "SYSTEM.md"
+scope = "system"
+
+[aleph.config_schema]
+type = "object"
+
+[aleph.config_ui_hints.api_key]
+label = "API Key"
+sensitive = true
+"#,
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest.tools_v2.as_ref().map(Vec::len),
+            Some(1),
+            "[[aleph.tools]] must reach tools_v2"
+        );
+        assert_eq!(manifest.commands_v2.as_ref().map(Vec::len), Some(1));
+        assert!(
+            manifest.prompt_v2.is_some(),
+            "[aleph.prompt] must reach prompt_v2"
+        );
+        assert!(manifest.config_schema.is_some());
+        assert!(manifest.config_ui_hints.contains_key("api_key"));
+    }
+
+    /// A declared tool must become a *callable* tool, not just an entry in the
+    /// manifest struct — the adapter is the half that was unreachable.
+    #[test]
+    fn a_tool_declared_in_the_preferred_manifest_registers() {
+        use crate::extension::capability::CapabilityDeclaration;
+        use crate::extension::manifest::adapter::ManifestAdapter;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(CC_PLUGIN_TOML),
+            r#"
+name = "memory-analytics"
+
+[aleph]
+runtime = "wasm"
+
+[[aleph.tools]]
+name = "memory_stats"
+handler = "memory_stats"
+"#,
+        )
+        .unwrap();
+
+        let out = ClaudeCodeTomlAdapter.parse(dir.path()).unwrap();
+        assert!(
+            out.capabilities.iter().any(|c| matches!(
+                c,
+                CapabilityDeclaration::Tool(t) if t.name == "memory_stats" && t.handler == "memory_stats"
+            )),
+            "adapter must emit a Tool declaration, got {:?}",
+            out.capabilities.len()
+        );
     }
 }

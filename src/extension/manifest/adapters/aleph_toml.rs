@@ -15,7 +15,9 @@ use anyhow::Result;
 use crate::extension::capability::{CapabilitySource, SourceFormat};
 use crate::extension::manifest::adapter::{AdapterOutput, ManifestAdapter};
 use crate::extension::manifest::toml_types::AlephPluginToml;
-use crate::extension::manifest::{convert_permissions, parsers, ALEPH_PLUGIN_TOML};
+use crate::extension::manifest::{
+    convert_permissions, declared_sections, parsers, ALEPH_PLUGIN_TOML,
+};
 use crate::extension::types::PluginOrigin;
 
 pub struct AlephTomlAdapter;
@@ -71,81 +73,23 @@ impl ManifestAdapter for AlephTomlAdapter {
             )?);
         }
 
-        // System prompt declared in [prompt].
-        if let Some(ref prompt) = raw.prompt {
-            match parsers::parse_v2_prompt(plugin_dir, prompt, &plugin_id) {
-                Ok(cap) => capabilities.push(cap),
-                Err(e) => tracing::debug!("Failed to parse [prompt] for {}: {}", plugin_id, e),
-            }
-        }
-
-        // Tool instruction files declared in [[tools]].
-        if !raw.tools.is_empty() {
-            match parsers::parse_v2_tool_prompts(plugin_dir, &raw.tools, &plugin_id) {
-                Ok(caps) => capabilities.extend(caps),
-                Err(e) => tracing::debug!("Failed to parse [[tools]] for {}: {}", plugin_id, e),
-            }
-            for tool in &raw.tools {
-                let Some(handler) = tool.handler.clone().filter(|handler| !handler.is_empty())
-                else {
-                    continue;
-                };
-                capabilities.push(crate::extension::CapabilityDeclaration::Tool(
-                    crate::extension::ToolRegistration {
-                        name: tool.name.clone(),
-                        description: tool.description.clone().unwrap_or_default(),
-                        parameters: tool
-                            .parameters
-                            .clone()
-                            .unwrap_or_else(|| serde_json::json!({"type": "object"})),
-                        handler,
-                        plugin_id: plugin_id.clone(),
-                    },
-                ));
-            }
-        }
-
-        for command in &raw.commands {
-            let Some(handler) = command
-                .handler
-                .clone()
-                .filter(|handler| !handler.is_empty())
-            else {
-                continue;
-            };
-            capabilities.push(crate::extension::CapabilityDeclaration::Skill(
-                crate::extension::SkillRegistration {
-                    name: command.name.clone(),
-                    description: command.description.clone().unwrap_or_default(),
-                    content: handler,
-                    skill_type: crate::extension::SkillType::Command,
-                    plugin_id: plugin_id.clone(),
-                    ..Default::default()
-                },
-            ));
-        }
-
-        // Event hooks declared in [[hooks]]. Previously these were parsed
-        // into `manifest.hooks_v2` and duplicate-validated but never
-        // registered — a declared hook silently never fired.
-        if !raw.hooks.is_empty() {
-            capabilities.extend(parsers::parse_v2_hooks(&raw.hooks, &plugin_id));
-        }
-
-        // Background services declared in [[services]] — gated on the
-        // `background` permission so a missing grant degrades to a warning
-        // instead of failing the whole plugin at the registrar.
+        // Manifest-declared sections ([prompt] / [[tools]] / [[commands]] /
+        // [[hooks]] / [[services]]) go through the one translation shared with
+        // the CC dialects, so the two formats cannot mean different things by
+        // the same section.
         let permissions = convert_permissions(&raw.permissions);
-        if !raw.services.is_empty() {
-            if permissions.contains(&crate::extension::manifest::PluginPermission::Background) {
-                capabilities.extend(parsers::parse_v2_services(&raw.services, &plugin_id));
-            } else {
-                tracing::warn!(
-                    plugin = %plugin_id,
-                    "[[services]] declared but permissions.background is not granted — services skipped"
-                );
-            }
-        }
+        capabilities.extend(declared_sections::declared_capabilities(
+            plugin_dir,
+            &plugin_id,
+            &declared_sections::DeclaredSections {
+                prompt: raw.prompt.as_ref(),
+                tools: &raw.tools,
+                hooks: &raw.hooks,
+                commands: &raw.commands,
+                services: &raw.services,
+            },
+            &permissions,
+        ));
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),

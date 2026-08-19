@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::declared_sections::AlephSuperset;
 use crate::extension::manifest::types::{
     AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
 };
@@ -176,7 +177,18 @@ pub fn parse_cc_plugin_json_content(
         .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
 
     // Parse [aleph] section from raw JSON value
+    let mut superset = AlephSuperset::default();
     let (kind, entry, aleph_ext, permissions) = if let Some(aleph_val) = json.aleph {
+        // The superset reads the same object. Deserializing twice rather than
+        // widening `AlephExtensions` keeps the runtime type free of parse-only
+        // sections, and unknown keys are ignored by both, so neither view can
+        // reject a manifest the other accepts.
+        superset = serde_json::from_value(aleph_val.clone()).map_err(|e| {
+            ExtensionError::invalid_manifest(
+                &manifest_path,
+                format!("Invalid [aleph] superset section: {e}"),
+            )
+        })?;
         let aleph_ext: AlephExtensions = serde_json::from_value(aleph_val).map_err(|e| {
             ExtensionError::invalid_manifest(
                 &manifest_path,
@@ -224,8 +236,8 @@ pub fn parse_cc_plugin_json_content(
         kind,
         entry: entry.into(),
         root_dir: plugin_dir.to_path_buf(),
-        config_schema: None,
-        config_ui_hints: Default::default(),
+        config_schema: superset.config_schema,
+        config_ui_hints: superset.config_ui_hints,
         permissions,
         author: json.author.map(AuthorInfo::from),
         homepage: json.homepage,
@@ -233,19 +245,21 @@ pub fn parse_cc_plugin_json_content(
         license: json.license,
         keywords: json.keywords.unwrap_or_default(),
         extensions: Vec::new(),
-        // V2 fields not available in CC JSON format
-        tools_v2: None,
-        hooks_v2: None,
-        commands_v2: None,
+        // Superset sections, carried in the `aleph` object (which Claude Code
+        // ignores). `services_v2` stays `None`: services round-trip through
+        // `aleph_extensions.services`, and a second copy would be a second
+        // answer to "what services did this plugin declare".
+        tools_v2: AlephSuperset::non_empty(superset.tools),
+        hooks_v2: AlephSuperset::non_empty(superset.hooks),
+        commands_v2: AlephSuperset::non_empty(superset.commands),
         services_v2: None,
-        prompt_v2: None,
+        prompt_v2: superset.prompt,
         capabilities_v2: None,
         wasm_capabilities,
         wasm_resource_limits: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
-        // Memory extension manifest — not available in CC JSON format
-        memory_manifest: None,
+        memory_manifest: superset.memory,
     };
 
     Ok(manifest)
@@ -334,6 +348,27 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
         capabilities.extend(parsers::parse_mcp_config_file(
             plugin_dir, mcp_rel, &plugin_id,
         )?);
+
+        // Manifest-declared sections from the `aleph` object — the same
+        // translation both the native and CC-TOML dialects use.
+        let no_services: Vec<crate::extension::manifest::ServiceSection> = Vec::new();
+        capabilities.extend(
+            crate::extension::manifest::declared_sections::declared_capabilities(
+                plugin_dir,
+                &plugin_id,
+                &crate::extension::manifest::declared_sections::DeclaredSections {
+                    prompt: manifest.prompt_v2.as_ref(),
+                    tools: manifest.tools_v2.as_deref().unwrap_or(&[]),
+                    hooks: manifest.hooks_v2.as_deref().unwrap_or(&[]),
+                    commands: manifest.commands_v2.as_deref().unwrap_or(&[]),
+                    services: manifest
+                        .aleph_extensions
+                        .as_ref()
+                        .map_or(&no_services, |ext| &ext.services),
+                },
+                &manifest.permissions,
+            ),
+        );
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
@@ -504,5 +539,102 @@ mod tests {
         let dir = PathBuf::from("/plugins/root-test");
         let manifest = parse_cc_plugin_json_content(content, &dir).unwrap();
         assert_eq!(manifest.root_dir, dir);
+    }
+
+    /// The two CC dialects must mean the same thing by the `aleph` superset.
+    ///
+    /// They necessarily have two deserialization structs — `AlephExtensionsToml`
+    /// with typed TOML sections, and a `serde_json::from_value` into
+    /// `AlephSuperset` — so nothing structural forces them to agree.
+    /// `serde(flatten)` would not fix it either: it is unsafe for TOML
+    /// arrays-of-tables. This test is the thing that holds them together.
+    #[test]
+    fn both_cc_dialects_agree_on_the_superset() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let from_json = parse_cc_plugin_json_content(
+            r#"{
+              "name": "twin",
+              "aleph": {
+                "runtime": "wasm",
+                "tools": [{"name": "t", "handler": "h"}],
+                "commands": [{"name": "c", "handler": "h"}],
+                "prompt": {"file": "SYSTEM.md", "scope": "system"},
+                "config_schema": {"type": "object"},
+                "config_ui_hints": {"k": {"label": "K"}}
+              }
+            }"#,
+            dir.path(),
+        )
+        .unwrap();
+
+        let from_toml = crate::extension::manifest::cc_plugin_toml::parse_cc_plugin_toml_content(
+            r#"
+name = "twin"
+
+[aleph]
+runtime = "wasm"
+
+[[aleph.tools]]
+name = "t"
+handler = "h"
+
+[[aleph.commands]]
+name = "c"
+handler = "h"
+
+[aleph.prompt]
+file = "SYSTEM.md"
+scope = "system"
+
+[aleph.config_schema]
+type = "object"
+
+[aleph.config_ui_hints.k]
+label = "K"
+"#,
+            dir.path(),
+        )
+        .unwrap();
+
+        assert_eq!(from_json.kind, from_toml.kind);
+        assert_eq!(
+            from_json.tools_v2.as_ref().map(|t| t
+                .iter()
+                .map(|x| (x.name.clone(), x.handler.clone()))
+                .collect::<Vec<_>>()),
+            from_toml.tools_v2.as_ref().map(|t| t
+                .iter()
+                .map(|x| (x.name.clone(), x.handler.clone()))
+                .collect::<Vec<_>>()),
+        );
+        assert_eq!(
+            from_json.commands_v2.as_ref().map(Vec::len),
+            from_toml.commands_v2.as_ref().map(Vec::len)
+        );
+        assert_eq!(
+            from_json.prompt_v2.as_ref().map(|p| p.file.clone()),
+            from_toml.prompt_v2.as_ref().map(|p| p.file.clone())
+        );
+        assert_eq!(from_json.config_schema, from_toml.config_schema);
+        assert_eq!(
+            from_json.config_ui_hints.keys().collect::<Vec<_>>(),
+            from_toml.config_ui_hints.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// camelCase is Claude Code's convention, so a JSON author writing
+    /// `configSchema` must not silently lose the schema.
+    #[test]
+    fn the_json_superset_accepts_camel_case_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse_cc_plugin_json_content(
+            r#"{"name":"camel","aleph":{"configSchema":{"type":"object"},
+                "configUiHints":{"k":{"label":"K"}}}}"#,
+            dir.path(),
+        )
+        .unwrap();
+        assert!(manifest.config_schema.is_some());
+        assert!(manifest.config_ui_hints.contains_key("k"));
     }
 }
