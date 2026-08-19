@@ -81,10 +81,16 @@ host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
     }
 });
 
+// Existence has to be answered by the same two things resolution consults,
+// or the guest is told a secret exists and then every request that uses it
+// hard-fails. This asked only the manifest allowlist until 2026-08-19 — the
+// plugin's own declaration of what it is *permitted* to see, which says
+// nothing about what the host can actually resolve.
 host_fn!(pub host_secret_exists(state: HostState; name: String) -> String {
     let state = state.get()?;
     let state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let exists = state.kernel.check_secret_pattern(&name);
+    let exists = state.kernel.check_secret_pattern(&name)
+        && state.kernel.resolve_secret(&name).is_some();
     Ok(exists.to_string())
 });
 

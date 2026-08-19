@@ -25,7 +25,7 @@ pub use secret_resolver::{
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::extension::error::ExtensionError;
 use crate::extension::manifest::PluginManifest;
@@ -93,6 +93,38 @@ impl WasmRuntime {
         self.load_plugin_with(manifest, resolver, &serde_json::Value::Null)
     }
 
+    /// Say out loud that a plugin's declared credentials cannot work.
+    ///
+    /// Host-side credential injection is fully implemented and has no
+    /// production caller that installs a resolver, so every
+    /// `[capabilities.http.credentials]` binding turns the plugin's
+    /// `http_fetch` to that host into a guaranteed `secret not found` error.
+    /// Without this line the author discovers it at runtime, from an error
+    /// that names a secret rather than the missing wire.
+    ///
+    /// A warning rather than a refusal: the plugin's other capabilities work,
+    /// and refusing to load it would be a larger change than the gap
+    /// justifies.
+    fn warn_if_credentials_are_unreachable(
+        manifest: &PluginManifest,
+        capabilities: &WasmCapabilities,
+    ) {
+        let declared = capabilities
+            .http
+            .as_ref()
+            .map_or(0, |http| http.credentials.len());
+        if declared == 0 {
+            return;
+        }
+        warn!(
+            plugin = %manifest.id,
+            bindings = declared,
+            "plugin declares http credentials, but no host secret resolver is installed — \
+             every request matching those bindings will fail with `secret not found`. \
+             See extension::runtime::wasm::secret_resolver for what connecting it requires."
+        );
+    }
+
     /// Load a WASM plugin with a secret resolver and the operator's stored
     /// configuration.
     ///
@@ -131,8 +163,13 @@ impl WasmRuntime {
         // builder so the kernel can be cloned freely; the default
         // deny-all resolver preserves the legacy "plugin supplies its own
         // credentials" behaviour when no resolver is provided.
-        let resolver: Arc<dyn SecretResolver> =
-            resolver.unwrap_or_else(|| Arc::new(DenyAllSecretResolver));
+        let resolver: Arc<dyn SecretResolver> = match resolver {
+            Some(r) => r,
+            None => {
+                Self::warn_if_credentials_are_unreachable(manifest, &capabilities);
+                Arc::new(DenyAllSecretResolver)
+            }
+        };
         let kernel = Arc::new(
             WasmCapabilityKernel::new(manifest.id.clone(), capabilities, limits)
                 .with_secret_resolver(resolver),

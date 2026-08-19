@@ -98,11 +98,19 @@ impl WasmCapabilityKernel {
         self.secret_resolver.as_ref()
     }
 
-    /// Convenience: resolve a single secret name to its plaintext value, or
-    /// `None` if the resolver doesn't recognise it. Returns `None` (silently)
-    /// when the kernel carries the default deny-all resolver — the credential
-    /// injector then skips the binding host-pattern match and the request
-    /// proceeds unchanged.
+    /// Resolve a single secret name to its plaintext value, or `None` if the
+    /// resolver doesn't recognise it.
+    ///
+    /// With the deny-all resolver every plugin carries today, this always
+    /// returns `None` — and a *matching* credential binding then fails the
+    /// request closed rather than letting it "proceed unchanged", which is
+    /// what this comment claimed until 2026-08-19.
+    ///
+    /// NOTE for whoever installs a real resolver: this applies no
+    /// `check_secret_pattern` gate, and `try_http_fetch` passes
+    /// `binding.secret_name` straight from the manifest. Add the gate in the
+    /// same change, or `[capabilities.http.credentials]` becomes a way to name
+    /// any vault key and bypass `[capabilities.secrets] allowed_patterns`.
     #[must_use]
     pub fn resolve_secret(&self, name: &str) -> Option<String> {
         self.secret_resolver.resolve(name)

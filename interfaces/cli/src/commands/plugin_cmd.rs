@@ -652,19 +652,32 @@ fn check_wasm_target() -> DoctorCheck {
     }
 }
 
+/// Report on the directory global plugin installs actually land in.
+///
+/// This probed `~/.aleph/extensions` until 2026-08-19 — a path nothing in the
+/// tree ever creates or reads. Plugins install into
+/// `<aleph_home>/plugins/installed` (`default_install_dir`) or, for project
+/// scope, `<project>/.aleph/plugins[.local]`. So the check reported "does not
+/// exist" on a machine with plugins installed, and it built the path from a
+/// hand-rolled `dirs::home_dir()`, which ignores `ALEPH_HOME` on top of that.
 fn check_plugin_dir_exists() -> DoctorCheck {
-    let home = dirs::home_dir();
-    let plugin_dir = home.as_ref().map(|h| h.join(".aleph/extensions"));
-    let exists = plugin_dir.as_ref().is_some_and(|p| p.exists());
+    let plugin_dir = super::doctor::aleph_home().join("plugins/installed");
+    let exists = plugin_dir.exists();
     DoctorCheck {
         name: "plugin-dir".into(),
-        description: "Global plugin directory (~/.aleph/extensions/)".into(),
+        description: "Global plugin directory".into(),
         passed: exists,
         required: false,
         message: if exists {
-            format!("{} exists", plugin_dir.unwrap().display())
+            let count = std::fs::read_dir(&plugin_dir)
+                .map(|entries| entries.flatten().filter(|e| e.path().is_dir()).count())
+                .unwrap_or(0);
+            format!("{} ({count} installed)", plugin_dir.display())
         } else {
-            "~/.aleph/extensions/ does not exist. Will be created on first plugin install.".into()
+            format!(
+                "{} does not exist. It is created on the first global plugin install.",
+                plugin_dir.display()
+            )
         },
     }
 }
@@ -1106,5 +1119,30 @@ description = "duplicate"
         assert!(names.iter().all(|n| !n.contains("node_modules")));
         // But should include other files
         assert!(names.iter().any(|n| n.contains("plugin.toml")));
+    }
+
+    /// The check must name the directory installs actually land in.
+    ///
+    /// It named `~/.aleph/extensions` — a path nothing in the tree creates or
+    /// reads — so it reported "does not exist" on a machine with plugins
+    /// installed. `ALEPH_HOME` is deliberately not set here: `std::env` is
+    /// process-global and libtest runs in parallel, so setting it would race
+    /// every sibling test that resolves a path. The resolver itself is
+    /// covered by `doctor::aleph_home`.
+    #[test]
+    fn the_plugin_directory_check_names_the_install_directory() {
+        let check = check_plugin_dir_exists();
+        assert_eq!(check.name, "plugin-dir");
+        assert!(
+            !check.message.contains("extensions"),
+            "expected the installs directory, got: {}",
+            check.message
+        );
+        assert!(
+            check.message.contains("plugins/installed")
+                || check.message.contains("plugins\\installed"),
+            "expected the installs directory, got: {}",
+            check.message
+        );
     }
 }
