@@ -258,11 +258,24 @@ impl GoogleMeetTool {
         bridge: &GoogleMeetBridge,
         args: &GoogleMeetArgs,
     ) -> Result<GoogleMeetOutput> {
+        // PR-10 / BT-D-R4-24: stamp the caller's actor into the
+        // JSON-RPC request so the bridge can implement per-caller
+        // ownership. Previously the tool forwarded the call with no
+        // caller identification, so any actor reaching this tool could
+        // leave / speak into a call another actor had joined, with the
+        // bridge having no way to know who the rightful owner was.
+        // The actor is read from the TURN_CONTEXT task-local; a
+        // separate process that does not set one (cron, headless
+        // tooling) gets "system" so the bridge can decide.
+        let actor = crate::builtin_tools::acting_agent::acting_agent_id("system");
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": args.action.rpc_method(),
-            "params": args,
+            "params": {
+                "actor": actor,
+                "args": args,
+            },
         });
 
         let client = reqwest::Client::builder()
