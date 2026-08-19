@@ -205,11 +205,32 @@ impl ProfileManager {
     /// manager whose reaper runs" is precisely "the manager the daemon serves
     /// from", and a `ProfileManager` built ad hoc (tests, CLI) never calls this
     /// and so never claims the handle.
-    pub fn spawn_idle_reaper(self: &Arc<Self>, interval_secs: u64) {
+pub fn spawn_idle_reaper(self: &Arc<Self>, interval_secs: u64) {
         if self.idle_reaper_started.swap(true, Ordering::AcqRel) {
             return;
         }
-        *LIVE_MANAGER.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::downgrade(self));
+        // BROWSER-R4-08: claim-or-skip rather than last-write-wins.
+        // The previous shape overwrote LIVE_MANAGER unconditionally,
+        // so a second ProfileManager invocation (a test that builds
+        // its own manager, a re-initialised daemon) would silently
+        // steal the handle and the live apply_policy_live arm would
+        // hot-apply to whichever manager most recently published.
+        // Only install the handle when the slot is empty or the
+        // existing weak has been dropped (try_unwrap succeeds).
+        let mut slot = LIVE_MANAGER.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = slot.as_ref() {
+            // The previous manager is still alive: refuse to steal the
+            // handle. The caller (typically a test) can run its own
+            // reaper locally; it does not need the global one.
+            if existing.strong_count() > 0 {
+                tracing::warn!(
+                    "ProfileManager::spawn_idle_reaper: live manager already installed; \
+                     refusing to claim the global reaper slot"
+                );
+                return;
+            }
+        }
+        *slot = Some(Arc::downgrade(self));
         let weak = Arc::downgrade(self);
         let interval = std::time::Duration::from_secs(interval_secs.max(5));
         tokio::spawn(async move {

@@ -34,7 +34,13 @@ pub struct SessionMap {
     live: RwSignal<HashMap<ConvId, ChatState>>,
     /// Per-conversation metadata.
     meta: RwSignal<HashMap<ConvId, ConvMeta>>,
-    /// Visible tab order, drives the tab strip and Cmd+N.
+    /// Open-conversation order. Its one job is to give [`Self::close`] a
+    /// neighbour to focus when the active conversation goes away.
+    ///
+    /// It does **not** drive a tab strip — there is none, and the claim that
+    /// there was outlived the two index-addressed helpers it was written for
+    /// (see the note above `set_session_key`). Switching is the sidebar's
+    /// session list, addressed by `session_key`, never by position.
     pub order: RwSignal<Vec<ConvId>>,
     /// Currently focused conversation. `None` = no tabs (boot).
     pub active: RwSignal<Option<ConvId>>,
@@ -247,17 +253,14 @@ impl SessionMap {
         }
     }
 
-    pub fn switch_by_index(&self, singleton: ChatState, idx: usize) {
-        if let Some(conv) = self.order.with(|o| o.get(idx).copied()) {
-            self.activate(singleton, conv);
-        }
-    }
-
-    pub fn close_active(&self, singleton: ChatState) {
-        if let Some(conv) = self.active.get_untracked() {
-            self.close(singleton, conv);
-        }
-    }
+    // `switch_by_index` / `close_active` used to live here as index-addressed
+    // wrappers for a tab strip and a Cmd+N binding. Neither exists: the left
+    // sidebar's session list is the only switch surface (`app.rs` says so in as
+    // many words — "there is no top tab strip"), and no caller in the crate,
+    // its tests included, ever reached them. Cut per R10 rather than left as a
+    // seam for a surface that was never built; re-deriving two three-line
+    // wrappers costs less than the four years they would otherwise spend
+    // implying that an index is a legitimate way to address a conversation.
 
     /// Record which backend session a conversation is showing.
     ///

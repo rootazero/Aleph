@@ -102,9 +102,19 @@ impl StateDatabase {
     }
 
     /// Get all events for a fact, ordered by seq.
+    ///
+    /// PR-9 / BT-D-R4-05: agent-filter the event stream. `agent_id`
+    /// is the caller's actor; an empty string is the wildcard
+    /// (internal system callers -- handler, projector, migration --
+    /// pass "" because they operate across agents on the system
+    /// behalf). The memory_timeline tool layer passes a real actor
+    /// so a fact_id belonging to one agent is not readable from
+    /// another. A future PR can tighten the wildcard to require an
+    /// explicit system capability.
     pub async fn get_memory_events_for_fact(
         &self,
         fact_id: &str,
+        agent_id: &str,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
@@ -112,14 +122,14 @@ impl StateDatabase {
                 r#"
                 SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
                 FROM memory_events
-                WHERE fact_id = ?1
+                WHERE fact_id = ?1 AND (?2 = '' OR actor = ?2)
                 ORDER BY seq ASC
                 "#,
             )
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let rows = stmt
-            .query_map(params![fact_id], MemoryEventRow::from_row)
+            .query_map(params![fact_id, agent_id], MemoryEventRow::from_row)
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
@@ -409,7 +419,7 @@ mod tests {
         let id = db.append_memory_event(&envelope).await.unwrap();
         assert!(id > 0);
 
-        let events = db.get_memory_events_for_fact("fact-001").await.unwrap();
+        let events = db.get_memory_events_for_fact("fact-001", "").await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].fact_id, "fact-001");
         assert_eq!(events[0].seq, 1);
@@ -439,7 +449,7 @@ mod tests {
 
         db.append_memory_events(&envelopes).await.unwrap();
 
-        let events = db.get_memory_events_for_fact("fact-002").await.unwrap();
+        let events = db.get_memory_events_for_fact("fact-002", "").await.unwrap();
         assert_eq!(events.len(), 5);
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[4].seq, 5);
@@ -611,7 +621,7 @@ mod tests {
 
         // Replay must not error — unknown variant is logged and skipped.
         let events = db
-            .get_memory_events_for_fact("fact-orphan")
+            .get_memory_events_for_fact("fact-orphan", "")
             .await
             .expect("unknown variant must not error replay");
         assert!(
@@ -631,7 +641,7 @@ mod tests {
         db.append_memory_event(&known).await.unwrap();
 
         let events = db
-            .get_memory_events_for_fact("fact-orphan")
+            .get_memory_events_for_fact("fact-orphan", "")
             .await
             .expect("mixed replay must succeed");
         assert_eq!(events.len(), 1, "only the known event should survive");

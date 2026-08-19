@@ -40,8 +40,8 @@ impl MemoryTimeTraveler {
     /// and produces the same `FactExplanation` struct for backward
     /// compatibility. The explanation is derived entirely from the event
     /// stream — no separate audit log or fact table is required.
-    pub async fn explain_fact(&self, fact_id: &str) -> Result<FactExplanation, AlephError> {
-        let events = self.db.get_memory_events_for_fact(fact_id).await?;
+    pub async fn explain_fact(&self, fact_id: &str, agent_id: &str) -> Result<FactExplanation, AlephError> {
+        let events = self.db.get_memory_events_for_fact(fact_id, agent_id).await?;
         if events.is_empty() {
             return Err(AlephError::other(format!(
                 "No events found for fact {fact_id}"

@@ -464,6 +464,28 @@ impl ScratchpadManager {
             generate_scratchpad(None, &self.session_id)
         };
 
+        // BT-D-R4-14: cap the number of notes. Each append_note call
+        // re-reads the full file, prepends a new bullet, and rewrites
+        // the whole thing — O(n) per call in file size, and the file
+        // grows by ~50 bytes per note. A long-lived scratchpad
+        // accumulating thousands of notes pays hundreds of KB on
+        // every append, and the prompt that re-renders the plan sees
+        // a giant notes section. 500 notes is far above any realistic
+        // working scratchpad and well below the rewrite cost becoming
+        // measurable. Refuse (rather than silently drop) so the model
+        // sees the limit and clears / archives the scratchpad.
+        const MAX_NOTES: usize = 500;
+        let existing_note_count = content
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- ["))
+            .count();
+        if existing_note_count >= MAX_NOTES {
+            return Err(AlephError::tool(format!(
+                "scratchpad already has {existing_note_count} notes (cap {MAX_NOTES}). \
+                 Run action='clear' or archive the notes before appending more."
+            )));
+        }
+
         let timestamp = chrono::Utc::now().format("%H:%M");
         let content =
             prepend_to_section(&content, NOTES_HEADER, &format!("- [{timestamp}] {note}"));

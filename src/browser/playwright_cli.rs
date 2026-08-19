@@ -115,9 +115,25 @@ impl PlaywrightCliDriver {
                 })?;
         let ledger = Arc::new(tokio::sync::RwLock::new(ledger));
 
-        let resolved = ensure_capability("playwright-cli", &ledger)
-            .await
-            .map_err(|e| BrowserError::PlaywrightCliError(format!("ensure playwright-cli: {e}")))?;
+        let resolved = tokio::time::timeout(
+            // BROWSER-R4-10: cap the install path. Without the timeout,
+            // ensure_capability could run for minutes on a captive
+            // portal, offline host, or slow mirror. The first browser
+            // tool call would block for the full duration before any
+            // diagnostic surfaced. 5 minutes is generous for a fresh
+            // download and well below the operator's patience horizon.
+            std::time::Duration::from_secs(300),
+            ensure_capability("playwright-cli", &ledger),
+        )
+        .await
+        .map_err(|_| {
+            BrowserError::PlaywrightCliError(
+                "playwright-cli install timed out after 300s; \
+                 check network connectivity and the runtimes mirror"
+                    .to_string(),
+            )
+        })?
+        .map_err(|e| BrowserError::PlaywrightCliError(format!("ensure playwright-cli: {e}")))?;
 
         *self.binary_path.write().unwrap_or_else(|e| e.into_inner()) = Some(resolved.clone());
         Ok(resolved)
@@ -356,7 +372,7 @@ fn classify_failure(
         || s.contains("browser not open")
     {
         BrowserError::NoSession(session_key.to_string())
-    } else if s.contains("timeout") {
+    } else if contains_timeout_phrase(&s) {
         BrowserError::Timeout(timeout_ms)
     } else if s.contains("element not found")
         || s.contains("no element")
@@ -370,6 +386,31 @@ fn classify_failure(
     } else {
         BrowserError::PlaywrightCliError(format!("exit {exit_code}: {detail}"))
     }
+}
+
+/// BROWSER-R4-03: anchored timeout detection. Previously the classifier
+/// folded on any substring containing the literal "timeout", which
+/// mis-classified unrelated error text like "the timeout parameter was
+/// rejected" or "previous request hit a timeout". Anchor on the common
+/// playwright-cli timeout phrasings (boundary-padded), so a stray
+/// "timeout" inside a longer word or a debug log does not flip a
+/// non-timeout failure into [`BrowserError::Timeout`] (and thereby
+/// trigger the tool-layer's retry-against-broken-state path).
+fn contains_timeout_phrase(s: &str) -> bool {
+    // Accept the four phrasings playwright-cli itself uses at the four
+    // timeout sites (action / navigation / waitFor / expect). The
+    // pattern matches when the phrase is preceded by whitespace or
+    // start-of-string and followed by whitespace, punctuation, or
+    // end-of-string — the rough "word boundary" check that handles
+    // "timeout" without anchoring to the regex crate.
+    for needle in [
+        " timeout ", " timeout.", " timeout:", "timeout exceeded", "timed out",
+    ] {
+        if s.contains(needle) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The `### Error` section, when the invocation reported a failure that its

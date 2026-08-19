@@ -37,6 +37,13 @@ type Bindings = HashMap<String, String>;
 
 static ACTIVE: Lazy<Mutex<Bindings>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// PR-8 / BT-D-R4-13: project ids whose on-disk file is being deleted
+/// right now. `set_active` consults this set and refuses to bind a
+/// session to a project that is mid-purge — the in-flight file delete
+/// would otherwise win the race and erase the new owner's plan.
+static IN_PROGRESS_PURGES: Lazy<Mutex<std::collections::HashSet<String>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
+
 /// Disk mirror target. `None` keeps the registry in-memory-only (the
 /// pre-persistence behavior); `init_persistence` sets it at boot.
 static STORE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
@@ -68,13 +75,28 @@ fn write_store(path: &Path, map: &Bindings) -> std::io::Result<()> {
     crate::utils::atomic_io::write_atomic(path, &json)
 }
 
-/// Mirror the table to disk when persistence is enabled. No-op otherwise.
-fn persist(map: &Bindings) {
+/// PR-5 / BT-D-R4-13: persist while holding the in-memory lock so the
+/// disk mirror and the live map are updated as one linearizable step.
+/// The previous shape released the lock before `persist`, so two
+/// concurrent writers could both snapshot the live map before either
+/// wrote to disk, and the second write would silently overwrite the
+/// first — memory and disk were free to disagree for an arbitrary
+/// interval. The acquire-then-persist-here path takes the lock once,
+/// mutates, mirrors, and drops — no other caller can interleave
+/// between the memory and disk sides.
+fn persist_locked(map: &Bindings) {
     if let Some(path) = store_path() {
         if let Err(e) = write_store(&path, map) {
             tracing::warn!(error = %e, "scratchpad_registry: failed to persist bindings");
         }
     }
+}
+
+/// Legacy alias for callers that already hold the lock and just want
+/// the disk-side write to run.
+#[allow(dead_code)]
+fn persist(map: &Bindings) {
+    persist_locked(map);
 }
 
 /// Enable persistence and reload any bindings written by a prior process.
@@ -102,12 +124,31 @@ pub fn set_active(session_key: &str, project_id: &str) {
     if session_key.is_empty() || project_id.is_empty() {
         return;
     }
-    let snapshot = {
-        let mut map = active_lock();
-        map.insert(session_key.to_string(), project_id.to_string());
-        map.clone()
-    };
-    persist(&snapshot);
+    // PR-8 / BT-D-R4-13: refuse to bind a session to a project whose
+    // on-disk file is being deleted right now. The in-progress purge
+    // would otherwise race the new binding and delete the freshly-bound
+    // plan. Returning false lets the caller (the scratchpad tool)
+    // surface a clear 'purge in progress' message and let the model
+    // retry; set_active is already infallible at the call site so we
+    // choose fail-closed over panicking.
+    {
+        let purges = IN_PROGRESS_PURGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if purges.contains(project_id) {
+            tracing::warn!(
+                session_key,
+                project_id,
+                "set_active refused: project is being purged"
+            );
+            return;
+        }
+    }
+    // PR-5 / BT-D-R4-13: hold the lock across the persist so the
+    // memory map and the disk mirror are a single linearizable step.
+    let mut map = active_lock();
+    map.insert(session_key.to_string(), project_id.to_string());
+    persist_locked(&map);
 }
 
 /// The active execution-list `project_id` for `session_key`, if any.
@@ -121,12 +162,11 @@ pub fn active(session_key: &str) -> Option<String> {
 
 /// Drop the pointer for `session_key` (e.g. the scratchpad was cleared).
 pub fn clear(session_key: &str) {
-    let snapshot = {
-        let mut map = active_lock();
-        map.remove(session_key);
-        map.clone()
-    };
-    persist(&snapshot);
+    // PR-5 / BT-D-R4-13: hold the lock across the persist so the
+    // memory map and the disk mirror are a single linearizable step.
+    let mut map = active_lock();
+    map.remove(session_key);
+    persist_locked(&map);
 }
 
 /// Delete the plan file a deleted session owned, and drop its binding.
@@ -149,26 +189,46 @@ pub async fn purge_session_scratchpad(session_key: &str) {
     if session_key.is_empty() {
         return;
     }
-    // Take the binding and answer "does anyone else still own this plan?"
-    // under one lock — two lock acquisitions would let a concurrent
-    // `set_active` slip between the removal and the check.
-    let (project_id, still_shared, snapshot) = {
+    // PR-8 / BT-D-R4-13: claim the in-progress slot for project_id while
+    // we still hold the active_lock, so set_active can reject any
+    // concurrent re-bind. The slot is cleared in the finally block
+    // (success or fail) so a future set_active is free to re-bind the
+    // project after the delete completes. Without this marker, a
+    // concurrent set_active between the lock release and the file
+    // delete would have its freshly-bound plan erased by the
+    // in-flight purge.
+    let project_id = {
         let mut map = active_lock();
         let Some(project_id) = map.remove(session_key) else {
             return;
         };
-        let still_shared = map.values().any(|p| *p == project_id);
-        let snapshot = map.clone();
-        (project_id, still_shared, snapshot)
+        if map.values().any(|p| *p == project_id) {
+            // Still owned by another session; persist the now-shorter
+            // map and leave the file alone.
+            persist_locked(&map);
+            return;
+        }
+        persist_locked(&map);
+        let mut purges = IN_PROGRESS_PURGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        purges.insert(project_id.clone());
+        project_id
     };
-    persist(&snapshot);
-    if still_shared {
-        return;
-    }
-    if let Err(e) = crate::memory::scratchpad::ScratchpadManager::new(&project_id, session_key)
+    let purge_result = crate::memory::scratchpad::ScratchpadManager::new(&project_id, session_key)
         .purge()
-        .await
+        .await;
+    // Always release the in-progress slot, even on failure. A failed
+    // delete still erased nothing on disk, so future set_active calls
+    // must be free to retry; a stuck slot would block the project
+    // forever.
     {
+        let mut purges = IN_PROGRESS_PURGES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        purges.remove(&project_id);
+    }
+    if let Err(e) = purge_result {
         tracing::warn!(error = %e, session_key, project_id, "failed to purge session scratchpad");
     }
 }
@@ -184,16 +244,15 @@ pub fn clear_superseded_epochs(base_key: &str, current_epoch: u32) {
     if base_key.is_empty() || current_epoch == 0 {
         return;
     }
-    let snapshot = {
-        let mut map = active_lock();
-        let before = map.len();
-        map.retain(|key, _| !is_superseded_epoch(key, base_key, current_epoch));
-        if map.len() == before {
-            return;
-        }
-        map.clone()
-    };
-    persist(&snapshot);
+    // PR-5 / BT-D-R4-13: hold the lock across retain + persist so the
+    // memory map and the disk mirror are a single linearizable step.
+    let mut map = active_lock();
+    let before = map.len();
+    map.retain(|key, _| !is_superseded_epoch(key, base_key, current_epoch));
+    if map.len() == before {
+        return;
+    }
+    persist_locked(&map);
 }
 
 /// Does `key` name an epoch of `base_key` older than `current_epoch`?

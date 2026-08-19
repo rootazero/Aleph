@@ -2354,6 +2354,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // PR-1 / BIN-R4-02: timer-loop JoinHandles declared in the outer scope so
+    // the orderly-shutdown section at the bottom of start_server can await
+    // them after `request_shutdown()`. Without the handles, the spawns
+    // were detached: setting the flag did not wait for the loops to wind
+    // down, so any future teardown between request_shutdown and runtime
+    // drop raced against the still-running loop.
+    let mut cron_timer_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut heartbeat_timer_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // BIN-R4-13 (complete): hoist the shared delivery engine OUT of the
+    // cron-only block so both the cron and heartbeat timer loops reuse the
+    // same `Arc` rather than constructing two structurally-identical engines.
+    // Two engines would drift the moment a new delivery target is added to
+    // one but not the other; one engine is structurally harder to drift apart.
+    let delivery_engine_shared = build_task_delivery_engine(
+        agent_result
+            .channel_registry_cell
+            .clone()
+            .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new())),
+        memory_db.clone(),
+        webhook_ssrf_policy.clone(),
+    );
+
     // Spawn cron timer loop (after agent handlers, so AgentRegistry is populated)
     if let Some(ref cron_svc) = cron_service {
         if let (Some(ref exec_adapter), Some(ref registry)) = (
@@ -2387,11 +2410,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Route cron failure alerts through the shared delivery engine so
             // Webhook / Memory alert targets work (not just Gateway). Same
             // engine wiring the heartbeat loop uses below.
-            let cron_delivery_engine = build_task_delivery_engine(
-                cron_channel_cell,
-                memory_db.clone(),
-                webhook_ssrf_policy.clone(),
-            );
+            // BIN-R4-13 (complete): delivery_engine_shared is declared in
+            // the outer scope above (between the JoinHandle decls and this
+            // block) so the heartbeat block below reuses the same Arc.
+            let cron_delivery_engine = delivery_engine_shared.clone();
             let alert_dispatcher_fn =
                 alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(
                     cron_delivery_engine,
@@ -2399,7 +2421,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
             let cron_config = cron_state.config.clone();
             let cron_svc_handle = cron_svc.clone();
-            tokio::spawn(async move {
+            cron_timer_handle = Some(tokio::spawn(async move {
                 // Run startup catchup before entering the timer loop
                 match run_startup_catchup(
                     &cron_state.store,
@@ -2441,7 +2463,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     change_emitter,
                 )
                 .await;
-            });
+            }));
 
             if !args.daemon {
                 println!("Cron timer loop: started");
@@ -2521,16 +2543,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Build the delivery engine with all targets registered so
             // heartbeat L2 results actually reach the user (H2). Without this
             // every deliver() call hits the "target not registered" path.
-            // Shared with the cron alert path via `build_task_delivery_engine`.
-            let hb_channel_cell = agent_result
-                .channel_registry_cell
-                .clone()
-                .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
-            let delivery_engine = build_task_delivery_engine(
-                hb_channel_cell,
-                memory_db.clone(),
-                webhook_ssrf_policy.clone(),
-            );
+            // BIN-R4-13 (complete): reuse the same `delivery_engine_shared`
+            // declared in the outer scope above so cron and heartbeat share
+            // one engine — previously each block built its own Arc.
+            let delivery_engine = delivery_engine_shared.clone();
 
             let tick_ctx = Arc::new(TickContext {
                 probe_executor: Arc::new(DefaultProbeExecutor::new(Arc::clone(tool_reg))),
@@ -2544,9 +2560,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 change_emitter: hb_change_emitter,
             });
 
-            tokio::spawn(async move {
+            heartbeat_timer_handle = Some(tokio::spawn(async move {
                 run_heartbeat_loop(hb_state, hb_wake, tick_ctx).await;
-            });
+            }));
 
             if !args.daemon {
                 println!("Heartbeat timer loop: started");
@@ -3300,6 +3316,52 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if let Some(ref cron_svc) = cron_service {
         let svc = cron_svc.lock().await;
         svc.request_shutdown();
+    }
+
+    // PR-1 / BIN-R4-02: await the spawned timer loops with a bounded
+    // timeout so request_shutdown's flag-flip is paired with the loops
+    // actually winding down. Without this join, a subsequent teardown
+    // step (drain alert_dispatcher_fn, flush tools_changed_sink,
+    // rotate logs, etc.) races against the loop's next tick. The 5s
+    // budget matches the documented ledger-drain window elsewhere in
+    // the shutdown sequence; log at warn if a loop does not finish in
+    // time and proceed regardless — a stuck loop should not block the
+    // rest of teardown.
+    const TIMER_LOOP_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+    if let Some(handle) = cron_timer_handle.take() {
+        match tokio::time::timeout(TIMER_LOOP_DRAIN, handle).await {
+            Ok(Ok(())) => {
+                tracing::info!("cron timer loop: drained cleanly");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "cron timer loop: join error after shutdown");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs = TIMER_LOOP_DRAIN.as_secs(),
+                    "cron timer loop: did not exit within drain window; continuing teardown"
+                );
+            }
+        }
+    }
+    if let Some(handle) = heartbeat_timer_handle.take() {
+        match tokio::time::timeout(TIMER_LOOP_DRAIN, handle).await {
+            Ok(Ok(())) => {
+                tracing::info!("heartbeat timer loop: drained cleanly");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = %e,
+                    "heartbeat timer loop: join error after shutdown"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs = TIMER_LOOP_DRAIN.as_secs(),
+                    "heartbeat timer loop: did not exit within drain window; continuing teardown"
+                );
+            }
+        }
     }
 
     if let Some(ref manager) = acp_manager {

@@ -141,7 +141,21 @@ pub fn stamped_owner_visible(owner_user_id: Option<&str>) -> bool {
 /// background sweeps, in-process tests), matching every other predicate here.
 #[must_use]
 pub fn ambient_actor() -> Option<String> {
-    crate::scope::ambient_room_author().or_else(crate::scope::ambient_owner)
+    // PR-4 / BT-D-R4-06 + BT-D-R4-07: when the dispatcher wraps a tool
+    // call with TURN_CONTEXT, the actor is on the run scope. Read it
+    // first so an A2A / cron / unattended run that nevertheless has a
+    // per-call turn identity (because the dispatcher set one) is not
+    // silently treated as actor-less. The room/owner scope from
+    // `scope::*` still wins when set; the TURN_CONTEXT fallback only
+    // kicks in when neither is in play, so older call sites are
+    // unchanged. Returning `None` here remains the explicit way to
+    // opt into the unrestricted arm — tests, cron, and A2A paths that
+    // do not yet plumb an actor continue to fall through.
+    crate::scope::ambient_room_author()
+        .or_else(crate::scope::ambient_owner)
+        .or_else(|| {
+            crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty())
+        })
 }
 
 /// Whether the current gateway caller may see records scoped to `project_id`

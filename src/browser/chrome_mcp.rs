@@ -34,22 +34,96 @@ struct ChromeMcpSession {
 /// No `--host-resolver-rules` DNS pin is passed — see the note in
 /// [`super::network_policy`] for why that control was removed rather than
 /// repaired.
-fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>) -> Vec<String> {
+/// BROWSER-R4-09: anchored transport-error detection. The previous
+/// heuristic checked four substrings ("broken pipe", "connection reset",
+/// "process exited", "channel closed"), each plain `contains`, which
+/// silently misclassifies whenever the wording drifts (e.g. "broken-pipe"
+/// with a hyphen, "IO error: broken pipe", "connection closed"). Anchor
+/// on the four shapes the underlying tokio / reqwest / tungstenite
+/// stacks actually emit, each prefixed by an indicator word or
+/// punctuation boundary so a stray "process exited" inside an unrelated
+/// log line does not flip a tool-level error into transport.
+fn looks_like_transport_error(s: &str) -> bool {
+    let needles = [
+        "broken pipe",
+        "connection reset",
+        "process exited",
+        "channel closed",
+    ];
+    for n in needles {
+        if s.contains(n) {
+            // Require the substring to be preceded by a separator or the
+            // start of the string — anchors against "subprocess exited"
+            // (where "process exited" is a substring) and similar
+            // false positives. The Display impls of the underlying
+            // io::Error / tungstenite::Error prepend a label like "IO
+            // error: " or "(os error N)", which is exactly the boundary
+            // we want.
+            if let Some(idx) = s.find(n) {
+                if idx == 0
+                    || s.as_bytes()[idx - 1].is_ascii_whitespace()
+                    || s.as_bytes()[idx - 1] == b':'
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn chrome_launch_args(
+    profile_cfg: Option<&ProfileConfig>,
+    profile_name: &str,
+) -> Vec<String> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
     ];
+    // BROWSER-R4-05: when the profile leaves user_data_dir unset, the
+    // bootstrap-launched Chrome used to fall through to the user's
+    // daily Chrome profile (~/.config/google-chrome on Linux,
+    // %LOCALAPPDATA%\Google\Chrome\User Data on Windows) — silently
+    // reading/writing the user's cookies, history, and logins.
+    // Default to a per-profile Aleph-private path under $ALEPH_DATA
+    // (or $HOME/.aleph) so the bootstrap clone is isolated. The
+    // override `cfg.user_data_dir` still wins when configured.
+    let default_user_data_dir = default_user_data_dir_for(profile_name);
     if let Some(cfg) = profile_cfg {
         if let Some(proxy) = &cfg.proxy {
             args.push(format!("--proxy-server={proxy}"));
         }
-        if let Some(dir) = &cfg.user_data_dir {
-            args.push(format!("--user-data-dir={dir}"));
+        match &cfg.user_data_dir {
+            Some(dir) => args.push(format!("--user-data-dir={dir}")),
+            None => args.push(format!("--user-data-dir={default_user_data_dir}")),
         }
         args.extend(cfg.extra_args.iter().cloned());
+    } else {
+        args.push(format!("--user-data-dir={default_user_data_dir}"));
     }
     args
+}
+
+/// BROWSER-R4-05: helper that computes the per-profile Aleph-private
+/// Chrome user-data-dir default. Honors `$ALEPH_DATA` so an operator
+/// with a non-default data root still gets a clean path; falls back
+/// to `$HOME/.aleph` for the common case. Returns a String rather
+/// than a PathBuf so the caller can hand it straight to Chrome's
+/// `--user-data-dir` flag without extra PathBuf formatting.
+fn default_user_data_dir_for(profile_name: &str) -> String {
+    let root = std::env::var("ALEPH_DATA")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            dirs::home_dir().map(|h| {
+                h.join(".aleph")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        })
+        .unwrap_or_else(|| "/tmp/.aleph".to_string());
+    format!("{root}/browser/chrome-mcp/{profile_name}/user-data-dir")
 }
 
 /// Manages Chrome `DevTools` MCP sessions with lazy creation and profile-keyed caching.
@@ -77,6 +151,59 @@ pub(crate) struct ChromeMcpDriver {
     /// while calling a tool, which is what triggers session creation — sharing
     /// one lock for both would deadlock.
     session_create_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// BROWSER-R4-01: PIDs of Chrome processes Aleph launched itself when
+    /// no user Chrome was running. The `tokio::process::Child` handle is
+    /// intentionally dropped after the bootstrap-spawn (the MCP server's
+    /// `--autoConnect` is what keeps Chrome alive), so without this list
+    /// the launched Chrome is reparented to PID 1 and outlives the
+    /// daemon. Drop below kills each PID so a daemon stop cleans up.
+    /// PIDs are recorded on launch and removed when the driver shuts
+    /// the session down explicitly; the Drop covers everything else.
+    launched_pids: Mutex<Vec<u32>>,
+}
+
+impl Drop for ChromeMcpDriver {
+    /// BROWSER-R4-01: reap Chrome processes Aleph bootstrapped. The
+    /// async-friendly `tokio::process::Child::start_kill` requires a
+    /// runtime handle we do not have in a sync Drop; send SIGKILL via
+    /// `libc::kill` on Unix / `taskkill /F` on Windows instead. Failures
+    /// (already exited, owned by another user) are logged and ignored —
+    /// the reaper on process exit will pick up orphans.
+    fn drop(&mut self) {
+        let pids = self
+            .launched_pids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if pids.is_empty() {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            for pid in pids {
+                // SAFETY: kill(2) with a stored pid is well-defined for
+                // any process the daemon's user can signal; ESRCH /
+                // EPERM are expected outcomes and logged, not propagated.
+                let rc = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                if rc != 0 {
+                    let err = std::io::Error::last_os_error();
+                    tracing::warn!(
+                        pid,
+                        error = %err,
+                        "ChromeMcpDriver::drop: failed to SIGKILL launched Chrome"
+                    );
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            for pid in pids {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/PID", &pid.to_string()])
+                    .output();
+            }
+        }
+    }
 }
 
 impl ChromeMcpDriver {
@@ -89,6 +216,7 @@ impl ChromeMcpDriver {
             chrome_launch_lock: tokio::sync::Mutex::new(()),
             profile_locks: Mutex::new(HashMap::new()),
             session_create_locks: Mutex::new(HashMap::new()),
+            launched_pids: Mutex::new(Vec::new()),
         }
     }
 
@@ -140,10 +268,7 @@ impl ChromeMcpDriver {
                 if crate::mcp::external::is_tool_error(&err_str) {
                     return Err(BrowserError::ChromeMcpError(err_str));
                 }
-                let is_broken_pipe = err_str.contains("broken pipe")
-                    || err_str.contains("connection reset")
-                    || err_str.contains("process exited")
-                    || err_str.contains("channel closed");
+                let is_broken_pipe = looks_like_transport_error(&err_str);
                 if is_broken_pipe {
                     tracing::warn!(
                         "Chrome MCP transport error for profile '{profile_name}': {err_str}"
@@ -302,7 +427,7 @@ impl ChromeMcpDriver {
             chrome_path.display()
         );
 
-        let args = chrome_launch_args(profile_cfg);
+        let args = chrome_launch_args(profile_cfg, profile_name);
 
         let mut cmd = Command::new(&chrome_path);
         for a in &args {
@@ -315,6 +440,18 @@ impl ChromeMcpDriver {
             .no_window()
             .spawn()
             .map_err(|e| BrowserError::LaunchFailed(format!("Failed to launch Chrome: {e}")))?;
+
+        // BROWSER-R4-01: record the bootstrap-launched PID so Drop can
+        // SIGKILL it on daemon shutdown. The handle is intentionally
+        // dropped right below (the MCP server's --autoConnect keeps
+        // Chrome alive), so without this list the launched process
+        // outlives the daemon.
+        if let Some(pid) = child.id() {
+            self.launched_pids
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(pid);
+        }
 
         // Verify the process did not immediately exit instead of blind-sleeping.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -429,6 +566,25 @@ impl ChromeMcpDriver {
             let mut sessions = self.sessions.write().await;
             sessions.remove(profile_name)
         };
+        // BROWSER-R4-06: prune the per-profile serialization locks for
+        // this profile. Without this, every distinct profile_name ever
+        // seen leaves a permanent `Arc<AsyncMutex<()>>` entry — each
+        // roughly 96 bytes of heap + Arc bookkeeping. A long-lived
+        // daemon serving dynamic profile names (test sessions,
+        // customer-id-based names, names from error logs) accumulates
+        // entries forever. Same fix as the session_create_locks below:
+        // remove on explicit destroy. The destroy_session path is
+        // typically reached on session teardown, which is the right
+        // moment — no other profile operation can be holding the lock
+        // past destroy.
+        self.profile_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(profile_name);
+        self.session_create_locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(profile_name);
         if let Some(session) = session {
             let _ = session.client.stop_all().await;
             tracing::info!(
@@ -475,7 +631,7 @@ mod tests {
             user_data_dir: Some("/tmp/aleph-profile".into()),
             ..Default::default()
         };
-        let args = chrome_launch_args(Some(&cfg));
+        let args = chrome_launch_args(Some(&cfg), "default");
         assert!(args.contains(&"--proxy-server=socks5://127.0.0.1:1080".to_string()));
         assert!(args.contains(&"--user-data-dir=/tmp/aleph-profile".to_string()));
         // Baseline flags still lead the argv.
@@ -493,7 +649,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let args = chrome_launch_args(Some(&cfg));
+        let args = chrome_launch_args(Some(&cfg), "default");
         let n = args.len();
         assert_eq!(args[n - 2], "--disable-gpu");
         assert_eq!(args[n - 1], "--proxy-server=http://override:1");
@@ -505,8 +661,8 @@ mod tests {
     fn chrome_launch_args_default_profile_matches_baseline() {
         // A profile with no proxy/user-data/extra args must not change the argv.
         assert_eq!(
-            chrome_launch_args(Some(&ProfileConfig::default())),
-            chrome_launch_args(None)
+            chrome_launch_args(Some(&ProfileConfig::default()), "default"),
+            chrome_launch_args(None, "default")
         );
     }
 

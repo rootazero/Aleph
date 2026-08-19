@@ -15,6 +15,7 @@ use crate::state::layout::WorkspaceState;
 use crate::state::user_directory::UserDirectoryState;
 use crate::state::viewport::FormFactor;
 use leptos::prelude::*;
+use shared_ui_logic::state::chat_scroll::{scroll_action, ListCursor, ScrollAction};
 use std::collections::HashMap;
 
 /// Context carrier for the per-message attribution-grouping map
@@ -184,47 +185,90 @@ pub(crate) fn MessageList() -> impl IntoView {
                 - f64::from(el.scroll_top())
                 - f64::from(el.client_height());
             let near_bottom = distance <= STICK_THRESHOLD_PX;
-            stuck_to_bottom.set(near_bottom);
-            if near_bottom {
+            // Write only on a real edge. Every programmatic `set_scroll_top`
+            // below fires this handler too, and both auto-scroll effects call
+            // it at their tick rate — an unconditional `set` would notify the
+            // pill's `Show` predicate ~30 times a second throughout a sweep to
+            // tell it the same thing each time.
+            if stuck_to_bottom.get_untracked() != near_bottom {
+                stuck_to_bottom.set(near_bottom);
+            }
+            if near_bottom && unseen_below.get_untracked() {
                 unseen_below.set(false);
             }
         }
     };
 
-    // Reactive auto-scroll — only when the user is already at the bottom, with
-    // one exception: the user posting their OWN message re-arms stickiness.
+    // Reactive auto-scroll. The decision — follow / raise the pill / leave
+    // alone — is `shared_ui_logic::state::chat_scroll::scroll_action`; read its
+    // module doc for why the inputs are a `sends` counter and a conversation id
+    // rather than anything derived from the message vector. This effect only
+    // samples the signals and applies the verdict.
     //
-    // Without that exception, scrolling up to re-read something and then
-    // sending left the reply off-screen behind the "new messages" pill — the
-    // user had asked for it and then had to go hunt for it. Sending is an
-    // unambiguous "I'm done reading back" signal (hermes-desktop's
-    // `useChatScroll` force-scrolls on the same trigger).
-    //
-    // Detected by growth of the trailing-user-message count rather than by
-    // hooking the send path, so every producer (composer, queued-prompt flush,
-    // retry, voice, slash command) is covered by construction.
-    let last_user_seq = RwSignal::new(0usize);
+    // `SessionMap` via `use_context` (not `expect_context`): a storybook mount
+    // without the registry still scrolls, it simply never sees a conversation
+    // switch — which for a mount that has only one conversation is correct.
+    let sessions = use_context::<crate::state::sessions::SessionMap>();
+    let observe = move || ListCursor {
+        // `active` read reactively rather than through `SessionMap::active_conv`,
+        // which is deliberately untracked for use inside the `'static` event
+        // closures. Every input this effect branches on has to be subscribed
+        // here, or the decision would be riding on a sibling signal happening to
+        // fire on the same update — true today (`activate` rewrites `messages`)
+        // and not a property anything guards.
+        conv: sessions.and_then(|s| s.active.get()).map(|c| c.0),
+        sends: chat.sends.get(),
+        rows: chat.messages.with(Vec::len),
+    };
+    let last_cursor = RwSignal::new(ListCursor::default());
     Effect::new(move |_| {
-        // Subscribe to message/phase changes (read both untracked-style for re-runs)
-        let user_seq = chat
-            .messages
-            .with(|msgs| msgs.iter().filter(|m| m.role == "user").count());
+        let next = observe();
+        // `phase` is subscribed so the thinking indicator appearing/disappearing
+        // — which changes the list's height without changing a row — still
+        // re-pins a follower to the bottom.
         let _phase = chat.phase.get();
-        let user_just_sent = user_seq > last_user_seq.get_untracked();
-        last_user_seq.set(user_seq);
-        if user_just_sent {
-            stuck_to_bottom.set(true);
-            unseen_below.set(false);
-        }
-        if let Some(el) = scroll_ref.get() {
-            if user_just_sent || stuck_to_bottom.get_untracked() {
-                let el: &web_sys::HtmlElement = &el;
-                el.set_scroll_top(el.scroll_height());
-            } else {
-                unseen_below.set(true);
+        let action = scroll_action(
+            last_cursor.get_untracked(),
+            next,
+            stuck_to_bottom.get_untracked(),
+        );
+        last_cursor.set(next);
+        match action {
+            ScrollAction::PinToBottom => {
+                stuck_to_bottom.set(true);
+                unseen_below.set(false);
+                if let Some(el) = scroll_ref.get() {
+                    let el: &web_sys::HtmlElement = &el;
+                    el.set_scroll_top(el.scroll_height());
+                }
             }
+            ScrollAction::MarkUnseen => unseen_below.set(true),
+            ScrollAction::Leave => {}
         }
     });
+
+    // Follow the typewriter sweep, not just the arrival of rows.
+    //
+    // The reveal is decoupled from `is_streaming` (see `state::typewriter`): it
+    // keeps advancing after the last chunk lands, growing the bubble's height
+    // with no further `messages` write to re-trigger the effect above. A reader
+    // parked at the bottom therefore watched the tail of every answer slide out
+    // from under the viewport. Subscribing to the animation tick pins it —
+    // gated on there actually being a live cursor, so an idle transcript takes
+    // no 30 fps dependency and a completed bubble stops the moment
+    // `TypewriterClock::finish` drops its cursor.
+    if let Some(clock) = use_context::<crate::state::typewriter::TypewriterClock>() {
+        Effect::new(move |_| {
+            clock.tick.track();
+            if !clock.is_sweeping() || !stuck_to_bottom.get_untracked() {
+                return;
+            }
+            if let Some(el) = scroll_ref.get() {
+                let el: &web_sys::HtmlElement = &el;
+                el.set_scroll_top(el.scroll_height());
+            }
+        });
+    }
 
     // Jump-to-bottom button handler (also re-arms stickiness).
     let on_jump = move |_: web_sys::MouseEvent| {
@@ -1075,10 +1119,29 @@ fn ExploreGroupRow(
     tools: Vec<crate::views::chat::state::ToolCallEntry>,
     completed: bool,
 ) -> impl IntoView {
-    use crate::components::tool_card::{explore_entries, summarize_tools, tool_headline, ToolKind};
+    use crate::components::tool_card::{
+        explore_entries, summarize_tools, tool_headline, ExploreOutcome, ToolKind,
+    };
     let chat = expect_context::<ChatState>();
     let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
+
+    // What the block actually achieved, as opposed to whether it stopped.
+    // `completed` only says "nothing is running any more"; a group whose reads
+    // failed, or whose outcome frames were dropped and settled to `unknown`,
+    // reaches it just the same and used to print an unqualified ✓ over the top.
+    //
+    // `completed` still gates the pulse, so this refines exactly one branch —
+    // the ✓ — and leaves the in-flight rendering byte-identical. It has to:
+    // `completed` is the wider condition (it also stays false while the source
+    // turn is still streaming, i.e. while more reads may yet join the block),
+    // and settling on any verdict there would be the same premature claim one
+    // step earlier.
+    let outcome = if completed {
+        ExploreOutcome::of_all(tools.iter().map(|t| t.status.clone()))
+    } else {
+        ExploreOutcome::Running
+    };
 
     let default_open = !completed;
     let open = {
@@ -1129,7 +1192,7 @@ fn ExploreGroupRow(
         let tools = tools.clone();
         let run = run_id.clone();
         Memo::new(move |_| {
-            let items: Vec<(String, String, Option<String>)> = tools
+            let items: Vec<(String, String, Option<String>, String)> = tools
                 .iter()
                 .map(|t| {
                     let kind = ToolKind::from_name(&t.tool_name);
@@ -1138,6 +1201,7 @@ fn ExploreGroupRow(
                         t.tool_id.clone(),
                         t.tool_name.clone(),
                         tool_headline(kind, &payload),
+                        t.status.clone(),
                     )
                 })
                 .collect();
@@ -1154,10 +1218,25 @@ fn ExploreGroupRow(
                        text-text-tertiary hover:text-text-secondary"
                 on:click=move |_| chat.toggle_strip(&k_for_toggle, default_open)
             >
-                {if completed {
-                    view! { <span class="text-success shrink-0 text-[11px]">"✓"</span> }.into_any()
-                } else {
-                    view! { <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span> }.into_any()
+                {match outcome {
+                    ExploreOutcome::Running => view! {
+                        <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                    }.into_any(),
+                    ExploreOutcome::Ok => view! {
+                        <span class="text-success shrink-0 text-[11px]">"✓"</span>
+                    }.into_any(),
+                    ExploreOutcome::Failed => view! {
+                        <span class="text-danger shrink-0 text-[11px]">"✗"</span>
+                    }.into_any(),
+                    // Same muted dash `ToolCard` uses for a settled-unknown row,
+                    // and the same tooltip, so one vocabulary covers both places
+                    // a dropped outcome frame can surface.
+                    ExploreOutcome::Unknown => view! {
+                        <span
+                            class="text-text-tertiary shrink-0 text-[11px]"
+                            title=move || t_string!(i18n, tool_card.status_unknown).to_string()
+                        >"–"</span>
+                    }.into_any(),
                 }}
                 <span class="shrink-0">"🔍"</span>
                 <span class="flex-1 min-w-0 truncate">{header}</span>
@@ -1171,14 +1250,37 @@ fn ExploreGroupRow(
                         each=move || entries.get()
                         key=|e| e.tool_ids.join(",")
                         children=move |e| {
-                            let icon = crate::components::tool_card::tool_icon("", e.kind);
+                            // The name matters: `tool_icon` resolves web_fetch /
+                            // skill / memory glyphs from it and only then falls
+                            // back to the kind icon. This call site passed `""`,
+                            // so those three families rendered the generic glyph.
+                            let icon = crate::components::tool_card::tool_icon(&e.tool_name, e.kind);
                             // Read-only summary row: it used to open the tool
                             // detail in the right pane, which no longer exists.
+                            // It carries its own outcome because a failed read
+                            // inside a collapsed block is otherwise invisible —
+                            // the row rendered identically whether the file was
+                            // read or the call errored.
+                            let (state_class, state_glyph) = match e.outcome {
+                                ExploreOutcome::Running => ("text-primary", "·"),
+                                ExploreOutcome::Ok => ("text-text-tertiary", ""),
+                                ExploreOutcome::Failed => ("text-danger", "✗"),
+                                ExploreOutcome::Unknown => ("text-text-tertiary", "–"),
+                            };
                             view! {
-                                <div class="flex items-center gap-2 px-1 py-0.5 text-xs
-                                            text-text-tertiary min-w-0">
+                                <div class=format!(
+                                    "flex items-center gap-2 px-1 py-0.5 text-xs min-w-0 {}",
+                                    if e.outcome == ExploreOutcome::Failed {
+                                        "text-danger"
+                                    } else {
+                                        "text-text-tertiary"
+                                    }
+                                )>
                                     <span class="shrink-0">{icon}</span>
                                     <span class="truncate">{e.label.clone()}</span>
+                                    <span class=format!("shrink-0 text-[10px] {state_class}")>
+                                        {state_glyph}
+                                    </span>
                                 </div>
                             }
                         }

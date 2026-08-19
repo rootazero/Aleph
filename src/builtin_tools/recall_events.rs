@@ -118,10 +118,28 @@ impl AlephTool for RecallEventsTool {
             return Ok(empty(note));
         };
 
-        let hits: Vec<RecallEventsHit> = store
+        // BT-D-R4-10: distinguish DB / store failure from a clean "no match".
+        // unwrap_or_default() silently turned an error into an empty
+        // result, which the empty-match arm then reported as "No
+        // earlier events matched" — the model (and the user) would
+        // hear a confident "no match" when the truth was "the database
+        // failed to answer". Return a tool error so the caller can
+        // retry or surface a real failure.
+        let raw_hits = match store
             .search_events(&session_id, &args.query, limit)
             .await
-            .unwrap_or_default()
+        {
+            Ok(h) => h,
+            Err(e) => {
+                let note = format!(
+                    "session event store search failed: {e}; recall_events is unavailable \
+                     for this call. Retry or fall back to session_search / ctx_search."
+                );
+                notify_tool_result(Self::NAME, &note, false);
+                return Err(crate::error::AlephError::tool(note));
+            }
+        };
+        let hits: Vec<RecallEventsHit> = raw_hits
             .into_iter()
             .map(|h| RecallEventsHit {
                 seq: h.seq,

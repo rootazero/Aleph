@@ -88,7 +88,13 @@ pub(crate) async fn poll_wait_for<B: BrowserBackend + ?Sized>(
     // `ms` is pre-clamped into the safe window by the tool layer, and a delay
     // IS the condition — `timeout_ms` does not apply to it.
     if let WaitCondition::Time(ms) = condition {
-        tokio::time::sleep(Duration::from_millis(*ms)).await;
+        // BROWSER-R4-14: clamp the Time arm to timeout_ms so a caller
+        // passing timeout_ms=60_000 with ms=120_000 does not silently
+        // double its budget. The tool layer pre-clamps today, but
+        // keeping the invariant at the predicate means a future direct
+        // caller of poll_wait_for cannot bypass it either.
+        let clamped_ms = (*ms).min(timeout_ms);
+        tokio::time::sleep(Duration::from_millis(clamped_ms)).await;
         return Ok(true);
     }
     let probe = wait_probe_func(condition);

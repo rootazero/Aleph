@@ -522,8 +522,29 @@ pub fn daemonize(
         }
     }
 
-    // Write PID file
-    write_pid_file(pid_file)?;
+    // Write PID file. BIN-R4-10: the previous shape used `?` which would
+    // propagate the io::Error up — but the daemon has already
+    // double-forked and redirected stdio at this point. Returning Err
+    // here aborts the parent dispatcher cleanly but leaves the
+    // daemon process running invisibly with no PID file: `aleph stop`
+    // refuses ("no daemon is running"), `aleph status` says nothing,
+    // and a second `start` runs into the singleton lock and exits 64.
+    // Warn loudly to stderr (which is still the operator's terminal in
+    // foreground mode) and return Ok so the daemon is at least
+    // observable through process listing. The lock file held in
+    // main() before fork() remains the durable fencing instrument.
+    if let Err(e) = write_pid_file(pid_file) {
+        eprintln!(
+            "Warning: daemon started but PID file '{pid_file}' could not be written: {e}.\n  \
+             The process is running; 'aleph stop' will fail to find it. Use 'ps' / 'pgrep' \
+             and the singleton lock to recover."
+        );
+        tracing::warn!(
+            pid_file,
+            error = %e,
+            "daemon: PID file write failed after fork; process is running but unfindable"
+        );
+    }
 
     Ok(())
 }

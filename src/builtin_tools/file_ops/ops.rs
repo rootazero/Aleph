@@ -239,17 +239,31 @@ pub(super) async fn execute_write(
 /// size differs — a cheap short-circuit that avoids loading the file when the
 /// lengths already disagree.
 async fn is_byte_equal_existing(canonical: &Path, wanted: &[u8]) -> bool {
-    let meta = match fs::metadata(canonical) {
+    // BT-A-R4-06: open the file once and read exactly `wanted.len()`
+    // bytes rather than two-syscall metadata() + read(). The previous
+    // shape had a TOCTOU window: a concurrent writer could change the
+    // file between the metadata() returning the right length and the
+    // read() returning the actual bytes, and a small replace would
+    // still byte-equal-length-match the wanted content. Reading
+    // `wanted.len()` bytes from a single `File` handle closes the
+    // window to a single syscall pair (open + read-of-N).
+    use tokio::io::AsyncReadExt;
+    let mut f = match tokio::fs::File::open(canonical).await {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let meta = match f.metadata().await {
         Ok(m) if m.is_file() => m,
         _ => return false,
     };
     if meta.len() as usize != wanted.len() {
         return false;
     }
-    match fs::read(canonical) {
-        Ok(existing) => existing == wanted,
-        Err(_) => false,
+    let mut existing = vec![0u8; wanted.len()];
+    if f.read_exact(&mut existing).await.is_err() {
+        return false;
     }
+    existing == wanted
 }
 
 /// Execute a move operation

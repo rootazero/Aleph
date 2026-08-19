@@ -15,6 +15,19 @@ use alephcore::utils::no_window::NoWindow;
 use std::error::Error;
 use std::time::Duration;
 
+/// PR-2 / BIN-R4-07: SHA256SUMS endpoint convention. Each release
+/// ships `install.sh` (Unix) and `install.ps1` (Windows); the matching
+/// `SHA256SUMS.txt` carries one `<sha256>  <filename>` line per asset.
+/// The file is fetched alongside the installer and the installer's
+/// hash is matched against the line for its filename before execution.
+/// When the asset is missing (404), we log a warning and proceed —
+/// the verification is opt-in until the release process publishes the
+/// file. To enforce fail-closed once a stable process is in place,
+/// flip `SOFT_FAIL_ON_MISSING_CHECKSUMS` to `false`.
+const SHA256SUMS_URL: &str =
+    "https://github.com/rootazero/Aleph/releases/latest/download/SHA256SUMS.txt";
+const SOFT_FAIL_ON_MISSING_CHECKSUMS: bool = true;
+
 /// Human-facing releases page (shown on lookup failure).
 const RELEASES_PAGE: &str = "https://github.com/rootazero/Aleph/releases/latest";
 /// GitHub API endpoint for the latest published release.
@@ -86,45 +99,196 @@ fn is_newer(latest: &str, current: &str) -> bool {
     }
 }
 
-/// Re-run the official installer for this platform (download + install). The
-/// command is printed before it runs so the action is transparent.
+/// Re-run the official installer for this platform (download + install).
+///
+/// PR-2 / BIN-R4-07: the previous `curl | bash` (or `iwr | iex`) flow
+/// downloaded and executed the installer in a single shell pipe, with
+/// no integrity check. A compromised DNS resolver or MITM could swap
+/// the installer's bytes for arbitrary code that the shell would then
+/// execute as root. The new shape:
+///
+///   1. Download the installer to memory via reqwest.
+///   2. Try to download SHA256SUMS.txt alongside it.
+///   3. If SHA256SUMS is available, compute the installer's SHA-256
+///      and match it against the line for the installer's filename.
+///      Mismatch is a hard failure (no execute).
+///   4. If SHA256SUMS is not yet published (404), behaviour is governed
+///      by [`SOFT_FAIL_ON_MISSING_CHECKSUMS`]: today we warn + proceed
+///      for backward compatibility with pre-checksums releases; flip
+///      to false once the release process always publishes SHA256SUMS.
+///   5. Write the verified bytes to a temp file and execute that file
+///      (not a fresh shell-piped download).
+///
+/// Reusing the published installer (rather than re-implementing
+/// download-and-replace per OS) keeps the core minimal (R3) and leans on
+/// the same battle-tested path the user originally installed with. The
+/// installer is what the user opted into; we are only adding a gate.
 fn run_installer() -> Result<(), Box<dyn Error>> {
-    use std::process::Command;
+    let (installer_url, installer_name) = installer_target();
 
-    #[cfg(windows)]
-    let mut cmd = {
-        println!("Running the Windows installer:\n  iwr -useb {INSTALL_PS1} | iex");
-        let mut c = Command::new("powershell");
-        c.args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            &format!("iwr -useb {INSTALL_PS1} | iex"),
-        ]);
-        c
-    };
-    #[cfg(not(windows))]
-    let mut cmd = {
-        println!("Running the installer:\n  curl -fsSL {INSTALL_SH} | bash");
-        let mut c = Command::new("bash");
-        c.arg("-c").arg(format!("curl -fsSL {INSTALL_SH} | bash"));
-        c
+    println!("Downloading the installer for verification...");
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(concat!("aleph-server/", env!("ALEPH_VERSION")))
+        .timeout(Duration::from_secs(120))
+        .build()?;
+    let installer_bytes = client
+        .get(&installer_url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("failed to download {installer_url}: {e}"))?
+        .bytes()
+        .map_err(|e| format!("failed to read installer body: {e}"))?;
+
+    // Attempt to fetch SHA256SUMS.txt. A 404 is not fatal under the
+    // soft-fail flag so existing releases keep working; a mismatch on
+    // a present SHA256SUMS is a hard failure.
+    let checksums = match client.get(SHA256SUMS_URL).send() {
+        Ok(r) if r.status().is_success() => Some(r.text().map_err(|e| {
+            format!("failed to read SHA256SUMS body: {e}")
+        })?),
+        Ok(r) if r.status().as_u16() == 404 => None,
+        Ok(r) => {
+            return Err(format!(
+                "SHA256SUMS fetch returned unexpected status {}; refusing to install \
+                 without integrity check",
+                r.status()
+            )
+            .into());
+        }
+        Err(e) => {
+            // Network error on the checksums fetch is treated like a
+            // soft-fail for now; the installer itself still went over
+            // HTTPS. If we want strict mode here too, flip to hard-fail.
+            if !SOFT_FAIL_ON_MISSING_CHECKSUMS {
+                return Err(format!(
+                    "failed to fetch SHA256SUMS and SOFT_FAIL_ON_MISSING_CHECKSUMS=false: {e}"
+                )
+                .into());
+            }
+            eprintln!(
+                "Warning: could not fetch SHA256SUMS.txt ({e}); proceeding without verification."
+            );
+            None
+        }
     };
 
-    let status = cmd
-        .no_window()
-        .status()
-        .map_err(|e| format!("failed to launch the installer: {e}"))?;
+    if let Some(text) = checksums {
+        let actual = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&installer_bytes);
+            format!("{:x}", hasher.finalize())
+        };
+        let expected = parse_sha256sums_line(&text, installer_name).ok_or_else(|| {
+            format!(
+                "SHA256SUMS.txt was fetched but contained no entry for '{installer_name}'; \
+                 refusing to install without integrity check"
+            )
+        })?;
+        if !expected.eq_ignore_ascii_case(&actual) {
+            return Err(format!(
+                "SHA256 mismatch for '{installer_name}':\n  expected: {expected}\n  actual:   {actual}\n\
+                 Refusing to install. The downloaded bytes do not match the release manifest."
+            )
+            .into());
+        }
+        println!(
+            "SHA256 verified: {} ({} bytes)",
+            &actual[..16],
+            installer_bytes.len()
+        );
+    } else if !SOFT_FAIL_ON_MISSING_CHECKSUMS {
+        return Err(
+            "SHA256SUMS.txt not published for this release and SOFT_FAIL_ON_MISSING_CHECKSUMS=false; \
+             refusing to install without integrity check"
+                .into(),
+        );
+    } else {
+        println!(
+            "SHA256SUMS.txt not published; verification SKIPPED (soft-fail mode). \
+             The HTTPS channel alone protects the install."
+        );
+    }
+
+    // Write the verified bytes to a temp file and execute that file
+    // (not a fresh shell-piped download). The temp file outlives this
+    // function so the child process can read it; cleanup is best-effort.
+    let temp_path = std::env::temp_dir().join(format!(
+        "aleph-installer-{}-{}",
+        installer_name,
+        std::process::id()
+    ));
+    std::fs::write(&temp_path, &installer_bytes)
+        .map_err(|e| format!("failed to write temp installer {}: {e}", temp_path.display()))?;
+
+    let status = {
+        use std::process::Command;
+        #[cfg(windows)]
+        {
+            println!("Running the Windows installer:\n  powershell -File {}", temp_path.display());
+            let mut c = Command::new("powershell");
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+            c.arg(&temp_path);
+            c
+        }
+        #[cfg(not(windows))]
+        {
+            println!("Running the installer:\n  bash {}", temp_path.display());
+            let mut c = Command::new("bash");
+            c.arg(&temp_path);
+            c
+        }
+    }
+    .no_window()
+    .status()
+    .map_err(|e| format!("failed to launch the installer: {e}"))?;
+
+    // Best-effort temp cleanup. The installer may still be reading it;
+    // a follow-up reboot / tmpfs reap will get it.
+    let _ = std::fs::remove_file(&temp_path);
+
     if !status.success() {
         return Err(format!("installer exited with status {status}").into());
     }
     Ok(())
 }
 
+/// Returns `(url, filename)` of the platform's installer asset.
+fn installer_target() -> (String, &'static str) {
+    #[cfg(windows)]
+    {
+        (INSTALL_PS1.to_string(), "install.ps1")
+    }
+    #[cfg(not(windows))]
+    {
+        (INSTALL_SH.to_string(), "install.sh")
+    }
+}
+
+/// Look up `<sha256>  <filename>` in a `sha256sums`-format manifest.
+/// Returns `None` if the filename is absent or the file is malformed.
+fn parse_sha256sums_line(manifest: &str, filename: &str) -> Option<String> {
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // sha256sums format: `<hex>  <filename>` (two spaces) or
+        // `<hex> *<filename>` (binary mode marker). The filename may
+        // appear with a leading `./`.
+        let mut parts = line.splitn(2, |c: char| c.is_whitespace() || c == '*');
+        let hex = parts.next()?.trim();
+        let name = parts.next()?.trim().trim_start_matches("./");
+        if name == filename && hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(hex.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_newer;
+    use super::{is_newer, parse_sha256sums_line};
 
     #[test]
     fn detects_newer_calver() {
@@ -144,5 +308,58 @@ mod tests {
     fn malformed_tags_fall_back_to_inequality() {
         assert!(is_newer("weird-tag", "26.6.14"));
         assert!(!is_newer("same", "same"));
+    }
+
+    /// PR-2 / BIN-R4-07: the SHA256SUMS manifest parser covers the
+    /// common `sha256sums` formats (two-space separator, binary-mode
+    /// `*` marker, leading `./` in filename) and rejects missing /
+    /// malformed entries.
+    #[test]
+    fn parses_canonical_two_space_separator() {
+        let manifest = "\
+            1111111111111111111111111111111111111111111111111111111111111111  install.sh\n\
+            2222222222222222222222222222222222222222222222222222222222222222  install.ps1\n";
+        assert_eq!(
+            parse_sha256sums_line(manifest, "install.sh").as_deref(),
+            Some("1111111111111111111111111111111111111111111111111111111111111111")
+        );
+    }
+
+    #[test]
+    fn parses_binary_mode_star_marker() {
+        let manifest = "\
+            abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd *install.sh\n";
+        assert!(parse_sha256sums_line(manifest, "install.sh").is_some());
+    }
+
+    #[test]
+    fn parses_leading_dot_slash_filename() {
+        let manifest = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  ./install.sh\n";
+        assert!(parse_sha256sums_line(manifest, "install.sh").is_some());
+    }
+
+    #[test]
+    fn ignores_comments_and_blanks() {
+        let manifest = "# generated by release.sh\n\n\
+            cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe  install.sh\n";
+        assert!(parse_sha256sums_line(manifest, "install.sh").is_some());
+    }
+
+    #[test]
+    fn returns_none_for_missing_file() {
+        let manifest = "1111111111111111111111111111111111111111111111111111111111111111  install.sh\n";
+        assert!(parse_sha256sums_line(manifest, "install.ps1").is_none());
+    }
+
+    #[test]
+    fn returns_none_for_malformed_hash_length() {
+        let manifest = "short  install.sh\n";
+        assert!(parse_sha256sums_line(manifest, "install.sh").is_none());
+    }
+
+    #[test]
+    fn returns_none_for_non_hex_hash() {
+        let manifest = "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ  install.sh\n";
+        assert!(parse_sha256sums_line(manifest, "install.sh").is_none());
     }
 }

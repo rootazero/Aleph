@@ -384,8 +384,14 @@ async fn run_session(
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(channel);
 
     let writer = tokio::spawn(async move {
+        // BIN-R4-08: surface writer-task errors to the operator log
+        // instead of silently breaking on the first send error. A panic
+        // inside this body is still invisible to the read loop
+        // (tokio::spawn swallows it); the JoinHandle returned below lets
+        // a future cleanup pass abort and await it.
         while let Some(frame) = out_rx.recv().await {
-            if write.send(Message::Text(frame.into())).await.is_err() {
+            if let Err(e) = write.send(Message::Text(frame.into())).await {
+                tracing::warn!(error = %e, "node writer: outbound WS send failed; breaking writer loop");
                 break;
             }
         }

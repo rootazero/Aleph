@@ -23,6 +23,7 @@ use crate::gateway::event_emitter::NoOpEventEmitter;
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::router::SessionKey;
+use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
 
 /// Bridges A2A protocol messages to Aleph's Agent Loop execution.
 ///
@@ -282,7 +283,30 @@ impl A2AMessageHandler for AgentLoopBridge {
         let task_id_owned = task_id.to_string();
         let context_id_owned = context_id.to_string();
 
-        tokio::spawn(async move {
+        // PR-7 / BT-D-R4-06 + BT-D-R4-07: build a TurnContext that carries
+        // an actor for the spawned run. PR-4 already taught ambient_actor()
+        // to fall back to TURN_CONTEXT; without this scope wrap the
+        // A2A bridge's tool dispatch hit the unrestricted arm anyway,
+        // because nothing set the task-local around the spawn. The actor
+        // here is the stable sentinel "a2a_peer" — distinct from "main"
+// and from any human channel id, so the visibility predicates see an
+// A2A run as belonging to a separate (machine) actor. A future PR can
+// promote this to the authenticated peer agent id once the A2A wire
+// carries that field; the sentinel keeps today's behavior unchanged
+// for honest callers and stops the actor-less arm from being the only
+// free path through visibility.
+        let a2a_turn = TurnContext {
+            session_key: request.session_key.clone(),
+            run_id: request.run_id.clone(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: true,
+            plan_gate: None,
+        };
+
+        tokio::spawn(TURN_CONTEXT.scope(a2a_turn, async move {
             match execution_adapter.execute(request, agent, emitter).await {
                 Ok(()) => {
                     let response_msg =
@@ -350,7 +374,7 @@ impl A2AMessageHandler for AgentLoopBridge {
                 }
             }
             let _ = streaming.cleanup_task(&task_id_owned).await;
-        });
+        }));
 
         Ok(stream)
     }

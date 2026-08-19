@@ -294,6 +294,29 @@ Examples:
                         });
                     }
                 };
+                // BT-C-R4-13: previously the model-supplied audio_path was
+                // handed straight to the desktop media capability. The
+                // speech-to-text backend reads from that path, so a path
+                // pointing outside the workspace (or at a denied path
+                // the same file_read guards) would have its contents
+                // transcribed into the model's context. Route through
+                // file_ops::check_and_resolve_path — same gate as
+                // file_read / media_understand — so the path is
+                // canonicalized, symlink-final-component checked, and
+                // matched against deny-read-globs before any backend
+                // opens it.
+                let audio_path = crate::builtin_tools::file_ops::check_and_resolve_path(
+                    std::path::Path::new(&audio_path),
+                    &crate::builtin_tools::file_ops::get_denied_paths(),
+                    None,
+                )
+                .map_err(|e| {
+                    crate::error::AlephError::tool(format!(
+                        "speech_to_text `audio_path` rejected by path guard: {e}"
+                    ))
+                })?
+                .to_string_lossy()
+                .into_owned();
 
                 let config = aleph_desktop::media_types::SpeechToTextConfig {
                     language: args.language.unwrap_or_else(|| "en-US".to_string()),

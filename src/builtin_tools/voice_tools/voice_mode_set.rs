@@ -87,12 +87,26 @@ impl VoiceModeSetTool {
         args: VoiceModeSetArgs,
         current_channel_id: Option<&str>,
     ) -> VoiceModeSetOutput {
-        // Resolve target channel: args > current > "default"
-        let channel_id = args
-            .channel_id
-            .clone()
-            .or_else(|| current_channel_id.map(str::to_string))
-            .unwrap_or_else(|| "default".to_string());
+        // BT-C-R4-09: previously the resolver fell back to the literal
+        // string "default" when neither args nor the caller's current
+        // channel supplied an id. That created voice state on a
+        // non-existent channel id and silently misconfigured any later
+        // "what channels have voice on?" query. Now refuse instead: a
+        // missing channel id is a caller mistake, not a sane default.
+        let channel_id = match args.channel_id.clone().or_else(|| current_channel_id.map(str::to_string)) {
+            Some(id) if !id.trim().is_empty() => id,
+            _ => {
+                return VoiceModeSetOutput {
+                    success: false,
+                    channel_id: String::new(),
+                    enabled: args.enabled,
+                    message: "voice_mode_set requires a target channel id; pass \
+    `channel_id` in the args or call from the channel whose voice \
+    setting you want to change."
+                        .to_string(),
+                };
+            }
+        };
 
         let enabled = args.enabled;
         let provider_override = args.provider.clone();
