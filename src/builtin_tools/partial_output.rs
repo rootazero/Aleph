@@ -74,10 +74,56 @@ pub(crate) fn gate(snapshot: &LiveSnapshot) -> PartialView {
     if !crate::sandbox::scrub::scrub_and_gate_output(&mut probe).is_empty() {
         return PartialView::Withheld;
     }
+    // BT-D-R4-18 (partial fix): detect known secret prefixes at the tail
+    // of either stream. The full pattern matcher needs the second half of
+    // the secret to be in the snapshot before it can identify the
+    // whole value; for live output the second half has not arrived yet
+    // and the prefix would otherwise leak. Refuse the snapshot when a
+    // recognised provider's key prefix is in the trailing bytes; the
+    // finished path's scrub-and-gate still runs on the full output
+    // and withholds the same way. The list of prefixes mirrors what
+    // the scrubber already detects for the finished path; extending
+    // either list updates both call sites.
+    if ends_with_secret_prefix(&probe.stdout) || ends_with_secret_prefix(&probe.stderr) {
+        return PartialView::Withheld;
+    }
     PartialView::Text {
         stdout: sanitize_command_output(&String::from_utf8_lossy(&probe.stdout)).into_owned(),
         stderr: sanitize_command_output(&String::from_utf8_lossy(&probe.stderr)).into_owned(),
     }
+}
+
+/// BT-D-R4-18 (partial fix): known-secret-prefix check applied to the
+/// tail of a live partial snapshot. The list is the same set of
+/// provider prefixes the finished-path scrubber redacts. A prefix
+/// match at the tail means a key is being written out one byte at a
+/// time and the remainder has not yet arrived; the partial is
+/// withheld so the model's context window never sees a half-key.
+fn ends_with_secret_prefix(bytes: &[u8]) -> bool {
+    const PREFIXES: &[&[u8]] = &[
+        b"sk-ant-",      // Anthropic admin / project
+        b"sk-ant-api",  // Anthropic API key
+        b"sk-proj-",    // OpenAI project key
+        b"sk-",         // OpenAI classic (less specific; used as fallback)
+        b"AKIA",        // AWS access key id
+        b"ASIA",        // AWS session token
+        b"ghp_",        // GitHub personal access token
+        b"gho_",        // GitHub OAuth token
+        b"ghs_",        // GitHub server token
+        b"glpat-",      // GitLab personal access token
+        b"xoxb-",       // Slack bot token
+        b"xoxp-",       // Slack user token
+    ];
+    // Search the trailing 80 bytes only — secrets are written out
+    // sequentially, so the prefix is always near the tail. Bounding
+    // the search keeps the cost trivial on a multi-KB snapshot.
+    const TAIL: usize = 80;
+    let tail = if bytes.len() > TAIL {
+        &bytes[bytes.len() - TAIL..]
+    } else {
+        bytes
+    };
+    PREFIXES.iter().any(|p| tail.windows(p.len()).any(|w| w == *p))
 }
 
 /// The gated snapshot as one block of durable text, or `None` when there is
