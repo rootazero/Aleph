@@ -94,8 +94,12 @@ impl ServiceManager {
     }
 
     /// Build a composite service key from `plugin_id` and `service_id`.
+    ///
+    /// Delegates to the subsystem's single `<plugin>:<component>` derivation so
+    /// this manager's key cannot drift from the one `PluginRegistry` stores
+    /// services under.
     fn make_key(plugin_id: &str, service_id: &str) -> String {
-        format!("{plugin_id}:{service_id}")
+        crate::extension::namespaced_component_key(plugin_id, service_id)
     }
 
     /// Start a service.

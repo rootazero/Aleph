@@ -13,6 +13,42 @@ use std::path::PathBuf;
 /// JSON Schema type alias for tool parameter definitions
 pub type JsonSchema = JsonValue;
 
+/// The one derivation of `<plugin>:<component>` in the extension subsystem.
+///
+/// Both the registry's storage key (`PluginRegistry::register_skill` /
+/// `register_agent`) and the name the model is shown
+/// (`SkillRegistration::qualified_name`) must be the *same* string, or a
+/// component the model can see becomes a component nobody can address.
+///
+/// # Why this is a function and not two `format!`s
+///
+/// Until 2026-08-19 there were two answers. The registry keyed on
+/// `plugin_id`; `qualified_name()` read a separate `plugin_name` field that
+/// **no production code path ever assigned** — every `SkillRegistration` /
+/// `AgentRegistration` construction site in `manifest/parsers.rs`,
+/// `manifest/adapters/*` and `registrar/api.rs` sets `plugin_id` and leaves
+/// `plugin_name` at its `Option::None` default, so the only assignments in the
+/// tree were test fixtures. Two consequences, both silent:
+///
+/// * `qualified_name()` returned a bare name forever, so the namespacing
+///   `PLUGIN_SYSTEM.md` documents never happened on the surface the model
+///   reads; and
+/// * `tool_catalog_init.rs` filtered plugin commands on
+///   `plugin_name.is_some()`, so **no plugin command was ever registered into
+///   the dispatch registry** — `commands/` is one of the five Claude Code
+///   component kinds, and it reached no surface at all.
+///
+/// The field is gone; this function is the single source. An empty
+/// `plugin_id` means "not from a plugin" and yields the bare name.
+#[must_use]
+pub fn namespaced_component_key(plugin_id: &str, name: &str) -> String {
+    if plugin_id.is_empty() {
+        name.to_string()
+    } else {
+        format!("{plugin_id}:{name}")
+    }
+}
+
 // ============================================================================
 // P0 Core Registration Types
 // ============================================================================
@@ -148,10 +184,6 @@ pub struct SkillRegistration {
     /// Unique skill name
     pub name: String,
 
-    /// Plugin name (if from a plugin, used for `qualified_name`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_name: Option<String>,
-
     /// Skill type (command vs skill)
     #[serde(default)]
     pub skill_type: crate::extension::types::SkillType,
@@ -203,10 +235,7 @@ impl SkillRegistration {
     /// Get the fully qualified name (plugin:skill or just skill)
     #[must_use]
     pub fn qualified_name(&self) -> String {
-        match &self.plugin_name {
-            Some(plugin) => format!("{}:{}", plugin, self.name),
-            None => self.name.clone(),
-        }
+        namespaced_component_key(&self.plugin_id, &self.name)
     }
 
     /// Check if this skill can be auto-invoked by the model
@@ -240,10 +269,6 @@ impl SkillRegistration {
 pub struct AgentRegistration {
     /// Unique agent name
     pub name: String,
-
-    /// Plugin name (if from a plugin)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_name: Option<String>,
 
     /// Agent mode
     #[serde(default)]
@@ -309,10 +334,7 @@ impl AgentRegistration {
     /// Get the fully qualified name
     #[must_use]
     pub fn qualified_name(&self) -> String {
-        match &self.plugin_name {
-            Some(plugin) => format!("{}:{}", plugin, self.name),
-            None => self.name.clone(),
-        }
+        namespaced_component_key(&self.plugin_id, &self.name)
     }
 
     /// Check if agent is a primary agent
@@ -598,5 +620,88 @@ mod tests {
         let roundtrip: AgentRegistration = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip.name, "test-agent");
         assert!(roundtrip.model.is_none());
+    }
+
+    #[test]
+    fn namespaced_key_is_bare_without_a_plugin() {
+        assert_eq!(namespaced_component_key("", "review"), "review");
+        assert_eq!(namespaced_component_key("acme", "review"), "acme:review");
+    }
+
+    /// Source-level census: `<plugin>:<component>` may be spelled in exactly
+    /// one place.
+    ///
+    /// This has to be a source scan, not a runtime assertion — at runtime a
+    /// second hand-rolled `format!` that happens to agree today is
+    /// indistinguishable from a call to the single source, right up to the
+    /// day someone changes the separator on one side. That divergence is what
+    /// actually shipped: the registry keyed `plugin_id:name` while
+    /// `qualified_name()` read a never-assigned `plugin_name`, so the model
+    /// was shown a name that addressed nothing.
+    ///
+    /// Scope this guard honestly declares: it recognises a *line* that
+    /// mentions `plugin_id` and also carries a `:`-joining format literal. A
+    /// derivation split across two statements, or one that goes through a
+    /// local variable on another line, is outside what it can see.
+    #[test]
+    fn joining_a_plugin_id_to_a_component_name_has_exactly_one_author() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/extension");
+        let mut offenders: Vec<String> = Vec::new();
+        let mut checked_files = 0usize;
+
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                // This file *is* the single source; its own derivation and the
+                // prose describing it are allowed to name the shape.
+                if path.ends_with("registry/types.rs") {
+                    continue;
+                }
+                let Ok(src) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                checked_files += 1;
+                for (lineno, line) in src.lines().enumerate() {
+                    let code = line.trim_start();
+                    // Comments are documentation, not a second author.
+                    if code.starts_with("//") {
+                        continue;
+                    }
+                    if !code.contains("plugin_id") {
+                        continue;
+                    }
+                    let joins = code.contains("\"{}:{}\"") || code.contains("}:{");
+                    if joins {
+                        offenders.push(format!(
+                            "{}:{} — {}",
+                            path.display(),
+                            lineno + 1,
+                            code.trim()
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            checked_files > 10,
+            "census scanned only {checked_files} files — it is not looking where it thinks it is"
+        );
+        assert!(
+            offenders.is_empty(),
+            "hand-rolled plugin namespacing outside `namespaced_component_key`:\n  {}",
+            offenders.join("\n  ")
+        );
     }
 }

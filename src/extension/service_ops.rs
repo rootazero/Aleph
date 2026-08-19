@@ -248,6 +248,10 @@ impl ExtensionManager {
             .into_iter()
             .find(|s| s.plugin_id == plugin_id && s.id == service_id)
             .cloned()
-            .ok_or_else(|| ExtensionError::ServiceNotFound(format!("{plugin_id}:{service_id}")))
+            .ok_or_else(|| {
+                ExtensionError::ServiceNotFound(crate::extension::namespaced_component_key(
+                    plugin_id, service_id,
+                ))
+            })
     }
 }

@@ -144,7 +144,8 @@ impl PluginRegistry {
     /// accessible via their namespaced keys.
     pub fn register_tool(&mut self, tool: ToolRegistration) {
         let plugin_id = tool.plugin_id.clone();
-        let namespaced_key = format!("{}:{}", tool.plugin_id, tool.name);
+        let namespaced_key =
+            crate::extension::namespaced_component_key(&tool.plugin_id, &tool.name);
         let short_key = tool.name.clone();
 
         // Update plugin record (track by namespaced key)
@@ -260,7 +261,7 @@ impl PluginRegistry {
     pub fn register_service(&mut self, service: ServiceRegistration) {
         let plugin_id = service.plugin_id.clone();
         let service_id = service.id.clone();
-        let namespaced_key = format!("{plugin_id}:{service_id}");
+        let namespaced_key = crate::extension::namespaced_component_key(&plugin_id, &service_id);
 
         self.services.insert(namespaced_key, service);
 
@@ -306,7 +307,8 @@ impl PluginRegistry {
     /// The skill is stored under both its namespaced key (`plugin_id:name`) and its
     /// short name (`name`) for backward compatibility. First-come wins for the short key.
     pub fn register_skill(&mut self, skill: SkillRegistration) {
-        let namespaced_key = format!("{}:{}", skill.plugin_id, skill.name);
+        let namespaced_key =
+            crate::extension::namespaced_component_key(&skill.plugin_id, &skill.name);
         let short_key = skill.name.clone();
 
         // Register under short name for backward compat (first-come wins)
@@ -353,7 +355,8 @@ impl PluginRegistry {
     /// The agent is stored under both its namespaced key (`plugin_id:name`) and its
     /// short name (`name`) for backward compatibility. First-come wins for the short key.
     pub fn register_agent(&mut self, agent: AgentRegistration) {
-        let namespaced_key = format!("{}:{}", agent.plugin_id, agent.name);
+        let namespaced_key =
+            crate::extension::namespaced_component_key(&agent.plugin_id, &agent.name);
         let short_key = agent.name.clone();
 
         // Register under short name for backward compat (first-come wins)
