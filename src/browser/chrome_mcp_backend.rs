@@ -597,12 +597,12 @@ impl BrowserBackend for ChromeMcpBackend {
 ///
 /// The server answers a successful evaluation with
 ///
-/// ```text
+/// ````text
 /// Script ran on page and returned:
 /// ```json
 /// <the JSON-encoded value>
 /// ```
-/// ```
+/// ````
 ///
 /// and a thrown script with a bare `Error: …` carrying no fence at all. So the
 /// fence is the anchor, and its absence means "there is no value here" — the

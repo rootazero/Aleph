@@ -13,11 +13,10 @@
 //! use alephcore::event::filter::EventFilter;
 //! use alephcore::event::EventType;
 //!
-//! // Filter for all tool events from a specific session
+//! // Filter for background process completions from a specific session
 //! let filter = EventFilter::new(vec![
-//!     EventType::ToolCallStarted,
-//!     EventType::ToolCallCompleted,
-//!     EventType::ToolCallFailed,
+//!     EventType::ProcessCompleted,
+//!     EventType::SubAgentCompleted,
 //! ])
 //! .with_session("session-123");
 //!
@@ -82,7 +81,7 @@ impl EventFilter {
     /// use alephcore::event::filter::EventFilter;
     /// use alephcore::event::EventType;
     ///
-    /// let filter = EventFilter::new(vec![EventType::ToolCallCompleted]);
+    /// let filter = EventFilter::new(vec![EventType::ProcessCompleted]);
     /// ```
     #[must_use]
     pub const fn new(event_types: Vec<EventType>) -> Self {

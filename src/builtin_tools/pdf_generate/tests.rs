@@ -115,6 +115,10 @@ code block
 
 #[tokio::test]
 async fn test_chinese_pdf_generation() {
+    // Without an isolated ALEPH_HOME the resolved output dir is the
+    // developer's real `~/.aleph/workspaces/...` — the BT-C-R4-01 anchor
+    // rewrites the absolute path below onto that dir.
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
     let tool = PdfGenerateTool::new();
     let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
     std::fs::create_dir_all(&temp_dir).unwrap();
@@ -148,8 +152,9 @@ async fn test_chinese_pdf_generation() {
     assert!(output.success);
     assert!(output.pages >= 1);
 
-    // Verify the file is non-trivial (CJK content should produce reasonable size)
-    let metadata = fs::metadata(&output_path).unwrap();
+    // BT-C-R4-01: the absolute path above is rewritten onto the workspace
+    // output dir — assert where the tool says it wrote, not the input path.
+    let metadata = fs::metadata(&output.output_path).unwrap();
     assert!(metadata.len() > 1000, "PDF should have substantial content");
 
     // Cleanup
@@ -339,8 +344,9 @@ fn main() {
     assert!(output.success);
     assert!(output.pages >= 1);
 
-    // Verify PDF file exists and has substantial content
-    let metadata = tokio::fs::metadata(&output_path).await.unwrap();
+    // BT-C-R4-01: the absolute input path is rewritten onto the workspace
+    // output dir — assert where the tool says it wrote.
+    let metadata = tokio::fs::metadata(&output.output_path).await.unwrap();
     assert!(
         metadata.len() > 5000,
         "Browser-rendered PDF should be substantial"

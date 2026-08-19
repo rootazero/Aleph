@@ -456,14 +456,14 @@ pub(crate) fn parse_page_meta(stdout: &str) -> Option<PageMeta> {
 ///
 /// `playwright-cli eval` answers with a transcript, not a value:
 ///
-/// ```text
+/// ````text
 /// ### Result
 /// "absent"
 /// ### Ran Playwright code
 /// ```js
 /// await page.evaluate('() => (...) ? "ALEPH_WAIT_FOUND" : \'absent\'');
 /// ```
-/// ```
+/// ````
 ///
 /// The second section echoes **the script that was run**, so any caller that
 /// searches the raw stdout for a token is searching a channel that contains its
