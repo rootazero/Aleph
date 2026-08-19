@@ -24,15 +24,19 @@ const MARKETPLACE_TOML: &str = ".claude-plugin/marketplace.toml";
 fn project_plugin(entry: &MarketplacePluginEntry) -> ExtensionEntry {
     // The marketplace `source` is a "./<dir>" path relative to the marketplace
     // root; keep only the leaf for provenance.
-    let subdir = entry
-        .source
-        .strip_prefix("./")
-        .or_else(|| entry.source.strip_prefix('.'))
-        .unwrap_or(&entry.source)
-        .to_string();
+    // Only the path form names a directory inside the repo; an external
+    // source (github/npm/...) has no subdir here, and provenance falls back to
+    // the repo root rather than inventing one.
+    let subdir = entry.source.as_relative_path().map(|source| {
+        source
+            .strip_prefix("./")
+            .or_else(|| source.strip_prefix('.'))
+            .unwrap_or(source)
+            .to_string()
+    });
     let spec = InstallSpec::GitDir {
         git_url: OFFICIAL_PLUGINS_REPO.to_string(),
-        subdir: Some(subdir),
+        subdir,
         git_ref: None,
         sha256: None,
     };

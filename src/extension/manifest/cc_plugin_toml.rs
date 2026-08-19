@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::component_source::{self, ComponentSource};
 use crate::extension::manifest::declared_sections::AlephSuperset;
 use crate::extension::manifest::toml_types::{
     convert_permissions, CapabilitiesSection, CommandSection, HookSection, PermissionsSection,
@@ -63,22 +64,23 @@ pub struct CcPluginToml {
     #[serde(rename = "author")]
     pub author: Option<CcPluginAuthorToml>,
 
-    // Flat component paths (CC-native)
-    /// Path to skills directory
-    pub skills: Option<String>,
+    // Flat component fields (CC-native). Each accepts a path, an array of
+    // paths, or an inlined table — see `component_source`.
+    /// Skills directory (or directories).
+    pub skills: Option<ComponentSource>,
 
-    /// Path to commands directory
-    pub commands: Option<String>,
+    /// Commands directory (or directories).
+    pub commands: Option<ComponentSource>,
 
-    /// Path to agents directory
-    pub agents: Option<String>,
+    /// Agents directory (or directories).
+    pub agents: Option<ComponentSource>,
 
-    /// Path to hooks file/directory
-    pub hooks: Option<String>,
+    /// Hooks file, files, or inlined hook configuration.
+    pub hooks: Option<ComponentSource>,
 
-    /// Path to MCP servers configuration
+    /// MCP servers configuration file, files, or inlined server map.
     #[serde(rename = "mcp-servers")]
-    pub mcp_servers: Option<String>,
+    pub mcp_servers: Option<ComponentSource>,
 
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<AlephExtensionsToml>,
@@ -377,36 +379,41 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
         let raw: CcPluginToml =
             toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML re-parse error: {e}"))?;
 
-        // Parse skills
-        let skills_rel = raw.skills.as_deref().unwrap_or("skills");
-        capabilities.extend(parsers::parse_skills_dir(
-            plugin_dir, skills_rel, &plugin_id,
-        )?);
-
-        // Parse commands
-        let commands_rel = raw.commands.as_deref().unwrap_or("commands");
-        capabilities.extend(parsers::parse_commands_dir(
+        // Component fields accept a path, an array of paths, or (for hooks and
+        // mcp-servers) an inlined table — see `component_source`.
+        capabilities.extend(component_source::resolve_dirs(
+            raw.skills.as_ref(),
+            "skills",
             plugin_dir,
-            commands_rel,
+            &plugin_id,
+            "skills",
+            parsers::parse_skills_dir,
+        )?);
+        capabilities.extend(component_source::resolve_dirs(
+            raw.commands.as_ref(),
+            "commands",
+            plugin_dir,
+            &plugin_id,
+            "commands",
+            parsers::parse_commands_dir,
+        )?);
+        capabilities.extend(component_source::resolve_dirs(
+            raw.agents.as_ref(),
+            "agents",
+            plugin_dir,
+            &plugin_id,
+            "agents",
+            parsers::parse_agents_dir,
+        )?);
+        capabilities.extend(component_source::resolve_hooks(
+            raw.hooks.as_ref(),
+            plugin_dir,
             &plugin_id,
         )?);
-
-        // Parse agents
-        let agents_rel = raw.agents.as_deref().unwrap_or("agents");
-        capabilities.extend(parsers::parse_agents_dir(
-            plugin_dir, agents_rel, &plugin_id,
-        )?);
-
-        // Parse hooks
-        let hooks_rel = raw.hooks.as_deref().unwrap_or("hooks/hooks.json");
-        capabilities.extend(parsers::parse_hooks_file(
-            plugin_dir, hooks_rel, &plugin_id,
-        )?);
-
-        // Parse MCP servers
-        let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
-        capabilities.extend(parsers::parse_mcp_config_file(
-            plugin_dir, mcp_rel, &plugin_id,
+        capabilities.extend(component_source::resolve_mcp_servers(
+            raw.mcp_servers.as_ref(),
+            plugin_dir,
+            &plugin_id,
         )?);
 
         // Manifest-declared sections from `[aleph]` — the same translation the

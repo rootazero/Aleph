@@ -120,7 +120,10 @@ source = "owner/world-plugin"
         assert_eq!(manifest.metadata.plugin_root.as_deref(), Some("plugins"));
         assert_eq!(manifest.plugins.len(), 2);
         assert_eq!(manifest.plugins[0].name, "hello-plugin");
-        assert_eq!(manifest.plugins[0].source, "owner/hello-plugin");
+        assert_eq!(
+            manifest.plugins[0].source.as_relative_path(),
+            Some("owner/hello-plugin")
+        );
         assert_eq!(
             manifest.plugins[0].description.as_deref(),
             Some("Says hello")
@@ -175,5 +178,77 @@ source = "owner/world-plugin"
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("No marketplace manifest found"), "got: {msg}");
+    }
+
+    /// Claude Code's `PluginSourceSchema` is a six-arm union. Aleph modelled
+    /// `source` as a bare `String` until 2026-08-19, and serde fails the whole
+    /// struct on a type mismatch — so a single `{"source":"github",...}` entry
+    /// made the entire marketplace unparseable and **every** plugin in it
+    /// invisible. The per-entry refusal is the point: the manifest still loads.
+    #[test]
+    fn an_object_source_does_not_take_the_whole_marketplace_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join(".claude-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("marketplace.json"),
+            r#"{
+              "name": "mixed",
+              "plugins": [
+                {"name": "local-one", "source": "./plugins/local-one"},
+                {"name": "gh-one", "source": {"source": "github", "repo": "owner/repo"}},
+                {"name": "npm-one", "source": {"source": "npm", "package": "x"}},
+                {"name": "future-one", "source": {"source": "not-invented-yet", "x": 1}}
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        // The oracle for why this type is an enum: the shape it replaced
+        // cannot read this file at all. This stays in the test rather than
+        // being a one-off mutation, because "a String would also work" is
+        // exactly the simplification a future reader will attempt.
+        #[derive(serde::Deserialize)]
+        struct OldEntry {
+            #[allow(dead_code)]
+            name: String,
+            #[allow(dead_code)]
+            source: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct OldManifest {
+            #[allow(dead_code)]
+            plugins: Vec<OldEntry>,
+        }
+        let raw = std::fs::read_to_string(plugin_dir.join("marketplace.json")).unwrap();
+        assert!(
+            serde_json::from_str::<OldManifest>(&raw).is_err(),
+            "the pre-2026-08-19 `source: String` shape must fail on this file — \
+             if it parses, this test is no longer proving anything"
+        );
+
+        let manifest = parse_marketplace_manifest(dir.path()).unwrap();
+        assert_eq!(
+            manifest.plugins.len(),
+            4,
+            "every entry must survive, including the forms Aleph cannot install"
+        );
+        assert_eq!(
+            manifest.plugins[0].source.as_relative_path(),
+            Some("./plugins/local-one")
+        );
+        assert_eq!(manifest.plugins[1].source.external_kind(), Some("github"));
+        assert_eq!(manifest.plugins[2].source.external_kind(), Some("npm"));
+        assert_eq!(
+            manifest.plugins[3].source.external_kind(),
+            Some("not-invented-yet"),
+            "an arm Claude Code adds later must parse, not brick the marketplace"
+        );
+        for entry in &manifest.plugins[1..] {
+            assert!(
+                entry.source.as_relative_path().is_none(),
+                "an external source must not resolve to a path inside the marketplace"
+            );
+        }
     }
 }

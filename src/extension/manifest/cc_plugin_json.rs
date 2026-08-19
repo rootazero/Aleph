@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::component_source::{self, ComponentSource};
 use crate::extension::manifest::declared_sections::AlephSuperset;
 use crate::extension::manifest::types::{
     AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
@@ -55,21 +56,22 @@ pub struct CcPluginJson {
     /// Author information (string or object)
     pub author: Option<CcPluginAuthor>,
 
-    // CC-native component path fields (camelCase)
-    /// Path to skills directory
-    pub skills: Option<String>,
+    // CC-native component fields (camelCase). Each accepts a path, an array
+    // of paths, or an inlined object — see `component_source`.
+    /// Skills directory (or directories).
+    pub skills: Option<ComponentSource>,
 
-    /// Path to commands directory (user-triggered `/command`s)
-    pub commands: Option<String>,
+    /// Commands directory (user-triggered `/command`s).
+    pub commands: Option<ComponentSource>,
 
-    /// Path to agents directory
-    pub agents: Option<String>,
+    /// Agents directory (or directories).
+    pub agents: Option<ComponentSource>,
 
-    /// Path to hooks file/directory
-    pub hooks: Option<String>,
+    /// Hooks file, files, or inlined hook configuration.
+    pub hooks: Option<ComponentSource>,
 
-    /// Path to MCP servers configuration
-    pub mcp_servers: Option<String>,
+    /// MCP servers configuration file, files, or inlined server map.
+    pub mcp_servers: Option<ComponentSource>,
 
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<JsonValue>,
@@ -317,36 +319,41 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
         let raw: CcPluginJson = serde_json::from_str(&content)
             .map_err(|e| anyhow::anyhow!("JSON re-parse error: {e}"))?;
 
-        // Parse skills
-        let skills_rel = raw.skills.as_deref().unwrap_or("skills");
-        capabilities.extend(parsers::parse_skills_dir(
-            plugin_dir, skills_rel, &plugin_id,
-        )?);
-
-        // Parse commands (user-triggered /commands → Command-typed skills)
-        let commands_rel = raw.commands.as_deref().unwrap_or("commands");
-        capabilities.extend(parsers::parse_commands_dir(
+        // Component fields accept a path, an array of paths, or (for hooks and
+        // mcpServers) an inlined object — see `component_source`.
+        capabilities.extend(component_source::resolve_dirs(
+            raw.skills.as_ref(),
+            "skills",
             plugin_dir,
-            commands_rel,
+            &plugin_id,
+            "skills",
+            parsers::parse_skills_dir,
+        )?);
+        capabilities.extend(component_source::resolve_dirs(
+            raw.commands.as_ref(),
+            "commands",
+            plugin_dir,
+            &plugin_id,
+            "commands",
+            parsers::parse_commands_dir,
+        )?);
+        capabilities.extend(component_source::resolve_dirs(
+            raw.agents.as_ref(),
+            "agents",
+            plugin_dir,
+            &plugin_id,
+            "agents",
+            parsers::parse_agents_dir,
+        )?);
+        capabilities.extend(component_source::resolve_hooks(
+            raw.hooks.as_ref(),
+            plugin_dir,
             &plugin_id,
         )?);
-
-        // Parse agents
-        let agents_rel = raw.agents.as_deref().unwrap_or("agents");
-        capabilities.extend(parsers::parse_agents_dir(
-            plugin_dir, agents_rel, &plugin_id,
-        )?);
-
-        // Parse hooks
-        let hooks_rel = raw.hooks.as_deref().unwrap_or("hooks/hooks.json");
-        capabilities.extend(parsers::parse_hooks_file(
-            plugin_dir, hooks_rel, &plugin_id,
-        )?);
-
-        // Parse MCP servers
-        let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
-        capabilities.extend(parsers::parse_mcp_config_file(
-            plugin_dir, mcp_rel, &plugin_id,
+        capabilities.extend(component_source::resolve_mcp_servers(
+            raw.mcp_servers.as_ref(),
+            plugin_dir,
+            &plugin_id,
         )?);
 
         // Manifest-declared sections from the `aleph` object — the same
@@ -636,5 +643,86 @@ label = "K"
         .unwrap();
         assert!(manifest.config_schema.is_some());
         assert!(manifest.config_ui_hints.contains_key("k"));
+    }
+
+    /// Two of Anthropic's own plugin manifests inline `mcpServers`. Aleph
+    /// declared it `Option<String>`, and serde fails the *whole* struct on a
+    /// type mismatch — so those plugins were registered with
+    /// `PluginStatus::Error` and zero capabilities. Loud, but all-or-nothing.
+    #[test]
+    fn an_inline_mcp_servers_object_no_longer_rejects_the_whole_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = parse_cc_plugin_json_content(
+            r#"{
+              "name": "chrome-devtools-mcp",
+              "version": "1.0.0",
+              "mcpServers": {
+                "chrome-devtools": {"command": "npx", "args": ["-y", "chrome-devtools-mcp"]}
+              }
+            }"#,
+            dir.path(),
+        );
+        assert!(
+            manifest.is_ok(),
+            "inline mcpServers must not reject the manifest: {:?}",
+            manifest.err()
+        );
+
+        // The oracle for why the field is a union: the shape it replaced
+        // cannot read this manifest at all.
+        #[derive(serde::Deserialize)]
+        struct OldShape {
+            #[allow(dead_code)]
+            name: String,
+            #[serde(rename = "mcpServers")]
+            #[allow(dead_code)]
+            mcp_servers: Option<String>,
+        }
+        assert!(
+            serde_json::from_str::<OldShape>(
+                r#"{"name":"x","mcpServers":{"s":{"command":"npx"}}}"#
+            )
+            .is_err(),
+            "if `Option<String>` parses this, the union is no longer load-bearing"
+        );
+    }
+
+    /// An array of component paths is the other shape Claude Code accepts.
+    #[test]
+    fn an_array_of_component_paths_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(parse_cc_plugin_json_content(
+            r#"{"name":"multi","skills":["./a/skills","./b/skills"]}"#,
+            dir.path(),
+        )
+        .is_ok());
+    }
+
+    /// The inline arm must reach a parser, not merely deserialize — otherwise
+    /// widening the type trades a loud rejection for a silent zero-capability
+    /// load, which is worse.
+    #[test]
+    fn an_inline_mcp_servers_object_actually_registers_a_server() {
+        use crate::extension::capability::CapabilityDeclaration;
+        use crate::extension::manifest::adapter::ManifestAdapter;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(CC_PLUGIN_JSON),
+            r#"{
+              "name": "inline-mcp",
+              "mcpServers": {"srv": {"command": "node", "args": ["server.js"]}}
+            }"#,
+        )
+        .unwrap();
+
+        let out = ClaudeCodeJsonAdapter.parse(dir.path()).unwrap();
+        assert!(
+            out.capabilities
+                .iter()
+                .any(|c| matches!(c, CapabilityDeclaration::McpServer(_))),
+            "inline mcpServers must produce an McpServer capability"
+        );
     }
 }

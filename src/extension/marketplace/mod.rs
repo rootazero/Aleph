@@ -233,17 +233,18 @@ impl MarketplaceManager {
             )),
             1 => {
                 let result = &results[0];
+                let plugin_path = result
+                    .plugin_path
+                    .as_deref()
+                    .ok_or_else(|| external_source_refusal(plugin_name, &result.plugin.source))?;
                 // Verify integrity before installing when the marketplace entry
                 // declares a hash (no-op when `sha256` is absent).
-                installer::verify_plugin_integrity(
-                    &result.plugin_path,
-                    result.plugin.sha256.as_deref(),
-                )?;
+                installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
                 // Gate on manifest soundness before copying into place: a plugin
                 // whose manifest fails to parse, has duplicate tools, or declares
                 // a malformed `config_schema` cannot load anyway, so reject it
                 // here with the concrete reasons rather than after install.
-                let validation = crate::extension::validation::validate_plugin(&result.plugin_path);
+                let validation = crate::extension::validation::validate_plugin(plugin_path);
                 if !validation.is_valid() {
                     return Err(format!(
                         "Plugin '{}' failed validation and was not installed:\n  - {}",
@@ -252,7 +253,7 @@ impl MarketplaceManager {
                     ));
                 }
                 let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
-                installer::install_plugin_from_cache(&result.plugin_path, &install_dir, plugin_name)
+                installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)
             }
             _ => {
                 let names: Vec<_> = results
@@ -325,14 +326,14 @@ impl MarketplaceManager {
                     });
                 }
 
+                let plugin_path = result
+                    .plugin_path
+                    .as_deref()
+                    .ok_or_else(|| external_source_refusal(plugin_name, &result.plugin.source))?;
                 // Same gates as install: integrity hash (when declared) + manifest
                 // soundness, before touching the existing install.
-                installer::verify_plugin_integrity(
-                    &result.plugin_path,
-                    result.plugin.sha256.as_deref(),
-                )?;
-                let validation =
-                    crate::extension::validation::validate_plugin(&result.plugin_path);
+                installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
+                let validation = crate::extension::validation::validate_plugin(plugin_path);
                 if !validation.is_valid() {
                     return Err(format!(
                         "Plugin '{}' failed validation and was not updated:\n  - {}",
@@ -341,11 +342,7 @@ impl MarketplaceManager {
                     ));
                 }
 
-                installer::update_plugin_from_cache(
-                    &result.plugin_path,
-                    &install_dir,
-                    plugin_name,
-                )?;
+                installer::update_plugin_from_cache(plugin_path, &install_dir, plugin_name)?;
 
                 Ok(UpdateOutcome::Updated {
                     from: installed_version,
@@ -469,8 +466,17 @@ fn builtin_config() -> MarketplaceConfig {
 ///
 /// The `source` field uses `./`-prefixed paths (e.g. `"./plugins/diagnostics"`).
 /// Strip the leading `./` (or `.`) and join with the marketplace root.
-fn resolve_plugin_path(marketplace_dir: &Path, source: &str) -> PathBuf {
+fn resolve_plugin_path(
+    marketplace_dir: &Path,
+    source: &crate::extension::marketplace::types::MarketplacePluginSource,
+) -> Option<PathBuf> {
     use std::path::Component;
+
+    // External forms (github / npm / pip / url / git-subdir) do not live
+    // inside the marketplace directory. Returning `None` rather than joining
+    // an empty path matters: an empty relative path resolves to the
+    // marketplace root itself, and the installer copies whatever it is given.
+    let source = source.as_relative_path()?;
 
     // Strip leading "./" or "." to get a plain relative component.
     let relative = source
@@ -487,7 +493,25 @@ fn resolve_plugin_path(marketplace_dir: &Path, source: &str) -> PathBuf {
         .filter(|c| matches!(c, Component::Normal(_)))
         .collect();
 
-    marketplace_dir.join(safe)
+    Some(marketplace_dir.join(safe))
+}
+
+/// The refusal for an entry whose source form this host cannot fetch.
+///
+/// Names the form and the fix. "Not found" would be a lie — the entry is
+/// there, it just points somewhere a directory-shaped marketplace does not
+/// reach.
+fn external_source_refusal(
+    plugin_name: &str,
+    source: &crate::extension::marketplace::types::MarketplacePluginSource,
+) -> String {
+    let kind = source.external_kind().unwrap_or("object");
+    format!(
+        "Plugin '{plugin_name}' declares a '{kind}' source, which this marketplace \
+         cannot install — Aleph serves plugins from the marketplace directory itself. \
+         Add the upstream repository as its own marketplace, or install it directly \
+         with `aleph plugin install <url>`."
+    )
 }
 
 // =============================================================================
@@ -590,13 +614,16 @@ mod tests {
     fn test_resolve_plugin_path_strips_dot_slash() {
         use std::path::PathBuf;
         let root = PathBuf::from("/marketplace");
+        let path = |s: &str| {
+            crate::extension::marketplace::types::MarketplacePluginSource::Path(s.to_string())
+        };
         assert_eq!(
-            resolve_plugin_path(&root, "./plugins/foo"),
-            PathBuf::from("/marketplace/plugins/foo")
+            resolve_plugin_path(&root, &path("./plugins/foo")),
+            Some(PathBuf::from("/marketplace/plugins/foo"))
         );
         assert_eq!(
-            resolve_plugin_path(&root, "plugins/bar"),
-            PathBuf::from("/marketplace/plugins/bar")
+            resolve_plugin_path(&root, &path("plugins/bar")),
+            Some(PathBuf::from("/marketplace/plugins/bar"))
         );
     }
 }

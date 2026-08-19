@@ -10,6 +10,7 @@ pub mod adapter;
 pub mod adapters;
 pub mod cc_plugin_json;
 pub mod cc_plugin_toml;
+pub mod component_source;
 pub mod config_validation;
 pub mod declared_sections;
 pub mod manifest_cache;
