@@ -43,7 +43,17 @@ impl HealthCheck for StaleLockCheck {
     }
 
     async fn run(&self, posture: Posture) -> Vec<Finding> {
-        let holder = match diagnose_holder(&self.data_dir) {
+        // `diagnose_holder` does a synchronous sysinfo process scan — keep it
+        // off the async executor (same discipline as `core/duplicate-instance`).
+        let data_dir = self.data_dir.clone();
+        let holder = match tokio::task::spawn_blocking(move || diagnose_holder(&data_dir)).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("instance-lock holder probe task failed: {e}");
+                None
+            }
+        };
+        let holder = match holder {
             // No lock file at all — nothing is holding the singleton.
             None => {
                 return vec![Finding::ok(
@@ -80,16 +90,16 @@ impl HealthCheck for StaleLockCheck {
             ),
         )
         .with_fix_hint(format!(
-            "Run `aleph doctor --fix`, or remove manually: rm {display} {holder_display}"
+            "Run `aleph doctor --fix`, or remove manually: rm \"{display}\" \"{holder_display}\""
         ))
         .repairable();
 
         if posture.allows_repair() {
-            let outcome = match std::fs::remove_file(&holder_path) {
+            let outcome = match tokio::fs::remove_file(&holder_path).await {
                 Ok(()) => {
                     // Best-effort tidy of the empty lock target; the sidecar was
                     // the file carrying the stale PID.
-                    let _ = std::fs::remove_file(&lock_path);
+                    let _ = tokio::fs::remove_file(&lock_path).await;
                     RepairOutcome::Repaired {
                         detail: format!("Removed stale lock ({display})"),
                     }

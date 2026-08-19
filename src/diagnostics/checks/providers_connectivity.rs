@@ -55,17 +55,20 @@ impl ProvidersConnectivityCheck {
     pub const fn new(config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> Self {
         Self { config, vault }
     }
+}
 
-    /// Resolve a provider's API key from the vault (`ai:<name>`). Mirrors the
-    /// gateway handler's resolution so both surfaces probe identical configs.
-    fn resolve_key(&self, name: &str) -> Option<String> {
-        match self.vault.get_secret(&provider_vault_key(name)) {
-            Ok(Some(secret)) => Some(secret.expose().to_string()),
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!(provider = %name, error = %e, "vault read failed during connectivity probe");
-                None
-            }
+/// Resolve a provider's API key from the vault (`ai:<name>`). Mirrors the
+/// gateway handler's resolution so both surfaces probe identical configs.
+///
+/// Blocking (vault decryption is synchronous crypto) — callers must keep it
+/// off the async executor (`spawn_blocking`).
+fn resolve_key(vault: &SharedTokenManager, name: &str) -> Option<String> {
+    match vault.get_secret(&provider_vault_key(name)) {
+        Ok(Some(secret)) => Some(secret.expose().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(provider = %name, error = %e, "vault read failed during connectivity probe");
+            None
         }
     }
 }
@@ -91,17 +94,16 @@ impl HealthCheck for ProvidersConnectivityCheck {
     }
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
-        // Snapshot configs + resolve keys under the read lock, then release
-        // it before any network I/O (same discipline as `providers.healthcheck`).
+        // Snapshot configs under the read lock, then release it before any
+        // blocking or network work (same discipline as `providers.healthcheck`).
+        // Key resolution happens AFTER the guard drops: vault decryption is
+        // synchronous crypto and must neither run while holding the config
+        // lock nor block the async executor.
         let probes: Vec<(String, bool, ProviderConfig)> = {
             let cfg = self.config.read().await;
             cfg.providers
                 .iter()
-                .map(|(name, pc)| {
-                    let mut runtime = pc.clone();
-                    runtime.api_key = self.resolve_key(name);
-                    (name.clone(), pc.enabled, runtime)
-                })
+                .map(|(name, pc)| (name.clone(), pc.enabled, pc.clone()))
                 .collect()
         };
 
@@ -112,6 +114,30 @@ impl HealthCheck for ProvidersConnectivityCheck {
                 "No LLM providers in config.toml; nothing to probe.",
             )];
         }
+
+        let names: Vec<String> = probes.iter().map(|(name, ..)| name.clone()).collect();
+        let vault = Arc::clone(&self.vault);
+        let keys: Vec<Option<String>> = match tokio::task::spawn_blocking(move || {
+            names.iter().map(|name| resolve_key(&vault, name)).collect()
+        })
+        .await
+        {
+            Ok(keys) => keys,
+            Err(e) => {
+                // Key resolution is best-effort (vault read failures already
+                // degrade to None); a failed task must not fail the check.
+                tracing::warn!("provider key-resolution task failed: {e}");
+                vec![None; probes.len()]
+            }
+        };
+        let probes: Vec<(String, bool, ProviderConfig)> = probes
+            .into_iter()
+            .zip(keys)
+            .map(|((name, enabled, mut runtime), key)| {
+                runtime.api_key = key;
+                (name, enabled, runtime)
+            })
+            .collect();
 
         // Count providers that will actually be probed (enabled AND whose
         // preset opts in to `/models` health probing) up-front — `probes` is

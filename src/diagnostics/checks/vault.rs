@@ -67,16 +67,19 @@ impl HealthCheck for VaultCheck {
             )];
         }
 
-        // `open()` errors ONLY when a present file cannot be loaded (corruption,
-        // an unsupported future version, or an I/O error) — exactly the
-        // problem worth surfacing. It never mutates the file.
-        match SecretVault::open(&self.vault_path) {
-            Ok(vault) => vec![Finding::ok(
+        // `open()` reads and decrypts the file synchronously — keep it off
+        // the async executor. It errors ONLY when a present file cannot be
+        // loaded (corruption, an unsupported future version, or an I/O
+        // error) — exactly the problem worth surfacing. It never mutates the
+        // file.
+        let path = self.vault_path.clone();
+        match tokio::task::spawn_blocking(move || SecretVault::open(&path)).await {
+            Ok(Ok(vault)) => vec![Finding::ok(
                 ID,
                 "Vault OK",
                 format!("{display} loads; {} secret(s) stored.", vault.len()),
             )],
-            Err(e) => vec![Finding::problem(
+            Ok(Err(e)) => vec![Finding::problem(
                 ID,
                 Severity::Error,
                 "Vault is not loadable",
@@ -87,6 +90,12 @@ impl HealthCheck for VaultCheck {
                  The daemon moves a corrupt vault aside to `<path>.corrupt-<timestamp>` \
                  on next start; restore from a backup, or re-enter secrets with \
                  `aleph secret set <name>` once the daemon has rebuilt an empty vault.",
+            )],
+            Err(e) => vec![Finding::problem(
+                ID,
+                Severity::Warning,
+                "Vault probe failed",
+                format!("the vault load task failed to run: {e}"),
             )],
         }
     }

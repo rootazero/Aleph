@@ -73,9 +73,13 @@ impl HealthCheck for DuplicateInstanceCheck {
 
     async fn run(&self, _posture: Posture) -> Vec<Finding> {
         // sysinfo does synchronous /proc I/O — keep it off the async executor.
-        let others = tokio::task::spawn_blocking(count_other_instances)
-            .await
-            .unwrap_or_default();
+        let others = match tokio::task::spawn_blocking(count_other_instances).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("duplicate-instance probe task failed: {e}");
+                0
+            }
+        };
 
         match classify_other_instances(others) {
             Some(severity) => vec![Finding::problem(

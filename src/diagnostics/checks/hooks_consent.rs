@@ -21,6 +21,7 @@ pub struct HooksConsentCheck {
 }
 
 impl HooksConsentCheck {
+    #[must_use]
     pub const fn new(consent: ShellHookConsent) -> Self {
         Self { consent }
     }

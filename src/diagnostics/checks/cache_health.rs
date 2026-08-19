@@ -8,7 +8,7 @@
 //! of the signal dying in a log file. Read-only by design (R1: core emits
 //! the event; notification surfaces are the interface layers' job).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
@@ -42,9 +42,12 @@ impl CacheHealthCheck {
 
     /// `(scope, streak, reads, writes, timestamp)` for every
     /// `cache_health_degraded` event inside the window, most recent first.
-    fn recent_alarms(&self) -> Result<Vec<(String, u32, u64, u64, i64)>, String> {
+    ///
+    /// Blocking (rusqlite is synchronous) — callers must keep it off the
+    /// async executor (`spawn_blocking`).
+    fn recent_alarms(db_path: &Path) -> Result<Vec<(String, u32, u64, u64, i64)>, String> {
         let conn = rusqlite::Connection::open_with_flags(
-            &self.db_path,
+            db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|e| format!("{e}"))?;
@@ -86,7 +89,7 @@ impl CacheHealthCheck {
             };
             alarms.push((
                 v["scope"].as_str().unwrap_or("unknown").to_string(),
-                v["streak"].as_u64().unwrap_or(0) as u32,
+                u32::try_from(v["streak"].as_u64().unwrap_or(0)).unwrap_or(0),
                 v["reads"].as_u64().unwrap_or(0),
                 v["writes"].as_u64().unwrap_or(0),
                 ts,
@@ -114,14 +117,24 @@ impl HealthCheck for CacheHealthCheck {
                 "state.db absent — no agent has run, so no cache telemetry exists.",
             )];
         }
-        let alarms = match self.recent_alarms() {
-            Ok(a) => a,
-            Err(e) => {
+        // rusqlite is synchronous — keep the query off the async executor.
+        let db = self.db_path.clone();
+        let alarms = match tokio::task::spawn_blocking(move || Self::recent_alarms(&db)).await {
+            Ok(Ok(a)) => a,
+            Ok(Err(e)) => {
                 return vec![Finding::problem(
                     ID,
                     Severity::Warning,
                     "Trace DB unreadable",
                     format!("could not read cache-health alarms from state.db: {e}"),
+                )];
+            }
+            Err(e) => {
+                return vec![Finding::problem(
+                    ID,
+                    Severity::Warning,
+                    "Trace DB unreadable",
+                    format!("the cache-health alarm read task failed to run: {e}"),
                 )];
             }
         };
