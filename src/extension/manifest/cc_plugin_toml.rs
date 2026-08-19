@@ -816,4 +816,34 @@ handler = "memory_stats"
             out.capabilities.len()
         );
     }
+
+    /// The server half of the scaffolder contract.
+    ///
+    /// `interfaces/cli` may not depend on `alephcore`, so the CLI test
+    /// (`every_template_scaffolds_a_runtime_the_host_can_load`) can only check
+    /// the runtime string against the shared vocabulary. This checks the other
+    /// half — that the manifest *shape* `plugin_cmd::scaffold_plugin` writes is
+    /// one the real parser accepts — which is what was broken: the scaffolder
+    /// emitted `[plugin] kind = "nodejs"` into the deprecated file, and the
+    /// CLI's own validator said it was fine.
+    #[test]
+    fn the_shape_the_scaffolder_writes_parses_for_every_runtime() {
+        for (runtime, expected) in [
+            ("mcp", PluginKind::Mcp),
+            ("wasm", PluginKind::Wasm),
+            ("static", PluginKind::Static),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let manifest = parse_cc_plugin_toml_content(
+                &format!(
+                    "name = \"p\"\nversion = \"0.1.0\"\ndescription = \"d\"\n\n\
+                     [aleph]\nruntime = \"{runtime}\"\nentry = \"e\"\n"
+                ),
+                dir.path(),
+            )
+            .unwrap_or_else(|e| panic!("scaffolded shape for {runtime} did not parse: {e}"));
+            assert_eq!(manifest.kind, expected);
+            assert_eq!(manifest.id, "p");
+        }
+    }
 }
