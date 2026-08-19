@@ -256,12 +256,28 @@ impl SandboxSummary {
         Some(format!("Writable roots: {}", paths.join(", ")))
     }
 
-    /// Single-line network posture descriptor for the dynamic
-    /// `## Operating Envelope` section. Mirrors the wording used in
-    /// [`Self::lines`] so the model sees the same descriptor in both halves
-    /// of the prompt. Returns `None` when the network state has no
-    /// interesting descriptor — but in practice every variant renders a
-    /// line, so the caller can use this as `Option<String>` uniformly.
+    /// The network posture, as the **only** place that sentence is produced.
+    ///
+    /// It used to be produced twice: [`Self::lines`] pushed it into the stable
+    /// `SecurityLayer` @600 half *and* this method rendered it again into the
+    /// dynamic `OperatingEnvelopeLayer` @1758 half. The duplication was
+    /// defended as "the session rule and the rule this run actually applies",
+    /// but both halves read the same `SandboxSummary` in the same turn, from
+    /// the same field — there is no state in which they can differ, so the
+    /// second copy was ~30 bytes of the same sentence on every request and a
+    /// direct violation of §2.3's own rule ③ (one question, one voice).
+    ///
+    /// It belongs to the **dynamic** half for a second, independent reason:
+    /// the posture is per-run. [`Self::isolated_worktree`] hardcodes
+    /// [`NetworkState::AllowAll`] while [`Self::from_baseline`] reads config,
+    /// so a session that mixes an isolated run with a normal one changes this
+    /// value mid-conversation — and while it lived in the cacheable prefix,
+    /// that change re-keyed the whole conversation's provider cache.
+    ///
+    /// Always `Some`: every [`NetworkState`] variant has a descriptor. The
+    /// `Option` is kept so callers compose it with the other per-run bullets
+    /// ([`Self::writable_roots_line`], [`Self::permission_profile_prompt_line`])
+    /// without a special case.
     #[must_use]
     pub fn network_prompt_line(&self) -> Option<String> {
         let line = match &self.network {
@@ -276,6 +292,54 @@ impl SandboxSummary {
             }
         };
         Some(line)
+    }
+
+    /// Every distinctive *value* this summary states, paired with the name of
+    /// the fact it answers.
+    ///
+    /// Exists so `thinker::prompt_contract::no_environment_fact_is_stated_twice`
+    /// can be driven by the type instead of by a hand-written list. The old
+    /// list enumerated six `RuntimeContext` facts and no sandbox facts at all,
+    /// which is exactly why the duplicated network sentence above survived four
+    /// rounds of that guard being green: a guard that names its members by hand
+    /// only ever covers the world as it stood on the day it was written.
+    ///
+    /// The exhaustive destructure is the mechanism — adding a field to
+    /// [`SandboxSummary`] fails to compile here until its owner has said
+    /// whether the new fact is model-visible.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn fact_census(&self) -> Vec<(&'static str, String)> {
+        let Self {
+            backend,
+            policy_tier,
+            writable_roots,
+            network,
+            max_memory_mb,
+            permission_profile_id,
+        } = self;
+        let mut facts: Vec<(&'static str, String)> = vec![
+            ("sandbox.backend", (*backend).to_string()),
+            ("sandbox.policy_tier", (*policy_tier).to_string()),
+        ];
+        for root in writable_roots {
+            facts.push(("sandbox.writable_root", root.display().to_string()));
+        }
+        facts.push((
+            "sandbox.network",
+            match network {
+                NetworkState::Denied => "denied".to_string(),
+                NetworkState::AllowAll => "allowed (all hosts)".to_string(),
+                NetworkState::AllowHosts { hosts } => hosts.join(", "),
+            },
+        ));
+        if let Some(mb) = max_memory_mb {
+            facts.push(("sandbox.max_memory_mb", format!("{mb} MiB")));
+        }
+        if let Some(id) = permission_profile_id {
+            facts.push(("sandbox.permission_profile_id", id.clone()));
+        }
+        facts
     }
 
     /// Stable permission-profile id for the active sandbox posture, when one
@@ -293,7 +357,7 @@ impl SandboxSummary {
 
     /// Single source for both renderings, so the operator view and the two
     /// prompt halves can never drift in wording or order.
-    fn lines(&self, include_writable_roots: bool) -> Vec<String> {
+    fn lines(&self, include_per_run: bool) -> Vec<String> {
         let mut lines = Vec::with_capacity(5);
         lines.push(format!("Sandbox: {} ({})", self.backend, self.policy_tier));
 
@@ -308,22 +372,14 @@ impl SandboxSummary {
             );
         }
 
-        if include_writable_roots {
+        // `include_per_run` gates BOTH per-run facts. `writable_roots` carries a
+        // fresh UUID on every isolated run and `network` flips with the sandbox
+        // flavour, so neither may reach the cacheable prefix — and the operator
+        // surface, which has no cache to break, wants both.
+        if include_per_run {
             lines.extend(self.writable_roots_line());
+            lines.extend(self.network_prompt_line());
         }
-
-        let net_line = match &self.network {
-            NetworkState::Denied => "Network: denied".to_string(),
-            NetworkState::AllowAll => "Network: allowed (all hosts)".to_string(),
-            NetworkState::AllowHosts { hosts } => {
-                if hosts.is_empty() {
-                    "Network: allowed (no hosts configured)".to_string()
-                } else {
-                    format!("Network: allowed (hosts: {})", hosts.join(", "))
-                }
-            }
-        };
-        lines.push(net_line);
 
         if let Some(mb) = self.max_memory_mb {
             lines.push(format!("Per-command memory ceiling: {mb} MiB"));
@@ -440,17 +496,62 @@ mod tests {
             .expect("an isolated worktree is writable");
         assert!(roots.contains("6f1c2e9a"));
 
+        // The network posture is per-run too — `isolated_worktree` hardcodes
+        // AllowAll while `from_baseline` reads config — so it left the stable
+        // half alongside the roots. Both are asserted absent from `posture`
+        // and present in the operator view.
+        let network = summary
+            .network_prompt_line()
+            .expect("every network state has a descriptor");
+        assert!(
+            !posture.iter().any(|l| l.starts_with("Network:")),
+            "the per-run network posture reached the stable half: {posture:?}"
+        );
+
         // The operator view stays whole, and the two halves reconstruct it in
         // the original order — so the split cannot silently drop or reorder a
         // fact behind `sandbox-debug`'s back.
         let full = summary.to_prompt_lines();
-        assert_eq!(full.len(), posture.len() + 1);
+        assert_eq!(full.len(), posture.len() + 2);
         assert!(full.contains(&roots));
+        assert!(full.contains(&network));
         assert_eq!(
-            full.iter().filter(|l| **l != roots).count(),
+            full.iter()
+                .filter(|l| **l != roots && **l != network)
+                .count(),
             posture.len(),
-            "full view = posture ∪ writable roots, nothing else: {full:?}"
+            "full view = posture ∪ per-run half, nothing else: {full:?}"
         );
+    }
+
+    /// The network sentence has exactly one producer.
+    ///
+    /// It used to have two: `lines()` pushed it into the stable
+    /// `SecurityLayer` half and `network_prompt_line()` rendered it again for
+    /// the dynamic `OperatingEnvelopeLayer` half — the same field, read from
+    /// the same struct, in the same turn. The duplication was defended as
+    /// "session rule vs the rule this run applies", which no state can make
+    /// true. Asserted on the source of both halves rather than on an assembled
+    /// prompt so it fails here, next to the code, rather than three layers
+    /// away.
+    #[test]
+    fn the_network_posture_is_produced_exactly_once() {
+        for summary in [
+            SandboxSummary::from_baseline("macos/seatbelt", &SandboxCapabilities::strict()),
+            SandboxSummary::isolated_worktree(PathBuf::from("/wt/aleph-1")),
+        ] {
+            let stable = summary.posture_lines();
+            assert!(
+                !stable.iter().any(|l| l.starts_with("Network:")),
+                "the stable half restated the network posture: {stable:?}"
+            );
+            let full = summary.to_prompt_lines();
+            assert_eq!(
+                full.iter().filter(|l| l.starts_with("Network:")).count(),
+                1,
+                "the operator view must state the network posture exactly once: {full:?}"
+            );
+        }
     }
 
     /// Read-only tiers have no writable root, so the dynamic half renders
@@ -461,7 +562,14 @@ mod tests {
             SandboxSummary::from_baseline("macos/seatbelt", &SandboxCapabilities::strict());
         assert_eq!(summary.policy_tier, "read-only");
         assert!(summary.writable_roots_line().is_none());
-        assert_eq!(summary.to_prompt_lines(), summary.posture_lines());
+        // The per-run half is then just the network posture: the full view is
+        // the stable half plus that one line, and nothing else.
+        let network = summary
+            .network_prompt_line()
+            .expect("a strict baseline still states `Network: denied`");
+        let mut expected = summary.posture_lines();
+        expected.push(network);
+        assert_eq!(summary.to_prompt_lines(), expected);
     }
 
     #[test]

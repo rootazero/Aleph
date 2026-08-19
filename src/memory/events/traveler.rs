@@ -40,8 +40,15 @@ impl MemoryTimeTraveler {
     /// and produces the same `FactExplanation` struct for backward
     /// compatibility. The explanation is derived entirely from the event
     /// stream — no separate audit log or fact table is required.
-    pub async fn explain_fact(&self, fact_id: &str, agent_id: &str) -> Result<FactExplanation, AlephError> {
-        let events = self.db.get_memory_events_for_fact(fact_id, agent_id).await?;
+    pub async fn explain_fact(
+        &self,
+        fact_id: &str,
+        agent_id: &str,
+    ) -> Result<FactExplanation, AlephError> {
+        let events = self
+            .db
+            .get_memory_events_for_fact(fact_id, agent_id)
+            .await?;
         if events.is_empty() {
             return Err(AlephError::other(format!(
                 "No events found for fact {fact_id}"
@@ -267,7 +274,7 @@ mod tests {
             .unwrap();
 
         let traveler = MemoryTimeTraveler::new(db);
-        let explanation = traveler.explain_fact("fact-ex-1").await.unwrap();
+        let explanation = traveler.explain_fact("fact-ex-1", "").await.unwrap();
 
         assert_eq!(explanation.fact_id, "fact-ex-1");
         assert_eq!(explanation.events.len(), 3);
@@ -296,7 +303,7 @@ mod tests {
             .unwrap();
 
         let traveler = MemoryTimeTraveler::new(db);
-        let explanation = traveler.explain_fact("fact-ex-2").await.unwrap();
+        let explanation = traveler.explain_fact("fact-ex-2", "").await.unwrap();
 
         assert_eq!(explanation.access_count, 2);
         assert!(explanation.is_valid);
@@ -324,7 +331,7 @@ mod tests {
         db.append_memory_event(&del_env).await.unwrap();
 
         let traveler = MemoryTimeTraveler::new(db);
-        let explanation = traveler.explain_fact("fact-ex-3").await.unwrap();
+        let explanation = traveler.explain_fact("fact-ex-3", "").await.unwrap();
 
         assert_eq!(explanation.fact_id, "fact-ex-3");
         assert!(!explanation.is_valid);
@@ -336,7 +343,7 @@ mod tests {
     async fn test_explain_nonexistent_fact() {
         let db = make_db();
         let traveler = MemoryTimeTraveler::new(db);
-        let result = traveler.explain_fact("ghost").await;
+        let result = traveler.explain_fact("ghost", "").await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("No events found"));
@@ -365,7 +372,7 @@ mod tests {
         db.append_memory_event(&restore_env).await.unwrap();
 
         let traveler = MemoryTimeTraveler::new(db);
-        let explanation = traveler.explain_fact("fact-ex-4").await.unwrap();
+        let explanation = traveler.explain_fact("fact-ex-4", "").await.unwrap();
 
         assert!(explanation.is_valid);
         // Restoration clears invalidation_reason

@@ -180,7 +180,7 @@ fn scan_email(chars: &[char], start: usize) -> Option<usize> {
         i += 1;
     }
     let tld_len = last_dot.map(|d| chars.len() - 1 - d).unwrap_or(0);
-    if tld_len < 2 || tld_len > 24 {
+    if !(2..=24).contains(&tld_len) {
         return None;
     }
     if i == domain_start {

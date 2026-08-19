@@ -175,7 +175,7 @@ fn fixed_runtime_context() -> crate::thinker::runtime_context::RuntimeContext {
         os: "linux".to_string(),
         arch: "x86_64".to_string(),
         shell: "bash".to_string(),
-        working_dir: std::path::PathBuf::from("/home/u/.aleph/workspaces/main"),
+        working_dir: Some(std::path::PathBuf::from("/home/u/.aleph/workspaces/main")),
         repo_root: None,
         // Model-ID shaped, deliberately NOT a provider name. In production
         // this is `TurnEnvelope::serving_model` (= `runner_impl`'s
@@ -688,35 +688,52 @@ fn no_sentence_is_stated_twice() {
 fn no_environment_fact_is_stated_twice() {
     let pipeline = PromptPipeline::default_layers();
     let config = production_config();
-    let rt = fixed_runtime_context();
     let context = resolve(InteractionParadigm::WebRich);
     let input = production_shaped(&config, &context);
 
-    // Distinctive values only: a fact whose value is a common substring (e.g. a
-    // one-word arch on some hosts) would produce coincidental hits.
-    let facts: [(&str, &str); 6] = [
-        ("os", rt.os.as_str()),
-        ("arch", rt.arch.as_str()),
-        ("shell", rt.shell.as_str()),
-        ("hostname", rt.hostname.as_str()),
-        ("working_dir", "/home/u/.aleph/workspaces/main"),
-        ("time", rt.current_time.as_str()),
-    ];
+    // The fact list is DERIVED from the two types that own the facts, not
+    // written out here. The hand-written version listed six `RuntimeContext`
+    // values and no sandbox values at all, so the `Network:` sentence that
+    // `SecurityLayer` @600 and `OperatingEnvelopeLayer` @1758 both rendered —
+    // from the same `SandboxSummary`, in the same turn — was outside its field
+    // of view for four rounds of green. Each census is an exhaustive
+    // destructure of its struct, so a new field is a compile error here until
+    // someone has said whether it is model-visible.
+    let mut facts: Vec<(&'static str, String)> = fixed_runtime_context().fact_census();
+    facts.extend(fixed_sandbox_summary().fact_census());
 
+    // Values short enough to appear inside unrelated prose would report
+    // collisions between genuinely different facts. Skipping them is a stated
+    // limit of the guard, not an exemption list that can grow into a licence:
+    // the threshold is a property of the string, re-derived every run, and
+    // nothing names a layer or a fact.
+    const MIN_DISTINCTIVE_LEN: usize = 5;
+
+    let sections = pipeline.layer_sections(AssemblyPath::Cached, &input, PromptMode::Full);
+    let mut checked = 0usize;
     for (fact, value) in facts {
-        let stating: Vec<&'static str> = pipeline
-            .layer_sections(AssemblyPath::Cached, &input, PromptMode::Full)
-            .into_iter()
-            .filter(|(_, section)| section.contains(value))
-            .map(|(name, _)| name)
+        if value.len() < MIN_DISTINCTIVE_LEN {
+            continue;
+        }
+        checked += 1;
+        let stating: Vec<&'static str> = sections
+            .iter()
+            .filter(|(_, section)| section.contains(&value))
+            .map(|(name, _)| *name)
             .collect();
         assert!(
             stating.len() <= 1,
             "environment fact {fact} ({value:?}) is stated by {stating:?} — exactly one \
-             layer must own it. Stable facts belong in `environment`, per-run facts in \
-             `runtime_context`; see RuntimeContext's module docs for the split."
+             layer must own it. Process-invariant facts belong in `environment` (Stable), \
+             per-run facts in `runtime_context` / `operating_envelope` (Dynamic); see \
+             RuntimeContext's module docs for the split."
         );
     }
+    assert!(
+        checked >= 8,
+        "only {checked} facts were distinctive enough to check — the censuses shrank or \
+         the fixtures went short, and this guard is now measuring almost nothing"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -803,7 +820,7 @@ fn stable_prefix_ignores_per_run_facts() {
         let mut shifted = resolve(paradigm);
         shifted.runtime_context = Some(crate::thinker::runtime_context::RuntimeContext {
             // Per-run / per-hour facts: all four must live in the dynamic zone.
-            working_dir: std::path::PathBuf::from("/home/u/.aleph/workspaces/other"),
+            working_dir: Some(std::path::PathBuf::from("/home/u/.aleph/workspaces/other")),
             repo_root: Some(std::path::PathBuf::from("/home/u/src/other")),
             current_model: "openai".to_string(),
             current_time: "2026-07-26 13:00".to_string(),

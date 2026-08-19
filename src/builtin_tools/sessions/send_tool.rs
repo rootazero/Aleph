@@ -673,15 +673,24 @@ impl Default for SessionsSendTool {
 }
 
 /// Canonical concurrency-claim key for a `session_send` target: the SAME
-/// gateway session key the send actually executes under (`parse_session_key`
-/// → [`session_key_to_gateway`] collapse), rendered to its stable string.
+/// gateway session key the send actually executes under
+/// ([`session_key_to_gateway`]), rendered to its stable string.
 ///
-/// The claim MUST key on the gateway form, not the raw spelling: the gateway
-/// collapse maps several routing spellings onto one execution session (e.g.
-/// `dm` and `group` keys with the same agent + peer both collapse to
-/// `peer`), so raw-string claims would judge two aliased fan-out arms
-/// disjoint and wrongly parallelize them into one session. `None` =
-/// unresolvable here (empty / invalid / defaulted target); the claim
+/// The claim MUST key on the gateway form rather than the raw spelling,
+/// because *that* is the key the send executes on: two raw spellings that
+/// normalise to one execution session must claim the same thing, or two
+/// fan-out arms race into one session.
+///
+/// **The dm/group example this doc used to give is no longer one.** It said
+/// `dm` and `group` keys with the same agent + peer "both collapse to `peer`"
+/// and used that as the whole justification — but PR-6 / BT-D-R4-20 removed
+/// that collapse deliberately (see [`session_key_to_gateway`]): it made a
+/// delegated send fork a seam-private `peer:` thread instead of continuing the
+/// visible conversation. The reasoning above survives the example's removal;
+/// the example did not, and the test that pinned it was asserting a rule the
+/// codebase had retired.
+///
+/// `None` = unresolvable here (empty / invalid / defaulted target); the claim
 /// producer degrades to whole-world exclusive.
 #[must_use]
 pub fn claim_session_key(raw: &str) -> Option<String> {
@@ -721,7 +730,7 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
             agent_id.clone(),
             channel.clone(),
             peer_id.clone(),
-            dm_scope.clone(),
+            *dm_scope,
         ),
         crate::routing::session_key::SessionKey::Group {
             agent_id,
@@ -731,7 +740,7 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
         } => SessionKey::group(
             agent_id.clone(),
             channel.clone(),
-            peer_kind.clone(),
+            *peer_kind,
             peer_id.clone(),
         ),
         crate::routing::session_key::SessionKey::Task {

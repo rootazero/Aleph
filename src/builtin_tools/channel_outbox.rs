@@ -82,13 +82,18 @@ pub struct ChannelOutboxArgs {
     #[serde(default)]
     pub limit: Option<usize>,
 
-    /// Required confirmation for the destructive `redrive` action. A redrive
-    /// replays permanently-failed outbound messages verbatim to their target
-    /// conversation — a typo'd confirm + dead-letter list = a duplicate
-    /// customer-visible message. Defaults to `false`; the call returns a
-    /// preview of what would be redriven when omitted, and only proceeds when
-    /// the caller explicitly passes `true`. `status` and `dead_letters` ignore
-    /// this flag.
+    // WHY (does not ship — a `//` comment is absent from the schemars schema,
+    // while this argument's doc is sent to the model on every request that can
+    // see this tool): a redrive replays permanently-failed outbound messages
+    // verbatim to their target conversation, so a mistaken confirm turns a
+    // dead-letter list into duplicate customer-visible messages. The model
+    // needs the mechanics below to call the tool correctly; it does not need
+    // the incident story in order to obey a required flag. Trimmed from seven
+    // doc lines to two when `registry_schema_bytes_ratchet` caught the 510 B —
+    // the same treatment the ledger on `REGISTRY_SCHEMA_CEILING_BYTES` records
+    // for `loop_graph`'s variant doc.
+    /// `redrive` only proceeds when this is `true`; omitted returns a preview
+    /// of what would be redriven. Ignored by `status` and `dead_letters`.
     #[serde(default)]
     pub confirm_redrive: Option<bool>,
 }
@@ -380,6 +385,10 @@ mod tests {
                     action,
                     channel_id: None,
                     limit: None,
+                    // The redrive arm gates on this; `None` is the shape a
+                    // caller that has not confirmed sends, which is what the
+                    // no-store assertion below is about.
+                    confirm_redrive: None,
                 })
                 .await
                 .expect("no store is not an error");
@@ -398,6 +407,7 @@ mod tests {
                 action: OutboxAction::DeadLetters,
                 channel_id: Some("teelgram".to_string()),
                 limit: None,
+                confirm_redrive: None,
             })
             .await
             .expect_err("a typo'd channel must not look like an empty result");

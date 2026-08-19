@@ -2363,16 +2363,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let mut cron_timer_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut heartbeat_timer_handle: Option<tokio::task::JoinHandle<()>> = None;
 
-    // BIN-R4-13 (complete): hoist the shared delivery engine OUT of the
-    // cron-only block so both the cron and heartbeat timer loops reuse the
-    // same `Arc` rather than constructing two structurally-identical engines.
-    // Two engines would drift the moment a new delivery target is added to
-    // one but not the other; one engine is structurally harder to drift apart.
+    // The channel cell and the delivery engine the cron and heartbeat loops
+    // share, declared where BOTH can see them.
+    //
+    // BIN-R4-13 said "declare the engine ONCE outside the cron-only block so
+    // the heartbeat block can reuse the same `Arc`" and then declared it
+    // *inside* that block. It read as correct only because the same change
+    // left `Some(tokio::spawn(async move {` closed with `});` instead of
+    // `}));`, which swallowed the whole rest of the function into the cron
+    // closure — so the binary never compiled at all and the scope error was
+    // never reached. Both halves are fixed here: the delimiter, and the scope
+    // the comment always described.
+    //
+    // Built unconditionally: it is three `Arc::new` registrations with no I/O,
+    // so paying for it when neither loop runs is cheaper than the second
+    // structurally-identical engine this replaces.
+    let task_channel_cell: alephcore::tasks::shared::targets::ChannelRegistryCell = agent_result
+        .channel_registry_cell
+        .clone()
+        .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
     let delivery_engine_shared = build_task_delivery_engine(
-        agent_result
-            .channel_registry_cell
-            .clone()
-            .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new())),
+        task_channel_cell.clone(),
         memory_db.clone(),
         webhook_ssrf_policy.clone(),
     );
@@ -2388,18 +2399,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 guard.state().clone()
             };
 
-            // Use the existing channel_registry_cell from agent_result for deferred injection.
-            // ChannelRegistry is initialized after this point; the cell is populated at line ~950.
-            let cron_channel_cell: alephcore::tasks::cron::executor::ChannelRegistryCell =
-                agent_result
-                    .channel_registry_cell
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
-
+            // The shared cell from above. ChannelRegistry is initialized after
+            // this point; the cell is populated at line ~950. Sharing it with
+            // the heartbeat side also removes a real divergence: when
+            // `agent_result.channel_registry_cell` is `None`, two
+            // `unwrap_or_else` calls minted two *different* empty cells.
             let executor_fn = build_cron_executor_fn(
                 Arc::clone(exec_adapter),
                 Arc::clone(registry),
-                cron_channel_cell.clone(),
+                task_channel_cell.clone(),
                 // D2: thread the cron-default iteration cap so each job's
                 // RunRequest carries it as max_iterations_override.
                 cron_state.config.default_max_iterations,
@@ -2408,11 +2416,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 Some(auth_bundle.security_store.clone()),
             );
             // Route cron failure alerts through the shared delivery engine so
-            // Webhook / Memory alert targets work (not just Gateway). Same
-            // engine wiring the heartbeat loop uses below.
-            // BIN-R4-13 (complete): delivery_engine_shared is declared in
-            // the outer scope above (between the JoinHandle decls and this
-            // block) so the heartbeat block below reuses the same Arc.
+            // Webhook / Memory alert targets work (not just Gateway) — the
+            // same `Arc` the heartbeat loop uses below.
             let cron_delivery_engine = delivery_engine_shared.clone();
             let alert_dispatcher_fn =
                 alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(
@@ -2540,12 +2545,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             };
 
-            // Build the delivery engine with all targets registered so
-            // heartbeat L2 results actually reach the user (H2). Without this
-            // every deliver() call hits the "target not registered" path.
-            // BIN-R4-13 (complete): reuse the same `delivery_engine_shared`
-            // declared in the outer scope above so cron and heartbeat share
-            // one engine — previously each block built its own Arc.
+            // The one delivery engine, with all targets registered, so
+            // heartbeat L2 results actually reach the user (H2) instead of
+            // hitting the "target not registered" path. Shared with the cron
+            // alert path — a second engine would drift the moment a delivery
+            // target is added to one and not the other.
             let delivery_engine = delivery_engine_shared.clone();
 
             let tick_ctx = Arc::new(TickContext {

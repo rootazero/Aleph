@@ -3,6 +3,7 @@ pub mod atomic_io;
 pub mod atomic_write;
 pub(crate) mod fifo_cache;
 pub(crate) mod filename;
+pub mod host;
 pub mod instance_lock;
 pub mod json_extract;
 pub mod no_window;

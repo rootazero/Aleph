@@ -79,6 +79,65 @@ impl PromptBuilder {
         ]
     }
 
+    /// Build the `Basic`-path system prompt **split at the stable/dynamic
+    /// boundary**, the same way [`Self::build_system_prompt_cached_with_mode`]
+    /// splits the `Cached` path.
+    ///
+    /// # Why the sub-agent path needs this
+    ///
+    /// A sub-agent used to ship its prompt as one undivided `String`
+    /// (`HarnessDeps::system_prompt_parts = None`), which the Anthropic adapter
+    /// then marks cacheable in its entirety. That was *correct* only because
+    /// the prompt happened to contain nothing per-run: the spawner threaded no
+    /// `ResolvedContext`, so every Dynamic layer stayed silent.
+    ///
+    /// The moment the child is told where it is — cwd, model, wall-clock hour,
+    /// its parent binding, its run id, the worktree it may write to — those
+    /// bytes differ per child, and in an undivided block they would re-key the
+    /// whole prompt for every member of a fan-out. `context=fork` exists
+    /// precisely to give a fan-out a warm shared prefix; N children each
+    /// writing their own copy of it is the failure that mode is built to
+    /// avoid. Splitting puts the shared scaffold in the cached block and the
+    /// per-child facts after the breakpoint, where they cost only themselves.
+    ///
+    /// Concatenating the two parts reproduces
+    /// [`Self::build_system_prompt`] byte-for-byte under any budget that does
+    /// not bite, because `stable_layers_come_before_dynamic` guarantees the
+    /// zones do not interleave. The budgets differ only when one does bite:
+    /// here the stable prefix is a protected floor (trimming it would defeat
+    /// the breakpoint it is being split for), there the whole string is fair
+    /// game because there is no breakpoint to protect.
+    pub fn build_system_prompt_parts(&self, tools: &[ToolInfo]) -> Vec<SystemPromptPart> {
+        let path = AssemblyPath::Basic;
+        let input = self.build_basic_input(tools);
+        super::maybe_trace_prompt_size(&self.pipeline, path, &input, PromptMode::Full);
+        let stable = self
+            .pipeline
+            .execute_stable_with_mode(path, &input, PromptMode::Full);
+        let mut dynamic = self
+            .pipeline
+            .execute_dynamic_with_mode(path, &input, PromptMode::Full);
+        // The welds land in the dynamic half for the same reason the Cached
+        // path puts its strategy weld there: they are per-run inputs the
+        // caller hands in, not part of the shared scaffold.
+        self.append_basic_welds(&mut dynamic);
+        let dynamic = crate::thinker::prompt_budget::fit_dynamic_suffix_with_content(
+            &stable,
+            dynamic,
+            &self.config.token_budget,
+        );
+        vec![
+            SystemPromptPart {
+                content: stable,
+                cache: true,
+            },
+            SystemPromptPart {
+                content: dynamic,
+                cache: false,
+            },
+        ]
+    }
+
     /// Construct the [`LayerInput`] shared by the cached stable/dynamic builds.
     ///
     /// Threads every builder field into the layer input — the same set

@@ -68,12 +68,15 @@ impl CardBuilder {
     }
 }
 
-/// Best-effort hostname retrieval without external crates.
-fn simple_hostname() -> String {
-    // Try HOSTNAME env first, then fall back to a default
-    std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
+/// The machine's hostname, through the one source that asks the OS.
+///
+/// This used to read `HOSTNAME` / `COMPUTERNAME` directly. Those are shell
+/// variables that no service manager exports, so every production daemon
+/// published its agent card as `aleph-unknown` and two peers on the same
+/// network were indistinguishable by id. See [`crate::utils::host`], which
+/// asks the OS first and keeps the env vars as a deliberate override.
+fn simple_hostname() -> &'static str {
+    crate::utils::host::hostname()
 }
 
 #[cfg(test)]
