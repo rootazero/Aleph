@@ -334,12 +334,38 @@ impl ExtensionManager {
         }
     }
 
-    /// This plugin's stored configuration, as JSON.
+    /// This plugin's **stored** configuration, as JSON.
     ///
     /// `{}` for a plugin the operator has never configured — which is not an
     /// error, and is exactly what a plugin with no `config_schema` should see.
+    ///
+    /// Stored form: any `{{secret:NAME}}` reference is returned verbatim. This
+    /// is what the display faces want — `plugin_manage(config_get / show)`
+    /// puts this text in the model's context and `plugin.config.get` puts it
+    /// in Panel, and neither is a place for a decrypted credential. Code
+    /// handing configuration to plugin code wants
+    /// [`Self::plugin_settings_for_runtime`] instead.
     pub async fn plugin_settings(&self, plugin_id: &str) -> serde_json::Value {
         self.plugins_config.read().await.settings_json(plugin_id)
+    }
+
+    /// This plugin's configuration with `{{secret:NAME}}` references resolved
+    /// against the vault — the form plugin code receives.
+    ///
+    /// See [`crate::extension::plugin_secrets`] for why this is a separate
+    /// function rather than a flag: resolving inside `plugin_settings` would
+    /// have been one line and would have piped every configured secret into
+    /// the transcript and the settings UI.
+    pub async fn plugin_settings_for_runtime(&self, plugin_id: &str) -> serde_json::Value {
+        let stored = self.plugin_settings(plugin_id).await;
+        let resolver = crate::gateway::security::shared_token::SharedTokenManager::global()
+            .map(crate::secrets::VaultSecretResolver::new);
+        crate::extension::plugin_secrets::resolve_settings(
+            &stored,
+            resolver.as_ref().map(|r| r as &dyn crate::secrets::AsyncSecretResolver),
+            plugin_id,
+        )
+        .await
     }
 
     /// Replace a plugin's configuration, validating it against the schema the
@@ -439,13 +465,20 @@ impl ExtensionManager {
     /// config write — the two moments the stored set can differ from the
     /// loader's copy.
     pub async fn publish_plugin_settings(&self) {
-        let snapshot: std::collections::HashMap<String, serde_json::Value> = {
+        // Ids first, under a short-lived read lock; resolution below awaits the
+        // vault and must not hold the config lock while it does.
+        let ids: Vec<String> = {
             let cfg = self.plugins_config.read().await;
-            cfg.entries
-                .keys()
-                .map(|id| (id.clone(), cfg.settings_json(id)))
-                .collect()
+            cfg.entries.keys().cloned().collect()
         };
+        let mut snapshot: std::collections::HashMap<String, serde_json::Value> =
+            std::collections::HashMap::with_capacity(ids.len());
+        for id in ids {
+            // Runtime form: this snapshot is what the WASM guest and the MCP
+            // child actually receive, so `{{secret:NAME}}` resolves here.
+            let settings = self.plugin_settings_for_runtime(&id).await;
+            snapshot.insert(id, settings);
+        }
         self.plugin_loader
             .write()
             .await

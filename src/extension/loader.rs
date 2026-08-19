@@ -172,7 +172,16 @@ impl PluginLoader {
             .get(&manifest.id)
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        runtime.load_plugin_with(manifest, None, &settings)?;
+        // The wire that made host-side credential injection reachable. This
+        // argument was `None` from the day the injector was written, so every
+        // `[capabilities.http.credentials]` binding resolved to `secret not
+        // found` — a fully implemented security feature with no way to reach it.
+        //
+        // Reads the process-global vault rather than a handle threaded through
+        // `PluginLoader::new`: see `VaultBackedSecretResolver::for_current_process`
+        // for why a constructor parameter is the wrong shape for this.
+        let resolver = super::runtime::wasm::VaultBackedSecretResolver::for_current_process();
+        runtime.load_plugin_with(manifest, Some(resolver), &settings)?;
 
         self.loaded_plugins
             .insert(manifest.id.clone(), PluginKind::Wasm);

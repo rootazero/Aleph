@@ -21,6 +21,7 @@ pub use credential_injector::{inject_credential, CredentialError};
 pub use limits::WasmResourceLimits;
 pub use secret_resolver::{
     shared_resolver, DenyAllSecretResolver, InMemorySecretResolver, SecretResolver,
+    VaultBackedSecretResolver,
 };
 
 use serde::{Deserialize, Serialize};

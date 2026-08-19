@@ -38,6 +38,7 @@ mod manager_global;
 pub mod manifest;
 pub mod mcp_config;
 mod plugin_ops;
+pub mod plugin_secrets;
 pub mod plugin_state;
 pub mod plugin_trust;
 pub mod plugin_vars;

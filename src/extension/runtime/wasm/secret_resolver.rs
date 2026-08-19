@@ -20,36 +20,35 @@
 //! block (Vault HTTP fetch, file read, in-memory map), so the resolver impl
 //! itself owns the I/O strategy.
 //!
-//! ## What is actually installed today
+//! ## What is installed today
 //!
-//! [`DenyAllSecretResolver`]. `WasmRuntime::load_plugin` forwards `None`, and
-//! `load_plugin_with_resolver(_, Some(..))` has **zero call sites** in the
-//! repo — production, `#[cfg(test)]` and `tests/` alike. So host-side
-//! credential injection is implemented and unreachable: every
-//! `[capabilities.http.credentials]` binding a plugin declares turns its
-//! `http_fetch` to that host into a guaranteed `secret not found` error.
+//! [`VaultBackedSecretResolver`], when the daemon has a shared token manager —
+//! i.e. in any running `aleph-server`. [`DenyAllSecretResolver`] otherwise:
+//! test binaries never install the global, so they keep denying without having
+//! to opt in.
 //!
-//! This module's doc used to say the opposite — that `load_plugin` installs an
-//! [`InMemorySecretResolver`] "as the default", and that `DenyAllSecretResolver`
-//! is a "test-only stub". Both were false, and a security feature whose
-//! documentation reports it as live is worse than one documented as missing:
-//! it reads as a control in review.
+//! Until 2026-08-19 it was deny-all everywhere. `WasmRuntime::load_plugin`
+//! forwarded `None` and `load_plugin_with_resolver(_, Some(..))` had zero call
+//! sites in the repo, so host-side credential injection was implemented and
+//! unreachable: every `[capabilities.http.credentials]` binding turned that
+//! plugin's `http_fetch` into a guaranteed `secret not found`.
 //!
-//! Load emits a warning naming the plugin when it declares credentials, so the
-//! gap is loud rather than a runtime surprise
-//! (`WasmRuntime::warn_if_credentials_are_unreachable`).
+//! Before that, this module's doc claimed the opposite — that `load_plugin`
+//! installs an [`InMemorySecretResolver`] "as the default" and that
+//! `DenyAllSecretResolver` is a "test-only stub". Both were false. A security
+//! feature whose documentation reports it as live is worse than one documented
+//! as missing: it reads as a control in review.
 //!
-//! ## Connecting it
+//! ## What had to land in the same change
 //!
-//! Aleph already owns the missing half (`src/secrets/`, the encrypted vault).
-//! Wiring it is one call site — `PluginLoader::load_wasm_plugin` passing a
-//! vault-backed `Arc<dyn SecretResolver>` — but it must land together with a
-//! `check_secret_pattern` gate inside [`super::WasmCapabilityKernel::resolve_secret`],
-//! which today applies none: `try_http_fetch` feeds it `binding.secret_name`
-//! straight from the manifest, so a real resolver would let
-//! `[capabilities.http.credentials]` name any vault key and bypass
-//! `[capabilities.secrets] allowed_patterns` entirely. That path has never
-//! executed and would run for the first time on the day the wire is connected.
+//! The gate. [`super::WasmCapabilityKernel::resolve_secret`] applied no
+//! `check_secret_pattern` check, while `try_http_fetch` fed it
+//! `binding.secret_name` straight from the manifest — so a real resolver would
+//! have made `[capabilities.http.credentials]` a way to name any vault key and
+//! bypass `[capabilities.secrets] allowed_patterns` entirely. That path had
+//! never executed, and would have run for the first time on the day this wire
+//! was connected. The gate now lives inside `resolve_secret` rather than at
+//! its callers, so a third caller inherits it without knowing it exists.
 
 use std::sync::RwLock;
 
@@ -132,15 +131,85 @@ impl SecretResolver for InMemorySecretResolver {
     }
 }
 
-/// Test-only resolver that denies every lookup. Keeps the historical
-/// "plugin must supply its own credentials" behaviour alive for tests that
-/// intentionally avoid the credential path.
+/// Resolver that denies every lookup.
+///
+/// Still the fallback whenever no vault is available — a build with no shared
+/// token manager installed (every test binary, and the daemon before boot
+/// completes) resolves nothing rather than panicking.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DenyAllSecretResolver;
 
 impl SecretResolver for DenyAllSecretResolver {
     fn resolve(&self, _name: &str) -> Option<String> {
         None
+    }
+}
+
+/// Resolver backed by Aleph's encrypted vault.
+///
+/// The sync twin of [`crate::secrets::VaultSecretResolver`], which MCP uses.
+/// Two impls rather than one because the two consumers need different shapes:
+/// MCP resolves during an async spawn and takes `AsyncSecretResolver`, while
+/// the WASM host functions run inside a synchronous guest call and cannot
+/// await. `SharedTokenManager::get_secret` is itself synchronous, so neither
+/// wrapper does I/O the other has to fake — they differ only in signature.
+///
+/// A missing vault entry, a locked vault, or a decryption failure all resolve
+/// to `None`: the trait's contract is that an unknown name is `None`, never a
+/// panic, and `try_http_fetch` turns `None` on a *matching* binding into a
+/// hard error before any egress. The failure direction is closed — no
+/// unauthenticated request goes out, and no placeholder leaks into one.
+pub struct VaultBackedSecretResolver {
+    inner: Arc<crate::gateway::security::shared_token::SharedTokenManager>,
+}
+
+impl VaultBackedSecretResolver {
+    #[must_use]
+    pub const fn new(
+        inner: Arc<crate::gateway::security::shared_token::SharedTokenManager>,
+    ) -> Self {
+        Self { inner }
+    }
+
+    /// The resolver a plugin load should use: vault-backed when a shared token
+    /// manager has been installed, deny-all otherwise.
+    ///
+    /// Reads the process-global rather than taking a handle through
+    /// `PluginLoader::new`. That is deliberate: a constructor parameter is
+    /// inherited only by the construction sites that remember it, and this is
+    /// a security-relevant capability whose failure mode is "one loader
+    /// resolves secrets, another silently does not". Installing it on the
+    /// lookup instead means a `PluginLoader` built somewhere nobody has
+    /// thought about yet gets the same answer.
+    ///
+    /// Test binaries never install the global, so they keep the deny-all
+    /// behaviour without opting into it.
+    #[must_use]
+    pub fn for_current_process() -> Arc<dyn SecretResolver> {
+        crate::gateway::security::shared_token::SharedTokenManager::global().map_or_else(
+            || Arc::new(DenyAllSecretResolver) as Arc<dyn SecretResolver>,
+            |mgr| Arc::new(Self::new(mgr)) as Arc<dyn SecretResolver>,
+        )
+    }
+}
+
+impl SecretResolver for VaultBackedSecretResolver {
+    fn resolve(&self, name: &str) -> Option<String> {
+        match self.inner.get_secret(name) {
+            Ok(Some(secret)) => Some(secret.expose().to_string()),
+            Ok(None) => None,
+            Err(e) => {
+                // Loud: "the vault is locked" and "there is no such key" are
+                // very different problems for a plugin author, and both look
+                // like `secret not found` at the call site.
+                tracing::warn!(
+                    secret = %name,
+                    error = %e,
+                    "vault lookup failed for a plugin credential"
+                );
+                None
+            }
+        }
     }
 }
 

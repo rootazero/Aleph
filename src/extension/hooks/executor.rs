@@ -589,7 +589,11 @@ impl HookExecutor {
             // from one plugin reading the same setting under two different
             // names would be two conventions for one fact.
             if let Some(manager) = crate::extension::try_extension_manager() {
-                let settings = manager.plugin_settings(plugin_name).await;
+                // Runtime form: these values become the hook subprocess's
+                // environment, so a `{{secret:NAME}}` reference resolves here.
+                // The display faces deliberately keep the placeholder — see
+                // `crate::extension::plugin_secrets`.
+                let settings = manager.plugin_settings_for_runtime(plugin_name).await;
                 for (key, value) in crate::extension::plugin_vars::settings_env(&settings) {
                     cmd.env(key, value);
                 }

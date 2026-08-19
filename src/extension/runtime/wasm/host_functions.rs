@@ -167,6 +167,23 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
     // resolving once prevents a TOCTOU race against a resolver that mutates.
     let mut resolved_secrets: Vec<(String, String)> = Vec::with_capacity(http.credentials.len());
     for binding in &http.credentials {
+        // A binding naming a secret outside `[capabilities.secrets]
+        // allowed_patterns` is a manifest error, not a runtime condition: the
+        // author declared a credential the plugin has not declared the right to
+        // read. `resolve_secret` refuses it silently (a guest *asking* is
+        // normal), so the diagnostic has to be raised here, where the manifest
+        // is the thing at fault. Without it the request just fails closed with
+        // "secret not found", which sends the author looking in the vault for a
+        // key that is present.
+        if !kernel.check_secret_pattern(&binding.secret_name) {
+            tracing::warn!(
+                plugin_id = %kernel.plugin_id(),
+                secret = %binding.secret_name,
+                "credential binding names a secret outside this plugin's \
+                 [capabilities.secrets] allowed_patterns; add the pattern there \
+                 or the binding can never resolve"
+            );
+        }
         if let Some(value) = kernel.resolve_secret(&binding.secret_name) {
             // `inject_credential` looks up by name; duplicates are harmless
             // (first-match wins).

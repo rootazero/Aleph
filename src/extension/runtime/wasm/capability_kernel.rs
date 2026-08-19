@@ -99,20 +99,37 @@ impl WasmCapabilityKernel {
     }
 
     /// Resolve a single secret name to its plaintext value, or `None` if the
-    /// resolver doesn't recognise it.
+    /// plugin may not read it / the resolver doesn't recognise it.
     ///
-    /// With the deny-all resolver every plugin carries today, this always
-    /// returns `None` — and a *matching* credential binding then fails the
-    /// request closed rather than letting it "proceed unchanged", which is
-    /// what this comment claimed until 2026-08-19.
+    /// # The gate lives here, not at the call sites
     ///
-    /// NOTE for whoever installs a real resolver: this applies no
-    /// `check_secret_pattern` gate, and `try_http_fetch` passes
-    /// `binding.secret_name` straight from the manifest. Add the gate in the
-    /// same change, or `[capabilities.http.credentials]` becomes a way to name
-    /// any vault key and bypass `[capabilities.secrets] allowed_patterns`.
+    /// `[capabilities.secrets] allowed_patterns` is the plugin's declared
+    /// secret surface. Until 2026-08-19 this function applied it nowhere:
+    /// `host_secret_exists` checked the pattern itself before calling, and
+    /// `try_http_fetch` did not — it passed `binding.secret_name` straight
+    /// from the manifest. So `[capabilities.http.credentials]` was a way to
+    /// name any key the resolver knows and bypass `allowed_patterns` entirely.
+    ///
+    /// That path had never executed, because every plugin carries the deny-all
+    /// resolver, and it would have run for the first time on the day a real
+    /// resolver was wired — which is the worst moment to discover a gate is on
+    /// one of two callers. Applying it here makes it structural: a third caller
+    /// added later inherits it without knowing it exists.
+    ///
+    /// Fail-closed on an undeclared block: a plugin with no
+    /// `[capabilities.secrets]` has declared no secret surface, so it gets
+    /// nothing. Same direction as `check_workspace_read`, where an empty
+    /// prefix list grants nothing rather than everything.
     #[must_use]
     pub fn resolve_secret(&self, name: &str) -> Option<String> {
+        // Deliberately silent: the guest is allowed to *ask* whether it may use
+        // a secret (`host_secret_exists`), and a `no` there is a normal answer,
+        // not a misconfiguration. The loud diagnostic belongs where a *manifest*
+        // names an unreachable secret — see `try_http_fetch`, which warns per
+        // refused credential binding.
+        if !self.check_secret_pattern(name) {
+            return None;
+        }
         self.secret_resolver.resolve(name)
     }
 
@@ -486,6 +503,51 @@ mod tests {
     fn test_secret_exists_without_capability_denies_all() {
         let kernel = kernel_with_no_caps();
         assert!(!kernel.check_secret_pattern("anything"));
+    }
+
+    /// A resolver that knows a secret is not enough — the plugin must also
+    /// have declared the right to read it.
+    ///
+    /// This is the bypass that `[capabilities.http.credentials]` used to be:
+    /// `try_http_fetch` passes `binding.secret_name` verbatim from the
+    /// manifest, so before the gate moved into `resolve_secret`, a binding
+    /// could name any key the resolver knew and `allowed_patterns` never ran.
+    /// Only a resolver that actually holds the out-of-pattern secret can tell
+    /// the gate working from a resolver that simply has nothing.
+    #[test]
+    fn resolve_secret_refuses_a_name_outside_allowed_patterns() {
+        let kernel = kernel_with_secrets().with_secret_resolver(super::super::shared_resolver(
+            super::super::InMemorySecretResolver::new(vec![
+                ("slack_bot_token".to_string(), "xoxb-ok".to_string()),
+                ("aws_key".to_string(), "AKIA-should-never-escape".to_string()),
+            ]),
+        ));
+
+        assert_eq!(
+            kernel.resolve_secret("slack_bot_token"),
+            Some("xoxb-ok".to_string()),
+            "a declared secret must still resolve — the gate is a filter, not an off switch"
+        );
+        assert_eq!(
+            kernel.resolve_secret("aws_key"),
+            None,
+            "the resolver holds this key and the plugin did not declare it; \
+             resolving it is the `allowed_patterns` bypass"
+        );
+    }
+
+    /// No `[capabilities.secrets]` block means no declared secret surface, so
+    /// nothing resolves — the same direction as `check_workspace_read`, where
+    /// an empty prefix list grants nothing rather than everything.
+    #[test]
+    fn resolve_secret_is_closed_when_no_secrets_capability_is_declared() {
+        let kernel = kernel_with_no_caps().with_secret_resolver(super::super::shared_resolver(
+            super::super::InMemorySecretResolver::new(vec![(
+                "anything".to_string(),
+                "value".to_string(),
+            )]),
+        ));
+        assert_eq!(kernel.resolve_secret("anything"), None);
     }
 
     #[test]
