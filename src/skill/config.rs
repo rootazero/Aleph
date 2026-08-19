@@ -5,7 +5,7 @@
 use crate::domain::skill::{PromptScope, SkillId};
 use crate::skill::prompt::SkillPromptBudget;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Global install preferences.
@@ -37,8 +37,17 @@ pub struct SkillEntryConfig {
 pub struct SkillsConfig {
     #[serde(default)]
     pub install_preferences: InstallPreferences,
+    /// `BTreeMap`, not `HashMap`: this file is one an operator reads and diffs,
+    /// and `HashMap`'s iteration order is randomised per process, so every save
+    /// reshuffled the whole `[entries.*]` section. The diff of a run that
+    /// toggled one skill was the entire file.
+    ///
+    /// The twin `plugins.toml` was written with a `BTreeMap` for exactly this
+    /// reason and cites this file as its model — while this file, the model,
+    /// had the bug. When one of two twin subsystems has answered a question,
+    /// the other adopting a different answer is how the two drift apart.
     #[serde(default)]
-    pub entries: HashMap<String, SkillEntryConfig>,
+    pub entries: BTreeMap<String, SkillEntryConfig>,
     /// Budget bounding the injected `<available_skills>` prompt index. Lets a
     /// host with a large skill library trade detail for context (or lift the
     /// cap entirely). Omitted → built-in default (64 skills / 12k chars).
@@ -169,6 +178,46 @@ mod tests {
         let loaded = SkillsConfig::load(tmp.path());
         assert_eq!(loaded.prompt_budget.max_skills, 10);
         assert_eq!(loaded.prompt_budget.max_chars, 2000);
+    }
+
+    /// The emitted file must be stable across saves.
+    ///
+    /// Keys are inserted in reverse order and asserted to come back sorted.
+    /// Ten of them, deliberately: `HashMap` randomises its iteration seed per
+    /// process, so a two-key version of this test would have passed half the
+    /// time and been worse than no test. At ten the odds of the old type
+    /// emitting sorted order are 1 in 3.6 million.
+    ///
+    /// The twin guard is `plugins.toml`'s own `BTreeMap`; if either subsystem
+    /// goes back to a randomised map, an operator's diff of a one-skill toggle
+    /// becomes the whole file again.
+    #[test]
+    fn the_saved_file_has_a_stable_key_order() {
+        let mut config = SkillsConfig::default();
+        for i in (0..10).rev() {
+            config.apply_update(
+                &SkillId::new(&format!("qa:skill-{i}")),
+                SkillConfigUpdate::SetEnabled(i % 2 == 0),
+            );
+        }
+
+        let tmp = NamedTempFile::new().unwrap();
+        config.save(tmp.path()).unwrap();
+        let text = std::fs::read_to_string(tmp.path()).unwrap();
+
+        let emitted: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("[entries.").and_then(|r| r.strip_suffix(']')))
+            .collect();
+        assert_eq!(emitted.len(), 10, "expected ten entry tables, got {emitted:?}");
+
+        let mut sorted = emitted.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            emitted, sorted,
+            "skills.toml emitted its entries in a non-deterministic order; every \
+             save would reshuffle the file and swamp the operator's diff"
+        );
     }
 
     #[test]

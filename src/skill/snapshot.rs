@@ -4,7 +4,7 @@
 //! prompt XML for system prompt injection. Each snapshot is versioned; version
 //! increments indicate cache invalidation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use crate::domain::skill::{SkillId, SkillManifest};
 use crate::skill::config::SkillEntryConfig;
@@ -77,7 +77,7 @@ impl SkillSnapshot {
         eligibility: &EligibilityService,
         version: u64,
         config: &serde_json::Value,
-        entries: &HashMap<String, SkillEntryConfig>,
+        entries: &BTreeMap<String, SkillEntryConfig>,
         archived: &HashSet<String>,
     ) -> Self {
         let mut eligible = Vec::new();
@@ -144,8 +144,8 @@ mod tests {
     };
 
     /// Helper: an empty user-override map (no enable/disable, no scope override).
-    fn no_overrides() -> HashMap<String, SkillEntryConfig> {
-        HashMap::new()
+    fn no_overrides() -> BTreeMap<String, SkillEntryConfig> {
+        BTreeMap::new()
     }
 
     /// Helper: an empty archived-skill set.
@@ -305,7 +305,7 @@ mod tests {
         registry.register(make_manifest("git:commit", SkillSource::Bundled));
 
         // User disables it via skills.toml.
-        let mut entries = HashMap::new();
+        let mut entries = BTreeMap::new();
         entries.insert(
             "git:commit".to_string(),
             SkillEntryConfig {
@@ -341,7 +341,7 @@ mod tests {
         // drops out of the prompt index even though it stays eligible.
         registry.register(make_manifest("git:commit", SkillSource::Bundled));
 
-        let mut entries = HashMap::new();
+        let mut entries = BTreeMap::new();
         entries.insert(
             "git:commit".to_string(),
             SkillEntryConfig {
