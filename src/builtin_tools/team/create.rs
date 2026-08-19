@@ -183,6 +183,42 @@ impl TeamCreateTool {
     /// Resolve a `MemberSpec` to an `agent_id`, creating the agent if needed.
     /// When `role` is set on the spec, the corresponding role prompt
     /// template is injected into the agent's system prompt.
+    /// BT-C-R4-06: best-effort cleanup of agents that THIS call created
+    /// inline. Called from the create_team and add_member failure arms so
+    /// a half-finished team_create leaves no orphan agents in the
+    /// registry. agent_manager may be `None` in tests that don't wire
+    /// it; the early-return keeps the call site clean. Each delete is
+    /// independent (best-effort): a delete that fails logs and proceeds
+    /// with the rest. Static (no `&self`) so we can call it from the
+    /// member-enrollment loop without borrowing issues.
+    async fn cleanup_orphans(
+        agent_manager: Option<&crate::config::agent_manager::AgentManager>,
+        created: &[String],
+    ) {
+        if created.is_empty() {
+            return;
+        }
+        let Some(mgr) = agent_manager else {
+            tracing::warn!(
+                created = ?created,
+                "team_create cleanup: agent_manager not wired; inline agents will remain \
+                 registered without a team. Wire the manager in the executor to clean up."
+            );
+            return;
+        };
+        for agent_id in created {
+            if let Err(e) = mgr.delete(agent_id) {
+                tracing::warn!(
+                    agent_id = %agent_id,
+                    error = %e,
+                    "team_create cleanup: failed to delete inline agent; agent will remain \
+                     registered without a team. Operator can clean up via team_member_remove / \
+                     agent_manage delete."
+                );
+            }
+        }
+    }
+
     async fn resolve_member(&self, spec: &MemberSpec) -> Result<String> {
         if let Some(ref agent_id) = spec.agent_id {
             // ACP harness members (`acp:claude-code`, `acp:codex/backend`, …)
@@ -418,11 +454,22 @@ impl AlephTool for TeamCreateTool {
         // will remain registered without being part of a team. This is an
         // accepted limitation — the spec does not require transactional
         // rollback, and the orphaned agent can be cleaned up manually.
+        // BT-C-R4-06: track the agent_ids that THIS call created so a
+        // failure in create_team / add_member / add_member-loop can clean
+        // them up. The previous shape documented the orphan risk and
+        // left cleanup to the operator; the agent_manager exposes a
+        // delete path that we can drive from the failure arm. Best
+        // effort: a delete that itself fails logs and proceeds (we are
+        // already on the error path).
+        let mut created_inline: Vec<String> = Vec::new();
         let mut resolved: Vec<(String, String, bool)> = Vec::new(); // (agent_id, role, created)
         for spec in &args.members {
             let created = spec.create.is_some();
             let agent_id = self.resolve_member(spec).await?;
-            resolved.push((agent_id, spec.role.clone(), created));
+            resolved.push((agent_id.clone(), spec.role.clone(), created));
+            if created {
+                created_inline.push(agent_id);
+            }
         }
 
         // Reject duplicate team names up front. `get_team_by_name` resolves by
@@ -436,15 +483,26 @@ impl AlephTool for TeamCreateTool {
             )));
         }
 
-        // Create the team record
-        let team = self
+        // Create the team record. If this fails (DB write error,
+        // duplicate name, etc.), every inline agent we just created
+        // would be left dangling in the registry without a team. Walk
+        // the created_inline list in the failure arm and remove each.
+        // BT-C-R4-06.
+        let team = match self
             .store
             .create_team(NewTeam {
                 name: args.name.clone(),
                 description: args.description.clone(),
                 leader_id: leader_id.clone(),
             })
-            .await?;
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                Self::cleanup_orphans(self.agent_manager.as_ref().map(|a| a.as_ref()), &created_inline).await;
+                return Err(e);
+            }
+        };
 
         info!(team_id = %team.id, leader = %leader_id, "team_create: team created");
 
@@ -500,7 +558,26 @@ impl AlephTool for TeamCreateTool {
                     ..Default::default()
                 }
             };
-            self.store.add_member(new_member).await?;
+            // BT-C-R4-06: a mid-loop add_member failure would leave the
+            // team record behind with only a partial member set, and the
+            // inline agents from this call would be orphan. Walk the
+            // already-enrolled members and the created_inline list in
+            // the failure arm so the half-finished team does not stay
+            // around to confuse later operators. Note: removing the team
+            // record is best-effort too; the leader auto-enroll above is
+            // also subject to the same cleanup when a later member fails.
+            if let Err(e) = self.store.add_member(new_member).await {
+                Self::cleanup_orphans(self.agent_manager.as_ref().map(|a| a.as_ref()), &created_inline).await;
+                if let Err(rm_err) = self.store.delete_team(&team.id).await {
+                    tracing::warn!(
+                        team_id = %team.id,
+                        error = %rm_err,
+                        "team_create cleanup: failed to delete half-built team after \
+                         add_member failure; team record may persist without the missing member."
+                    );
+                }
+                return Err(e);
+            }
 
             info!(
                 team_id = %team.id,
