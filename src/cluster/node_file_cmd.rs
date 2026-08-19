@@ -27,6 +27,33 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// Decode a base64 payload and enforce the `file.write` fail-fast gates:
+/// base64 length pre-cap (reject before allocating), decoded byte cap, and
+/// sha256 integrity. Extracted from `FileWriteCommand::run` to keep the
+/// command's control flow flat; pure and synchronous (hashing ≤8 MB is not
+/// worth a `spawn_blocking` hop).
+fn decode_verified_payload(content_b64: &str, expected_sha: &str) -> Result<Vec<u8>, String> {
+    let max_b64_len = MAX_FILE_BYTES * 4 / 3 + 4;
+    if content_b64.len() > max_b64_len {
+        return Err(format!(
+            "file.write: base64 payload exceeds {MAX_FILE_BYTES} byte cap"
+        ));
+    }
+    let bytes = B64
+        .decode(content_b64)
+        .map_err(|e| format!("file.write: invalid base64: {e}"))?;
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(format!(
+            "file.write: {} bytes exceeds {MAX_FILE_BYTES} cap",
+            bytes.len()
+        ));
+    }
+    if sha256_hex(&bytes) != expected_sha {
+        return Err("file.write: sha256 mismatch".to_string());
+    }
+    Ok(bytes)
+}
+
 /// Resolve the request `path` into the node workspace jail. Relative paths are
 /// joined to the workspace; any final canonical path must still fall within the
 /// workspace (absolute path escape → reject). Reuses `file_ops` canonicalize +
@@ -100,25 +127,7 @@ impl NodeCommand for FileWriteCommand {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let max_b64_len = MAX_FILE_BYTES * 4 / 3 + 4;
-        if content_b64.len() > max_b64_len {
-            return Err(format!(
-                "file.write: base64 payload exceeds {MAX_FILE_BYTES} byte cap"
-            ));
-        }
-
-        let bytes = B64
-            .decode(content_b64)
-            .map_err(|e| format!("file.write: invalid base64: {e}"))?;
-        if bytes.len() > MAX_FILE_BYTES {
-            return Err(format!(
-                "file.write: {} bytes exceeds {MAX_FILE_BYTES} cap",
-                bytes.len()
-            ));
-        }
-        if sha256_hex(&bytes) != expected_sha {
-            return Err("file.write: sha256 mismatch".to_string());
-        }
+        let bytes = decode_verified_payload(content_b64, expected_sha)?;
 
         let dest = resolve_in_jail(path, &self.workspace_dir).await?;
         if let Some(parent) = dest.parent() {
@@ -249,7 +258,6 @@ impl NodeCommand for FileReadCommand {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::io::Write as _;
 
     fn b64(bytes: &[u8]) -> String {
         use base64::Engine as _;
@@ -357,9 +365,9 @@ mod tests {
     async fn file_read_rejects_oversize() {
         let dir = tempfile::tempdir().unwrap();
         let big_path = dir.path().join("big.bin");
-        let mut f = std::fs::File::create(&big_path).unwrap();
-        f.write_all(&vec![0u8; MAX_FILE_BYTES + 1]).unwrap();
-        drop(f);
+        tokio::fs::write(&big_path, vec![0u8; MAX_FILE_BYTES + 1])
+            .await
+            .unwrap();
         let reader = FileReadCommand::new(dir.path().to_path_buf());
         let err = reader
             .run(json!({ "path": "big.bin" }))
