@@ -360,7 +360,7 @@ impl McpManagerHandle {
     pub async fn set_sampling_callback<F, Fut>(
         &self,
         callback: F,
-    ) -> std::result::Result<(), String>
+    ) -> Result<()>
     where
         F: Fn(crate::mcp::jsonrpc::mcp::SamplingRequest) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<
@@ -377,8 +377,9 @@ impl McpManagerHandle {
                 respond_to: tx,
             })
             .await
-            .map_err(|_| "Manager not running".to_string())?;
-        rx.await.map_err(|_| "Failed to set callback".to_string())
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
+        rx.await
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
     // ===== Event Subscription =====
