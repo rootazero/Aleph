@@ -54,7 +54,16 @@ pub(crate) fn is_continuation_driven_slash(name: &str) -> bool {
 /// side question that silently degraded to a normal turn under that condition
 /// would run at the session's real tier with the main session's key — the
 /// two failures this feature exists to prevent, in the one configuration
-/// (tests, simulated mode) where nobody would notice.
+/// where nobody would notice: a test-constructed `ExecutionEngine` that
+/// never called `with_command_parser_cell`. Genuine Simulated boot does not
+/// reach this code at all — it runs `SimpleExecutionEngine`, a different
+/// type with no `command_parser` field and no `stamp_slash_mode`.
+///
+/// Called unconditionally from the top of `execute.rs`'s `execute()`,
+/// before `admit_run` — not gated on `SLASH_COMMAND_MODE_KEY`. That key
+/// answers a different question (did `/foo` resolve to a command); a
+/// request a channel's shared parser has already resolved must still be
+/// checked for `/btw`.
 pub(crate) fn stamp_btw(input: &str, metadata: &mut HashMap<String, String>) {
     use crate::gateway::btw::{BtwTurn, BTW_METADATA_KEY};
     if metadata.contains_key(BTW_METADATA_KEY) {
@@ -114,9 +123,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// no `allowed_tools` narrowing, and no recorded use. `agent.run` — i.e.
     /// the TUI — was that surface.
     ///
-    /// Returns `None` when the parser cell is still empty (tests, simulated
-    /// mode). Deliberately *not* a degraded second derivation: resolving
-    /// `/foo` a different way is the drift this convergence removes.
+    /// Returns `None` when the parser cell is still empty — a
+    /// test-constructed engine that never called `with_command_parser_cell`
+    /// (genuine Simulated boot runs `SimpleExecutionEngine` instead, which
+    /// has no `command_parser` field and never calls this function at all).
+    /// Deliberately *not* a degraded second derivation: resolving `/foo` a
+    /// different way is the drift this convergence removes.
     pub(super) async fn try_resolve_slash_command(&self, input: &str) -> Option<String> {
         let trimmed = input.trim();
         if !trimmed.starts_with('/') {
@@ -944,15 +956,22 @@ mod arg_mapping_tests {
         );
     }
 
+    /// `stamp_btw`'s pure resolution: it recognises `/btw <question>` and
+    /// leaves plain input untouched, without consulting the shared
+    /// `CommandParser` cell. The property this exists to enable — that a
+    /// stamped request is never folded into a running sibling as steering
+    /// text — is proven separately, in
+    /// `steering::tests::a_btw_request_is_never_folded_into_a_running_sibling`.
     #[test]
-    fn btw_is_stamped_and_therefore_never_folded_into_a_running_sibling() {
+    fn stamp_btw_recognises_a_side_question_and_ignores_plain_input() {
         use crate::gateway::btw::BTW_METADATA_KEY;
         let mut metadata = std::collections::HashMap::new();
 
-        // The pure half of stamp_slash_mode: btw resolution needs no parser and
-        // must therefore work even when the command-parser cell is empty (tests,
-        // simulated mode) — the exact condition under which try_resolve_slash_command
-        // returns None.
+        // The pure half of stamp_slash_mode: btw resolution needs no parser
+        // and must therefore work even when the command-parser cell is
+        // empty — the exact condition under which try_resolve_slash_command
+        // returns None in a test-constructed engine that never called
+        // `with_command_parser_cell`.
         super::stamp_btw("/btw what was that file called?", &mut metadata);
         assert_eq!(
             metadata.get(BTW_METADATA_KEY).map(String::as_str),
@@ -962,5 +981,55 @@ mod arg_mapping_tests {
         let mut plain = std::collections::HashMap::new();
         super::stamp_btw("just a message", &mut plain);
         assert!(plain.is_empty());
+    }
+
+    /// `execute.rs`'s slash-input gate
+    /// (`request.input.trim().starts_with('/') &&
+    /// !metadata.contains_key(SLASH_COMMAND_MODE_KEY)`) used to wrap the
+    /// *only* call reachable from a channel-originated request that could
+    /// stamp `BTW_METADATA_KEY`. `SLASH_COMMAND_MODE_KEY` answers "did the
+    /// shared parser resolve this input to a command" — a question with no
+    /// bearing on whether the input is a side question — so gating btw
+    /// recognition on it meant any command the parser also happens to
+    /// resolve (independent of whether `/btw` itself is ever registered
+    /// there) would silently disable btw stamping for that request. `admit_run`
+    /// (bound above `stamp_btw`'s call site here) reads `BTW_METADATA_KEY`
+    /// through `steering::carries_more_than_text` to decide whether the
+    /// request may be folded into a running sibling as plain steering text,
+    /// so the stamp must also land before that admission check — not merely
+    /// somewhere unconditional.
+    #[test]
+    fn stamp_btw_runs_before_admission_and_is_never_gated_on_slash_command_mode_key() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/gateway/execution_engine/execute.rs");
+        let text = production_prefix(&std::fs::read_to_string(&path).expect("execute.rs"));
+
+        let call = text.find("stamp_btw(").expect(
+            "execute.rs must call stamp_btw directly; if the call site moved, \
+             update this test's anchor rather than deleting it",
+        );
+        let admission = text
+            .find(".admit_run(")
+            .expect("the admission gate this call must precede");
+        let slash_gate = text
+            .find("request.input.trim().starts_with('/')")
+            .expect("the slash-input gate this call must not be nested inside");
+
+        assert!(
+            call < admission,
+            "stamp_btw must run before admit_run: admit_run's busy-lane fold \
+             decision (steering::carries_more_than_text) reads \
+             BTW_METADATA_KEY, so a side question stamped after admission has \
+             already missed the one check it exists to satisfy"
+        );
+        assert!(
+            call < slash_gate,
+            "stamp_btw must not be nested inside the slash-input gate — a \
+             gate answering whether `/foo` resolved to a command must not \
+             also decide whether a side question was recognised; a request \
+             that already carries SLASH_COMMAND_MODE_KEY (e.g. one the \
+             shared parser has already resolved) would otherwise never be \
+             checked for `/btw`"
+        );
     }
 }

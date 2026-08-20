@@ -1,4 +1,5 @@
 use super::gate::GateOutcome;
+use super::slash_command::stamp_btw;
 use super::{ExecutionEngine, ExecutionError, RunRequest, RunState};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
@@ -126,6 +127,20 @@ where
         emitter: Arc<E>,
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
+
+        // Recognise a `/btw` side question unconditionally, before anything
+        // else in this function reads `request.metadata` — most importantly
+        // `admit_run` below, whose busy-lane fold decision
+        // (`steering::carries_more_than_text`) reads `BTW_METADATA_KEY` to
+        // keep a side question from being folded into a running sibling as
+        // plain steering text. This must NOT be nested inside the later gate
+        // keyed on `SLASH_COMMAND_MODE_KEY` (the "did `/foo` resolve to a
+        // command" question, further down): that gate goes false for any
+        // request a channel's shared parser has already resolved, which has
+        // nothing to do with whether the input is a side question, and
+        // stamping is otherwise cheap and side-question-free input resolves
+        // to nothing (`BtwTurn::resolve` returns `None`).
+        stamp_btw(&request.input, &mut request.metadata);
 
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
