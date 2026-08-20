@@ -534,7 +534,38 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .map(|r| r.request.session_key.clone())
     }
 
+    /// Stop everything this session owns.
+    ///
+    /// "Owns" is wider than "is keyed on": it covers the session's own run, the
+    /// delegated child runs the background tracker attributes to it, and the
+    /// `/btw` side session derived from it. That last one is not a new kind of
+    /// reach — a side session is a derived child, and it was invisible to this
+    /// walk only because nothing told the walk about the derivation. Leaving it
+    /// out made a side question unstoppable from every surface a user has: the
+    /// only other way in is `chat.abort` with the run id, and no client is shown
+    /// a btw run's id.
+    ///
+    /// Returns the run id of whatever it stopped, preferring this session's own
+    /// — the caller turns `Some` into "stopped" and `None` into "nothing was
+    /// running", and a stopped side question must not be reported as nothing.
     pub async fn cancel_session(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ExecutionError> {
+        let own = self.cancel_runs_keyed_on(session_key).await?;
+        // One level deep by construction: `side_session_of` answers `None` for a
+        // key that is already derived, so this cannot walk into a phantom
+        // session nothing ever ran on.
+        let side = match crate::gateway::btw::side_session_of(session_key) {
+            Some(side) => self.cancel_runs_keyed_on(&side).await.unwrap_or(None),
+            None => None,
+        };
+        Ok(own.or(side))
+    }
+
+    /// The single-session half of [`Self::cancel_session`]: the run keyed on
+    /// this exact session, plus the delegated children attributed to it.
+    async fn cancel_runs_keyed_on(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
     ) -> Result<Option<String>, ExecutionError> {

@@ -84,10 +84,15 @@ fn moa_fallthrough_input(original: &str) -> Option<String> {
 ///
 /// The decision is [`btw::execution_session`], and the engine is not the first
 /// to ask it: `busy_queue` keys its arrival lane on the same answer, one layer
-/// further out, and a side question queued on the main lane waits behind the
-/// run it was asked about. This function is the one place that *writes* the
-/// answer into the request; asking is free and idempotent, writing twice would
-/// derive the side key of the side key.
+/// further out. Keying that lane wrong strands the run's own ticket on the main
+/// lane for the whole side question — `mark_admitted` withdraws a ticket only
+/// from the lane the run *claimed* — and makes it wait behind, and take a slot
+/// from, the main conversation's waiting messages. See `register_run`.
+///
+/// This function is the one place that *writes* the answer into the request.
+/// Asking is free; writing twice would derive the side key of the side key,
+/// which is why `execution_session` returns an already-derived key unchanged
+/// and why this returns `None` on a re-entry that carries one.
 ///
 /// [`btw::execution_session`]: crate::gateway::btw::execution_session
 pub(super) fn redirect_to_side_session(
@@ -215,6 +220,50 @@ where
         Ok(())
     }
 
+    /// Emit the terminal frame for a failure that returns from `execute()`
+    /// *before* `RunAccepted`.
+    ///
+    /// The run loop's own `RunError` producer is unreachable from up here, and
+    /// the two delivery wrappers both decline to report an attempt that "ran"
+    /// on the assumption that the engine already did. Without this, such a
+    /// failure is invisible on every surface: no message on a channel, an
+    /// unclosable in-flight bubble on the Panel.
+    ///
+    /// `scope` is the session the frame is charged to, which is deliberately a
+    /// parameter rather than `request.session_key`: the run may already have
+    /// been redirected onto a session the user's client has never heard of, and
+    /// a receipt has to arrive where the person is looking.
+    pub(super) async fn emit_pre_admission_run_error<E: EventEmitter + Send + Sync + 'static>(
+        &self,
+        emitter: &E,
+        run_id: &str,
+        scope: &crate::routing::session_key::SessionKey,
+        request: &RunRequest,
+        error: &ExecutionError,
+    ) {
+        let (error_code, error_message) = error.user_receipt(
+            crate::gateway::i18n::Locale::from_run_metadata(&request.metadata),
+        );
+        let seq = emitter.next_seq();
+        if let Err(emit_err) = emitter
+            .emit(StreamEvent::RunError {
+                run_id: run_id.to_string(),
+                seq,
+                error: error_message,
+                error_code: Some(error_code.to_string()),
+                session_key: Some(scope.to_key_string()),
+            })
+            .await
+        {
+            tracing::warn!(
+                run_id = %run_id,
+                error_code = %error_code,
+                error = %emit_err,
+                "failed to emit the pre-admission RunError stream event"
+            );
+        }
+    }
+
     /// The budget one cold side seed may spend.
     ///
     /// `max_turns` is the bound that does the work and always applies:
@@ -266,10 +315,18 @@ where
             });
         };
         ForkBudget::for_child(Some(&cfg), 0, Some(turns)).ok_or_else(|| {
+            // Names the effective window and the section, not one key inside
+            // it. `token_budget` may be a value the operator never wrote —
+            // `build_context_budget_config` fills it from the chain-minimum
+            // model when it is omitted — and it is the wrong key outright when
+            // the floor is reached via `warning_threshold = 0.0`, which is
+            // clamped rather than rejected. Quoting a setting nobody typed is
+            // the same misdirection `GateRule::PolicyDeny` is careful about.
             ExecutionError::Failed(format!(
-                "side question cannot be seeded: `[context_budget] token_budget` \
-                 ({} tokens) leaves no room to carry any of this conversation",
-                cfg.token_budget
+                "side question cannot be seeded: the effective context window \
+                 ({} tokens × warning threshold {}, from `[context_budget]`) \
+                 leaves no room to carry any of this conversation",
+                cfg.token_budget, cfg.warning_threshold
             ))
         })
     }
@@ -374,7 +431,30 @@ where
         // `ensure_seeded` re-establishes from the same metadata) and before
         // dispatch, because the harness reads history further down.
         if let Some(main) = btw_main_session.as_ref() {
-            self.seed_side_session(main, &request).await?;
+            if let Err(e) = self.seed_side_session(main, &request).await {
+                // This is the only fallible early return `execute()` has before
+                // `RunAccepted`, and NOTHING downstream voices it. Both delivery
+                // wrappers stay quiet on the same stated assumption — "the
+                // engine already put a sanitized receipt on the wire" — which is
+                // true of every other failure and false of this one: the single
+                // in-engine `RunError` producer lives in the run loop's result
+                // match, far below here. So the failure mode is a channel user
+                // getting nothing at all and a Panel user getting a spinner that
+                // nothing will ever close, and it is STICKY: an uninterpretable
+                // `btw_seed_cursor` fails at this same point on every later
+                // `/btw`, silently and permanently.
+                //
+                // `session_key` names the MAIN session, not the side one, for
+                // the same reason `spawn_queued_run` documents for its own
+                // never-ran receipt: it is the conversation the user is looking
+                // at, and it is the key the delivery filter can resolve — the
+                // side row may not exist yet, and no `RunAccepted` has seeded
+                // the run→session index. (`src/gateway/CLAUDE.md` 地雷 H: a
+                // frame emitted before admission must carry its own scope.)
+                self.emit_pre_admission_run_error(emitter.as_ref(), &run_id, main, &request, &e)
+                    .await;
+                return Err(e);
+            }
         }
 
         // Emit run accepted event — AFTER the row above exists, and this order

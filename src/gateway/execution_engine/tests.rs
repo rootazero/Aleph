@@ -15,14 +15,14 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 /// Test event emitter that collects events
-struct TestEmitter {
+pub(super) struct TestEmitter {
     events: Arc<RwLock<Vec<StreamEvent>>>,
     event_count: AtomicUsize,
     seq_counter: AtomicU64,
 }
 
 impl TestEmitter {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             events: Arc::new(RwLock::new(Vec::new())),
             event_count: AtomicUsize::new(0),
@@ -30,7 +30,7 @@ impl TestEmitter {
         }
     }
 
-    async fn get_events(&self) -> Vec<StreamEvent> {
+    pub(super) async fn get_events(&self) -> Vec<StreamEvent> {
         self.events.read().await.clone()
     }
 }

@@ -401,7 +401,15 @@ impl InboundMessageRouter {
         // admitted, so purging first marks every ticket that was waiting when
         // the user asked to stop, and `deliver_with_ticket` checks
         // `is_cancelled` ahead of `is_front`, so the wake finds it already dead.
-        let dropped = crate::gateway::busy_queue::purge(&ctx.session_key.to_key_string());
+        // Both lanes, for the same reason `cancel_session` reaches both
+        // sessions: a `/btw` side question queues on a lane derived from this
+        // one, and to the person typing `/stop` there is one conversation.
+        // `side_session_of` is `None` when this key is already a derived one, so
+        // this cannot purge a phantom lane.
+        let dropped = crate::gateway::busy_queue::purge(&ctx.session_key.to_key_string())
+            + crate::gateway::btw::side_session_of(&ctx.session_key).map_or(0, |side| {
+                crate::gateway::busy_queue::purge(&side.to_key_string())
+            });
         if dropped > 0 {
             info!(
                 session = %ctx.session_key.to_key_string(),

@@ -3938,6 +3938,80 @@ fn a_side_question_revokes_every_plan_carve_out() {
     }
 }
 
+/// The read half of "it can read and search, but not change anything" — the
+/// sentence the refusal itself puts in front of the model.
+///
+/// A multiplexer declares nothing at the NAME level, so `Plan` fails it closed
+/// wholesale; only the per-call claim lets its read arms through. That
+/// re-admission used to be keyed on the rule's name (`PlanMode`), and a side
+/// question reports its OWN rule — so the most common thing a side question
+/// does, listing and searching the tree, came back refused by a sentence
+/// promising exactly that, with "do not retry" attached. Mirrors
+/// `planning_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest`,
+/// because the two verdicts must behave identically per call and differ only
+/// in the sentence they hand back.
+#[tokio::test]
+async fn a_side_question_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest() {
+    let svc = side_question_service(true);
+    svc.execute("file_ops", json!({ "operation": "list" }))
+        .await
+        .expect("a side question explores");
+    let err = svc
+        .execute("file_ops", json!({ "operation": "delete" }))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ToolError::PermissionDenied { .. }),
+        "the write arm of the same tool must still refuse, got {err:?}"
+    );
+    // A missing `operation` is not a read: the claim degrades to exclusive,
+    // which is the fail-closed direction.
+    assert!(svc.execute("file_ops", json!({})).await.is_err());
+
+    // The floor is not re-admitted with the reads. `scratchpad` is denied at
+    // rung -1 of `permission_for`, which `denied_only_by_plan` does not
+    // consult — so it reports `false` there and the per-call arm never opens.
+    assert!(
+        svc.execute("scratchpad", json!({})).await.is_err(),
+        "the side-question floor must survive the read re-admission"
+    );
+
+    // Control: the SAME tier without the side-question flag answers the same
+    // way, per call. That is the invariant this fix is built on — the two
+    // verdicts differ in the sentence they hand back, never in what runs — and
+    // asserting it here is what keeps this test from passing because `Plan`
+    // itself was quietly widened.
+    let planning = side_question_service(false);
+    planning
+        .execute("file_ops", json!({ "operation": "list" }))
+        .await
+        .expect("planning explores the same way");
+    assert!(planning
+        .execute("file_ops", json!({ "operation": "delete" }))
+        .await
+        .is_err());
+}
+
+/// The refusal sentence is a claim the code has to keep, and the two halves are
+/// asserted against the SAME service so they cannot drift apart: if a mutating
+/// call is refused with "it can read and search", a read has to really run.
+#[tokio::test]
+async fn the_side_question_refusal_promises_reads_that_really_run() {
+    let svc = side_question_service(true);
+    let err = svc
+        .execute("file_ops", json!({ "operation": "delete" }))
+        .await
+        .unwrap_err();
+    let reason = err.to_string();
+    assert!(
+        reason.contains("read and search"),
+        "the refusal is what makes the promise; got: {reason}"
+    );
+    svc.execute("file_ops", json!({ "operation": "list" }))
+        .await
+        .expect("the sentence above just promised this call runs");
+}
+
 /// A mutating tool is refused during a side question, and the reason names
 /// the side question rather than the plan handoff — pointing the reader at
 /// "get your plan approved" would name a repair that cannot work here.

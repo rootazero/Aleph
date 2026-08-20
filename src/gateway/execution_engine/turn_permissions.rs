@@ -31,10 +31,16 @@ pub(super) struct TurnPermissions {
     /// The merged EXPLICIT policy, or `None` when everything is all-default
     /// (so the `ScopedToolService` hot path stays a no-op).
     pub(super) explicit: Option<ToolPermissionsConfig>,
-    /// The plan → build handoff cell — `Some` exactly when `tier` is
-    /// [`ExecTier::Plan`]. Rides the turn context into both tool services the
-    /// run builds, so one human approval lifts the gate for the run and for
-    /// anything it spawns.
+    /// The plan → build handoff cell — `Some` when `tier` is
+    /// [`ExecTier::Plan`] **and this is not a `/btw` side question**. Rides the
+    /// turn context into both tool services the run builds, so one human
+    /// approval lifts the gate for the run and for anything it spawns.
+    ///
+    /// Not a biconditional, and the exception is the point: a side question
+    /// always resolves to `Plan`, and it gets `None` because its ceiling is a
+    /// bound on one turn with nothing to hand back to. See the mint site in
+    /// [`ExecutionEngine::resolve_turn_permissions`] for why that is withheld
+    /// rather than merely unreachable.
     pub(super) plan_gate: Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>>,
     /// This turn is a `/btw` side question — see
     /// `crate::gateway::btw::BTW_METADATA_KEY` and `TurnContext::side_question`.

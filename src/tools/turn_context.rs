@@ -52,9 +52,15 @@ pub struct TurnContext {
     /// on the 120 s approval timeout instead of failing closed instantly.
     pub unattended: bool,
     /// The plan → build handoff cell, when this turn resolved to
-    /// [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan);
-    /// `None` on every other turn (and then everything below is
-    /// byte-identical to a build with no plan mode at all).
+    /// [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan) and is
+    /// not a `/btw` side question; `None` otherwise (and then everything below
+    /// is byte-identical to a build with no plan mode at all).
+    ///
+    /// The side-question exception is deliberate, not an omission: a side
+    /// question always resolves to `Plan`, and this cell is the one thing that
+    /// can move a turn's tier mid-run. Its ceiling has nothing to hand back to,
+    /// so it is withheld — see `resolve_turn_permissions`. Do not reintroduce a
+    /// `Plan ⇒ Some` assertion at any consumer.
     ///
     /// It rides HERE rather than as a fourteenth parameter of
     /// `build_request_tool_service` because the run builds the tool service

@@ -203,10 +203,28 @@ pub fn register(session_key: &str, max_per_session: usize, run_id: &str) -> Opti
 ///
 /// The one case where they differ today is a `/btw` side question, which runs
 /// on a derived session ([`crate::gateway::btw::execution_session`]). Keying
-/// its ticket on the conversation it was typed in parks it behind the run it is
-/// asking about — only the front ticket attempts delivery — which is precisely
-/// what a side question exists not to do, and nothing anywhere reports it: the
-/// engine's own gate, the tier and the seed are all still perfectly correct.
+/// its ticket on the conversation it was typed in breaks two things, and the
+/// worse one runs the other way round from the obvious one:
+///
+/// 1. **The ticket never leaves.** [`mark_admitted`] withdraws a ticket from
+///    the lane it is *given*, and `SessionRunRegistry::try_claim` gives it the
+///    key the run **claimed**. A run that queued on the main lane and claims
+///    the side key withdraws nothing: its ticket stays at the front of the main
+///    lane for the whole side question, so every ordinary message in that
+///    conversation parks behind it.
+/// 2. **It waits behind, and takes a slot from, the main conversation.** A
+///    main-lane ticket sits behind whatever is *waiting* there — a `queue`-mode
+///    follower, a steer deferred for attachments or at `max_pending_steering` —
+///    and consumes one of that lane's `max_per_session` slots, so a full main
+///    lane rejects the side question outright.
+///
+/// What does **not** go wrong: waiting behind the running main turn. A running
+/// run holds no ticket ([`mark_admitted`] withdrew it at claim), which is the
+/// whole reason `Steer` and `Interrupt` can reach the engine mid-run. This lane
+/// is a waiting room, not a run registry.
+///
+/// Either way nothing reports it: the engine's own gate, the tier and the seed
+/// stay perfectly correct while the conversation gets slower and stranger.
 ///
 /// Same arrival-path rule as [`register`]: call this synchronously, before
 /// spawning the delivery task.
@@ -670,9 +688,20 @@ mod tests {
     /// having to be told. Source-level because the two functions are
     /// indistinguishable at runtime once the key is a string.
     ///
-    /// Bounded to `src/gateway/` and it says so: a lane registration needs a
-    /// `RunRequest`, which is a gateway type. Outside that tree this scan is
-    /// blind, which is the stated edge rather than a claim about the repo.
+    /// Two stated bounds, because a census that does not declare its edges is
+    /// read as covering everything:
+    ///
+    /// * **Directory.** `src/gateway/` only. A lane registration needs a
+    ///   `RunRequest`, which is a gateway type; outside that tree this is blind.
+    /// * **Spelling.** Outside this module it matches the module-pathed form
+    ///   (`busy_queue::register(`). A caller who writes
+    ///   `use crate::gateway::busy_queue::register;` and then a bare
+    ///   `register(&key, …)` is invisible to it. Verified as an empty class
+    ///   today — the only `use crate::gateway::busy_queue::{…}` outside this
+    ///   module imports `deliver_with_ticket`/`DeliveryOutcome` — and matching
+    ///   the bare form everywhere is not the fix: this tree has a dozen
+    ///   unrelated `register` verbs (`channel_registry`, the interface plugin
+    ///   table, `RunningRegistration`), and a name is not a callee.
     #[test]
     fn no_production_arrival_path_picks_its_own_lane_key() {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
