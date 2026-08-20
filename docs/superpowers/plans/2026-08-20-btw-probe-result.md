@@ -35,10 +35,11 @@ is owner/user-scoped, not session-key-scoped.
    the gateway's `should_receive` gives it both" (referring to `ResponseChunk`
    and `AgentTrace` carrying the same text twice).
 
-2. **`src/gateway/event_visibility.rs:337-354`** — `session_identity_of` classifies
+2. **`src/gateway/event_visibility.rs:342-358`** — `session_identity_of` classifies
    `stream.response_chunk`, `stream.agent_trace`, `stream.tool_start/update/end`,
    `stream.reasoning`, `stream.run_complete`, `stream.run_error` etc. as
-   `SessionIdentity::ByRunId(run_id)` — these frames carry only a `run_id`, not a
+   `SessionIdentity::ByRunId(run_id)` (the construction itself is at lines
+   355-357, inside this match arm) — these frames carry only a `run_id`, not a
    `session_key`.
 
 3. **`src/gateway/event_visibility.rs:748-755`** — the `ByRunId` arm of
@@ -65,35 +66,43 @@ is owner/user-scoped, not session-key-scoped.
    setup) every session on the box shares one owner and this gate is a no-op —
    every run's frames pass it.
 
-   Consequence for a background/delegated subagent: `src/agents/subagent_tool/types.rs:68-70`
-   and `src/agents/subagent_tool/recovery.rs:80-125` show a spawned subagent gets
-   its own distinct `SessionKey::Ephemeral { .. }` — a different session_key from
-   the parent conversation. Nothing in the traced path denies its frames to a
-   TUI attached to the parent session, provided the child session's stamped
+   Consequence for a background/delegated subagent: `src/agents/subagent_spawner/mod.rs:1200-1209`
+   (`fn ephemeral_for(agent_id, request_id) -> SessionKey`, called from the
+   actual spawn path at `:488`) builds `SessionKey::Ephemeral { agent_id,
+   ephemeral_id }`, with `ephemeral_id` prefixed `SUBAGENT_BG_CHILD_PREFIX =
+   "sub-bg-"` (`:1216`) for a background child or `ANON_CHILD_PREFIX = "sub-"`
+   (`:1220`) otherwise — a session key distinct from the parent conversation's.
+   `src/agents/subagent_tool/recovery.rs:80-125` shows the matching reader side
+   (`addresses`/`classify`), confirming the same `Ephemeral` shape and prefix
+   convention. Nothing in the traced path denies a child's frames to a TUI
+   attached to the parent session, provided the child session's stamped
    `owner_user_id` matches the connection's `caller_user` (true by default for
    any subagent spawned within one user's own run).
 
-5. **Client-side, `shared/client/src/connection.rs:220-231`** (`handle_message`) —
+5. **Client-side, `shared/client/src/connection.rs:221-232`** (`handle_message`) —
    every JSON-RPC notification that parses as a `StreamEvent` is forwarded
    unconditionally into the `event_tx` channel: `serde_json::from_value::<StreamEvent>(params) → event_tx.send(event)`.
    No session_key or run_id filter exists at this layer either; this is the
    shared client used by both the TUI and the CLI.
 
-6. **TUI-side, `interfaces/tui/src/tui/app/events.rs:87-296`** (`handle_gateway_event`) —
-   only `RunAccepted` (line 87-88) *sets* `self.current_run`; no other
-   arm — not `AgentTrace` (97-99), not `ResponseChunk` (186-192), not
-   `ToolStart`/`ToolUpdate`/`ToolEnd`, not `Reasoning`, not `RunComplete`/`RunError` —
-   checks the incoming frame's `run_id` (or any session_key) against
-   `self.current_run` before applying it to the transcript. They apply
-   unconditionally. The ONE exception in the whole file is
-   `StreamEvent::ClarificationEnded` (`events.rs:284-296`), which explicitly
-   compares `session_key == d.session_key` before acting — the brief's cited
-   comment ("Only the card for THIS session is retired... a frame for another
-   session must not close the one the user is looking at") confirms this is a
-   deliberate, narrow exception, not the general rule. Even the sibling
-   `StreamEvent::AskUser` handler (`events.rs:259-272`) shows a dialog for
-   whatever session_key the frame carries, with no check that it matches the
-   session currently open.
+6. **TUI-side, `interfaces/tui/src/tui/app/events.rs:85-389`** (the full body of
+   `handle_gateway_event`) — only `RunAccepted` (line 87-88) *sets*
+   `self.current_run`; no other arm in the function checks the incoming frame's
+   `run_id` (or any session_key) against `self.current_run` before applying it
+   to the transcript. Confirmed for every arm that carries a `run_id`
+   server-side per gate #2 above: `AgentTrace` (97-99), `ResponseChunk`
+   (186-192), `ToolStart`/`ToolUpdate`/`ToolEnd`, `Reasoning`,
+   `RunComplete`/`RunError`, `ReasoningBlock` (309-316), `UncertaintySignal`
+   (318-330), `RunRetrying` (332-346), `ModelResolved` (348-370), and
+   `ContextGauge` (372-387) — all apply unconditionally. The ONE exception in
+   the whole file is `StreamEvent::ClarificationEnded` (`events.rs:288-298`),
+   which explicitly compares `session_key == d.session_key` (the comparison
+   itself is at line 295) before acting — the brief's cited comment ("Only the
+   card for THIS session is retired... a frame for another session must not
+   close the one the user is looking at") confirms this is a deliberate,
+   narrow exception, not the general rule. Even the sibling `StreamEvent::AskUser`
+   handler (`events.rs:259-272`) shows a dialog for whatever session_key the
+   frame carries, with no check that it matches the session currently open.
 
 ## Why both booleans, per Ruling R1
 
