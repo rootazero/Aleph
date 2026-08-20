@@ -153,9 +153,9 @@ impl StdioTransport {
             cmd.env(key, value);
         }
 
-        for (name, _) in std::env::vars() {
-            if crate::security::secret_env::is_secret_env(&name) {
-                cmd.env_remove(&name);
+        for (var_name, _) in std::env::vars() {
+            if crate::security::secret_env::is_secret_env(&var_name) {
+                cmd.env_remove(&var_name);
             }
         }
 
@@ -163,14 +163,40 @@ impl StdioTransport {
         // to start because its runtime couldn't read a secret from the
         // inherited environment. Per-key logging is too noisy; a single
         // summary line is enough.
-        let stripped = std::env::vars()
+        let stripped_secrets = std::env::vars()
             .filter(|(k, _)| crate::security::secret_env::is_secret_env(k))
             .count();
-        if stripped > 0 {
+
+        // Strip inherited interpreter/loader hijack vars (LD_PRELOAD,
+        // NODE_OPTIONS, PYTHONSTARTUP, BASH_ENV, etc.) regardless of who set
+        // them. The forward-pass above only filters keys the operator
+        // explicitly supplied — an attacker who can influence the Aleph
+        // daemon's environment (development shell, shared host, supply-chain
+        // compromise) would otherwise have their loader fire inside every
+        // spawned MCP server subprocess.
+        let mut stripped_unsafe: Vec<&'static str> = Vec::new();
+        for var_name in UNSAFE_ENV_KEYS {
+            if std::env::var(var_name).is_ok() {
+                cmd.env_remove(var_name);
+                stripped_unsafe.push(*var_name);
+            }
+        }
+        // Also strip any inherited unsafe key by uppercased match (e.g.
+        // `Ld_Preload`) since `is_unsafe_env_key` is case-insensitive.
+        for (var_name, _) in std::env::vars() {
+            if is_unsafe_env_key(&var_name)
+                && !stripped_unsafe.iter().any(|k| k.eq_ignore_ascii_case(&var_name))
+            {
+                cmd.env_remove(&var_name);
+            }
+        }
+
+        if stripped_secrets > 0 || !stripped_unsafe.is_empty() {
             tracing::debug!(
                 server = %name,
-                stripped,
-                "stripped inherited secret env vars before spawning MCP server"
+                stripped_secrets,
+                stripped_unsafe = ?stripped_unsafe,
+                "stripped inherited env vars before spawning MCP server"
             );
         }
 

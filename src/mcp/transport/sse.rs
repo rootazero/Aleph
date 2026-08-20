@@ -270,6 +270,10 @@ impl SseTransport {
                                     backoff_secs,
                                     "SSE stream error, will retry"
                                 );
+                                // Only escalate on actual failures; otherwise
+                                // the unconditional post-sleep doubling would
+                                // silently double the reset value too.
+                                backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
                             }
                         }
 
@@ -288,7 +292,6 @@ impl SseTransport {
                             _ = tokio::time::sleep(sleep) => {}
                             _ = shutdown_rx.recv() => break,
                         }
-                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
                     }
                 }
             }

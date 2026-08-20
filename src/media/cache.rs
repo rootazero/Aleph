@@ -430,14 +430,25 @@ impl MediaCache {
 
     /// Validate a model-supplied local media path for outbound delivery.
     ///
-    /// Returns the canonicalized path (as a String) iff it resolves inside the
-    /// OS temp dir — the only root where legitimate producers write (native
-    /// `camera_clip`/`record_audio` via `NSTemporaryDirectory`, and this cache's
-    /// own `<temp_dir>/aleph/media`). Canonicalization collapses `..` and
-    /// symlinks first, and `PathBuf::starts_with` matches whole components, so an
-    /// escape cannot slip past the prefix check. Returns `None` for any path
-    /// outside that root (or one that cannot be resolved), which the caller
-    /// treats as "do not attach this file".
+    /// A path is **safe** iff it canonicalizes into one of:
+    ///
+    /// 1. [`crate::utils::paths::private_temp_root`] — Aleph's owned tree
+    ///    (`<temp_dir>/aleph-<uid>/...`), where this cache itself writes
+    ///    attachments.
+    /// 2. A directory under `temp_dir()` that this process exclusively owns
+    ///    (e.g. native `camera_clip` / `record_audio` captures on macOS that
+    ///    land in `NSTemporaryDirectory`, which is per-user on every modern
+    ///    Unix).
+    ///
+    /// Merely being "under `temp_dir()`" is **not** sufficient: `/tmp` is
+    /// world-writable on most Linux distributions and any other account or
+    /// process could plant a file the model would then exfiltrate. The
+    /// ownership check closes that hole while preserving the documented
+    /// contract for native captures.
+    ///
+    /// Canonicalization collapses `..` and symlinks first, and
+    /// `PathBuf::starts_with` matches whole components, so an escape cannot
+    /// slip past the prefix check.
     ///
     /// `pub(crate)` so `media_send`'s pre-flight can ask this exact predicate
     /// rather than a copy of it — see [`Self::decode_data_url`] for why a copy
@@ -445,10 +456,29 @@ impl MediaCache {
     pub(crate) async fn safe_local_media_path(raw: &str) -> Option<String> {
         let expanded = expand_tilde(raw);
         let canonical = tokio::fs::canonicalize(&expanded).await.ok()?;
-        let root = tokio::fs::canonicalize(std::env::temp_dir()).await.ok()?;
-        canonical
-            .starts_with(&root)
-            .then(|| canonical.to_string_lossy().into_owned())
+
+        // (1) Aleph's owned private root is always safe.
+        if let Ok(private_root) = crate::utils::paths::private_temp_root() {
+            let canonical_private = tokio::fs::canonicalize(&private_root).await.ok()?;
+            if canonical.starts_with(&canonical_private) {
+                return Some(canonical.to_string_lossy().into_owned());
+            }
+        }
+
+        // (2) Otherwise, require the canonical path to be under `temp_dir()`
+        //     AND owned by the current process. `symlink_metadata` (not
+        //     `metadata`) is mandatory: a symlink would otherwise report its
+        //     *target's* owner, which is the one stat an attacker can choose.
+        let canonical_temp = tokio::fs::canonicalize(std::env::temp_dir()).await.ok()?;
+        if !canonical.starts_with(&canonical_temp) {
+            return None;
+        }
+        let meta = tokio::fs::symlink_metadata(&canonical).await.ok()?;
+        if !is_owned_by_current_process(&meta) {
+            return None;
+        }
+
+        Some(canonical.to_string_lossy().into_owned())
     }
 
     /// An [`Attachment`] that carries only the original URL — no bytes, no
@@ -567,6 +597,33 @@ async fn write_private(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> 
     file.write_all(bytes).await?;
     // tokio's File buffers; a dropped handle can lose the tail.
     file.flush().await
+}
+
+/// True iff the current process owns `meta`.
+///
+/// `safe_local_media_path` uses this as the second leg of its "may I attach
+/// this?" predicate: files under `temp_dir()` are safe only when Aleph itself
+/// wrote them (or the native capture subsystem did, which on macOS / Linux is
+/// always the same UID). A world-writable `/tmp/foo` left by another account is
+/// not.
+///
+/// On Windows, ACLs rather than uid make this check meaningless as currently
+/// written; until a per-platform ACL check is added, Windows falls back to
+/// "any file under temp_dir()" — which is the same overly-permissive behavior
+/// the original code had, but only on the one platform where per-user temp
+/// directories are the convention and the broader risk is lower.
+fn is_owned_by_current_process(meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let euid = unsafe { libc::geteuid() };
+        meta.uid() == euid
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        true
+    }
 }
 
 /// Build a collision-free temp filename by prefixing the (sanitized) attachment
