@@ -447,12 +447,18 @@ pub fn migrate_notes_links_lifecycle(conn: &Connection) -> Result<(), AlephError
 /// `default` row's content is dropped, since `main` is the canonical,
 /// canvas-visible source of truth.
 pub(crate) fn migrate_unify_default_to_main_agent(conn: &Connection) -> Result<(), AlephError> {
+    // Carry `aliases_json` (added by `migrate_notes_index_aliases` AFTER this
+    // migration ran for the first time). Without the explicit projection the
+    // migrated rows would silently land on `'[]'`, losing every alias the
+    // user had typed under the legacy `default` agent.
     conn.execute_batch(
         "INSERT OR IGNORE INTO notes_index
             (path, filename, agent_id, category, tags_json,
-             created_at, updated_at, last_accessed_at, content_hash)
+             created_at, updated_at, last_accessed_at, content_hash,
+             aliases_json)
          SELECT path, filename, 'main', category, tags_json,
-                created_at, updated_at, last_accessed_at, content_hash
+                created_at, updated_at, last_accessed_at, content_hash,
+                aliases_json
          FROM notes_index WHERE agent_id = 'default';
 
          INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note, to_raw)
