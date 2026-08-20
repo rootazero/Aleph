@@ -289,16 +289,37 @@ async fn already_forked(session: &dyn SessionService, side: &SessionId) -> Resul
 /// * a `RunFinished` proves everything through it is over — cut after it;
 /// * a `TurnStarted` proves everything before it is over — cut before it.
 ///
-/// Both markers are non-prompt-bearing, so `plan` filters them out and this is
-/// not a second answer to `plan`'s question — it answers a different one, on
-/// the records `plan` never sees.
+/// This is not a second answer to `plan`'s question — it answers a different
+/// one, about where to cut, and `plan` then decides what inside that cut is
+/// worth carrying. `TurnStarted` is never prompt-bearing, so `plan` drops it.
+/// `RunFinished` is prompt-bearing for exactly one outcome, `Cancelled` (it
+/// renders as the interruption note — see [`fork::is_prompt_bearing`]), and
+/// that is fine here rather than an oversight: the cut runs *after* such a
+/// marker, so it lands inside the carried slice, and `group_into_turns` has an
+/// explicit turn-less arm that files it with the turn it interrupted instead of
+/// opening a bucket of its own.
 ///
 /// Returning an empty slice is the correct answer, not a failure: it means main
 /// is mid-turn and nothing has settled since the last question. The next call
-/// carries it once a marker lands, and both markers are emitted unconditionally
-/// on every harness run (`harness_bridge::session_seed` opens each user turn,
-/// `harness_bridge::runner_impl` emits `RunFinished` on the completed,
-/// cancelled and errored paths alike).
+/// carries it once a marker lands.
+///
+/// **A marker always lands in production, but because of who calls what, not
+/// because either emit promises it.** Neither is a callee guarantee:
+///
+/// * `harness_bridge::runner_impl` emits `RunFinished` on the completed,
+///   cancelled and errored paths alike — but the emit is fail-soft (a store
+///   error is warned and swallowed), and a run that `?`s out *before*
+///   `harness.run` never reaches it at all.
+/// * `harness_bridge::session_seed` opens a `TurnStarted` for `History` and
+///   `Multimodal` inputs only; `Prompt` and `Messages` seed user messages
+///   without one.
+///
+/// Every gateway turn is one of those two shapes and does reach `harness.run`,
+/// which is why the empty slice is a "not yet" rather than a "never" — but that
+/// is a fact about this caller, and a producer that stopped being either shape
+/// would strand a side session on a stale cursor with nothing saying so.
+///
+/// [`fork::is_prompt_bearing`]: crate::agents::subagent_spawner::fork::is_prompt_bearing
 fn settled_prefix(records: &[SessionEventRecord]) -> &[SessionEventRecord] {
     let mut cut = 0usize;
     for (i, record) in records.iter().enumerate() {
