@@ -130,15 +130,18 @@ impl GenerationProvider for OpenAiCompatProvider {
 
                 info!(provider = %self.name, task_id = %submit.task_id, "Async task submitted, starting poll");
 
-                // Validate task_id to prevent URL injection from untrusted API responses
+                // Validate task_id to prevent URL injection from untrusted API responses.
+// Use an allow-list of safe characters plus a length cap: blocking `..` etc.
+// misses CR/LF/NUL/control chars, unicode whitespace, double-quote, and
+// over-long inputs that can split header lines or DoS the URL builder.
+                const MAX_TASK_ID_LEN: usize = 256;
                 let task_id = &submit.task_id;
+                let bad_char = task_id
+                    .chars()
+                    .find(|c| !c.is_ascii_alphanumeric() && *c != '-' && *c != '_' && *c != '.');
                 if task_id.is_empty()
-                    || task_id.contains("..")
-                    || task_id.contains('\\')
-                    || task_id.contains('?')
-                    || task_id.contains('#')
-                    || task_id.starts_with('/')
-                    || task_id.contains('%')
+                    || task_id.len() > MAX_TASK_ID_LEN
+                    || bad_char.is_some()
                 {
                     return Err(GenerationError::serialization(format!(
                         "Invalid task_id format: {task_id}"
@@ -260,9 +263,18 @@ impl OpenAiCompatProvider {
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {e}")))?;
 
             let status = response.status();
-            let body = response.text().await.map_err(|e| {
-                GenerationError::network(format!("Failed to read poll response: {e}"))
-            })?;
+            const MAX_POLL_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+            let body = response
+                .text_with_limit(MAX_POLL_RESPONSE_BYTES)
+                .await
+                .map_err(|e| {
+                    GenerationError::network(format!("Failed to read poll response: {e}"))
+                })?
+                .ok_or_else(|| {
+                    GenerationError::network(format!(
+                        "poll response body exceeded {MAX_POLL_RESPONSE_BYTES} bytes"
+                    ))
+                })?;
 
             if !status.is_success() {
                 error!(provider = %self.name, status = %status, body = %body, "Poll request failed");
