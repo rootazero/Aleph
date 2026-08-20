@@ -487,8 +487,42 @@ aleph plugin list
 克隆并失败（2026-08-19 第二轮改为调 `plugin.install`，服务端自己分类）；而找到那个
 名字则要等本轮的 `plugin.marketplace.browse`。现 Panel 调 `plugin.install` /
 `plugin.marketplace.browse` / `plugin.marketplace.update` / `plugin.marketplace.install`。
-**仍零 Panel 客户端的是 `plugin.marketplace.add` / `remove`**——marketplace 的增删只有
-CLI（`aleph plugin marketplace add|remove`），Panel 只能刷新与浏览已注册的那些。
+**2026-08-20 起 `add` / `remove` 也有 Panel 面了**（设置 → 插件 → Marketplaces）。此前
+它们唯一的客户端是 `interfaces/cli`，而 release workflow 从不构建那个二进制，所以桌面
+App 用户要进 .app bundle 翻出内嵌的 `aleph-server` 才能加一个第三方市场。同日第二轮
+再加工具面（见下）。三个面因此都在，且**都调同一个 `classify`**。
+
+⚠️ **`add` 不抓取，三个面各自 compose `add` + `update`**：一个注册了却空着的目录看起来
+是坏的，而这三个面上没有任何东西提示第二次调用会填满它。刻意不折进 handler——`add`
+对每个客户端保持一个意思。
+
+### source 分类只有一个答案（2026-08-20）
+
+`add` 的两个面各写过一份启发式，在**四种输入上分歧**：`C:\dir\mk`（RPC 判 github、
+名字 `c:\dir\mk`；子命令判 local、名字 `mk`）· `./foo/bar`（RPC local ✓；子命令
+github ✗）· `myrepo` 裸名（RPC github；子命令 local）· `/abs/My Dir`（名字大小写两个
+答案）。外加**两边都错的一条**：`~/foo` 双方都判 github，而 `local_source::expand_tilde`
+正是为这个形式写的——一个只有 resolver 支持、没有任何生产者产得出来的分支。
+
+**修法不是第三个启发式，分类器早就存在**：`github_source::is_valid_owner_repo` 就是
+决定 github 那条路能不能走通的那个函数（严格两段 `[A-Za-z0-9_.-]`，`.`/`..` 不算）。
+问它，「判成 github」和「clone 得下来」就是同一个答案，而不是两个要保持同步的猜测。
+
+单一源 `marketplace/source_spec.rs::classify(source, explicit_name)`，返回
+`MarketplaceSpec { name, source, source_type }`。**名字校验上移到 add 边界**——旧 RPC
+存得进 `c:\dir\mk`，要到 sync 才失败。**GitHub URL 归一化不是加功能，是不制造回归**：
+`is_valid_owner_repo` 拒绝 URL，判 Local 之后错误会变成「Local marketplace path does
+not exist: https://…」，比它取代的那句更误导；所以四种 URL 拼法折叠成它们指代的
+`owner/repo`，而 deep link（`/tree/main/sub`）**刻意不猜**——猜出来会 fetch 一个没人
+要的东西。
+
+顺带收敛掉三族重复（本轮都碰到了，抄第六份才是错的）：**(a)** 「这个名字会被 join 到
+一个受管目录上」的安全谓词有**五份**（`sync_github_marketplace` / `removal_refusal` /
+`resolve_cache_dir` / `install_plugin_from_cache` / `update_plugin_from_cache`），两份
+措辞短到不说明规则；现 `marketplace/names.rs::reject_unsafe_segment`。**(b)** 「怎么把
+一条已存的注册读回来」有**四份**；现 `configs_from_entries` + `MarketplaceManager::
+from_config()`，后者顺带让工具面不必依赖一个网关 handler。**(c)** `"github"` / `"local"`
+两个 token 有**六个**手写点；现 `MarketplaceSourceType::{as_config_str, from_config_str}`。
 
 ⚠️ **`list` 与 `browse` 是两个问题**：前者答「注册了哪些 marketplace」，后者答「某个
 marketplace 里有什么」。拿 `list` 去找插件名的调用者会一个都找不到，然后得出「这个
@@ -508,12 +542,25 @@ R8 要求每个可配置操作都有对话面。插件曾是唯一没有工具�
 
 `plugin_manage` 的动作：`list` / `show` / `enable` / `disable` / `reload` /
 `config_get` / `config_set` / `trust_status` / `trust` / `untrust` /
-`trust_enforce`。
+`trust_enforce` / `marketplace_list` / `marketplace_browse` / `marketplace_add` /
+`marketplace_remove` / `marketplace_update`。
 
-**刻意没有 marketplace 动作**：模型的扩展发现路径是 Hub（`hub_catalog_search` +
-consent-gated `hub_install_run`），marketplace 是操作者的路径。给模型一张它按下条
-规则不能作用的目录，比不给更糟——一张附带动作邀请的清单，它列的每一行都必须真的
-能被那个动作作用。
+**marketplace 动作（2026-08-20 用户裁决加入，推翻 2026-08-19 的「刻意不加」）**：
+注册一个目录**不是**安装一个插件——它记录目录住在哪，同步时 `git clone` 一堆
+manifest，在人类安装之前没有任何东西从它里面执行。这是这五个动作与下面那条 install
+边界能同时成立的全部理由，而 DESCRIPTION 必须把两件事都说出来，否则「不能 install」
+读起来就是自相矛盾。
+
+⚠️ **原来那条反对意见没有被一起推翻**：给模型一张它不能作用的目录，是「一张附带动作
+邀请的清单，它列的每一行都必须真的能被那个动作作用」的反面。`MarketplacePluginRow`
+的 `installable` 位主语是 **Panel 的 Install 按钮**，挂在一个没有 install 动词的工具上
+就正是那个假邀请。所以 browse **不原样透传那一行**：工具侧投影把它改名为
+`operator_can_install`（同一个 `marketplace_row` 推导，只是说清主语），守卫
+`a_browse_row_names_the_actor_who_can_install` 钉住它。`unavailable_reason` 保留——
+「Aleph 根本装不了这一条」正是操作者需要听到的。
+
+整段跑在 `spawn_blocking` 里：`git clone`、配置读写、目录删除都是阻塞的，而这里是
+agent 循环的执行器。
 
 **它结构上不能装也不能卸**——装插件就是在机主的机器上运行第三方代码，那一步留给人
 和 consent-gated 的 `hub_install_run`。这是 `hooks_manage` 的先例：随便报，永远不批。
