@@ -65,9 +65,20 @@ pub(crate) const TOOL_ERROR_MARKER: &str = "' returned error: ";
 
 /// Whether an error from [`McpConnection::call_tool`] is the tool's own verdict
 /// rather than a failure to reach it.
+///
+/// Substring match on the marker alone is too permissive: an
+/// `AlephError::IoError` whose formatted message happens to contain
+/// `' returned error: ` (e.g. a wrapped inner error quoting a tool name
+/// verbatim) would be misclassified as a tool verdict, suppressing
+/// retries downstream. Require the literal `Tool ` prefix that the call
+/// site always emits, so only messages produced by the canonical
+/// formatter match.
 #[must_use]
 pub(crate) fn is_tool_error(message: &str) -> bool {
     message.contains(TOOL_ERROR_MARKER)
+        && message
+            .split_once(TOOL_ERROR_MARKER)
+            .is_some_and(|(prefix, _)| prefix.trim_start().starts_with("Tool "))
 }
 
 impl ChangedLists {
