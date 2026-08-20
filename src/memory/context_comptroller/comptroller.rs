@@ -55,8 +55,14 @@ impl ContextComptroller {
         }
     }
 
-    /// Estimate tokens (4 chars per token)
+    /// Estimate tokens (4 chars per token).
+    ///
+    /// Counts Unicode characters rather than bytes: a CJK character is 3
+    /// bytes in UTF-8 but a single character, so `text.len() / 4` would
+    /// undercount CJK-heavy content by ~3× and silently blow past the
+    /// budget. Matches the convention in
+    /// `crate::memory::assembler::hydration::estimate_tokens`.
     fn estimate_tokens(&self, text: &str) -> usize {
-        (text.len() / 4).max(1)
+        (text.chars().count() / 4).max(1)
     }
 }
