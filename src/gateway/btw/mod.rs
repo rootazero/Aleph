@@ -17,6 +17,8 @@
 //! `knob_validators()`, or in `session_snapshot.rs`, and no later task
 //! should add it there.
 
+pub(crate) mod seed;
+
 use crate::routing::session_key::SessionKey;
 
 /// Metadata key that marks a run request as a side question. Whichever
