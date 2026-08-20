@@ -20,8 +20,14 @@ pub struct SkillId(String);
 
 impl SkillId {
     /// Create a new `SkillId` from any string-like value.
+    ///
+    /// The `plugin:skill_name` convention is intentionally not enforced
+    /// (tests and ad-hoc skills use bare names), but an empty id can never
+    /// be meaningful — it would silently become an empty registry key.
     pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
+        let id = id.into();
+        debug_assert!(!id.is_empty(), "SkillId must not be empty");
+        Self(id)
     }
 
     /// Return the underlying string slice.
@@ -60,7 +66,9 @@ pub struct PluginId(String);
 impl PluginId {
     /// Create a new `PluginId`.
     pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
+        let id = id.into();
+        debug_assert!(!id.is_empty(), "PluginId must not be empty");
+        Self(id)
     }
 
     /// Return the underlying string slice.
@@ -364,19 +372,18 @@ pub struct AutomationSpec {
 // InvocationPolicy
 // ---------------------------------------------------------------------------
 
-/// Serde helper: returns `true`.
-const fn default_true() -> bool {
-    true
-}
-
 /// Controls how a skill can be invoked.
+///
+/// Container-level `#[serde(default)]` delegates missing fields to
+/// `Default::default()`, keeping the handwritten `Default` impl below the
+/// single source of truth for defaults (previously the serde default for
+/// `user_invocable` was a separate `default_true` helper that could drift).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct InvocationPolicy {
     /// Whether the user can invoke this skill directly.
-    #[serde(default = "default_true")]
     pub user_invocable: bool,
     /// Whether to prevent the model from invoking this skill.
-    #[serde(default)]
     pub disable_model_invocation: bool,
 }
 
@@ -438,7 +445,7 @@ impl fmt::Display for SkillContent {
 /// content, eligibility, installation instructions, and invocation
 /// policy. It implements `Entity<Id=SkillId>` (formerly `AggregateRoot`, removed
 /// 2026-08-16 — see `src/domain/mod.rs`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillManifest {
     /// Unique skill identifier.
     id: SkillId,

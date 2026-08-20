@@ -150,42 +150,84 @@ impl ToolQuery {
         tools: &std::collections::HashMap<String, UnifiedTool>,
         name: &str,
     ) -> Option<UnifiedTool> {
-        let pick = |matches: &dyn Fn(&UnifiedTool) -> bool| {
-            tools
-                .values()
-                .filter(|t| t.is_active && matches(t))
-                .max_by(|a, b| {
-                    a.source
-                        .priority()
-                        .cmp(&b.source.priority())
-                        .then_with(|| b.id.cmp(&a.id))
-                })
-                .cloned()
+        // Tier 3 normalization, computed once outside the loop. The execution
+        // layer (`LoopToolRegistry::resolve`) already swaps `.`↔`_`, so a user
+        // or bot that types `/session.new` must resolve the same command it
+        // would execute — otherwise the slash command silently falls through
+        // to plain chat. Canonical names and aliases never carry dots, so we
+        // only normalize the *input's* `.`→`_` and re-compare. Guarded on
+        // `name.contains('.')` and ranked below the exact tiers, this is
+        // strictly additive: it only adds matches the exact tiers missed and
+        // can never shadow a real command.
+        let norm = if name.contains('.') {
+            Some(name.replace('.', "_"))
+        } else {
+            None
         };
 
-        // Tier 1: canonical name.
-        pick(&|t| t.name.to_lowercase() == name)
-            // Tier 2: alias fallback.
-            .or_else(|| pick(&|t| t.aliases.iter().any(|a| a.to_lowercase() == name)))
-            // Tier 3: separator-tolerant fallback. The execution layer
-            // (`LoopToolRegistry::resolve`) already swaps `.`↔`_`, so a user or
-            // bot that types `/session.new` must resolve the same command it
-            // would execute — otherwise the slash command silently falls through
-            // to plain chat. Canonical names and aliases never carry dots, so we
-            // only normalize the *input's* `.`→`_` and re-compare. Guarded on
-            // `name.contains('.')` and chained after the exact tiers, this is
-            // strictly additive: it only adds matches the exact tiers missed and
-            // can never shadow a real command.
-            .or_else(|| {
-                if !name.contains('.') {
-                    return None;
+        // Single pass with per-tier best tracking. Replaces the original
+        // three full scans (`pick` chained via `or_else`) with identical
+        // semantics: tier order is canonical name > alias > normalized, and
+        // within a tier the comparator is the same one `max_by` used —
+        // higher `source.priority()` wins, ties go to the lexicographically
+        // larger `id`, and a full tie keeps the *later* element (max_by
+        // returns the last of equal maxima), which `replace` reproduces by
+        // swapping in the candidate whenever the incumbent is not strictly
+        // greater.
+        let replace = |incumbent: &UnifiedTool, candidate: &UnifiedTool| {
+            incumbent
+                .source
+                .priority()
+                .cmp(&candidate.source.priority())
+                .then_with(|| candidate.id.cmp(&incumbent.id))
+                != std::cmp::Ordering::Greater
+        };
+
+        let mut best: [Option<&UnifiedTool>; 3] = [None, None, None];
+
+        for tool in tools.values() {
+            if !tool.is_active {
+                continue;
+            }
+            // Lowercase the name once and each alias once.
+            let name_lower = tool.name.to_lowercase();
+            let mut alias_hit_name = false;
+            let mut alias_hit_norm = false;
+            for alias in &tool.aliases {
+                let alias_lower = alias.to_lowercase();
+                alias_hit_name = alias_hit_name || alias_lower == name;
+                if let Some(norm) = &norm {
+                    alias_hit_norm = alias_hit_norm || alias_lower == *norm;
                 }
-                let norm = name.replace('.', "_");
-                pick(&|t| {
-                    t.name.to_lowercase() == norm
-                        || t.aliases.iter().any(|a| a.to_lowercase() == norm)
-                })
-            })
+            }
+
+            let tier = if name_lower == name {
+                // Tier 0: canonical name.
+                Some(0)
+            } else if alias_hit_name {
+                // Tier 1: alias fallback.
+                Some(1)
+            } else if let Some(norm) = &norm {
+                // Tier 2: separator-tolerant fallback.
+                if name_lower == *norm || alias_hit_norm {
+                    Some(2)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(tier) = tier {
+                if best[tier].is_none_or(|incumbent| replace(incumbent, tool)) {
+                    best[tier] = Some(tool);
+                }
+            }
+        }
+
+        // Cross-tier precedence mirrors the original `.or_else` chain:
+        // tier 0 > tier 1 > tier 2.
+        best[0].or(best[1]).or(best[2]).cloned()
     }
 
     /// Suggest up to `max` active command names closest to `needle` — an
@@ -204,38 +246,53 @@ impl ToolQuery {
             return Vec::new();
         }
 
-        let tools = self.tools.read().await;
+        // Snapshot under the read lock only what scoring needs (lowercased
+        // canonical name + aliases of active tools, plus the original-case
+        // name for the result); Levenshtein scoring then runs after the
+        // guard drops instead of holding the lock across O(tools×aliases)
+        // edit-distance work.
+        let snapshot: Vec<(String, String, Vec<String>)> = {
+            let tools = self.tools.read().await;
+            tools
+                .values()
+                .filter(|t| t.is_active)
+                .map(|t| {
+                    (
+                        t.name.clone(),
+                        t.name.to_lowercase(),
+                        t.aliases.iter().map(|a| a.to_lowercase()).collect(),
+                    )
+                })
+                .collect()
+        };
+
         let mut scored: Vec<(usize, String)> = Vec::new();
 
-        'tool: for t in tools.values() {
-            if !t.is_active {
-                continue;
-            }
+        'tool: for (name, name_lower, aliases_lower) in &snapshot {
             // Best (lowest) effective distance across canonical name + aliases.
             // Threshold is tuned for short identifiers: at most 2 edits for
             // ≤6-char candidates, 3 otherwise, plus a substring fast-path.
             let mut best: Option<usize> = None;
-            for cand in std::iter::once(&t.name).chain(t.aliases.iter()) {
-                let cand = cand.to_lowercase();
-                if cand == needle {
+            for cand in std::iter::once(name_lower).chain(aliases_lower.iter()) {
+                if *cand == needle {
                     // Exact hit — the caller should have resolved this already;
                     // skip the whole tool so we never suggest what matches.
                     continue 'tool;
                 }
-                let dist = levenshtein_distance(&cand, &needle);
+                let dist = levenshtein_distance(cand, &needle);
                 let threshold = if cand.len().max(needle.len()) <= 6 {
                     2
                 } else {
                     3
                 };
-                let substring_hit = cand.contains(&needle) || needle.contains(&cand);
+                let substring_hit = cand.contains(&needle) || needle.contains(cand.as_str());
                 if dist <= threshold || substring_hit {
                     let effective = if substring_hit { dist.min(2) } else { dist };
                     best = Some(best.map_or(effective, |b| b.min(effective)));
                 }
             }
             if let Some(d) = best {
-                scored.push((d, t.name.clone()));
+                scored.push((d, name.clone()));
             }
         }
 

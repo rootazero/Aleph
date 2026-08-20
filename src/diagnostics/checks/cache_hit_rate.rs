@@ -13,7 +13,7 @@
 //! and `AgentUsageTotal::cache_hit_ratio`, so doctor never quotes a third
 //! number.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
@@ -52,9 +52,12 @@ impl CacheHitRateCheck {
     /// `(calls_with_cache_activity, total_reads, total_prompt)` over the
     /// window, where `total_prompt = Σ(input + read)` per the disjoint-counter
     /// invariant (see `aleph_protocol::cache_hit_ratio`).
-    fn rollup(&self) -> Result<(u64, u64, u64), String> {
+    ///
+    /// Blocking (rusqlite is synchronous) — callers must keep it off the
+    /// async executor (`spawn_blocking`).
+    fn rollup(db_path: &Path) -> Result<(u64, u64, u64), String> {
         let conn = rusqlite::Connection::open_with_flags(
-            &self.db_path,
+            db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|e| format!("{e}"))?;
@@ -114,17 +117,28 @@ impl HealthCheck for CacheHitRateCheck {
                 "state.db absent — no agent has run, so no cache telemetry exists.",
             )];
         }
-        let (calls, reads, prompt) = match self.rollup() {
-            Ok(r) => r,
-            Err(e) => {
-                return vec![Finding::problem(
-                    ID,
-                    Severity::Warning,
-                    "Trace DB unreadable",
-                    format!("could not aggregate provider usage from state.db: {e}"),
-                )];
-            }
-        };
+        // rusqlite is synchronous — keep the aggregation off the async executor.
+        let db = self.db_path.clone();
+        let (calls, reads, prompt) =
+            match tokio::task::spawn_blocking(move || Self::rollup(&db)).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    return vec![Finding::problem(
+                        ID,
+                        Severity::Warning,
+                        "Trace DB unreadable",
+                        format!("could not aggregate provider usage from state.db: {e}"),
+                    )];
+                }
+                Err(e) => {
+                    return vec![Finding::problem(
+                        ID,
+                        Severity::Warning,
+                        "Trace DB unreadable",
+                        format!("the cache hit-rate aggregation task failed to run: {e}"),
+                    )];
+                }
+            };
         if calls < MIN_CALLS {
             return vec![Finding::ok(
                 ID,

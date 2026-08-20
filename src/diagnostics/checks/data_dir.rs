@@ -26,10 +26,10 @@ impl DataDirCheck {
 
     /// Probe writability by creating and removing a throwaway file. Returns
     /// the io error if the directory is not writable.
-    fn write_probe(dir: &std::path::Path) -> std::io::Result<()> {
+    async fn write_probe(dir: &std::path::Path) -> std::io::Result<()> {
         let probe = dir.join(".aleph-doctor-write-probe");
-        std::fs::write(&probe, b"ok")?;
-        let _ = std::fs::remove_file(&probe);
+        tokio::fs::write(&probe, b"ok").await?;
+        let _ = tokio::fs::remove_file(&probe).await;
         Ok(())
     }
 }
@@ -54,11 +54,11 @@ impl HealthCheck for DataDirCheck {
                 "Data directory is missing",
                 format!("{display} does not exist; SQLite stores, vault, and the instance lock cannot be created."),
             )
-            .with_fix_hint(format!("Run `aleph doctor --fix`, or create it manually: mkdir -p {display}"))
+            .with_fix_hint(format!("Run `aleph doctor --fix`, or create it manually: mkdir -p \"{display}\""))
             .repairable();
 
             if posture.allows_repair() {
-                let outcome = match std::fs::create_dir_all(&self.data_dir) {
+                let outcome = match tokio::fs::create_dir_all(&self.data_dir).await {
                     Ok(()) => RepairOutcome::Repaired {
                         detail: format!("Created {display}"),
                     },
@@ -71,7 +71,7 @@ impl HealthCheck for DataDirCheck {
             return vec![finding];
         }
 
-        match Self::write_probe(&self.data_dir) {
+        match Self::write_probe(&self.data_dir).await {
             Ok(()) => vec![Finding::ok(
                 ID,
                 "Data directory OK",
@@ -84,7 +84,7 @@ impl HealthCheck for DataDirCheck {
                 format!("{display} exists but a write probe failed: {e}"),
             )
             .with_fix_hint(format!(
-                "Check ownership/permissions: ls -ld {display} (the directory must be writable by the current user)."
+                "Check ownership/permissions: ls -ld \"{display}\" (the directory must be writable by the current user)."
             ))],
         }
     }

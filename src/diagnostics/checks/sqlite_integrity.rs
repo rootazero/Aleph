@@ -7,7 +7,9 @@
 //! symptom that gets blamed on the feature above it rather than on the file
 //! underneath. codex checks the same thing (`state_check` →
 //! `sqlite_integrity_detail`); Aleph runs it over *every* store in the data
-//! dir instead of one named file, and concurrently.
+//! dir instead of one named file — sequentially inside a single
+//! `spawn_blocking`, since rusqlite is synchronous and "concurrent" probing
+//! would just move the serialization onto the async executor.
 //!
 //! **Not repairable.** A failed integrity check means "restore from a backup
 //! or accept data loss" — a human decision with irreversible consequences,

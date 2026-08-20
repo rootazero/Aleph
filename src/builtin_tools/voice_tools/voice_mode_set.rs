@@ -290,6 +290,9 @@ mod tests {
             "the refusal must name what is missing: {}",
             output.message
         );
+        // No state may be created for the phantom "default" channel.
+        let state = registry.get_voice_state("default").await;
+        assert!(!state.enabled);
     }
 
     #[tokio::test]

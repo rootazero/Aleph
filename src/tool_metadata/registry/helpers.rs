@@ -8,7 +8,7 @@
 /// - "^/translate" -> "translate"
 /// - "^/(?i)code" -> "code"
 /// - "^/draw\\s+" -> "draw"
-pub fn extract_command_name(pattern: &str) -> String {
+pub(crate) fn extract_command_name(pattern: &str) -> String {
     // Remove common regex prefixes and patterns sequentially
     let mut cleaned = pattern;
     cleaned = cleaned.strip_prefix("^/").unwrap_or(cleaned);
@@ -23,7 +23,7 @@ pub fn extract_command_name(pattern: &str) -> String {
 }
 
 /// Truncate description to max length, adding ellipsis (Unicode-safe)
-pub fn truncate_description(s: &str, max_len: usize) -> String {
+pub(crate) fn truncate_description(s: &str, max_len: usize) -> String {
     crate::utils::text_format::truncate_text(s.trim(), max_len)
 }
 

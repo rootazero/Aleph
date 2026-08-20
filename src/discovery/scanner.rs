@@ -13,8 +13,10 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, trace};
 
 /// Directory scanner for discovering components across multiple locations
+///
+/// Crate-internal: external consumers go through [`DiscoveryManager`].
 #[derive(Debug)]
-pub struct DirectoryScanner {
+pub(crate) struct DirectoryScanner {
     /// Aleph home directory (~/.aleph/)
     aleph_home: PathBuf,
     /// Claude home directory (~/.claude/)
@@ -34,7 +36,17 @@ impl DirectoryScanner {
 
         // Claude home is optional (only scan if it exists)
         let claude_home = if config.scan_claude_dirs {
-            claude_home_dir().ok().filter(|p| p.exists())
+            match claude_home_dir() {
+                Ok(p) if p.exists() => Some(p),
+                Ok(_) => None,
+                Err(e) => {
+                    // An unresolvable home must not abort discovery, but a
+                    // silent skip makes "why weren't my ~/.claude skills
+                    // loaded" undebuggable.
+                    debug!("claude home unavailable, skipping .claude scan: {e}");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -61,6 +73,13 @@ impl DirectoryScanner {
             working_dir: config.working_dir.clone(),
             config: config.clone(),
         })
+    }
+
+    /// Cached Aleph home directory resolved at construction (honours the
+    /// `ALEPH_HOME` override), so callers cannot drift from the scanner's
+    /// view by re-resolving env at call time.
+    pub(crate) fn aleph_home(&self) -> &Path {
+        &self.aleph_home
     }
 
     /// Get all directories to scan, in priority order
@@ -104,6 +123,18 @@ impl DirectoryScanner {
 
             // Reverse to get proper priority (deeper = higher priority)
             for (i, dir) in claude_dirs.into_iter().rev().enumerate() {
+                // Same guard as the `.aleph` block below: when no git root
+                // bounds the upward walk it can re-discover the global
+                // `~/.claude`; skip it so it is not double-counted with the
+                // ClaudeGlobal entry above (otherwise the Project-priority
+                // copy wins the sort and global components are mislabeled).
+                if self
+                    .claude_home
+                    .as_deref()
+                    .is_some_and(|ch| crate::utils::paths::equivalent(&dir, ch))
+                {
+                    continue;
+                }
                 let priority = 20u32.saturating_add(i as u32);
                 dirs.push(ScanDirectory::new(dir, DiscoverySource::Project, priority));
             }
@@ -152,77 +183,8 @@ impl DirectoryScanner {
         let mut discovered = Vec::new();
         let scan_dirs = self.get_all_directories()?;
 
-        for scan_dir in scan_dirs {
-            if !scan_dir.path.exists() {
-                continue;
-            }
-
-            let component_dir = scan_dir.path.join(component_name);
-            if !component_dir.exists() || !component_dir.is_dir() {
-                continue;
-            }
-
-            // Scan for subdirectories (each is a component)
-            match std::fs::read_dir(&component_dir) {
-                Ok(entries) => {
-                    for entry in entries {
-                        let entry = match entry {
-                            Ok(e) => e,
-                            Err(e) => {
-                                debug!("Failed to read entry in {:?}: {}", component_dir, e);
-                                continue;
-                            }
-                        };
-                        let path = entry.path();
-                        // `symlink_metadata` reports the link's own type, so
-                        // a symlinked skill/command/agent pointing outside
-                        // the expected tree is rejected instead of being
-                        // enumerated as a discovered component.
-                        let meta = match std::fs::symlink_metadata(&path) {
-                            Ok(m) => m,
-                            Err(_) => continue,
-                        };
-                        if meta.file_type().is_dir() {
-                            if is_hidden(&path) {
-                                continue;
-                            }
-
-                            // Skip directories without a marker file for the component type.
-                            // e.g. ~/.aleph/agents/{id}/ without agent.md is Aleph's identity
-                            // system, not an extension agent.
-                            if let Some(marker) = component_marker_file(component_name) {
-                                if !path.join(marker).exists() {
-                                    trace!("Skipping {:?}: missing marker file '{}'", path, marker);
-                                    continue;
-                                }
-                            }
-
-                            discovered.push(DiscoveredPath::new(
-                                path,
-                                scan_dir.source,
-                                scan_dir.priority,
-                            ));
-                        } else if meta.file_type().is_file() {
-                            if is_hidden(&path) {
-                                continue;
-                            }
-                            // Also include direct .md files (for commands/agents)
-                            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                                if ext == "md" {
-                                    discovered.push(DiscoveredPath::new(
-                                        path,
-                                        scan_dir.source,
-                                        scan_dir.priority,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug!("Failed to read directory {:?}: {}", component_dir, e);
-                }
-            }
+        for scan_dir in &scan_dirs {
+            scan_component_dir(scan_dir, component_name, &mut discovered);
         }
 
         // Sort by priority (lower first, so higher priority items can override)
@@ -327,6 +289,86 @@ impl DirectoryScanner {
     }
 }
 
+/// Scan a single scan-dir's `<dir>/<component_name>` subdirectory, pushing
+/// each valid component into `out`. A missing or unreadable directory is a
+/// silent no-op (debug-logged).
+fn scan_component_dir(
+    scan_dir: &ScanDirectory,
+    component_name: &str,
+    out: &mut Vec<DiscoveredPath>,
+) {
+    let component_dir = scan_dir.path.join(component_name);
+    if !component_dir.is_dir() {
+        return;
+    }
+    let entries = match std::fs::read_dir(&component_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            debug!("Failed to read directory {:?}: {}", component_dir, e);
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                debug!("Failed to read entry in {:?}: {}", component_dir, e);
+                continue;
+            }
+        };
+        classify_entry(&entry.path(), scan_dir, component_name, out);
+    }
+}
+
+/// Classify a single directory entry as a component (marker-checked
+/// subdirectory or direct `.md` file) and push it into `out` when it
+/// qualifies.
+fn classify_entry(
+    path: &Path,
+    scan_dir: &ScanDirectory,
+    component_name: &str,
+    out: &mut Vec<DiscoveredPath>,
+) {
+    // `symlink_metadata` reports the link's own type, so a symlinked
+    // skill/command/agent pointing outside the expected tree is rejected
+    // instead of being enumerated as a discovered component.
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            trace!("stat {:?} failed, skipping entry: {}", path, e);
+            return;
+        }
+    };
+    if is_hidden(path) {
+        return;
+    }
+    let is_component = if meta.file_type().is_dir() {
+        // Skip directories without a marker file for the component type.
+        // e.g. ~/.aleph/agents/{id}/ without agent.md is Aleph's identity
+        // system, not an extension agent.
+        match component_marker_file(component_name) {
+            Some(marker) => {
+                let present = path.join(marker).exists();
+                if !present {
+                    trace!("Skipping {:?}: missing marker file '{}'", path, marker);
+                }
+                present
+            }
+            None => true,
+        }
+    } else {
+        // Also include direct .md files (for commands/agents)
+        meta.file_type().is_file() && path.extension().and_then(|e| e.to_str()) == Some("md")
+    };
+    if is_component {
+        out.push(DiscoveredPath::new(
+            path.to_path_buf(),
+            scan_dir.source,
+            scan_dir.priority,
+        ));
+    }
+}
+
 /// `DirEntry::path().is_dir()` follows symlinks; `symlink_metadata` reports
 /// the link's own file type. This stops a symlink inside `~/.aleph/{skills,
 /// commands, plugins}` pointing outside the expected tree from being
@@ -379,11 +421,14 @@ fn has_plugin_manifest(path: &Path) -> bool {
     ]
     .iter()
     .any(|p| p.exists())
-        || path.join(".cursor/rules").is_dir()
-        || path.join("skills").is_dir()
-        || path.join("commands").is_dir()
-        || path.join("agents").is_dir()
-        || path.join("hooks").is_dir()
+        // Auto-discover dirs use the no-follow check too: the plugin parent
+        // itself is symlink-screened, and a `skills -> /elsewhere` symlink
+        // must not qualify an arbitrary directory as a plugin either.
+        || is_existing_dir_no_follow(&path.join(".cursor/rules"))
+        || is_existing_dir_no_follow(&path.join("skills"))
+        || is_existing_dir_no_follow(&path.join("commands"))
+        || is_existing_dir_no_follow(&path.join("agents"))
+        || is_existing_dir_no_follow(&path.join("hooks"))
 }
 
 #[cfg(test)]

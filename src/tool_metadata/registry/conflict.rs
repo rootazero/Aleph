@@ -62,17 +62,15 @@ impl ConflictResolver {
         let tools = self.tools.read().await;
         let name_lower = name.to_lowercase();
 
-        for tool in tools.values() {
-            if tool.name.to_lowercase() == name_lower {
-                return Some(ConflictInfo {
-                    existing_id: tool.id.clone(),
-                    existing_name: tool.name.clone(),
-                    existing_source: tool.source.clone(),
-                    existing_priority: tool.source.priority(),
-                });
-            }
-        }
-        None
+        tools
+            .values()
+            .find(|t| t.name.to_lowercase() == name_lower)
+            .map(|tool| ConflictInfo {
+                existing_id: tool.id.clone(),
+                existing_name: tool.name.clone(),
+                existing_source: tool.source.clone(),
+                existing_priority: tool.source.priority(),
+            })
     }
 
     /// Resolve a naming conflict between two tools
@@ -85,7 +83,8 @@ impl ConflictResolver {
     /// 2. Native - System capabilities
     /// 3. Custom - User-defined rules
     /// 4. MCP - External MCP tools
-    /// 5. Skill - Claude Agent skills
+    /// 5. Plugin - Plugin tools from manifests
+    /// 6. Skill - Claude Agent skills
     ///
     /// # Arguments
     ///

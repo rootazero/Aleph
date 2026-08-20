@@ -53,25 +53,55 @@ impl HealthCheck for LoopGraphCheck {
                 "loop_graph.db absent — no governance topology declared (zero cost).",
             )];
         }
-        let store = match LoopGraphStore::open_readonly(&path) {
-            Ok(s) => s,
-            Err(e) => {
+        /// Outcome of the blocking store probe (`open` + `lint` + emptiness
+        /// check), one enum so a single `spawn_blocking` covers all three
+        /// synchronous SQLite calls.
+        enum Probe {
+            Unreadable(String),
+            LintFailed(String),
+            Done { findings: Vec<String>, empty: bool },
+        }
+
+        // rusqlite is synchronous — keep open/lint/list_nodes off the async executor.
+        let probe = tokio::task::spawn_blocking(move || {
+            let store = match LoopGraphStore::open_readonly(&path) {
+                Ok(s) => s,
+                Err(e) => return Probe::Unreadable(format!("{e}")),
+            };
+            let findings = match store.lint(DEFAULT_AGENT) {
+                Ok(f) => f,
+                Err(e) => return Probe::LintFailed(format!("{e}")),
+            };
+            let empty = findings.is_empty()
+                && matches!(store.list_nodes(DEFAULT_AGENT), Ok(n) if n.is_empty());
+            Probe::Done { findings, empty }
+        })
+        .await;
+
+        let (findings, empty) = match probe {
+            Ok(Probe::Done { findings, empty }) => (findings, empty),
+            Ok(Probe::Unreadable(e)) => {
                 return vec![Finding::problem(
                     ID,
                     Severity::Warning,
                     "Graph DB unreadable",
-                    format!("{e}"),
+                    e,
                 )];
             }
-        };
-        let findings = match store.lint(DEFAULT_AGENT) {
-            Ok(f) => f,
+            Ok(Probe::LintFailed(e)) => {
+                return vec![Finding::problem(
+                    ID,
+                    Severity::Warning,
+                    "Graph lint failed",
+                    e,
+                )];
+            }
             Err(e) => {
                 return vec![Finding::problem(
                     ID,
                     Severity::Warning,
                     "Graph lint failed",
-                    format!("{e}"),
+                    format!("the graph lint task failed to run: {e}"),
                 )];
             }
         };
@@ -84,7 +114,6 @@ impl HealthCheck for LoopGraphCheck {
             // there and an EMPTY graph — no loop registered, nothing watching
             // anything — used to report as "Topology sound". A governance layer
             // that certifies its own absence is the failure it exists to catch.
-            let empty = matches!(store.list_nodes(DEFAULT_AGENT), Ok(n) if n.is_empty());
             if empty {
                 return vec![Finding::ok(
                     ID,
