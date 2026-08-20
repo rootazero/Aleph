@@ -89,8 +89,8 @@ impl PiiSecretsGuardrail {
                 // to enumerate the vault namespace. Logging the name into a
                 // dedicated audit field instead keeps triage intact.
                 let variant = match &e {
-                    crate::secrets::injection::SecretError::NotFound(_) => "not_found",
-                    crate::secrets::injection::SecretError::InvalidPlaceholder(_) => {
+                    crate::secrets::types::SecretError::NotFound(_) => "not_found",
+                    crate::secrets::types::SecretError::InvalidPlaceholder(_) => {
                         "invalid_placeholder"
                     }
                     _ => "resolution_failed",

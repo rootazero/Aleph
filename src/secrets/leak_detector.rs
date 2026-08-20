@@ -11,7 +11,6 @@ use std::hash::{Hash, Hasher};
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::{BTreeSet, HashSet};
 
 use super::injection::{InjectedSecret, INJECTED_HASH_KEY0, INJECTED_HASH_KEY1};
 
