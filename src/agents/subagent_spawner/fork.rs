@@ -404,7 +404,13 @@ pub(crate) async fn seed(
         .await
         .map_err(|e| format!("sub-agent failed: fork: emit SessionForked: {e}"))?;
 
-    seed_events(session, child, &plan.events).await?;
+    // The prefix belongs to this function, not to the copy loop: `seed_events`
+    // is also the btw side-thread's warm path, where "sub-agent failed" names a
+    // subsystem the user was not using. Re-applied here so `seed`'s own output
+    // stays byte-identical for the spawner.
+    seed_events(session, child, &plan.events)
+        .await
+        .map_err(|e| format!("sub-agent failed: {e}"))?;
 
     Ok(Some(plan))
 }
@@ -420,6 +426,12 @@ pub(crate) async fn seed(
 /// warmth requires the copied bytes to be byte-identical replays, so anything
 /// that reshapes an event here would silently delete the saving the fork modes
 /// exist for.
+///
+/// Errors are **unprefixed**. Attributing them to a sub-agent here would be
+/// wrong for every caller that is not one, and the error string is the only
+/// classification a consumer gets — pointing an operator at the wrong
+/// subsystem's logs is the same defect as returning the wrong error code.
+/// [`seed`] re-applies its own prefix.
 pub(crate) async fn seed_events(
     session: &dyn crate::session::service::SessionService,
     child: &crate::session::service::SessionId,
@@ -429,7 +441,7 @@ pub(crate) async fn seed_events(
         session
             .emit_event(child, event.clone())
             .await
-            .map_err(|e| format!("sub-agent failed: fork: copy event: {e}"))?;
+            .map_err(|e| format!("fork: copy event: {e}"))?;
     }
     Ok(())
 }

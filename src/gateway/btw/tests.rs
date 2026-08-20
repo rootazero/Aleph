@@ -76,13 +76,16 @@ fn the_side_key_is_derived_from_the_main_key_including_its_epoch() {
 // ---------------------------------------------------------------------------
 
 mod seeding {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use crate::agents::subagent_spawner::fork::ForkBudget;
     use crate::gateway::btw::seed::{ensure_seeded, interpret_cursor, SeedOutcome};
     use crate::gateway::btw::side_key_for;
     use crate::gateway::session_store::SessionStore;
-    use crate::session::events::{MessageContent, SessionEvent};
+    use crate::session::events::{
+        MessageContent, RunOutcome, SessionEvent, ToolOutput, TurnTrigger,
+    };
     use crate::session::in_process::InProcessActorSessionService;
     use crate::session::service::{SessionId, SessionService};
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
@@ -112,6 +115,12 @@ mod seeding {
         (main, side)
     }
 
+    /// No run attribution — equivalent to a single-user install, where
+    /// `scope_from_metadata` yields `None` and the row is owner-adopted.
+    fn no_attribution() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
     fn content(text: &str) -> MessageContent {
         MessageContent {
             text: text.to_string(),
@@ -121,42 +130,133 @@ mod seeding {
         }
     }
 
-    /// Append one *complete* turn: a question and its answer, sharing a turn
-    /// id and leaving no open tool call. Only closed turns are eligible to be
-    /// forked, so seeding an incomplete one would make every assertion here
-    /// vacuously true.
+    async fn emit(session: &dyn SessionService, id: &SessionId, event: SessionEvent) {
+        session.emit_event(id, event).await.expect("emit");
+    }
+
+    async fn turn_started(session: &dyn SessionService, id: &SessionId) -> uuid::Uuid {
+        let turn_id = uuid::Uuid::new_v4();
+        emit(
+            session,
+            id,
+            SessionEvent::TurnStarted {
+                turn_id,
+                trigger: TurnTrigger::UserMessage,
+                at: 0,
+            },
+        )
+        .await;
+        turn_id
+    }
+
+    async fn user(session: &dyn SessionService, id: &SessionId, turn_id: uuid::Uuid, text: &str) {
+        emit(
+            session,
+            id,
+            SessionEvent::UserMessage {
+                turn_id,
+                content: content(text),
+                at: 0,
+                synthetic: false,
+                author_user_id: None,
+            },
+        )
+        .await;
+    }
+
+    async fn assistant(
+        session: &dyn SessionService,
+        id: &SessionId,
+        turn_id: uuid::Uuid,
+        text: &str,
+    ) {
+        emit(
+            session,
+            id,
+            SessionEvent::AssistantMessage {
+                turn_id,
+                content: content(text),
+                usage: None,
+                at: 0,
+            },
+        )
+        .await;
+    }
+
+    async fn tool_call(
+        session: &dyn SessionService,
+        id: &SessionId,
+        turn_id: uuid::Uuid,
+        call_id: &str,
+    ) {
+        emit(
+            session,
+            id,
+            SessionEvent::ToolCallRequested {
+                turn_id,
+                call_id: call_id.to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({}),
+                at: 0,
+            },
+        )
+        .await;
+    }
+
+    async fn tool_result(
+        session: &dyn SessionService,
+        id: &SessionId,
+        turn_id: uuid::Uuid,
+        call_id: &str,
+        body: &str,
+    ) {
+        emit(
+            session,
+            id,
+            SessionEvent::ToolResult {
+                turn_id,
+                call_id: call_id.to_string(),
+                output: ToolOutput {
+                    value: serde_json::Value::String(body.to_string()),
+                    metadata: Default::default(),
+                },
+                at: 0,
+            },
+        )
+        .await;
+    }
+
+    /// The marker that ends a run — and therefore, per `TurnStarted`'s own
+    /// doc, the marker that proves its last turn is over.
+    async fn run_finished(session: &dyn SessionService, id: &SessionId) {
+        emit(
+            session,
+            id,
+            SessionEvent::RunFinished {
+                run_id: uuid::Uuid::new_v4().to_string(),
+                outcome: RunOutcome::Completed,
+                at: 0,
+            },
+        )
+        .await;
+    }
+
+    /// Append one *settled* turn, framed the way production frames it:
+    /// `harness_bridge::session_seed` opens every user turn with
+    /// `TurnStarted`, and `harness_bridge::runner_impl` closes every run with
+    /// `RunFinished` on the completed, cancelled and errored paths alike.
+    /// Seeding cuts on those markers, so a fixture without them would be
+    /// asserting against a log shape production never produces.
     async fn append_closed_turn(
         session: &dyn SessionService,
         id: &SessionId,
         ask: &str,
         answer: &str,
     ) {
-        let turn_id = uuid::Uuid::new_v4();
-        session
-            .emit_event(
-                id,
-                SessionEvent::UserMessage {
-                    turn_id,
-                    content: content(ask),
-                    at: 0,
-                    synthetic: false,
-                    author_user_id: None,
-                },
-            )
-            .await
-            .expect("emit user message");
-        session
-            .emit_event(
-                id,
-                SessionEvent::AssistantMessage {
-                    turn_id,
-                    content: content(answer),
-                    usage: None,
-                    at: 0,
-                },
-            )
-            .await
-            .expect("emit assistant message");
+        let turn_id = turn_started(session, id).await;
+        user(session, id, turn_id, ask).await;
+        assistant(session, id, turn_id, answer).await;
+        run_finished(session, id).await;
     }
 
     async fn transcript_text(session: &dyn SessionService, id: &SessionId) -> String {
@@ -185,9 +285,16 @@ mod seeding {
 
         append_closed_turn(session.as_ref(), &main, "first user turn", "first answer").await;
 
-        let a = ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("first seed");
+        let a = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("first seed");
         assert!(
             a.events_added > 0,
             "the first seed must carry the transcript"
@@ -197,10 +304,17 @@ mod seeding {
             "a seed that carried must leave a cursor"
         );
 
-        // Nothing new closed on the main session in between.
-        let b = ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("second seed");
+        // Nothing new settled on the main session in between.
+        let b = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("second seed");
 
         // The transcript is asserted before the receipt on purpose: it is the
         // ground truth, and a receipt that agreed with a doubled transcript
@@ -228,14 +342,28 @@ mod seeding {
         let (main, side) = keys();
 
         append_closed_turn(session.as_ref(), &main, "turn one", "answer one").await;
-        let a = ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("first seed");
+        let a = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("first seed");
 
         append_closed_turn(session.as_ref(), &main, "turn two", "answer two").await;
-        let b = ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("delta seed");
+        let b = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("delta seed");
 
         assert!(b.events_added > 0, "the new turn must be carried");
         assert!(
@@ -252,6 +380,11 @@ mod seeding {
     /// Provenance is a claim about how many forks happened, and exactly one
     /// did. Re-marking on every top-up would tell the classification that
     /// reads this marker that the side session was forked N times.
+    ///
+    /// This pins the **top-up** path. It deliberately does not cover the
+    /// window described in the module doc, where a cold seed whose cursor
+    /// write is lost re-enters the cold arm and emits a second marker — that
+    /// is a real gap, stated there rather than pinned here.
     #[tokio::test]
     async fn the_fork_marker_is_emitted_once_however_many_top_ups_follow() {
         let session = in_memory_session_service();
@@ -260,9 +393,16 @@ mod seeding {
 
         for i in 0..3 {
             append_closed_turn(session.as_ref(), &main, &format!("ask {i}"), "answer").await;
-            ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-                .await
-                .expect("seed");
+            ensure_seeded(
+                session.as_ref(),
+                store.as_ref(),
+                &main,
+                &side,
+                &no_attribution(),
+                &budget(),
+            )
+            .await
+            .expect("seed");
         }
 
         let marks = session
@@ -275,16 +415,8 @@ mod seeding {
         assert_eq!(marks, 1, "the side session claims {marks} forks");
     }
 
-    /// A turn holding an unresolved tool call is deliberately left behind —
-    /// that is `fork`'s definition of open, and it is what the main session
-    /// looks like at the instant a side question is asked. The cursor must not
-    /// step over it, or half of it would reach the side thread and the other
-    /// half never would.
-    ///
-    /// Note what "open" does **not** mean here: a user message with no answer
-    /// yet holds no open call, so it is a complete group and is carried at
-    /// once. Its answer arrives in the next delta and appends behind it, which
-    /// is why the second half of this test asserts order rather than absence.
+    /// A turn holding an unresolved tool call is left behind — it is not over,
+    /// and neither of the markers that would prove it over has landed.
     #[tokio::test]
     async fn an_open_trailing_turn_is_carried_whole_once_it_closes() {
         let session = in_memory_session_service();
@@ -294,37 +426,20 @@ mod seeding {
         append_closed_turn(session.as_ref(), &main, "closed ask", "closed answer").await;
 
         // The model asked for a tool and no result exists yet.
-        let open_turn = uuid::Uuid::new_v4();
-        session
-            .emit_event(
-                &main,
-                SessionEvent::UserMessage {
-                    turn_id: open_turn,
-                    content: content("still in flight"),
-                    at: 0,
-                    synthetic: false,
-                    author_user_id: None,
-                },
-            )
-            .await
-            .expect("emit");
-        session
-            .emit_event(
-                &main,
-                SessionEvent::ToolCallRequested {
-                    turn_id: open_turn,
-                    call_id: "c-open".to_string(),
-                    name: "bash".to_string(),
-                    input: serde_json::json!({}),
-                    at: 0,
-                },
-            )
-            .await
-            .expect("emit");
+        let open_turn = turn_started(session.as_ref(), &main).await;
+        user(session.as_ref(), &main, open_turn, "still in flight").await;
+        tool_call(session.as_ref(), &main, open_turn, "c-open").await;
 
-        let cold = ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("cold seed");
+        let cold = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("cold seed");
         assert_eq!(
             transcript_text(session.as_ref(), &side)
                 .await
@@ -334,37 +449,20 @@ mod seeding {
             "a turn with an unresolved call must not be carried while it is open"
         );
 
-        session
-            .emit_event(
-                &main,
-                SessionEvent::ToolResult {
-                    turn_id: open_turn,
-                    call_id: "c-open".to_string(),
-                    output: crate::session::events::ToolOutput {
-                        value: serde_json::Value::String("tool output".to_string()),
-                        metadata: Default::default(),
-                    },
-                    at: 0,
-                },
-            )
-            .await
-            .expect("emit");
-        session
-            .emit_event(
-                &main,
-                SessionEvent::AssistantMessage {
-                    turn_id: open_turn,
-                    content: content("landed at last"),
-                    usage: None,
-                    at: 0,
-                },
-            )
-            .await
-            .expect("emit");
+        tool_result(session.as_ref(), &main, open_turn, "c-open", "tool output").await;
+        assistant(session.as_ref(), &main, open_turn, "landed at last").await;
+        run_finished(session.as_ref(), &main).await;
 
-        let b = ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("delta seed");
+        let b = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("delta seed");
         assert!(b.events_added > 0, "the turn that closed must be carried");
         assert!(b.cursor > cold.cursor, "the cursor must step past it now");
 
@@ -385,55 +483,160 @@ mod seeding {
         );
     }
 
-    /// The other half of the note above: a user message whose answer has not
-    /// landed is carried immediately, and the answer appends behind it rather
-    /// than re-carrying the question.
+    /// The case `fork::plan`'s snapshot predicate gets wrong on its own.
+    ///
+    /// Between an `AssistantMessage` and the next `ToolCallRequested` a live
+    /// multi-step turn has **no outstanding tool call**, so `open_calls
+    /// .is_empty()` reads it as closed. Cutting there carries half the turn,
+    /// lets the side thread append its own exchange, and carries the other
+    /// half next time — one main turn in two places with foreign content
+    /// wedged between them. Asking a side question while the main run works is
+    /// the premise of the feature, so this is the ordinary path, not an edge.
     #[tokio::test]
-    async fn an_unanswered_question_is_not_re_carried_when_its_answer_lands() {
+    async fn a_multi_step_main_turn_is_never_split_across_two_deltas() {
         let session = in_memory_session_service();
         let (store, _tmp) = in_memory_session_store();
         let (main, side) = keys();
 
-        let turn = uuid::Uuid::new_v4();
-        session
-            .emit_event(
-                &main,
-                SessionEvent::UserMessage {
-                    turn_id: turn,
-                    content: content("asked but unanswered"),
-                    at: 0,
-                    synthetic: false,
-                    author_user_id: None,
-                },
-            )
-            .await
-            .expect("emit");
+        // A settled turn first, so the side session has a cursor and the
+        // second seed exercises the warm arm.
+        append_closed_turn(session.as_ref(), &main, "earlier ask", "earlier answer").await;
+        ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("cold seed");
 
-        ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("cold seed");
+        // Main is mid-run, momentarily between steps: it has spoken but not
+        // yet reached for its next tool.
+        let live = turn_started(session.as_ref(), &main).await;
+        user(session.as_ref(), &main, live, "multi step ask").await;
+        assistant(session.as_ref(), &main, live, "thinking out loud").await;
 
-        session
-            .emit_event(
-                &main,
-                SessionEvent::AssistantMessage {
-                    turn_id: turn,
-                    content: content("answered later"),
-                    usage: None,
-                    at: 0,
-                },
-            )
-            .await
-            .expect("emit");
+        let a = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("mid-run seed");
+        assert_eq!(
+            a.events_added, 0,
+            "an unfinished main turn must not be carried in halves"
+        );
 
-        ensure_seeded(session.as_ref(), store.as_ref(), &main, &side, &budget())
-            .await
-            .expect("delta seed");
+        // The side thread now has its own exchange. Anything carried later
+        // lands after this, so a split turn would straddle it.
+        let side_turn = turn_started(session.as_ref(), &side).await;
+        user(session.as_ref(), &side, side_turn, "SIDE QUESTION").await;
+        assistant(session.as_ref(), &side, side_turn, "SIDE ANSWER").await;
+
+        // Main finishes the turn it was in the middle of.
+        tool_call(session.as_ref(), &main, live, "c-live").await;
+        tool_result(session.as_ref(), &main, live, "c-live", "step output").await;
+        assistant(session.as_ref(), &main, live, "final word").await;
+        run_finished(session.as_ref(), &main).await;
+
+        let b = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("settled seed");
+        assert!(b.events_added > 0, "the settled turn must be carried");
 
         let text = transcript_text(session.as_ref(), &side).await;
-        assert_eq!(text.matches("asked but unanswered").count(), 1);
-        assert_eq!(text.matches("answered later").count(), 1);
-        assert!(text.find("asked but unanswered") < text.find("answered later"));
+        let side_q = text.find("SIDE QUESTION").expect("side question present");
+        for fragment in [
+            "multi step ask",
+            "thinking out loud",
+            "step output",
+            "final word",
+        ] {
+            assert_eq!(
+                text.matches(fragment).count(),
+                1,
+                "`{fragment}` must appear exactly once"
+            );
+            assert!(
+                text.find(fragment).expect("present") > side_q,
+                "`{fragment}` landed before the side thread's own exchange — \
+                 the main turn was split around it"
+            );
+        }
+    }
+
+    /// Concurrent side questions on one side session must queue, not
+    /// interleave. Without the seeding lock every racer reads the same cursor,
+    /// copies the same delta, and writes the same cursor back: the delta lands
+    /// N times, the resulting state looks healthy, and nothing ever repeats or
+    /// self-heals.
+    ///
+    /// `patch_session`'s own critical section does not cover this — it makes
+    /// the *metadata document*'s read-modify-write atomic, not
+    /// `ensure_seeded`'s read → copy → write.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_side_questions_do_not_double_the_delta() {
+        let session = in_memory_session_service();
+        let (store, _tmp) = in_memory_session_store();
+        let (main, side) = keys();
+
+        append_closed_turn(
+            session.as_ref(),
+            &main,
+            "contested turn",
+            "contested answer",
+        )
+        .await;
+
+        let racers: Vec<_> = (0..8)
+            .map(|_| {
+                let session = Arc::clone(&session);
+                let store = Arc::clone(&store);
+                let main = main.clone();
+                let side = side.clone();
+                tokio::spawn(async move {
+                    ensure_seeded(
+                        session.as_ref(),
+                        store.as_ref(),
+                        &main,
+                        &side,
+                        &no_attribution(),
+                        &budget(),
+                    )
+                    .await
+                    .expect("concurrent seed")
+                })
+            })
+            .collect();
+
+        let mut carried = 0usize;
+        for racer in racers {
+            let outcome = racer.await.expect("task joined");
+            if outcome.events_added > 0 {
+                carried += 1;
+            }
+        }
+
+        let text = transcript_text(session.as_ref(), &side).await;
+        assert_eq!(
+            text.matches("contested turn").count(),
+            1,
+            "the delta was copied more than once — concurrent seeds interleaved"
+        );
+        assert_eq!(carried, 1, "exactly one racer should report having carried");
     }
 
     /// A stored value this code cannot interpret has not said "no cursor".

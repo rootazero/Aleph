@@ -3,8 +3,9 @@
 //! A side question must run as its own turn on a *derived* ephemeral
 //! session: read-only, in its own busy-queue lane (so it can answer while
 //! the main run keeps going), and never appended to the main conversation.
-//! Tasks 3-7 wire this in; this module only supplies the derivations those
-//! tasks and everything downstream of them must agree on.
+//! This module supplies only the derivations every one of those surfaces has
+//! to agree on; the dispatch, tier and retirement machinery lives elsewhere
+//! and depends on this, never the other way round.
 //!
 //! # Why this is not a sixth session knob
 //!
@@ -14,7 +15,7 @@
 //! it must affect exactly one call. Filing it with the knobs would make a
 //! single side question permanently drop the main conversation to `Plan`.
 //! It therefore does NOT appear in `turn_*.rs`, in `sessions.patch`'s
-//! `knob_validators()`, or in `session_snapshot.rs`, and no later task
+//! `knob_validators()`, or in `session_snapshot.rs`, and nothing downstream
 //! should add it there.
 
 pub(crate) mod seed;
@@ -22,8 +23,10 @@ pub(crate) mod seed;
 use crate::routing::session_key::SessionKey;
 
 /// Metadata key that marks a run request as a side question. Whichever
-/// surface builds that request must stamp this key (Task 3); `resolve`
-/// below only recognizes the input, it does not stamp anything itself.
+/// surface builds that request must stamp this key at the point it builds it;
+/// `resolve` below only recognizes the input, it does not stamp anything
+/// itself, so an unstamped request is indistinguishable from an ordinary one
+/// all the way down.
 pub const BTW_METADATA_KEY: &str = "btw";
 
 /// A resolved `/btw` input.
@@ -33,9 +36,9 @@ pub struct BtwTurn {
     /// verbatim. Empty when `promote` is set.
     pub question: String,
     /// `/btw promote` — the user's explicit request that the latest side
-    /// answer be moved into the main conversation (wired in Task 10).
-    /// Explicit by construction: nothing should cross that boundary without
-    /// the user asking out loud.
+    /// answer be moved into the main conversation. Explicit by construction:
+    /// nothing crosses that boundary without the user asking out loud, which
+    /// is why it is a distinct verb rather than a heuristic on the answer.
     pub promote: bool,
 }
 
@@ -46,8 +49,9 @@ impl BtwTurn {
     /// this function; none may re-derive "is this a btw" from its own string
     /// handling. The predicate this is meant to replace still lives in
     /// `inbound_router`, a channel-only module, so the TUI and Panel cannot
-    /// reach it — that old code stays in place, untouched, until Task 11
-    /// deletes it.
+    /// reach it. That older predicate is still in place and still live for
+    /// channels; until it is removed, the two must agree on what counts as a
+    /// side question, and this one is the definition.
     #[must_use]
     pub fn resolve(input: &str) -> Option<Self> {
         let trimmed = input.trim();
@@ -91,10 +95,10 @@ impl BtwTurn {
 /// 1. `/new` bumps the epoch, so the derived key changes and the side thread
 ///    starts empty **by construction** — not because anyone remembered to
 ///    clear it.
-/// 2. The previous side session becomes unaddressable, so the retirement
-///    logic (Task 7) only needs to *delete* it, never also to hide it. A
-///    missed retirement would leave disk residue, never a crossed side
-///    thread.
+/// 2. The previous side session becomes unaddressable, so retirement only
+///    needs to *delete* it, never also to hide it. A missed retirement leaves
+///    disk residue, never a crossed side thread — which is what makes the
+///    cleanup path allowed to be best-effort.
 ///
 /// Hashed with `Sha256` rather than `std::hash::Hash` / `DefaultHasher`: this
 /// id is persisted to disk, and `DefaultHasher`'s algorithm is explicitly
