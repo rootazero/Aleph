@@ -105,9 +105,77 @@ impl HubCatalogArtifact {
             if !seen.insert(e.id.as_str()) {
                 return Err(format!("duplicate entry id '{}'", e.id));
             }
+            // Wire-controlled `config_schema` flows directly to the Panel's
+            // schema-driven form renderer. An unbounded schema (deep nesting,
+            // huge arrays) can OOM the UI or hang the validator. We can't
+            // `serde_json::to_string` the Value here without a second
+            // allocation, so bound by structural depth + property count
+            // instead of bytes.
+            if let Some(schema) = &e.config_schema {
+                if let Err(reason) = validate_config_schema(schema) {
+                    return Err(format!("entry '{}' has invalid config_schema: {reason}", e.id));
+                }
+            }
+            // Cap the other wire-controlled user-visible fields. A hostile
+            // publisher can ship a 10 MiB description that the Panel then
+            // has to render; a 4 KiB cap is generous for a catalog blurb.
+            if e.description.len() > 4096 {
+                return Err(format!(
+                    "entry '{}' description exceeds 4096 bytes",
+                    e.id
+                ));
+            }
+            if e.tags.len() > 32 {
+                return Err(format!("entry '{}' has >32 tags", e.id));
+            }
+            if e.tags.iter().any(|t| t.len() > 64) {
+                return Err(format!("entry '{}' has a tag >64 bytes", e.id));
+            }
         }
         Ok(())
     }
+}
+
+/// Bound the structural complexity of a wire-supplied `config_schema`. JSON
+/// Schema has no intrinsic size limit, so a hostile publisher could ship a
+/// schema with 10k nested `allOf` branches or a 100k-entry `enum` and stall
+/// the Panel's form renderer. Depth <= 16 and <= 1024 total properties are
+/// generous for any realistic extension config (typical schemas are < 5
+/// levels, < 50 properties).
+fn validate_config_schema(schema: &serde_json::Value) -> Result<(), String> {
+    const MAX_DEPTH: usize = 16;
+    const MAX_PROPERTIES: usize = 1024;
+
+    fn walk(v: &serde_json::Value, depth: usize, budget: &mut usize) -> Result<(), String> {
+        if depth > MAX_DEPTH {
+            return Err(format!("schema nesting exceeds {MAX_DEPTH} levels"));
+        }
+        match v {
+            serde_json::Value::Object(map) => {
+                *budget = budget.saturating_sub(map.len());
+                if *budget == 0 {
+                    return Err(format!("schema has >{MAX_PROPERTIES} properties"));
+                }
+                for value in map.values() {
+                    walk(value, depth + 1, budget)?;
+                }
+            }
+            serde_json::Value::Array(items) => {
+                *budget = budget.saturating_sub(items.len());
+                if *budget == 0 {
+                    return Err(format!("schema has >{MAX_PROPERTIES} properties"));
+                }
+                for item in items {
+                    walk(item, depth + 1, budget)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let mut budget = MAX_PROPERTIES;
+    walk(schema, 0, &mut budget)
 }
 
 impl HubCatalogEntry {
