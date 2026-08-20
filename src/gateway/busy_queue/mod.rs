@@ -786,8 +786,12 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "these pick a lane key themselves instead of letting `register_run` \
-             derive it from the request; a `/btw` side question they carry \
-             queues behind the run it is asking about, silently:\n  {}",
+             derive it from the request. A `/btw` side question they carry then \
+             strands its own ticket on the main lane for the whole side \
+             question (`mark_admitted` withdraws only from the lane the run \
+             CLAIMED), and waits behind, and takes a `max_per_session` slot \
+             from, whatever is WAITING there. Not behind the running main turn \
+             — that one holds no ticket at all. All of it silent:\n  {}",
             offenders.join("\n  ")
         );
     }

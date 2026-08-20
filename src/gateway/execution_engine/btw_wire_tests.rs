@@ -383,6 +383,76 @@ async fn stopping_reports_a_side_question_it_stopped() {
     assert!(side_rx.recv().await.is_some());
 }
 
+/// Register a `Running` run that cannot be cancelled — it is in `active_runs`
+/// but has no cancel channel, which is what `cancel` reports as `RunNotActive`.
+async fn park_uncancellable_run(
+    engine: &super::ExecutionEngine<
+        crate::thinker::SingleProviderRegistry,
+        super::tests::EmptyToolRegistry,
+    >,
+    session: &SessionKey,
+    run_id: &str,
+) {
+    engine.active_runs.write().await.insert(
+        run_id.to_string(),
+        super::ActiveRun {
+            request: gate_test_request(session, run_id),
+            state: super::RunState::Running,
+            started_at: chrono::Utc::now(),
+            admitted_at: std::time::Instant::now(),
+            completed_at: None,
+            steps_completed: 0,
+            current_tool: None,
+            cancel_tx: None,
+            seq_counter: Default::default(),
+            chunk_counter: Default::default(),
+        },
+    );
+}
+
+/// A side question that could not be stopped must not be reported as nothing
+/// having run.
+///
+/// Only `Ok` may assert something about what was there. Folding the side walk's
+/// `Err` into `Ok(None)` would answer "nothing was running" about a session
+/// where something was running *and could not be stopped* — the one answer a
+/// stop path must never give.
+#[tokio::test]
+async fn a_side_question_that_cannot_be_stopped_is_not_reported_as_nothing() {
+    let engine = test_engine();
+    let main = SessionKey::main("btw-stop-err");
+    let side = crate::gateway::btw::side_key_for(&main);
+    park_uncancellable_run(&engine, &side, "run-stuck").await;
+
+    let outcome = engine.cancel_session(&main).await;
+    assert!(
+        matches!(
+            outcome,
+            Err(crate::gateway::execution_engine::ExecutionError::RunNotActive(_))
+        ),
+        "expected the side walk's failure to surface, got {outcome:?}"
+    );
+}
+
+/// ...but a side fault must not void a receipt for a main run that really was
+/// stopped. The error is reported only when there is nothing else to say, which
+/// is why this is a `match` and not a `?` on both branches.
+#[tokio::test]
+async fn a_side_fault_does_not_void_a_main_run_that_was_stopped() {
+    let engine = test_engine();
+    let main = SessionKey::main("btw-stop-err-mixed");
+    let side = crate::gateway::btw::side_key_for(&main);
+    let mut main_rx = park_running_run(&engine, &main, "run-main").await;
+    park_uncancellable_run(&engine, &side, "run-stuck").await;
+
+    let stopped = engine
+        .cancel_session(&main)
+        .await
+        .expect("a stop that worked stays a stop");
+    assert_eq!(stopped.as_deref(), Some("run-main"));
+    assert!(main_rx.recv().await.is_some());
+}
+
 /// The walk is one level deep. Stopping a side session must not derive a
 /// side-of-side key and go looking in a session nothing ever ran on.
 #[tokio::test]
@@ -522,6 +592,26 @@ fn a_seeding_failure_cannot_return_without_announcing_itself() {
         "the seeding-failure path must emit its terminal frame before it \
          returns; block was:\n{block}"
     );
+    // ...and charged to the MAIN session. The producer guard above supplies
+    // `&main` itself, so it pins the producer's contract and not this call
+    // site's argument — which leaves the one thing the whole fix is about
+    // unpinned. A one-token "simplification" to `&request.session_key` keeps
+    // every other assertion green while sending the receipt to a derived
+    // session the client has never heard of and the delivery filter cannot
+    // resolve: the invisible failure, fully reinstated. Same lesson as
+    // `execute_redirects_before_it_admits`, one function down — the placement
+    // is correct and well commented, and a comment is not a guard.
+    assert!(
+        block.contains("&run_id, main,"),
+        "the terminal frame must be charged to the MAIN session (`main`), not \
+         to the side session the run was redirected onto; block was:\n{block}"
+    );
+    assert!(
+        !block.contains("request.session_key"),
+        "by the time this block runs, `request.session_key` IS the side \
+         session — charging the receipt to it puts the only notice of a \
+         permanently sticky failure where nobody is looking; block was:\n{block}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +723,12 @@ fn a_stamped_request_is_moved_onto_the_derived_side_key() {
     assert_ne!(request.session_key.to_key_string(), main.to_key_string());
 }
 
-/// Asking twice must be free — including the third and fourth ask.
+/// Asking twice must be free.
+///
+/// The property is structural rather than merely twice-true: after the first
+/// redirect the key IS a side key, so `execution_session` is at a fixed point
+/// and asks 3, 4, …n return it unchanged. This exercises the second ask, which
+/// is the one a real re-entry performs.
 ///
 /// `execute()` is re-enterable, and the one re-entry path that carries metadata
 /// verbatim (`steering::build_steering_rescue_request`) clones both the stamp

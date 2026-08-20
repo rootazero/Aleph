@@ -3978,9 +3978,13 @@ async fn a_side_question_admits_the_read_arm_of_a_multiplexer_and_refuses_the_re
 
     // Control: the SAME tier without the side-question flag answers the same
     // way, per call. That is the invariant this fix is built on — the two
-    // verdicts differ in the sentence they hand back, never in what runs — and
-    // asserting it here is what keeps this test from passing because `Plan`
-    // itself was quietly widened.
+    // verdicts differ in the sentence they hand back, never in what runs.
+    //
+    // What it buys, stated narrowly: it isolates a failure above to the
+    // side-question flag rather than to a general breakage of `Plan`. It does
+    // NOT catch a quiet *widening* of `Plan` — that would leave both arms
+    // passing, since `file_ops delete` would then stop at the
+    // destructive-argument filter instead.
     let planning = side_question_service(false);
     planning
         .execute("file_ops", json!({ "operation": "list" }))

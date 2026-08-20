@@ -500,24 +500,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         Ok(())
     }
 
-    /// Cancel the `Running` run on `session_key`, if any, AND any in-flight
-    /// delegated child runs it owns. Returns the leader's own cancelled run
-    /// id, or `None` when nothing was running on the session itself (the
-    /// child walk still happens either way).
-    ///
-    /// Channel-facing seam for `/stop` and Panel `chat.abort`: channels know
-    /// their session key, not the engine-internal run id. Reuses the same
-    /// same-session predicate as the busy-input paths (`find_steering_target_id`,
-    /// with no run excluded — the empty exclusion id never matches a real run).
-    ///
-    /// A leader that delegated work (`task_manage` / bash-code / delegate
-    /// workflows) registers its member run's REAL engine `run_id` in the
-    /// `BackgroundAgentTracker` under `root_session = leader`. Without this
-    /// walk, cancelling the leader left that member DETACHED — still running,
-    /// still burning tokens, with no way back to it. Firing the same
-    /// cooperative per-run token (`cancel`) for each tracked child closes that
-    /// leak; a child id that is not a live engine run (e.g. an in-process
-    /// subagent) is simply a harmless `cancel` miss.
     /// The session a live run belongs to. Inverse of
     /// [`Self::active_run_for_session`]; see
     /// [`crate::gateway::execution_adapter::ExecutionAdapter::session_of_run`]
@@ -545,9 +527,25 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// only other way in is `chat.abort` with the run id, and no client is shown
     /// a btw run's id.
     ///
+    /// Channel-facing seam for `/stop` and Panel `chat.abort`: channels know
+    /// their session key, not the engine-internal run id.
+    ///
     /// Returns the run id of whatever it stopped, preferring this session's own
     /// — the caller turns `Some` into "stopped" and `None` into "nothing was
     /// running", and a stopped side question must not be reported as nothing.
+    ///
+    /// # `Err` is never folded into "nothing was running"
+    ///
+    /// Only `Ok` may assert something about what was there. `cancel` fails with
+    /// `RunNotActive` (the run is registered but has no cancel channel — it
+    /// exists and cannot be stopped) or `RunNotFound` (it finished between the
+    /// read and the send). Answering `Ok(None)` to either would tell the user
+    /// nothing was running about a session where something was, so the side
+    /// walk's error is reported rather than swallowed.
+    ///
+    /// It is reported only when there is nothing else to say, though: a side
+    /// fault must not void a receipt for a main run that really was stopped.
+    /// That asymmetry is the whole reason this is a `match` and not a `?`.
     pub async fn cancel_session(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
@@ -557,14 +555,33 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // key that is already derived, so this cannot walk into a phantom
         // session nothing ever ran on.
         let side = match crate::gateway::btw::side_session_of(session_key) {
-            Some(side) => self.cancel_runs_keyed_on(&side).await.unwrap_or(None),
-            None => None,
+            Some(side) => self.cancel_runs_keyed_on(&side).await,
+            None => Ok(None),
         };
-        Ok(own.or(side))
+        match (own, side) {
+            // A stop that worked stays a stop, whatever the side walk found.
+            (Some(own), _) => Ok(Some(own)),
+            (None, Ok(side)) => Ok(side),
+            (None, Err(e)) => Err(e),
+        }
     }
 
     /// The single-session half of [`Self::cancel_session`]: the run keyed on
     /// this exact session, plus the delegated children attributed to it.
+    ///
+    /// Reuses the same same-session predicate as the busy-input paths
+    /// (`find_steering_target_id`, with no run excluded — the empty exclusion id
+    /// never matches a real run).
+    ///
+    /// A leader that delegated work (`task_manage` / bash-code / delegate
+    /// workflows) registers its member run's REAL engine `run_id` in the
+    /// `BackgroundAgentTracker` under `root_session = leader`. Without this
+    /// walk, cancelling the leader left that member DETACHED — still running,
+    /// still burning tokens, with no way back to it. Firing the same
+    /// cooperative per-run token (`cancel`) for each tracked child closes that
+    /// leak; a child id that is not a live engine run (e.g. an in-process
+    /// subagent) is simply a harmless `cancel` miss. The walk happens whether or
+    /// not this session had a run of its own.
     async fn cancel_runs_keyed_on(
         &self,
         session_key: &crate::routing::session_key::SessionKey,
