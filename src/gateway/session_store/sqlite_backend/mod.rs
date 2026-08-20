@@ -592,6 +592,18 @@ impl crate::session::epoch_registrar::SessionEpochRegistrar for SessionManager {
             .map(|_| ())
             .map_err(|e| anyhow::anyhow!("register_epoch: get_or_create failed: {e}"))
     }
+
+    async fn retire_superseded(&self, superseded: &crate::session::service::SessionId) {
+        // Awaited rather than spawned: the caller is already a background
+        // compaction, so there is no user-facing latency to protect, and
+        // awaiting means the work cannot be lost to a runtime shutdown.
+        crate::gateway::continuation_lifecycle::retire_side_session_now(
+            superseded,
+            "context-split",
+            self,
+        )
+        .await;
+    }
 }
 
 #[cfg(test)]

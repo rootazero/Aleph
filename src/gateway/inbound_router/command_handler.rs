@@ -264,7 +264,18 @@ impl InboundMessageRouter {
         let reply_route = ReplyRoute::new(msg.channel_id.clone(), msg.conversation_id.clone())
             .with_inbound_message_id(msg.id.clone());
 
-        // Use ephemeral session — no persistence, no context pollution
+        // A fresh `SessionKey::ephemeral` — a new random uuid per call, NOT the
+        // side session `gateway::btw::side_key_for` derives from the conversation.
+        // These rows persist like any other session (the name is not a
+        // storage claim; see `routing::session_key::SessionKey::Ephemeral`), and
+        // because nothing derives this key, nothing can address it a second time,
+        // seed it incrementally, or retire it.
+        //
+        // Reaching the derived side session instead means letting the engine's
+        // `slash_command::stamp_btw` see the `/btw` prefix on the conversation's
+        // own key; this path rewrites the text without the prefix (below) and
+        // substitutes a key, so the stamp never fires and `btw::execution_session`
+        // has nothing to redirect.
         let session_key = SessionKey::ephemeral(agent_id);
 
         // Create a modified message with just the btw text

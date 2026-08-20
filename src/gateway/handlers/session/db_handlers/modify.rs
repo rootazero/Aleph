@@ -130,6 +130,17 @@ pub async fn handle_reset_db(
                 }
             };
 
+            // Same reasoning as `chat.clear`: the side session holds a
+            // copied prefix of this transcript, so a reset that spares it
+            // leaves the cleared content readable through the next `/btw`.
+            // Side session only — the key is unchanged, so the loop/goal
+            // chains keyed to it are still reachable and must survive.
+            crate::gateway::continuation_lifecycle::retire_side_session(
+                &session_key,
+                "sessions.reset",
+                Some(manager.clone()),
+            );
+
             match manager.reset_session(&session_key).await {
                 Ok(reset) => JsonRpcResponse::success(
                     request.id,

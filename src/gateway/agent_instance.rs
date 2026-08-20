@@ -555,8 +555,20 @@ impl AgentInstance {
         }
     }
 
-    /// Reset (clear) a session (delegated to session store)
+    /// Reset (clear) a session (delegated to session store).
+    ///
+    /// Retires the `/btw` side session first, for the same reason `chat.clear`
+    /// and the `sessions.reset` RPC do: the side session holds a copied prefix
+    /// of this transcript in its own event log, so a reset that spares it
+    /// leaves the cleared content readable through the next `/btw`. Side
+    /// session only — the key is unchanged, so any loop/goal keyed to it is
+    /// still reachable and must survive a content wipe.
     pub async fn reset_session(&self, key: &SessionKey) -> bool {
+        crate::gateway::continuation_lifecycle::retire_side_session(
+            key,
+            "agent_instance.reset",
+            Some(self.session_store.clone()),
+        );
         match self.session_store.reset_session(key).await {
             Ok(deleted) => {
                 debug!("Reset session: {}", key.to_key_string());

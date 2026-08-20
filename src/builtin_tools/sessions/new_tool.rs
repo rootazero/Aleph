@@ -98,6 +98,19 @@ impl AlephTool for SessionNewTool {
             ));
         }
 
+        // Retire the closing session's autonomous continuations and its `/btw`
+        // side session BEFORE the bump — this tool rolls a conversation to the
+        // next epoch exactly as the channel `/new` command and the
+        // `sessions.new` RPC do, and after the bump a loop/goal keyed under the
+        // old epoch is uncancellable and the old side session is unaddressable.
+        // Passing `routing_key`, the same parse the bump above used, so the
+        // derived side key is the one the turns actually ran on.
+        crate::gateway::continuation_lifecycle::terminate_session_continuations(
+            &routing_key,
+            "session_new",
+            Some(self.session_store.clone()),
+        );
+
         // Close old session
         let legacy_key = LegacySessionKey::from_key_string(session_key_str);
         if let Some(ref lk) = legacy_key {
