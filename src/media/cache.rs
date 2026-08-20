@@ -134,14 +134,25 @@ impl MediaCache {
     }
 
     async fn resolve_local_path(path: &str, mime_type: &str) -> Result<CachedMedia, CacheError> {
-        let path = expand_tilde(path);
-        let meta = tokio::fs::metadata(&path).await?;
+        // Symlink-aware path containment: an inbound Attachment.path coming
+        // from a channel adapter (Telegram / Slack / Discord / …) or the
+        // model itself can name any file the process can read — ~/.ssh/id_rsa,
+        // /etc/passwd, another account's temp. The TOCTOU window between
+        // this check and the actual read is closed by `O_NOFOLLOW` at the
+        // call site that opens the file (the cache's own helpers); here we
+        // gate on the canonicalized location.
+        let safe = Self::safe_local_media_path(path).await.ok_or_else(|| {
+            CacheError::Download(format!(
+                "refusing to attach path outside the media trust root: {path}"
+            ))
+        })?;
+        let meta = tokio::fs::symlink_metadata(&safe).await?;
         let size = meta.len();
         if size > MAX_FILE_SIZE {
             return Err(CacheError::TooLarge { size });
         }
         Ok(CachedMedia {
-            local_path: path,
+            local_path: PathBuf::from(safe),
             mime_type: mime_type.to_string(),
             size,
         })
