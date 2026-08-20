@@ -50,35 +50,33 @@ impl BuiltinToolRegistry {
         } else {
             SearchTool::with_api_key(config.tavily_api_key.clone())
         };
-        let web_fetch_tool = {
-            let mut tool = if let Some(ref cfg) = config.config {
-                let cfg_guard = cfg.read().await;
-                WebFetchTool::with_policy(&cfg_guard.policies.web_fetch)
-                    .with_ssrf_policy(cfg_guard.ssrf.clone())
-            } else {
-                WebFetchTool::new()
-            };
-            if let Some(ref cfg) = config.config {
-                let cfg_guard = cfg.read().await;
-                if let Some(ref fetch_cfg) = cfg_guard.fetch {
-                    if fetch_cfg.enabled {
-                        let vault = config.shared_token_manager.clone();
-                        let resolve = move |k: &str| -> Option<String> {
-                            vault
-                                .as_ref()
-                                .and_then(|m| m.get_secret(k).ok().flatten())
-                                .map(|s| s.expose().to_string())
-                        };
-                        let ctx = crate::fetch::factory::FetchBuildCtx {
-                            search: cfg_guard.search.as_ref(),
-                            resolve_secret: &resolve,
-                        };
-                        let registry = crate::fetch::FetchRegistry::from_config(fetch_cfg, &ctx);
-                        tool = tool.with_fetch_providers(registry.select());
-                    }
+        let web_fetch_tool = if let Some(ref cfg) = config.config {
+            // Single read for both consumers: two independent `read().await`s
+            // could observe different config generations if a patch lands
+            // between them (policy from generation N, fetch providers from N+1).
+            let cfg_guard = cfg.read().await;
+            let mut tool = WebFetchTool::with_policy(&cfg_guard.policies.web_fetch)
+                .with_ssrf_policy(cfg_guard.ssrf.clone());
+            if let Some(ref fetch_cfg) = cfg_guard.fetch {
+                if fetch_cfg.enabled {
+                    let vault = config.shared_token_manager.clone();
+                    let resolve = move |k: &str| -> Option<String> {
+                        vault
+                            .as_ref()
+                            .and_then(|m| m.get_secret(k).ok().flatten())
+                            .map(|s| s.expose().to_string())
+                    };
+                    let ctx = crate::fetch::factory::FetchBuildCtx {
+                        search: cfg_guard.search.as_ref(),
+                        resolve_secret: &resolve,
+                    };
+                    let registry = crate::fetch::FetchRegistry::from_config(fetch_cfg, &ctx);
+                    tool = tool.with_fetch_providers(registry.select());
                 }
             }
             tool
+        } else {
+            WebFetchTool::new()
         };
         let file_ops_tool = if let Some(ref tc) = config.tool_context {
             FileOpsTool::new().with_tool_context(Arc::clone(tc))
@@ -1192,6 +1190,7 @@ impl BuiltinToolRegistry {
             gateway_context: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
                 if let Some(ref ctx) = config.gateway_context {
+                    // Freshly created cell: set() cannot fail, result dropped.
                     let _ = cell.set(ctx.clone());
                 }
                 cell
@@ -1295,6 +1294,7 @@ impl BuiltinToolRegistry {
             channel_registry_cell: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
                 if let Some(ref cr) = config.channel_registry {
+                    // Freshly created cell: set() cannot fail, result dropped.
                     let _ = cell.set(cr.clone());
                 }
                 cell
