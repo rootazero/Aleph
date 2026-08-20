@@ -200,6 +200,40 @@ pub trait ToolService: Send + Sync + 'static {
     /// also implement, typically returning `Arc::from([])`.
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]>;
 
+    /// The execution tier this service will actually enforce on the **next**
+    /// call, when it knows one.
+    ///
+    /// Exists so a prompt can state the approval regime without deriving it a
+    /// second time. The sub-agent spawner is the caller that forced it: a
+    /// spawned child gets no tool service of its own — `subagent_spawner`
+    /// wraps the PARENT's `ScopedToolService` (`parent_view_for_children`), so
+    /// the tier and the very same `PlanGate` `Arc` are enforced on every call
+    /// the child makes. The child's prompt nonetheless said nothing about it,
+    /// because the spawner held only an `Arc<dyn ToolService>` and had no way
+    /// to ask. Under [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan)
+    /// — which `subagent` is deliberately reachable from, so a plan for a
+    /// large codebase can be researched by delegation — that silence costs the
+    /// child its whole iteration budget discovering by refusal what one
+    /// sentence would have told it.
+    ///
+    /// **Asking the enforcer is not a second derivation.** `ScopedToolService`
+    /// answers with the identical call its own gate makes
+    /// (`effective_exec_tier`), which is why this is a trait method rather
+    /// than a tier snapshot threaded through `SpawnRequest`: a snapshot taken
+    /// at spawn time would go stale the moment a human approves a plan, while
+    /// this reads the live gate.
+    ///
+    /// `None` = this service has no tier wired (test stubs, pre-boot, the
+    /// null service). Callers must render nothing rather than a default —
+    /// stating a regime nobody enforces is the expensive half of 判据 §0.
+    ///
+    /// Every production DECORATOR must forward it. The default is `None`, so
+    /// a decorator that forgets degrades to silence rather than to a wrong
+    /// answer — safe, but silent, which is why each one has a named test.
+    fn enforced_exec_tier(&self) -> Option<crate::config::types::policies::ExecTier> {
+        None
+    }
+
     /// Resource-scope-aware concurrency claim for the named call, given the
     /// concrete input the LLM emitted. The harness parallel fast path admits a
     /// batch only when [`crate::tools::concurrency::batch_parallelizable`]

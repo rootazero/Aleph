@@ -74,11 +74,17 @@ pub struct RuntimeContext {
     ///
     /// `None` means **"nobody can name this run's directory"** — not "use the
     /// daemon's". The distinction is the whole point of this field: a dispatch
-    /// path that cannot resolve an authorised root (a detached background
-    /// sub-agent, whose `EXEC_WORKSPACE` scope did not survive `tokio::spawn`)
-    /// must stay silent rather than advertise the daemon's cwd, which is
-    /// precisely the lie the 2026-07-26 round removed from the main path. See
+    /// path that cannot resolve an authorised root must stay silent rather
+    /// than advertise the daemon's cwd, which is precisely the lie the
+    /// 2026-07-26 round removed from the main path. See
     /// [`RuntimeContext::collect_detached`].
+    ///
+    /// A detached background sub-agent used to be that path — `EXEC_WORKSPACE`
+    /// is a `tokio::task_local` and does not survive `tokio::spawn`. It is no
+    /// longer: [`crate::scope::CarriedAttribution`] carries the root across
+    /// every spawn a run forks at, so such a child now both *names* and
+    /// *executes in* its parent's authorised root. What is left here is the
+    /// genuinely unknowable case — a caller outside any run at all.
     pub working_dir: Option<PathBuf>,
     /// Git repository root, if inside a repo (caller provides from cached git info)
     pub repo_root: Option<PathBuf>,
@@ -191,13 +197,18 @@ impl RuntimeContext {
     /// caller-supplied path, fall back to the process cwd", which is right for
     /// `prompt-size` (it is reporting on *this machine*) and wrong for anything
     /// running on behalf of a session. A detached background sub-agent is the
-    /// case that forced the distinction — `EXEC_WORKSPACE` is a
-    /// `tokio::task_local` and does not survive `tokio::spawn`, so the spawner
-    /// genuinely does not know which directory the child's sandbox will jail
-    /// to, and printing the daemon's would re-introduce the exact defect §2.3
-    /// exists to prevent: a prompt that names a directory no tool call lands
-    /// in, followed by the model addressing absolute paths into it and being
-    /// denied by the jail.
+    /// case that forced the distinction: the spawner did not know which
+    /// directory the child's sandbox would jail to, and printing the daemon's
+    /// would re-introduce the exact defect §2.3 exists to prevent — a prompt
+    /// that names a directory no tool call lands in, followed by the model
+    /// addressing absolute paths into it and being denied by the jail.
+    ///
+    /// That particular caller now has an answer ([`crate::scope::CarriedAttribution`]
+    /// carries `EXEC_WORKSPACE` across the spawn), so it reaches
+    /// `collect_in`. This entry point stays because the *shape* it names is
+    /// still reachable — any dispatch on behalf of a session that cannot
+    /// resolve an authorised root — and because the alternative spelling for
+    /// it is a lie, not a gap.
     ///
     /// Silence is the honest answer. The model still gets `<model>` and
     /// `<time>`, and still learns its parent binding — it just is not told a

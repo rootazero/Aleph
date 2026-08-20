@@ -111,6 +111,13 @@ impl ToolService for McpScopedToolService {
             })
     }
 
+    /// Forwarded: extras add per-agent MCP tools, they do not add a gate.
+    /// Every call — parent tool or extra — is executed by the parent, so the
+    /// parent's tier is the one in force.
+    fn enforced_exec_tier(&self) -> Option<crate::config::types::policies::ExecTier> {
+        self.parent.enforced_exec_tier()
+    }
+
     async fn call_concurrency_claim(
         &self,
         name: &str,

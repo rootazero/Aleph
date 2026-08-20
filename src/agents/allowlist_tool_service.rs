@@ -111,6 +111,15 @@ impl ToolService for AllowlistToolService {
         self.inner.describe(name).await
     }
 
+    /// Forwarded unchanged: this wrapper narrows WHICH tools a child may call,
+    /// never whether a call pauses for a human. That question is answered one
+    /// layer down, by the parent `ScopedToolService` this delegates every
+    /// execution to — so the tier a child's prompt states is the tier a
+    /// child's call meets.
+    fn enforced_exec_tier(&self) -> Option<crate::config::types::policies::ExecTier> {
+        self.inner.enforced_exec_tier()
+    }
+
     fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
         // Filter the parent's metadata schema down to what this child agent
         // is allowed to see. Returning an empty slice here (the previous

@@ -983,7 +983,7 @@ impl LoopTool for SubagentTool {
                 // New exposure surface: sync-batch subagent writes now land in
                 // the room / personal partition for the first time — previously
                 // every one of them wrote to the default partition.
-                // The five task-locals a spawned leg must carry, read through
+                // The six task-locals a spawned leg must carry, read through
                 // the one type that knows what the set IS. This used to be two
                 // hand-rolled captures re-established as three combinators
                 // below — which meant the batch legs silently dropped
@@ -2090,9 +2090,11 @@ mod tests {
                      inherit none of them, and each one fails in its own \
                      direction: the scope / agent id / project root fail QUIET \
                      (writes land in the default partition), `caller_role` fails \
-                     OPEN (an absent role reads as trusted), and the room author \
+                     OPEN (an absent role reads as trusted), the room author \
                      fails WRONG (`ambient_actor()` reports the room's creator, \
-                     confidently, about someone else's work).\n\
+                     confidently, about someone else's work), and the exec \
+                     workspace fails DEAD (the child's jail becomes an empty \
+                     hash directory, so every command it runs sees nothing).\n\
                      \n\
                      Re-establishing the combinators by hand is what this guard \
                      used to accept, and it is how two of those five were lost: \

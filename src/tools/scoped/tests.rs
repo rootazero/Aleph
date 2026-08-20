@@ -3629,6 +3629,85 @@ fn planning(
     (svc, gate)
 }
 
+/// The chokepoint must be able to SAY what it enforces, through the exact
+/// chain a spawned sub-agent's calls travel.
+///
+/// A child gets no tool service of its own — `subagent_spawner` wraps this
+/// very object (`parent_view_for_children`) in `McpScopedToolService` and
+/// `AllowlistToolService` — so its prompt can only state a regime that
+/// matches reality if the answer survives both wrappers. It travelled through
+/// neither until this round, which is why a child spawned mid-plan was told
+/// nothing about the tier that refuses every mutating call it makes.
+///
+/// Asserted after the release too: the answer is the LIVE gate, not a
+/// snapshot. A tier threaded through `SpawnRequest` would have gone stale the
+/// moment a human approved the plan.
+#[tokio::test]
+async fn the_enforced_tier_survives_the_wrappers_a_subagent_runs_behind() {
+    use crate::config::types::policies::ExecTier;
+    use crate::tools::service::ToolService;
+
+    let (svc, gate) = planning(ExecTier::Auto);
+    assert_eq!(
+        svc.enforced_exec_tier(),
+        Some(ExecTier::Plan),
+        "the chokepoint must report what `permission_for` will actually apply"
+    );
+
+    let parent: Arc<dyn ToolService> = Arc::new(svc);
+    let with_mcp: Arc<dyn ToolService> = Arc::new(
+        crate::tools::mcp_scope_view::McpScopedToolService::new(parent, Vec::new()),
+    );
+    let child: Arc<dyn ToolService> = Arc::new(
+        crate::agents::allowlist_tool_service::AllowlistToolService::new(
+            with_mcp,
+            StdArc::new(crate::agents::AgentDef::new(
+                "explorer",
+                crate::agents::AgentMode::SubAgent,
+            )),
+        ),
+    );
+
+    assert_eq!(
+        child.enforced_exec_tier(),
+        Some(ExecTier::Plan),
+        "a decorator that drops this degrades the child's prompt to silence \
+         about a gate that refuses every mutating call it makes"
+    );
+
+    assert!(gate.release());
+    assert_eq!(
+        child.enforced_exec_tier(),
+        Some(ExecTier::Auto),
+        "the answer must be the live gate — a snapshot taken at spawn time \
+         goes stale the instant a human approves the plan"
+    );
+}
+
+/// A service with no tier wired must say so, not default.
+///
+/// The caller renders nothing on `None`; a default here would put a regime in
+/// a prompt that nothing applies — the expensive half of 判据 §0.
+#[tokio::test]
+async fn a_service_with_no_tier_wired_reports_none() {
+    use crate::tools::service::ToolService;
+
+    let svc = ScopedToolService::new(plan_registry(), BTreeSet::new());
+    assert!(svc.enforced_exec_tier().is_none());
+    assert!(
+        crate::agents::allowlist_tool_service::AllowlistToolService::new(
+            Arc::new(svc),
+            StdArc::new(crate::agents::AgentDef::new(
+                "explorer",
+                crate::agents::AgentMode::SubAgent,
+            )),
+        )
+        .enforced_exec_tier()
+        .is_none(),
+        "silence must propagate as silence"
+    );
+}
+
 /// The tier's whole promise: nothing that mutates runs, and reads do.
 #[tokio::test]
 async fn planning_refuses_mutation_and_lets_reads_through() {

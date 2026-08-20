@@ -46,6 +46,28 @@
 /// `dropping_the_author_at_a_spawn_silently_reports_the_room_owner` already
 /// asserted this shape, commented "not a missing label, it is a confidently
 /// wrong one" — it just had no carrier to fix it in.
+///
+/// The sixth — [`EXEC_WORKSPACE`](crate::sandbox::context::EXEC_WORKSPACE) —
+/// is not attribution at all, which is why the type's name understates its
+/// contract (read the first line: *the task-locals a spawned unit of work must
+/// carry*). It is the directory this run is AUTHORISED to execute in, and it
+/// fails in a fourth direction again: not quiet, not open, not wrong, but
+/// **dead**. `WorkspaceSandbox::jail_root_for` falls back to
+/// `workspaces/<hash(session)>` when nobody published one, and a detached
+/// child's session is a fresh nonce — so the jail is an empty directory
+/// created on first use. Every shell command the child runs lands in a tree
+/// that contains nothing, and every absolute path it addresses into the real
+/// project is refused "cwd outside workspace root". A foreground sub-agent,
+/// which never crosses a spawn, has always had the parent's root; the
+/// background and batch legs of the same tool did not, so the same delegation
+/// worked or did not depending on whether the caller passed `background`.
+///
+/// Carrying it does **not** weaken the "a nested run cannot inherit an outer
+/// run's workspace" rule that makes `EXEC_WORKSPACE` an `Option` published
+/// explicitly: a nested *run* re-enters `run_agent_loop`, which scopes its own
+/// value over this one. What is carried here is one run's own tree of tasks.
+/// And it stays gateway-owned by construction — the carrier reads the
+/// task-local, never a model-writable field.
 #[derive(Clone, Default)]
 pub struct CarriedAttribution {
     scope: Option<super::ScopeAttribution>,
@@ -53,10 +75,11 @@ pub struct CarriedAttribution {
     agent_id: Option<String>,
     caller_role: Option<String>,
     room_author: Option<String>,
+    exec_workspace: Option<std::path::PathBuf>,
 }
 
 impl CarriedAttribution {
-    /// Read the five task-locals. **Must be called BEFORE `tokio::spawn`** —
+    /// Read the six task-locals. **Must be called BEFORE `tokio::spawn`** —
     /// inside the spawned future they are already gone.
     ///
     /// `caller_role` joined the other three because it fails in the same way and
@@ -77,6 +100,7 @@ impl CarriedAttribution {
             agent_id: crate::agents::current_agent_id(),
             caller_role: crate::gateway::caller_identity::current_caller_role(),
             room_author: super::current_room_author(),
+            exec_workspace: crate::sandbox::context::current_exec_workspace(),
         }
     }
 
@@ -92,7 +116,7 @@ impl CarriedAttribution {
         self.scope.as_ref()
     }
 
-    /// Re-establish all five around `fut`, inside the spawned task.
+    /// Re-establish all six around `fut`, inside the spawned task.
     ///
     /// Boxed: `AgentRuntime::run`'s state machine is already large, and nesting
     /// three task-local combinators around it inline overflowed the
@@ -112,7 +136,13 @@ impl CarriedAttribution {
                         self.project_root,
                         super::with_scope(
                             self.scope,
-                            super::with_room_author(self.room_author, Box::pin(fut)),
+                            super::with_room_author(
+                                self.room_author,
+                                crate::sandbox::context::with_exec_workspace(
+                                    self.exec_workspace,
+                                    Box::pin(fut),
+                                ),
+                            ),
                         ),
                     ),
                 ),
@@ -192,15 +222,64 @@ mod tests {
         );
     }
 
+    /// The jail root must cross the spawn, and this is the one carried value
+    /// whose loss is neither quiet nor wrong but **dead**: with it absent,
+    /// `WorkspaceSandbox::jail_root_for` anchors the child on
+    /// `workspaces/<hash(its own fresh session nonce)>` — an empty directory
+    /// it creates on first use — so every command the child runs executes in a
+    /// tree containing nothing, and every absolute path into the real project
+    /// is refused "cwd outside workspace root".
+    ///
+    /// The negative half is asserted in the same test on purpose: a bare spawn
+    /// must still lose it. If that half ever passes, this carrier leg is dead
+    /// weight and should go.
+    #[tokio::test]
+    async fn the_carrier_keeps_the_runs_authorised_exec_root() {
+        use crate::sandbox::context::{current_exec_workspace, with_exec_workspace};
+
+        let root = std::path::PathBuf::from("/tmp/aleph-carried-jail-root");
+
+        let (lost, carried) = with_exec_workspace(Some(root.clone()), async {
+            let lost = tokio::spawn(async { current_exec_workspace() })
+                .await
+                .unwrap();
+            let carrier = CarriedAttribution::capture();
+            let carried = tokio::spawn(carrier.reestablish(async { current_exec_workspace() }))
+                .await
+                .unwrap();
+            (lost, carried)
+        })
+        .await;
+
+        assert!(
+            lost.is_none(),
+            "a bare spawn must lose it — if this ever passes, the reason this leg exists is gone"
+        );
+        assert_eq!(
+            carried,
+            Some(root),
+            "a detached child must execute in the root its run was authorised for,              not in a fresh empty hash directory"
+        );
+    }
+
     /// Capturing outside any scope is the unrestricted case and must stay a
     /// no-op, so wrapping a cron / test / A2A spawn changes nothing.
     #[tokio::test]
     async fn capturing_nothing_reestablishes_nothing() {
         let carrier = CarriedAttribution::capture();
         assert!(carrier.scope().is_none());
-        let inner = tokio::spawn(carrier.reestablish(async { crate::scope::current_scope() }))
-            .await
-            .unwrap();
-        assert!(inner.is_none());
+        let inner = tokio::spawn(carrier.reestablish(async {
+            (
+                crate::scope::current_scope().is_some(),
+                crate::sandbox::context::current_exec_workspace().is_some(),
+            )
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            inner,
+            (false, false),
+            "publishing `None` for the exec root must stay indistinguishable from              never having scoped it — that absence is what keeps every caller              outside a run (cron, cluster file commands, tests) on the historical              per-session workspace"
+        );
     }
 }

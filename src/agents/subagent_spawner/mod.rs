@@ -207,15 +207,23 @@ pub struct SpawnRequest<'a> {
 ///   rooted there), otherwise whatever
 ///   [`current_exec_workspace`](crate::sandbox::context::current_exec_workspace)
 ///   reports *at this point in the child's own call stack* — which is the same
-///   value its `WorkspaceSandbox` will read when it jails a command. When that
-///   is absent (a detached background child: `EXEC_WORKSPACE` is a
-///   `tokio::task_local` and does not survive `tokio::spawn`) the envelope
-///   states **no** cwd. Naming the daemon's directory instead would recreate
-///   the exact defect the 2026-07-26 round removed from the main path: a
-///   prompt that advertises a directory no tool call lands in, followed by the
-///   model addressing absolute paths into it and being refused by the jail.
-///   Silence is the only honest third answer, which is why
-///   [`RuntimeContext::working_dir`] is an `Option`.
+///   value its `WorkspaceSandbox` will read when it jails a command. Reading
+///   it here rather than accepting it as a parameter is the point: the two
+///   cannot disagree, whatever the caller believes.
+///
+///   A detached background child used to reach this with nothing to report
+///   (`EXEC_WORKSPACE` is a `tokio::task_local` and does not survive
+///   `tokio::spawn`), and it was not only the prompt that suffered — its
+///   sandbox jailed to an empty `workspaces/<hash>` directory too, so the
+///   silence was accurate. [`crate::scope::CarriedAttribution`] now carries
+///   the root across that spawn, so such a child both names and executes in
+///   its parent's authorised root. When the value is genuinely absent (a
+///   caller outside any run) the envelope still states **no** cwd: naming the
+///   daemon's directory would recreate the exact defect the 2026-07-26 round
+///   removed from the main path — a prompt that advertises a directory no tool
+///   call lands in, followed by the model addressing absolute paths into it
+///   and being refused by the jail. Silence is the only honest third answer,
+///   which is why [`RuntimeContext::working_dir`] is an `Option`.
 /// * **`parent` / `run_id`** — the first production writers either field has
 ///   ever had. Both were added with a renderer, a doc comment and tests on
 ///   both ends, and no producer, so `<parent kind="subagent">` and
@@ -233,16 +241,31 @@ pub struct SpawnRequest<'a> {
 ///   their own sub-agent-specific wording. Setting them here as well would
 ///   state each fact twice, which is the rule (§2.3 ③, one question one voice)
 ///   this whole round is enforcing elsewhere.
-/// * **`approval_tier`** — unset. The tier IS enforced for the child (it
-///   inherits the parent's `ScopedToolService`), but this module has no typed
-///   handle on it, and a *second* derivation of "which tier is this" is worse
-///   than silence: it could disagree with the gate. Wiring the sentence needs
-///   the tier threaded from the tool that resolved it; see the round notes.
+/// * **`approval_tier`** — asked of the enforcer, not derived. A child gets
+///   no tool service of its own: it runs on the parent's
+///   `ScopedToolService` (`parent_view_for_children`), which carries the tier
+///   and the very same `PlanGate` `Arc`, so every call the child makes meets
+///   the gate that would have met the parent's. `ToolService::enforced_exec_tier`
+///   asks that object the identical question its own gate asks
+///   (`effective_exec_tier`) — which is why this is not the "second
+///   derivation that could disagree with the gate" an earlier round declined
+///   to write, and why it is read here rather than snapshotted at spawn time:
+///   a human releasing the plan gate mid-turn changes the answer, and the
+///   child's prompt is built after that.
+///
+///   `None` (no tier wired — tests, direct callers) still states nothing.
+///   The tier that made this load-bearing is
+///   [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan): it is
+///   the one tier that REFUSES rather than asks, `subagent` is deliberately
+///   reachable under it so a plan for a large codebase can be researched by
+///   delegation, and a child told nothing spends its whole iteration budget
+///   discovering by refusal what one sentence states.
 fn child_environment_context(
     model: &str,
     worktree: Option<&std::path::Path>,
     parent_session_id: Option<&str>,
     request_id: Option<&str>,
+    approval_tier: Option<crate::config::types::policies::ExecTier>,
 ) -> crate::thinker::context::ResolvedContext {
     use crate::thinker::context::EnvelopeParent;
     use crate::thinker::runtime_context::RuntimeContext;
@@ -277,6 +300,7 @@ fn child_environment_context(
     ctx.run_id = request_id
         .filter(|id| !id.is_empty())
         .map(std::string::ToString::to_string);
+    ctx.approval_tier = approval_tier;
     ctx
 }
 
@@ -514,6 +538,10 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             worktree_handle.as_ref().map(|h| h.path()),
             base.parent_session_id.as_deref(),
             req.request_id,
+            // The gate the child's calls will actually meet, asked of the
+            // object that enforces it — `parent_tools` IS the service the
+            // child's `AllowlistToolService` delegates every execution to.
+            base.parent_tools.enforced_exec_tier(),
         ));
         if let Some(strategy) = req.strategy {
             builder = builder.with_strategy(strategy.to_string());

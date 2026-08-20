@@ -185,6 +185,14 @@ impl ScopedToolService {
 
 #[async_trait]
 impl ToolService for ScopedToolService {
+    /// The tier this chokepoint will enforce, straight from the method the
+    /// gate itself calls — including a `PlanGate` that a human has already
+    /// released. One derivation, two readers (the gate, and the sub-agent
+    /// prompt that has to describe the gate).
+    fn enforced_exec_tier(&self) -> Option<crate::config::types::policies::ExecTier> {
+        self.effective_exec_tier()
+    }
+
     async fn list(&self) -> Vec<ToolDefinition> {
         // Take a single health snapshot so the filter is consistent across
         // every tool in this list call.

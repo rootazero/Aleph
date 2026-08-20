@@ -28,7 +28,9 @@
 //! not cross `tokio::spawn`**. A tool that hands work to a detached task must
 //! re-enter the scopes inside that task — see `bash_exec::spawn_background`,
 //! which re-enters `SESSION_ID`, `LIVE_TAIL` and `EXEC_WORKSPACE` for exactly
-//! this reason.
+//! this reason, and [`crate::scope::CarriedAttribution`], which carries
+//! `EXEC_WORKSPACE` across the four spawn boundaries an agent run forks at
+//! (background sub-agent, sync batch leg, team fan-out ×2).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,6 +62,14 @@ task_local! {
     /// workspace, and absence (outside any run — cluster node file commands,
     /// direct callers, tests) keeps the historical `workspaces/<hash(session)>`
     /// behaviour.
+    ///
+    /// "Run-tree-wide" is only true because [`crate::scope::CarriedAttribution`]
+    /// carries it across the spawns inside a run: a detached sub-agent that
+    /// lost it did not fall back to something workable, it fell back to an
+    /// empty hash directory created on first use. Note the distinction that
+    /// keeps both rules intact — a nested **run** re-enters `run_agent_loop`
+    /// and scopes its own value over the carried one; what the carrier crosses
+    /// is one run's own tasks.
     ///
     /// Gateway-owned by construction: nothing on the model's side of the wire
     /// can write it. That is the whole point — see the module doc.

@@ -1939,6 +1939,7 @@ mod tests {
             Some(&wt),
             Some("agent:parent:main"),
             Some("req-42"),
+            None,
         );
         let whole = render_child_prompt(ctx).join("");
 
@@ -1973,7 +1974,7 @@ mod tests {
     /// daemon's own directory, which is the defect §2.3 exists to prevent.
     #[test]
     fn a_child_that_cannot_name_its_directory_states_none() {
-        let ctx = child_environment_context("m", None, None, None);
+        let ctx = child_environment_context("m", None, None, None, None);
         let whole = render_child_prompt(ctx).join("");
         assert!(
             !whole.contains("<cwd>"),
@@ -2004,12 +2005,14 @@ mod tests {
             Some(&wt_a),
             Some("agent:p:main"),
             Some("req-a"),
+            Some(crate::config::types::policies::ExecTier::Ask),
         ));
         let b = render_child_prompt(child_environment_context(
             "m",
             Some(&wt_b),
             Some("agent:p:main"),
             Some("req-b"),
+            Some(crate::config::types::policies::ExecTier::Ask),
         ));
         assert_eq!(a.len(), 2);
         assert_eq!(
@@ -2030,7 +2033,7 @@ mod tests {
     /// either fact a second time (§2.3 rule ③: one question, one voice).
     #[test]
     fn the_resolved_context_does_not_restate_the_welded_facts() {
-        let ctx = child_environment_context("m", None, None, None);
+        let ctx = child_environment_context("m", None, None, None, None);
         assert!(
             ctx.strategy.is_none() && ctx.strategy_guardrails.is_none(),
             "the strategy is welded post-pipeline; setting it here states it twice"
@@ -2041,8 +2044,136 @@ mod tests {
         );
         assert!(
             ctx.approval_tier.is_none(),
-            "the tier is enforced by the inherited ScopedToolService; a second \
-             derivation here could disagree with the gate that enforces it"
+            "a caller that could not ask the enforcer must state no regime at \
+             all — a default here would describe a gate nobody applies"
+        );
+    }
+
+    /// The child must be told the approval regime its own calls will meet.
+    ///
+    /// It runs on the PARENT's `ScopedToolService`, so the tier and the very
+    /// same `PlanGate` are enforced on every call it makes — and until this
+    /// round its prompt said nothing about either. `Plan` is the tier that
+    /// makes the silence expensive rather than merely untidy: it REFUSES
+    /// instead of asking, and `subagent` is deliberately reachable under it
+    /// (`PLAN_REACHABLE_TOOLS`) so a plan for a large codebase can be
+    /// researched by delegation. A child that is not told spends its whole
+    /// iteration budget discovering by refusal.
+    #[test]
+    fn a_child_is_told_the_approval_regime_its_calls_will_meet() {
+        use crate::config::types::policies::ExecTier;
+
+        for tier in [
+            ExecTier::Plan,
+            ExecTier::Ask,
+            ExecTier::Auto,
+            ExecTier::Full,
+        ] {
+            let whole =
+                render_child_prompt(child_environment_context("m", None, None, None, Some(tier)))
+                    .join("");
+            assert!(
+                whole.contains(tier.approval_prompt_line()),
+                "a child under {} must read the regime its calls meet:\n{whole}",
+                tier.id()
+            );
+        }
+
+        // …and a caller with no answer states none, rather than the default
+        // tier. Stating a regime nobody enforces is the expensive half.
+        let silent =
+            render_child_prompt(child_environment_context("m", None, None, None, None)).join("");
+        assert!(
+            !silent.contains("Approval mode:"),
+            "an unknowable tier must be omitted, never defaulted:\n{silent}"
+        );
+    }
+
+    /// The tier line must ride the DYNAMIC half.
+    ///
+    /// It is a per-turn knob (the composer pill, `chat.send{exec_tier}`, a
+    /// human releasing the plan gate mid-turn), and the same reason it was
+    /// moved out of `SecurityLayer` on the main path applies here: a byte that
+    /// changes mid-conversation must not sit in the cacheable prefix, or a
+    /// fan-out of N children rewrites the shared scaffold N times.
+    #[test]
+    fn the_approval_regime_does_not_land_in_the_cached_prefix() {
+        use crate::config::types::policies::ExecTier;
+
+        let ask = render_child_prompt(child_environment_context(
+            "m",
+            None,
+            None,
+            None,
+            Some(ExecTier::Ask),
+        ));
+        let plan = render_child_prompt(child_environment_context(
+            "m",
+            None,
+            None,
+            None,
+            Some(ExecTier::Plan),
+        ));
+        assert_eq!(ask.len(), 2);
+        assert_eq!(
+            ask[0], plan[0],
+            "the tier must not reach the cacheable prefix — flipping a pill \
+             would then re-WRITE the whole conversation's cached prefix at \
+             1.25x instead of READing it at 0.1x"
+        );
+        assert!(ask[1].contains(ExecTier::Ask.approval_prompt_line()));
+        assert!(plan[1].contains(ExecTier::Plan.approval_prompt_line()));
+    }
+
+    /// The effect, not the wire: a child that crossed a `tokio::spawn` must
+    /// name — and jail to — the root its run was authorised for.
+    ///
+    /// The negative half is asserted in the same test because it is the whole
+    /// reason `CarriedAttribution` has this leg: a bare spawn still loses it,
+    /// and a child that lost it does not degrade to "slightly wrong cwd", it
+    /// degrades to an empty `workspaces/<hash>` directory that
+    /// `WorkspaceSandbox` creates on first use.
+    #[tokio::test]
+    async fn a_detached_child_names_the_root_it_actually_executes_in() {
+        use crate::sandbox::context::with_exec_workspace;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("authorised-root");
+        std::fs::create_dir(&root).expect("mkdir root");
+
+        let (bare, carried) = with_exec_workspace(Some(root.clone()), async {
+            let bare =
+                tokio::spawn(async { child_environment_context("m", None, None, None, None) })
+                    .await
+                    .expect("join bare");
+            let carrier = crate::scope::CarriedAttribution::capture();
+            let carried = tokio::spawn(
+                carrier
+                    .reestablish(async { child_environment_context("m", None, None, None, None) }),
+            )
+            .await
+            .expect("join carried");
+            (bare, carried)
+        })
+        .await;
+
+        assert!(
+            bare.runtime_context
+                .as_ref()
+                .and_then(|rc| rc.working_dir.as_ref())
+                .is_none(),
+            "a bare spawn must still lose the root — if this ever passes, the \
+             carrier leg this test guards is dead weight"
+        );
+        assert_eq!(
+            carried
+                .runtime_context
+                .as_ref()
+                .and_then(|rc| rc.working_dir.clone())
+                .as_deref(),
+            Some(root.as_path()),
+            "a detached child must be told the root it will actually execute \
+             in, not silence and not the daemon's cwd"
         );
     }
 }
