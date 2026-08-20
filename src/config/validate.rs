@@ -589,11 +589,24 @@ impl Config {
             error!(error = %e, "Group-chat config validation failed");
             return Err(AlephError::invalid_config(format!("group_chat.{e}")));
         }
+        let mut seen_persona_ids = std::collections::HashSet::new();
         for (idx, persona) in self.personas.iter().enumerate() {
             if let Err(e) = persona.validate() {
                 error!(index = idx, persona_id = %persona.id, error = %e, "Persona config validation failed");
                 return Err(AlephError::invalid_config(format!(
                     "personas[{idx}] (id={}): {e}",
+                    persona.id
+                )));
+            }
+            // Fail fast on duplicate persona ids: `PersonaRegistry::from_configs`
+            // silently applies last-wins on a duplicate (an operator who
+            // copy-pastes a `[[personas]]` block and forgets to change the id
+            // loses the first definition entirely). Startup validation is the
+            // right place to catch it (M7 in review/group_chat-statics).
+            if !seen_persona_ids.insert(persona.id.as_str()) {
+                error!(persona_id = %persona.id, "Duplicate persona id in config");
+                return Err(AlephError::invalid_config(format!(
+                    "personas[{idx}]: duplicate persona id '{}'",
                     persona.id
                 )));
             }

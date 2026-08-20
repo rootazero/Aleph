@@ -97,9 +97,21 @@ impl GroupChatSession {
     /// already-seen round is rejected with a debug log and the turn is NOT
     /// appended, because replay orders by `(round, sequence)` and a stray
     /// out-of-order row would float to the top of `get_group_chat_turns`.
-    /// No-op if the session is not Active.
+    ///
+    /// Silent no-op (with a debug log) when the session is not Active. Callers
+    /// that need to know whether the turn landed must check
+    /// [`GroupChatSession::status`] first — this signature deliberately does
+    /// not return `Result` because the single production caller
+    /// (`executor::execute_round`) already gates on Active upstream (M3 in
+    /// review/group_chat-statics).
     pub fn add_turn(&mut self, round: u32, speaker: Speaker, content: String) {
         if self.status != GroupChatStatus::Active {
+            tracing::debug!(
+                subsystem = "group_chat",
+                session_id = %self.id,
+                status = %self.status.as_str(),
+                "add_turn on non-Active session; turn dropped"
+            );
             return;
         }
         if round < self.current_round {
