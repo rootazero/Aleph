@@ -60,6 +60,9 @@ pub(crate) struct FakeBackend {
     failure_message: String,
     tabs_text: String,
     snapshot_text: String,
+    screenshot_png: Vec<u8>,
+    console_text: String,
+    network_text: String,
     /// Queued `evaluate` answers. The last entry sticks once the queue is down
     /// to one, so a polling loop can be given a steady "absent" without
     /// guessing how many probes it will run.
@@ -74,6 +77,9 @@ impl FakeBackend {
             failure_message: DEFAULT_FAILURE_MESSAGE.to_string(),
             tabs_text: DEFAULT_TABS_TEXT.to_string(),
             snapshot_text: String::new(),
+            screenshot_png: Vec::new(),
+            console_text: String::new(),
+            network_text: String::new(),
             evaluate_responses: Mutex::new(VecDeque::new()),
         }
     }
@@ -94,6 +100,30 @@ impl FakeBackend {
     /// What `snapshot` puts in `snapshot_text` (default: empty).
     pub(crate) fn with_snapshot_text(mut self, text: impl Into<String>) -> Self {
         self.snapshot_text = text.into();
+        self
+    }
+
+    /// What `screenshot` answers with (default: zero bytes).
+    ///
+    /// The bytes need not be a real PNG: `bound_screenshot_png` returns its
+    /// input unchanged when decoding fails, so a caller can hand over a payload
+    /// of a chosen *size* to drive the parts of the pipeline that care about
+    /// size — the inline-image hoist's `> 256` base64 floor above all, which a
+    /// zero-byte default silently sits below.
+    pub(crate) fn with_screenshot_png(mut self, png: impl Into<Vec<u8>>) -> Self {
+        self.screenshot_png = png.into();
+        self
+    }
+
+    /// What `console_messages` answers with (default: empty).
+    pub(crate) fn with_console_text(mut self, text: impl Into<String>) -> Self {
+        self.console_text = text.into();
+        self
+    }
+
+    /// What `network_log` answers with (default: empty).
+    pub(crate) fn with_network_text(mut self, text: impl Into<String>) -> Self {
+        self.network_text = text.into();
         self
     }
 
@@ -207,7 +237,7 @@ impl BrowserBackend for FakeBackend {
     ) -> Result<ScreenshotOutput, BrowserError> {
         self.record("screenshot".into())?;
         Ok(ScreenshotOutput {
-            png_bytes: Vec::new(),
+            png_bytes: self.screenshot_png.clone(),
         })
     }
 
@@ -260,12 +290,12 @@ impl BrowserBackend for FakeBackend {
 
     async fn console_messages(&self, _tab_id: &str) -> Result<String, BrowserError> {
         self.record("console_messages".into())?;
-        Ok(String::new())
+        Ok(self.console_text.clone())
     }
 
     async fn network_log(&self, _tab_id: &str) -> Result<String, BrowserError> {
         self.record("network_log".into())?;
-        Ok(String::new())
+        Ok(self.network_text.clone())
     }
 
     async fn pdf(&self, _tab_id: &str, output_path: &Path) -> Result<(), BrowserError> {
@@ -402,6 +432,16 @@ mod tests {
             fake.evaluate("1", "() => 1").await.unwrap(),
             super::super::wait_probe::WAIT_PROBE_FOUND
         );
+        // The reads that gained a builder later: their defaults are the empty
+        // answers every pre-existing test was written against.
+        assert!(fake
+            .screenshot("1", ScreenshotOpts::default())
+            .await
+            .unwrap()
+            .png_bytes
+            .is_empty());
+        assert_eq!(fake.console_messages("1").await.unwrap(), "");
+        assert_eq!(fake.network_log("1").await.unwrap(), "");
         // The failure text is a builder too, so its default is pinned here with
         // the rest: the existing abort tests match on `boom`.
         let failing = FakeBackend::new(Some(1));

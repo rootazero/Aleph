@@ -20,6 +20,32 @@ pub enum DialogAction {
     Dismiss,
 }
 
+impl DialogAction {
+    /// The verb the backend takes, and the label every face of this action
+    /// shows. One derivation so `browser_dialog` and `browser_exec`'s `dialog`
+    /// step cannot drift into two spellings of the same answer.
+    pub(crate) fn verb(&self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Dismiss => "dismiss",
+        }
+    }
+}
+
+/// The **raw** approval target for answering a dialog — shared by both faces of
+/// this verb (`browser_dialog` and `browser_exec`'s `dialog` step).
+///
+/// It is raw on purpose: `check_browser_approval` matches allow/blocklist
+/// patterns against this string and shows the human only
+/// `approval_display_target`'s sanitized label, so withholding the payload here
+/// would not hide anything from a prompt — it would only make one face of the
+/// verb invisible to an operator's dialog-payload rule while the other stayed
+/// covered. A predicate that two faces derive differently is a predicate only
+/// one of them enforces.
+pub(crate) fn dialog_approval_target(action: &DialogAction, prompt_text: Option<&str>) -> String {
+    format!("{}{}", action.verb(), prompt_text.unwrap_or(""))
+}
+
 /// Arguments for the `browser_dialog` tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserDialogArgs {
@@ -84,16 +110,13 @@ impl AlephTool for BrowserDialogTool {
             }
         }
 
-        let action = match args.action {
-            DialogAction::Accept => "accept",
-            DialogAction::Dismiss => "dismiss",
-        };
+        let action = args.action.verb();
 
         if let Some(message) = super::check_browser_approval(
             self.approval_policy.as_ref(),
             ActionType::BrowserDialog,
             "dialog",
-            &format!("{action}{}", args.prompt_text.as_deref().unwrap_or("")),
+            &dialog_approval_target(&args.action, args.prompt_text.as_deref()),
         )
         .await
         {
