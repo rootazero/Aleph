@@ -627,12 +627,22 @@ impl AgentEnvStore {
         // come back as ADD COLUMN in this same list — which is the cheap half.
         // Re-adding a column is a migration; un-teaching an operator that a
         // setting exists is not.
-        for column in [
+        //
+        // `column` cannot be bound as a parameter; restrict it to the
+        // known-safe literal set so the format!() interpolation stays an
+        // inert identifier rather than a future injection surface.
+        const KNOWN_COLUMNS: &[&str] = &[
             "env_vars",
             "default_model",
             "system_prompt_override",
             "allowed_tools",
-        ] {
+        ];
+        for column in KNOWN_COLUMNS {
+            // Defence in depth: re-check the literal matches [A-Za-z0-9_]+.
+            debug_assert!(
+                column.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "KNOWN_COLUMNS contains a non-identifier: {column}"
+            );
             let _ = conn.execute(&format!("ALTER TABLE agent_envs DROP COLUMN {column}"), []);
         }
 

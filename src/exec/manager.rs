@@ -141,7 +141,7 @@ impl ExecApprovalRecord {
             executable,
             resolved_path,
             created_at_ms: now,
-            expires_at_ms: now + timeout_ms,
+            expires_at_ms: now.saturating_add(timeout_ms),
             resolved_at_ms: None,
             decision: None,
             resolved_by: None,
@@ -343,6 +343,14 @@ impl ExecApprovalManager {
 
         {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+            if pending.contains_key(&id) {
+                // `ExecApprovalRequest.id` is caller-supplied: a duplicate
+                // silently drops the live entry's sender, and its waiter then
+                // reports a spurious timeout. Keep the overwrite (callers use
+                // uuid v4 today) but make it observable.
+                warn!(id = %id, "Duplicate approval id overwrites a live pending entry");
+                debug_assert!(false, "duplicate approval id registered: {id}");
+            }
             pending.insert(
                 id.clone(),
                 PendingEntry {

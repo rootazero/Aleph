@@ -12,7 +12,7 @@
 
 use crate::routing::config::RouteBinding;
 use crate::sync_primitives::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
 use super::session_store::SessionStore;
@@ -38,6 +38,14 @@ pub struct AgentRouter {
     agents: Arc<RwLock<Vec<String>>>,
     /// Optional session store for epoch resolution
     session_store: Option<Arc<dyn SessionStore>>,
+    /// Per-base-pattern serialization for epoch allocation. Closes the
+    /// TOCTOU window between `get_current_epoch` and `with_epoch(epoch+1)`
+    /// within a single process: without this, two concurrent `/new` writes
+    /// for the same `(agent, peer)` could both observe epoch=N and both
+    /// produce `(session=N+1)` keys, silently overwriting each other.
+    /// Cross-process races remain (would need backend-level CAS); see
+    /// session_store trait for the planned `reserve_next_epoch` API.
+    epoch_locks: Arc<Mutex<()>>,
 }
 
 impl AgentRouter {
@@ -50,6 +58,7 @@ impl AgentRouter {
             default_agent: "main".to_string(),
             agents: Arc::new(RwLock::new(vec!["main".to_string()])),
             session_store: None,
+            epoch_locks: Arc::new(Mutex::new(())),
         }
     }
 
@@ -62,6 +71,7 @@ impl AgentRouter {
             default_agent: default.clone(),
             agents: Arc::new(RwLock::new(vec![default])),
             session_store: None,
+            epoch_locks: Arc::new(Mutex::new(())),
         }
     }
 
@@ -91,6 +101,7 @@ impl AgentRouter {
             default_agent: default,
             agents: Arc::new(RwLock::new(agent_ids)),
             session_store: None,
+            epoch_locks: Arc::new(Mutex::new(())),
         }
     }
 
@@ -166,8 +177,14 @@ impl AgentRouter {
         // 5. No explicit session_key → create a new session (next epoch).
         //    The session is only persisted to DB when the first message is sent.
         //    This ensures refresh/new-chat without conversation leaves no trace.
+        //
+        //    Race fix: hold an in-process mutex across the
+        //    `get_current_epoch → with_epoch(epoch+1)` pair so two concurrent
+        //    `/new` calls for the same base_pattern cannot both observe the
+        //    same epoch and clobber each other's session row.
         if let Some(ref sm) = self.session_store {
             let base_pattern = base_key.base_key_pattern();
+            let _guard = self.epoch_locks.lock().await;
             match sm.get_current_epoch(&base_pattern).await {
                 Ok(epoch) => return base_key.with_epoch(epoch + 1),
                 Err(e) => warn!("Failed to resolve epoch for {}: {}", base_pattern, e),

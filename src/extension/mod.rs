@@ -654,7 +654,7 @@ impl ExtensionManager {
                                 }
                             }
                             drop(cfg);
-                            match std::fs::remove_file(&legacy_marker) {
+                            match tokio::fs::remove_file(&legacy_marker).await {
                                 Ok(()) => tracing::info!(
                                     plugin_id = %plugin_id,
                                     "migrated legacy .disabled marker into plugins.toml"
@@ -1653,7 +1653,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_project_plugin(tmp.path(), "old-timer");
         let marker = tmp.path().join("plugins/old-timer/.disabled");
-        std::fs::write(&marker, "").unwrap();
+        tokio::fs::write(&marker, "").await.unwrap();
 
         let (manager, cfg_path) = isolated_manager(tmp.path()).await;
         manager.load_all().await.unwrap();

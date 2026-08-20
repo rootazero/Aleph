@@ -1,5 +1,6 @@
 use crate::exec::secret_patterns::secret_masker_patterns;
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::{Arc, LazyLock, RwLock};
 
 static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
@@ -100,14 +101,21 @@ impl SecretMasker {
     }
 
     pub fn mask(&self, text: &str) -> String {
-        let mut result = text.to_string();
+        // `replace_all` returns a borrow on no-match; only promote to an
+        // owned accumulator when a pattern actually fires, so clean text
+        // costs zero copies instead of one full allocation per pattern.
+        let mut result = Cow::Borrowed(text);
         for (regex, replacement) in SECRET_PATTERNS.iter() {
-            result = regex.replace_all(&result, *replacement).to_string();
+            if let Cow::Owned(masked) = regex.replace_all(&result, *replacement) {
+                result = Cow::Owned(masked);
+            }
         }
         for (regex, replacement) in operator_patterns().iter() {
-            result = regex.replace_all(&result, replacement.as_str()).to_string();
+            if let Cow::Owned(masked) = regex.replace_all(&result, replacement.as_str()) {
+                result = Cow::Owned(masked);
+            }
         }
-        result
+        result.into_owned()
     }
 
     #[allow(dead_code)]

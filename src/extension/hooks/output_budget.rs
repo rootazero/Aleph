@@ -209,7 +209,11 @@ async fn prune_spill_dir(dir: &Path) {
     files.sort_by_key(|(mtime, _)| *mtime);
     let excess = files.len() - MAX_SPILL_FILES_PER_SESSION;
     for (_, path) in files.into_iter().take(excess) {
-        let _ = tokio::fs::remove_file(path).await;
+        if let Err(e) = tokio::fs::remove_file(&path).await {
+            // Best-effort cleanup; log at debug so operators can chase
+            // permission/TOCTOU issues without spamming at warn level.
+            tracing::debug!(path = %path.display(), error = %e, "spill prune: remove_file failed");
+        }
     }
 }
 
@@ -307,7 +311,7 @@ mod tests {
             assert!(out.contains("spill write failed"));
             return;
         };
-        let restored = std::fs::read_to_string(&path).expect("spill file readable");
+        let restored = tokio::fs::read_to_string(&path).await.expect("spill file readable");
         assert!(restored.starts_with("UNIQUE-SPILL-BODY"));
         assert_eq!(
             restored.trim_end_matches('\n').chars().count(),
@@ -323,7 +327,7 @@ mod tests {
         // Seed past the cap, with ascending mtimes so "oldest" is well-defined.
         for i in 0..(MAX_SPILL_FILES_PER_SESSION + 5) {
             let p = dir.path().join(format!("{i:03}.txt"));
-            std::fs::write(&p, "x").expect("write");
+            tokio::fs::write(&p, "x").await.expect("write");
             let t = std::time::SystemTime::UNIX_EPOCH
                 + std::time::Duration::from_secs(1_700_000_000 + i as u64);
             filetime::set_file_mtime(&p, filetime::FileTime::from_system_time(t))
@@ -332,11 +336,16 @@ mod tests {
 
         prune_spill_dir(dir.path()).await;
 
-        let remaining: Vec<String> = std::fs::read_dir(dir.path())
-            .expect("read_dir")
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
+        // `tokio::fs::ReadDir` exposes `next_entry().await`, not `Iterator`;
+// the remote review commit used the std-style `.flatten()` chain which
+// only compiles against `std::fs::ReadDir`. Drain it the tokio way.
+        let mut entries = tokio::fs::read_dir(dir.path())
+            .await
+            .expect("read_dir");
+        let mut remaining = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("next_entry") {
+            remaining.push(entry.file_name().to_string_lossy().to_string());
+        }
         assert_eq!(remaining.len(), MAX_SPILL_FILES_PER_SESSION);
         // The five oldest went; the newest survived.
         assert!(!remaining.contains(&"000.txt".to_string()));
@@ -347,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn prune_is_a_noop_under_the_cap_and_on_a_missing_dir() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("only.txt"), "x").expect("write");
+        tokio::fs::write(dir.path().join("only.txt"), "x").await.expect("write");
         prune_spill_dir(dir.path()).await;
         assert!(dir.path().join("only.txt").exists());
         // Must not panic on a directory that was never created.
