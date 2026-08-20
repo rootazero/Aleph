@@ -1,10 +1,16 @@
 use crate::error::{AlephError, Result};
 use crate::fetch::FetchProvider;
 use crate::search::providers::base::build_client;
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 const NAME: &str = "firecrawl";
+
+/// Maximum response body size accepted from the firecrawl backend (16 MiB).
+/// Anything larger is treated as a backend error to prevent OOM on a
+/// hostile or misconfigured upstream.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Serialize)]
 struct ScrapeRequest<'a> {
@@ -45,9 +51,15 @@ impl FirecrawlFetchProvider {
                 "Firecrawl base URL must use http:// or https:// scheme",
             ));
         }
+        let api_key = api_key.into();
+        if api_key.trim().is_empty() {
+            return Err(AlephError::invalid_config(
+                "Firecrawl api_key cannot be empty",
+            ));
+        }
         Ok(Self {
             base_url,
-            api_key: api_key.into(),
+            api_key,
             client: build_client()?,
         })
     }
@@ -56,6 +68,15 @@ impl FirecrawlFetchProvider {
 #[async_trait]
 impl FetchProvider for FirecrawlFetchProvider {
     async fn fetch(&self, url: &str) -> Result<String> {
+        // SSRF guard: reject URLs targeting loopback / RFC1918 / link-local /
+        // metadata endpoints before we hand them to the upstream provider.
+        // Without this, a self-hosted firecrawl (which may be on the same
+        // host as internal services) can be coerced into scraping internal
+        // endpoints via the agent's fetch tool. The operator can widen the
+        // policy via `[security] ssrf` configuration.
+        validate_url_async(url, &SsrfPolicy::default())
+            .await
+            .map_err(|e| AlephError::tool(format!("fetch URL blocked by SSRF policy: {e}")))?;
         let resp = self
             .client
             .post(format!("{}/v2/scrape", self.base_url))
@@ -68,8 +89,23 @@ impl FetchProvider for FirecrawlFetchProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
         let resp = crate::search::providers::base::check_status(resp, NAME)?;
-        let parsed: FirecrawlScrapeResponse =
-            crate::search::providers::base::parse_json(resp, NAME).await?;
+        // Bound body size before deserializing to avoid OOM on hostile /
+        // misconfigured upstreams that return arbitrarily large responses.
+        let body_bytes = resp
+            .bytes_with_limit(MAX_RESPONSE_BYTES)
+            .await
+            .map_err(|e| {
+                AlephError::provider(format!(
+                    "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes: {e}"
+                ))
+            })?
+            .ok_or_else(|| {
+                AlephError::provider(format!(
+                    "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes"
+                ))
+            })?;
+        let parsed: FirecrawlScrapeResponse = serde_json::from_slice(&body_bytes)
+            .map_err(|e| AlephError::provider(format!("Failed to parse firecrawl response: {e}")))?;
         map_scrape(parsed)
             .ok_or_else(|| AlephError::provider("firecrawl scrape returned no markdown"))
     }

@@ -2,9 +2,13 @@ use crate::config::types::FetchBackendConfig;
 use crate::config::Crawl4aiConfig;
 use crate::error::{AlephError, Result};
 use crate::fetch::FetchProvider;
+use crate::security::ssrf::{validate_url_async, SsrfPolicy};
 use async_trait::async_trait;
 
 const NAME: &str = "crawl4ai";
+
+/// Maximum response body size accepted from the crawl4ai backend (16 MiB).
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Fetch provider backed by the existing crawl4ai HTTP client.
 pub struct Crawl4aiFetchProvider {
@@ -13,8 +17,11 @@ pub struct Crawl4aiFetchProvider {
 
 impl Crawl4aiFetchProvider {
     /// Build from a `[fetch].backends.crawl4ai` entry. `None` when the entry is
-    /// unusable (no/invalid base_url) — caller then skips this provider.
+    /// unusable (no/invalid base_url, or backend reports unhealthy).
     pub fn from_backend(b: &FetchBackendConfig) -> Option<Self> {
+        if !b.enabled {
+            return None;
+        }
         let cfg = Crawl4aiConfig {
             enabled: true,
             base_url: b.base_url.clone().unwrap_or_default(),
@@ -29,6 +36,13 @@ impl Crawl4aiFetchProvider {
 #[async_trait]
 impl FetchProvider for Crawl4aiFetchProvider {
     async fn fetch(&self, url: &str) -> Result<String> {
+        // SSRF guard: the agent must not be able to instruct crawl4ai (which
+        // is often self-hosted on the same network as internal services) to
+        // crawl loopback / RFC1918 / metadata endpoints. Operators can widen
+        // the policy via `[security] ssrf` configuration.
+        validate_url_async(url, &SsrfPolicy::default())
+            .await
+            .map_err(|e| AlephError::tool(format!("fetch URL blocked by SSRF policy: {e}")))?;
         self.inner
             .fetch_markdown(url)
             .await
@@ -38,7 +52,11 @@ impl FetchProvider for Crawl4aiFetchProvider {
         NAME
     }
     fn is_available(&self) -> bool {
-        true
+        // Touch the backend's health endpoint synchronously enough to detect a
+        // dead process before we accept the full request latency. Uses a
+        // short timeout via the inner client; on unreachable host this fails
+        // fast and the registry routes to the next available provider.
+        self.inner.is_healthy()
     }
 }
 
@@ -54,6 +72,7 @@ mod tests {
             base_url: Some("http://10.0.0.1:11235".into()),
             timeout_seconds: Some(45),
             verified: false,
+            enabled: true,
         };
         let p = Crawl4aiFetchProvider::from_backend(&backend);
         assert!(p.is_some());
@@ -68,6 +87,20 @@ mod tests {
             base_url: None,
             timeout_seconds: None,
             verified: false,
+            enabled: true,
+        };
+        assert!(Crawl4aiFetchProvider::from_backend(&backend).is_none());
+    }
+
+    #[test]
+    fn factory_returns_none_when_disabled() {
+        let backend = crate::config::types::FetchBackendConfig {
+            provider_type: "crawl4ai".into(),
+            api_key: Some("tok".into()),
+            base_url: Some("http://10.0.0.1:11235".into()),
+            timeout_seconds: Some(45),
+            verified: false,
+            enabled: false,
         };
         assert!(Crawl4aiFetchProvider::from_backend(&backend).is_none());
     }
