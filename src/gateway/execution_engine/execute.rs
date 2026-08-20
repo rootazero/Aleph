@@ -59,6 +59,44 @@ fn moa_fallthrough_input(original: &str) -> Option<String> {
     (!prompt.trim_start().starts_with('/')).then(|| prompt.to_string())
 }
 
+/// Move a stamped `/btw` request onto its own session, and hand back the main
+/// session it was asked from.
+///
+/// `None` — and `request` untouched — for every ordinary run. `Some(main)`
+/// means the request now carries the derived side key
+/// ([`crate::gateway::btw::side_key_for`]) and the main key came back for the
+/// one caller that still needs it: the seed source.
+///
+/// # Why this runs before admission, and not where the key is "derived"
+///
+/// [`ExecutionEngine::admit_run`] keys the busy-input lane on
+/// `request.session_key` (`SessionRunRegistry::try_claim`). A side question
+/// still carrying the main key is therefore admitted on the **main** session's
+/// lane and — with the main run already holding it — is steered, interrupted
+/// or queued against that run. That is the single thing `/btw` exists not to
+/// do, and nothing would report it: the turn would simply behave like an
+/// ordinary message. The redirect belongs immediately after
+/// [`stamp_btw`], which is `execute()`'s first statement, and the rest of the
+/// function then reads the side key everywhere by construction rather than by
+/// each site remembering to.
+///
+/// The predicate is the metadata key, not the input string: `stamp_btw` is the
+/// one resolver ([`crate::gateway::btw::BtwTurn::resolve`]), and re-deriving
+/// "is this a btw" from the text here would be a second answer to a question
+/// that already has one.
+pub(super) fn redirect_to_side_session(
+    request: &mut RunRequest,
+) -> Option<crate::routing::session_key::SessionKey> {
+    if !request
+        .metadata
+        .contains_key(crate::gateway::btw::BTW_METADATA_KEY)
+    {
+        return None;
+    }
+    let side = crate::gateway::btw::side_key_for(&request.session_key);
+    Some(std::mem::replace(&mut request.session_key, side))
+}
+
 impl<P, R> ExecutionEngine<P, R>
 where
     P: crate::thinker::ProviderRegistry + 'static,
@@ -111,6 +149,139 @@ where
         Some((key, handle))
     }
 
+    /// Bring this run's side session up to date with the main conversation the
+    /// side question was asked from.
+    ///
+    /// # What is an error here and what is not
+    ///
+    /// A failure from [`ensure_seeded`] IS this run's error. It reports a store
+    /// fault or a cursor it cannot interpret, and both are states in which
+    /// carrying on would re-copy the same prefix on every later question —
+    /// silently, and forever. That is worth stopping for.
+    ///
+    /// A missing handle is not. Both are `Some` on every gateway boot and
+    /// `None` only in unit fixtures and the simple engine, and the two halves
+    /// of `/btw` that are load-bearing — its own lane and its read-only
+    /// ceiling — are already established by the time this runs and do not
+    /// depend on it. Refusing here would turn a boot-shape fact into a
+    /// refusal of the question the user just asked. It warns instead, by name,
+    /// so an install that somehow reaches it says so.
+    ///
+    /// [`ensure_seeded`]: crate::gateway::btw::seed::ensure_seeded
+    async fn seed_side_session(
+        &self,
+        main: &crate::routing::session_key::SessionKey,
+        request: &RunRequest,
+    ) -> Result<(), ExecutionError> {
+        let Some(orchestrator) = self.orchestrator.get() else {
+            warn!(
+                run_id = %request.run_id,
+                "side question runs with no inherited context: this engine has no orchestrator, \
+                 so there is no session service to read the main transcript from"
+            );
+            return Ok(());
+        };
+        let Some(store) = self.session_manager.as_ref() else {
+            warn!(
+                run_id = %request.run_id,
+                "side question runs with no inherited context: this engine has no session store, \
+                 so the seed cursor has nowhere to live"
+            );
+            return Ok(());
+        };
+
+        let budget = self.btw_fork_budget(orchestrator).await?;
+        let outcome = crate::gateway::btw::seed::ensure_seeded(
+            orchestrator.session_service.as_ref(),
+            store.as_ref(),
+            main,
+            &request.session_key,
+            &request.metadata,
+            &budget,
+        )
+        .await
+        .map_err(ExecutionError::Failed)?;
+
+        info!(
+            run_id = %request.run_id,
+            main = %main.to_key_string(),
+            side = %request.session_key.to_key_string(),
+            events_added = outcome.events_added,
+            "Side session seeded from the main conversation"
+        );
+        Ok(())
+    }
+
+    /// The budget one cold side seed may spend.
+    ///
+    /// `max_turns` is the bound that does the work and always applies:
+    /// `[policies] btw_fork_turns`, defaulting to
+    /// [`DEFAULT_BTW_FORK_TURNS`](crate::config::types::policies::DEFAULT_BTW_FORK_TURNS).
+    ///
+    /// The character ceiling comes from
+    /// [`ForkBudget::for_child`](crate::agents::subagent_spawner::fork::ForkBudget::for_child),
+    /// which derives it from the install's `[context_budget]` so a cold seed
+    /// lands below the side session's own compaction line instead of paying an
+    /// LLM to summarise the history we just paid to copy.
+    ///
+    /// Two departures from that function's own contract, both deliberate:
+    ///
+    /// * **`system_prompt_chars` is `0`.** `for_child` subtracts the child's
+    ///   system block because a sub-agent spawner has built it by the time it
+    ///   plans a fork. Here the side session's prompt is assembled by the very
+    ///   run this seeding precedes, so the honest input is "not known yet" and
+    ///   the derived ceiling is the window's warning line rather than that
+    ///   line minus one system block. It errs generous by exactly that block;
+    ///   the turn cap is what actually bounds a cold seed, so the ceiling is a
+    ///   backstop for one pathologically large turn rather than the operative
+    ///   limit.
+    /// * **An absent `[context_budget]` is not a refusal.** That section is
+    ///   opt-in and absent on a default install, so treating `for_child`'s
+    ///   `None` as "I cannot size this" uniformly would make `/btw` refuse
+    ///   everywhere out of the box — a floor with no door. Absent means the
+    ///   install has opted out of window management altogether: the main
+    ///   conversation being forked from runs uncompacted too, so there is no
+    ///   line to stay below and the turn cap is the whole bound. This is the
+    ///   same conclusion `btw::seed`'s own `delta_budget` reaches for the warm
+    ///   path, and the same degradation `run_loop` applies when it declines to
+    ///   hand a spawned child a budget it does not have.
+    ///
+    /// A configured window too small to hold a fork IS a refusal: the operator
+    /// stated a window, and it cannot hold one. That is loud and it names the
+    /// key to change.
+    async fn btw_fork_budget(
+        &self,
+        orchestrator: &crate::orchestrator::Orchestrator,
+    ) -> Result<crate::agents::subagent_spawner::fork::ForkBudget, ExecutionError> {
+        use crate::agents::subagent_spawner::fork::ForkBudget;
+
+        let turns = self.btw_fork_turns().await;
+        let Some(cfg) = orchestrator.harness.context_budget_config() else {
+            return Ok(ForkBudget {
+                max_turns: Some(turns),
+                max_chars: usize::MAX,
+            });
+        };
+        ForkBudget::for_child(Some(&cfg), 0, Some(turns)).ok_or_else(|| {
+            ExecutionError::Failed(format!(
+                "side question cannot be seeded: `[context_budget] token_budget` \
+                 ({} tokens) leaves no room to carry any of this conversation",
+                cfg.token_budget
+            ))
+        })
+    }
+
+    /// `[policies] btw_fork_turns`, read live from the shared config so a
+    /// change takes effect on the next side question with no restart — the
+    /// same contract every other `[policies]` read in this engine has.
+    async fn btw_fork_turns(&self) -> usize {
+        let configured = match self.app_config.as_ref() {
+            Some(cfg) => cfg.read().await.policies.btw_fork_turns,
+            None => None,
+        };
+        configured.unwrap_or(crate::config::types::policies::DEFAULT_BTW_FORK_TURNS)
+    }
+
     /// Execute a run request
     ///
     /// Returns a stream of events for the run.
@@ -141,6 +312,13 @@ where
         // stamping is otherwise cheap and side-question-free input resolves
         // to nothing (`BtwTurn::resolve` returns `None`).
         stamp_btw(&request.input, &mut request.metadata);
+
+        // ...and move it onto its own session before ANYTHING keys off the
+        // session it was typed in. `admit_run` below is the reason this is
+        // here rather than further down — see `redirect_to_side_session`. The
+        // main key comes back because it is still needed once: it is the
+        // source the side session is seeded from, further down.
+        let btw_main_session = redirect_to_side_session(&mut request);
 
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
@@ -185,6 +363,16 @@ where
         // ambient scope, which no producer still has by here (they all spawn).
         // See `run_loop::ensure_session_under_request_scope`.
         super::run_loop::ensure_session_under_request_scope(&agent, &request).await;
+
+        // Carry whatever has settled on the main conversation into the side
+        // session, so a side question is asked *about* the thing the user is
+        // looking at rather than into an empty room. After the scope step
+        // above (the side row is opened under the run's attribution, which
+        // `ensure_seeded` re-establishes from the same metadata) and before
+        // dispatch, because the harness reads history further down.
+        if let Some(main) = btw_main_session.as_ref() {
+            self.seed_side_session(main, &request).await?;
+        }
 
         // Emit run accepted event — AFTER the row above exists, and this order
         // is load-bearing rather than tidy. `RunAccepted` classifies as

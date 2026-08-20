@@ -401,7 +401,7 @@ async fn test_simple_execution_engine_run() {
 /// Minimal `ToolRegistry` double: `admit_run` never looks up or executes a
 /// tool, so an empty registry satisfies `ExecutionEngine<P, R>`'s generic
 /// bound without pulling in the real (heavy) `BuiltinToolRegistry`.
-struct EmptyToolRegistry;
+pub(super) struct EmptyToolRegistry;
 
 impl crate::executor::ToolRegistry for EmptyToolRegistry {
     fn get_tool(&self, _name: &str) -> Option<&crate::tool_metadata::UnifiedTool> {
@@ -472,11 +472,12 @@ async fn stamp_slash_mode_never_overwrites_an_existing_stamp() {
     );
 }
 
-fn test_engine() -> ExecutionEngine<crate::thinker::SingleProviderRegistry, EmptyToolRegistry> {
+pub(super) fn test_engine(
+) -> ExecutionEngine<crate::thinker::SingleProviderRegistry, EmptyToolRegistry> {
     test_engine_with_config(ExecutionEngineConfig::default())
 }
 
-fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRequest {
+pub(super) fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRequest {
     RunRequest {
         run_id: run_id.to_string(),
         input: "hello".to_string(),
@@ -492,7 +493,10 @@ fn gate_test_request(session_key: &SessionKey, run_id: &str) -> RunRequest {
     }
 }
 
-async fn gate_test_agent(temp: &tempfile::TempDir, agent_id: &str) -> Arc<AgentInstance> {
+pub(super) async fn gate_test_agent(
+    temp: &tempfile::TempDir,
+    agent_id: &str,
+) -> Arc<AgentInstance> {
     let sm = test_session_manager(temp);
     let config = AgentInstanceConfig {
         agent_id: agent_id.to_string(),

@@ -41,6 +41,64 @@ pub(super) struct TurnPermissions {
     pub(super) side_question: bool,
 }
 
+impl TurnPermissions {
+    /// This turn's routing and permission facts, in the shape the run's tool
+    /// services are built from.
+    ///
+    /// The crossing from resolution into enforcement, as a named function
+    /// rather than a struct literal inside the agent loop. Two reasons, and
+    /// the second is the load-bearing one:
+    ///
+    /// 1. `plan_gate` and `side_question` are resolved here and consumed
+    ///    there, and a literal at the far end is where a newly resolved fact
+    ///    gets left out — the resolution keeps passing its own tests while the
+    ///    enforcement never hears about it.
+    /// 2. It makes the crossing *exercisable*. A test that resolves
+    ///    permissions from a real request and then calls this is running the
+    ///    same hand-off production runs; a test that fills in `side_question`
+    ///    itself is asserting about its own input.
+    ///
+    /// Every field comes from `self`, `request`, `run_id` or `unattended` —
+    /// there is no fifth source, which is what makes this a faithful move of
+    /// the literal rather than a second, thinner construction.
+    pub(super) fn turn_context(
+        &self,
+        request: &RunRequest,
+        run_id: &str,
+        unattended: bool,
+    ) -> crate::tools::turn_context::TurnContext {
+        crate::tools::turn_context::TurnContext {
+            session_key: request.session_key.clone(),
+            run_id: run_id.to_string(),
+            // Channel id / conversation id come from the inbound router's
+            // metadata; empty for non-channel turns (cron, webhook) — the HITL
+            // tools that read them degrade rather than fail.
+            channel_id: request
+                .metadata
+                .get("channel_id")
+                .cloned()
+                .unwrap_or_default(),
+            conversation_id: request
+                .metadata
+                .get("conversation_id")
+                .cloned()
+                .unwrap_or_default(),
+            caller_role: request.metadata.get("caller_role").cloned(),
+            channel_tool_permissions: request
+                .metadata
+                .get(super::CHANNEL_TOOL_PERMISSIONS_KEY)
+                .cloned(),
+            unattended,
+            // Cloned into BOTH tool services the run builds (its own and the
+            // parent view handed to spawned children), so the one human
+            // approval that lifts the gate lifts it everywhere this run can
+            // reach. `None` on every non-planning turn.
+            plan_gate: self.plan_gate.clone(),
+            side_question: self.side_question,
+        }
+    }
+}
+
 /// Resolve this turn's execution tier.
 ///
 /// Precedence: the tier the REQUEST carries (the composer's pick, possibly made
@@ -228,6 +286,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .metadata
             .contains_key(crate::gateway::btw::BTW_METADATA_KEY);
 
+        // A side question is read-only whatever the conversation's own tier
+        // says. Composed through `most_restrictive` — the same rule the
+        // channel clamp and the non-operator ceiling already compose through —
+        // so it can only ever tighten: a session already at `Plan` is
+        // byte-identical, and no tier, no explicit `[policies.tool_permissions]`
+        // entry and no request-carried pick can raise it, because `Plan`'s
+        // refusal is a floor rather than a default (`effective_permission`
+        // rung 0).
+        let tier = if side_question {
+            ExecTier::most_restrictive(tier, ExecTier::Plan)
+        } else {
+            tier
+        };
+
         // The plan → build handoff cell, minted only for a turn that actually
         // resolved to `Plan`.
         //
@@ -245,7 +317,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // conversation that was explicitly at `ask` returns to the install's
         // posture, not to `ask`. That is the trade — one write, one writer,
         // no key that can go stale — and the tier is one pill click away.
-        let plan_gate = (tier == ExecTier::Plan).then(|| {
+        //
+        // NOT minted for a side question, even though one always resolves to
+        // `Plan`. The gate is the one thing that may move a turn's tier
+        // mid-run, and a side question's ceiling is not the conversation's
+        // request to plan — it is a bound on this single turn, with nothing to
+        // hand back to when the turn ends. Withholding it makes that bound
+        // immovable by construction. It is *also* unreachable today by another
+        // route (`scratchpad`, the only thing that flips a gate, is revoked
+        // for a side question by `PLAN_REACHABLE_TOOLS`) — but a ceiling that
+        // holds only because a list in another module happens to name the
+        // right tool is a ceiling resting on someone else's invariant.
+        let plan_gate = (tier == ExecTier::Plan && !side_question).then(|| {
             std::sync::Arc::new(crate::tools::plan_gate::PlanGate::new(plan_restore_tier(
                 global_tier,
                 requested,

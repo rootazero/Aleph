@@ -43,6 +43,8 @@ mod turn_thinking;
 mod unattended_redacting_sink;
 
 #[cfg(test)]
+mod btw_wire_tests;
+#[cfg(test)]
 mod tests;
 
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
