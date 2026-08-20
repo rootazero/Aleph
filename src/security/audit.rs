@@ -43,6 +43,27 @@ pub enum AuditEventType {
     /// it names the object of the change, not the credential.
     AuthorityChange,
     ScopedContentRead,
+    /// The sandbox command hard-filter ([`crate::sandbox::command_policy`])
+    /// refused a command, or matched a `Warn`-tier rule and let it through.
+    ///
+    /// Both dispositions share one variant so a single `WHERE event_type =
+    /// 'command_policy'` answers the post-incident question — "what did the
+    /// command filter see, in order" — with the severity column separating the
+    /// refusals from the audited pass-throughs. Splitting them would mean two
+    /// queries to reconstruct one timeline.
+    ///
+    /// [`Self::ExecBlocked`] is deliberately *not* reused: its producers are
+    /// the inbound/outbound content-leak detector in
+    /// [`crate::security::runtime_guard`], and folding a second, unrelated
+    /// meaning into that column would leave it unable to answer either
+    /// question cleanly.
+    ///
+    /// Until this variant the `Warn` tier — whose entire purpose is to audit
+    /// rather than refuse — left nothing behind but a `tracing` line, i.e. the
+    /// paper trail it advertises existed only for whoever was watching stdout
+    /// at the time. `detail` names the matched rules and the program; it never
+    /// carries the command text, which is where the secrets would be.
+    CommandPolicy,
 }
 
 impl fmt::Display for AuditEventType {
@@ -56,6 +77,7 @@ impl fmt::Display for AuditEventType {
             Self::LeakWarning => "leak_warning",
             Self::AuthorityChange => "authority_change",
             Self::ScopedContentRead => "scoped_content_read",
+            Self::CommandPolicy => "command_policy",
         };
         write!(f, "{s}")
     }
@@ -142,6 +164,39 @@ impl AuditEntry {
             source_ip: None,
             session_id: None,
             actor_user,
+            detail: detail.into(),
+        }
+    }
+
+    /// The command hard-filter decided about one command — see
+    /// [`AuditEventType::CommandPolicy`].
+    ///
+    /// `blocked` selects the severity: a refusal is `Critical`, an audited
+    /// pass-through is `Warn`. `session_id` is the session whose tool call it
+    /// was; `detail` is `"<disposition> <program>: <rule>, <rule>"`.
+    ///
+    /// `actor_user` is `None` by construction and that is honest rather than a
+    /// gap: this producer runs on the sandbox execution task, downstream of the
+    /// `tokio::spawn` that starts a run, where
+    /// [`crate::gateway::caller_identity::CALLER_USER`] is dead — the same
+    /// task-local hole every tool-face predicate has. The session key is the
+    /// join column back to whoever owns the run.
+    #[must_use]
+    pub fn command_policy(
+        blocked: bool,
+        session_id: Option<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_type: AuditEventType::CommandPolicy,
+            severity: if blocked {
+                AuditSeverity::Critical
+            } else {
+                AuditSeverity::Warn
+            },
+            source_ip: None,
+            session_id,
+            actor_user: None,
             detail: detail.into(),
         }
     }

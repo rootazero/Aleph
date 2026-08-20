@@ -1022,9 +1022,18 @@ audits a slightly larger suspicious set; it never reasons about model intent.
      path-preserving) joined by a newline. Folding unconditionally is what let
      `\\?\C:\` normalise to `\?C:` and slip the floor, and what made
      `C:\Windows` unnameable by any rule.
-  2. **Path-prefix canonicalisation.** `\\?\C:\` and `\\.\C:\` address exactly
+  2. **A shell-word view of each** (2026-08-20). Quotes pose the same problem
+     in the other direction: dropping them is right for `d'd'` (the shell runs
+     `dd`) but *loses* the left token boundary several Windows rules anchor on
+     (`del /s /q'C:\'`), so quote removal — plus `$IFS` expansion — is an extra
+     view rather than a change to the folding. Emitted only when a quote
+     actually *splices* a token (non-whitespace on both sides) or the text
+     references `IFS`, so ordinary `-m "message"` quoting costs nothing. Views
+     are additive: a reading that turns out to be wrong can only fail to match,
+     never mask what another view sees.
+  3. **Path-prefix canonicalisation.** `\\?\C:\` and `\\.\C:\` address exactly
      what `C:\` addresses; `\\?\UNC\srv\share` is `\\srv\share`.
-  3. **`-EncodedCommand` expansion.** `powershell -enc <base64>` hid the entire
+  4. **`-EncodedCommand` expansion.** `powershell -enc <base64>` hid the entire
      script from every rule at once — the catastrophic floor was one base64
      away from being switched off on Windows. Payloads (and every
      abbreviation PowerShell accepts: `-e`, `-ec`, `-enc`, …) are
@@ -1032,7 +1041,14 @@ audits a slightly larger suspicious set; it never reasons about model intent.
      over at most 8 payloads and 2 nesting rounds, and gated on the decode
      reading as text so a stray long argument cannot inject noise. Because
      this happens in the normaliser, ahead of the tier split,
-     `enforcement = "off"` cannot restore the blind spot.
+     `enforcement = "off"` cannot restore the blind spot. **The decoded payload
+     recurses through the whole pipeline** (2026-08-20): it used to be handed to
+     a degraded copy that folded escapes and nothing else, so a payload kept
+     exactly the two tricks that copy did not know about — the extended-length
+     path prefix (`del /s /q \\?\C:\`) and a zero-width character spliced into
+     `dd`. Both reached the catastrophic floor as a mere `warn`. Recursing means
+     a payload is normalised exactly as hard as the text that carried it, by
+     construction rather than by two authors agreeing.
 - **Config** (`[sandbox.command_policy]`): `enabled`, `enforcement`
   (`block` / `warn` — global observe mode that downgrades every block to an
   audit / `off`), `use_default_rules`, and `custom_rules[]` (`{name, regex,
@@ -1042,7 +1058,14 @@ audits a slightly larger suspicious set; it never reasons about model intent.
 - **Scan target:** `program` + space-joined `args` + any UTF-8 `stdin`
   payload (the `bash -s` large-script path), bounded to 256 KiB.
 - **Audit:** matches log to the `command_policy` tracing target (parallel to
-  `capability_ledger` / `sandbox_rate_limit`).
+  `capability_ledger` / `sandbox_rate_limit`) **and**, since 2026-08-20, to the
+  durable `security_audit_log` table as `event_type = 'command_policy'` —
+  severity `Critical` for a refusal, `Warn` for an audited pass-through, so one
+  `WHERE` clause reconstructs the timeline. Until that wire existed the `Warn`
+  tier's advertised "audited, not refused" contract was satisfied only by a
+  `tracing` line, i.e. it existed for whoever was tailing stdout and for nobody
+  afterwards. `detail` carries rule names and the program only — never the
+  command text, which is where a pasted credential would be.
 - **Non-breaking:** defaults block only patterns with essentially no
   legitimate workspace use; relative-path `rm -rf build/` and ordinary
   commands are unaffected. The OS sandbox remains the real enforcer.
@@ -1068,13 +1091,56 @@ audits a slightly larger suspicious set; it never reasons about model intent.
   - **De-duplication (entropy reduction).** The raw-block-device alternation was
     hand-pasted in four rules and the `rm` recursive-flag prefix in two — the
     exact drift hazard behind the device-class gap. Both are now single-sourced
-    (`RAW_BLOCK_DEVICE_CLASS` / `RM_RECURSIVE_PREFIX` consts composed into the
-    patterns via `LazyLock`), so a newly-covered device or a change to "what
-    counts as a recursive rm" lands in one place and every affected rule sees it.
+    (`unix_block_device!()` / `rm_recursive_prefix!()` `macro_rules!` fragments
+    spliced into the patterns with `concat!`), so a newly-covered device or a
+    change to "what counts as a recursive rm" lands in one place and every
+    affected rule sees it.
   - Still a pure deterministic hard-filter (R7): no LLM/intent reasoning was
     added; codex's landlock+seccomp is mirrored by `sandbox_init.rs`, and its
     positive safe-command allowlist deliberately stays in the exec-tier /
     approval layer, not here.
+- **Round 5 — measured bypasses (2026-08-20, re-benchmarked against codex
+  `shell-command/command_safety` + `bash.rs`).** Thirteen shapes were confirmed
+  *allowed* by running the shipped regexes through the shipped normaliser, and
+  all thirteen now block. Full ledger in FEATURE_LOCATOR §3.8; the parts that
+  generalise:
+  - **The recorded reason for not porting codex's AST was wrong, and the
+    correction strengthens it.** Wrapper recursion (`sudo`, `env A=B`,
+    `timeout N`, `xargs`, `nohup … &`, `bash -c '…'`) was assumed to need an
+    AST; measured, all six already match — precisely *because* this layer scans
+    flat text and scopes nothing to argv. So an AST buys only the *readings*,
+    which is the normaliser's job. Not importing `tree-sitter-bash` is therefore
+    not a weight trade-off but a no-op purchase; and this repo already has two
+    shell parsers, neither usable here, because both **reject** on the very
+    constructs this layer most needs to read (`exec::parser` errors on a
+    background `&`, on backticks, on newlines) and a fail-soft skip is not
+    evidence that a command is safe.
+  - **`rm` takes an operand list.** Both recursive-remove rules anchored the
+    dangerous target to the first operand, so `rm -rf ./build /` wiped the root
+    while reading clean. `rm_operand_gap!()` spans intervening operands with a
+    token class that stops at `#` (a comment) and at `& | ; < >` (an unrelated
+    following statement) — the hazard `seg!()` exists for, in the one place
+    `seg!()` cannot be used because the span is by *word*, not by character.
+  - **An anchored alternation makes prefixed spellings separate entries.** The
+    device class sits right after `/dev/`, so having `disk` did nothing for
+    `rdisk` — and on macOS `/dev/rdiskN` is the raw node every disk-imaging
+    instruction names. The inverse half is pinned too: `/dev/null`, `random`,
+    `urandom`, `zero`, `stdout`, `tty` must stay out, because a device list long
+    enough to catch `/dev/null` has stopped being a floor and started being an
+    outage.
+  - **The floor had a platform-shaped hole.** It was written in POSIX device
+    nodes and coreutils verbs; macOS reaches the same destruction through
+    `diskutil` / `asr`, naming no `/dev/` path at all — so the project's primary
+    development platform had zero native disk-destruction coverage while Windows
+    carried eight rules. New floor entry `macos_disk_destruction`, new warn
+    `macos_security_disable` (`csrutil disable` / `spctl --master-disable`, the
+    twin of `win_disable_defender`).
+  - **An unfixable false positive belongs one tier down.** The pipe-free fork
+    bomb `:(){ :&:& };:` shares its shape with `up() { server & worker & }`, so
+    it audits (`fork_bomb_background_recursion`) rather than joining a floor no
+    configuration can switch off. The floor kept the self-*pipe* requirement and
+    only relaxed its terminator, since a shell function ends as validly at a
+    newline as at a `;`.
 
 ## Cycle 8 — background-exec lifecycle & the two-phase cwd gate (2026-08-10)
 

@@ -48,9 +48,22 @@ use serde::{Deserialize, Serialize};
 /// compromises or crashes the host. The alternation is anchored right after
 /// `/dev/`, and every rule only tests match *presence*, so alternation order
 /// does not affect matching.
+///
+/// Because the alternation is anchored, a *prefixed* spelling of a covered
+/// class is a different string and needs its own entry — which is how
+/// `/dev/rdisk0` escaped a list that already had `disk`. That one mattered
+/// most of all: on macOS `/dev/diskN` is the buffered node and `/dev/rdiskN`
+/// is the raw one, so `of=/dev/rdisk0` is not an exotic spelling, it is the
+/// spelling every macOS disk-imaging instruction uses. Also here for the same
+/// reason: `root` (the boot volume's own alias), `nbd` (network block device),
+/// `ram`/`zram` (in-memory block devices), `ada`/`nvd` (FreeBSD SATA/NVMe) and
+/// `dasd` (s390). None of them collide with the harmless `/dev` nodes an agent
+/// legitimately writes — `random`, `null`, `zero`, `stdout`, `tty`, `urandom`
+/// all fail the anchored match, which
+/// `harmless_dev_nodes_are_not_block_devices` pins.
 macro_rules! unix_block_device {
     () => {
-        r"(?:sd|nvme|disk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|mapper|md|mem|kmem|port)"
+        r"(?:sd|nvme|nvd|disk|rdisk|hd|xvd|vd|mmcblk|loop|sr|pmem|dm-|mapper|md|mem|kmem|port|root|nbd|zram|ram|ada|dasd)"
     };
 }
 
@@ -60,22 +73,48 @@ macro_rules! unix_block_device {
 /// recursive rm" cannot drift between the floor and the warn. Matches `rm`
 /// then, in any flag order, a recursive flag — a combined cluster
 /// (`-rf`/`-fr`/`-R`), a bare short `-r`, or long `--recursive` — with any
-/// other flags allowed before/after. The trailing `\s+` leaves the scan
-/// positioned at the target argument, which each rule then constrains.
+/// other flags allowed before/after. It stops *before* the whitespace that
+/// precedes the operand list; [`rm_operand_gap`] carries the scan from there
+/// to the target argument each rule constrains.
 macro_rules! rm_recursive_prefix {
     () => {
-        r"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*\s+"
+        r"\brm\b(?:\s+-{1,2}\S+)*\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+-{1,2}\S+)*"
+    };
+}
+
+/// The operands that may sit between a recursive `rm` and the dangerous one.
+///
+/// `rm` takes a *list*, and both recursive-remove rules used to require the
+/// dangerous target to be the very first operand — so `rm -rf ./build /`
+/// deleted the filesystem root while reading as clean to the catastrophic
+/// floor. That is not obfuscation; it is how anyone writes a multi-target
+/// remove. The gap accepts any run of intervening operand tokens and then the
+/// whitespace before the target.
+///
+/// The token class is deliberately *not* `\S+`. A token may not begin with `#`
+/// (a comment starts there, so `rm -rf ./x  # tidy /` must not be read as a
+/// root delete) and may not contain a statement separator or redirection
+/// (`& | ; < >`), so a following *unrelated* statement cannot supply the
+/// target — `rm -rf ./out && ls /` stops the run at `&&`. That is the same
+/// hazard `seg!` exists for, in the one place `seg!` cannot be used because
+/// the gap must span whitespace-separated words rather than arbitrary text.
+macro_rules! rm_operand_gap {
+    () => {
+        r"(?:\s+[^\s#&|;<>][^\s&|;<>]*)*\s+"
     };
 }
 
 /// Bare-root target for the hardline [`rm_rf_root`] rule: one-or-more `/` (so
 /// `//`, `///` — all POSIX root — are covered, closing the `rm -rf //`
-/// bypass), an optional trailing `.` (`/.`), then a terminator or the root
-/// glob `*`. A redundant-slash *subdir* (`//tmp`) does not match: the char
-/// after the slash run is a path segment, not a terminator.
+/// bypass), any run of `.`/`..` segments (`/.`, `/..`, `/./`, `/../` — every
+/// one of which POSIX resolves to the root itself), then a terminator or the
+/// root glob `*`. A redundant-slash *subdir* (`//tmp`) does not match: the
+/// char after the slash run is a path segment, not a terminator. A dotfile at
+/// the root (`/.config`) does not match either — `.config` is one segment, not
+/// a `.` followed by a terminator.
 macro_rules! rm_root_target {
     () => {
-        r#"["']?/+\.?(?:\s|\*|$|["';&|])"#
+        r#"["']?/+(?:\.{1,2}/*)*(?:\s|\*|$|["';&|])"#
     };
 }
 
@@ -202,10 +241,22 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             name: "fork_bomb",
             description: "fork bomb — a self-piping backgrounded function that exhausts PIDs",
             action: Block,
-            // Matches the structural shape `…(){ … | … & };` (e.g. the classic
-            // `:(){ :|:& };:`). No backrefs in the regex crate, so this keys on
-            // the function-body shape rather than name equality.
-            pattern: r"\(\s*\)\s*\{[^}]*\|[^}]*&[^}]*\}\s*;",
+            // Matches the structural shape `…(){ … | … & }` followed by a
+            // statement end (e.g. the classic `:(){ :|:& };:`). No backrefs in
+            // the regex crate, so this keys on the function-body shape rather
+            // than name equality.
+            //
+            // The terminator is `;`, a newline, or end-of-text — not `;` alone.
+            // A shell function definition ends just as validly at a newline,
+            // and requiring the semicolon meant the two-line spelling
+            // (`bomb() { bomb|bomb & }` ⏎ `bomb`) walked past the floor. The
+            // pipe-and-background body requirement is what keeps this off
+            // ordinary functions; the pipe-free `:(){ :&:& };:` shape is a
+            // `Warn` (`fork_bomb_background_recursion`) rather than a floor
+            // entry, because `deploy() { a & b & }` has the same shape and an
+            // unfixable false positive on the floor is worse than an audited
+            // one below it.
+            pattern: r"\(\s*\)\s*\{[^}]*\|[^}]*&[^}]*\}\s*(?:;|\n|$)",
         },
         PolicyRule {
             name: "rm_no_preserve_root",
@@ -228,9 +279,16 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
             // precise, never-legitimate shape — a subdir target (`/etc`,
             // `/tmp/x`, `//tmp`) does not match because the char after the slash
             // run must be a terminator, leaving those to the tunable
-            // `rm_rf_system_path` warn. Prefix + root fragment single-sourced in
-            // `rm_recursive_prefix!` / `rm_root_target!`.
-            pattern: concat!(rm_recursive_prefix!(), rm_root_target!()),
+            // `rm_rf_system_path` warn. The root may sit anywhere in the
+            // operand list (`rm -rf ./build /`), which is what
+            // `rm_operand_gap!` spans. Prefix / gap / root fragments are
+            // single-sourced in `rm_recursive_prefix!` / `rm_operand_gap!` /
+            // `rm_root_target!`.
+            pattern: concat!(
+                rm_recursive_prefix!(),
+                rm_operand_gap!(),
+                rm_root_target!()
+            ),
         },
         // Raw-block-device rules. The device class itself is single-sourced in
         // `unix_block_device!()` and composed into each pattern via
@@ -247,15 +305,28 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
         },
         PolicyRule {
             name: "mkfs_device",
-            description: "mkfs formatting a device node (destroys an existing filesystem)",
+            description: "mkfs/mke2fs/mkswap/newfs formatting a device node (destroys an existing filesystem)",
             action: Block,
-            pattern: r#"\bmkfs(\.\w+)?\b[^\n]*\s["']?/dev/"#,
+            // `mkfs` is the umbrella name, not the only one: `mke2fs` is the
+            // real ext2/3/4 binary `mkfs.ext4` execs, `newfs`/`newfs_*` is the
+            // BSD and macOS spelling, and `mkswap` destroys a filesystem just
+            // as thoroughly while being spelled nothing like "mkfs".
+            pattern: r#"\b(?:mkfs(?:\.\w+)?|mke2fs|mkswap|newfs(?:_\w+)?)\b[^\n]*\s["']?/dev/"#,
         },
         PolicyRule {
             name: "redirect_to_block_device",
-            description: "shell redirect overwriting a raw block device",
+            description: "shell redirect or `tee` overwriting a raw block device",
             action: Block,
-            pattern: concat!(r#">\s*["']?/dev/"#, unix_block_device!()),
+            // `>` was the only write verb this knew, so `cat img | tee /dev/sda`
+            // — the standard way to write an image with a progress-friendly
+            // pipeline — wrote the raw disk with the floor watching. `tee` is
+            // matched in command position with its own flags allowed, so a
+            // `tee` whose *argument* merely mentions a device path in some
+            // other role is not the shape being caught here.
+            pattern: concat!(
+                r#"(?:>\s*|\btee\b(?:\s+-{1,2}\S+)*\s+)["']?/dev/"#,
+                unix_block_device!()
+            ),
         },
         PolicyRule {
             name: "device_wipe_tools",
@@ -271,6 +342,34 @@ pub fn hardline_rules() -> Vec<PolicyRule> {
                 unix_block_device!(),
                 r#"|\bshred\b[^\n]*\s["']?/dev/"#,
                 unix_block_device!()
+            ),
+        },
+        // --- macOS catastrophic shapes (diskutil / asr) ---------------------
+        // The Unix floor is written in POSIX device nodes and coreutils verbs.
+        // macOS reaches the same destruction through its own tooling, which
+        // names no `/dev/` path at all (`diskutil eraseDisk … disk0`), so the
+        // floor had a platform-shaped hole in it — on the platform this project
+        // is primarily developed on, while Windows carried eight rules.
+        PolicyRule {
+            name: "macos_disk_destruction",
+            description: "macOS whole-disk destruction (`diskutil eraseDisk|zeroDisk|secureErase`, `diskutil apfs deleteContainer`, `asr restore --erase`)",
+            action: Block,
+            // The macOS analogue of `win_format_volume` + `win_disk_wipe_tools`.
+            // Read-only `diskutil` verbs (`list`, `info`, `activity`) are the
+            // ones an agent actually has reason to run, and none of them appear
+            // here.
+            pattern: concat!(
+                r"\bdiskutil\b",
+                seg!(),
+                r"\b(?:erasedisk|erasevolume|eraseoptical|zerodisk|randomdisk|secureerase|reformat|partitiondisk)\b|\bdiskutil\b",
+                seg!(),
+                r"\bap(?:fs)?\b",
+                seg!(),
+                r"\bdelete(?:container|volume)\b|\basr\b",
+                seg!(),
+                r"\brestore\b",
+                seg!(),
+                r"--erase\b"
             ),
         },
         // --- Windows catastrophic shapes (cmd.exe / PowerShell) -------------
@@ -441,11 +540,57 @@ pub fn default_rules() -> Vec<PolicyRule> {
             // deletes without a prompt in the agent's non-interactive shell) are
             // both caught. Force is not required: `-r` alone is destructive here.
             // Relative targets (`build/`, `./target`) are excluded by the
-            // absolute-path requirement.
+            // absolute-path requirement, and the target may sit anywhere in the
+            // operand list (`rm -rf ./build /etc`) via `rm_operand_gap!` — the
+            // same fix its hardline sibling needed.
+            //
+            // The macOS system roots (`/System`, `/Library`, `/Applications`,
+            // `/Volumes`, `/private`) are here for the same reason the Linux
+            // ones are: this warns, it does not refuse, so a legitimate
+            // `rm -rf /Library/Caches/…` still runs — it just leaves a record.
             pattern: concat!(
                 rm_recursive_prefix!(),
-                r#"["']?(?:/|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin)(?:\s|/|\*|$|[\x22\x27;&|])"#
+                rm_operand_gap!(),
+                r#"["']?(?:/|~|\$HOME|/etc|/usr|/var|/bin|/boot|/lib|/sys|/root|/sbin|/opt|/srv|/home|/System|/Library|/Applications|/Volumes|/private)(?:\s|/|\*|$|[\x22\x27;&|])"#
             ),
+        },
+        PolicyRule {
+            name: "find_root_delete",
+            description: "`find /` with `-delete` or `-exec rm` — a whole-filesystem delete that never says `rm -rf /`",
+            action: Warn,
+            // The one destructive shape that reaches the root without naming it
+            // as an `rm` target: `find / -delete` (and the `-exec rm` /
+            // `-execdir rm` / `-ok rm` spellings) walk every mounted filesystem
+            // and unlink as they go. The search root must be a *bare* `/`, so
+            // `find .`, `find ./target`, `find /tmp/build` and the read-only
+            // `find / -name …` are all outside the rule.
+            //
+            // Audited rather than refused, for the reason the sibling
+            // `fork_bomb_background_recursion` gives: the unqualified
+            // `find / -delete` has no legitimate reading, but the *filtered*
+            // form it shares a shape with (`find / -name '*.pyc' -delete`) is a
+            // real image-slimming idiom, and a regex cannot tell "deletes
+            // everything" from "deletes every `.pyc`" — the discriminator is
+            // which predicates appear, which is an enumeration that would only
+            // describe the day it was written. A floor entry that fires on the
+            // legitimate form could not be switched off by any configuration;
+            // an operator who wants it refused adds one `block` custom rule,
+            // which is what the tunable tier is for. The OS sandbox is in any
+            // case the enforcer for reach outside the workspace.
+            pattern: r#"\bfind\b\s+["']?/+["']?\s(?:[^\n]*\s)?-(?:delete\b|(?:exec|execdir|ok|okdir)\s+(?:sudo\s+)?(?:\S*/)?rm\b)"#,
+        },
+        PolicyRule {
+            name: "fork_bomb_background_recursion",
+            description: "shell function whose body backgrounds itself more than once — the pipe-free fork-bomb shape (`:(){ :&:& };:`)",
+            action: Warn,
+            // The hardline `fork_bomb` requires the self-*pipe*, which is what
+            // makes it precise enough to refuse outright. `:(){ :&:& };:`
+            // exhausts PIDs just as fast without one, but so does the shape of
+            // an ordinary `up() { server & worker & }` — and a floor entry that
+            // fires on that could not be turned off by any config. So this tier
+            // takes it: audited, allowed, and visible to an operator deciding
+            // whether to add a custom `block` rule of their own.
+            pattern: r"\(\s*\)\s*\{[^}|]*&[^}|]*&[^}]*\}\s*(?:;|\n|$)",
         },
         PolicyRule {
             name: "pipe_to_shell",
@@ -534,6 +679,22 @@ pub fn default_rules() -> Vec<PolicyRule> {
             // redirect (`>>`/`>`), `tee`, in-place `sed -i`, and `cp`/`mv`/
             // `install` whose target path ends in `.ssh/authorized_keys`.
             pattern: r"(?:>>?|\btee\b|\bsed\b[^\n]*\s-\S*i|\bcp\b|\bmv\b|\binstall\b)[^\n]*\.ssh/authorized_keys\b",
+        },
+        PolicyRule {
+            name: "macos_security_disable",
+            description: "disabling a macOS platform defence (`csrutil disable` — System Integrity Protection, `spctl --master-disable` — Gatekeeper)",
+            action: Warn,
+            // The macOS twin of `win_disable_defender` / `win_disable_firewall`:
+            // same "turn off the thing that would have stopped the next step"
+            // tier, same audited-not-refused treatment (both are reversible and
+            // both have legitimate developer uses).
+            pattern: concat!(
+                r"\bcsrutil\b",
+                seg!(),
+                r"\b(?:disable|clear)\b|\bspctl\b",
+                seg!(),
+                r"--(?:master-disable|global-disable)\b"
+            ),
         },
         // --- Windows high-signal shapes (cmd.exe / PowerShell) -------------
         // Audited, not blocked: each is occasionally legitimate (an installer,
@@ -757,22 +918,64 @@ mod tests {
 
     #[test]
     fn shared_fragments_are_spliced_not_copied() {
-        // The device class exists once; every rule that needs it must carry the
-        // identical text. A hand-edited copy would show up here as a rule that
-        // no longer contains the canonical fragment.
-        let hardline = hardline_rules();
-        for name in [
-            "dd_to_block_device",
-            "redirect_to_block_device",
-            "device_wipe_tools",
-        ] {
-            let rule = hardline
-                .iter()
-                .find(|r| r.name == name)
-                .expect("rule present");
+        // Each shared vocabulary exists once; every rule that needs it must
+        // carry the identical text. A hand-edited copy is how the device class
+        // came to be pasted four times under a "kept in sync" comment, which is
+        // how `dd of=/dev/mapper/vg-root` escaped a floor that covered `dm-`.
+        //
+        // The rules are NOT enumerated by name here. A list of names only
+        // describes the ruleset on the day it was written: the *next* device
+        // rule would hand-copy the class and this test would stay green, which
+        // is precisely the failure it exists to prevent. Instead each fragment
+        // is paired with a marker distinctive enough that a rule mentioning the
+        // marker is, by construction, a rule that meant to use the fragment.
+        let fragments: &[(&str, &str)] = &[
+            ("nvme", unix_block_device!()),
+            ("--recursive", rm_recursive_prefix!()),
+            (r"#&|;<>", rm_operand_gap!()),
+            ("systemdrive", win_bare_root!()),
+            ("programdata", win_system_path!()),
+            ("rmdir", win_delete_verb!()),
+        ];
+        for rule in hardline_rules().iter().chain(default_rules().iter()) {
+            for (marker, fragment) in fragments {
+                if rule.pattern.contains(marker) {
+                    assert!(
+                        rule.pattern.contains(fragment),
+                        "rule '{}' mentions `{marker}` but does not splice the \
+                         canonical fragment — copy it from the macro instead",
+                        rule.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// The two recursive-remove rules answer the same question at two
+    /// severities ("is this a recursive rm at a dangerous path"), so they must
+    /// agree on what a recursive `rm` is and on where its operands may sit. A
+    /// round of this project's history was spent on the floor and the warn
+    /// drifting apart on exactly that.
+    #[test]
+    fn the_two_recursive_remove_rules_share_their_prefix_and_gap() {
+        let root = hardline_rules()
+            .into_iter()
+            .find(|r| r.name == "rm_rf_root")
+            .expect("floor rule present");
+        let system = default_rules()
+            .into_iter()
+            .find(|r| r.name == "rm_rf_system_path")
+            .expect("warn rule present");
+        for rule in [&root, &system] {
             assert!(
-                rule.pattern.contains(unix_block_device!()),
-                "{name} must splice the canonical device class"
+                rule.pattern.contains(rm_recursive_prefix!()),
+                "{} must splice rm_recursive_prefix!",
+                rule.name
+            );
+            assert!(
+                rule.pattern.contains(rm_operand_gap!()),
+                "{} must splice rm_operand_gap!",
+                rule.name
             );
         }
     }
