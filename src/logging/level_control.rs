@@ -44,7 +44,17 @@ impl LogLevel {
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim().trim_matches('\"');
         if let Ok(n) = s.parse::<u8>() {
-            return Self::from_u8(n);
+            // 0..=4 are the five known variants; anything else is out of
+            // range (e.g. `"9"`) and should parse as `None` rather than
+            // silently fall back to `Info` via `from_u8`.
+            return match n {
+                0 => Some(Self::Error),
+                1 => Some(Self::Warn),
+                2 => Some(Self::Info),
+                3 => Some(Self::Debug),
+                4 => Some(Self::Trace),
+                _ => None,
+            };
         }
         if s.eq_ignore_ascii_case("error") {
             Some(Self::Error)
@@ -274,21 +284,19 @@ mod tests {
     fn test_get_set_log_level() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = get_log_level();
-        // Set to Debug
-        set_log_level(LogLevel::Debug).expect("filter unavailable");
-        assert_eq!(get_log_level(), LogLevel::Debug);
-
-        // Set to Error
-        set_log_level(LogLevel::Error).expect("filter unavailable");
-        assert_eq!(get_log_level(), LogLevel::Error);
-
-        // Set back to Info (default)
-        set_log_level(LogLevel::Info).expect("filter unavailable");
-        assert_eq!(get_log_level(), LogLevel::Info);
+        // The atomic is updated unconditionally; the live filter update is
+        // best-effort and may report `FilterUnavailable` when the shared
+        // backend was never installed (the test environment). Both outcomes
+        // are correct — what we pin here is that `get_log_level` reflects
+        // every successful `set_log_level` call.
+        for target in [LogLevel::Debug, LogLevel::Error, LogLevel::Info] {
+            let _ = set_log_level(target);
+            assert_eq!(get_log_level(), target);
+        }
 
         // Restore to whatever was set before this test ran, so we don't
         // pollute parallel tests' assumptions about the default level.
-        set_log_level(prev).expect("filter unavailable");
+        let _ = set_log_level(prev);
     }
 
     #[test]
@@ -301,8 +309,12 @@ mod tests {
         let prev = get_log_level();
         let result = set_log_level(LogLevel::Warn);
         assert_eq!(get_log_level(), LogLevel::Warn, "atomic updated regardless");
-        let _ = result; // either Ok (filter installed) or FilterUnavailable — both legitimate
-        set_log_level(prev).expect("filter unavailable");
+        // The contract: outside a runtime the result is `FilterUnavailable`,
+        // but a test that runs alongside `init_component_logging` (some
+        // integration tests do) sees `Ok`. Both are correct — we only assert
+        // that the atomic was updated regardless of which branch fired.
+        let _ = result;
+        let _ = set_log_level(prev);
     }
 
     #[test]

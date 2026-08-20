@@ -378,7 +378,6 @@ impl LoopState {
         }
         if matches!(self.cadence, Cadence::ModelPaced { .. }) {
             match self.next_wake_ms {
-            match self.next_wake_ms {
                 Some(wake) if now_ms != 0 && wake > now_ms => {
                     parts.push(format!("next wake: in {}", fmt_duration_ms(wake - now_ms)));
                 }

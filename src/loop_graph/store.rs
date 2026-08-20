@@ -554,7 +554,10 @@ impl LoopGraphStore {
     /// success the report matches the actual store state; on failure the
     /// store is unchanged (the transaction was rolled back) but the report
     /// describes the deletes that *would have* run.
-    pub fn gc(&self, agent_id: &str) -> Result<GcReport, (GcReport, AlephError)> {
+    pub fn gc(
+        &self,
+        agent_id: &str,
+    ) -> std::result::Result<GcReport, (GcReport, AlephError)> {
         let mut conn = self.lock();
         let ids = match node_ids_present(&conn, agent_id, "gc") {
             Ok(ids) => ids,

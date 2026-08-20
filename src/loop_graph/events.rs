@@ -100,6 +100,9 @@ pub struct TopologyEventBus {
     inner: Arc<broadcast::Sender<TopologyEvent>>,
     /// Cumulative count of events dropped because a subscriber lagged past the
     /// bounded channel. See [`Self::dropped_events`] / [`Self::record_lag`].
+    /// `pub` so a subscriber task can capture the counter alone, not the whole
+    /// bus — capturing the bus would keep the Sender alive past the lifetime
+    /// of every other send site and the bounded channel would never close.
     dropped_events: Arc<AtomicU64>,
 }
 
@@ -170,6 +173,15 @@ impl TopologyEventBus {
     #[must_use]
     pub fn dropped_events(&self) -> u64 {
         self.dropped_events.load(Ordering::Acquire)
+    }
+
+    /// Clone the inner lag counter so a subscriber task can record lags
+    /// without holding the bus itself (which would keep the Sender alive
+    /// past every other send site and prevent the bounded channel from
+    /// closing — see [`spawn_event_persister`] tests).
+    #[must_use]
+    pub fn lag_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.dropped_events)
     }
 
     /// Record `n` events dropped by a subscriber's lag. Called by

@@ -1,5 +1,4 @@
 /// Log file appender helpers — delegates to `aleph-logging` crate
-use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::logging::LoggingError;
@@ -16,7 +15,7 @@ mod tests {
     /// RAII guard that restores an env var on drop (even when the body panics).
     struct EnvGuard {
         key: &'static str,
-        prev: Option<OsString>,
+        prev: Option<std::ffi::OsString>,
     }
     impl EnvGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
