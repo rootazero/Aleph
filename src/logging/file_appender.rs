@@ -1,4 +1,5 @@
 /// Log file appender helpers — delegates to `aleph-logging` crate
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::logging::LoggingError;
@@ -12,39 +13,41 @@ pub fn get_log_directory() -> Result<PathBuf, LoggingError> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_get_log_directory() {
-        // ALEPH_HOME is process-global; lock so other tests don't point it at a
-        // temp directory without "aleph" in the path while we read it.
-        let _guard = crate::utils::paths::ALEPH_HOME_TEST_GUARD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var_os("ALEPH_HOME");
-        // Keep the `.aleph` component: the assertions below read the resolved
-        // log directory and require "aleph" to appear in it.
-        let (_scratch, scratch) = crate::utils::scratch::scratch_root();
-        let tmp = scratch.join(".aleph");
-        std::fs::create_dir_all(&tmp).unwrap();
-        std::env::set_var("ALEPH_HOME", &tmp);
-
-        let log_dir = get_log_directory().unwrap();
-        assert!(log_dir.to_string_lossy().contains("aleph"));
-        assert!(log_dir.to_string_lossy().contains("logs"));
-
-        match prev {
-            Some(v) => std::env::set_var("ALEPH_HOME", v),
-            None => std::env::remove_var("ALEPH_HOME"),
+    /// RAII guard that restores an env var on drop (even when the body panics).
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<OsString>,
+    }
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
         }
     }
 
     #[test]
-    fn test_log_directory_creation() {
-        // Use a temp directory to avoid deleting the real ~/.aleph/logs/
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let log_dir = temp_dir.path().join("logs");
-        std::fs::create_dir_all(&log_dir).unwrap();
-        assert!(log_dir.exists());
-        assert!(log_dir.is_dir());
-        // temp_dir is automatically cleaned up on drop
+    fn test_get_log_directory() {
+        // ALEPH_HOME is process-global; lock so other tests don't point it at a
+        // temp directory without "aleph" in the path while we read it.
+        let _lock = crate::utils::paths::ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (_scratch, scratch) = crate::utils::scratch::scratch_root();
+        let tmp = scratch.join(".aleph");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let _restore = EnvGuard::set("ALEPH_HOME", &tmp);
+
+        let log_dir = get_log_directory().unwrap();
+        assert!(log_dir.to_string_lossy().contains("aleph"));
+        assert!(log_dir.to_string_lossy().contains("logs"));
     }
 }

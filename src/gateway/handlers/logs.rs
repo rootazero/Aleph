@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::parse_params;
-use crate::logging::{get_log_directory, get_log_level, set_log_level, LogLevel};
+use crate::logging::{get_log_directory, get_log_level, set_log_level, LogLevel, LoggingError};
 
 /// Get current log level
 ///
@@ -71,15 +71,29 @@ pub async fn handle_set_level(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
 
-    set_log_level(level);
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "ok": true,
-            "level": level.to_filter_string()
-        }),
-    )
+    match set_log_level(level) {
+        Ok(()) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "ok": true,
+                "level": level.to_filter_string()
+            }),
+        ),
+        Err(LoggingError::FilterUnavailable(reason)) => JsonRpcResponse::error(
+            request.id,
+            -32000,
+            format!(
+                "Log level reported as {} but live filter could not be applied: {}",
+                level.to_filter_string(),
+                reason
+            ),
+        ),
+        Err(other) => JsonRpcResponse::error(
+            request.id,
+            -32000,
+            format!("Failed to set log level: {other}"),
+        ),
+    }
 }
 
 /// Get log directory path
@@ -135,13 +149,14 @@ mod tests {
         );
         let response = handle_set_level(request).await;
 
-        assert!(response.is_success());
+        assert!(response.is_success(), "{:?}", response.error);
         let result = response.result.unwrap();
         assert_eq!(result["ok"], true);
         assert_eq!(result["level"], "debug");
 
-        // Reset to info
-        set_log_level(LogLevel::Info);
+        // Reset to info — may return FilterUnavailable when shared logging
+        // is not initialized in tests, which is expected.
+        let _ = set_log_level(LogLevel::Info);
     }
 
     #[tokio::test]
