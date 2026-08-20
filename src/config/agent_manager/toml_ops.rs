@@ -131,60 +131,7 @@ impl AgentManager {
         }
 
         // Build the agent table
-        let mut agent = Table::new();
-        agent["id"] = toml_edit::value(&def.id);
-
-        if def.default {
-            agent["default"] = toml_edit::value(true);
-        }
-
-        if let Some(ref name) = def.name {
-            agent["name"] = toml_edit::value(name.as_str());
-        }
-
-        if let Some(ref profile) = def.profile {
-            agent["profile"] = toml_edit::value(profile.as_str());
-        }
-
-        if let Some(ref model) = def.model {
-            agent["model"] = model_ref_to_item(model);
-        }
-
-        if let Some(ref skills) = def.skills {
-            let mut arr = Array::new();
-            for s in skills {
-                arr.push(s.as_str());
-            }
-            agent["skills"] = toml_edit::value(arr);
-        }
-
-        if let Some(archetype) = def.archetype {
-            agent["archetype"] = toml_edit::value(archetype.as_str());
-        }
-
-        if let Some(ref identity) = def.identity {
-            let mut t = Table::new();
-            if let Some(ref emoji) = identity.emoji {
-                t["emoji"] = toml_edit::value(emoji.as_str());
-            }
-            if let Some(ref desc) = identity.description {
-                t["description"] = toml_edit::value(desc.as_str());
-            }
-            if let Some(ref avatar) = identity.avatar {
-                t["avatar"] = toml_edit::value(avatar.as_str());
-            }
-            agent["identity"] = Item::Table(t);
-        }
-
-        if let Some(ref subagents) = def.subagents {
-            let mut t = Table::new();
-            let mut arr = Array::new();
-            for a in &subagents.allow {
-                arr.push(a.as_str());
-            }
-            t["allow"] = toml_edit::value(arr);
-            agent["subagents"] = Item::Table(t);
-        }
+        let agent = agent_definition_to_table(def);
 
         // Append to [[agents.list]]
         let agents = doc["agents"]
@@ -206,6 +153,66 @@ impl AgentManager {
         list.push(agent);
         Ok(())
     }
+}
+
+/// Build a `toml_edit::Table` from an `AgentDefinition`, one key per set field.
+fn agent_definition_to_table(def: &AgentDefinition) -> Table {
+    let mut agent = Table::new();
+    agent["id"] = toml_edit::value(&def.id);
+
+    if def.default {
+        agent["default"] = toml_edit::value(true);
+    }
+
+    if let Some(ref name) = def.name {
+        agent["name"] = toml_edit::value(name.as_str());
+    }
+
+    if let Some(ref profile) = def.profile {
+        agent["profile"] = toml_edit::value(profile.as_str());
+    }
+
+    if let Some(ref model) = def.model {
+        agent["model"] = model_ref_to_item(model);
+    }
+
+    if let Some(ref skills) = def.skills {
+        let mut arr = Array::new();
+        for s in skills {
+            arr.push(s.as_str());
+        }
+        agent["skills"] = toml_edit::value(arr);
+    }
+
+    if let Some(archetype) = def.archetype {
+        agent["archetype"] = toml_edit::value(archetype.as_str());
+    }
+
+    if let Some(ref identity) = def.identity {
+        let mut t = Table::new();
+        if let Some(ref emoji) = identity.emoji {
+            t["emoji"] = toml_edit::value(emoji.as_str());
+        }
+        if let Some(ref desc) = identity.description {
+            t["description"] = toml_edit::value(desc.as_str());
+        }
+        if let Some(ref avatar) = identity.avatar {
+            t["avatar"] = toml_edit::value(avatar.as_str());
+        }
+        agent["identity"] = Item::Table(t);
+    }
+
+    if let Some(ref subagents) = def.subagents {
+        let mut t = Table::new();
+        let mut arr = Array::new();
+        for a in &subagents.allow {
+            arr.push(a.as_str());
+        }
+        t["allow"] = toml_edit::value(arr);
+        agent["subagents"] = Item::Table(t);
+    }
+
+    agent
 }
 
 /// Write `AgentModelRef` as a `toml_edit` Item:

@@ -197,89 +197,7 @@ impl MoaToml {
     pub fn validation_errors(&self) -> Vec<String> {
         let mut errs = Vec::new();
         for (name, preset) in &self.presets {
-            if name.trim().is_empty() {
-                errs.push("[moa] preset name must not be empty".to_string());
-            }
-            let mut slots: Vec<&MoaSlot> = preset.advisors.iter().collect();
-            slots.push(&preset.aggregator);
-            for slot in slots {
-                if slot.provider.trim().is_empty() || slot.model.trim().is_empty() {
-                    errs.push(format!(
-                        "[moa.presets.{name}] slot provider/model must be non-empty"
-                    ));
-                }
-                if slot.provider.trim().eq_ignore_ascii_case("moa") {
-                    errs.push(format!(
-                        "[moa.presets.{name}] slots cannot reference provider 'moa' \
-                         (recursive MoA is forbidden)"
-                    ));
-                }
-            }
-            if preset.enabled && preset.advisors.is_empty() {
-                errs.push(format!(
-                    "[moa.presets.{name}] an enabled preset needs at least one advisor"
-                ));
-            }
-            // A 0s advisor budget makes every advisor time out instantly, so the
-            // preset silently degrades to aggregator-alone — reject it as a
-            // configuration mistake rather than let it fail-soft every turn.
-            if preset.advisor_timeout_secs == 0 {
-                errs.push(format!(
-                    "[moa.presets.{name}] advisor_timeout_secs must be >= 1"
-                ));
-            }
-            // `FromStr` already folds `every_n:1` into `PerIteration` and
-            // rejects `every_n:0`, so a parsed config can never land here. A
-            // preset built as a Rust literal (the `moa` tool, `MoaPresetStore`,
-            // tests) bypasses that parse, and `EveryN(0)` would divide by zero
-            // in the cadence check — keep the boundary honest on both paths.
-            if let MoaFanout::EveryN(n) = preset.fanout {
-                if n < 2 {
-                    errs.push(format!(
-                        "[moa.presets.{name}] fanout every_n:{n} must have N >= 2 \
-                         (use per_iteration for every iteration)"
-                    ));
-                }
-            }
-            // Temperatures thread straight to the provider with no clamp
-            // (fan_out.rs / provider.rs → RequestPayload::with_temperature), so an
-            // out-of-range value reaches the API verbatim; the aggregator branch
-            // is NOT fail-soft, so a bad value there fails the whole turn with an
-            // opaque 400. Reject at the config boundary (same 0.0..=2.0 convention
-            // as rig/config.rs). NOTE (audit D2): this is the WIDEST range — it
-            // catches gross errors + NaN/Inf, but a provider with a narrower
-            // protocol limit (e.g. anthropic 0.0..=1.0) can still 400 on a value
-            // in (1.0, 2.0]. Per-protocol clamping isn't available here (a MoA
-            // slot carries only a provider key, not the resolved protocol), so
-            // the turn-time 400 is the self-correcting backstop for that band.
-            for t in [preset.advisor_temperature, preset.aggregator_temperature]
-                .into_iter()
-                .flatten()
-            {
-                if !t.is_finite() || !(0.0..=2.0).contains(&t) {
-                    errs.push(format!(
-                        "[moa.presets.{name}] temperature {t} is out of range [0.0, 2.0]"
-                    ));
-                }
-            }
-            // Global distinctness: every slot (all advisors + aggregator) must be
-            // a unique (provider, model) after case/whitespace normalization.
-            let mut seen = std::collections::HashSet::new();
-            let mut all_slots: Vec<&MoaSlot> = preset.advisors.iter().collect();
-            all_slots.push(&preset.aggregator);
-            for slot in all_slots {
-                let key = (
-                    slot.provider.trim().to_lowercase(),
-                    slot.model.trim().to_lowercase(),
-                );
-                if !seen.insert(key) {
-                    errs.push(format!(
-                        "[moa.presets.{name}] duplicate slot (provider, model) — \
-                         advisors and aggregator must all be distinct"
-                    ));
-                    break;
-                }
-            }
+            preset_validation_errors(name, preset, &mut errs);
         }
         if let Some(d) = &self.default_preset {
             if !self.presets.contains_key(d) {
@@ -287,6 +205,94 @@ impl MoaToml {
             }
         }
         errs
+    }
+}
+
+/// Per-preset validation errors, appended to `errs`. Extracted from
+/// [`MoaConfig::validation_errors`] so each rule reads top-to-bottom.
+fn preset_validation_errors(name: &str, preset: &MoaPreset, errs: &mut Vec<String>) {
+    if name.trim().is_empty() {
+        errs.push("[moa] preset name must not be empty".to_string());
+    }
+    let mut slots: Vec<&MoaSlot> = preset.advisors.iter().collect();
+    slots.push(&preset.aggregator);
+    for slot in slots {
+        if slot.provider.trim().is_empty() || slot.model.trim().is_empty() {
+            errs.push(format!(
+                "[moa.presets.{name}] slot provider/model must be non-empty"
+            ));
+        }
+        if slot.provider.trim().eq_ignore_ascii_case("moa") {
+            errs.push(format!(
+                "[moa.presets.{name}] slots cannot reference provider 'moa' \
+                 (recursive MoA is forbidden)"
+            ));
+        }
+    }
+    if preset.enabled && preset.advisors.is_empty() {
+        errs.push(format!(
+            "[moa.presets.{name}] an enabled preset needs at least one advisor"
+        ));
+    }
+    // A 0s advisor budget makes every advisor time out instantly, so the
+    // preset silently degrades to aggregator-alone — reject it as a
+    // configuration mistake rather than let it fail-soft every turn.
+    if preset.advisor_timeout_secs == 0 {
+        errs.push(format!(
+            "[moa.presets.{name}] advisor_timeout_secs must be >= 1"
+        ));
+    }
+    // `FromStr` already folds `every_n:1` into `PerIteration` and
+    // rejects `every_n:0`, so a parsed config can never land here. A
+    // preset built as a Rust literal (the `moa` tool, `MoaPresetStore`,
+    // tests) bypasses that parse, and `EveryN(0)` would divide by zero
+    // in the cadence check — keep the boundary honest on both paths.
+    if let MoaFanout::EveryN(n) = preset.fanout {
+        if n < 2 {
+            errs.push(format!(
+                "[moa.presets.{name}] fanout every_n:{n} must have N >= 2 \
+                 (use per_iteration for every iteration)"
+            ));
+        }
+    }
+    // Temperatures thread straight to the provider with no clamp
+    // (fan_out.rs / provider.rs → RequestPayload::with_temperature), so an
+    // out-of-range value reaches the API verbatim; the aggregator branch
+    // is NOT fail-soft, so a bad value there fails the whole turn with an
+    // opaque 400. Reject at the config boundary (same 0.0..=2.0 convention
+    // as rig/config.rs). NOTE (audit D2): this is the WIDEST range — it
+    // catches gross errors + NaN/Inf, but a provider with a narrower
+    // protocol limit (e.g. anthropic 0.0..=1.0) can still 400 on a value
+    // in (1.0, 2.0]. Per-protocol clamping isn't available here (a MoA
+    // slot carries only a provider key, not the resolved protocol), so
+    // the turn-time 400 is the self-correcting backstop for that band.
+    for t in [preset.advisor_temperature, preset.aggregator_temperature]
+        .into_iter()
+        .flatten()
+    {
+        if !t.is_finite() || !(0.0..=2.0).contains(&t) {
+            errs.push(format!(
+                "[moa.presets.{name}] temperature {t} is out of range [0.0, 2.0]"
+            ));
+        }
+    }
+    // Global distinctness: every slot (all advisors + aggregator) must be
+    // a unique (provider, model) after case/whitespace normalization.
+    let mut seen = std::collections::HashSet::new();
+    let mut all_slots: Vec<&MoaSlot> = preset.advisors.iter().collect();
+    all_slots.push(&preset.aggregator);
+    for slot in all_slots {
+        let key = (
+            slot.provider.trim().to_lowercase(),
+            slot.model.trim().to_lowercase(),
+        );
+        if !seen.insert(key) {
+            errs.push(format!(
+                "[moa.presets.{name}] duplicate slot (provider, model) — \
+                 advisors and aggregator must all be distinct"
+            ));
+            break;
+        }
     }
 }
 

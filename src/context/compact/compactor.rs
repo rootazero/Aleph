@@ -457,85 +457,27 @@ impl ContextCompactor {
             });
         }
 
-        // Fingerprint-cache fast path (openteams compression-cache parity).
-        // The harness rebuilds `messages` from the session log every turn, so
-        // the previous turn's in-place compaction is gone by the time we run
-        // again. If the last compaction's covered range still hashes to the
-        // same fingerprint in this rebuild, reapply the cached summary with
-        // zero API cost. When the un-summarized gap behind the summary has
-        // grown past the extension threshold, run one LLM merge that feeds the
-        // cached summary explicitly as prior state and folds only the new gap
-        // into it (openclaw "merge prior summaries", done incrementally) — and
-        // refresh the cache to cover the wider range.
-        let cached = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        if let Some(c) = cached {
-            let fits = c.start < c.end && c.end <= cut_end;
-            if fits && hash_window(&messages[c.start..c.end]) == c.hash {
-                return self.reapply_cached(messages, c, cut_end).await;
-            }
-            // Stale fingerprint (prefix changed under a preflight pass, or the
-            // window shrank): drop the entry and fall through to a full
-            // recompaction, which refreshes the cache. Purge the carry-over
-            // slot too so the next run does not re-seed the same dead entry.
-            *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            if let Some(key) = self.carryover_key.as_deref() {
-                carryover_remove(&COMPACTION_CARRYOVER, key);
-            }
-        }
-
         // Fingerprint of the window in rebuilt coordinates, captured before
         // any mutation below. Every success path stores it so the next turn's
-        // rebuilt prompt hits the cache fast path above instead of paying the
+        // rebuilt prompt hits the cache fast path instead of paying the
         // side-channel LLM call again.
         let window_hash = hash_window(&messages[window_start..window_end]);
 
-        // Fast path: reuse pre-existing hierarchical session summaries (zero
-        // API cost). Active only when summary reuse is wired and the caller
-        // supplied a session id; otherwise fall through to the LLM path.
-        if let (Some(reuse), Some(sid)) = (self.summary_reuse.as_ref(), session_id) {
-            let source =
-                SessionSummarySource::new(reuse.backend.clone(), sid, reuse.agent_id.clone());
-            // Captured before `try_reuse` drains the window out from under us —
-            // it owns its own drain/insert and cannot be handed the preserved
-            // turns after the fact. The carried artifacts (execution list, file
-            // ledger) are captured here for the same reason: this is the FIFTH
-            // drain site, and it used to re-attach the user's turns while
-            // silently dropping everything `splice_preserved` carries — so the
-            // zero-API-cost path was the one path where the model lost its own
-            // checklist. Whatever a drain hands forward, every drain hands
-            // forward.
-            let preserved = preserved_user_messages(
-                &messages[window_start..window_end],
-                PRESERVED_USER_TOKEN_BUDGET,
-            );
-            let carriers = carried_artifacts(&messages[window_start..window_end]);
-            if let Some(reuse_result) = source.try_reuse(messages, window_start, window_end).await {
-                if let Some(text) = first_message_text(&messages[window_start]) {
-                    // The cache cover must be the hashed+drained range
-                    // [window_start, window_end) — `cut_end` can exceed
-                    // `window_end` when `select_window_end` clipped (the
-                    // long-history case), and mismatched coordinates would
-                    // make next turn's validation hash a different range and
-                    // miss on every rebuild.
-                    self.store_cache(window_start, window_end, window_hash, text.to_string());
-                }
-                // Re-attach around the summary `try_reuse` just inserted — after
-                // `store_cache` has read it, since that read addresses the
-                // summary by position. Carriers go in first, directly BELOW the
-                // summary (they are live state the model acts on next turn);
-                // the user's turns then go in ABOVE it. Doing it in this order
-                // keeps both splice indices expressed against the summary's
-                // known position instead of a running offset.
-                let below = window_start + 1;
-                messages.splice(below..below, carriers);
-                messages.splice(window_start..window_start, preserved);
-                tracing::info!(
-                    tokens_before = reuse_result.tokens_before,
-                    tokens_after = reuse_result.tokens_after,
-                    "Compaction via session memory reuse (zero API cost)"
-                );
-                return Ok(reuse_result);
-            }
+        // Zero-LLM-cost fast paths: the validated fingerprint cache
+        // (`reapply_cached`) and session-memory summary reuse (`try_reuse`).
+        // `None` falls through to the side-channel summarizer below.
+        if let Some(result) = self
+            .try_zero_cost_compaction(
+                messages,
+                window_start,
+                window_end,
+                cut_end,
+                window_hash,
+                session_id,
+            )
+            .await?
+        {
+            return Ok(result);
         }
 
         let window = &messages[window_start..window_end];
@@ -655,6 +597,99 @@ impl ContextCompactor {
                 }
             }
         }
+    }
+
+    /// Zero-LLM-cost fast paths for [`compact_inner`](Self::compact_inner):
+    /// the validated fingerprint cache (`reapply_cached`, zero cost) and
+    /// session-memory summary reuse (`try_reuse`, zero API cost). Returns
+    /// `Some(result)` when either handled this turn's compaction; `None`
+    /// means fall through to the side-channel summarizer. `window_hash` is
+    /// the fingerprint of `[window_start, window_end)` in rebuilt coordinates,
+    /// captured by the caller before any mutation.
+    async fn try_zero_cost_compaction(
+        &self,
+        messages: &mut Vec<UnifiedMessage>,
+        window_start: usize,
+        window_end: usize,
+        cut_end: usize,
+        window_hash: u64,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<Option<CompactResult>> {
+        // Fingerprint-cache fast path (openteams compression-cache parity).
+        // The harness rebuilds `messages` from the session log every turn, so
+        // the previous turn's in-place compaction is gone by the time we run
+        // again. If the last compaction's covered range still hashes to the
+        // same fingerprint in this rebuild, reapply the cached summary with
+        // zero API cost. When the un-summarized gap behind the summary has
+        // grown past the extension threshold, run one LLM merge that feeds the
+        // cached summary explicitly as prior state and folds only the new gap
+        // into it (openclaw "merge prior summaries", done incrementally) — and
+        // refresh the cache to cover the wider range.
+        let cached = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(c) = cached {
+            let fits = c.start < c.end && c.end <= cut_end;
+            if fits && hash_window(&messages[c.start..c.end]) == c.hash {
+                return self.reapply_cached(messages, c, cut_end).await.map(Some);
+            }
+            // Stale fingerprint (prefix changed under a preflight pass, or the
+            // window shrank): drop the entry and fall through to a full
+            // recompaction, which refreshes the cache. Purge the carry-over
+            // slot too so the next run does not re-seed the same dead entry.
+            *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            if let Some(key) = self.carryover_key.as_deref() {
+                carryover_remove(&COMPACTION_CARRYOVER, key);
+            }
+        }
+
+        // Fast path: reuse pre-existing hierarchical session summaries (zero
+        // API cost). Active only when summary reuse is wired and the caller
+        // supplied a session id; otherwise fall through to the LLM path.
+        if let (Some(reuse), Some(sid)) = (self.summary_reuse.as_ref(), session_id) {
+            let source =
+                SessionSummarySource::new(reuse.backend.clone(), sid, reuse.agent_id.clone());
+            // Captured before `try_reuse` drains the window out from under us —
+            // it owns its own drain/insert and cannot be handed the preserved
+            // turns after the fact. The carried artifacts (execution list, file
+            // ledger) are captured here for the same reason: this is the FIFTH
+            // drain site, and it used to re-attach the user's turns while
+            // silently dropping everything `splice_preserved` carries — so the
+            // zero-API-cost path was the one path where the model lost its own
+            // checklist. Whatever a drain hands forward, every drain hands
+            // forward.
+            let preserved = preserved_user_messages(
+                &messages[window_start..window_end],
+                PRESERVED_USER_TOKEN_BUDGET,
+            );
+            let carriers = carried_artifacts(&messages[window_start..window_end]);
+            if let Some(reuse_result) = source.try_reuse(messages, window_start, window_end).await {
+                if let Some(text) = first_message_text(&messages[window_start]) {
+                    // The cache cover must be the hashed+drained range
+                    // [window_start, window_end) — `cut_end` can exceed
+                    // `window_end` when `select_window_end` clipped (the
+                    // long-history case), and mismatched coordinates would
+                    // make next turn's validation hash a different range and
+                    // miss on every rebuild.
+                    self.store_cache(window_start, window_end, window_hash, text.to_string());
+                }
+                // Re-attach around the summary `try_reuse` just inserted — after
+                // `store_cache` has read it, since that read addresses the
+                // summary by position. Carriers go in first, directly BELOW the
+                // summary (they are live state the model acts on next turn);
+                // the user's turns then go in ABOVE it. Doing it in this order
+                // keeps both splice indices expressed against the summary's
+                // known position instead of a running offset.
+                let below = window_start + 1;
+                messages.splice(below..below, carriers);
+                messages.splice(window_start..window_start, preserved);
+                tracing::info!(
+                    tokens_before = reuse_result.tokens_before,
+                    tokens_after = reuse_result.tokens_after,
+                    "Compaction via session memory reuse (zero API cost)"
+                );
+                return Ok(Some(reuse_result));
+            }
+        }
+        Ok(None)
     }
 
     /// Store a fresh cache entry covering `[start, end)` of the rebuilt
@@ -921,7 +956,7 @@ fn splice_preserved(
     preserved: Vec<UnifiedMessage>,
     summary: UnifiedMessage,
 ) -> usize {
-    let carriers = carried_artifacts(&messages[range.clone()]);
+    let carriers = carried_artifacts(&messages[range.start..range.end]);
     let inserted = preserved.len() + 1 + carriers.len();
     messages.splice(
         range,

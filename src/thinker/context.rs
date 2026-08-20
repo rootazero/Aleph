@@ -160,27 +160,20 @@ pub struct TurnEnvelope {
     /// construction. `None` leaves the previous behaviour for dispatch paths
     /// that resolve no model.
     pub serving_model: Option<String>,
-    /// Sub-agent dispatch ONLY: the parent session that spawned this run.
-    ///
-    /// `Some((parent_kind, parent_id))` for a subagent / team dispatch whose
-    /// turn envelope carries a *parent* binding — used by
-    /// `RuntimeContext::to_environment_context_block` to emit
-    /// `<parent kind="…">id</parent>` so the
-    /// model can disambiguate "I am the explore sub-agent of session X" from
-    /// "I am the user's main session X". `None` on every primary dispatch —
-    /// the printed prompt stays byte-identical for the common path.
-    ///
-    /// `parent_kind` is a stable, machine-readable discriminator chosen by the
-    /// dispatcher (`"subagent"` / `"team"` / `"background"` …) so the model
-    /// does not have to guess from a fragile id shape.
-    pub parent: Option<EnvelopeParent>,
-    /// Sub-agent dispatch ONLY: a stable, cheap correlation handle for the run
-    /// (NOT the session key — the session is a session, this is "this turn of
-    /// this sub-agent", which can be reset between tool-call retries). Used
-    /// by `OperatingEnvelopeLayer` to print `<run_id>` in the dynamic tail so
-    /// the model can refer to its current task in long delegations without
-    /// `==`-name-matching against tool outputs. `None` on primary dispatch.
-    pub run_id: Option<String>,
+    // `parent` and `run_id` lived here from 2026-08-06 to 2026-08-19 as the
+    // "sub-agent dispatch ONLY" half of this envelope, and no dispatcher ever
+    // wrote either one. They could not: `TurnEnvelope` is built at exactly one
+    // production site (`run_loop::inner`, the gateway turn), and a sub-agent
+    // never reaches it — `subagent_spawner` drives `AgentHarness::run`
+    // directly and constructs no `FlowRequest` at all. So the channel ran from
+    // a writer that structurally could not exist to a renderer that was fully
+    // implemented and tested, which is why nothing looked broken.
+    //
+    // Both facts are now produced where they are actually known, straight onto
+    // `ResolvedContext::{envelope_parent, run_id}` by
+    // `subagent_spawner::child_environment_context`. Retracted here per R10's
+    // YAGNI clause rather than left as a second, permanently-empty road to the
+    // same two fields.
     /// Per-turn response language override — when `Some(lang)`, pushed onto
     /// `LanguageLayer`'s StackedLayer input as a *runtime fact* (so the layer
     /// reads it from the envelope the same place it reads cwd and exec_tier,
@@ -240,26 +233,21 @@ pub struct EnvelopeParent {
 impl TurnEnvelope {
     /// Envelope for dispatch paths that resolve no per-turn facts (internal
     /// tooling, sub-flows, token estimation). Named so a call site states the
-    /// intent instead of spelling five `None`s.
+    /// intent instead of spelling out every field — and so adding a field is
+    /// not a mechanical edit at every such call site.
     #[must_use]
     pub fn none() -> Self {
         Self::default()
     }
 
-    /// True iff every field is `None` — i.e. the dispatch path resolved no
-    /// per-turn facts and the envelope contributes zero bytes to the prompt.
-    /// Lets prompt-building code take a fast path (skip parent dispatch,
-    /// skip the run-id line, etc.) without an `is_none` chain on every field.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.exec_tier.is_none()
-            && self.session_mode.is_none()
-            && self.cwd.is_none()
-            && self.serving_model.is_none()
-            && self.parent.is_none()
-            && self.run_id.is_none()
-            && self.response_language.is_none()
-    }
+    // `is_empty()` lived here from 2026-08-06 to 2026-08-19. Its doc claimed
+    // three prompt-building fast paths wanted it; none of them ever called it,
+    // and no other production code did either. It had also already gone wrong
+    // in the quiet way a zero-consumer predicate does: `memory_mode` was added
+    // to the struct afterwards and never to the predicate, so a "completely
+    // empty" envelope could be the one thing that mutes the whole memory
+    // pipeline. Retracted per R10 rather than repaired — a predicate nobody
+    // asks cannot be kept honest by anything except a reader noticing.
 }
 
 /// Everything the prompt layers read about *this* turn.
@@ -588,60 +576,57 @@ mod envelope_tests {
     use super::*;
 
     #[test]
-    fn none_is_fully_empty_for_a_zero_byte_default() {
-        // The fast-path `is_empty` contract the prompt builder relies on
-        // for the "no per-turn facts" dispatch paths (internal tooling,
-        // sub-agent dispatch, token estimation). Defaulting `None` must
-        // return `true`, every field set must return `false`.
-        let env = TurnEnvelope::none();
-        assert!(env.is_empty());
-        assert_eq!(env, TurnEnvelope::default());
+    fn none_is_the_default_envelope() {
+        // `none()` exists so a dispatch path with no per-turn facts states that
+        // intent instead of spelling out every field — and so adding a field is
+        // not a mechanical edit at a dozen call sites. Its only contract is
+        // that it stays equal to `default()`.
+        assert_eq!(TurnEnvelope::none(), TurnEnvelope::default());
     }
 
+    /// Every field must survive being set — the property the retired
+    /// `is_empty()` predicate was actually pinning, restated without it.
+    ///
+    /// It is stated per field rather than as one struct literal so a new field
+    /// that nobody threads through shows up as an untouched line here rather
+    /// than as a silently-defaulted member of a wholesale comparison.
     #[test]
-    fn is_empty_returns_false_when_any_single_field_is_set() {
-        // Boundary check: `is_empty` is per-field, not `Option<Enum>`. A
-        // single parent binding is enough to make the envelope contribute
-        // bytes to the prompt. Test one field per `Option<…>` to keep the
-        // pin set tight.
+    fn each_field_round_trips_independently() {
         let mut env = TurnEnvelope::none();
-        assert!(env.is_empty());
 
         env.exec_tier = Some(crate::config::types::policies::ExecTier::Ask);
-        assert!(!env.is_empty(), "exec_tier must make envelope non-empty");
-
+        assert_ne!(env, TurnEnvelope::none(), "exec_tier");
         env.exec_tier = None;
+
         env.session_mode = Some(crate::config::types::policies::SessionMode::Chat);
-        assert!(!env.is_empty(), "session_mode must make envelope non-empty");
-
+        assert_ne!(env, TurnEnvelope::none(), "session_mode");
         env.session_mode = None;
+
         env.cwd = Some(std::path::PathBuf::from("/tmp"));
-        assert!(!env.is_empty(), "cwd must make envelope non-empty");
-
+        assert_ne!(env, TurnEnvelope::none(), "cwd");
         env.cwd = None;
+
         env.serving_model = Some("claude".into());
-        assert!(
-            !env.is_empty(),
-            "serving_model must make envelope non-empty"
-        );
-
+        assert_ne!(env, TurnEnvelope::none(), "serving_model");
         env.serving_model = None;
-        env.parent = Some(EnvelopeParent {
-            kind: "subagent".into(),
-            id: "s-X".into(),
-        });
-        assert!(!env.is_empty(), "parent must make envelope non-empty");
 
-        env.parent = None;
-        env.run_id = Some("run-1".into());
-        assert!(!env.is_empty(), "run_id must make envelope non-empty");
-
-        env.run_id = None;
         env.response_language = Some("zh-Hans".into());
+        assert_ne!(env, TurnEnvelope::none(), "response_language");
+        env.response_language = None;
+
+        // `memory_mode` is the field the retired predicate had already been
+        // left behind by: it was added to the struct and never to the
+        // `is_none()` chain, so a "fully empty" envelope was the one value
+        // that could mute the entire memory pipeline.
+        env.memory_mode = Some(crate::memory::session_memory_mode::MemoryMode::Off);
+        assert_ne!(env, TurnEnvelope::none(), "memory_mode");
         assert!(
-            !env.is_empty(),
-            "response_language must make envelope non-empty"
+            !env.injects_memory(),
+            "memory_mode=Off must be the only value that suppresses injection"
         );
+        env.memory_mode = None;
+
+        assert_eq!(env, TurnEnvelope::none(), "every field was restored");
     }
 
     #[test]

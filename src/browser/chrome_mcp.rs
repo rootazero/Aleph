@@ -72,10 +72,7 @@ fn looks_like_transport_error(s: &str) -> bool {
     false
 }
 
-fn chrome_launch_args(
-    profile_cfg: Option<&ProfileConfig>,
-    profile_name: &str,
-) -> Vec<String> {
+fn chrome_launch_args(profile_cfg: Option<&ProfileConfig>, profile_name: &str) -> Vec<String> {
     let mut args = vec![
         "--remote-debugging-port=0".to_string(),
         "--no-first-run".to_string(),
@@ -105,25 +102,34 @@ fn chrome_launch_args(
     args
 }
 
-/// BROWSER-R4-05: helper that computes the per-profile Aleph-private
-/// Chrome user-data-dir default. Honors `$ALEPH_DATA` so an operator
-/// with a non-default data root still gets a clean path; falls back
-/// to `$HOME/.aleph` for the common case. Returns a String rather
-/// than a PathBuf so the caller can hand it straight to Chrome's
-/// `--user-data-dir` flag without extra PathBuf formatting.
+/// BROWSER-R4-05: the per-profile Aleph-private Chrome user-data-dir default,
+/// so a bootstrap-launched Chrome never falls through to the human's daily
+/// profile (their cookies, history and logins).
+///
+/// Rooted through [`get_config_dir`](crate::utils::paths::get_config_dir) — the
+/// one function that answers "where is this process's `.aleph`" — rather than
+/// hand-rolled. It used to read an `$ALEPH_DATA` env var that nothing else in
+/// the repo reads or writes and no document mentions, then fall back to
+/// `dirs::home_dir()`. Both spellings ignore `ALEPH_HOME`, which is the single
+/// authoritative knob, so an isolated run (every QA run, every test harness)
+/// wrote its browser profile into the operator's real `~/.aleph` while
+/// believing it was sandboxed — the failure mode
+/// `utils::paths::no_hand_rolled_aleph_home_outside_the_allowlist` exists to
+/// catch, and did, the moment the lib test binary could be built again.
+///
+/// Returns a `String` so the caller can hand it straight to Chrome's
+/// `--user-data-dir` flag.
 fn default_user_data_dir_for(profile_name: &str) -> String {
-    let root = std::env::var("ALEPH_DATA")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            dirs::home_dir().map(|h| {
-                h.join(".aleph")
-                    .to_string_lossy()
-                    .into_owned()
-            })
-        })
-        .unwrap_or_else(|| "/tmp/.aleph".to_string());
-    format!("{root}/browser/chrome-mcp/{profile_name}/user-data-dir")
+    // No home directory at all: the same last-resort root the previous
+    // implementation used, kept so a container without HOME still launches.
+    let root = crate::utils::paths::get_config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph"));
+    root.join("browser")
+        .join("chrome-mcp")
+        .join(profile_name)
+        .join("user-data-dir")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Manages Chrome `DevTools` MCP sessions with lazy creation and profile-keyed caching.

@@ -2428,15 +2428,31 @@ mod tests {
     /// (+1,297 B). Three fields and a seven-variant action enum; the costly
     /// part is the per-variant doc on `PluginAction`, which is what lets the
     /// model pick `config_get` before `config_set` instead of guessing.
-    /// Same day: 94_095 -> 94_661 B (+566 B), the four owner-trust variants on
-    /// `PluginAction` plus the `enforce` field, arriving with the trust
-    /// policy's first producer. Against the three questions: (1) runtime facts
-    /// — `trust_status` is the only way to learn whether this deployment
-    /// enforces, and the variant docs are where "vouch for" and "turn a plugin
-    /// off" stop being synonyms; (2) unguessable, and guessing wrong means
-    /// calling `untrust` when the operator asked for a plugin to stop, which
-    /// leaves it running; (3) no other tool speaks about owner trust.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 94_661;
+    /// 2026-08-19 (measured): 94_095 -> 94_877 B (+782 B across two rounds).
+    ///
+    /// Round 1 (origin plugin ecosystem): 94_095 -> 94_661 B (+566 B), the
+    /// four owner-trust variants on `PluginAction` plus the `enforce` field,
+    /// arriving with the trust policy's first producer. Against the three
+    /// questions: (1) runtime facts — `trust_status` is the only way to learn
+    /// whether this deployment enforces, and the variant docs are where
+    /// "vouch for" and "turn a plugin off" stop being synonyms; (2)
+    /// unguessable, and guessing wrong means calling `untrust` when the
+    /// operator asked for a plugin to stop, which leaves it running; (3) no
+    /// other tool speaks about owner trust.
+    ///
+    /// Round 2 (§2.3 round): 94_661 -> 94_877 B (+216 B), measured after the
+    /// binary-build repair (the delimiter fix in `start/mod.rs`'s cron block:
+    /// `Some(tokio::spawn(async move {` closed with `});` instead of `}));`)
+    /// restored `cargo test -p alephcore --lib` — the previous 94_095 figure
+    /// had been arithmetic (92_798 + 1_297) on a claimed delta, not a
+    /// measurement. Against the three questions for the +216 B: (1) runtime
+    /// facts — a sub-agent prompt now threads `ResolvedContext` so
+    /// `<environment_context>`, `## Operating Envelope`, and sandbox posture
+    /// reach every layer that reads one, and `plugin_manage`'s three
+    /// questions reach the model with their measured delta instead of an
+    /// arithmetic one; (2) unguessable without the harness structure; (3) no
+    /// other tool speaks about the sub-agent envelope.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 94_877;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

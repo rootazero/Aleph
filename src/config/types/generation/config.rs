@@ -206,35 +206,14 @@ impl GenerationConfig {
         let mut seen = std::collections::HashSet::new();
 
         // New typed format first (priority)
-        for (name, cfg) in &self.image_providers {
-            seen.insert(name.clone());
-            let mut cfg = cfg.clone();
-            cfg.capabilities = vec![GenerationType::Image];
-            result.push((name.clone(), cfg, GenerationType::Image));
-        }
-        for (name, cfg) in &self.video_providers {
-            seen.insert(name.clone());
-            let mut cfg = cfg.clone();
-            cfg.capabilities = vec![GenerationType::Video];
-            result.push((name.clone(), cfg, GenerationType::Video));
-        }
-        for (name, cfg) in &self.speech_providers {
-            seen.insert(name.clone());
-            let mut cfg = cfg.clone();
-            cfg.capabilities = vec![GenerationType::Speech];
-            result.push((name.clone(), cfg, GenerationType::Speech));
-        }
-        for (name, cfg) in &self.audio_providers {
-            seen.insert(name.clone());
-            let mut cfg = cfg.clone();
-            cfg.capabilities = vec![GenerationType::Audio];
-            result.push((name.clone(), cfg, GenerationType::Audio));
-        }
-        for (name, cfg) in &self.transcription_providers {
-            seen.insert(name.clone());
-            let mut cfg = cfg.clone();
-            cfg.capabilities = vec![GenerationType::Transcription];
-            result.push((name.clone(), cfg, GenerationType::Transcription));
+        for (map, gen_type) in [
+            (&self.image_providers, GenerationType::Image),
+            (&self.video_providers, GenerationType::Video),
+            (&self.speech_providers, GenerationType::Speech),
+            (&self.audio_providers, GenerationType::Audio),
+            (&self.transcription_providers, GenerationType::Transcription),
+        ] {
+            push_typed_providers(&mut result, &mut seen, map, gen_type);
         }
 
         // Legacy format: emit one entry per declared capability (mirrors
@@ -256,40 +235,33 @@ impl GenerationConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         // Validate default providers exist and are enabled
-        if let Some(ref provider) = self.default_image_provider {
-            self.validate_provider_reference(provider, "default_image_provider")?;
-        }
-        if let Some(ref provider) = self.default_video_provider {
-            self.validate_provider_reference(provider, "default_video_provider")?;
-        }
-        if let Some(ref provider) = self.default_audio_provider {
-            self.validate_provider_reference(provider, "default_audio_provider")?;
-        }
-        if let Some(ref provider) = self.default_speech_provider {
-            self.validate_provider_reference(provider, "default_speech_provider")?;
-        }
-        if let Some(ref provider) = self.default_transcription_provider {
-            self.validate_provider_reference(provider, "default_transcription_provider")?;
+        for (field, provider) in [
+            ("default_image_provider", &self.default_image_provider),
+            ("default_video_provider", &self.default_video_provider),
+            ("default_audio_provider", &self.default_audio_provider),
+            ("default_speech_provider", &self.default_speech_provider),
+            (
+                "default_transcription_provider",
+                &self.default_transcription_provider,
+            ),
+        ] {
+            if let Some(provider) = provider {
+                self.validate_provider_reference(provider, field)?;
+            }
         }
 
         // Validate each provider configuration
-        for (name, config) in &self.providers {
-            config.validate(name)?;
-        }
-        for (name, config) in &self.image_providers {
-            config.validate(name)?;
-        }
-        for (name, config) in &self.video_providers {
-            config.validate(name)?;
-        }
-        for (name, config) in &self.speech_providers {
-            config.validate(name)?;
-        }
-        for (name, config) in &self.audio_providers {
-            config.validate(name)?;
-        }
-        for (name, config) in &self.transcription_providers {
-            config.validate(name)?;
+        for map in [
+            &self.providers,
+            &self.image_providers,
+            &self.video_providers,
+            &self.speech_providers,
+            &self.audio_providers,
+            &self.transcription_providers,
+        ] {
+            for (name, config) in map {
+                config.validate(name)?;
+            }
         }
 
         Ok(())
@@ -343,5 +315,24 @@ impl GenerationConfig {
         } else {
             fallback.to_path_buf()
         }
+    }
+}
+
+/// Append every entry of a typed provider map to `result`, forcing its
+/// capability set to the map's own `gen_type`, and mark the names as seen.
+///
+/// The clones are inherent to the API: `merged_providers` returns owned
+/// values, and the map's `cfg` must not be mutated in place.
+fn push_typed_providers(
+    result: &mut Vec<(String, GenerationProviderConfig, GenerationType)>,
+    seen: &mut std::collections::HashSet<String>,
+    map: &HashMap<String, GenerationProviderConfig>,
+    gen_type: GenerationType,
+) {
+    for (name, cfg) in map {
+        seen.insert(name.clone());
+        let mut cfg = cfg.clone();
+        cfg.capabilities = vec![gen_type];
+        result.push((name.clone(), cfg, gen_type));
     }
 }

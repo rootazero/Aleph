@@ -71,7 +71,15 @@ pub struct RuntimeContext {
     /// value as [`EXEC_WORKSPACE`](crate::sandbox::context::EXEC_WORKSPACE), which
     /// is the root `WorkspaceSandbox` jails shell calls to. Falls back to the
     /// daemon's process cwd only when no caller-supplied path is available.
-    pub working_dir: PathBuf,
+    ///
+    /// `None` means **"nobody can name this run's directory"** — not "use the
+    /// daemon's". The distinction is the whole point of this field: a dispatch
+    /// path that cannot resolve an authorised root (a detached background
+    /// sub-agent, whose `EXEC_WORKSPACE` scope did not survive `tokio::spawn`)
+    /// must stay silent rather than advertise the daemon's cwd, which is
+    /// precisely the lie the 2026-07-26 round removed from the main path. See
+    /// [`RuntimeContext::collect_detached`].
+    pub working_dir: Option<PathBuf>,
     /// Git repository root, if inside a repo (caller provides from cached git info)
     pub repo_root: Option<PathBuf>,
     /// Current LLM model identifier
@@ -125,9 +133,13 @@ impl RuntimeContext {
 
         let working_dir = resolve_working_dir(cwd);
 
-        let hostname = std::env::var("HOSTNAME")
-            .or_else(|_| std::env::var("COMPUTERNAME"))
-            .unwrap_or_else(|_| "unknown".to_string());
+        // The OS names the host, not the shell. This used to read `HOSTNAME` /
+        // `COMPUTERNAME`, which are shell variables no service manager exports —
+        // so `- **Host**: unknown` was welded into the CACHEABLE half of every
+        // system prompt on every production daemon. Same defect the `shell`
+        // field above already carries the fix for: read the fact from whoever
+        // owns it. `utils::host` is that owner, and it caches per process.
+        let hostname = crate::utils::host::hostname().to_string();
 
         // Collect current local time, epoch ms, and timezone. The prompt-facing
         // string is HOUR precision (hermes-agent's date-only-timestamp lesson,
@@ -156,7 +168,7 @@ impl RuntimeContext {
             })
         };
 
-        let repo_root = cached_repo_root(&working_dir);
+        let repo_root = working_dir.as_deref().and_then(cached_repo_root);
 
         Self {
             os,
@@ -169,6 +181,33 @@ impl RuntimeContext {
             current_time,
             timezone,
         }
+    }
+
+    /// Collect runtime context for a run whose working directory **cannot be
+    /// named**, leaving `<cwd>` / `<repo>` / `<git>` out of the rendered block
+    /// entirely.
+    ///
+    /// This is not [`Self::collect_in`] with `None`: that spelling means "no
+    /// caller-supplied path, fall back to the process cwd", which is right for
+    /// `prompt-size` (it is reporting on *this machine*) and wrong for anything
+    /// running on behalf of a session. A detached background sub-agent is the
+    /// case that forced the distinction — `EXEC_WORKSPACE` is a
+    /// `tokio::task_local` and does not survive `tokio::spawn`, so the spawner
+    /// genuinely does not know which directory the child's sandbox will jail
+    /// to, and printing the daemon's would re-introduce the exact defect §2.3
+    /// exists to prevent: a prompt that names a directory no tool call lands
+    /// in, followed by the model addressing absolute paths into it and being
+    /// denied by the jail.
+    ///
+    /// Silence is the honest answer. The model still gets `<model>` and
+    /// `<time>`, and still learns its parent binding — it just is not told a
+    /// cwd nobody can vouch for.
+    #[must_use]
+    pub fn collect_detached(current_model: &str) -> Self {
+        let mut ctx = Self::collect_in(current_model, None);
+        ctx.working_dir = None;
+        ctx.repo_root = None;
+        ctx
     }
 
     /// The **process-invariant** half of the envelope, as Markdown bullets for
@@ -219,7 +258,6 @@ impl RuntimeContext {
     /// byte-identical).
     #[must_use]
     pub fn to_environment_context_block(&self, parent: Option<(&str, &str)>) -> String {
-        let cwd = self.working_dir.display().to_string();
         let git = self.repo_root.as_deref().and_then(detect_git_branch);
         let mut out = String::with_capacity(192);
         open_block_with_attrs(
@@ -227,7 +265,14 @@ impl RuntimeContext {
             "environment_context",
             std::iter::empty::<(&str, &str)>(),
         );
-        push_text_element(&mut out, "cwd", &cwd);
+        // Omitted, not defaulted, when the dispatch path cannot name a
+        // directory (`collect_detached`). A `<cwd>` element that names the
+        // daemon's own directory is worse than no element: the model reads it
+        // as authoritative and starts addressing absolute paths into a tree the
+        // sandbox will refuse.
+        if let Some(ref dir) = self.working_dir {
+            push_text_element(&mut out, "cwd", &dir.display().to_string());
+        }
         if let Some(ref repo) = self.repo_root {
             push_text_element(&mut out, "repo", &repo.display().to_string());
         }
@@ -261,6 +306,61 @@ impl RuntimeContext {
         out
     }
 
+    /// Every distinctive *value* this context states, paired with the name of
+    /// the fact it answers.
+    ///
+    /// Drives `prompt_contract::no_environment_fact_is_stated_twice`, which
+    /// used to carry a hand-written list of six facts. A guard that names its
+    /// members by hand only covers the world as it stood the day it was
+    /// written — the sandbox's duplicated `Network:` sentence sat outside that
+    /// list for four rounds while the guard reported green.
+    ///
+    /// The exhaustive destructure is the mechanism: adding a field to
+    /// [`RuntimeContext`] fails to compile here until its owner has said
+    /// whether the new fact is model-visible and how it is spelled.
+    ///
+    /// Facts whose value is a common substring are deliberately excluded — a
+    /// duplicate-detector that matches `linux` inside `linux/bwrap` reports a
+    /// collision between two genuinely different facts. `arch` is kept because
+    /// `x86_64` / `aarch64` do not occur inside other prompt text; `os` is
+    /// kept for the same reason and the sandbox fixture deliberately names a
+    /// different platform.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn fact_census(&self) -> Vec<(&'static str, String)> {
+        let Self {
+            os,
+            arch,
+            shell,
+            working_dir,
+            repo_root,
+            current_model,
+            hostname,
+            current_time,
+            timezone,
+        } = self;
+        let mut facts: Vec<(&'static str, String)> = vec![
+            ("runtime.os", os.clone()),
+            ("runtime.arch", arch.clone()),
+            ("runtime.shell", shell.clone()),
+            ("runtime.current_model", current_model.clone()),
+            ("runtime.hostname", hostname.clone()),
+            ("runtime.current_time", current_time.clone()),
+        ];
+        if let Some(dir) = working_dir {
+            facts.push(("runtime.working_dir", dir.display().to_string()));
+        }
+        if let Some(repo) = repo_root {
+            facts.push(("runtime.repo_root", repo.display().to_string()));
+        }
+        // `timezone` is intentionally NOT a census entry: it is rendered only
+        // as a suffix of `current_time`, never on its own, so it can never be
+        // the duplicated half — and `UTC` is short enough to collide with
+        // unrelated prose.
+        let _ = timezone;
+        facts
+    }
+
     /// True iff the dynamic half has any rendering facts. Lets prompt-building
     /// code skip the XML block entirely (and the byte it would have produced)
     /// when only the stable bullets are real — the bare `prompt-size` /
@@ -281,9 +381,9 @@ impl RuntimeContext {
 /// the model is never told to write into a path that vanished between dispatch
 /// and prompt assembly. `None` (tests, `prompt-size`, internal tooling) falls
 /// back to the daemon's process cwd.
-fn resolve_working_dir(cwd: Option<&Path>) -> PathBuf {
+fn resolve_working_dir(cwd: Option<&Path>) -> Option<PathBuf> {
     match cwd {
-        Some(p) if p.is_dir() => p.to_path_buf(),
+        Some(p) if p.is_dir() => Some(p.to_path_buf()),
         Some(p) => {
             // Two log fields (reason, requested_cwd) so a daemon operator
             // can grep for either axis; `cwd_downgrade_total` is the
@@ -296,11 +396,25 @@ fn resolve_working_dir(cwd: Option<&Path>) -> PathBuf {
                 requested_cwd = %p.display(),
                 fallback_cwd = %process_cwd().display(),
                 cwd_downgrade_total = 1,
-                "run workspace is not a directory; falling back to the process cwd for the prompt envelope"
+                "run workspace is not a directory; the prompt envelope will state no cwd"
             );
-            process_cwd()
+            // Degrade to SILENCE, not to the daemon's directory.
+            //
+            // A caller that passed a path was asserting "this is the run's
+            // authorised root". If that turns out not to be a directory, the
+            // honest answer is that nobody knows where this run is — the
+            // process cwd answers a different question (where the *daemon* was
+            // started) and answering it here is the same lie the 2026-07-26
+            // round removed from `EnvironmentLayer`: a prompt that names a
+            // directory the sandbox will refuse, which the model then addresses
+            // absolute paths into. Still graceful (pi's `assertSessionCwdExists`
+            // softened to P7), just not graceful in the direction of fiction.
+            None
         }
-        None => process_cwd(),
+        // No path supplied at all is a different question, with a different
+        // right answer: `prompt-size` and internal tooling are asking about
+        // *this machine*, and the process cwd is exactly what they mean.
+        None => Some(process_cwd()),
     }
 }
 
@@ -388,9 +502,23 @@ fn detect_git_branch(repo_root: &Path) -> Option<String> {
     let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
     let head = head.trim();
     if let Some(reference) = head.strip_prefix("ref:") {
-        // "ref: refs/heads/feature/x" -> last path segment "x".
+        // "ref: refs/heads/feature/x" -> "feature/x".
+        //
+        // The whole short ref, NOT its last segment. Taking `rsplit('/').next()`
+        // rendered `feature/x` as `x`: a name that is not the branch, that
+        // `git checkout` does not resolve, and that `feature/x` and `hotfix/x`
+        // both collapse onto. Namespaced branches are the normal case in any
+        // repo with a flow convention, so the segment the old code dropped was
+        // usually the only one that disambiguated. This matches
+        // `git rev-parse --abbrev-ref HEAD`, which is what every other tool
+        // shows the user.
+        //
+        // Non-`refs/heads/` refs (a `refs/tags/...` HEAD, or the bare-repo
+        // shapes git writes) keep their last two segments rather than being
+        // mislabelled as a branch — they fall through the prefix strip and are
+        // reported verbatim.
         let reference = reference.trim();
-        let branch = reference.rsplit('/').next().unwrap_or(reference);
+        let branch = reference.strip_prefix("refs/heads/").unwrap_or(reference);
         if branch.is_empty() {
             None
         } else {
@@ -422,7 +550,7 @@ mod tests {
 
         // Working dir should be a valid path
         assert!(
-            ctx.working_dir.to_str().is_some(),
+            ctx.working_dir.as_ref().and_then(|d| d.to_str()).is_some(),
             "working_dir should be a valid UTF-8 path"
         );
 
@@ -447,7 +575,7 @@ mod tests {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
             shell: "bash".to_string(),
-            working_dir: PathBuf::from("/workspace/proj"),
+            working_dir: Some(PathBuf::from("/workspace/proj")),
             repo_root,
             current_model: "claude-opus-4-6".to_string(),
             hostname: "test-host".to_string(),
@@ -461,7 +589,7 @@ mod tests {
             os: "macos".to_string(),
             arch: "aarch64".to_string(),
             shell: "zsh".to_string(),
-            working_dir: PathBuf::from("/workspace"),
+            working_dir: Some(PathBuf::from("/workspace")),
             repo_root,
             current_model: "claude-opus-4-6".to_string(),
             hostname: "MacBook-Pro".to_string(),
@@ -602,17 +730,40 @@ mod tests {
         std::fs::create_dir(&ws).expect("mkdir proj");
 
         let ctx = RuntimeContext::collect_in("m", Some(&ws));
-        assert_eq!(ctx.working_dir, ws, "caller-supplied workspace must win");
+        assert_eq!(
+            ctx.working_dir,
+            Some(ws),
+            "caller-supplied workspace must win"
+        );
 
-        // A vanished / non-directory path degrades to the process cwd (P7), never
-        // to the bogus path itself.
+        // A vanished / non-directory path degrades to SILENCE (P7), never to
+        // the bogus path and never to the daemon's own directory.
+        //
+        // The process-cwd fallback used to apply here too, and it was the same
+        // lie this section was rebuilt to remove: the model reads `<cwd>` as
+        // authoritative, addresses absolute paths into it, and the sandbox —
+        // which jails to the authorised root, not to the daemon's — refuses
+        // every one of them. "I do not know where you are" is the only true
+        // third answer, and it is what a caller who *supplied* a path and was
+        // wrong has earned.
         let ghost = dir.path().join("gone");
         let ctx = RuntimeContext::collect_in("m", Some(&ghost));
-        assert_ne!(ctx.working_dir, ghost);
-        assert_eq!(ctx.working_dir, process_cwd());
+        assert_eq!(
+            ctx.working_dir, None,
+            "an unusable caller-supplied path must produce no cwd at all"
+        );
+        assert!(
+            !ctx.to_environment_context_block(None).contains("<cwd>"),
+            "and therefore no `<cwd>` element"
+        );
 
-        // `None` (tests / prompt-size / internal tooling) = process cwd.
-        assert_eq!(RuntimeContext::collect("m").working_dir, process_cwd());
+        // `None` (tests / prompt-size / internal tooling) is a DIFFERENT
+        // question — "where is this machine" — and the process cwd is exactly
+        // what it means, so that fallback stays.
+        assert_eq!(
+            RuntimeContext::collect("m").working_dir,
+            Some(process_cwd())
+        );
     }
 
     /// The advertised shell must be the interpreter the exec tool actually spawns,
@@ -638,8 +789,22 @@ mod tests {
         assert_eq!(detect_git_branch(dir.path()).as_deref(), Some("main"));
     }
 
+    /// A namespaced branch is reported whole.
+    ///
+    /// This test used to assert the opposite — `refs/heads/feature/x` was
+    /// rendered as `x` — and the name it carried (`keeps_last_segment_…`)
+    /// described the defect as if it were the design. It is not: `x` is not a
+    /// branch anyone can check out, and `feature/x` and `hotfix/x` collapse
+    /// onto the same string, so the segment being dropped was usually the only
+    /// one that disambiguated. Flow conventions make namespaced branches the
+    /// normal case, so the prompt's `<git>` element was wrong more often than
+    /// it was right, in the one block whose entire purpose is to state facts
+    /// the model cannot otherwise check.
+    ///
+    /// The expected value is what `git rev-parse --abbrev-ref HEAD` prints,
+    /// which is what every other surface shows the user.
     #[test]
-    fn detect_git_branch_keeps_last_segment_of_slashed_branch() {
+    fn detect_git_branch_keeps_the_whole_namespaced_branch() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
         std::fs::write(
@@ -650,8 +815,26 @@ mod tests {
 
         assert_eq!(
             detect_git_branch(dir.path()).as_deref(),
-            Some("context-mode")
+            Some("feature/context-mode")
         );
+    }
+
+    /// Two branches that share a leaf name must not render identically — the
+    /// property the leaf-segment spelling could not hold, stated directly so a
+    /// future "simplification" back to `rsplit('/')` fails by name.
+    #[test]
+    fn branches_sharing_a_leaf_name_stay_distinguishable() {
+        let render = |head: &str| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+            std::fs::write(dir.path().join(".git/HEAD"), head.as_bytes()).expect("write HEAD");
+            detect_git_branch(dir.path())
+        };
+        let feature = render("ref: refs/heads/feature/login\n");
+        let hotfix = render("ref: refs/heads/hotfix/login\n");
+        assert_eq!(feature.as_deref(), Some("feature/login"));
+        assert_eq!(hotfix.as_deref(), Some("hotfix/login"));
+        assert_ne!(feature, hotfix);
     }
 
     #[test]
@@ -723,7 +906,7 @@ mod tests {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
             shell: "bash".to_string(),
-            working_dir: PathBuf::from("/workspace/proj"),
+            working_dir: Some(PathBuf::from("/workspace/proj")),
             repo_root: Some(PathBuf::from("/workspace/proj")),
             current_model: "claude-opus-4-6".to_string(),
             hostname: "h".to_string(),
@@ -736,7 +919,7 @@ mod tests {
         // …and overwrite the repo_root with the tempdir so `detect_git_branch`
         // is exercised on a real disk fixture.
         let mut ctx = ctx;
-        ctx.working_dir = dir.path().to_path_buf();
+        ctx.working_dir = Some(dir.path().to_path_buf());
         ctx.repo_root = Some(dir.path().to_path_buf());
 
         let block = ctx.to_environment_context_block(None);
@@ -805,7 +988,7 @@ mod tests {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
             shell: "bash".to_string(),
-            working_dir: PathBuf::from("/tmp/a&b<c>"),
+            working_dir: Some(PathBuf::from("/tmp/a&b<c>")),
             repo_root: None,
             current_model: "m".to_string(),
             hostname: "h".to_string(),

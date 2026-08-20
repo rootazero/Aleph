@@ -100,16 +100,18 @@ impl CommandParser {
 
         let resolved = self.tool_registry.resolve_command(trimmed).await?;
 
-        // `resolved.arguments` is the last field moved out of `resolved`;
-        // once it has moved the only borrow (`tool_to_command_context`) has
-        // ended and the partial moves from `resolved.tool` are sound.
+        // `ParsedCommand` needs `name`/`id` *and* context derivation consumes
+        // the tool, so those two fields are cloned once; every other field
+        // moves into the `CommandContext` without cloning.
         let source_type = ToolSourceType::from(&resolved.tool.source);
-        let context = tool_to_command_context(&resolved.tool);
+        let command_name = resolved.tool.name.clone();
+        let tool_id = resolved.tool.id.clone();
+        let context = tool_to_command_context(resolved.tool);
 
         Some(ParsedCommand {
             source_type,
-            command_name: resolved.tool.name,
-            tool_id: resolved.tool.id,
+            command_name,
+            tool_id,
             arguments: resolved.arguments,
             context,
         })
@@ -122,28 +124,29 @@ impl CommandParser {
     }
 }
 
-/// Derive `CommandContext` from `UnifiedTool` fields
-fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
-    match &tool.source {
+/// Derive `CommandContext` from `UnifiedTool` fields.
+///
+/// Takes the tool by value so every context field moves instead of cloning;
+/// the caller clones `name`/`id` up front for `ParsedCommand`.
+fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
+    match tool.source {
         ToolSource::Builtin | ToolSource::Native => CommandContext::Builtin {
-            tool_name: tool.name.clone(),
+            tool_name: tool.name,
         },
-        ToolSource::Mcp { server } => CommandContext::Mcp {
-            server_name: server.clone(),
-        },
+        ToolSource::Mcp { server } => CommandContext::Mcp { server_name: server },
         ToolSource::Skill { id } => CommandContext::Skill {
-            skill_id: id.clone(),
-            instructions: tool.routing_system_prompt.clone().unwrap_or_default(),
-            display_name: tool.display_name.clone(),
-            allowed_tools: tool.routing_capabilities.clone(),
+            skill_id: id,
+            instructions: tool.routing_system_prompt.unwrap_or_default(),
+            display_name: tool.display_name,
+            allowed_tools: tool.routing_capabilities,
         },
         ToolSource::Custom { .. } => CommandContext::Custom {
-            system_prompt: tool.routing_system_prompt.clone(),
+            system_prompt: tool.routing_system_prompt,
             // Provider override for custom `[[rules]]` lives on the rule itself
             // (`RoutingRuleConfig::provider`); the slash-command fast path
             // reads no `provider` JSON key, so this struct does not carry it.
             // Resolution happens in the agent-loop routing pass.
-            pattern: tool.routing_regex.as_ref().unwrap_or(&tool.name).clone(),
+            pattern: tool.routing_regex.unwrap_or(tool.name),
         },
         ToolSource::Plugin { .. } => CommandContext::Builtin {
             // Plugin tools live in the tool registry under their namespaced id
@@ -151,7 +154,7 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
             // direct-tool fast path. Routing them as `Mcp` mangled the id into
             // `mcp__plugin:<id>_<name>`, which never matched a registered tool,
             // so every plugin slash command failed with a hard execution error.
-            tool_name: tool.id.clone(),
+            tool_name: tool.id,
         },
     }
 }

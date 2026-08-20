@@ -1046,10 +1046,17 @@ mod tests {
             ConcurrencyClaim::global(),
             "an unparseable key cannot be pinned to one session"
         );
-        // Aliased spellings that the gateway collapses onto ONE execution
-        // session must yield CONFLICTING claims (same claim key), or two
-        // fan-out arms would race into one session. `dm` and `group` keys
-        // with the same agent + peer both collapse to `peer`.
+        // The claim keys on the gateway form — the key the send actually
+        // executes under — so two raw spellings conflict exactly when they
+        // execute in the same session, and not otherwise.
+        //
+        // This block used to assert that `dm` and `group` with the same agent
+        // + peer CONFLICT, because `session_key_to_gateway` collapsed both
+        // onto the legacy `peer` form. PR-6 / BT-D-R4-20 removed that collapse
+        // on purpose: it executed on a key no inbound conversation ever wrote,
+        // so a delegated send forked a seam-private thread instead of
+        // continuing the visible one. They are now genuinely different
+        // sessions, and parallelising them is correct rather than a race.
         let dm = send
             .concurrency_claim(&json!({"session_key": "agent:a:telegram:dm:u1", "message": "x"}));
         let group = send.concurrency_claim(
@@ -1058,12 +1065,22 @@ mod tests {
         assert_ne!(
             dm,
             ConcurrencyClaim::global(),
-            "test key must parse to a bounded Sessions scope for the alias \
-             assertion to be meaningful"
+            "the key must parse to a bounded Sessions scope for either \
+             assertion below to be meaningful"
         );
         assert!(
-            crate::tools::concurrency::claims_conflict(&dm, &group),
-            "gateway-collapsed aliases must conflict: dm={dm:?} group={group:?}"
+            !crate::tools::concurrency::claims_conflict(&dm, &group),
+            "a DM and a group with the same peer are distinct execution \
+             sessions since PR-6: dm={dm:?} group={group:?}"
+        );
+        // The property that still holds, and the one that actually matters:
+        // the same target claimed twice conflicts with itself, so no two arms
+        // of a fan-out can enter one session concurrently.
+        let dm_again = send
+            .concurrency_claim(&json!({"session_key": "agent:a:telegram:dm:u1", "message": "z"}));
+        assert!(
+            crate::tools::concurrency::claims_conflict(&dm, &dm_again),
+            "two sends to one session must serialise: {dm:?} vs {dm_again:?}"
         );
 
         // a2a_agents: list is a pure read; add/remove mutate the remote-agent

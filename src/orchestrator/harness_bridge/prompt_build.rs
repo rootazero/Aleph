@@ -885,13 +885,17 @@ async fn resolve_prompt_context(
     // explains its own amnesia rather than reporting it. Only the muted case
     // renders, so every unmuted prompt is byte-identical.
     resolved_context.memory_muted = !envelope.injects_memory();
-    // Sub-agent binding: forwarded verbatim from the envelope so the
-    // `<environment_context>` block can print `<parent kind="…">…</parent>` for
-    // sub-agent / team / background dispatches that carry a parent session.
-    // The discriminator is chosen by the dispatcher (validated against the
-    // few allowed tokens at the run-loop boundary, not here — pure pass-through
-    // in the harness bridge per R7/R10, "no judgment near the wire").
-    resolved_context.envelope_parent = envelope.parent.clone();
+    // Sub-agent binding (`envelope_parent`) and the sub-agent run correlation
+    // handle (`run_id`) are deliberately NOT set here. Both are sub-agent
+    // facts, and a sub-agent never passes through this function: it does not
+    // build a `FlowRequest`, it drives `AgentHarness::run` directly. They are
+    // produced at the one place that knows them, by
+    // `agents::subagent_spawner::child_environment_context`.
+    //
+    // The `TurnEnvelope` fields that used to feed these two lines were
+    // retracted in the same round — they had never had a writer, because the
+    // only construction site of that struct is the gateway turn, which by
+    // definition has neither a parent nor a sub-agent run id to give.
     resolved_context
 }
 

@@ -1899,4 +1899,150 @@ mod tests {
             "tool signals attribute to the sub-role that ran the tool, not the parent"
         );
     }
+
+    // ---------------------------------------------------------------------
+    // §2.3 — the environment envelope a sub-agent is given about itself.
+    //
+    // Before this round the child's prompt threaded no `ResolvedContext` at
+    // all, so none of these layers could speak: `<environment_context>` (cwd /
+    // repo / branch / model / hour), `## Operating Envelope` (writable roots,
+    // network posture, run id) and the sandbox posture bullets in
+    // `## Security & Constraints`. The child ran `bash` and edited files in a
+    // tree it was never told about, while the parent — same tools, same tree —
+    // was told all of it.
+    // ---------------------------------------------------------------------
+
+    use super::super::child_environment_context;
+
+    fn render_child_prompt(ctx: crate::thinker::context::ResolvedContext) -> Vec<String> {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+        PromptBuilder::new(PromptConfig::default())
+            .with_agent(AgentDef::new("explorer", AgentMode::SubAgent))
+            .with_resolved_context(ctx)
+            .build_system_prompt_parts(&[])
+            .into_iter()
+            .map(|p| p.content)
+            .collect()
+    }
+
+    #[test]
+    fn a_worktree_isolated_child_is_told_where_it_may_write() {
+        // A real directory, because a provisioned worktree is one — and
+        // because `RuntimeContext` now (correctly) refuses to advertise a path
+        // that is not a directory.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt = tmp.path().join("aleph-6f1c2e9a");
+        std::fs::create_dir(&wt).expect("mkdir worktree");
+        let wt_str = wt.display().to_string();
+        let ctx = child_environment_context(
+            "claude-sonnet-4-5",
+            Some(&wt),
+            Some("agent:parent:main"),
+            Some("req-42"),
+        );
+        let whole = render_child_prompt(ctx).join("");
+
+        // The three facts a child running shell commands cannot get any other way.
+        assert!(
+            whole.contains(&format!("<cwd>{wt_str}</cwd>")),
+            "the child must be told the worktree it actually executes in:\n{whole}"
+        );
+        assert!(
+            whole.contains("<model>claude-sonnet-4-5</model>"),
+            "the child must be told which model is answering:\n{whole}"
+        );
+        assert!(
+            whole.contains(&format!("Writable roots: {wt_str}")),
+            "the child must be told the root it may write to:\n{whole}"
+        );
+        // The two fields that had a renderer, a doc and tests but never a
+        // producer, so neither string could appear for any input.
+        assert!(
+            whole.contains("<parent kind=\"subagent\">agent:parent:main</parent>"),
+            "the parent binding never had a production writer until now:\n{whole}"
+        );
+        assert!(
+            whole.contains("- Run id: `req-42`"),
+            "the run id never had a production writer until now:\n{whole}"
+        );
+    }
+
+    /// A detached background child cannot name its directory —
+    /// `EXEC_WORKSPACE` is a `tokio::task_local` and does not survive
+    /// `tokio::spawn` — so it must be told nothing rather than told the
+    /// daemon's own directory, which is the defect §2.3 exists to prevent.
+    #[test]
+    fn a_child_that_cannot_name_its_directory_states_none() {
+        let ctx = child_environment_context("m", None, None, None);
+        let whole = render_child_prompt(ctx).join("");
+        assert!(
+            !whole.contains("<cwd>"),
+            "an unknowable cwd must be omitted, never defaulted:\n{whole}"
+        );
+        // Silence about the directory is not silence about everything: the
+        // facts that ARE knowable still ship.
+        assert!(whole.contains("<model>m</model>"), "{whole}");
+        assert!(whole.contains("<environment_context>"), "{whole}");
+    }
+
+    /// The reason the child prompt is split rather than handed over whole.
+    ///
+    /// A `context=fork` fan-out exists to give N children a warm shared
+    /// prefix. Every fact this round adds differs per child, so in an
+    /// undivided block each member would rewrite the entire scaffold. The
+    /// stable half must be byte-identical across siblings that differ only in
+    /// their per-child facts; the dynamic half is where they may differ.
+    #[test]
+    fn siblings_in_a_fan_out_share_a_byte_identical_cached_prefix() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wt_a = tmp.path().join("aleph-aaaa");
+        let wt_b = tmp.path().join("aleph-bbbb");
+        std::fs::create_dir(&wt_a).expect("mkdir a");
+        std::fs::create_dir(&wt_b).expect("mkdir b");
+        let a = render_child_prompt(child_environment_context(
+            "m",
+            Some(&wt_a),
+            Some("agent:p:main"),
+            Some("req-a"),
+        ));
+        let b = render_child_prompt(child_environment_context(
+            "m",
+            Some(&wt_b),
+            Some("agent:p:main"),
+            Some("req-b"),
+        ));
+        assert_eq!(a.len(), 2);
+        assert_eq!(
+            a[0], b[0],
+            "the cached prefix must not carry per-child bytes — a fan-out would \
+             pay cache_creation N times for an otherwise identical prefix"
+        );
+        assert_ne!(
+            a[1], b[1],
+            "the per-child facts must actually be present in the uncached half"
+        );
+        assert!(a[1].contains("req-a") && b[1].contains("req-b"));
+        assert!(a[1].contains("aleph-aaaa") && b[1].contains("aleph-bbbb"));
+    }
+
+    /// The child inherits the sub-agent-specific wording for strategy and
+    /// usage mode from the hand-welds, and the resolved context must not state
+    /// either fact a second time (§2.3 rule ③: one question, one voice).
+    #[test]
+    fn the_resolved_context_does_not_restate_the_welded_facts() {
+        let ctx = child_environment_context("m", None, None, None);
+        assert!(
+            ctx.strategy.is_none() && ctx.strategy_guardrails.is_none(),
+            "the strategy is welded post-pipeline; setting it here states it twice"
+        );
+        assert!(
+            ctx.session_mode.is_none(),
+            "the usage mode is welded post-pipeline with sub-agent wording"
+        );
+        assert!(
+            ctx.approval_tier.is_none(),
+            "the tier is enforced by the inherited ScopedToolService; a second \
+             derivation here could disagree with the gate that enforces it"
+        );
+    }
 }

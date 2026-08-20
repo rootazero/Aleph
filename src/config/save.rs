@@ -47,6 +47,157 @@ fn reject_real_home_config(path: &Path, caller: &str) {
     );
 }
 
+/// Fail closed when the in-memory section is empty but the on-disk file still
+/// has entries for it. That signature means a mis-isolated test or a load that
+/// silently dropped providers — writing would erase them.
+fn guard_against_section_loss(
+    path: &Path,
+    in_memory_empty: bool,
+    on_disk_marker: &str,
+    section_label: &str,
+) -> Result<()> {
+    if !in_memory_empty || !path.exists() {
+        return Ok(());
+    }
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing.contains(on_disk_marker) {
+            error!(
+                path = %path.display(),
+                backtrace = %std::backtrace::Backtrace::force_capture(),
+                "GUARD: save_to_file would ERASE {section_label}! \
+                 On-disk config has providers but in-memory has 0. \
+                 Aborting save to prevent data loss."
+            );
+            return Err(AlephError::invalid_config(format!(
+                "Refusing to save: would erase existing {section_label}. \
+                 This is likely a bug — please report."
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Write `contents` to `path` atomically: temp file (same directory, so the
+/// rename stays on one filesystem) + fsync + rename. The target is never in
+/// a partially written state, even on crash or power loss mid-write.
+fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+    let temp_path = path.with_extension("tmp");
+
+    // Write to temp file
+    fs::write(&temp_path, contents).map_err(|e| {
+        error!(temp_path = %temp_path.display(), error = %e, "Failed to write temp file");
+        AlephError::invalid_config(format!(
+            "Failed to write temp config file {}: {}",
+            temp_path.display(),
+            e
+        ))
+    })?;
+
+    debug!(temp_path = %temp_path.display(), "Wrote config to temp file");
+
+    // fsync the temp file to ensure data is on disk
+    #[cfg(unix)]
+    {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&temp_path)
+            .map_err(|e| {
+                error!(temp_path = %temp_path.display(), error = %e, "Failed to open temp file for fsync");
+                AlephError::invalid_config(format!(
+                    "Failed to open temp file for fsync: {e}"
+                ))
+            })?;
+
+        // Sync file data and metadata
+        file.sync_all().map_err(|e| {
+            error!(temp_path = %temp_path.display(), error = %e, "Failed to fsync temp file");
+            AlephError::invalid_config(format!("Failed to fsync temp file: {e}"))
+        })?;
+
+        debug!(temp_path = %temp_path.display(), "Fsynced temp file to disk");
+    }
+
+    // Atomic rename (overwrites target if exists)
+    fs::rename(&temp_path, path).map_err(|e| {
+        error!(
+            temp_path = %temp_path.display(),
+            target_path = %path.display(),
+            error = %e,
+            "Failed to atomically rename temp file"
+        );
+        // Clean up temp file on error
+        let _ = fs::remove_file(&temp_path);
+        AlephError::invalid_config(format!(
+            "Failed to rename temp config to {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Copy the requested `sections` (dot-paths) from `current` into `existing`,
+/// creating intermediate tables as needed. Sections missing from `current`
+/// or blocked by a non-table parent are skipped with a warning.
+fn merge_sections(existing: &mut toml::Value, current: &toml::Value, sections: &[&str]) {
+    // Collect values from current config first (immutable borrow)
+    let mut section_values: Vec<(&str, Vec<&str>, toml::Value)> = Vec::new();
+    if let toml::Value::Table(ref current_table) = current {
+        for section in sections {
+            let parts: Vec<&str> = section.split('.').collect();
+            if parts.is_empty() {
+                continue;
+            }
+
+            if let Some(val) = parts.iter().try_fold(current, |n, p| n.get(p)) {
+                section_values.push((section, parts, val.clone()));
+            } else {
+                warn!(
+                    section = %section,
+                    "save_incremental: section not present in current config; update skipped"
+                );
+            }
+        }
+        let _ = current_table; // explicitly drop borrow
+    }
+
+    // Now apply to existing config (mutable borrow)
+    for (section, parts, value) in section_values {
+        // Navigate/create intermediate tables at arbitrary depth
+        let (path_parts, leaf) = parts.split_at(parts.len() - 1);
+        let leaf_key = leaf[0];
+
+        let mut target: &mut toml::Value = &mut *existing;
+        let mut navigated = true;
+        for part in path_parts {
+            match target {
+                toml::Value::Table(t) => {
+                    target = t
+                        .entry(part.to_string())
+                        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                }
+                _ => {
+                    navigated = false;
+                    break;
+                }
+            }
+        }
+
+        if navigated {
+            if let toml::Value::Table(ref mut t) = target {
+                t.insert(leaf_key.to_string(), value);
+                debug!(section = %section, "Updated section");
+            }
+        } else {
+            warn!(
+                section = %section,
+                "save_incremental: parent path is not a table; update skipped"
+            );
+        }
+    }
+}
+
 impl Config {
     /// Save configuration to a TOML file with atomic write
     ///
@@ -74,52 +225,21 @@ impl Config {
         #[cfg(test)]
         reject_real_home_config(path, "save_to_file");
 
-        // Guard: detect embedding provider loss before writing.
-        // If the file already exists with providers but we're about to write empty,
-        // refuse the save and log a backtrace to catch the culprit.
-        if path.exists() && self.memory.embedding.providers.is_empty() {
-            // Check if the on-disk version has providers
-            if let Ok(existing) = fs::read_to_string(path) {
-                if existing.contains("[[memory.embedding.providers]]") {
-                    error!(
-                        path = %path.display(),
-                        backtrace = %std::backtrace::Backtrace::force_capture(),
-                        "GUARD: save_to_file would ERASE embedding providers! \
-                         On-disk config has providers but in-memory has 0. \
-                         Aborting save to prevent data loss."
-                    );
-                    return Err(AlephError::invalid_config(
-                        "Refusing to save: would erase existing embedding providers. \
-                         This is likely a bug — please report."
-                            .to_string(),
-                    ));
-                }
-            }
-        }
-
-        // Guard: detect chat-provider loss before writing. Symmetric to the
-        // embedding-provider guard above. Replacing a populated [providers.*]
-        // table on disk with an empty in-memory map is never a legitimate save
-        // — it is the signature of a mis-isolated test or a load that silently
-        // dropped providers. Fail closed and capture a backtrace.
-        if path.exists() && self.providers.is_empty() {
-            if let Ok(existing) = fs::read_to_string(path) {
-                if existing.contains("[providers.") {
-                    error!(
-                        path = %path.display(),
-                        backtrace = %std::backtrace::Backtrace::force_capture(),
-                        "GUARD: save_to_file would ERASE all chat providers! \
-                         On-disk config has providers but in-memory has 0. \
-                         Aborting save to prevent data loss."
-                    );
-                    return Err(AlephError::invalid_config(
-                        "Refusing to save: would erase existing providers. \
-                         This is likely a bug — please report."
-                            .to_string(),
-                    ));
-                }
-            }
-        }
+        // Guards: detect provider loss before writing. If the file already
+        // exists with providers but we're about to write empty, refuse the
+        // save and log a backtrace to catch the culprit.
+        guard_against_section_loss(
+            path,
+            self.memory.embedding.providers.is_empty(),
+            "[[memory.embedding.providers]]",
+            "embedding providers",
+        )?;
+        guard_against_section_loss(
+            path,
+            self.providers.is_empty(),
+            "[providers.",
+            "chat providers",
+        )?;
 
         debug!(
             path = %path.display(),
@@ -154,59 +274,7 @@ impl Config {
             "Config serialized to TOML"
         );
 
-        // Create temporary file in the same directory (atomic rename requirement)
-        let temp_path = path.with_extension("tmp");
-
-        // Write to temp file
-        fs::write(&temp_path, &contents).map_err(|e| {
-            error!(temp_path = %temp_path.display(), error = %e, "Failed to write temp file");
-            AlephError::invalid_config(format!(
-                "Failed to write temp config file {}: {}",
-                temp_path.display(),
-                e
-            ))
-        })?;
-
-        debug!(temp_path = %temp_path.display(), "Wrote config to temp file");
-
-        // fsync the temp file to ensure data is on disk
-        #[cfg(unix)]
-        {
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&temp_path)
-                .map_err(|e| {
-                    error!(temp_path = %temp_path.display(), error = %e, "Failed to open temp file for fsync");
-                    AlephError::invalid_config(format!(
-                        "Failed to open temp file for fsync: {e}"
-                    ))
-                })?;
-
-            // Sync file data and metadata
-            file.sync_all().map_err(|e| {
-                error!(temp_path = %temp_path.display(), error = %e, "Failed to fsync temp file");
-                AlephError::invalid_config(format!("Failed to fsync temp file: {e}"))
-            })?;
-
-            debug!(temp_path = %temp_path.display(), "Fsynced temp file to disk");
-        }
-
-        // Atomic rename (overwrites target if exists)
-        fs::rename(&temp_path, path).map_err(|e| {
-            error!(
-                temp_path = %temp_path.display(),
-                target_path = %path.display(),
-                error = %e,
-                "Failed to atomically rename temp file"
-            );
-            // Clean up temp file on error
-            let _ = fs::remove_file(&temp_path);
-            AlephError::invalid_config(format!(
-                "Failed to rename temp config to {}: {}",
-                path.display(),
-                e
-            ))
-        })?;
+        write_atomically(path, &contents)?;
 
         // Set file permissions to 600 (owner read/write only) for security
         // This protects API keys stored in the config file
@@ -290,71 +358,8 @@ impl Config {
             return self.save_to_file(path);
         }
 
-        // Guard: refuse to overwrite existing embedding providers with empty
-        if sections.contains(&"memory") {
-            let embed_count = self.memory.embedding.providers.len();
-            let active_id = &self.memory.embedding.active_provider_id;
-            if embed_count == 0 {
-                // Check if on-disk config has providers
-                if let Ok(existing) = fs::read_to_string(path) {
-                    if existing.contains("[[memory.embedding.providers]]") {
-                        error!(
-                            sections = ?sections,
-                            embedding_providers_count = embed_count,
-                            active_embedding_provider = %active_id,
-                            backtrace = %std::backtrace::Backtrace::force_capture(),
-                            "GUARD: save_incremental would ERASE embedding providers! \
-                             On-disk has providers, in-memory has 0. Aborting save."
-                        );
-                        return Err(AlephError::invalid_config(
-                            "Refusing to save memory section: would erase existing \
-                             embedding providers. This is likely a bug."
-                                .to_string(),
-                        ));
-                    }
-                }
-                // No providers on disk either — just log
-                info!(
-                    sections = ?sections,
-                    embedding_providers_count = 0,
-                    "Incremental save: memory section (no embedding providers)"
-                );
-            } else {
-                info!(
-                    sections = ?sections,
-                    embedding_providers_count = embed_count,
-                    active_embedding_provider = %active_id,
-                    "Incremental save: memory section (embedding provider snapshot)"
-                );
-            }
-        } else {
-            debug!(
-                sections = ?sections,
-                "Performing incremental config save"
-            );
-        }
-
-        // Guard: refuse to overwrite a populated [providers] table with empty.
-        // save_incremental replaces the WHOLE [providers] section from the
-        // in-memory map (not a per-entry merge), so an empty map here wipes
-        // every configured provider on disk. Symmetric to the embedding guard.
-        if sections.contains(&"providers") && self.providers.is_empty() {
-            if let Ok(existing) = fs::read_to_string(path) {
-                if existing.contains("[providers.") {
-                    error!(
-                        sections = ?sections,
-                        backtrace = %std::backtrace::Backtrace::force_capture(),
-                        "GUARD: save_incremental would ERASE all chat providers! \
-                         On-disk has providers, in-memory has 0. Aborting save."
-                    );
-                    return Err(AlephError::invalid_config(
-                        "Refusing to save providers section: would erase existing \
-                         providers. This is likely a bug."
-                            .to_string(),
-                    ));
-                }
-            }
-        }
+        self.guard_incremental_memory(path, sections)?;
+        self.guard_incremental_providers(path, sections)?;
 
         // Read existing file
         let existing_contents = fs::read_to_string(path).map_err(|e| {
@@ -372,61 +377,7 @@ impl Config {
         })?;
 
         // Only update specified sections
-        // Collect values from current config first (immutable borrow)
-        let mut section_values: Vec<(&str, Vec<&str>, toml::Value)> = Vec::new();
-        if let toml::Value::Table(ref current_table) = current {
-            for section in sections {
-                let parts: Vec<&str> = section.split('.').collect();
-                if parts.is_empty() {
-                    continue;
-                }
-
-                if let Some(val) = parts.iter().try_fold(&current, |n, p| n.get(p)) {
-                    section_values.push((section, parts, val.clone()));
-                } else {
-                    warn!(
-                        section = %section,
-                        "save_incremental: section not present in current config; update skipped"
-                    );
-                }
-            }
-            let _ = current_table; // explicitly drop borrow
-        }
-
-        // Now apply to existing config (mutable borrow)
-        for (section, parts, value) in section_values {
-            // Navigate/create intermediate tables at arbitrary depth
-            let (path_parts, leaf) = parts.split_at(parts.len() - 1);
-            let leaf_key = leaf[0];
-
-            let mut target: &mut toml::Value = &mut existing;
-            let mut navigated = true;
-            for part in path_parts {
-                match target {
-                    toml::Value::Table(t) => {
-                        target = t
-                            .entry(part.to_string())
-                            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-                    }
-                    _ => {
-                        navigated = false;
-                        break;
-                    }
-                }
-            }
-
-            if navigated {
-                if let toml::Value::Table(ref mut t) = target {
-                    t.insert(leaf_key.to_string(), value);
-                    debug!(section = %section, "Updated section");
-                }
-            } else {
-                warn!(
-                    section = %section,
-                    "save_incremental: parent path is not a table; update skipped"
-                );
-            }
-        }
+        merge_sections(&mut existing, &current, sections);
 
         // Serialize back to TOML string
         let new_contents = toml::to_string_pretty(&existing).map_err(|e| {
@@ -434,28 +385,7 @@ impl Config {
         })?;
 
         // Write with atomic operation (same as save_to_file)
-        let temp_path = path.with_extension("tmp");
-        fs::write(&temp_path, &new_contents)
-            .map_err(|e| AlephError::invalid_config(format!("Failed to write temp config: {e}")))?;
-
-        // fsync on Unix
-        #[cfg(unix)]
-        {
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&temp_path)
-                .map_err(|e| {
-                    AlephError::invalid_config(format!("Failed to open temp file for fsync: {e}"))
-                })?;
-            file.sync_all()
-                .map_err(|e| AlephError::invalid_config(format!("Failed to fsync: {e}")))?;
-        }
-
-        // Atomic rename
-        fs::rename(&temp_path, path).map_err(|e| {
-            let _ = fs::remove_file(&temp_path);
-            AlephError::invalid_config(format!("Failed to rename temp config: {e}"))
-        })?;
+        write_atomically(path, &new_contents)?;
 
         // Set permissions on Unix
         #[cfg(unix)]
@@ -475,6 +405,82 @@ impl Config {
             "Incremental config save completed"
         );
 
+        Ok(())
+    }
+
+    /// Guard for the `memory` section of an incremental save: refuse to
+    /// overwrite existing embedding providers with an empty in-memory list.
+    fn guard_incremental_memory(&self, path: &Path, sections: &[&str]) -> Result<()> {
+        if !sections.contains(&"memory") {
+            debug!(
+                sections = ?sections,
+                "Performing incremental config save"
+            );
+            return Ok(());
+        }
+
+        let embed_count = self.memory.embedding.providers.len();
+        let active_id = &self.memory.embedding.active_provider_id;
+        if embed_count == 0 {
+            // Check if on-disk config has providers
+            if let Ok(existing) = fs::read_to_string(path) {
+                if existing.contains("[[memory.embedding.providers]]") {
+                    error!(
+                        sections = ?sections,
+                        embedding_providers_count = embed_count,
+                        active_embedding_provider = %active_id,
+                        backtrace = %std::backtrace::Backtrace::force_capture(),
+                        "GUARD: save_incremental would ERASE embedding providers! \
+                         On-disk has providers, in-memory has 0. Aborting save."
+                    );
+                    return Err(AlephError::invalid_config(
+                        "Refusing to save memory section: would erase existing \
+                         embedding providers. This is likely a bug."
+                            .to_string(),
+                    ));
+                }
+            }
+            // No providers on disk either — just log
+            info!(
+                sections = ?sections,
+                embedding_providers_count = 0,
+                "Incremental save: memory section (no embedding providers)"
+            );
+        } else {
+            info!(
+                sections = ?sections,
+                embedding_providers_count = embed_count,
+                active_embedding_provider = %active_id,
+                "Incremental save: memory section (embedding provider snapshot)"
+            );
+        }
+        Ok(())
+    }
+
+    /// Guard for the `providers` section of an incremental save: refuse to
+    /// overwrite a populated [providers] table with an empty in-memory map.
+    /// save_incremental replaces the WHOLE [providers] section from the
+    /// in-memory map (not a per-entry merge), so an empty map here wipes
+    /// every configured provider on disk. Symmetric to the embedding guard.
+    fn guard_incremental_providers(&self, path: &Path, sections: &[&str]) -> Result<()> {
+        if !(sections.contains(&"providers") && self.providers.is_empty()) {
+            return Ok(());
+        }
+        if let Ok(existing) = fs::read_to_string(path) {
+            if existing.contains("[providers.") {
+                error!(
+                    sections = ?sections,
+                    backtrace = %std::backtrace::Backtrace::force_capture(),
+                    "GUARD: save_incremental would ERASE all chat providers! \
+                     On-disk has providers, in-memory has 0. Aborting save."
+                );
+                return Err(AlephError::invalid_config(
+                    "Refusing to save providers section: would erase existing \
+                     providers. This is likely a bug."
+                        .to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 }

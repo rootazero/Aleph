@@ -33,7 +33,11 @@ fn cached_config_schema() -> &'static serde_json::Value {
     SCHEMA.get_or_init(|| {
         let schema = generate_config_schema();
         serde_json::to_value(&schema).unwrap_or_else(|e| {
-            panic!(
+            // Unreachable invariant: `Schema` is a transparent wrapper over
+            // `serde_json::Value` with string-only keys, so `to_value` cannot
+            // fail. It can only error on non-string map keys, which the
+            // generated schema never contains.
+            unreachable!(
                 "Config schema serialization failed — the schema is generated from the \
                  same `Config` struct the validator consumes, so this is a type-system \
                  soundness failure, not a recoverable error: {e}"
@@ -254,21 +258,10 @@ impl ConfigPatcher {
         let mut patched_json = config_json.clone();
         set_nested_value(&mut patched_json, &request.path, &request.patch)?;
 
-        // 5. Validate against JSON Schema
-        self.validate_schema(&patched_json)?;
-
-        // 6. Deserialize back to Config
-        let mut new_config: Config = serde_json::from_value(patched_json.clone()).map_err(|e| {
-            AlephError::invalid_config(format!("Patched config failed deserialization: {e}"))
-        })?;
-
-        // 6b. Normalize before validation (mirrors Config::load ordering) so
-        // validation sees the same config a fresh boot would produce.
-        crate::config::types::voice_local::normalize_voice_local(&mut new_config);
-        crate::config::validate::normalize_default_provider(&mut new_config);
-
-        // 7. Run Config::validate()
-        new_config.validate()?;
+        // 5-7. Validate the candidate: JSON Schema → deserialize → normalize
+        // → Config::validate(). The value actually committed is re-validated
+        // under the write lock inside `commit_patch`.
+        self.validate_candidate(patched_json.clone())?;
 
         // 8. Compute diff
         let new_at_path = get_nested_value(&patched_json, &request.path).cloned();
@@ -280,18 +273,13 @@ impl ConfigPatcher {
 
         // 9. If dry_run, return early with diff
         if request.dry_run {
-            return Ok(PatchResult {
-                success: true,
-                applied_sections: vec![top_section],
+            let health_check = request.health_check.then_some(HealthCheckResult::Skipped);
+            return Ok(early_patch_result(
+                top_section,
                 diff,
-                health_check: if request.health_check {
-                    Some(HealthCheckResult::Skipped)
-                } else {
-                    None
-                },
+                health_check,
                 warnings,
-                live_applied: Vec::new(),
-            });
+            ));
         }
 
         // 9b. No-op guard. An empty diff means the patch deep-merges to a config
@@ -313,17 +301,15 @@ impl ConfigPatcher {
                 None
             };
             debug!(path = %request.path, "Config patch is a no-op (empty diff); skipping write");
-            return Ok(PatchResult {
-                success: true,
-                applied_sections: vec![top_section],
+            // Nothing changed, so nothing to push onto the runtime —
+            // reporting a hot-apply here would tell the caller a no-op had
+            // an effect, hence `live_applied` stays empty.
+            return Ok(early_patch_result(
+                top_section,
                 diff,
                 health_check,
                 warnings,
-                // Nothing changed, so nothing to push onto the runtime — and
-                // reporting a hot-apply here would tell the caller a no-op had
-                // an effect.
-                live_applied: Vec::new(),
-            });
+            ));
         }
 
         // 10. Check conflict (mtime) — hard error if file was modified externally
@@ -343,45 +329,7 @@ impl ConfigPatcher {
         // sections (e.g. embedding providers). By re-applying the patch on the
         // latest config, we only mutate the targeted section and preserve
         // concurrent changes to other sections.
-        {
-            let mut config = self.config.write().await;
-
-            // Re-check mtime now that we hold the write lock. The earlier
-            // check happened before acquiring the lock, leaving a window for
-            // an external edit to land in between.
-            self.check_conflict().await?;
-
-            let latest_json = serde_json::to_value(&*config).map_err(|e| {
-                AlephError::invalid_config(format!(
-                    "Failed to serialize latest config to JSON: {e}"
-                ))
-            })?;
-            let mut re_patched = latest_json;
-            set_nested_value(&mut re_patched, &request.path, &request.patch)?;
-            // Re-validate the value actually being committed. A concurrent
-            // writer may have changed the base between step 2 (the validated
-            // snapshot) and now, so `re_patched` can be a different document
-            // than the one validated in steps 5-7. Without this, an invalid
-            // config could be persisted and installed live under concurrency.
-            self.validate_schema(&re_patched)?;
-            let mut final_config: Config = serde_json::from_value(re_patched).map_err(|e| {
-                AlephError::invalid_config(format!("Re-patched config failed deserialization: {e}"))
-            })?;
-            // Normalize before validation (mirrors Config::load ordering) so
-            // the config installed live + persisted is the normalized one.
-            crate::config::types::voice_local::normalize_voice_local(&mut final_config);
-            crate::config::validate::normalize_default_provider(&mut final_config);
-            final_config.validate()?;
-            // Commit to disk first; only swap in-memory on success. If the
-            // save fails, restore the previous live config so the in-memory
-            // state never diverges from what is on disk.
-            let previous = config.clone();
-            *config = final_config;
-            if let Err(e) = config.save_incremental_to_file(&self.config_path, &[&top_section]) {
-                *config = previous;
-                return Err(e);
-            }
-        }
+        self.commit_patch(&request, &top_section).await?;
 
         // 12b. Hot-apply onto the running runtime.
         //
@@ -427,6 +375,56 @@ impl ConfigPatcher {
             warnings,
             live_applied,
         })
+    }
+
+    /// Validate a candidate config document: JSON Schema → deserialize →
+    /// normalize → `Config::validate()`. Shared by the preview path in
+    /// `apply` and the write-lock commit path (which must re-validate the
+    /// value actually being committed).
+    fn validate_candidate(&self, candidate: serde_json::Value) -> Result<Config> {
+        self.validate_schema(&candidate)?;
+        let mut config: Config = serde_json::from_value(candidate).map_err(|e| {
+            AlephError::invalid_config(format!("Patched config failed deserialization: {e}"))
+        })?;
+        // Normalize before validation (mirrors Config::load ordering) so
+        // validation sees the same config a fresh boot would produce.
+        crate::config::types::voice_local::normalize_voice_local(&mut config);
+        crate::config::validate::normalize_default_provider(&mut config);
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Commit stage of `apply`: under the write lock, re-apply the patch onto
+    /// the latest config, re-validate, persist, and swap in-memory.
+    async fn commit_patch(&self, request: &PatchRequest, top_section: &str) -> Result<()> {
+        let mut config = self.config.write().await;
+
+        // Re-check mtime now that we hold the write lock. The earlier
+        // check happened before acquiring the lock, leaving a window for
+        // an external edit to land in between.
+        self.check_conflict().await?;
+
+        let latest_json = serde_json::to_value(&*config).map_err(|e| {
+            AlephError::invalid_config(format!("Failed to serialize latest config to JSON: {e}"))
+        })?;
+        let mut re_patched = latest_json;
+        set_nested_value(&mut re_patched, &request.path, &request.patch)?;
+        // Re-validate the value actually being committed. A concurrent
+        // writer may have changed the base between the preview snapshot and
+        // now, so `re_patched` can be a different document than the one
+        // already validated. Without this, an invalid config could be
+        // persisted and installed live under concurrency.
+        let final_config = self.validate_candidate(re_patched)?;
+        // Commit to disk first; only swap in-memory on success. If the
+        // save fails, restore the previous live config so the in-memory
+        // state never diverges from what is on disk.
+        let previous = config.clone();
+        *config = final_config;
+        if let Err(e) = config.save_incremental_to_file(&self.config_path, &[top_section]) {
+            *config = previous;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Probe the provider(s) touched by a `providers.*` patch to confirm the
@@ -784,6 +782,24 @@ pub(crate) fn deep_merge(target: &mut serde_json::Value, source: &serde_json::Va
         _ => {
             *target = source.clone();
         }
+    }
+}
+
+/// Build the `PatchResult` for the early-return paths of `apply` (dry-run
+/// and no-op): nothing was persisted, so `live_applied` stays empty.
+fn early_patch_result(
+    top_section: String,
+    diff: Vec<FieldDiff>,
+    health_check: Option<HealthCheckResult>,
+    warnings: Vec<String>,
+) -> PatchResult {
+    PatchResult {
+        success: true,
+        applied_sections: vec![top_section],
+        diff,
+        health_check,
+        warnings,
+        live_applied: Vec::new(),
     }
 }
 

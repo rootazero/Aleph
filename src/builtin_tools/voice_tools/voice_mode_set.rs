@@ -93,7 +93,11 @@ impl VoiceModeSetTool {
         // non-existent channel id and silently misconfigured any later
         // "what channels have voice on?" query. Now refuse instead: a
         // missing channel id is a caller mistake, not a sane default.
-        let channel_id = match args.channel_id.clone().or_else(|| current_channel_id.map(str::to_string)) {
+        let channel_id = match args
+            .channel_id
+            .clone()
+            .or_else(|| current_channel_id.map(str::to_string))
+        {
             Some(id) if !id.trim().is_empty() => id,
             _ => {
                 return VoiceModeSetOutput {
@@ -253,7 +257,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_channel_id_defaults_to_default_when_no_current() {
+    /// A missing channel id is refused, not defaulted.
+    ///
+    /// This test asserted the opposite until 2026-08-19, and its name still
+    /// described the retired rule: BT-C-R4-09 replaced the literal `"default"`
+    /// fallback with a refusal, because writing voice state onto a
+    /// non-existent channel id silently misconfigures every later "which
+    /// channels have voice on?" query. The test was not updated, and nobody
+    /// saw it fail because `cargo test -p alephcore --lib` had not compiled
+    /// since `5433648fc`.
+    async fn a_missing_channel_id_is_refused_not_defaulted() {
         let registry = make_registry();
         let tool = VoiceModeSetTool::new(Arc::clone(&registry));
 
@@ -266,8 +279,17 @@ mod tests {
 
         let output = tool.execute(args, None).await;
 
-        assert!(output.success);
-        assert_eq!(output.channel_id, "default");
+        assert!(
+            !output.success,
+            "a caller that named no channel must be told so, not silently \
+             given a channel that does not exist"
+        );
+        assert!(output.channel_id.is_empty());
+        assert!(
+            output.message.contains("channel id"),
+            "the refusal must name what is missing: {}",
+            output.message
+        );
     }
 
     #[tokio::test]

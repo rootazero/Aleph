@@ -88,7 +88,8 @@ pub(crate) fn canonicalize_path_string(raw: &str) -> String {
 }
 
 /// The `tool_call_id`s in `messages` whose `ToolResult` arrived with
-/// `is_error == false`.
+/// `is_error == false`. The set borrows from `messages`: it is built, queried,
+/// and dropped inside a single pass, so cloning every id would be pure churn.
 ///
 /// Both consumers gate on this and for the same reason: a call that failed did
 /// not change the world. A failed write left the file untouched (so an earlier
@@ -96,7 +97,7 @@ pub(crate) fn canonicalize_path_string(raw: &str) -> String {
 /// modified); a failed read produced no bytes (so the ledger must not tell the
 /// model it already has the content).
 #[must_use]
-pub(crate) fn successful_result_ids(messages: &[UnifiedMessage]) -> BTreeSet<String> {
+pub(crate) fn successful_result_ids(messages: &[UnifiedMessage]) -> BTreeSet<&str> {
     messages
         .iter()
         .filter_map(|msg| match msg {
@@ -104,21 +105,26 @@ pub(crate) fn successful_result_ids(messages: &[UnifiedMessage]) -> BTreeSet<Str
                 tool_call_id,
                 is_error: false,
                 ..
-            } => Some(tool_call_id.clone()),
+            } => Some(tool_call_id.as_str()),
             _ => None,
         })
         .collect()
 }
 
 /// One classified file op, pinned to the message it was issued from.
+///
+/// `call_id` / `tool_name` borrow from the message list under scan: the index
+/// is built, queried, and dropped inside a single pass, so owning those strings
+/// would be a per-op heap allocation for no lifetime benefit. `path` stays
+/// owned because it is canonicalized — a fresh allocation either way.
 #[derive(Debug, Clone)]
-pub(crate) struct FileOp {
+pub(crate) struct FileOp<'a> {
     pub(crate) msg_index: usize,
-    pub(crate) call_id: String,
+    pub(crate) call_id: &'a str,
     pub(crate) kind: FileOpKind,
     /// Tool name from the `ToolCall` block, kept so a consumer can quote the
     /// operation that superseded another one.
-    pub(crate) tool_name: String,
+    pub(crate) tool_name: &'a str,
     pub(crate) path: String,
 }
 
@@ -128,7 +134,7 @@ pub(crate) struct FileOp {
 /// `tool_call_id`, which is what lets both consumers reason about success
 /// without re-parsing tool output.
 #[must_use]
-pub(crate) fn index_file_ops(messages: &[UnifiedMessage]) -> Vec<FileOp> {
+pub(crate) fn index_file_ops(messages: &[UnifiedMessage]) -> Vec<FileOp<'_>> {
     let mut ops = Vec::new();
     for (msg_index, msg) in messages.iter().enumerate() {
         let UnifiedMessage::Assistant { content } = msg else {
@@ -149,9 +155,9 @@ pub(crate) fn index_file_ops(messages: &[UnifiedMessage]) -> Vec<FileOp> {
             };
             ops.push(FileOp {
                 msg_index,
-                call_id: id.clone(),
+                call_id: id.as_str(),
                 kind,
-                tool_name: name.clone(),
+                tool_name: name.as_str(),
                 path,
             });
         }

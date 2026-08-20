@@ -300,9 +300,12 @@ impl PromptBuilder {
         self
     }
 
-    /// Build the system prompt
-    pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
-        let path = AssemblyPath::Basic;
+    /// The [`LayerInput`] for the `Basic` assembly path, shared by both Basic
+    /// entry points ([`Self::build_system_prompt`] and
+    /// [`Self::build_system_prompt_parts`]) so they cannot disagree about which
+    /// builder fields reach the layers. The `Cached` twin is
+    /// [`Self::build_cached_input`].
+    pub(super) fn build_basic_input<'a>(&'a self, tools: &'a [ToolInfo]) -> LayerInput<'a> {
         let input = LayerInput::basic(&self.config, tools)
             .with_identity_files_opt(self.identity_files.as_ref())
             .with_extra_files_opt(self.extra_files.as_deref());
@@ -314,32 +317,51 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
-        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
-        let input = input.with_chain_context_opt(self.chain_context.as_ref());
-        let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
-        let input = input
+        input
+            .with_curated_envelope(self.curated_memory_envelope.clone())
+            .with_chain_context_opt(self.chain_context.as_ref())
+            .with_resolved_context_opt(self.resolved_context.as_ref())
             .with_behavior_name_opt(self.behavior_name.as_deref())
-            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref());
-        let input = input
+            .with_model_behavior_delta_opt(self.model_behavior_delta.as_deref())
             .with_iteration_cap_opt(self.iteration_cap)
             .with_session_summaries(self.has_session_summaries)
-            .with_recalled_memory(self.has_recalled_memory);
+            .with_recalled_memory(self.has_recalled_memory)
+    }
+
+    /// The two post-pipeline welds the Basic path carries, appended to `out`.
+    ///
+    /// Both exist because a sub-agent prompt historically threaded no
+    /// `ResolvedContext`, so `StrategyLayer` and the session-mode line had no
+    /// input to read. A caller that DOES supply a resolved context must leave
+    /// `ResolvedContext::strategy` unset (the spawner does) or the strategy
+    /// body would be stated twice — the layer once and this weld again.
+    pub(super) fn append_basic_welds(&self, out: &mut String) {
+        // Wrap mirrors `StrategyLayer` byte-for-byte:
+        // `<strategy>\n{body}\n</strategy>\n\n`.
+        if let Some(body) = self.strategy.as_deref() {
+            out.push_str("<strategy>\n");
+            out.push_str(body);
+            out.push_str("\n</strategy>\n\n");
+        }
+        if let Some(mode) = self.session_mode {
+            out.push_str(mode.subagent_prompt_line());
+            out.push_str("\n\n");
+        }
+    }
+
+    /// Build the system prompt as one undivided string.
+    ///
+    /// Carries **no** prompt-cache breakpoint, so the whole prompt is subject
+    /// to the token budget — there is no protected floor to keep intact. Use
+    /// [`Self::build_system_prompt_parts`] for anything that reaches a
+    /// provider: an unsplit prompt is cached (or not) as a single block, which
+    /// means one per-run byte anywhere in it re-keys all of it.
+    pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
+        let path = AssemblyPath::Basic;
+        let input = self.build_basic_input(tools);
         maybe_trace_prompt_size(&self.pipeline, path, &input, PromptMode::Full);
         let mut prompt = self.pipeline.execute(path, &input);
-        // Subagent strategy weld: appended post-pipeline because the Basic-path
-        // inline prompt threads no `ResolvedContext` for `StrategyLayer` to read.
-        // Wrap mirrors `StrategyLayer` byte-for-byte: `<strategy>\n{body}\n</strategy>\n\n`.
-        if let Some(body) = self.strategy.as_deref() {
-            prompt.push_str("<strategy>\n");
-            prompt.push_str(body);
-            prompt.push_str("\n</strategy>\n\n");
-        }
-        // Subagent mode weld: same post-pipeline seam as the strategy weld —
-        // the Basic path has no `ResolvedContext` for `SecurityLayer` to read.
-        if let Some(mode) = self.session_mode {
-            prompt.push_str(mode.subagent_prompt_line());
-            prompt.push_str("\n\n");
-        }
+        self.append_basic_welds(&mut prompt);
         crate::thinker::prompt_budget::fit_dynamic_suffix_with_content(
             "",
             prompt,

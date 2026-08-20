@@ -53,6 +53,26 @@ impl Config {
             "Starting config validation"
         );
 
+        self.validate_default_provider()?;
+        self.validate_provider_configs()?;
+        self.validate_rules()?;
+        self.validate_memory_config()?;
+        self.validate_language_preference();
+        self.validate_search_config()?;
+        self.validate_group_chat_and_personas()?;
+        self.validate_policies()?;
+
+        info!(
+            providers_count = self.providers.len(),
+            rules_count = self.rules.len(),
+            "Config validation completed successfully"
+        );
+
+        Ok(())
+    }
+
+    /// Validate that the configured default provider exists in the providers map.
+    fn validate_default_provider(&self) -> Result<()> {
         // Validate default provider exists (if configured)
         if let Some(ref default_provider) = self.general.default_provider {
             if !self.providers.contains_key(default_provider) {
@@ -64,6 +84,11 @@ impl Config {
             debug!(default_provider = %default_provider, "Default provider validated");
         }
 
+        Ok(())
+    }
+
+    /// Validate each provider's timeout, sampling parameters, and protocol-specific fields.
+    fn validate_provider_configs(&self) -> Result<()> {
         // Validate provider configurations
         for (name, provider) in &self.providers {
             let protocol = provider.protocol();
@@ -189,6 +214,11 @@ impl Config {
             );
         }
 
+        Ok(())
+    }
+
+    /// Validate routing rules: provider references, keyword prompts, and regex patterns.
+    fn validate_rules(&self) -> Result<()> {
         // Validate routing rules
         for (idx, rule) in self.rules.iter().enumerate() {
             let rule_type = rule.get_rule_type();
@@ -264,6 +294,11 @@ impl Config {
             }
         }
 
+        Ok(())
+    }
+
+    /// Validate memory thresholds, dreaming schedule, and decay settings.
+    fn validate_memory_config(&self) -> Result<()> {
         // Validate memory config
         if !(0.0..=1.0).contains(&self.memory.similarity_threshold) {
             error!(
@@ -395,6 +430,11 @@ impl Config {
             "Memory config validated"
         );
 
+        Ok(())
+    }
+
+    /// Advise on unsupported language codes (warn-only; falls back to system language).
+    fn validate_language_preference(&self) {
         // Validate language preference
         if let Some(ref language) = self.general.language {
             // List of supported language codes (must match .lproj directory names)
@@ -412,7 +452,10 @@ impl Config {
                 debug!(language = %language, "Language preference validated");
             }
         }
+    }
 
+    /// Validate search backends, default/fallback provider references, and limits.
+    fn validate_search_config(&self) -> Result<()> {
         // Validate search configuration
         if let Some(ref search_config) = self.search {
             if search_config.enabled {
@@ -534,6 +577,11 @@ impl Config {
             }
         }
 
+        Ok(())
+    }
+
+    /// Validate group-chat and persona sub-configs.
+    fn validate_group_chat_and_personas(&self) -> Result<()> {
         // Validate group-chat section (sub-config `validate` methods are not
         // reachable from `Config::validate` otherwise, so a typo like
         // `max_personas_per_session = 0` would silently disable every session).
@@ -551,6 +599,11 @@ impl Config {
             }
         }
 
+        Ok(())
+    }
+
+    /// Refuse `exec_tier = "plan"` as an install-wide default.
+    fn validate_policies(&self) -> Result<()> {
         // `plan` deserializes here — it is a real `ExecTier`, just not an
         // INSTALL one: it is a per-conversation posture that ENDS when a human
         // approves a plan, and ending it means falling back to this very
@@ -571,12 +624,6 @@ impl Config {
                  conversation into planning from the composer's tier pill (or `/tier plan`).",
             ));
         }
-
-        info!(
-            providers_count = self.providers.len(),
-            rules_count = self.rules.len(),
-            "Config validation completed successfully"
-        );
 
         Ok(())
     }

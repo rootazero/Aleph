@@ -185,6 +185,101 @@ pub struct SpawnRequest<'a> {
     pub request_id: Option<&'a str>,
 }
 
+/// The environment envelope a spawned sub-agent is given about *itself*.
+///
+/// # What was missing
+///
+/// A sub-agent's prompt threaded no [`ResolvedContext`] at all, so every layer
+/// that reads one stayed silent: no `<environment_context>` (no cwd, no repo,
+/// no branch, no model, no wall-clock), no `## Operating Envelope` (no
+/// writable roots, no network posture), no sandbox posture in
+/// `## Security & Constraints`. A child that runs `bash`, edits files and
+/// browses a repo was told none of it — while the parent, running the same
+/// tools against the same tree, was told all of it. The two hand-welds this
+/// module still performs (`<strategy>` and the session-mode line) are the
+/// scar tissue: both exist only because there was no resolved context for the
+/// layers that own those facts to read.
+///
+/// # Why each field is set the way it is
+///
+/// * **`cwd`** — the worktree path for an isolated child (definitive: its exec
+///   tools run under a [`WorktreeSandbox`](crate::sandbox::WorktreeSandbox)
+///   rooted there), otherwise whatever
+///   [`current_exec_workspace`](crate::sandbox::context::current_exec_workspace)
+///   reports *at this point in the child's own call stack* — which is the same
+///   value its `WorkspaceSandbox` will read when it jails a command. When that
+///   is absent (a detached background child: `EXEC_WORKSPACE` is a
+///   `tokio::task_local` and does not survive `tokio::spawn`) the envelope
+///   states **no** cwd. Naming the daemon's directory instead would recreate
+///   the exact defect the 2026-07-26 round removed from the main path: a
+///   prompt that advertises a directory no tool call lands in, followed by the
+///   model addressing absolute paths into it and being refused by the jail.
+///   Silence is the only honest third answer, which is why
+///   [`RuntimeContext::working_dir`] is an `Option`.
+/// * **`parent` / `run_id`** — the first production writers either field has
+///   ever had. Both were added with a renderer, a doc comment and tests on
+///   both ends, and no producer, so `<parent kind="subagent">` and
+///   `- Run id:` could not appear for any input. The parent session id lets a
+///   child say *whose* explore run it is; the request id is the only handle
+///   the model itself ever sees for a background spawn, so it is the one that
+///   makes "this task of mine" addressable back to the parent.
+/// * **`sandbox_summary`** — only for a worktree-isolated child, where this
+///   module owns the sandbox and therefore knows the posture. A non-isolated
+///   child inherits the parent's tool service and this function has no handle
+///   on that sandbox; guessing one would put a posture in the prompt that the
+///   gate does not enforce.
+/// * **`session_mode` / `strategy`** — deliberately left unset even though the
+///   caller knows both, because this module still welds them in by hand with
+///   their own sub-agent-specific wording. Setting them here as well would
+///   state each fact twice, which is the rule (§2.3 ③, one question one voice)
+///   this whole round is enforcing elsewhere.
+/// * **`approval_tier`** — unset. The tier IS enforced for the child (it
+///   inherits the parent's `ScopedToolService`), but this module has no typed
+///   handle on it, and a *second* derivation of "which tier is this" is worse
+///   than silence: it could disagree with the gate. Wiring the sentence needs
+///   the tier threaded from the tool that resolved it; see the round notes.
+fn child_environment_context(
+    model: &str,
+    worktree: Option<&std::path::Path>,
+    parent_session_id: Option<&str>,
+    request_id: Option<&str>,
+) -> crate::thinker::context::ResolvedContext {
+    use crate::thinker::context::EnvelopeParent;
+    use crate::thinker::runtime_context::RuntimeContext;
+    use crate::thinker::{InteractionManifest, InteractionParadigm};
+
+    // Background: a sub-agent has no channel, no human watching its stream,
+    // and no interactive rendering surface. It is the paradigm the harness
+    // bridge already falls back to when no channel manifest is supplied.
+    let paradigm = InteractionParadigm::Background;
+    let mut ctx = crate::thinker::context::ContextAggregator::resolve(
+        &InteractionManifest::new(paradigm),
+        &crate::thinker::security_context::SecurityContext::for_paradigm(paradigm),
+    );
+
+    let cwd = worktree
+        .map(std::path::Path::to_path_buf)
+        .or_else(crate::sandbox::context::current_exec_workspace);
+    ctx.runtime_context = Some(match cwd {
+        Some(dir) => RuntimeContext::collect_in(model, Some(&dir)),
+        None => RuntimeContext::collect_detached(model),
+    });
+
+    ctx.sandbox_summary =
+        worktree.map(|path| crate::sandbox::SandboxSummary::isolated_worktree(path.to_path_buf()));
+
+    ctx.envelope_parent = parent_session_id
+        .filter(|id| !id.is_empty())
+        .map(|id| EnvelopeParent {
+            kind: "subagent".to_string(),
+            id: id.to_string(),
+        });
+    ctx.run_id = request_id
+        .filter(|id| !id.is_empty())
+        .map(std::string::ToString::to_string);
+    ctx
+}
+
 /// Build a child ephemeral session, run the harness, and synthesize the
 /// `LoopRunResult` by walking the child session event log.
 ///
@@ -413,14 +508,30 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             ..PromptConfig::default()
         })
         .with_agent(req.agent_def.clone())
-        .with_chain_context(child_chain.clone());
+        .with_chain_context(child_chain.clone())
+        .with_resolved_context(child_environment_context(
+            resolved_model.as_deref().unwrap_or(base.provider.name()),
+            worktree_handle.as_ref().map(|h| h.path()),
+            base.parent_session_id.as_deref(),
+            req.request_id,
+        ));
         if let Some(strategy) = req.strategy {
             builder = builder.with_strategy(strategy.to_string());
         }
         if let Some(mode) = req.session_mode {
             builder = builder.with_session_mode(mode);
         }
-        let system_prompt = builder.build_system_prompt(&[]);
+        // Split at the stable/dynamic boundary rather than handed over as one
+        // undivided string. Everything the child now learns about *itself* —
+        // cwd, model, hour, parent binding, run id, worktree — differs per
+        // child, and an undivided block is cached (or not) whole: N members of
+        // a fan-out would each write their own copy of the shared scaffold,
+        // which is exactly the warmth `context=fork` exists to preserve.
+        let system_prompt_parts = builder.build_system_prompt_parts(&[]);
+        let system_prompt: String = system_prompt_parts
+            .iter()
+            .map(|p| p.content.as_str())
+            .collect();
 
         // 3c. Fork: copy the parent's own recent transcript into the child
         //     BEFORE its task turn opens, so `build_prompt` — which walks the
@@ -682,8 +793,13 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             // when routing capture is on, this is the child's own OutcomeObserver
             // wrapping that sink; otherwise the raw sink (unchanged).
             trace_sink: child_trace_sink,
+            // Both are set. `HarnessDeps` documents that the two travel
+            // independently — the harness does NOT derive one from the other —
+            // so an adapter that reads only the legacy field still sees the
+            // whole prompt, while the Anthropic adapter places the cache
+            // breakpoint at the boundary the parts describe.
             system_prompt: Some(system_prompt),
-            system_prompt_parts: None,
+            system_prompt_parts: Some(system_prompt_parts),
             recall_context: None,
             // Stage 5a (#9): inherit parent guardrails so the subagent enforces
             // the same Input/Output/ToolCall checks as the spawning harness.

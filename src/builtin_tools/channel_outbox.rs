@@ -82,13 +82,18 @@ pub struct ChannelOutboxArgs {
     #[serde(default)]
     pub limit: Option<usize>,
 
-    /// Required confirmation for the destructive `redrive` action. A redrive
-    /// replays permanently-failed outbound messages verbatim to their target
-    /// conversation — a typo'd confirm + dead-letter list = a duplicate
-    /// customer-visible message. Defaults to `false`; the call returns a
-    /// preview of what would be redriven when omitted, and only proceeds when
-    /// the caller explicitly passes `true`. `status` and `dead_letters` ignore
-    /// this flag.
+    // WHY (does not ship — a `//` comment is absent from the schemars schema,
+    // while this argument's doc is sent to the model on every request that can
+    // see this tool): a redrive replays permanently-failed outbound messages
+    // verbatim to their target conversation, so a mistaken confirm turns a
+    // dead-letter list into duplicate customer-visible messages. The model
+    // needs the mechanics below to call the tool correctly; it does not need
+    // the incident story in order to obey a required flag. Trimmed from seven
+    // doc lines to two when `registry_schema_bytes_ratchet` caught the 510 B —
+    // the same treatment the ledger on `REGISTRY_SCHEMA_CEILING_BYTES` records
+    // for `loop_graph`'s variant doc.
+    /// `redrive` only proceeds when this is `true`; omitted returns a preview
+    /// of what would be redriven. Ignored by `status` and `dead_letters`.
     #[serde(default)]
     pub confirm_redrive: Option<bool>,
 }
@@ -369,21 +374,19 @@ mod tests {
         // "No queue configured" and "queue configured, nothing stuck" are
         // different answers; reporting 0 for the first would tell the user
         // their pushes are fine when nothing is being retained at all.
+        //
+        // Redrive is tested separately below: it has two semantically distinct
+        // entry shapes (confirmed vs unconfirmed) that both produce empty
+        // counters for different reasons — folding them into this loop would
+        // hide which branch the executor took.
         let tool = ChannelOutboxTool::new(Arc::new(ChannelRegistry::new()));
-        for action in [
-            OutboxAction::Status,
-            OutboxAction::DeadLetters,
-            OutboxAction::Redrive,
-        ] {
+        for action in [OutboxAction::Status, OutboxAction::DeadLetters] {
             let out = tool
                 .call(ChannelOutboxArgs {
                     action,
                     channel_id: None,
                     limit: None,
-                    // Confirmed on purpose: this asserts the no-store answer,
-                    // and an unconfirmed redrive returns the preview without
-                    // ever reaching it.
-                    confirm_redrive: Some(true),
+                    confirm_redrive: None,
                 })
                 .await
                 .expect("no store is not an error");
@@ -392,6 +395,68 @@ mod tests {
             assert!(out.dead_letters.is_none());
             assert!(out.redriven.is_none());
         }
+    }
+
+    /// `Some(true)` is the only shape that exercises the redrive *executor*
+    /// path against a no-store registry — `None` short-circuits to a preview
+    /// before ever calling `self.redrive(...)`. Pinning `Some(true)` here
+    /// asserts the executor's own no-store answer (the registry's
+    /// `redrive_dead_letters` returns `None` and the executor reports
+    /// "nothing to redrive"); without it, an unconfirmed redrive that
+    /// silently returned an empty shape would also pass a blanket
+    /// `redriven.is_none()` assertion, and the executor path itself would
+    /// have no test.
+    #[tokio::test]
+    async fn confirmed_redrive_against_empty_registry_runs_the_executor_and_reports_no_store(
+    ) {
+        let tool = ChannelOutboxTool::new(Arc::new(ChannelRegistry::new()));
+        let out = tool
+            .call(ChannelOutboxArgs {
+                action: OutboxAction::Redrive,
+                channel_id: None,
+                limit: None,
+                confirm_redrive: Some(true),
+            })
+            .await
+            .expect("no store is not an error");
+        assert!(!out.durable_queue);
+        assert!(out.pending.is_none());
+        assert!(out.dead_letters.is_none());
+        assert!(out.redriven.is_none());
+        assert!(
+            out.message.contains("No durable delivery queue"),
+            "expected the executor's own no-store answer, got: {:?}",
+            out.message
+        );
+    }
+
+    /// `None` is the shape a caller that has not confirmed sends; the handler
+    /// is expected to short-circuit with a preview (no executor call) rather
+    /// than attempt the redrive. This is the *other* half of the same
+    /// invariant the confirmed case proves from the inside — a redrive that
+    /// the caller has not authorized must never reach the executor, no
+    /// matter how the resulting output looks.
+    #[tokio::test]
+    async fn unconfirmed_redrive_returns_preview_without_executing() {
+        let tool = ChannelOutboxTool::new(Arc::new(ChannelRegistry::new()));
+        let out = tool
+            .call(ChannelOutboxArgs {
+                action: OutboxAction::Redrive,
+                channel_id: None,
+                limit: None,
+                confirm_redrive: None,
+            })
+            .await
+            .expect("no store is not an error");
+        assert!(!out.durable_queue);
+        assert!(out.pending.is_none());
+        assert!(out.dead_letters.is_none());
+        assert!(out.redriven.is_none());
+        assert!(
+            out.message.contains("redrive preview"),
+            "expected the preview short-circuit, got: {:?}",
+            out.message
+        );
     }
 
     #[tokio::test]
