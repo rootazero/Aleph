@@ -59,6 +59,16 @@ pub struct FetchBackendConfig {
     /// Verified via a successful Test connection.
     #[serde(default)]
     pub verified: bool,
+
+    /// Operator gate to disable this backend without removing its config.
+    /// Mirrors `SearchBackendConfig::enabled` so the registry can skip a
+    /// backend without depending on its `base_url`/`api_key` being empty.
+    #[serde(default = "default_backend_enabled")]
+    pub enabled: bool,
+}
+
+fn default_backend_enabled() -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -73,6 +83,7 @@ mod tests {
             base_url: Some("http://10.0.0.1:11235".into()),
             timeout_seconds: Some(60),
             verified: false,
+            enabled: true,
         };
         let toml = toml::to_string(&b).unwrap();
         assert!(!toml.contains("secret-token"), "token must never serialize");
@@ -90,6 +101,7 @@ mod tests {
                 base_url: Some("http://x:11235".into()),
                 timeout_seconds: Some(60),
                 verified: true,
+                enabled: true,
             },
         );
         let cfg = FetchConfigInternal {

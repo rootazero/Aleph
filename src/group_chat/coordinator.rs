@@ -143,8 +143,22 @@ pub fn build_persona_prompt(
 ) -> String {
     let mut prompt = String::new();
 
-    // Identity (system_prompt is passed separately via the system parameter)
-    prompt.push_str(&format!("You are \"{name}\".\n\n", name = persona.name));
+    // Identity (system_prompt is passed separately via the system parameter).
+    // persona.name is operator-supplied (preset config or inline --role) and
+    // may contain control characters (`\n`, `\t`, `\"`) that break the
+    // prompt's layout — a name with an embedded newline would splice a second
+    // fake instruction line into the persona prompt (L4 in
+    // review/group_chat-statics). Strip control chars and replace `"` with
+    // the Unicode right-double-quote so quoting stays well-formed. This is
+    // defensive typography, not injection defense — the output is text for
+    // the model, not executable content.
+    let safe_name: String = persona
+        .name
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .replace('"', "\u{201D}");
+    prompt.push_str(&format!("You are \"{safe_name}\".\n\n"));
 
     // Coordinator guidance
     if !guidance.is_empty() {
@@ -163,9 +177,8 @@ pub fn build_persona_prompt(
 
     // Response instruction
     prompt.push_str(&format!(
-        "Please respond from \"{name}\"'s perspective and area of expertise. \
+        "Please respond from \"{safe_name}\"'s perspective and area of expertise. \
          Be concise and focused. Do not repeat what others have already said.",
-        name = persona.name,
     ));
 
     prompt

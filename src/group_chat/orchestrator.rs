@@ -191,11 +191,19 @@ impl GroupChatOrchestrator {
         match handle.try_lock() {
             Ok(mut session) => session.end(),
             Err(_) => {
-                tracing::debug!(
+                // The session is removed from the map but NOT marked ended —
+                // a ghost session if the caller also forgets `session.end()`.
+                // Warn-level (was debug) so the orphaned-active state is
+                // observable in production logs rather than silent (M5 in
+                // review/group_chat-statics). `blocking_lock` is not an
+                // option here: `end_session` is sync and may run inside a
+                // tokio runtime, where `blocking_lock` panics.
+                tracing::warn!(
                     subsystem = "group_chat",
                     session_id = %session_id,
-                    "session lock contended during end_session; caller is expected to \
-                     lock and call session.end() to mark the session ended"
+                    "session lock contended during end_session; caller MUST lock and call \
+                     session.end() to mark the session ended, or the session stays Active \
+                     while detached from the orchestrator"
                 );
             }
         }

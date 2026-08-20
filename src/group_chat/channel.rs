@@ -78,12 +78,22 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
                 if i >= tokens.len() {
                     return None;
                 }
+                // Refuse to swallow another flag as a role spec — a typo like
+                // `--role --topic "x"` used to silently turn `--topic` into
+                // the role spec. Treat "saw a flag" as a missing value.
+                if tokens[i].starts_with("--") {
+                    return None;
+                }
                 let persona = parse_inline_role(&tokens[i])?;
                 personas.push(PersonaSource::Inline(persona));
             }
             "--topic" => {
                 i += 1;
                 if i >= tokens.len() {
+                    return None;
+                }
+                // Same defense as `--role`: refuse to eat a flag-looking value.
+                if tokens[i].starts_with("--") {
                     return None;
                 }
                 topic = tokens[i].clone();

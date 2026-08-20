@@ -724,12 +724,28 @@ impl ChannelRegistry {
             ChannelError::NotConnected(format!("Channel not found: {channel_id}"))
         })?;
 
-        // NOTE: guard held across await (see `edit`). This call can be a
-        // multi-page HTTP sweep, i.e. held far longer than a send — adapters
-        // are expected to serve it from a TTL cache and to cap pagination so a
-        // cold lookup cannot wedge `stop_channel` / `restart_channel`, which
-        // need the WRITE lock.
-        let channel = channel_arc.read().await;
+        // Known trade-off: the `Channel` trait uses `async fn` returning a
+        // future that borrows `&self`, so the read guard must be held for
+        // the full duration of the adapter call. We mitigate the writer-
+        // starvation risk by using `try_read` and returning a transient
+        // `Busy` error if a writer (`stop_channel`/`restart_channel`) is
+        // already queued — that way the writer can proceed instead of
+        // waiting behind us for the adapter's full HTTP sweep.
+        //
+        // Adapters are still expected to serve `list_conversations` from a
+        // TTL cache (see the existing per-adapter `editing` capability
+        // gate) so the read-lock window stays short in practice.
+        // tokio 1.52's `sync::TryLockError` is a unit struct (no variant
+        // distinction between "would block" and "poisoned"); the review
+        // commit pattern-matched variants that do not exist in this
+        // version. Treat any try_read failure as "channel busy, retry":
+        // the channel will surface real failures when the next read
+        // succeeds and the guard goes out of scope.
+        let channel = channel_arc.try_read().map_err(|_| {
+            ChannelError::Busy(format!(
+                "channel {channel_id} is restarting; retry list_conversations"
+            ))
+        })?;
         channel.list_conversations(query, limit).await
     }
 

@@ -276,7 +276,13 @@ fn try_http_fetch(kernel: &WasmCapabilityKernel, request: &str) -> Result<String
                     },
                 )
                 .join()
-                .map_err(|_| "http worker thread panicked".to_string())?
+                .map_err(|e| match e.downcast_ref::<String>() {
+                    Some(s) => format!("http worker thread panicked: {s}"),
+                    None => match e.downcast_ref::<&'static str>() {
+                        Some(s) => format!("http worker thread panicked: {s}"),
+                        None => "http worker thread panicked (non-string payload)".to_string(),
+                    },
+                })?
         })?;
 
     if bytes.len() > max_response_bytes {

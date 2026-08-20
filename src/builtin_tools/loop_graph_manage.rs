@@ -120,6 +120,10 @@ pub struct LoopGraphArgs {
     /// events: max rows, newest first (default 20, hard cap 200)
     #[serde(default)]
     pub limit: Option<u32>,
+    /// events: return rows with `id < before_id` (exclusive). Omit for the
+    /// first page; pass the last seen row's `id` to walk past it.
+    #[serde(default)]
+    pub before_id: Option<i64>,
 
     // ── Internal (injected by the dispatcher, not LLM-visible) ─────
     /// Source channel id, injected from turn context. Stamped onto the cron
@@ -735,7 +739,25 @@ impl AlephTool for LoopGraphTool {
             }
 
             LoopGraphAction::Gc => {
-                let report = self.store.gc(&agent_id)?;
+                let report = match self.store.gc(&agent_id) {
+                    Ok(r) => r,
+                    Err((report, err)) => {
+                        // Surface failure as a structured "what would have been
+                        // removed" — same shape as the success path so the
+                        // audit loop and the operator both see it. The store
+                        // was NOT modified (the gc transaction rolled back),
+                        // but the report describes the deletes that were
+                        // attempted so the next pass can retry.
+                        if !report.removed.is_empty() || !report.retained_acl.is_empty() {
+                            crate::loop_graph::publish(crate::loop_graph::TopologyEvent::GcCompleted {
+                                agent_id: agent_id.clone(),
+                                removed: 0, // failed: nothing was committed
+                                retained_acl: report.retained_acl.len(),
+                            });
+                        }
+                        return Err(err);
+                    }
+                };
                 if !report.removed.is_empty() || !report.retained_acl.is_empty() {
                     crate::loop_graph::publish(crate::loop_graph::TopologyEvent::GcCompleted {
                         agent_id: agent_id.clone(),
@@ -1277,9 +1299,10 @@ impl AlephTool for LoopGraphTool {
                 // Read-only: no write path, no exec_tier involvement (the
                 // argument-level gate only matches the write actions).
                 let limit = args.limit.unwrap_or(20).clamp(1, 200) as usize;
+                let before_id = args.before_id;
                 let inspector = crate::loop_graph::LoopGraphInspector::new(&self.store, &agent_id)
                     .with_snapshots(snapshots);
-                let events = inspector.recent_events(limit)?;
+                let events = inspector.recent_events_before(limit, before_id)?;
                 if events.is_empty() {
                     return Ok(LoopGraphOutput {
                         message:
@@ -1420,6 +1443,7 @@ mod tests {
             format: None,
             op: None,
             limit: None,
+            before_id: None,
             __channel: None,
             __conversation_id: None,
         }

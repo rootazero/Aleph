@@ -222,11 +222,40 @@ pub fn forget_installed(
     kind: ExtensionKind,
     backend: &str,
 ) -> rusqlite::Result<usize> {
-    let doomed: Vec<String> = all_origins(conn)?
+    let all: Vec<InstallOrigin> = all_origins(conn)?
         .into_iter()
-        .filter(|o| o.kind == kind && local_ref_addresses(&o.local_ref, backend))
-        .map(|o| o.entry_id)
+        .filter(|o| o.kind == kind)
         .collect();
+    // Resolve exact matches first — this is what MCP uses (local_ref IS the
+    // server id, verbatim). For plugin/skill the caller passes a *leaf* name
+    // (the install directory), so we also need leaf matches. If multiple
+    // rows share the same leaf (two catalog entries installed into the same
+    // directory name), an unscoped forget would silently delete BOTH; we
+    // avoid that by requiring the leaf match be unambiguous.
+    let exact: Vec<String> = all
+        .iter()
+        .filter(|o| o.local_ref == backend)
+        .map(|o| o.entry_id.clone())
+        .collect();
+    let doomed: Vec<String> = if !exact.is_empty() {
+        exact
+    } else {
+        let leaf_matches: Vec<String> = all
+            .iter()
+            .filter(|o| local_ref_addresses(&o.local_ref, backend))
+            .map(|o| o.entry_id.clone())
+            .collect();
+        if leaf_matches.len() > 1 {
+            tracing::warn!(
+                kind = kind.as_str(),
+                backend = %backend,
+                candidates = %leaf_matches.join(","),
+                "forget_installed: leaf name is ambiguous across multiple ledger rows; skipping"
+            );
+            return Ok(0);
+        }
+        leaf_matches
+    };
     let mut removed = 0;
     for entry_id in doomed {
         removed += delete_origin(conn, &entry_id)?;

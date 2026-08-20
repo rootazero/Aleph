@@ -209,11 +209,17 @@ pub fn target_has_victory_claim(node_id: &str) -> bool {
 fn one_line(s: &str) -> String {
     s.chars()
         .map(|c| match c {
-            // `\n` / `\r` plus the Unicode line/paragraph separators, which
-            // several renderers treat as line breaks.
-            '\n' | '\r' | '\u{2028}' | '\u{2029}' => ' ',
+            // `\n` plus the Unicode line/paragraph separators map to a space
+            // so a stray newline inside `label` cannot masquerade as the next
+            // header line at the render seam.
+            '\n' | '\u{2028}' | '\u{2029}' => ' ',
+            // `\r` is stripped rather than replaced with a space so a trailing
+            // `\r\n` does not leave a stray space at the line end (matches
+            // `indented_body`'s `trim_end_matches('\r')` discipline).
+            '\r' => '\0',
             other => other,
         })
+        .filter(|&c| c != '\0')
         .collect()
 }
 
@@ -616,27 +622,57 @@ fn render_session_topology_inner(
             )))
         }
     };
-    let edges = store.list_edges(DEFAULT_AGENT).map_err(|e| {
-        crate::error::AlephError::other(format!("loop_graph topology read edges: {e}"))
+    // Raw-column reads (see [`LoopGraphStore::edges_for_render`] and
+    // [`LoopGraphStore::root_nodes_for_render`]) so an unknown `EdgeKind` /
+    // `NodeKind` variant from a newer build still surfaces in this build —
+    // `list_edges` / `list_nodes` fail-soft unparseable rows to nothing, and
+    // "nothing" here reads as "no watcher / no root reference" for the very
+    // session whose governance this function exists to render.
+    let edges = store
+        .edges_for_render(DEFAULT_AGENT, &node_id)
+        .map_err(|e| {
+            crate::error::AlephError::other(format!(
+                "loop_graph topology read edges: {e}"
+            ))
+        })?;
+    let roots = store.root_nodes_for_render(DEFAULT_AGENT).map_err(|e| {
+        crate::error::AlephError::other(format!(
+            "loop_graph topology read roots: {e}"
+        ))
     })?;
-    let nodes = store.list_nodes(DEFAULT_AGENT).map_err(|e| {
-        crate::error::AlephError::other(format!("loop_graph topology read nodes: {e}"))
-    })?;
+    // Resolve labels for every node id we will mention. Skipping the full
+    // `list_nodes` read saves O(N) on a populated graph; the IN-clause stays
+    // tight (a few ids per session turn).
+    let mut ids: Vec<&str> = Vec::new();
+    for e in &edges {
+        ids.push(if e.to_id == node_id {
+            e.from_id.as_str()
+        } else {
+            e.to_id.as_str()
+        });
+    }
+    let labels: std::collections::HashMap<String, String> = store
+        .labels_for_ids(DEFAULT_AGENT, &ids)
+        .map_err(|e| {
+            crate::error::AlephError::other(format!(
+                "loop_graph topology read labels: {e}"
+            ))
+        })?
+        .into_iter()
+        .collect();
     // Every interpolated value below is model-authored free text (`label`,
     // `cadence`, and the ids the model chose) and this format is line-oriented
     // with privileged lines — so each one is flattened at the seam. See
     // `one_line`.
     let label_of = |id: &str| -> String {
-        nodes.iter().find(|n| n.id == id).map_or_else(
-            || clamp_handle(&one_line(id)),
-            |n| {
-                format!(
-                    "{} ({})",
-                    clamp_handle(&one_line(id)),
-                    clamp_handle(&one_line(&n.label))
-                )
-            },
-        )
+        match labels.get(id) {
+            Some(label) => format!(
+                "{} ({})",
+                clamp_handle(&one_line(id)),
+                clamp_handle(&one_line(label))
+            ),
+            None => clamp_handle(&one_line(id)),
+        }
     };
 
     let mut out = String::new();
@@ -684,10 +720,7 @@ fn render_session_topology_inner(
     {
         out.push_str(&format!("你的锚点: {}\n", label_of(&e.to_id)));
     }
-    let mut roots: Vec<_> = nodes
-        .iter()
-        .filter(|n| n.kind == crate::loop_graph::NodeKind::Root)
-        .collect();
+    let mut roots = roots;
     roots.sort_by(|a, b| a.id.cmp(&b.id));
     for r in roots {
         if let Some(body) = &r.body {

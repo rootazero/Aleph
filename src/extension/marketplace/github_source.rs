@@ -12,9 +12,15 @@ use std::process::Command;
 
 /// Validate an `owner/repo` slug before it is embedded into a GitHub URL:
 /// exactly two non-empty segments of `[A-Za-z0-9_.-]`, and neither may be a
-/// `.`/`..` segment (mirrors the `marketplace_name` validation in
-/// `sync_github_marketplace`).
-fn is_valid_owner_repo(owner_repo: &str) -> bool {
+/// `.`/`..` segment.
+///
+/// Public because it is also **the** classifier: whether a source string is a
+/// GitHub slug or a local path is decided by asking the function that decides
+/// whether the GitHub fetch can work at all. See
+/// [`super::source_spec::classify`] for the two hand-rolled heuristics this
+/// replaced and the four shapes on which they disagreed.
+#[must_use]
+pub fn is_valid_owner_repo(owner_repo: &str) -> bool {
     let mut parts = owner_repo.split('/');
     let (Some(owner), Some(repo), None) = (parts.next(), parts.next(), parts.next()) else {
         return false;
@@ -96,13 +102,7 @@ pub fn sync_github_marketplace(
     cache_dir: &Path,
     marketplace_name: &str,
 ) -> Result<PathBuf, String> {
-    if marketplace_name.is_empty()
-        || marketplace_name.contains('/')
-        || marketplace_name.contains('\\')
-        || marketplace_name.contains("..")
-    {
-        return Err(format!("Invalid marketplace name '{marketplace_name}'"));
-    }
+    super::names::reject_unsafe_segment("marketplace name", marketplace_name)?;
 
     let final_dir = cache_dir.join(marketplace_name);
     if std::fs::symlink_metadata(&final_dir).is_ok_and(|metadata| metadata.file_type().is_symlink())

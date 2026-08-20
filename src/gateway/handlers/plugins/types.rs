@@ -153,17 +153,11 @@ pub fn marketplace_registration_row(
     name: &str,
     config: &crate::extension::marketplace::types::MarketplaceConfig,
 ) -> aleph_protocol::plugins::MarketplaceRow {
-    use crate::extension::marketplace::types::MarketplaceSourceType;
-
-    let source_type = match config.source_type {
-        MarketplaceSourceType::Local => "local",
-        MarketplaceSourceType::Github => "github",
-    };
     let refusal = crate::extension::marketplace::MarketplaceManager::removal_refusal(name);
     aleph_protocol::plugins::MarketplaceRow {
         name: name.to_string(),
         source: config.source.clone(),
-        source_type: source_type.to_string(),
+        source_type: config.source_type.as_config_str().to_string(),
         removable: refusal.is_none(),
         unremovable_reason: refusal,
     }

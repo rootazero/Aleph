@@ -147,17 +147,23 @@ pub fn install_git_skill(
     // Last path segment is the on-disk skill name; the guard above guarantees it
     // is non-empty and free of `..`.
     let safe_name = leaf.rsplit(['/', '\\']).next().unwrap_or(&leaf).to_string();
-    // Restrict accepted git URL schemes: HTTPS (`https://`) and SSH-style scp
-    // form (`git@host:…`). Anything else (file://, ssh://, plain /local/path,
-    // gopher://) is a foothold into the sandbox and gets rejected at install
-    // time rather than at clone time (where the failure mode is opaque).
+    // Restrict accepted git URL schemes to HTTPS (`https://`). SCP-style SSH
+    // (`git@host:…`) used to be accepted for compatibility but opens SSH
+    // Trust-On-First-Use — a catalog entry that declared `git_url: "git@…"`
+    // could make the client auto-accept a fresh host key for an attacker
+    // host and pull arbitrary content through the otherwise-pinned sha256
+    // path. libgit2's curl backend (HTTPS) verifies against the system CA
+    // store, which is the only trust root we want to expose here. Any other
+    // scheme (file://, ssh://, plain /local/path, gopher://) is a foothold
+    // into the sandbox and gets rejected at install time rather than at
+    // clone time (where the failure mode is opaque).
     //
     // Tests opt out for the duration of one test with `AllowLocalGitUrl::set()`
     // so the fixture-driven harness (which clones from a tempdir) keeps working
     // without making `file://` a production-grade escape hatch.
     if !acceptable_git_url(git_url) {
         return Err(format!(
-            "git_url must be https:// or git@<host>:..., got '{git_url}'"
+            "git_url must be https:// (got '{git_url}')"
         ));
     }
     // Clone into an isolated per-source checkout (never the live skills dir),
@@ -225,17 +231,19 @@ pub fn install_git_skill(
 
 /// Restrict accepted git URL schemes.
 ///
-/// Production callers: HTTPS (`https://`) or SSH-style scp (`git@host:…`).
-/// Anything else (`file://`, `ssh://`, `/local/path`, `gopher://`) is a
-/// foothold into the sandbox; rejecting at install time gives a typed Err
-/// rather than an opaque libgit2 failure.
+/// Production callers: HTTPS only (`https://`). SCP-style SSH (`git@host:…`)
+/// is rejected — it triggers SSH Trust-On-First-Use (auto-accept on first
+/// connection, no out-of-band host key verification) and a hostile catalog
+/// entry can use it to make the client pull arbitrary content through an
+/// otherwise-pinned `sha256`. Other schemes (`file://`, `ssh://`,
+/// `/local/path`, `gopher://`) are a foothold into the sandbox; rejecting at
+/// install time gives a typed Err rather than an opaque libgit2 failure.
 ///
 /// `#[cfg(test)]`: a test that needs to clone from a tempdir opts out for its
 /// own duration with [`AllowLocalGitUrl::set`]. There is no such opt-out in a
 /// non-test build.
 fn acceptable_git_url(url: &str) -> bool {
-    let production_ok =
-        url.starts_with("https://") || (url.starts_with("git@") && url.contains(':'));
+    let production_ok = url.starts_with("https://");
     #[cfg(test)]
     {
         if AllowLocalGitUrl::is_set() {
@@ -634,7 +642,7 @@ mod tests {
     #[test]
     fn git_url_scheme_accepts_https_and_rejects_local() {
         assert!(acceptable_git_url("https://github.com/x/y"));
-        assert!(acceptable_git_url("git@github.com:x/y.git"));
+        assert!(!acceptable_git_url("git@github.com:x/y.git"));
         assert!(!acceptable_git_url("/tmp/local-path"));
         assert!(!acceptable_git_url("file:///tmp/local"));
         assert!(!acceptable_git_url("ssh://github.com/x/y"));
@@ -694,7 +702,7 @@ mod tests {
         assert!(!acceptable_git_url(WIN));
         assert!(!acceptable_git_url(NIX));
         assert!(acceptable_git_url("https://example.com/x.git"));
-        assert!(acceptable_git_url("git@example.com:x/y.git"));
+        assert!(!acceptable_git_url("git@example.com:x/y.git"));
     }
 
     #[test]

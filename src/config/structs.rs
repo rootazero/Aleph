@@ -468,6 +468,7 @@ impl Config {
                 base_url: (!c4.base_url.is_empty()).then(|| c4.base_url.clone()),
                 timeout_seconds: Some(c4.timeout_seconds),
                 verified: false,
+                enabled: c4.enabled,
             },
         );
         self.fetch = Some(crate::config::types::FetchConfigInternal {

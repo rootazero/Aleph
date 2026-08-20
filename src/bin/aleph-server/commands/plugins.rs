@@ -7,7 +7,7 @@
 //! the reverse-regression check (Task 25).
 
 use crate::cli::MarketplaceAction;
-use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+use alephcore::extension::marketplace::types::MarketplaceConfig;
 use alephcore::Config;
 use alephcore::PluginMarketplaceEntry;
 
@@ -265,23 +265,9 @@ async fn set_enabled_locally(name: &str, enabled: bool) -> Result<(), Box<dyn st
 fn load_marketplace_configs(
 ) -> Result<std::collections::HashMap<String, MarketplaceConfig>, Box<dyn std::error::Error>> {
     let config = Config::load()?;
-    Ok(config
-        .plugin_marketplaces
-        .iter()
-        .map(|(name, entry): (&String, &PluginMarketplaceEntry)| {
-            let source_type = match entry.source_type.as_str() {
-                "local" => MarketplaceSourceType::Local,
-                _ => MarketplaceSourceType::Github,
-            };
-            (
-                name.clone(),
-                MarketplaceConfig {
-                    source: entry.source.clone(),
-                    source_type,
-                },
-            )
-        })
-        .collect())
+    Ok(alephcore::extension::marketplace::configs_from_entries(
+        &config.plugin_marketplaces,
+    ))
 }
 
 /// Install plugin from marketplace (by name) or URL (legacy path)
@@ -404,7 +390,6 @@ pub async fn handle_plugin_update(
 pub async fn handle_marketplace_command(
     action: MarketplaceAction,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::marketplace::types::MarketplaceSourceType;
     use alephcore::extension::marketplace::MarketplaceManager;
 
     // Load marketplace config from config.toml
@@ -419,53 +404,35 @@ pub async fn handle_marketplace_command(
             println!("{:<25} {:<15} SOURCE", "NAME", "TYPE");
             println!("{}", "-".repeat(70));
             for (name, cfg) in &marketplaces {
-                let type_str = match cfg.source_type {
-                    MarketplaceSourceType::Github => "github",
-                    MarketplaceSourceType::Local => "local",
-                };
-                println!("{:<25} {:<15} {}", name, type_str, cfg.source);
+                println!(
+                    "{:<25} {:<15} {}",
+                    name,
+                    cfg.source_type.as_config_str(),
+                    cfg.source
+                );
             }
         }
         MarketplaceAction::Add { source } => {
-            // Derive name and type from source
-            let (name, source_type) = if source.contains('/') && !source.starts_with('/') {
-                // GitHub: "owner/repo" -> name from repo part
-                let repo = source
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&source)
-                    .to_lowercase();
-                (repo, MarketplaceSourceType::Github)
-            } else {
-                // Local path
-                let name = std::path::Path::new(&source)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("local")
-                    .to_string();
-                (name, MarketplaceSourceType::Local)
-            };
+            // Name and type come from the shared classifier, not from a
+            // heuristic written here. This arm and `plugin.marketplace.add`
+            // used to carry two different ones that disagreed about Windows
+            // paths, relative paths, bare words and name casing.
+            let spec = alephcore::extension::marketplace::classify(&source, None)?;
+            let name = spec.name;
+            let source = spec.source;
+            let source_type = spec.source_type;
 
-            manager.add(
-                name.clone(),
-                MarketplaceConfig {
-                    source: source.clone(),
-                    source_type: source_type.clone(),
-                },
-            );
+            let entry = MarketplaceConfig {
+                source: source.clone(),
+                source_type,
+            };
+            manager.add(name.clone(), entry.clone());
 
             // Save to config
             let mut config = Config::load()?;
-            config.plugin_marketplaces.insert(
-                name.clone(),
-                PluginMarketplaceEntry {
-                    source: source.clone(),
-                    source_type: match source_type {
-                        MarketplaceSourceType::Github => "github".to_string(),
-                        MarketplaceSourceType::Local => "local".to_string(),
-                    },
-                },
-            );
+            config
+                .plugin_marketplaces
+                .insert(name.clone(), PluginMarketplaceEntry::from(&entry));
             config.save_incremental(&["plugin_marketplaces"])?;
 
             println!("Added marketplace '{name}' ({source})");

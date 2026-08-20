@@ -209,8 +209,21 @@ impl LoopRegistry {
             .collect();
         for session in &targets {
             if let Some(live) = map.get(session) {
-                let next = live
-                    .clone()
+                // Leaving Active retires a tick that is still asleep — it
+                // never ran, so give its claim back (see `refund_iteration`).
+                // A tick already executing has cleared the marker itself,
+                // so nothing is refunded then. Without this, a kill-switch
+                // hit on a 1-cap loop could leave a Stopped row with
+                // `iterations_used: 1/1` having executed nothing — exactly
+                // the bug `transition` already defends against.
+                let retires_unrun_tick =
+                    live.status == LoopStatus::Active && live.pending_tick_wake_ms.is_some();
+                let base = if retires_unrun_tick {
+                    live.clone().refund_iteration()
+                } else {
+                    live.clone()
+                };
+                let next = base
                     .with_status(LoopStatus::Stopped)
                     .with_stop_reason(Some(reason.to_string()))
                     .with_pending_tick(None);
@@ -234,24 +247,41 @@ impl LoopRegistry {
     /// being deactivated here. One-way freeze: reactivating the user does not
     /// auto-resume its loops (spec is silent on auto-resume).
     pub fn pause_all_owned_by(&self, user_id: &str) -> usize {
-        let targets: Vec<String> = self
-            .list_all()
-            .into_iter()
+        let reason = format!("Account '{user_id}' was deactivated — pursuit frozen.");
+        let mut map = self.lock();
+        // Snapshot + transition under a single lock guard, matching
+        // `stop_all`'s atomic shape: no release between the scan and the
+        // per-row transitions, so a concurrent `start` cannot insert a new
+        // loop belonging to the same user that this snapshot silently misses.
+        let targets: Vec<String> = map
+            .values()
             .filter(|l| {
                 l.status != LoopStatus::Stopped && l.owner_user_id.as_deref() == Some(user_id)
             })
-            .map(|l| l.session_id)
+            .map(|l| l.session_id.clone())
             .collect();
-        let reason = format!("Account '{user_id}' was deactivated — pursuit frozen.");
-        targets
-            .iter()
-            .filter(|session_id| {
-                matches!(
-                    self.transition(session_id, LoopStatus::Paused, Some(reason.clone())),
-                    TransitionOutcome::Applied { .. }
-                )
-            })
-            .count()
+        let mut applied = 0usize;
+        for session_id in &targets {
+            let Some(live) = map.get(session_id) else {
+                continue;
+            };
+            let from = live.status;
+            // Pause is legal from Active or Paused (no-op counted below).
+            let legal = matches!(from, LoopStatus::Active | LoopStatus::Paused);
+            if !legal {
+                continue;
+            }
+            let next = live
+                .clone()
+                .with_status(LoopStatus::Paused)
+                .with_stop_reason(Some(reason.clone()))
+                .with_pending_tick(None);
+            map.insert(session_id.clone(), next);
+            if from == LoopStatus::Active {
+                applied += 1;
+            }
+        }
+        applied
     }
 
     /// The continuation hook's whole post-run decision, under ONE lock guard:
@@ -296,8 +326,16 @@ impl LoopRegistry {
         // A tick already in flight blocks another claim — this is the fan-out
         // gate. Past the stale grace the enqueued task is presumed dead and
         // the claim proceeds (its own confirm_fire will then mismatch).
+        //
+        // `now_ms == 0` is the documented "clock unavailable" sentinel — the
+        // rest of the module treats it as fail-open (`exhausted`,
+        // `fires_out_of_bounds`, `is_final_deadline_tick`, `live_status`).
+        // Failing CLOSED here would strand a previously-healthy loop as a
+        // dormant Active until the next user input, for a blip that may
+        // last only one SystemTime call. Match the module-wide fail-open
+        // discipline by skipping the in-flight gate when we cannot tell.
         if let Some(wake) = state.pending_tick_wake_ms {
-            if now_ms < wake.saturating_add(PENDING_TICK_STALE_GRACE_MS) {
+            if now_ms != 0 && now_ms < wake.saturating_add(PENDING_TICK_STALE_GRACE_MS) {
                 // Persist a just-seeded baseline even when skipping.
                 map.insert(session_id.to_string(), state);
                 return TickDecision::Idle;
@@ -1108,6 +1146,59 @@ mod tests {
             "an untouched loop keeps its original reason"
         );
         assert!(LoopRegistry::default().stop_all("x").is_empty());
+    }
+
+    /// `transition(_, Stopped, _)` already refunds an unrun tick when leaving
+    /// Active with a claimed-but-unfired marker. `stop_all` used to write the
+    /// status change directly and silently skip the refund, so a 1-cap loop
+    /// hit by a kill switch would land `iterations_used: 1/1` having
+    /// executed nothing. Pinned here so the two write paths cannot drift.
+    #[test]
+    fn stop_all_refunds_iteration_on_active_with_pending_tick() {
+        let reg = LoopRegistry::default();
+        // Claim a tick on a 1-cap loop — the bump to iterations_used=1
+        // happens in `try_claim_tick` (spent_iteration), so the registry now
+        // holds Active with pending_tick_wake_ms=Some(…) and iterations_used=1.
+        let cap_one = st("a").with_max_iterations(Some(1));
+        reg.put(cap_one.clone());
+        let _ = reg.try_claim_tick("a", None, 1_000);
+        let claimed = reg.get("a").unwrap();
+        assert_eq!(claimed.iterations_used, 1);
+        assert!(
+            claimed.pending_tick_wake_ms.is_some(),
+            "claim must stamp the pending marker"
+        );
+
+        let stopped = reg.stop_all("kill switch");
+        assert_eq!(stopped, vec!["a".to_string()]);
+        let after = reg.get("a").unwrap();
+        assert_eq!(after.status, LoopStatus::Stopped);
+        assert_eq!(
+            after.iterations_used, 0,
+            "the unrun tick's claim must be refunded, not carried into Stopped"
+        );
+        assert!(after.pending_tick_wake_ms.is_none());
+    }
+
+    /// `try_claim_tick` must match the module-wide fail-open discipline when
+    /// the clock is unavailable (`now_ms == 0` sentinel). Today only this
+    /// gate fails closed; the bug strands a healthy loop until the next user
+    /// input. Pinned here so a future refactor cannot silently flip it back.
+    #[test]
+    fn try_claim_tick_proceeds_when_clock_unavailable_and_tick_in_flight() {
+        let reg = LoopRegistry::default();
+        reg.put(st("a").with_max_iterations(Some(3)));
+        // Pre-seed an in-flight marker as if a previous claim had been made
+        // and the wake is in the future.
+        let pre = reg.get("a").unwrap().clone().with_pending_tick(Some(1_000_000));
+        reg.put(pre);
+        // now_ms == 0 means the clock is unavailable. The in-flight gate must
+        // fall through, the claim must proceed, and the loop must Fire.
+        let decision = reg.try_claim_tick("a", None, 0);
+        assert!(
+            matches!(decision, TickDecision::Fire { .. }),
+            "clock-unavailable must not strand an Active loop: {decision:?}"
+        );
     }
 
     #[test]
