@@ -398,11 +398,21 @@ impl GroupChatExecutor {
             persist_seq = persist_seq.saturating_add(1);
         }
 
-        // Advance current_round after a successful commit. The rollback path
-        // below restores both `history` and `current_round`.
+        // Advance current_round after a successful commit. Note: this is NOT
+        // transactional with the DB persistence below — `session.history` and
+        // `session.current_round` are mutated before `persist_turn` runs, so a
+        // cancel that lands between this assignment and the persistence loop
+        // leaves the in-memory session one round ahead of the
+        // `group_chat_turns` table. There is no rollback path here (none was
+        // ever needed before the staging refactor); the asymmetry is
+        // recoverable on next round by re-staging the user turn. If we ever
+        // add a transactional guarantee, this is the point to attach it.
         session.current_round = round;
 
-        // Persist every staged turn to the DB.
+        // Persist every staged turn to the DB. Best-effort: a DB error here
+        // is logged via `persist_turn` itself and does not propagate — the
+        // round is considered successful from the caller's perspective once
+        // the in-memory state is committed above.
         for (round_v, seq, speaker, content) in &staged_turns {
             self.persist_turn(&session.id, *round_v, *seq, speaker, content)
                 .await;
