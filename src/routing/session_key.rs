@@ -73,7 +73,41 @@ pub enum SessionKey {
         subagent_id: String,
     },
 
-    /// Ephemeral session (no persistence)
+    /// Ephemeral session: not part of any conversation's addressable history,
+    /// but **stored like every other session**. Both backends give it a real
+    /// row — `session_store::file_backend` writes it with
+    /// `session_type = "ephemeral"`, and the SQLite backend INSERTs the same
+    /// string via `session_manager::ops::session_type_str`.
+    ///
+    /// The name once said "no persistence", which was never true and was the
+    /// reason nothing ever cleaned these up: every reader concluded there was
+    /// nothing to clean. Whoever mints one owns retiring it — see
+    /// [`crate::gateway::continuation_lifecycle::terminate_session_continuations`]
+    /// for the `/btw` side session's retirement.
+    ///
+    /// # Retirement must stay targeted — a sweep would delete live work
+    ///
+    /// Do not retire these by *variant*, or by any prefix broader than one
+    /// derived key. This variant is the catch-all for "a session that is not a
+    /// conversation", and several of its inhabitants are running right now:
+    /// background sub-agent children (`agents::subagent_spawner`), the
+    /// OpenAI-compatible completions face (`gateway::openai_api`), and the
+    /// steering rescue path all mint `Ephemeral` keys. A "tidy up old
+    /// ephemerals" job would kill sub-agent work mid-flight.
+    ///
+    /// The `/btw` retirement is safe precisely because it is not a sweep: it
+    /// deletes exactly `gateway::btw::side_key_for(<the key being retired>)`
+    /// and nothing else.
+    ///
+    /// # A side session's row is load-bearing, not just residue
+    ///
+    /// It carries the incremental seed cursor
+    /// (`identity_meta.custom["btw_seed_cursor"]`, see `gateway::btw::seed`),
+    /// so deleting the row also discards how far the side thread has been
+    /// seeded. That is correct on an epoch bump and on delete — the derived key
+    /// changes or the conversation is gone, so a fresh cold seed is exactly
+    /// right — and it would be wrong at any other time. Deleting one of these
+    /// on a timer would silently re-seed every user's side thread from scratch.
     Ephemeral {
         agent_id: String,
         ephemeral_id: String,

@@ -310,10 +310,14 @@ impl InboundMessageRouter {
         // Terminate the closed session's autonomous continuations BEFORE the
         // epoch bump — after it, `/loop stop` / `goal clear` route to the new
         // epoch and the old chain becomes uncancellable (shared seam with the
-        // Panel `sessions.new` RPC).
+        // Panel `sessions.new` RPC). The same call retires the `/btw` side
+        // session derived from this key; the store handle is optional here for
+        // the same reason the epoch lookup above is, and without it the side
+        // session is left as disk residue rather than anything worse.
         crate::gateway::continuation_lifecycle::terminate_session_continuations(
-            &old_key_resolved.to_key_string(),
+            &old_key_resolved,
             "/new",
+            self.session_store.clone(),
         );
 
         let new_key = old_key.with_epoch(current_epoch + 1);
