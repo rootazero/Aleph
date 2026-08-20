@@ -592,7 +592,12 @@ impl ExtensionManager {
 
         if changed {
             if !enabled {
-                let _ = self.unload_runtime_plugin(plugin_id).await;
+                if let Err(e) = self.unload_runtime_plugin(plugin_id).await {
+                    // Non-fatal: the next reload attempt or process restart will
+                    // reap the orphaned runtime. Log so the operator can see
+                    // stale state without grepping logs at debug level.
+                    tracing::warn!(plugin_id = %plugin_id, error = %e, "failed to unload plugin runtime on disable");
+                }
             }
             *self.hook_executor.write().await = crate::extension::hooks::HookExecutor::empty()
                 .with_consent(crate::extension::hooks::ShellHookConsent::shared());
