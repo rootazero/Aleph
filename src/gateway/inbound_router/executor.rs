@@ -375,7 +375,7 @@ impl InboundMessageRouter {
         // Project-mode override (free workdir choice) enters via the desktop
         // Panel's `chat.send` and is gated there on Config tier.
         let effective_workspace = ctx.workspace.clone().or(channel_workspace);
-        let request = RunRequest {
+        let mut request = RunRequest {
             run_id: run_id.clone(),
             input: ctx.message.text.clone(),
             session_key: ctx.session_key.clone(),
@@ -413,11 +413,24 @@ impl InboundMessageRouter {
             run_id
         );
 
-        // Busy lane is keyed by SESSION (matches the engine's per-session
-        // `SessionRunRegistry` gate). Two sessions of the same agent get
-        // independent lanes and run in parallel; only same-session messages
-        // serialize FIFO.
-        let session_key = request.session_key.to_key_string();
+        // Recognise a `/btw` side question BEFORE the lane, not only inside
+        // `execute()`. The lane below is registered before the engine is ever
+        // entered, and to `btw::execution_session` an unstamped request is
+        // indistinguishable from an ordinary one — so an unstamped side
+        // question would queue on the session it was typed in and wait behind
+        // the very run it is asking about. Idempotent: `execute()`'s own call
+        // stamps from this same `request.input` and finds the key already
+        // there. The RPC surfaces get this from `stamp_slash_mode`, which they
+        // call before `spawn_queued_run` for the identical reason.
+        crate::gateway::execution_engine::stamp_btw(&request.input, &mut request.metadata);
+
+        // Busy lane is keyed by the session the run will EXECUTE on (matches
+        // the engine's per-session `SessionRunRegistry` gate, which claims the
+        // same key). Two sessions of the same agent get independent lanes and
+        // run in parallel; only same-session messages serialize FIFO. A side
+        // question executes on a derived session, so it gets its own lane —
+        // that is what lets it answer while the main run keeps going, and
+        // `register_run` is what picks the key rather than this call site.
         let agent_id_for_busy = request.session_key.agent_id().to_string();
         let busy_cfg = self.busy_queue_config().await;
 
@@ -426,8 +439,9 @@ impl InboundMessageRouter {
         // lane order depend on task scheduling, so two messages sent a
         // millisecond apart could enqueue inverted, defeating the arrival-order
         // guarantee the lane exists to provide.
-        let ticket = crate::gateway::busy_queue::register(
-            &session_key,
+        let ticket = crate::gateway::busy_queue::register_run(
+            &request.session_key,
+            &request.metadata,
             busy_cfg.max_per_session,
             &request.run_id,
         );

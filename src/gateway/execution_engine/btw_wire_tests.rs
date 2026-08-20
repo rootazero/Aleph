@@ -252,6 +252,79 @@ async fn promote_is_bound_by_the_same_ceiling() {
 }
 
 // ---------------------------------------------------------------------------
+// The arrival lane
+// ---------------------------------------------------------------------------
+
+/// The other half of "it answers while the main run keeps going", and the half
+/// the engine cannot show: the arrival lane is registered **before** the engine
+/// is ever entered, and only its FIFO front ticket attempts delivery. A side
+/// question queued on the session it was typed in therefore parks behind the
+/// very run it is asking about — with `admit_run` and the ceiling both perfectly
+/// correct, and nothing anywhere reporting it.
+///
+/// Driven against the real `busy_queue` with the real key derivation, one lane
+/// occupied the whole time. The control arm is the same call with the stamp
+/// removed: it must time out, or this test would pass on a lane that never
+/// blocks anyone.
+#[tokio::test]
+async fn a_side_question_does_not_queue_behind_the_main_run() {
+    use crate::gateway::busy_queue::{
+        deliver_with_ticket, register, BusyQueueConfig, DeliveryOutcome,
+    };
+
+    let cfg = BusyQueueConfig {
+        max_per_session: 8,
+        // Short: the control arm below waits it out on purpose.
+        max_wait_secs: 1,
+        wake_fallback_secs: 3600,
+    };
+    let main = SessionKey::main("btw-lane");
+    let main_lane = main.to_key_string();
+
+    // The main run, holding its lane's front ticket for the whole test — which
+    // is exactly what `deliver_with_ticket` does while `execute()` runs.
+    let _main_run = register(&main_lane, cfg.max_per_session, "run-main")
+        .expect("the main run takes the front ticket");
+
+    let mut side_question = gate_test_request(&main, "run-btw");
+    side_question.input = "/btw why?".to_string();
+    stamp_btw(&side_question.input, &mut side_question.metadata);
+    let side_lane =
+        crate::gateway::btw::execution_session(&side_question.session_key, &side_question.metadata)
+            .to_key_string();
+
+    let ticket = register(&side_lane, cfg.max_per_session, "run-btw")
+        .expect("the side question takes a ticket on its own lane");
+    let outcome = deliver_with_ticket(ticket, cfg, &mut || async { Ok(()) }).await;
+    assert!(
+        matches!(outcome, DeliveryOutcome::Executed(Ok(()))),
+        "a side question must be delivered while the main run holds its lane, \
+         got {outcome:?}"
+    );
+
+    // Control: the same message with no stamp resolves to the main lane, where
+    // the occupied front ticket makes it wait — and it is that difference, not
+    // anything else about this rig, that the assertion above is reading.
+    let mut ordinary = gate_test_request(&main, "run-ordinary");
+    ordinary.input = "why?".to_string();
+    stamp_btw(&ordinary.input, &mut ordinary.metadata);
+    let ordinary_lane =
+        crate::gateway::btw::execution_session(&ordinary.session_key, &ordinary.metadata)
+            .to_key_string();
+    assert_eq!(ordinary_lane, main_lane);
+
+    let ticket = register(&ordinary_lane, cfg.max_per_session, "run-ordinary")
+        .expect("the ordinary message takes a ticket");
+    let outcome = deliver_with_ticket(ticket, cfg, &mut || async { Ok(()) }).await;
+    assert!(
+        matches!(outcome, DeliveryOutcome::TimedOut),
+        "an ordinary message must wait behind the main run — if it does not, \
+         this lane is not the thing the side question needed to escape, and the \
+         assertion above proves nothing. Got {outcome:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The redirect on its own
 // ---------------------------------------------------------------------------
 

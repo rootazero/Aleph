@@ -54,7 +54,7 @@ pub use engine::{ContinuationDeps, ExecutionEngine};
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 pub use simple::SimpleExecutionEngine;
-pub(crate) use slash_command::{is_continuation_driven_slash, is_shorthand_alias};
+pub(crate) use slash_command::{is_continuation_driven_slash, is_shorthand_alias, stamp_btw};
 pub(crate) use steering::wake_lane_if_burst_drained;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use tool_service_builder::build_request_tool_service;

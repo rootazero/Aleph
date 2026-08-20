@@ -80,21 +80,24 @@ fn moa_fallthrough_input(original: &str) -> Option<String> {
 /// function then reads the side key everywhere by construction rather than by
 /// each site remembering to.
 ///
-/// The predicate is the metadata key, not the input string: `stamp_btw` is the
-/// one resolver ([`crate::gateway::btw::BtwTurn::resolve`]), and re-deriving
-/// "is this a btw" from the text here would be a second answer to a question
-/// that already has one.
+/// # This is the write, not the decision
+///
+/// The decision is [`btw::execution_session`], and the engine is not the first
+/// to ask it: `busy_queue` keys its arrival lane on the same answer, one layer
+/// further out, and a side question queued on the main lane waits behind the
+/// run it was asked about. This function is the one place that *writes* the
+/// answer into the request; asking is free and idempotent, writing twice would
+/// derive the side key of the side key.
+///
+/// [`btw::execution_session`]: crate::gateway::btw::execution_session
 pub(super) fn redirect_to_side_session(
     request: &mut RunRequest,
 ) -> Option<crate::routing::session_key::SessionKey> {
-    if !request
-        .metadata
-        .contains_key(crate::gateway::btw::BTW_METADATA_KEY)
-    {
+    let resolved = crate::gateway::btw::execution_session(&request.session_key, &request.metadata);
+    if resolved == request.session_key {
         return None;
     }
-    let side = crate::gateway::btw::side_key_for(&request.session_key);
-    Some(std::mem::replace(&mut request.session_key, side))
+    Some(std::mem::replace(&mut request.session_key, resolved))
 }
 
 impl<P, R> ExecutionEngine<P, R>

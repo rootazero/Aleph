@@ -193,6 +193,34 @@ pub fn register(session_key: &str, max_per_session: usize, run_id: &str) -> Opti
     })
 }
 
+/// Join the FIFO lane of the session this run will **execute** on.
+///
+/// The entry point every arrival path uses. [`register`] takes a raw lane key
+/// and stays public for this module's own tests, which exercise lane mechanics
+/// on invented keys; production code has a request in hand and must not pick
+/// the key itself, because the session a run is addressed to is not always the
+/// session it runs on.
+///
+/// The one case where they differ today is a `/btw` side question, which runs
+/// on a derived session ([`crate::gateway::btw::execution_session`]). Keying
+/// its ticket on the conversation it was typed in parks it behind the run it is
+/// asking about — only the front ticket attempts delivery — which is precisely
+/// what a side question exists not to do, and nothing anywhere reports it: the
+/// engine's own gate, the tier and the seed are all still perfectly correct.
+///
+/// Same arrival-path rule as [`register`]: call this synchronously, before
+/// spawning the delivery task.
+#[must_use]
+pub fn register_run(
+    addressed_to: &crate::routing::session_key::SessionKey,
+    metadata: &HashMap<String, String>,
+    max_per_session: usize,
+    run_id: &str,
+) -> Option<TicketGuard> {
+    let lane = crate::gateway::btw::execution_session(addressed_to, metadata);
+    register(&lane.to_key_string(), max_per_session, run_id)
+}
+
 /// Signal that `session_key`'s run slot is free, so its front waiter may try.
 ///
 /// Called from the engine's `SessionRunRegistry::release` — the one place a
@@ -630,6 +658,110 @@ mod tests {
     use super::*;
 
     const CAP: usize = 32;
+
+    /// Production code takes its ticket through [`register_run`], which picks
+    /// the lane from the request. Reaching for the raw-key [`register`] is how
+    /// an arrival path silently keys a run on the wrong session — and the
+    /// failure is invisible everywhere else: the engine's gate, the tier and
+    /// the seed all stay correct while the run waits behind a stranger.
+    ///
+    /// Phrased over *whichever* files call it, not over a list of the two that
+    /// do today, so a third arrival path inherits the requirement instead of
+    /// having to be told. Source-level because the two functions are
+    /// indistinguishable at runtime once the key is a string.
+    ///
+    /// Bounded to `src/gateway/` and it says so: a lane registration needs a
+    /// `RunRequest`, which is a gateway type. Outside that tree this scan is
+    /// blind, which is the stated edge rather than a claim about the repo.
+    #[test]
+    fn no_production_arrival_path_picks_its_own_lane_key() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let gateway = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway");
+        // Only this file, not the whole module: `spawn.rs` is an arrival path
+        // like any other and must be scanned, or breaking the one caller
+        // outside the module would empty the census and report itself as "the
+        // pattern rotted" instead of naming the offender.
+        let definition_site = gateway.join("busy_queue").join("mod.rs");
+        let mut files = Vec::new();
+        walk(&gateway, &mut files);
+
+        let mut offenders: Vec<String> = Vec::new();
+        let mut derived_callers = 0usize;
+        for path in files {
+            // This file owns the raw form; `register_run` is built on it.
+            if path == definition_site {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // Split on the bare attribute, never on `\n#[cfg(test)]\n`: this
+            // repo's Windows checkouts are CRLF, where an anchored separator
+            // matches nothing and the "production prefix" quietly becomes the
+            // whole file — including every test that legitimately invents a
+            // lane key.
+            let normalized = text.replace('\r', "");
+            let production = normalized
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let rel = path
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            // Inside this module the two are imported and called bare; outside
+            // it they can only be reached through the module path. Matching the
+            // bare form everywhere would sweep in a dozen unrelated `register`
+            // verbs that live in this tree (`channel_registry`, the interface
+            // plugin table, `RunningRegistration`) — a name is not a callee.
+            let inside_module = path.starts_with(gateway.join("busy_queue"));
+            for (n, line) in production.lines().enumerate() {
+                // Comments describe, they do not call.
+                let code = line.split("//").next().unwrap_or_default();
+                let calls = |name: &str| {
+                    if inside_module {
+                        code.match_indices(&format!("{name}("))
+                            .any(|(i, _)| !code[..i].ends_with('.'))
+                    } else {
+                        code.contains(&format!("busy_queue::{name}("))
+                    }
+                };
+                if calls("register_run") {
+                    derived_callers += 1;
+                } else if calls("register") {
+                    offenders.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+
+        assert!(
+            derived_callers >= 1,
+            "the scan found no `register_run` caller at all, so its green means \
+             nothing — the arrival paths moved or the pattern stopped matching"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these pick a lane key themselves instead of letting `register_run` \
+             derive it from the request; a `/btw` side question they carry \
+             queues behind the run it is asking about, silently:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
 
     // Tests share one process-global lane map, so each test uses a unique
     // session key to stay isolated under the parallel test runner.

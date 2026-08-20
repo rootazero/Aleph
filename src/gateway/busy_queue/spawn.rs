@@ -7,7 +7,7 @@
 //! user a receipt* — that rule lives with [`DeliveryOutcome`], and this is its
 //! one implementation for stream surfaces.
 
-use super::{deliver_with_ticket, register, BusyQueueConfig, DeliveryOutcome};
+use super::{deliver_with_ticket, register_run, BusyQueueConfig, DeliveryOutcome};
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::i18n::Locale;
@@ -50,7 +50,21 @@ pub fn spawn_queued_run<P, R, E>(
     let run_id = request.run_id.clone();
     let session_key = request.session_key.to_key_string();
     let agent_id = request.session_key.agent_id().to_string();
-    let ticket = register(&session_key, cfg.max_per_session, &run_id);
+    // `register_run`, not `register`: the lane is keyed on the session this run
+    // will EXECUTE on, which for a side question is not the one it was
+    // addressed to. See that function for what keying it wrong costs.
+    //
+    // `session_key` above stays the session it was ADDRESSED to, and the two
+    // uses below want that one: the log line reads better against the
+    // conversation a person is looking at, and the `RunError` receipt for a run
+    // that never reached the engine has to resolve on the client that is
+    // attached to it — the derived session may have no row at all yet.
+    let ticket = register_run(
+        &request.session_key,
+        &request.metadata,
+        cfg.max_per_session,
+        &run_id,
+    );
 
     tokio::spawn(async move {
         let outcome = match ticket {

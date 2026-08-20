@@ -82,6 +82,45 @@ impl BtwTurn {
     }
 }
 
+/// The session a run will execute on: the one it was addressed to, unless it
+/// carries the side-question stamp.
+///
+/// **Every layer that keys anything on "which session is this run" must ask
+/// this, not `request.session_key`.** There is more than one such layer and
+/// they are not adjacent:
+///
+/// * `busy_queue` registers the arrival ticket, and only the FIFO front ticket
+///   attempts delivery. A side question queued on the MAIN session's lane waits
+///   behind the run it was asked about — which deletes the whole promise ("it
+///   answers while the main run keeps going") one layer further out than the
+///   engine, where nothing about the engine looks wrong.
+/// * `ExecutionEngine::admit_run` claims the session's run slot and, when the
+///   claim fails, applies the busy-input policy — so a side question on the main
+///   key is steered, interrupted or queued against the running turn.
+///
+/// A **query**, deliberately, even though the engine goes on to write the
+/// result into the request. The lane asks before the engine does, and the two
+/// must agree; a mutation asked twice would derive the side key OF the side key
+/// and land the run somewhere neither layer named. As a query it is idempotent
+/// by construction: same input, same answer, however many layers ask.
+///
+/// The predicate is the metadata stamp, never the input text —
+/// [`BtwTurn::resolve`] is the one resolver, and a layer re-deriving "is this a
+/// btw" from the string would be a second answer to a question that already has
+/// one. A layer that sits before whatever stamps must call the stamp first, not
+/// invent its own test.
+#[must_use]
+pub fn execution_session(
+    addressed_to: &SessionKey,
+    metadata: &std::collections::HashMap<String, String>,
+) -> SessionKey {
+    if metadata.contains_key(BTW_METADATA_KEY) {
+        side_key_for(addressed_to)
+    } else {
+        addressed_to.clone()
+    }
+}
+
 /// The side session key for `main`.
 ///
 /// **Single source — write and read must be this same function.** Two call
