@@ -295,7 +295,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                             None => self
                                 .session_context_handle
                                 .as_ref()
-                                .and_then(|h| h.try_read().ok())
+                                .and_then(|h| match h.try_read() {
+                                    Ok(ctx) => Some(ctx),
+                                    Err(_) => {
+                                        tracing::warn!(
+                                            "loop_graph: session context lock contended; the \
+                                             installed cron job will have no delivery route"
+                                        );
+                                        None
+                                    }
+                                })
                                 .map(|ctx| {
                                     (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone()))
                                 })
@@ -632,7 +641,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                         crate::tools::turn_context::current_session_key().or_else(|| {
                             self.session_context_handle
                                 .as_ref()
-                                .and_then(|h| h.try_read().ok())
+                                .and_then(|h| match h.try_read() {
+                                    Ok(ctx) => Some(ctx),
+                                    Err(_) => {
+                                        tracing::warn!(
+                                            "session_new: session context lock contended; session \
+                                             key unresolved — no __session_key injected"
+                                        );
+                                        None
+                                    }
+                                })
                                 .map(|ctx| ctx.session_key_str.clone())
                         });
                     if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
@@ -660,7 +678,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                         crate::tools::turn_context::current_session_key().or_else(|| {
                             self.session_context_handle
                                 .as_ref()
-                                .and_then(|h| h.try_read().ok())
+                                .and_then(|h| match h.try_read() {
+                                    Ok(ctx) => Some(ctx),
+                                    Err(_) => {
+                                        tracing::warn!(
+                                            "session_compact: session context lock contended; \
+                                             session key unresolved — no __session_key injected"
+                                        );
+                                        None
+                                    }
+                                })
                                 .map(|ctx| ctx.session_key_str.clone())
                         });
                     if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
@@ -690,7 +717,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                         crate::tools::turn_context::current_session_key().or_else(|| {
                             self.session_context_handle
                                 .as_ref()
-                                .and_then(|h| h.try_read().ok())
+                                .and_then(|h| match h.try_read() {
+                                    Ok(ctx) => Some(ctx),
+                                    Err(_) => {
+                                        tracing::warn!(
+                                            "session_rename: session context lock contended; \
+                                             session key unresolved — no __session_key injected"
+                                        );
+                                        None
+                                    }
+                                })
                                 .map(|ctx| ctx.session_key_str.clone())
                         });
                     if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
@@ -720,7 +756,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                         crate::tools::turn_context::current_session_key().or_else(|| {
                             self.session_context_handle
                                 .as_ref()
-                                .and_then(|h| h.try_read().ok())
+                                .and_then(|h| match h.try_read() {
+                                    Ok(ctx) => Some(ctx),
+                                    Err(_) => {
+                                        tracing::warn!(
+                                            "session_set_mode: session context lock contended; \
+                                             session key unresolved — no __session_key injected"
+                                        );
+                                        None
+                                    }
+                                })
                                 .map(|ctx| ctx.session_key_str.clone())
                         });
                     if let (Some(session_key), Some(obj)) = (session_key, args.as_object_mut()) {
@@ -866,7 +911,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                         None => self
                             .session_context_handle
                             .as_ref()
-                            .and_then(|h| h.try_read().ok())
+                            .and_then(|h| match h.try_read() {
+                                Ok(ctx) => Some(ctx),
+                                Err(_) => {
+                                    tracing::warn!(
+                                        "agent management tools: session context lock contended; \
+                                         channel unresolved — no __channel injected"
+                                    );
+                                    None
+                                }
+                            })
                             .map(|ctx| ctx.channel.clone()),
                     };
                     if let (Some(channel), Some(obj)) = (channel, args.as_object_mut()) {
@@ -1548,7 +1602,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let session_id = crate::tools::turn_context::current_session_key().or_else(|| {
                     self.session_context_handle
                         .as_ref()
-                        .and_then(|h| h.try_read().ok())
+                        .and_then(|h| match h.try_read() {
+                            Ok(ctx) => Some(ctx),
+                            Err(_) => {
+                                tracing::warn!(
+                                    "recall_context: session context lock contended; session key \
+                                     unresolved — the call will fail: no active session context"
+                                );
+                                None
+                            }
+                        })
                         .map(|ctx| ctx.session_key_str.clone())
                 });
                 // Resolve the same (optionally project-scoped) agent id the
