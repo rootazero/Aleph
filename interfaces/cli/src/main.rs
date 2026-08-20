@@ -765,7 +765,8 @@ async fn dispatch_marketplace(
     // now follows. A hand-copied key here is the exact shape that made
     // `aleph plugin call` fail on every invocation it ever had.
     use aleph_protocol::plugins::{
-        MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpdateParams,
+        MarketplaceAddParams, MarketplaceBrowseParams, MarketplaceRemoveParams,
+        MarketplaceUpdateParams,
     };
     let (method, params) = match action {
         MarketplaceAction::Add { source } => (
@@ -773,6 +774,10 @@ async fn dispatch_marketplace(
             serde_json::to_value(MarketplaceAddParams { source, name: None })?,
         ),
         MarketplaceAction::List => ("plugin.marketplace.list", serde_json::json!({})),
+        MarketplaceAction::Browse { query, marketplace } => (
+            "plugin.marketplace.browse",
+            serde_json::to_value(MarketplaceBrowseParams { marketplace, query })?,
+        ),
         MarketplaceAction::Update { name } => (
             "plugin.marketplace.update",
             serde_json::to_value(MarketplaceUpdateParams { name })?,
@@ -785,6 +790,39 @@ async fn dispatch_marketplace(
     let result: serde_json::Value = client.call(method, Some(params)).await?;
     if json {
         crate::output::print_json(&result);
+    } else if matches!(method, "plugin.marketplace.browse") {
+        // Rendered through the contract type, so a renamed wire key is a
+        // compile error here rather than a column of dashes. `providers list`
+        // printed `type` and `default` for a whole release while the server
+        // sent `provider_type` and `is_default`; nothing went red because a
+        // missing key renders exactly like a missing value.
+        let listing: aleph_protocol::plugins::MarketplaceBrowseResult =
+            serde_json::from_value(result)?;
+        // Problems first: an operator staring at an empty list needs to know
+        // whether the marketplace is empty or was never fetched.
+        for problem in &listing.problems {
+            eprintln!("! {}: {}", problem.marketplace, problem.reason);
+        }
+        if listing.plugins.is_empty() {
+            println!("No matching plugins.");
+        }
+        for row in &listing.plugins {
+            let version = if row.version.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", row.version)
+            };
+            println!("{}@{}{}", row.name, row.marketplace, version);
+            if !row.description.is_empty() {
+                println!("    {}", row.description);
+            }
+            // Printed for exactly the rows `plugin install` would refuse, from
+            // the server's own predicate — a listing that invites an action on
+            // a row the action rejects is worse than one that says so.
+            if let Some(reason) = &row.unavailable_reason {
+                println!("    (not installable: {reason})");
+            }
+        }
     } else if matches!(method, "plugin.marketplace.list") {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {

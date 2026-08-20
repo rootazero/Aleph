@@ -1170,7 +1170,14 @@
       "enable": "Enable",
       "disable": "Disable",
       "loading": "Loading plugins...",
-      "source_hint": "A bare name (my-plugin) is looked up in your marketplaces; anything with a / . or : is cloned as a Git URL."
+      "source_hint": "A bare name (my-plugin) is looked up in your marketplaces; anything with a / . or : is cloned as a Git URL.",
+      "browse_title": "Browse marketplace",
+      "browse_search_placeholder": "Search plugins by name or description",
+      "browse_refresh": "Refresh index",
+      "browse_refreshing": "Refreshing...",
+      "browse_empty": "No matching plugins.",
+      "browse_installed": "Installed",
+      "browse_loading": "Loading marketplace..."
     },
     "skills": {
       "add": "Add",

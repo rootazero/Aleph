@@ -296,6 +296,7 @@ mod tests {
     ("plugin.installFromZip", Class::Admin),
     ("plugin.list", Class::Admin),
     ("plugin.marketplace.add", Class::Admin),
+    ("plugin.marketplace.browse", Class::Admin),
     ("plugin.marketplace.install", Class::Admin),
     ("plugin.marketplace.list", Class::Admin),
     ("plugin.marketplace.remove", Class::Admin),

@@ -616,7 +616,7 @@ mod tests {
         // The DNS pin was removed (see network_policy's note): a control that
         // cannot fire on the reachable path is worse than none, because three
         // comments claimed it worked. This asserts it stays gone.
-        let args = chrome_launch_args(None);
+        let args = chrome_launch_args(None, "default");
         assert!(
             !args.iter().any(|a| a.contains("--host-resolver-rules")),
             "no --host-resolver-rules may reach Chrome — args = {args:?}"

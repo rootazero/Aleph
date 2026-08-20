@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use aleph_protocol::plugins::{PluginRow, PluginRuntimeStatus};
+use aleph_protocol::plugins::{MarketplacePluginRow, PluginRow, PluginRuntimeStatus};
 
 // The wire shapes below are **not** redefined here. They live in
 // `aleph_protocol::plugins` because `aleph-cli` — which cannot depend on
@@ -115,7 +115,32 @@ pub struct UnloadPluginParams {
 // Marketplace Parameters — shapes live in `aleph_protocol::plugins`
 // ============================================================================
 
+/// Build the wire row for one marketplace entry.
+///
+/// `installable` comes from [`PluginSearchResult::installable_path`] — the same
+/// call `install_to_scope` makes — rather than from re-reading the source enum
+/// here. Two readings drift, and the direction they drift in is a catalogue
+/// that offers an Install button the install call then refuses.
+#[must_use]
+pub fn marketplace_row(
+    entry: &crate::extension::marketplace::PluginSearchResult,
+) -> MarketplacePluginRow {
+    let (installable, unavailable_reason) = match entry.installable_path() {
+        Ok(_) => (true, None),
+        Err(reason) => (false, Some(reason)),
+    };
+    MarketplacePluginRow {
+        name: entry.plugin.name.clone(),
+        marketplace: entry.marketplace_name.clone(),
+        description: entry.plugin.description.clone().unwrap_or_default(),
+        version: entry.plugin.version.clone().unwrap_or_default(),
+        installable,
+        unavailable_reason,
+    }
+}
+
 pub use aleph_protocol::plugins::MarketplaceAddParams;
+pub use aleph_protocol::plugins::MarketplaceBrowseParams;
 pub use aleph_protocol::plugins::MarketplaceInstallParams;
 pub use aleph_protocol::plugins::MarketplaceRemoveParams;
 pub use aleph_protocol::plugins::MarketplaceUpdateParams;

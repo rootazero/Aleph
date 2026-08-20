@@ -380,6 +380,10 @@ mod tests {
                     action,
                     channel_id: None,
                     limit: None,
+                    // Confirmed on purpose: this asserts the no-store answer,
+                    // and an unconfirmed redrive returns the preview without
+                    // ever reaching it.
+                    confirm_redrive: Some(true),
                 })
                 .await
                 .expect("no store is not an error");
@@ -398,6 +402,7 @@ mod tests {
                 action: OutboxAction::DeadLetters,
                 channel_id: Some("teelgram".to_string()),
                 limit: None,
+                confirm_redrive: None,
             })
             .await
             .expect_err("a typo'd channel must not look like an empty result");

@@ -107,6 +107,38 @@ pub enum SkillSource {
 }
 
 impl SkillSource {
+    /// One word for where these instructions came from, for the reader that
+    /// is about to follow them.
+    ///
+    /// A skill body is not fenced as untrusted content, and correctly so — a
+    /// skill *is* instructions, and fencing it would defeat the mechanism.
+    /// What was missing is the other half: the model reads the body with no
+    /// way to tell "shipped with Aleph" from "appeared in the skills
+    /// directory" from "arrived with the repository I just cloned". The
+    /// provenance was computed all along (`skill::guess_source`) and used only
+    /// to rank overrides.
+    ///
+    /// This is deliberately a fact and not advice. Aleph does not gate skill
+    /// loading the way it gates plugin loading: a plugin registers executable
+    /// capability with no per-call decision (hooks fire, MCP servers spawn,
+    /// WASM loads), while everything a skill can cause re-enters through the
+    /// tool permission layer. The asymmetry that was real is this one — the
+    /// reader could not see where the words came from. Telling it what to
+    /// conclude would be teaching a strong model how to think (R9); telling it
+    /// where the words came from is a runtime fact it cannot derive.
+    ///
+    /// The match is exhaustive on purpose: a new variant must answer this
+    /// question at compile time rather than inherit someone else's label.
+    #[must_use]
+    pub fn provenance(&self) -> String {
+        match self {
+            Self::Bundled => "bundled".to_string(),
+            Self::Global => "user".to_string(),
+            Self::Workspace => "workspace".to_string(),
+            Self::Plugin(id) => format!("plugin:{}", id.as_str()),
+        }
+    }
+
     /// Priority for override resolution. Higher value wins.
     ///
     /// Bundled=1 < Global=2 < Plugin=3 < Workspace=4
@@ -640,6 +672,38 @@ impl Entity for SkillManifest {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every source says something, and no two say the same thing.
+    ///
+    /// The point of the field is that a reader can tell "shipped with Aleph"
+    /// from "appeared in the skills directory" from "arrived with this
+    /// checkout". Two variants sharing a word would collapse exactly the
+    /// distinction it exists to make. The `match` in `provenance` is
+    /// exhaustive, so a new variant cannot inherit a neighbour's label by
+    /// omission — this pins that it does not get a duplicate one either.
+    #[test]
+    fn every_skill_source_has_a_distinct_non_empty_provenance() {
+        use std::collections::HashSet;
+        let all = [
+            SkillSource::Bundled,
+            SkillSource::Global,
+            SkillSource::Workspace,
+            SkillSource::Plugin(PluginId::new("some-plugin")),
+        ];
+        let labels: Vec<String> = all.iter().map(SkillSource::provenance).collect();
+        assert!(
+            labels.iter().all(|l| !l.trim().is_empty()),
+            "a blank provenance is worse than none — it reads as 'no answer' \
+             while looking like one: {labels:?}"
+        );
+        let unique: HashSet<&String> = labels.iter().collect();
+        assert_eq!(unique.len(), all.len(), "labels collided: {labels:?}");
+        assert_eq!(
+            SkillSource::Plugin(PluginId::new("some-plugin")).provenance(),
+            "plugin:some-plugin",
+            "a plugin's label names which plugin — 'plugin' alone cannot be acted on"
+        );
+    }
     use super::*;
 
     // === Task 1 tests ===

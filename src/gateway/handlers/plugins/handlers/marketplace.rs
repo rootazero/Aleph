@@ -29,6 +29,55 @@ pub async fn handle_marketplace_list(request: JsonRpcRequest) -> JsonRpcResponse
     JsonRpcResponse::success(request.id, json!({ "marketplaces": result }))
 }
 
+/// List the plugins a marketplace contains.
+///
+/// The sibling above lists **registrations** — name, source, type. Nothing
+/// listed a marketplace's *contents*, and `search_plugin` only ever matched an
+/// exact id, so the only way to install by name was to already know the name.
+/// Panel's install dialog and `aleph plugin marketplace browse` are both this
+/// call.
+///
+/// Not auto-syncing is deliberate: browsing is a local read of an already
+/// fetched cache, and a browse that silently git-pulls turns opening a dialog
+/// into network I/O. A marketplace with no cache comes back in `problems`
+/// saying which command fetches it.
+pub async fn handle_marketplace_browse(request: JsonRpcRequest) -> JsonRpcResponse {
+    use crate::gateway::handlers::plugins::types::marketplace_row;
+    use aleph_protocol::plugins::{MarketplaceBrowseResult, MarketplaceProblemRow};
+
+    // Every field is optional, so an omitted `params` is a valid "browse
+    // everything" rather than an error.
+    let params: crate::gateway::handlers::plugins::types::MarketplaceBrowseParams =
+        serde_json::from_value(request.params.clone().unwrap_or(json!({}))).unwrap_or_default();
+
+    let manager = match build_marketplace_manager() {
+        Ok(m) => m,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    let listing = manager.browse(params.marketplace.as_deref(), params.query.as_deref());
+
+    // Built from the contract type rather than a `json!` literal: serde ignores
+    // unknown keys on the way in, so a test that only parses a real response is
+    // structurally blind to whatever else is on the wire.
+    let result = MarketplaceBrowseResult {
+        plugins: listing.entries.iter().map(marketplace_row).collect(),
+        problems: listing
+            .problems
+            .into_iter()
+            .map(|p| MarketplaceProblemRow {
+                marketplace: p.marketplace,
+                reason: p.reason,
+            })
+            .collect(),
+    };
+
+    match serde_json::to_value(result) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(request.id, -32000, format!("Serialisation error: {e}")),
+    }
+}
+
 /// Add a marketplace source
 pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse {
     use crate::config::PluginMarketplaceEntry;
@@ -160,15 +209,32 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
 
     // project_dir is None for now; project/local scope support requires workspace detection
     match manager.install_to_scope(&params.name, params.marketplace.as_deref(), scope, None) {
-        Ok(dest) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "ok": true,
-                "name": params.name,
-                "scope": scope_str,
-                "installed_at": dest.to_string_lossy(),
-            }),
-        ),
+        Ok(dest) => {
+            // Refresh the live extension set, exactly as the git-clone
+            // installer and `plugin.update` do.
+            //
+            // Installing has two routes — `plugins.install` (a git URL) and
+            // this one — and only the other one refreshed. `plugin.install`
+            // sends a bare name here, so the plugin landed on disk and stayed
+            // invisible to `plugins.list` until the daemon was restarted: an
+            // install that reports success and changes nothing an operator can
+            // see. `handle_update`'s own comment says its reload "matches the
+            // install handler's behaviour", which was true of one of the two.
+            if let Ok(mgr) = crate::gateway::handlers::plugins::handlers::get_extension_manager() {
+                if let Err(e) = mgr.reload().await {
+                    tracing::warn!("Failed to refresh extensions after install: {}", e);
+                }
+            }
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "ok": true,
+                    "name": params.name,
+                    "scope": scope_str,
+                    "installed_at": dest.to_string_lossy(),
+                }),
+            )
+        }
         Err(e) => JsonRpcResponse::error(request.id, -32000, e),
     }
 }

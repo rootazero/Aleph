@@ -276,4 +276,95 @@ handler = "handle2"
         assert!(!result.is_valid());
         assert!(result.errors[0].contains("exist"));
     }
+
+    /// Every plugin Aleph ships must pass Aleph's own installer.
+    ///
+    /// This is the guard that was missing. `plugins/` is a submodule whose
+    /// manifests are written by one author and parsed by another, and nothing
+    /// ever ran the second author over the first author's output: two of the
+    /// seven bundled plugins wrote `id` in `[[aleph.services]]` where this
+    /// crate's `ServiceSection` wanted `name`, and a missing *required* field
+    /// is not a missing field to serde — it fails the whole document. So
+    /// `diagnostics` and `voice-call` could not be installed at all, and the
+    /// only way to find out was to install one.
+    ///
+    /// It stayed invisible behind a second defect: the built-in marketplace
+    /// was unreadable to every lookup, so install-by-name never got as far as
+    /// validating anything. Fixing that made this the next thing to run.
+    ///
+    /// Asserting through `validate_plugin` rather than through the parser
+    /// directly, because `validate_plugin` is the call `install_to_scope`
+    /// makes — a test against a different entry point can pass while the one
+    /// install uses refuses.
+    #[test]
+    fn every_bundled_plugin_passes_the_installers_own_validation() {
+        let plugins_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        let Ok(entries) = std::fs::read_dir(&plugins_root) else {
+            // The submodule is not checked out (a bare `git clone` without
+            // `--recursive`). Nothing to assert rather than a false green:
+            // `include_dir!` makes a missing `plugins/` a compile error, so a
+            // build that got this far in CI has it.
+            return;
+        };
+
+        let mut checked = 0;
+        let mut refused: Vec<String> = Vec::new();
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            // A plugin is a directory carrying a manifest; `plugins/` also
+            // holds README files and the submodule's own metadata.
+            if !dir.join(".claude-plugin").join("plugin.toml").exists()
+                && !dir.join(".claude-plugin").join("plugin.json").exists()
+            {
+                continue;
+            }
+            checked += 1;
+            let result = validate_plugin(&dir);
+            if !result.is_valid() {
+                refused.push(format!(
+                    "{}: {}",
+                    dir.file_name().unwrap_or_default().to_string_lossy(),
+                    result.errors.join("; ")
+                ));
+            }
+        }
+
+        assert!(
+            checked > 0,
+            "scanned {} and found no plugin manifests — the scan, not the \
+             plugins, is what broke",
+            plugins_root.display()
+        );
+        assert!(
+            refused.is_empty(),
+            "Aleph ships {} plugin(s) its own installer refuses:\n  {}",
+            refused.len(),
+            refused.join("\n  ")
+        );
+    }
+
+    /// `id` and `name` are one field, and the alias carries the value rather
+    /// than merely being tolerated.
+    ///
+    /// Widening a type to stop an error is worth nothing if the widened branch
+    /// then drops what it accepted — that turns a loud refusal into a silent
+    /// half-load, which is worse. So this asserts the value *arrives*, under
+    /// both spellings, and that the older spelling did not stop working.
+    #[test]
+    fn a_service_may_spell_its_identifier_id_or_name() {
+        use crate::extension::manifest::ServiceSection;
+
+        let by_id: ServiceSection =
+            toml::from_str(r#"id = "metrics-collector""#).expect("`id` is an accepted spelling");
+        assert_eq!(by_id.name, "metrics-collector");
+
+        let by_name: ServiceSection =
+            toml::from_str(r#"name = "metrics-collector""#).expect("`name` still parses");
+        assert_eq!(by_name.name, "metrics-collector");
+
+        // And neither spelling is optional: a service with no identifier at
+        // all is still an error, not a blank name.
+        toml::from_str::<ServiceSection>(r#"description = "no identifier""#)
+            .expect_err("an identifier is still required");
+    }
 }

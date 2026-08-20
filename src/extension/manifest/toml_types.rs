@@ -229,6 +229,24 @@ pub struct CommandSection {
 /// Service definition section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceSection {
+    /// The service's identifier.
+    ///
+    /// `id` is accepted as an input spelling because that is what the plugins
+    /// Aleph itself ships write, and a required field under a name the author
+    /// did not use is not a missing field — serde fails the **whole document**,
+    /// so `diagnostics` and `voice-call` (every bundled plugin that declares a
+    /// service) could not be installed at all. Their manifests parse as valid
+    /// TOML; it is this struct that rejected them.
+    ///
+    /// Widening the input rather than renaming this field, and rather than
+    /// editing the manifests: the plugins live in a separate repository on a
+    /// separate release cadence, so a parser that accepts only `name` also
+    /// bricks every third-party plugin already published with `id`. The
+    /// vocabulary still has one owner — this field — and `plugin.toml` is
+    /// never written back (the only manifest Aleph serialises is
+    /// `plugins.toml`, the operator's own document), so an author's chosen
+    /// spelling is never rewritten underneath them.
+    #[serde(alias = "id")]
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,

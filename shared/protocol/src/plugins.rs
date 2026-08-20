@@ -283,6 +283,73 @@ pub struct MarketplaceInstallParams {
     pub scope: Option<String>,
 }
 
+/// Parameters for `plugin.marketplace.browse`.
+///
+/// Both fields optional: no `marketplace` reads every registered one, no
+/// `query` lists everything. This is the call that answers "what is in there",
+/// which `plugin.marketplace.list` does not — that one lists the *registrations*
+/// (name, source, type), and a caller who reads it looking for plugin names
+/// finds none and concludes the marketplace is empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceBrowseParams {
+    /// Restrict to one marketplace by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketplace: Option<String>,
+    /// Case-insensitive substring, matched against name and description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+}
+
+/// One row of `plugin.marketplace.browse`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplacePluginRow {
+    /// The plugin id. Also the key `plugin.marketplace.install` takes.
+    pub name: String,
+
+    /// Which marketplace this row came from. Sending it back with the install
+    /// call is what keeps a name that exists in two marketplaces from being
+    /// refused as ambiguous.
+    pub marketplace: String,
+
+    #[serde(default)]
+    pub description: String,
+
+    #[serde(default)]
+    pub version: String,
+
+    /// Whether `plugin.marketplace.install` can actually act on this row.
+    ///
+    /// Derived server-side from the predicate install itself runs, not from a
+    /// client's reading of the source field. A row rendered with an Install
+    /// button that the install call then refuses is the failure this exists to
+    /// prevent.
+    pub installable: bool,
+
+    /// Why not, when `installable` is false. Present exactly when it is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+/// A marketplace that could not be read during a browse, and why.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceProblemRow {
+    pub marketplace: String,
+    pub reason: String,
+}
+
+/// Result of `plugin.marketplace.browse`.
+///
+/// `problems` is not decoration. An empty `plugins` with an empty `problems`
+/// means the query matched nothing; an empty `plugins` with a problem means
+/// something upstream needs doing, and collapsing the two into one empty list
+/// is how "run `marketplace update` first" becomes invisible.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceBrowseResult {
+    pub plugins: Vec<MarketplacePluginRow>,
+    #[serde(default)]
+    pub problems: Vec<MarketplaceProblemRow>,
+}
+
 /// Parameters for `plugin.update` — upgrade an installed plugin in place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginUpdateParams {
@@ -325,6 +392,98 @@ mod tests {
             ["args", "handler", "pluginId"],
             "the CLI used to send plugin/tool/params — three wrong names"
         );
+    }
+
+    /// Every column the CLI table and the Panel row render, present on the
+    /// wire under exactly these names.
+    ///
+    /// The failure this pins is the one `providers list` shipped for a whole
+    /// release: the renderer read `type` and `default` while the server sent
+    /// `provider_type` and `is_default`, so every row printed a dash. A
+    /// missing key renders identically to a missing value, which is why
+    /// nothing went red.
+    #[test]
+    fn a_browse_row_carries_every_column_its_renderers_read() {
+        let wire = serde_json::to_value(MarketplacePluginRow {
+            name: "alpha".into(),
+            marketplace: "fixture".into(),
+            description: "A calendar helper".into(),
+            version: "1.0.0".into(),
+            installable: true,
+            unavailable_reason: None,
+        })
+        .unwrap();
+        let mut keys: Vec<&str> = wire.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["description", "installable", "marketplace", "name", "version"],
+            "renaming a column here must break both renderers at compile time, \
+             not print a row of dashes"
+        );
+    }
+
+    /// `unavailable_reason` is present exactly when `installable` is false.
+    ///
+    /// Both renderers key off this: a reason with no refusal is a warning
+    /// beside a working button, and a refusal with no reason is a disabled
+    /// button with nothing to say.
+    #[test]
+    fn a_browse_row_carries_a_reason_exactly_when_it_is_not_installable() {
+        let ok = serde_json::to_value(MarketplacePluginRow {
+            name: "alpha".into(),
+            marketplace: "fixture".into(),
+            installable: true,
+            unavailable_reason: None,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(ok.get("unavailable_reason").is_none());
+
+        let refused = serde_json::to_value(MarketplacePluginRow {
+            name: "gamma".into(),
+            marketplace: "fixture".into(),
+            installable: false,
+            unavailable_reason: Some("declares an 'npm' source".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            refused.get("unavailable_reason").and_then(|v| v.as_str()),
+            Some("declares an 'npm' source")
+        );
+    }
+
+    /// An omitted `params` object must be a valid "browse everything", not a
+    /// deserialisation error — the CLI's bare `marketplace browse` sends it.
+    #[test]
+    fn browse_params_are_all_optional() {
+        let empty: MarketplaceBrowseParams = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(empty, MarketplaceBrowseParams::default());
+        assert_eq!(
+            serde_json::to_value(MarketplaceBrowseParams::default()).unwrap(),
+            serde_json::json!({}),
+            "an all-None browse must not put explicit nulls on the wire"
+        );
+    }
+
+    /// Empty plugins with no problems and empty plugins with a problem are
+    /// two different answers, and the second one must survive the round trip.
+    #[test]
+    fn a_browse_result_keeps_problems_separate_from_an_empty_catalogue() {
+        let quiet = serde_json::to_value(MarketplaceBrowseResult::default()).unwrap();
+        assert_eq!(quiet.get("problems").and_then(|v| v.as_array()).map(Vec::len), Some(0));
+
+        let noisy = MarketplaceBrowseResult {
+            plugins: vec![],
+            problems: vec![MarketplaceProblemRow {
+                marketplace: "aleph-official".into(),
+                reason: "not synced yet".into(),
+            }],
+        };
+        let back: MarketplaceBrowseResult =
+            serde_json::from_value(serde_json::to_value(&noisy).unwrap()).unwrap();
+        assert_eq!(back, noisy);
     }
 
     #[test]

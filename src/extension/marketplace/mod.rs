@@ -14,9 +14,9 @@ use github_source::sync_github_marketplace;
 use local_source::resolve_local_marketplace;
 use manifest::parse_marketplace_manifest;
 pub use types::{
-    default_install_dir, marketplace_cache_dir, MarketplaceConfig, MarketplaceManifest,
-    MarketplacePluginEntry, MarketplaceSourceType, PluginSearchResult, BUILTIN_MARKETPLACE_NAME,
-    BUILTIN_MARKETPLACE_SOURCE,
+    default_install_dir, marketplace_cache_dir, MarketplaceConfig, MarketplaceListing,
+    MarketplaceManifest, MarketplacePluginEntry, MarketplaceProblem, MarketplaceSourceType,
+    PluginSearchResult, BUILTIN_MARKETPLACE_NAME, BUILTIN_MARKETPLACE_SOURCE,
 };
 
 // =============================================================================
@@ -127,9 +127,12 @@ impl MarketplaceManager {
             .get(name)
             .ok_or_else(|| format!("Unknown marketplace '{name}'"))?;
 
-        // Builtin marketplace is managed by bundled extractor — just return cache path
+        // Builtin marketplace is managed by bundled extractor — just return
+        // cache path. Resolved through `resolve_cache_dir` rather than joined
+        // again here: two joins is how this and the lookup path came to
+        // disagree about where the built-in marketplace lives.
         if name == BUILTIN_MARKETPLACE_NAME {
-            let cache = self.cache_dir.join(name);
+            let cache = self.resolve_cache_dir(name, config)?;
             return if cache.exists() {
                 Ok(cache)
             } else {
@@ -167,42 +170,135 @@ impl MarketplaceManager {
     }
 
     // -------------------------------------------------------------------------
-    // Search
+    // Search / browse
     // -------------------------------------------------------------------------
+
+    /// Read every registered marketplace cache once.
+    ///
+    /// Returns the full entry set plus a named problem per marketplace that
+    /// could not be read. Both [`search_plugin`](Self::search_plugin) (exact
+    /// id, the resolution install runs on) and [`browse`](Self::browse)
+    /// (substring, the catalogue an operator reads) go through here: two walks
+    /// would be two answers to "what is in this marketplace", and only one of
+    /// them is the one install resolves from.
+    ///
+    /// The problems are the reason this is not a plain iterator. `search_plugin`
+    /// skipped an unreadable marketplace silently, which is right for a lookup
+    /// — one broken cache must not fail the others. It is wrong for a
+    /// catalogue: an empty list then means "nothing matched", "never synced",
+    /// "not a marketplace repo" and "malformed manifest" all at once, and only
+    /// the first of those is something the operator should keep typing at.
+    fn read_all(&self, only: Option<&str>) -> (Vec<PluginSearchResult>, Vec<MarketplaceProblem>) {
+        let all = self.all_marketplaces();
+        let mut results = Vec::new();
+        let mut problems = Vec::new();
+
+        // `all_marketplaces` hands back a `HashMap`, so without this the row
+        // order — and the order a duplicated plugin id is reported in — would
+        // resample on every call.
+        let mut names: Vec<&String> = all.keys().collect();
+        names.sort();
+
+        for marketplace_name in names {
+            if only.is_some_and(|want| want != marketplace_name.as_str()) {
+                continue;
+            }
+            let config = &all[marketplace_name];
+            let marketplace_dir = match self.resolve_cache_dir(marketplace_name, config) {
+                Ok(d) => d,
+                Err(e) => {
+                    problems.push(MarketplaceProblem {
+                        marketplace: marketplace_name.clone(),
+                        reason: e,
+                    });
+                    continue;
+                }
+            };
+
+            // "Nothing to parse" and "failed to parse" are two answers. A cache
+            // directory that does not exist yet has never been synced, and the
+            // fix is one command; reporting it as a manifest error sends the
+            // operator to look at a repository that is fine.
+            if !marketplace_dir.exists() {
+                problems.push(MarketplaceProblem {
+                    marketplace: marketplace_name.clone(),
+                    reason: format!(
+                        "not synced yet — no local cache at {}. Run `aleph plugin marketplace \
+                         update {marketplace_name}` first.",
+                        marketplace_dir.display()
+                    ),
+                });
+                continue;
+            }
+
+            let manifest = match parse_marketplace_manifest(&marketplace_dir) {
+                Ok(m) => m,
+                Err(e) => {
+                    problems.push(MarketplaceProblem {
+                        marketplace: marketplace_name.clone(),
+                        reason: e,
+                    });
+                    continue;
+                }
+            };
+
+            for entry in manifest.plugins {
+                let plugin_path = resolve_plugin_path(&marketplace_dir, &entry.source);
+                results.push(PluginSearchResult {
+                    marketplace_name: marketplace_name.clone(),
+                    plugin: entry,
+                    plugin_path,
+                });
+            }
+        }
+
+        (results, problems)
+    }
 
     /// Search for a plugin by name across all marketplace caches.
     ///
     /// Returns every matching [`PluginSearchResult`] — the same plugin name may
-    /// appear in multiple marketplaces.
+    /// appear in multiple marketplaces. Exact match on purpose: this is what
+    /// install resolves a bare name through, and a substring match there would
+    /// let `foo` install `foo-experimental`.
     #[must_use]
     pub fn search_plugin(&self, name: &str) -> Vec<PluginSearchResult> {
-        let all = self.all_marketplaces();
-        let mut results = Vec::new();
+        let (entries, _) = self.read_all(None);
+        entries
+            .into_iter()
+            .filter(|r| r.plugin.name == name)
+            .collect()
+    }
 
-        for (marketplace_name, config) in &all {
-            let marketplace_dir = match self.resolve_cache_dir(marketplace_name, config) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
+    /// List what a marketplace contains, optionally narrowed by a substring.
+    ///
+    /// This is the surface that was missing: `search_plugin` answers "is there
+    /// a plugin called exactly this", which cannot help anyone who does not
+    /// already know the name. `query` is matched case-insensitively against
+    /// both name and description; `None` lists everything.
+    #[must_use]
+    pub fn browse(&self, marketplace: Option<&str>, query: Option<&str>) -> MarketplaceListing {
+        let (entries, problems) = self.read_all(marketplace);
+        let needle = query
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .map(str::to_lowercase);
 
-            let manifest = match parse_marketplace_manifest(&marketplace_dir) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-
-            for entry in manifest.plugins {
-                if entry.name == name {
-                    let plugin_path = resolve_plugin_path(&marketplace_dir, &entry.source);
-                    results.push(PluginSearchResult {
-                        marketplace_name: marketplace_name.clone(),
-                        plugin: entry,
-                        plugin_path,
-                    });
+        let entries = entries
+            .into_iter()
+            .filter(|r| match &needle {
+                None => true,
+                Some(n) => {
+                    r.plugin.name.to_lowercase().contains(n)
+                        || r.plugin
+                            .description
+                            .as_deref()
+                            .is_some_and(|d| d.to_lowercase().contains(n))
                 }
-            }
-        }
+            })
+            .collect();
 
-        results
+        MarketplaceListing { entries, problems }
     }
 
     // -------------------------------------------------------------------------
@@ -233,10 +329,7 @@ impl MarketplaceManager {
             )),
             1 => {
                 let result = &results[0];
-                let plugin_path = result
-                    .plugin_path
-                    .as_deref()
-                    .ok_or_else(|| external_source_refusal(plugin_name, &result.plugin.source))?;
+                let plugin_path = result.installable_path()?;
                 // Verify integrity before installing when the marketplace entry
                 // declares a hash (no-op when `sha256` is absent).
                 installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
@@ -326,10 +419,7 @@ impl MarketplaceManager {
                     });
                 }
 
-                let plugin_path = result
-                    .plugin_path
-                    .as_deref()
-                    .ok_or_else(|| external_source_refusal(plugin_name, &result.plugin.source))?;
+                let plugin_path = result.installable_path()?;
                 // Same gates as install: integrity hash (when declared) + manifest
                 // soundness, before touching the existing install.
                 installer::verify_plugin_integrity(plugin_path, result.plugin.sha256.as_deref())?;
@@ -373,6 +463,28 @@ impl MarketplaceManager {
         marketplace_name: &str,
         config: &MarketplaceConfig,
     ) -> Result<PathBuf, String> {
+        // The built-in marketplace's `source` is the sentinel `"bundled"`, not
+        // a path — its content is extracted from the binary into
+        // `<cache>/aleph-official` at startup (`bundled::extractor`). It is
+        // typed `Local` only because it is not cloned from GitHub.
+        //
+        // This branch was in `update` and not here, so the two disagreed about
+        // where the built-in lives, and lookup used the wrong one: every
+        // `search_plugin` walk sent `"bundled"` to `resolve_local_marketplace`,
+        // which resolved it against the process's working directory, found
+        // nothing, and skipped the marketplace — silently, because a lookup
+        // that skips an unreadable cache is right for the other marketplaces.
+        //
+        // The consequence was the whole install-by-name path for anything
+        // shipped with Aleph: `plugin.install {source: "<official name>"}` →
+        // marketplace install → `search_plugin` → zero results → "not found,
+        // try marketplace update first", which could not help because update
+        // wrote to a directory the lookup never read. The hub's `"local"`
+        // source form, documented as "install from the builtin marketplace",
+        // rode on the same call.
+        if marketplace_name == BUILTIN_MARKETPLACE_NAME {
+            return Ok(self.cache_dir.join(marketplace_name));
+        }
         match config.source_type {
             MarketplaceSourceType::Github => {
                 if marketplace_name.is_empty()
@@ -496,23 +608,6 @@ fn resolve_plugin_path(
     Some(marketplace_dir.join(safe))
 }
 
-/// The refusal for an entry whose source form this host cannot fetch.
-///
-/// Names the form and the fix. "Not found" would be a lie — the entry is
-/// there, it just points somewhere a directory-shaped marketplace does not
-/// reach.
-fn external_source_refusal(
-    plugin_name: &str,
-    source: &crate::extension::marketplace::types::MarketplacePluginSource,
-) -> String {
-    let kind = source.external_kind().unwrap_or("object");
-    format!(
-        "Plugin '{plugin_name}' declares a '{kind}' source, which this marketplace \
-         cannot install — Aleph serves plugins from the marketplace directory itself. \
-         Add the upstream repository as its own marketplace, or install it directly \
-         with `aleph plugin install <url>`."
-    )
-}
 
 // =============================================================================
 // Tests
@@ -608,6 +703,245 @@ mod tests {
         // Built-in was never in the user config, so it should not appear.
         assert!(!cfg.contains_key(BUILTIN_MARKETPLACE_NAME));
         assert!(cfg.contains_key("extra"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Browse
+    // ---------------------------------------------------------------------
+
+    /// A local marketplace directory holding the given `marketplace.json`.
+    fn make_local_marketplace(entries: &str) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manifest_dir = dir.path().join(".claude-plugin");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join("marketplace.json"),
+            format!(r#"{{"name":"fixture","plugins":[{entries}]}}"#),
+        )
+        .unwrap();
+        dir
+    }
+
+    /// A manager over one local marketplace, with the cache root pointed at an
+    /// empty temp dir so the built-in marketplace resolves to "not synced"
+    /// rather than reaching whatever is in the developer's real cache.
+    fn browsing_manager(
+        local: &tempfile::TempDir,
+        cache: &tempfile::TempDir,
+    ) -> MarketplaceManager {
+        let mut map = HashMap::new();
+        map.insert(
+            "fixture".to_string(),
+            make_local_config(&local.path().to_string_lossy()),
+        );
+        MarketplaceManager::new(map, Some(cache.path().to_path_buf()))
+    }
+
+    const THREE_ENTRIES: &str = r#"
+        {"name":"alpha","source":"./plugins/alpha","description":"A calendar helper"},
+        {"name":"beta","source":"./plugins/beta","description":"Nothing in particular"},
+        {"name":"gamma","source":{"source":"npm","package":"gamma"},"description":"External"}
+    "#;
+
+    /// The built-in marketplace is readable by lookup, not just by update.
+    ///
+    /// Its `source` is the sentinel `"bundled"` and its content is extracted
+    /// into `<cache>/aleph-official` at startup. `update` knew that; the cache
+    /// resolver every lookup goes through did not, and sent `"bundled"` to the
+    /// local-path resolver, which resolved it against the working directory
+    /// and failed. So `search_plugin` skipped the one marketplace every
+    /// install has by default — and with it every install-by-name of anything
+    /// Aleph ships, plus the hub's `"local"` source form. The skip was silent
+    /// because skipping an unreadable cache is the right thing for a lookup.
+    ///
+    /// Point the cache root at a fixture laid out the way the extractor lays
+    /// it out and the entry must be findable.
+    #[test]
+    fn the_builtin_marketplace_is_readable_by_lookup_and_not_only_by_update() {
+        let cache = tempfile::TempDir::new().unwrap();
+        let builtin = cache.path().join(BUILTIN_MARKETPLACE_NAME);
+        std::fs::create_dir_all(builtin.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            builtin.join(".claude-plugin").join("marketplace.json"),
+            r#"{"name":"aleph-official","plugins":[
+                {"name":"diagnostics","source":"./diagnostics","description":"Ships with Aleph"}
+            ]}"#,
+        )
+        .unwrap();
+
+        let mgr = MarketplaceManager::new(HashMap::new(), Some(cache.path().to_path_buf()));
+
+        let found = mgr.search_plugin("diagnostics");
+        assert_eq!(
+            found.len(),
+            1,
+            "a bundled plugin must resolve by name — this is what `plugin install <name>` does"
+        );
+        assert_eq!(found[0].marketplace_name, BUILTIN_MARKETPLACE_NAME);
+        assert!(
+            found[0].installable_path().is_ok(),
+            "and it must be installable, not merely visible"
+        );
+
+        // Browsing reaches it too, and reports no problem for it.
+        let listing = mgr.browse(None, None);
+        assert_eq!(listing.entries.len(), 1);
+        assert!(
+            listing.problems.is_empty(),
+            "a present built-in cache is not a problem: {:?}",
+            listing.problems
+        );
+    }
+
+    #[test]
+    fn browse_lists_a_marketplaces_contents_which_search_by_exact_name_cannot() {
+        let local = make_local_marketplace(THREE_ENTRIES);
+        let cache = tempfile::TempDir::new().unwrap();
+        let mgr = browsing_manager(&local, &cache);
+
+        // The gap this closes: you could only find a plugin whose name you
+        // already knew.
+        assert!(mgr.search_plugin("alph").is_empty(), "search stays exact");
+        assert_eq!(mgr.search_plugin("alpha").len(), 1);
+
+        let all = mgr.browse(None, None);
+        let names: Vec<&str> = all.entries.iter().map(|e| e.plugin.name.as_str()).collect();
+        assert_eq!(names, ["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn browse_matches_description_as_well_as_name_case_insensitively() {
+        let local = make_local_marketplace(THREE_ENTRIES);
+        let cache = tempfile::TempDir::new().unwrap();
+        let mgr = browsing_manager(&local, &cache);
+
+        let by_name = mgr.browse(None, Some("ALPH"));
+        assert_eq!(by_name.entries.len(), 1);
+        assert_eq!(by_name.entries[0].plugin.name, "alpha");
+
+        // "calendar" appears only in a description — a name-only match would
+        // leave this searcher with nothing and no way to know why.
+        let by_desc = mgr.browse(None, Some("calendar"));
+        assert_eq!(by_desc.entries.len(), 1);
+        assert_eq!(by_desc.entries[0].plugin.name, "alpha");
+
+        assert!(mgr.browse(None, Some("nothing-matches-this")).entries.is_empty());
+        // A blank query is "everything", not "match the empty string".
+        assert_eq!(mgr.browse(None, Some("   ")).entries.len(), 3);
+    }
+
+    #[test]
+    fn browse_narrows_to_one_marketplace_when_asked() {
+        let local = make_local_marketplace(THREE_ENTRIES);
+        let cache = tempfile::TempDir::new().unwrap();
+        let mgr = browsing_manager(&local, &cache);
+
+        assert_eq!(mgr.browse(Some("fixture"), None).entries.len(), 3);
+        let elsewhere = mgr.browse(Some("no-such-marketplace"), None);
+        assert!(elsewhere.entries.is_empty());
+        assert!(
+            elsewhere.problems.is_empty(),
+            "narrowing to an unregistered name is an empty result, not a broken marketplace"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_marketplace_is_named_rather_than_silently_skipped() {
+        // "Nothing matched" and "never fetched" render identically as an empty
+        // list, and only one of them is something the operator should keep
+        // typing at. `search_plugin` skips silently on purpose — one broken
+        // cache must not fail a lookup — so this is the browse half.
+        let local = make_local_marketplace(THREE_ENTRIES);
+        let cache = tempfile::TempDir::new().unwrap();
+        let mgr = browsing_manager(&local, &cache);
+
+        let listing = mgr.browse(None, None);
+        let builtin = listing
+            .problems
+            .iter()
+            .find(|p| p.marketplace == BUILTIN_MARKETPLACE_NAME)
+            .expect("an unsynced marketplace must be reported, not dropped");
+        assert!(
+            builtin.reason.contains("not synced"),
+            "a missing cache is 'never fetched', not 'malformed manifest': {}",
+            builtin.reason
+        );
+        // The readable one still yields its entries.
+        assert_eq!(listing.entries.len(), 3);
+    }
+
+    #[test]
+    fn a_malformed_manifest_reports_the_parse_error_not_an_empty_marketplace() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manifest_dir = dir.path().join(".claude-plugin");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        std::fs::write(manifest_dir.join("marketplace.json"), "{ not json").unwrap();
+        let cache = tempfile::TempDir::new().unwrap();
+        let mgr = browsing_manager(&dir, &cache);
+
+        let listing = mgr.browse(Some("fixture"), None);
+        assert!(listing.entries.is_empty());
+        let problem = listing
+            .problems
+            .iter()
+            .find(|p| p.marketplace == "fixture")
+            .expect("a manifest that will not parse must say so");
+        assert!(!problem.reason.contains("not synced"), "{}", problem.reason);
+    }
+
+    #[test]
+    fn the_installable_bit_is_the_predicate_install_itself_enforces() {
+        // The listing renders an Install button from `installable_path`. A
+        // second reading of the source enum for the button would drift from
+        // the one install runs, and the drift direction is a catalogue that
+        // offers an action the install call then refuses. So: for every entry
+        // the listing marks unavailable, install must refuse with the very
+        // same words.
+        //
+        // Only the refused entries are put through `install_to_scope` — the
+        // refusal is its first statement, before any path is resolved or byte
+        // copied, so this reaches no disk. Calling it for an installable entry
+        // would install into the developer's real `~/.aleph`.
+        let local = make_local_marketplace(THREE_ENTRIES);
+        let cache = tempfile::TempDir::new().unwrap();
+        let mgr = browsing_manager(&local, &cache);
+
+        let mut refused = 0;
+        for entry in mgr.browse(None, None).entries {
+            let Err(shown) = entry.installable_path() else {
+                continue;
+            };
+            refused += 1;
+            let attempted = mgr
+                .install_to_scope(
+                    &entry.plugin.name,
+                    Some(&entry.marketplace_name),
+                    crate::extension::types::PluginScope::User,
+                    None,
+                )
+                .expect_err("an entry the listing calls unavailable must not install");
+            assert_eq!(
+                attempted, shown,
+                "the button's reason and the install refusal are two readings of one predicate"
+            );
+        }
+        assert_eq!(
+            refused, 1,
+            "the fixture has exactly one external-source entry; a 0 here means \
+             this test stopped exercising the branch it exists for"
+        );
+
+        // And concretely: the npm-sourced entry is the one that cannot be had,
+        // and the refusal names the form rather than saying "not found".
+        let gamma = mgr
+            .browse(None, Some("gamma"))
+            .entries
+            .pop()
+            .expect("gamma is in the fixture");
+        let refusal = gamma
+            .installable_path()
+            .expect_err("an npm source is not servable from a marketplace directory");
+        assert!(refusal.contains("npm"), "the refusal names the form: {refusal}");
     }
 
     #[test]

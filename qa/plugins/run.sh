@@ -4,6 +4,8 @@
 #   ./qa/plugins/run.sh manifest   # component-field union, marketplace source
 #                                  # union, plugin-root expansion, durable config
 #   ./qa/plugins/run.sh scaffold   # `aleph plugin init` output really installs
+#   ./qa/plugins/run.sh browse     # marketplace contents are listable, and a
+#                                  # name found that way actually installs
 #
 # The round this covers shipped with unit and source-level guards only. Two of
 # its headline fixes are `serde` all-or-nothing bugs, and those have a specific
@@ -209,8 +211,42 @@ trust)
   cat "$ALEPH_HOME/data/plugins.toml" 2>/dev/null | head -30
   ;;
 
+browse)
+  # The built-in marketplace cannot be faked: its content is extracted from the
+  # binary into $ALEPH_HOME/plugins/cache/aleph-official on startup, and the
+  # bug this scenario pins was a *sentinel* ("bundled") being resolved as a
+  # relative path by the lookup side only. A unit test can build the layout;
+  # only a real boot proves the extractor, the resolver and the RPC agree.
+  say "start server (the bundled extractor populates the built-in marketplace)"
+  start_server || exit 1
+  ls "$ALEPH_HOME/plugins/cache/aleph-official" 2>/dev/null | head -10 \
+    || echo "(no built-in cache extracted — the contents phase will say so)"
+
+  say "drive: browse"
+  python3 "$HERE/drive_browse.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" contents || RC=$?
+
+  say "the CLI renders the same contents"
+  # A renderer reading keys the server never sends prints a column of dashes,
+  # which looks like "no value yet" rather than a bug. Assert a real name
+  # reaches stdout.
+  # `--server` is the WebSocket URL (`DEFAULT_GATEWAY_URL` is `ws://…/ws`);
+  # an `http://` one fails with "URL scheme not supported" before a single
+  # frame is sent, which reads like a server problem and is not one.
+  CLI_OUT="$("$CLI" --server "ws://127.0.0.1:$GATEWAY_PORT/ws" plugin marketplace browse 2>&1 | head -30)"
+  printf '%s\n' "$CLI_OUT"
+  if printf '%s' "$CLI_OUT" | grep -q "@aleph-official"; then
+    echo "  [PASS] the CLI prints browsed rows with their marketplace"
+  else
+    echo "  [FAIL] the CLI printed no aleph-official row"; RC=1
+  fi
+
+  say "drive: install a name that browsing found"
+  python3 "$HERE/drive_browse.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" install || RC=$?
+  ls "$INSTALLED" 2>/dev/null | head -10
+  ;;
+
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"

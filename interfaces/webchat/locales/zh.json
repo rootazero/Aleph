@@ -1170,7 +1170,14 @@
       "enable": "启用",
       "disable": "禁用",
       "loading": "加载插件...",
-      "source_hint": "纯名称（my-plugin）会在已注册的市场中查找；包含 / . : 的一律按 Git URL 克隆。"
+      "source_hint": "纯名称（my-plugin）会在已注册的市场中查找；包含 / . : 的一律按 Git URL 克隆。",
+      "browse_title": "浏览市场",
+      "browse_search_placeholder": "按名称或描述搜索插件",
+      "browse_refresh": "刷新索引",
+      "browse_refreshing": "刷新中...",
+      "browse_empty": "没有匹配的插件。",
+      "browse_installed": "已安装",
+      "browse_loading": "正在加载市场..."
     },
     "skills": {
       "add": "添加",

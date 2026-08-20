@@ -696,7 +696,7 @@ fn plugin_id_from_path(path: &Path) -> Option<String> {
 /// - Under `~/.aleph/skills/` otherwise → Global
 /// - Contains `.aleph/skills` but not under home → Workspace
 /// - Otherwise → Bundled (e.g. Claude Code compatibility paths)
-fn guess_source(path: &Path) -> SkillSource {
+pub fn guess_source(path: &Path) -> SkillSource {
     use std::sync::OnceLock;
 
     // Plugin-bundled skills take precedence: they live under a `plugins/<id>/

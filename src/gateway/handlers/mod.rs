@@ -321,6 +321,10 @@ impl HandlerRegistry {
 
         // Plugin marketplace handlers
         registry.register("plugin.marketplace.list", plugins::handle_marketplace_list);
+        // `list` returns the registrations; `browse` returns what is inside
+        // them. Without the second one, installing by name required already
+        // knowing the name.
+        registry.register("plugin.marketplace.browse", plugins::handle_marketplace_browse);
         registry.register("plugin.marketplace.add", plugins::handle_marketplace_add);
         registry.register(
             "plugin.marketplace.update",

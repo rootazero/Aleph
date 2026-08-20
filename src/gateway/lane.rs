@@ -66,7 +66,7 @@ impl Lane {
             let suffix = &method[dot + 1..];
             match suffix {
                 "get" | "list" | "search" | "status" | "describe" | "history" | "effective"
-                | "catalog" | "neighbors" | "subscribe" | "unsubscribe" | "stats" => {
+                | "catalog" | "neighbors" | "subscribe" | "unsubscribe" | "stats" | "browse" => {
                     return Self::Query
                 }
                 "install" | "uninstall" => return Self::System,

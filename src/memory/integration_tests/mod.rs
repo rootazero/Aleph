@@ -184,7 +184,7 @@ mod event_sourcing {
         assert_eq!(timeline.len(), 5);
 
         // 8. Explain fact
-        let explanation = traveler.explain_fact(&fact_id).await.unwrap();
+        let explanation = traveler.explain_fact(&fact_id, "").await.unwrap();
         assert_eq!(explanation.fact_id, fact_id);
         assert_eq!(explanation.events.len(), 5);
         // First event should describe creation

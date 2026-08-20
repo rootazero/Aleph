@@ -208,7 +208,8 @@ MCP server id 由 `mcp_config.rs` 组成 `plugin:<id>/<server>`。
 
 ```bash
 # Marketplace 管理
-aleph plugin marketplace list                      # 列出（含内置 aleph-official）
+aleph plugin marketplace list                      # 列出注册项（含内置 aleph-official）
+aleph plugin marketplace browse [query]            # 列出内容（--marketplace 收窄）
 aleph plugin marketplace add HKUDS/CLI-Anything    # 添加 GitHub marketplace
 aleph plugin marketplace add /local/path           # 添加本地 marketplace
 aleph plugin marketplace update [name]             # 同步缓存
@@ -301,6 +302,32 @@ version = "0.1.0"
 ### 内置 Marketplace
 
 `aleph-official` 指向 `rootazero/Aleph-plugins`，始终可用，无需手动添加。
+
+---
+
+## Service 的标识符：`id` 与 `name` 是同一个字段（2026-08-20）
+
+`[[aleph.services]]` 的标识符在 `ServiceSection` 上叫 `name`，而 **`id` 是被接受的
+输入拼法**（`#[serde(alias = "id")]`）。
+
+这不是风格宽容，是一次事故的修复：Aleph 自己随包发的 `diagnostics` 与 `voice-call`
+写的是 `id`，而 `name` 是**必填**字段——缺一个必填字段对 serde 不是「少一个字段」，
+是**整份文档解析失败**。于是这两个（**每一个声明了 service 的随包插件**）根本装不
+上，错误还是一句看起来像 TOML 语法错的 `TOML parse error at line 13`，而那份 TOML
+完全合法。它长期看不见，是因为更上游的一个缺陷让 install-by-name 从来走不到 validate
+（内置 marketplace 对所有查找不可读，见 §3.10）。
+
+**选放宽输入而不是改那两份 manifest**：插件住在独立仓、独立发布节奏，一个只认 `name`
+的解析器同时也让每一个已按 `id` 发布的第三方插件变砖。词汇仍然只有一个所有者——这个
+字段——并且 `plugin.toml` **从不被 Aleph 写回**（唯一被序列化的 manifest 是
+`plugins.toml`，操作者自己的文档），所以作者选的拼法不会在他不知情时被改写。
+
+两条守卫在 `src/extension/validation.rs`：`a_service_may_spell_its_identifier_id_or_name`
+断言两种拼法都**把值送到**（只放宽类型却丢掉所接受的东西，是把响亮的拒绝换成静默的
+半加载，比原缺陷更糟），且没有标识符时仍然报错；
+`every_bundled_plugin_passes_the_installers_own_validation` 让**每一个随包插件都必须
+过 Aleph 自己的安装校验**——`plugins/` 是 submodule，写它的和解析它的是两个作者，而
+在此之前从没有人拿第二个作者跑过第一个作者的产物。
 
 ---
 
@@ -440,7 +467,8 @@ aleph plugin list
 | `plugin.update` | 升级已装插件（原子换装 + 版本比对，`force` 强制）|
 | `plugin.enable` / `plugins.enable` | 启用插件 |
 | `plugin.disable` / `plugins.disable` | 禁用插件 |
-| `plugin.marketplace.list` | 列出 marketplace |
+| `plugin.marketplace.list` | 列出 marketplace **注册项**（name/source/type）——不是内容 |
+| `plugin.marketplace.browse` | 列出 marketplace **内容**（可选 `marketplace` / `query` 子串，匹配名称与描述）|
 | `plugin.marketplace.add` | 添加 marketplace |
 | `plugin.marketplace.update` | 更新缓存 |
 | `plugin.marketplace.remove` | 移除 marketplace |
@@ -452,10 +480,24 @@ aleph plugin list
 
 ⚠️ **两个命名空间的能力集并不相等**：`callTool` / `executeCommand` / `load` /
 `unload` **只**在复数上，`update` / `reload` / `config.*` / `marketplace.*` **只**在
-单数上。而 Panel 的插件设置页只说复数，CLI 只说单数——所以 Panel 装插件走的是仅支持
-git URL 的 `handle_install`，CLI 走的是同时支持 marketplace 的
-`handle_install_unified`。**Panel 因此装不了 marketplace 插件，`plugin.marketplace.*`
-五个 RPC 零 Panel 客户端。** 这条尚未修复（见 §3.10 轮次记录的「未做」）。
+单数上。
+
+**这一段曾经描述的缺陷已经修完，分两轮**：Panel 的设置页此前只说复数命名空间，于是
+装插件走的是仅支持 git URL 的 `handle_install`，一个 marketplace 名字被当成 git URL
+克隆并失败（2026-08-19 第二轮改为调 `plugin.install`，服务端自己分类）；而找到那个
+名字则要等本轮的 `plugin.marketplace.browse`。现 Panel 调 `plugin.install` /
+`plugin.marketplace.browse` / `plugin.marketplace.update` / `plugin.marketplace.install`。
+**仍零 Panel 客户端的是 `plugin.marketplace.add` / `remove`**——marketplace 的增删只有
+CLI（`aleph plugin marketplace add|remove`），Panel 只能刷新与浏览已注册的那些。
+
+⚠️ **`list` 与 `browse` 是两个问题**：前者答「注册了哪些 marketplace」，后者答「某个
+marketplace 里有什么」。拿 `list` 去找插件名的调用者会一个都找不到，然后得出「这个
+marketplace 是空的」——那正是 `browse` 存在的理由。`browse` **不联网**（只读已抓下来
+的缓存），拉取是 `update` 这个显式动作；读不出的 marketplace 逐条出现在
+`problems` 里并说明该跑哪条命令，因为空列表同时意味着「没匹配」「没同步」「不是
+marketplace 仓」「manifest 坏了」，只有第一种值得继续敲字。每一行还带
+`installable` + `unavailable_reason`，来源是 `PluginSearchResult::installable_path`
+——**install 自己执行的那个谓词**，不是渲染端对 source 枚举的第二次解读。
 
 ---
 
@@ -465,7 +507,13 @@ R8 要求每个可配置操作都有对话面。插件曾是唯一没有工具�
 （skills 有 `skill_manage`、hooks 有 `hooks_manage`、Hub 有六个 `hub_*`）。
 
 `plugin_manage` 的动作：`list` / `show` / `enable` / `disable` / `reload` /
-`config_get` / `config_set`。
+`config_get` / `config_set` / `trust_status` / `trust` / `untrust` /
+`trust_enforce`。
+
+**刻意没有 marketplace 动作**：模型的扩展发现路径是 Hub（`hub_catalog_search` +
+consent-gated `hub_install_run`），marketplace 是操作者的路径。给模型一张它按下条
+规则不能作用的目录，比不给更糟——一张附带动作邀请的清单，它列的每一行都必须真的
+能被那个动作作用。
 
 **它结构上不能装也不能卸**——装插件就是在机主的机器上运行第三方代码，那一步留给人
 和 consent-gated 的 `hub_install_run`。这是 `hooks_manage` 的先例：随便报，永远不批。
@@ -663,6 +711,32 @@ cache（`plugins/cache/aleph-official/<id>`），scanner 只从 plugin parent �
 它带着走，`PluginOrigin::classify` 是唯一推导。
 
 真机覆盖：`qa/plugins/run.sh trust`（三次重启——LOAD 闸只有在下一次加载时可观测）。
+
+### 为什么技能目录没有对应的闸（2026-08-19 裁决）
+
+这道闸治理的是插件目录。一个自然的追问是：手工塞进 `~/.aleph/skills/` 的目录，该不该
+同样需要背书？**裁决是不该**，理由不是「风险小」，是**两者拦的不是同一件事**：
+
+- 插件闸拦的是**能力注册**——hook 不经模型选择就触发、MCP 起子进程、WASM 被加载。
+- 技能注册不了任何东西。它是模型**可能会读**的一段文字，而它能引发的一切动作仍要
+  重新过工具权限层、执行档位与沙箱。
+
+还有一条结构性理由：`~/.aleph/skills/` 有一个**设计内的模型写者**（`skill_manage`，
+R8/R9 的自我改进条款）。给它加 allowlist，要么自动放行模型自己的写入（那就什么都
+没拦住，因为「有东西写了一个目录」正是要拦的那件事），要么打断那个循环。而按上文
+`[trust] enforce` 自己的论证，默认还必须是关的——于是交付的是一个旋钮，不是一道控制。
+
+**真正存在的不对称在别处，且已修**：`skill/guard.rs` 的威胁扫描挂在**安装**路径
+（`skill_manage` 两处 + markdown 上传），手工放进目录的技能绕过它；而 `skill_read`
+把正文**不加围栏**交给模型——这是对的，技能就是指令，加围栏会废掉这个机制——只是
+模型无从知道这段字是随包发的、是某天出现在技能目录里的、还是跟着刚 clone 的仓库
+进来的。出处一直被算着（`skill::guess_source`），只用于覆盖优先级。
+
+现 `ReadSkillOutput.provenance`：`bundled` / `user` / `workspace` / `plugin:<id>`，
+由 `SkillSource::provenance` 的**穷尽匹配**派生，所以新增变体必须在编译期回答这一问。
+**只上 `skill_read`，不上 `<available_skills>` 索引**——索引对 ~90 个条目每请求付费，
+而这个答案要紧的时刻正是正文即将被照做的那一刻（R9 第二把尺）。**只陈述不劝诫**：
+出处是模型推不出的运行时事实，「该多怀疑谁」是教强模型怎么想。
 
 ---
 

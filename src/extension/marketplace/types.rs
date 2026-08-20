@@ -1,7 +1,7 @@
 //! Marketplace types — core data structures for the plugin marketplace system.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // =============================================================================
 // Source Types
@@ -141,6 +141,57 @@ pub struct PluginSearchResult {
     /// operator gets "this marketplace cannot install that form" rather than
     /// "no such plugin" — the second one sends them looking for a typo.
     pub plugin_path: Option<PathBuf>,
+}
+
+impl PluginSearchResult {
+    /// The directory to install this entry from, or the reason there is none.
+    ///
+    /// This is the **one** predicate for "can this entry be installed". Install
+    /// and update both go through it, and so does the browse listing that
+    /// renders an Install button — a catalogue that offers an action on a row
+    /// the action refuses is worse than one that says so up front, and the only
+    /// way to keep the two in step is for the renderer and the refusal to be
+    /// the same code rather than two readings of the same enum.
+    ///
+    /// # Errors
+    /// Returns the refusal text when the entry declares one of Claude Code's
+    /// external source forms (`github` / `npm` / `pip` / `url` / `git-subdir`),
+    /// which do not live inside the marketplace directory this host serves.
+    pub fn installable_path(&self) -> Result<&Path, String> {
+        match self.plugin_path.as_deref() {
+            Some(p) => Ok(p),
+            None => {
+                let kind = self.plugin.source.external_kind().unwrap_or("object");
+                let name = &self.plugin.name;
+                Err(format!(
+                    "Plugin '{name}' declares a '{kind}' source, which this marketplace \
+                     cannot install — Aleph serves plugins from the marketplace directory itself. \
+                     Add the upstream repository as its own marketplace, or install it directly \
+                     with `aleph plugin install <url>`."
+                ))
+            }
+        }
+    }
+}
+
+/// A marketplace that could not be read, and why.
+///
+/// Carried alongside the entries rather than logged: a browse surface that
+/// silently drops an unreadable marketplace reports "nothing here", which is
+/// the same thing it reports for an empty query, and the operator has no way
+/// to tell that a `marketplace update` is what they are missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplaceProblem {
+    pub marketplace: String,
+    pub reason: String,
+}
+
+/// What one browse call found: the entries, and every marketplace it could not
+/// read on the way.
+#[derive(Debug, Clone, Default)]
+pub struct MarketplaceListing {
+    pub entries: Vec<PluginSearchResult>,
+    pub problems: Vec<MarketplaceProblem>,
 }
 
 // =============================================================================

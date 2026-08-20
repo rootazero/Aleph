@@ -781,6 +781,17 @@ pub enum MarketplaceAction {
     Add { source: String },
     /// List configured marketplace sources
     List,
+    /// List the plugins a marketplace contains (optionally filtered)
+    ///
+    /// `list` shows the sources; this shows what is inside them. Without it
+    /// `plugin install <name>` required already knowing the name.
+    Browse {
+        /// Case-insensitive substring, matched against name and description
+        query: Option<String>,
+        /// Restrict to one marketplace
+        #[arg(long)]
+        marketplace: Option<String>,
+    },
     /// Update marketplace index (all sources or a specific one)
     Update { name: Option<String> },
     /// Remove a marketplace source

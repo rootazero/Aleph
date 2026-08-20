@@ -458,3 +458,47 @@ async fn test_list_skills_elides_absolute_location() {
         "location key must be skipped on serialize"
     );
 }
+
+/// A skill body is returned as instructions — unfenced, and rightly so, since
+/// a skill *is* instructions. This asserts the other half arrives with it: the
+/// reader can see where the words came from.
+///
+/// Asserting the field on the tool's *output* rather than that `guess_source`
+/// was called: a test that only proves the derivation exists guards the origin,
+/// not the wire.
+#[tokio::test]
+async fn a_read_skill_says_where_its_instructions_came_from() {
+    let temp = TempDir::new().unwrap();
+    create_test_skill(temp.path(), "demo", "Demo", "A demo skill");
+
+    let tool = ReadSkillTool::new(temp.path().to_path_buf());
+    let out = tool
+        .call(ReadSkillArgs {
+            skill_id: "demo".to_string(),
+            file_name: None,
+        })
+        .await
+        .expect("the fixture skill reads");
+
+    assert!(out.success);
+    assert!(
+        !out.provenance.trim().is_empty(),
+        "the body arrives as instructions; where it came from must arrive with it"
+    );
+    // A temp dir is neither the global skills root nor a `.aleph/skills`
+    // checkout path, so `guess_source` classes it `Bundled` — the important
+    // part is that the value is the shared derivation's, not a second reading
+    // invented here.
+    assert_eq!(
+        out.provenance,
+        crate::skill::guess_source(std::path::Path::new(&out.location)).provenance()
+    );
+
+    // And it survives serialisation — this output is read by a model, not by
+    // Rust, so a field that never leaves the struct is not delivered.
+    let wire = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        wire.get("provenance").and_then(|v| v.as_str()),
+        Some(out.provenance.as_str())
+    );
+}

@@ -1,10 +1,10 @@
 use crate::extension::ExtensionManager;
 use crate::gateway::handlers::plugins::handlers::{
-    get_extension_manager, handle_call_tool, handle_execute_command, handle_load,
-    handle_unload, init_extension_manager, is_extension_manager_initialized,
+    handle_call_tool, handle_execute_command, handle_load, handle_unload,
+    init_extension_manager, is_extension_manager_initialized,
 };
 use crate::gateway::handlers::plugins::types::*;
-use crate::gateway::protocol::{JsonRpcRequest, INVALID_PARAMS};
+use crate::gateway::protocol::{JsonRpcRequest, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::sync_primitives::Arc;
 use serde_json::json;
 
@@ -322,4 +322,58 @@ async fn test_handle_execute_command_not_found() {
         .unwrap()
         .message
         .contains("not found"));
+}
+
+// ============================================================================
+// Marketplace browse rows
+// ============================================================================
+
+/// The row builder's `installable` bit and its reason are one decision.
+///
+/// `marketplace_row` reads `PluginSearchResult::installable_path` — the same
+/// call `install_to_scope` makes — so the button and the refusal cannot
+/// disagree. This pins the two halves it derives from that one answer.
+#[test]
+fn a_marketplace_row_reasons_exactly_when_it_is_not_installable() {
+    use crate::extension::marketplace::{types::MarketplacePluginSource, PluginSearchResult};
+    use crate::gateway::handlers::plugins::types::marketplace_row;
+
+    let servable = PluginSearchResult {
+        marketplace_name: "fixture".into(),
+        plugin: crate::extension::marketplace::MarketplacePluginEntry {
+            name: "alpha".into(),
+            source: MarketplacePluginSource::Path("./plugins/alpha".into()),
+            description: Some("A calendar helper".into()),
+            version: Some("1.0.0".into()),
+            sha256: None,
+        },
+        plugin_path: Some(std::path::PathBuf::from("/tmp/fixture/plugins/alpha")),
+    };
+    let row = marketplace_row(&servable);
+    assert!(row.installable);
+    assert!(row.unavailable_reason.is_none());
+    assert_eq!(row.marketplace, "fixture", "the row must say which marketplace it came from, or install cannot address it unambiguously");
+    assert_eq!(row.description, "A calendar helper");
+    assert_eq!(row.version, "1.0.0");
+
+    let external = PluginSearchResult {
+        plugin_path: None,
+        plugin: crate::extension::marketplace::MarketplacePluginEntry {
+            name: "gamma".into(),
+            source: MarketplacePluginSource::External(json!({"source": "npm"})),
+            description: None,
+            version: None,
+            sha256: None,
+        },
+        ..servable
+    };
+    let row = marketplace_row(&external);
+    assert!(!row.installable);
+    let reason = row
+        .unavailable_reason
+        .expect("a row the install call refuses must carry the refusal");
+    assert!(reason.contains("npm"), "the reason names the form: {reason}");
+    // Absent optional fields render as empty strings, not as the word "None".
+    assert_eq!(row.description, "");
+    assert_eq!(row.version, "");
 }

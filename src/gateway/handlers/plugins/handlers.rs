@@ -12,6 +12,13 @@ mod manage;
 mod marketplace;
 mod runtime;
 
+// `tests.rs` sat beside these four with no `mod` statement anywhere in the
+// crate, so 325 lines of plugin-RPC parameter tests had never been compiled,
+// let alone run — and an uncompiled test file is indistinguishable from a
+// passing one in every report. Declared here so it is either green or loud.
+#[cfg(test)]
+mod tests;
+
 pub use install::*;
 pub use manage::*;
 pub use marketplace::*;

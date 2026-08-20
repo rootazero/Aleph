@@ -60,6 +60,17 @@ pub struct ReadSkillOutput {
     /// `location`. Empty when the skill ships no supporting files.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub usage_hint: String,
+
+    /// Where these instructions came from: `bundled` (shipped with Aleph),
+    /// `user` (present in the global skills directory), `workspace` (came with
+    /// this project's checkout), or `plugin:<id>`.
+    ///
+    /// See [`SkillSource::provenance`](crate::domain::skill::SkillSource::provenance)
+    /// for why this is here and why it is stated rather than acted on. Carried
+    /// on the read rather than on the always-on `<available_skills>` index:
+    /// the index costs bytes on every request for ~90 entries, and the moment
+    /// the answer matters is the moment the body is about to be followed.
+    pub provenance: String,
 }
 
 /// Skill reading tool
@@ -423,6 +434,9 @@ impl ReadSkillTool {
             location: skill_dir.to_string_lossy().to_string(),
             available_files,
             usage_hint,
+            // The single derivation, shared with the prompt index's override
+            // ranking — not a second reading of the path here.
+            provenance: crate::skill::guess_source(&skill_dir).provenance(),
         })
     }
 }
