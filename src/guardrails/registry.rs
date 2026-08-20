@@ -47,13 +47,30 @@ impl GuardrailRegistry {
 
     /// Runtime kill-switch — flips `enabled` to false. All three `evaluate_*`
     /// methods short-circuit to `Allow` until `enable_all()` is called.
-    pub fn disable_all(&self) {
-        self.enabled.store(false, Ordering::Release);
-    }
+///
+/// Emits an audit-level log entry on every state change. Anyone with a
+/// handle to `GuardrailRegistry` (sub-modules, callbacks, plugins) can
+/// call this — the log is what makes it possible to tell an operator
+/// action from a hostile one after the fact.
+pub fn disable_all(&self) {
+    self.enabled.store(false, Ordering::Release);
+    tracing::warn!(
+        actor = crate::scope::current_scope()
+            .map(|s| s.owner_user_id)
+            .unwrap_or_else(|| "unknown".into()),
+        "guardrails disabled (runtime kill-switch) — all evaluations now Allow"
+    );
+}
 
-    pub fn enable_all(&self) {
-        self.enabled.store(true, Ordering::Release);
-    }
+pub fn enable_all(&self) {
+    self.enabled.store(true, Ordering::Release);
+    tracing::warn!(
+        actor = crate::scope::current_scope()
+            .map(|s| s.owner_user_id)
+            .unwrap_or_else(|| "unknown".into()),
+        "guardrails re-enabled"
+    );
+}
 
     pub fn input_count(&self) -> usize {
         self.input.len()

@@ -194,21 +194,41 @@ struct CompiledCustomPattern {
 
 /// Bidirectional leak detector for secret values.
 pub struct LeakDetector {
-    injected_hashes: HashSet<u64>,
+    /// Fingerprints of registered secrets with bounded capacity. The previous
+    /// unbounded `HashSet<u64>` grew for the lifetime of the process on every
+    /// `register_injected` call (Aleph Server is a long-running daemon), so a
+    /// workload that injected many distinct secrets would inflate memory and
+    /// broaden false-positive matches over time. The LRU cap evicts the
+    /// oldest fingerprints first; once evicted, an old secret value that
+    /// re-appears in inbound content will no longer be flagged here (pattern
+    /// rules still cover the leak case — they just won't tag it as
+    /// "previously injected").
+    injected_hashes: lru::LruCache<u64, ()>,
     /// Byte lengths of the registered secrets — the window sizes
-    /// [`Self::scan_inbound`] slides over inbound content. Kept as a sorted set
-    /// because a handful of distinct lengths is the norm and the scan cost is
-    /// linear in their sum.
-    injected_lens: BTreeSet<usize>,
+    /// [`Self::scan_inbound`] slides over inbound content. Kept as a sorted
+    /// set because a handful of distinct lengths is the norm and the scan
+    /// cost is linear in their sum. Lengths are also LRU-bounded for the same
+    /// reason as the hash set.
+    injected_lens: lru::LruCache<usize, ()>,
     custom_patterns: Vec<CompiledCustomPattern>,
 }
+
+/// Cap on tracked fingerprints. Long enough to cover a multi-turn tool
+/// resolution + a follow-up reflection prompt (typical: < 50 entries); small
+/// enough that memory and scan cost stay bounded under adversarial workloads
+/// (e.g. a host that cycles through unique tokens).
+const INJECTED_LRU_CAP: usize = 1024;
 
 impl LeakDetector {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            injected_hashes: HashSet::new(),
-            injected_lens: BTreeSet::new(),
+            injected_hashes: lru::LruCache::new(
+                std::num::NonZeroUsize::new(INJECTED_LRU_CAP).expect("cap is non-zero"),
+            ),
+            injected_lens: lru::LruCache::new(
+                std::num::NonZeroUsize::new(INJECTED_LRU_CAP).expect("cap is non-zero"),
+            ),
             custom_patterns: Vec::new(),
         }
     }
@@ -251,8 +271,10 @@ impl LeakDetector {
             if secret.value_len < MIN_INJECTED_MATCH_LEN {
                 continue;
             }
-            self.injected_hashes.insert(secret.value_hash);
-            self.injected_lens.insert(secret.value_len);
+            // `put` evicts the least-recently-used entry when the cache is at
+            // capacity. `contains` below promotes on hit (LRU semantics).
+            self.injected_hashes.put(secret.value_hash, ());
+            self.injected_lens.put(secret.value_len, ());
         }
     }
 
@@ -345,7 +367,7 @@ impl LeakDetector {
         if self.injected_lens.is_empty() {
             return None;
         }
-        for &len in &self.injected_lens {
+        for (&len, _) in self.injected_lens.iter() {
             if len > content.len() {
                 continue;
             }
@@ -550,7 +572,11 @@ mod tests {
         detector.register_injected(&[InjectedSecret::from_value("k", secret)]);
         assert!(!detector.injected_hashes.is_empty());
         assert_eq!(
-            detector.injected_lens.iter().copied().collect::<Vec<_>>(),
+            detector
+                .injected_lens
+                .iter()
+                .map(|(k, _)| *k)
+                .collect::<Vec<_>>(),
             vec![secret.len()],
             "only the length is kept alongside the hash"
         );

@@ -77,10 +77,35 @@ impl PiiSecretsGuardrail {
                 reason,
                 class: ErrorClass::Fixable,
             },
-            Err(SecurityGuardError::SecretResolutionFailed(e)) => GuardrailDecision::Block {
-                reason: format!("Secret resolution failed: {e}"),
-                class: ErrorClass::Unexpected,
-            },
+            Err(SecurityGuardError::SecretResolutionFailed(e)) => {
+                // Strip the requested secret name from `reason` before it
+                // reaches the model / log / UI: `SecretError::NotFound` and
+                // `SecretError::InvalidPlaceholder` echo the user-supplied
+                // name verbatim in their `Display` impls, and that echo was
+                // exposed via `Block.reason` (see review/guardrails-statics
+                // C1) — an attacker who guessed vault keys could iterate
+                // `{{secret:NAME}}` and use the differential between "name
+                // echoed back" (vault hit) and "name NOT echoed" (vault miss)
+                // to enumerate the vault namespace. Logging the name into a
+                // dedicated audit field instead keeps triage intact.
+                let variant = match &e {
+                    crate::secrets::injection::SecretError::NotFound(_) => "not_found",
+                    crate::secrets::injection::SecretError::InvalidPlaceholder(_) => {
+                        "invalid_placeholder"
+                    }
+                    _ => "resolution_failed",
+                };
+                tracing::warn!(
+                    error = %e,
+                    secret_kind = "vault",
+                    variant = variant,
+                    "secret resolution failed during guardrail evaluation"
+                );
+                GuardrailDecision::Block {
+                    reason: "secret resolution failed".to_string(),
+                    class: ErrorClass::Unexpected,
+                }
+            }
         }
     }
 
