@@ -47,6 +47,31 @@ pub(crate) fn is_continuation_driven_slash(name: &str) -> bool {
     matches!(name, "loop" | "goal")
 }
 
+/// Stamp `BTW_METADATA_KEY` into `metadata` if `input` is a side question.
+///
+/// Free-standing and parser-free on purpose. `try_resolve_slash_command`
+/// returns `None` whenever the shared `CommandParser` cell is empty, and a
+/// side question that silently degraded to a normal turn under that condition
+/// would run at the session's real tier with the main session's key — the
+/// two failures this feature exists to prevent, in the one configuration
+/// (tests, simulated mode) where nobody would notice.
+pub(crate) fn stamp_btw(input: &str, metadata: &mut HashMap<String, String>) {
+    use crate::gateway::btw::{BtwTurn, BTW_METADATA_KEY};
+    if metadata.contains_key(BTW_METADATA_KEY) {
+        return;
+    }
+    if let Some(turn) = BtwTurn::resolve(input) {
+        metadata.insert(
+            BTW_METADATA_KEY.to_string(),
+            if turn.promote {
+                "promote".to_string()
+            } else {
+                turn.question
+            },
+        );
+    }
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Stamp `SLASH_COMMAND_MODE_KEY` into `metadata` if `input` is a slash
     /// command. Idempotent: an already-stamped request is left alone.
@@ -60,6 +85,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// flight: the text lands in the transcript, the loop reads it as an
     /// interjection, and the client gets no events and no error.
     pub async fn stamp_slash_mode(&self, input: &str, metadata: &mut HashMap<String, String>) {
+        // Side questions first: they are resolved without the command parser,
+        // and they must be stamped even when the parser cell is empty.
+        stamp_btw(input, metadata);
         if metadata.contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY) {
             return;
         }
@@ -914,5 +942,25 @@ mod arg_mapping_tests {
              slash command they carry is folded into a running sibling as \
              plain text and never executes: {offenders:?}"
         );
+    }
+
+    #[test]
+    fn btw_is_stamped_and_therefore_never_folded_into_a_running_sibling() {
+        use crate::gateway::btw::BTW_METADATA_KEY;
+        let mut metadata = std::collections::HashMap::new();
+
+        // The pure half of stamp_slash_mode: btw resolution needs no parser and
+        // must therefore work even when the command-parser cell is empty (tests,
+        // simulated mode) — the exact condition under which try_resolve_slash_command
+        // returns None.
+        super::stamp_btw("/btw what was that file called?", &mut metadata);
+        assert_eq!(
+            metadata.get(BTW_METADATA_KEY).map(String::as_str),
+            Some("what was that file called?")
+        );
+
+        let mut plain = std::collections::HashMap::new();
+        super::stamp_btw("just a message", &mut plain);
+        assert!(plain.is_empty());
     }
 }
