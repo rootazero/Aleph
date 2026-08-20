@@ -417,6 +417,17 @@ impl DreamPipeline {
             executed.push(stage.name().to_string());
         }
 
+        // Cap the unbounded growth of `recall_signals` (P1 from review).
+        // The table grew without bound because `cleanup_old_signals` was
+        // defined but never wired into any background task. Dream is the
+        // natural cadence: once per cycle, regardless of which stages ran.
+        if let Err(e) = ctx.database.cleanup_old_signals(RECALL_SIGNAL_RETENTION_DAYS) {
+            tracing::warn!(
+                error = %e,
+                "recall_signals retention cleanup failed; continuing dream cycle"
+            );
+        }
+
         let mut report = ctx.report;
         report.status = DreamReportStatus::Completed;
         report.stages_executed = executed;
@@ -435,6 +446,12 @@ impl Default for DreamPipeline {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_CHECK_INTERVAL_SECONDS: u64 = 60;
+
+/// Retention window for `recall_signals` rows. The table grows by one row
+/// per recall; without a cap the dedup index and downstream aggregation
+/// queries slow over time. 90 days matches the typical "this note was
+/// recently useful" horizon used by `note_decay` and similar stages.
+const RECALL_SIGNAL_RETENTION_DAYS: u32 = 90;
 
 static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
 
