@@ -86,18 +86,27 @@ pub fn enable_all(&self) {
         if !self.is_enabled() || self.input.is_empty() {
             return GuardrailDecision::Allow;
         }
-        let mut last_warn = None;
+        // Aggregate Warn reasons from ALL guardrails instead of keeping only
+        // the last one. The previous `last_warn: Option<Warn>` silently
+        // dropped every earlier warning, so operators saw at most one reason
+        // even when three guardrails each fired (H2 in
+        // review/guardrails-statics). Block / Sanitize still short-circuit.
+        let mut warns: Vec<String> = Vec::new();
         for g in &self.input {
             let d = g.evaluate_input(text).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => {
-                    last_warn = Some(GuardrailDecision::Warn { reason });
-                }
+                GuardrailDecision::Warn { reason } => warns.push(reason),
                 _ => return d,
             }
         }
-        last_warn.unwrap_or(GuardrailDecision::Allow)
+        if warns.is_empty() {
+            GuardrailDecision::Allow
+        } else {
+            GuardrailDecision::Warn {
+                reason: warns.join("; "),
+            }
+        }
     }
 
     /// Screen the user input the harness is about to replay into a prompt.
@@ -178,7 +187,18 @@ pub fn enable_all(&self) {
                         reason = %reason,
                         "input guardrail blocked a replayed user message; redacting it",
                     );
-                    set_screened_text(&mut record.event, REDACTED_USER_MESSAGE.to_string());
+                    // Tag the redaction with the event's `seq` so the audit
+                    // trail can tell two redacted messages apart. The previous
+                    // single constant (`REDACTED_USER_MESSAGE`) made every
+                    // redaction indistinguishable, so if user A pasted user
+                    // B's secret and user C later pasted their own, both
+                    // looked identical in the log — there was no way to
+                    // correlate a redaction with the session seq that held
+                    // the original.
+                    set_screened_text(
+                        &mut record.event,
+                        format!("{REDACTED_USER_MESSAGE} [redacted:seq={}]", record.seq),
+                    );
                 }
             }
         }
@@ -189,36 +209,44 @@ pub fn enable_all(&self) {
         if !self.is_enabled() || self.output.is_empty() {
             return GuardrailDecision::Allow;
         }
-        let mut last_warn = None;
+        let mut warns: Vec<String> = Vec::new();
         for g in &self.output {
             let d = g.evaluate_output(text).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => {
-                    last_warn = Some(GuardrailDecision::Warn { reason });
-                }
+                GuardrailDecision::Warn { reason } => warns.push(reason),
                 _ => return d,
             }
         }
-        last_warn.unwrap_or(GuardrailDecision::Allow)
+        if warns.is_empty() {
+            GuardrailDecision::Allow
+        } else {
+            GuardrailDecision::Warn {
+                reason: warns.join("; "),
+            }
+        }
     }
 
     pub async fn evaluate_tool_call(&self, tool_name: &str, args: &Value) -> GuardrailDecision {
         if !self.is_enabled() || self.tool_call.is_empty() {
             return GuardrailDecision::Allow;
         }
-        let mut last_warn = None;
+        let mut warns: Vec<String> = Vec::new();
         for g in &self.tool_call {
             let d = g.evaluate_tool_call(tool_name, args).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => {
-                    last_warn = Some(GuardrailDecision::Warn { reason });
-                }
+                GuardrailDecision::Warn { reason } => warns.push(reason),
                 _ => return d,
             }
         }
-        last_warn.unwrap_or(GuardrailDecision::Allow)
+        if warns.is_empty() {
+            GuardrailDecision::Allow
+        } else {
+            GuardrailDecision::Warn {
+                reason: warns.join("; "),
+            }
+        }
     }
 }
 

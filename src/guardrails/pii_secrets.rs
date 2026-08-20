@@ -182,6 +182,29 @@ impl PiiSecretsGuardrail {
                     }
                     Ok(Value::Object(out))
                 }
+                // Numbers are NOT a safe bypass: an 11-digit phone number or
+                // a 16-digit bank-card number can be expressed as a JSON
+                // number, and the PII rules operate on strings. Convert
+                // number leaves to their string form for scanning; on a hit
+                // we redact the string form and re-parse it back to a number
+                // when possible (preserving the wire shape for well-formed
+                // values), or fall back to a redacted string when the
+                // guardrail mangled it beyond numeric recognition (e.g.
+                // `13812345678` -> `[REDACTED]` can't be re-parsed as a
+                // number, so we return a string rather than guessing).
+                Value::Number(n) => {
+                    let text = n.to_string();
+                    let scanned = self
+                        .scan_tool_arg_leaf(&text, resolver_ref, warnings, sources)
+                        .await?;
+                    if scanned == text {
+                        Ok(value.clone())
+                    } else if let Ok(num) = scanned.parse::<serde_json::Number>() {
+                        Ok(Value::Number(num))
+                    } else {
+                        Ok(Value::String(scanned))
+                    }
+                }
                 _ => Ok(value.clone()),
             }
         })
