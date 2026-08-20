@@ -138,11 +138,47 @@ fn write_atomically(path: &Path, contents: &str) -> Result<()> {
 }
 
 /// Copy the requested `sections` (dot-paths) from `current` into `existing`,
-/// creating intermediate tables as needed. Sections missing from `current`
-/// or blocked by a non-table parent are skipped with a warning.
-fn merge_sections(existing: &mut toml::Value, current: &toml::Value, sections: &[&str]) {
+/// creating intermediate tables as needed.
+///
+/// # A section the caller named but `current` does not contain is an error
+///
+/// This used to `warn!` and skip, and the call still reported success. That
+/// combination is the shape behind a bug fixed on 2026-08-20: a section
+/// carrying `skip_serializing_if` vanishes from `current` once it is empty, so
+/// *removing the last element* serialised nothing, merged nothing, wrote
+/// nothing, and answered `{"ok": true}` — the entry came back at the next
+/// load. Three shipped delete surfaces (`plugin_marketplaces`, `channels`,
+/// `rules`) were fixed on the fields; the four remaining `Option` sections
+/// (`behavior` / `search` / `fetch` / `unified_tools`) have no path today that
+/// clears them, which is precisely why the next one to be written would be
+/// silent too.
+///
+/// Whichever way the absence arose, the caller's intent could not be honoured:
+/// it either meant "clear this" (which the merge cannot express) or "write
+/// this" (and there was nothing to write). Saying so is the difference between
+/// a lie and a refusal.
+///
+/// **It is deliberately not "absent ⇒ delete the on-disk section".** The
+/// fail-soft here is load-bearing: `guard_incremental_memory` and
+/// `guard_incremental_providers` exist because a partially populated `Config`
+/// once erased on-disk embedding providers. Teaching the merge to treat
+/// absence as deletion would upgrade that whole class from *silently skipped*
+/// to *silently erased*.
+///
+/// Errors are collected and no mutation happens on failure, so the caller
+/// never gets a partial write reported as a whole one.
+///
+/// # Errors
+/// One entry per named section that is not present in `current`, or whose
+/// parent path in `existing` is blocked by a non-table value.
+fn merge_sections(
+    existing: &mut toml::Value,
+    current: &toml::Value,
+    sections: &[&str],
+) -> std::result::Result<(), Vec<String>> {
     // Collect values from current config first (immutable borrow)
     let mut section_values: Vec<(&str, Vec<&str>, toml::Value)> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
     if let toml::Value::Table(ref current_table) = current {
         for section in sections {
             let parts: Vec<&str> = section.split('.').collect();
@@ -153,16 +189,29 @@ fn merge_sections(existing: &mut toml::Value, current: &toml::Value, sections: &
             if let Some(val) = parts.iter().try_fold(current, |n, p| n.get(p)) {
                 section_values.push((section, parts, val.clone()));
             } else {
-                warn!(
-                    section = %section,
-                    "save_incremental: section not present in current config; update skipped"
-                );
+                missing.push(format!(
+                    "`{section}` is not present in the serialised config, so this save would \
+                     have changed nothing. An optional section must be `Some`, and a collection \
+                     section must serialise when empty, for the merge to be able to write it."
+                ));
             }
         }
         let _ = current_table; // explicitly drop borrow
+    } else {
+        return Err(vec![
+            "the serialised config is not a table; nothing can be merged".to_string(),
+        ]);
     }
 
-    // Now apply to existing config (mutable borrow)
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+
+    // Now apply to existing config (mutable borrow). A blocked parent is
+    // reported rather than skipped for the same reason as an absent section,
+    // but it is detected mid-walk, so earlier sections are already written —
+    // the write below is the caller's, and it still happens.
+    let mut blocked: Vec<String> = Vec::new();
     for (section, parts, value) in section_values {
         // Navigate/create intermediate tables at arbitrary depth
         let (path_parts, leaf) = parts.split_at(parts.len() - 1);
@@ -190,11 +239,17 @@ fn merge_sections(existing: &mut toml::Value, current: &toml::Value, sections: &
                 debug!(section = %section, "Updated section");
             }
         } else {
-            warn!(
-                section = %section,
-                "save_incremental: parent path is not a table; update skipped"
-            );
+            blocked.push(format!(
+                "`{section}` cannot be written: a parent of it in the existing file is not a \
+                 table."
+            ));
         }
+    }
+
+    if blocked.is_empty() {
+        Ok(())
+    } else {
+        Err(blocked)
     }
 }
 
@@ -376,8 +431,15 @@ impl Config {
             AlephError::invalid_config(format!("Failed to serialize current config: {e}"))
         })?;
 
-        // Only update specified sections
-        merge_sections(&mut existing, &current, sections);
+        // Only update specified sections. A named section that is not there
+        // cannot be honoured, and reporting success for it is how "removed the
+        // last marketplace" came back at the next load — see `merge_sections`.
+        merge_sections(&mut existing, &current, sections).map_err(|problems| {
+            AlephError::invalid_config(format!(
+                "Incremental save of {sections:?} changed nothing: {}",
+                problems.join("; ")
+            ))
+        })?;
 
         // Serialize back to TOML string
         let new_contents = toml::to_string_pretty(&existing).map_err(|e| {

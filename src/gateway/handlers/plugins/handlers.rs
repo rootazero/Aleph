@@ -56,31 +56,5 @@ pub fn get_extension_manager() -> Result<&'static Arc<ExtensionManager>, JsonRpc
 
 pub(crate) fn build_marketplace_manager(
 ) -> Result<crate::extension::marketplace::MarketplaceManager, String> {
-    use crate::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
-    use std::collections::HashMap;
-
-    let config = crate::config::Config::load().map_err(|e| format!("Config error: {e}"))?;
-
-    let marketplace_configs: HashMap<String, MarketplaceConfig> = config
-        .plugin_marketplaces
-        .iter()
-        .map(|(name, entry)| {
-            let source_type = match entry.source_type.as_str() {
-                "local" => MarketplaceSourceType::Local,
-                _ => MarketplaceSourceType::Github,
-            };
-            (
-                name.clone(),
-                MarketplaceConfig {
-                    source: entry.source.clone(),
-                    source_type,
-                },
-            )
-        })
-        .collect();
-
-    Ok(crate::extension::marketplace::MarketplaceManager::new(
-        marketplace_configs,
-        None,
-    ))
+    crate::extension::marketplace::MarketplaceManager::from_config()
 }

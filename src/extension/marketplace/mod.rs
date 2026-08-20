@@ -5,6 +5,8 @@ pub mod github_source;
 pub mod installer;
 pub mod local_source;
 pub mod manifest;
+pub mod names;
+pub mod source_spec;
 pub mod types;
 
 use std::collections::HashMap;
@@ -13,8 +15,10 @@ use std::path::{Path, PathBuf};
 use github_source::sync_github_marketplace;
 use local_source::resolve_local_marketplace;
 use manifest::parse_marketplace_manifest;
+pub use names::reject_unsafe_segment;
+pub use source_spec::{classify, MarketplaceSpec};
 pub use types::{
-    default_install_dir, marketplace_cache_dir, MarketplaceConfig, MarketplaceListing,
+    configs_from_entries, default_install_dir, marketplace_cache_dir, MarketplaceConfig, MarketplaceListing,
     MarketplaceManifest, MarketplacePluginEntry, MarketplaceProblem, MarketplaceSourceType,
     PluginSearchResult, BUILTIN_MARKETPLACE_NAME, BUILTIN_MARKETPLACE_SOURCE,
 };
@@ -42,6 +46,23 @@ impl MarketplaceManager {
             marketplaces,
             cache_dir: cache_dir.unwrap_or_else(marketplace_cache_dir),
         }
+    }
+
+    /// Build a manager from the process's effective config file.
+    ///
+    /// Four callers wanted "a manager over what is registered right now" and
+    /// each wrote the load-and-decode itself; the gateway's copy was the one
+    /// every RPC handler reached for, which is why a *tool* face for the same
+    /// verbs would otherwise have had to depend on a gateway handler.
+    ///
+    /// # Errors
+    /// The config file cannot be read or parsed.
+    pub fn from_config() -> Result<Self, String> {
+        let config = crate::config::Config::load().map_err(|e| format!("Config error: {e}"))?;
+        Ok(Self::new(
+            configs_from_entries(&config.plugin_marketplaces),
+            None,
+        ))
     }
 
     // -------------------------------------------------------------------------
@@ -78,14 +99,9 @@ impl MarketplaceManager {
         // Reject names that could traverse outside the cache directory —
         // `name` may come from user input and is joined into a deletion path
         // in `remove`, so a crafted value like `../../etc` must never reach
-        // `remove_dir_all`.
-        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
-            return Some(format!(
-                "Invalid marketplace name '{name}': must not be empty or contain path separators or '..'."
-            ));
-        }
-
-        None
+        // `remove_dir_all`. Shared with the four other sites that join a name
+        // onto a managed root; see `names.rs` for why it is not inlined here.
+        names::reject_unsafe_segment("marketplace name", name).err()
     }
 
     /// Remove a marketplace registration and delete its cache.
@@ -510,13 +526,7 @@ impl MarketplaceManager {
         }
         match config.source_type {
             MarketplaceSourceType::Github => {
-                if marketplace_name.is_empty()
-                    || marketplace_name.contains('/')
-                    || marketplace_name.contains('\\')
-                    || marketplace_name.contains("..")
-                {
-                    return Err(format!("Invalid marketplace name '{marketplace_name}'"));
-                }
+                names::reject_unsafe_segment("marketplace name", marketplace_name)?;
                 Ok(self.cache_dir.join(marketplace_name))
             }
             MarketplaceSourceType::Local => resolve_local_marketplace(&config.source),

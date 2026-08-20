@@ -413,29 +413,24 @@ fn MarketplacesSection() -> impl IntoView {
             </div>
 
             {move || {
-                // "Still connecting" and "refused" are both answered before
-                // the empty state gets a turn. Only a load that succeeded and
-                // really came back empty may say so — the built-in marketplace
-                // is always in a real response, so an empty list that is not
-                // one of the other two answers means the server said something
-                // we should not paper over.
-                if loading.get() || !state.is_connected.get() {
-                    view! {
+                match marketplace_list_state(
+                    loading.get(),
+                    state.is_connected.get(),
+                    error.get().is_some(),
+                    rows.get().is_empty(),
+                ) {
+                    MarketplaceListState::Waiting => view! {
                         <p class="text-sm text-text-tertiary">
                             {t!(i18n, settings.plugins.marketplaces_loading)}
                         </p>
-                    }.into_any()
-                } else if error.get().is_some() {
-                    // The box above is already showing it; a second line
-                    // saying "none registered" would contradict it.
-                    ().into_any()
-                } else if rows.get().is_empty() {
-                    view! {
+                    }.into_any(),
+                    MarketplaceListState::Silent => ().into_any(),
+                    MarketplaceListState::Empty => view! {
                         <p class="text-sm text-text-tertiary">
                             {t!(i18n, settings.plugins.marketplaces_none)}
                         </p>
-                    }.into_any()
-                } else {
+                    }.into_any(),
+                    MarketplaceListState::Rows => {
                     view! {
                         <div class="space-y-2">
                             <For
@@ -491,9 +486,113 @@ fn MarketplacesSection() -> impl IntoView {
                             />
                         </div>
                     }.into_any()
+                    }
                 }
             }}
         </div>
+    }
+}
+
+/// What the marketplace list area renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarketplaceListState {
+    /// Still connecting, or the first load has not answered.
+    Waiting,
+    /// Nothing here — the banner above already says why.
+    Silent,
+    /// A load that succeeded and really came back empty.
+    Empty,
+    /// The registrations themselves.
+    Rows,
+}
+
+/// Decide it in one place, because the order of these four questions is the
+/// whole content of the decision.
+///
+/// The refusal arm used to be asked **before** the rows, so a failed *write*
+/// (an add whose source does not resolve, a remove the server refused) wiped
+/// the registrations off the screen: the rows were still in the signal and
+/// still correct, and the operator saw "add failed" plus an empty list, which
+/// reads as "and it ate my marketplaces". The comment on that arm said what it
+/// meant — the banner already explains it, so a second line saying "none
+/// registered" would contradict it — but suppressing that *line* is not
+/// suppressing the *list*.
+///
+/// A failed **load** needs no special case here: `load_marketplaces` empties
+/// the rows on both of its error paths, so the refusal arm still gets its
+/// turn, which is the behaviour that arm was written for.
+///
+/// Found by the first real-browser run of this screen (`qa/plugins/run.sh
+/// panel`), with three registrations on disk and none on screen.
+const fn marketplace_list_state(
+    loading: bool,
+    connected: bool,
+    has_error: bool,
+    rows_empty: bool,
+) -> MarketplaceListState {
+    if loading || !connected {
+        MarketplaceListState::Waiting
+    } else if !rows_empty {
+        MarketplaceListState::Rows
+    } else if has_error {
+        MarketplaceListState::Silent
+    } else {
+        MarketplaceListState::Empty
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{marketplace_list_state, MarketplaceListState};
+
+    /// The case the browser found: a write failed, the registrations are
+    /// intact, and they must still be on screen.
+    #[test]
+    fn a_failed_write_does_not_erase_the_registrations() {
+        assert_eq!(
+            marketplace_list_state(false, true, true, false),
+            MarketplaceListState::Rows
+        );
+    }
+
+    /// A failed *load* empties the rows itself, so the banner is the only
+    /// thing on screen — saying "none registered" underneath it would be the
+    /// UI inventing an answer the server never gave.
+    #[test]
+    fn a_failed_load_says_nothing_beyond_its_banner() {
+        assert_eq!(
+            marketplace_list_state(false, true, true, true),
+            MarketplaceListState::Silent
+        );
+    }
+
+    /// Only a load that succeeded and really came back empty may say so. In
+    /// practice the built-in marketplace is always in a real response, so this
+    /// state means the server answered with nothing at all.
+    #[test]
+    fn only_a_successful_empty_load_claims_there_are_none() {
+        assert_eq!(
+            marketplace_list_state(false, true, false, true),
+            MarketplaceListState::Empty
+        );
+    }
+
+    /// Not connected outranks everything: rows from a previous connection are
+    /// not evidence about this one, and neither is their absence.
+    #[test]
+    fn waiting_outranks_every_other_answer() {
+        for has_error in [false, true] {
+            for rows_empty in [false, true] {
+                assert_eq!(
+                    marketplace_list_state(true, true, has_error, rows_empty),
+                    MarketplaceListState::Waiting
+                );
+                assert_eq!(
+                    marketplace_list_state(false, false, has_error, rows_empty),
+                    MarketplaceListState::Waiting
+                );
+            }
+        }
     }
 }
 
