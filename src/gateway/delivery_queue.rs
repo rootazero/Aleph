@@ -586,6 +586,19 @@ impl DeliveryStore {
     }
 
     fn backfill_conversation_ids(conn: &Connection, table: &str) {
+        // SQL identifier allow-list: even though callers currently pass hard-
+        // coded literals, this function's API shape lets a future caller
+        // inject arbitrary SQL via `table` because identifiers cannot be
+        // bound as parameters. Reject anything that isn't [A-Za-z0-9_] up
+        // front so this stays safe under any future refactor.
+        if !table
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            || table.is_empty()
+        {
+            tracing::warn!(table = %table, "backfill_conversation_ids: rejecting non-identifier table name");
+            return;
+        }
         let sql = format!("SELECT id, payload FROM {table} WHERE conversation_id IS NULL");
         let Ok(mut stmt) = conn.prepare(&sql) else {
             return;

@@ -68,6 +68,9 @@ pub enum ChannelError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Channel busy: {0}")]
+    Busy(String),
 }
 
 /// Channel identifier

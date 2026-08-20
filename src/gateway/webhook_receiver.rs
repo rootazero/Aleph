@@ -269,10 +269,20 @@ pub struct WebhookReceiver;
 impl WebhookReceiver {
     /// Route all `{WEBHOOK_ROUTE_PREFIX}/…` POSTs at `table`.
     pub fn router(table: Arc<WebhookMountTable>) -> Router {
-        Router::new().route(
-            &format!("{WEBHOOK_ROUTE_PREFIX}/{{*rest}}"),
-            post(webhook_endpoint).with_state(table),
-        )
+        // Cap the request body at 1 MiB BEFORE the handler runs. The handler
+        // extracts `Bytes`, which means axum would otherwise buffer the
+        // entire upload before the signature check — a 1 GiB POST could OOM
+        // the gateway. 1 MiB is well above any legitimate webhook payload
+        // (Telegram 64 KiB, Slack 1 MiB, Discord 25 MiB max but we cap
+        // tighter since we only relay metadata, not media).
+        const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
+        Router::new()
+            .route(
+                &format!("{WEBHOOK_ROUTE_PREFIX}/{{*rest}}"),
+                post(webhook_endpoint)
+                    .with_state(table)
+                    .layer(axum::extract::DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES)),
+            )
     }
 
     /// Compute HMAC-SHA256 signature of data with the given secret.
