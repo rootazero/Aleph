@@ -25,35 +25,52 @@ impl SecurityKernelHook {
     pub const fn new(kernel: SecurityKernel) -> Self {
         Self { kernel }
     }
-
-    /// Reconstruct the inspected command line from the sandbox command.
-    fn command_line(ctx: &SandboxHookContext<'_>) -> String {
-        let mut line = ctx.command.program.clone();
-        for arg in &ctx.command.args {
-            line.push(' ');
-            line.push_str(arg);
-        }
-        line
-    }
 }
 
 #[async_trait]
 impl SandboxBeforeHook for SecurityKernelHook {
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult {
-        let command = Self::command_line(&ctx);
+        // The same text, folded the same way, as the command-policy hook one
+        // slot along in the chain. This used to be a second, private
+        // reconstruction that (a) stopped at the args, so a script piped in as
+        // stdin (`bash -s`) was invisible to every operator pattern, and
+        // (b) skipped normalisation entirely, so `r\m` walked past a pattern
+        // written as `rm`. Two functions answering "what command is about to
+        // run" is one too many: an operator who writes an explicit
+        // `custom_blocked` rule is entitled to the same de-obfuscation the
+        // built-in rules get, and the only way to keep that true is to read the
+        // same string.
+        let text = crate::sandbox::command_policy::command_text(ctx.command);
+        let command = crate::sandbox::command_policy::normalize::normalize_for_matching(&text);
         match self.kernel.assess_custom(&command) {
-            Some(RiskLevel::Blocked) => SandboxHookResult::Deny {
-                reason: format!(
-                    "command blocked by custom shell-security pattern ([security].custom_blocked): {}",
-                    ctx.command.program
-                ),
-            },
+            Some(RiskLevel::Blocked) => {
+                // Same durable trail as the built-in ruleset next to it: a
+                // refusal the operator configured themselves is exactly as
+                // worth reconstructing after an incident, and a second audit
+                // producer would only be a second thing to keep in step.
+                crate::sandbox::command_policy::record_policy_decision(
+                    true,
+                    ctx.command,
+                    &["custom_blocked".to_string()],
+                );
+                SandboxHookResult::Deny {
+                    reason: format!(
+                        "command blocked by custom shell-security pattern ([security].custom_blocked): {}",
+                        ctx.command.program
+                    ),
+                }
+            }
             Some(RiskLevel::Danger) => {
                 tracing::warn!(
                     target: "shell_security",
                     tool = ctx.tool_name,
                     program = %ctx.command.program,
                     "command matched a custom danger pattern (advisory; allowed)"
+                );
+                crate::sandbox::command_policy::record_policy_decision(
+                    false,
+                    ctx.command,
+                    &["custom_danger".to_string()],
                 );
                 SandboxHookResult::Allow
             }
@@ -131,6 +148,43 @@ mod tests {
         let command = cmd("deploy", &["prod"]);
         let ctx = SandboxHookContext::new("bash", &command);
         assert!(matches!(hook.before(ctx).await, SandboxHookResult::Allow));
+    }
+
+    /// An operator who writes an explicit `custom_blocked` rule gets the same
+    /// de-obfuscation the built-in rules get. Before this hook read the shared
+    /// normalised text, a pattern written as `secret_tool` was defeated by
+    /// `secret_to\ol` — the shell runs the same program either way.
+    #[tokio::test]
+    async fn custom_patterns_see_the_de_obfuscated_command() {
+        let hook = hook_with(&[r"secret_tool\b"], &[]);
+        for args in [
+            vec!["-c", r"secret_to\ol --leak"],
+            vec!["-c", "secret_to''ol --leak"],
+            vec!["-c", "secret_to'o'l --leak"],
+            vec!["-c", "secret_tool${IFS}--leak"],
+        ] {
+            let command = cmd("bash", &args);
+            let ctx = SandboxHookContext::new("bash", &command);
+            assert!(
+                matches!(hook.before(ctx).await, SandboxHookResult::Deny { .. }),
+                "must deny: {args:?}"
+            );
+        }
+    }
+
+    /// The reconstruction must include the stdin payload, which is where the
+    /// `bash -s` large-script path puts the whole program. A hook that stops at
+    /// the args cannot see any of it.
+    #[tokio::test]
+    async fn custom_patterns_see_a_script_arriving_on_stdin() {
+        let hook = hook_with(&[r"secret_tool\b"], &[]);
+        let mut command = cmd("bash", &["-s"]);
+        command.stdin = Some(b"set -e\nsecret_tool --leak\n".to_vec());
+        let ctx = SandboxHookContext::new("bash", &command);
+        assert!(matches!(
+            hook.before(ctx).await,
+            SandboxHookResult::Deny { .. }
+        ));
     }
 
     #[tokio::test]
