@@ -363,13 +363,18 @@ mod tests {
             !body.contains("${CLAUDE_PLUGIN_ROOT}"),
             "the model must not be shown an unexpanded variable: {body}"
         );
+        // The SKILL.md fixture spelled the tail as `/scripts/x.py` and the
+        // substitution is a pure string replace — so the body holds
+        // `<plugin_root><literal-slash>scripts/x.py`. On Windows the
+        // canonical plugin root uses back-slashes, the literal stays
+        // forward, and a join() done in the test would yield a pure
+        // back-slash path that the body can never contain. Match the
+        // exact spelling by composing the assertion string the same way.
         assert!(
-            body.contains(
-                &dir.path()
-                    .join("scripts/x.py")
-                    .to_string_lossy()
-                    .to_string()
-            ),
+            body.contains(&format!(
+                "{}/scripts/x.py",
+                dir.path().to_string_lossy()
+            )),
             "expected the plugin root to be substituted: {body}"
         );
     }

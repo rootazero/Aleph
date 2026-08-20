@@ -646,13 +646,26 @@ mod tests {
         // The ruled-out location. Compared component-wise (`Path::starts_with`),
         // never as a string: `aleph-501` string-starts-with `aleph`, and a
         // string compare here would report a violation on every Unix machine.
-        let shared = std::env::temp_dir().join("aleph");
-        assert!(
-            !base.starts_with(&shared),
-            "{} sits under the shared name {} that base_dir's own doc rules out",
-            base.display(),
-            shared.display()
-        );
+        //
+        // Unix-only: on Windows `%TEMP%` is already per-user and
+        // `private_temp_root` uses the bare `aleph` name (no euid suffix),
+        // so the "shared name another local user could squat in" concept
+        // does not apply — `private` itself is `temp_dir/aleph`, and
+        // `base.starts_with(temp_dir)` is true by construction. The ruling
+        // the test pins down ("never write under a name pre-creatable by
+        // anyone else") is enforced by `%TEMP%` being per-user, not by the
+        // path spell. Skipping the path comparison on Windows is therefore
+        // correct, not a gap — see `private_temp_root` for the doc.
+        #[cfg(unix)]
+        {
+            let shared = std::env::temp_dir().join("aleph");
+            assert!(
+                !base.starts_with(&shared),
+                "{} sits under the shared name {} that base_dir's own doc rules out",
+                base.display(),
+                shared.display()
+            );
+        }
     }
 
     /// Before the two `sanitize_filename` copies converged, this half stripped

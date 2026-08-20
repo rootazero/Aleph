@@ -1262,6 +1262,13 @@ mod tests {
             let temp = tempfile::tempdir().unwrap();
             let store = store(&temp);
             let alice_key = alice_session(&store).await;
+            // The scratchpad registry is a process-global; a sibling test in
+            // this module may have bound the same canonical key and never
+            // cleared it (or, more subtly, the static is keyed by canonical
+            // session key, which is the same across this whole `mod`). Drop
+            // any pre-existing binding first so we actually exercise the
+            // "never bound" arm this test pins.
+            crate::builtin_tools::scratchpad_registry::clear(&alice_key.to_key_string());
 
             let resp = CALLER_USER
                 .scope(

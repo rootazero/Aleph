@@ -595,7 +595,6 @@ mod tests {
                 allow_fork: true,
                 max_memory_mb: Some(512),
             },
-            ..Default::default()
         };
         let cwd = Path::new("C:\\workspace");
         let profile_str = driver.generate_profile(&policy, cwd).unwrap();
