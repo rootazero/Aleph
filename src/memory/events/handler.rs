@@ -255,7 +255,7 @@ impl MemoryCommandHandler {
             cmd.note_path,
             seq,
             event,
-            EventActor::User,
+            cmd.actor,
             cmd.correlation_id,
         );
 
@@ -586,6 +586,7 @@ mod tests {
         handler
             .restore_fact(RestoreNoteCommand {
                 note_path: fact_id.clone(),
+                actor: EventActor::User,
                 correlation_id: None,
             })
             .await
