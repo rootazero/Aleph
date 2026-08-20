@@ -13,6 +13,44 @@ use aleph_protocol::{
 use super::super::slash::ToolProgressMode;
 use super::{Action, AppState, AskDialogView, ChatMessage};
 
+/// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
+/// learned one per `RunAccepted`. A background/cron/subagent-heavy install
+/// can mint many runs while one TUI screen stays open for hours; this keeps
+/// that memory bounded. Eviction is FIFO and fails open: the oldest pair
+/// falls out and that run_id reverts to "unknown" — which
+/// `AppState::frame_belongs_here` already keeps rather than drops. That is
+/// the safe direction: capping this can let a few stragglers back in, it can
+/// never cause a frame that is actually ours to be dropped.
+const RUN_SESSION_CAP: usize = 256;
+
+/// The run id `handle_gateway_event`'s cross-session guard should check for
+/// `event`, or `None` for a frame the guard does not apply to.
+///
+/// Default is GUARDED: `StreamEvent::run_id()` is an exhaustive match in
+/// shared/protocol (no wildcard arm), so a tenth run-scoped variant added
+/// there is a compile error until someone decides what it returns, and
+/// inherits this guard the moment they do — nothing here has to be told
+/// about it by name. Only one variant opts out below, and it says why.
+/// `ClarificationEnded` already self-exempts: `run_id()` returns `""` for it
+/// (session-keyed, not run-keyed, by the protocol's own design), which the
+/// emptiness check turns into `None` without a named case here.
+fn run_scoped_id(event: &StreamEvent) -> Option<&str> {
+    match event {
+        // Keyed by `session_key` — the clarification registry's actual
+        // routing key — not by which run started it. A parked question
+        // arguably belongs on every open screen until it is answered (R5:
+        // AI comes to you), which is a different judgement call from "this
+        // run's assistant text leaked into a transcript that isn't its
+        // session's." Scoping AskUser by run/session is left to its own
+        // task rather than folded into this guard by accident.
+        StreamEvent::AskUser { .. } => None,
+        other => {
+            let id = other.run_id();
+            (!id.is_empty()).then_some(id)
+        }
+    }
+}
+
 /// Flatten an `AskUser` frame into the view the dialog overlay renders.
 ///
 /// Prefers the structured `questions` view: it carries the short header, the
@@ -78,13 +116,84 @@ impl AppState {
         self.should_quit = true;
     }
 
+    /// Record which session `run_id` belongs to, learned from that run's own
+    /// `RunAccepted`. Recorded for EVERY run, own or foreign: a run's home
+    /// session cannot change, but [`AppState::session_key`] can (a
+    /// `/session` switch), so `frame_belongs_here` re-derives "does this
+    /// belong on THIS screen" against the current key every time instead of
+    /// baking in a yes/no at learn time — the same run correctly resumes
+    /// once the screen switches back to its actual session, instead of
+    /// staying dropped forever because it was foreign a moment ago.
+    ///
+    /// Idempotent (a repeated id is not pushed twice, so a resend cannot
+    /// burn through the FIFO bound early) and bounded at
+    /// [`RUN_SESSION_CAP`] (see its doc for why eviction is safe).
+    fn mark_run_session(&mut self, run_id: String, session_key: String) {
+        if self.run_sessions.iter().any(|(id, _)| *id == run_id) {
+            return;
+        }
+        if self.run_sessions.len() >= RUN_SESSION_CAP {
+            self.run_sessions.pop_front();
+        }
+        self.run_sessions.push_back((run_id, session_key));
+    }
+
+    /// Whether a frame naming `run_id` belongs on THIS screen right now.
+    ///
+    /// Only a run id whose recorded home session does not match
+    /// [`AppState::session_key`] *at this moment* is dropped. An id this
+    /// screen has never learned about is kept: "I cannot tell" must not
+    /// become "not mine", or a run whose `RunAccepted` raced past this frame
+    /// (or a core too old to send one at all) goes silently missing from its
+    /// own transcript.
+    #[must_use]
+    pub fn frame_belongs_here(&self, run_id: &str) -> bool {
+        match self.run_sessions.iter().find(|(id, _)| id == run_id) {
+            Some((_, session_key)) => *session_key == self.session_key,
+            None => true,
+        }
+    }
+
     // -- Gateway event handling -----------------------------------------
 
     /// Handle a `StreamEvent` from the gateway. Returns an Action if the event
     /// should trigger further side effects (e.g. scrolling to bottom).
     pub fn handle_gateway_event(&mut self, event: StreamEvent) -> Action {
+        // Cross-session guard, structural rather than one early-return per
+        // arm: see `run_scoped_id` for what is exempt and why. Everything
+        // else — whether it appends visible transcript text (`ResponseChunk`,
+        // `AgentTrace`, tool rows, reasoning, the system-message arms) or
+        // repaints run-scoped status (`ModelResolved`, `ContextGauge`) — is
+        // "another run's state silently applied to this screen," the same
+        // defect either way, so both kinds are dropped here before a single
+        // arm below runs.
+        if let Some(run_id) = run_scoped_id(&event) {
+            if !self.frame_belongs_here(run_id) {
+                return Action::None;
+            }
+        }
+
         match event {
-            StreamEvent::RunAccepted { run_id, .. } => {
+            StreamEvent::RunAccepted {
+                run_id,
+                session_key,
+                ..
+            } => {
+                // Learn this run's home session unconditionally — own or
+                // foreign — so `frame_belongs_here` can answer for it later
+                // no matter how many times `self.session_key` changes
+                // afterward (see `mark_run_session`'s doc). This frame
+                // itself always reaches here un-guarded: nothing could have
+                // proven it foreign before its own `RunAccepted`, which is
+                // what teaches it.
+                self.mark_run_session(run_id.clone(), session_key.clone());
+                if session_key != self.session_key {
+                    // Someone else's run: a background/cron/delegated-
+                    // subagent run, or another window's conversation. Every
+                    // later frame naming it is caught by the guard above and
+                    // dropped instead of leaking into this transcript.
+                    return Action::None;
+                }
                 self.current_run = Some(run_id);
                 self.run_started_at = Some(Instant::now());
                 self.current_run_uses_agent_trace = false;

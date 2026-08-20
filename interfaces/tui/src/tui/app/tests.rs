@@ -1563,3 +1563,236 @@ fn switching_session_retires_the_provider_picker() {
     assert!(state.provider_picker.is_none());
     assert_eq!(state.focus, Focus::Input);
 }
+
+// ---------------------------------------------------------------------------
+// Cross-session frame routing (btw side-quest, task 1)
+// ---------------------------------------------------------------------------
+//
+// Background runs, cron runs and delegated subagents all publish frames
+// carrying a `run_id` but, with three exceptions, no `session_key` at all —
+// see `StreamEvent::run_id()`'s doc in shared/protocol. The gateway's own
+// visibility filter is owner-scoped, not session-scoped, so on a single-user
+// box every one of those frames reaches every open TUI connection.
+// `RunAccepted` is the one frame that names both `run_id` and `session_key`;
+// these tests drive it as the teaching signal `frame_belongs_here` learns
+// from, per Controller Ruling R7 (2026-08-20-btw-side-questions).
+
+#[test]
+fn frame_belongs_here_learns_from_run_accepted() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    // A run whose OWN `RunAccepted` named a different session is proven
+    // foreign: dropped.
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-foreign".into(),
+        session_key: "agent:main:ephemeral:btw-abc".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    assert!(!state.frame_belongs_here("run-foreign"));
+
+    // A run whose `RunAccepted` named THIS session: kept.
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-mine".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:01Z".into(),
+    });
+    assert!(state.frame_belongs_here("run-mine"));
+
+    // A run id this screen has never seen a `RunAccepted` for at all: "I
+    // cannot tell" must not become "drop" — a new session's first turn, and
+    // every frame from a core too old to send `RunAccepted`, must not go
+    // silently missing.
+    assert!(state.frame_belongs_here("run-never-announced"));
+}
+
+#[test]
+fn a_response_chunk_from_another_sessions_run_is_not_appended() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-elsewhere".into(),
+        session_key: "agent:main:ephemeral:btw-abc".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-elsewhere".into(),
+        seq: 1,
+        content: "not for you".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+    // Only the welcome message — nothing was appended.
+    assert_eq!(state.messages.len(), 1);
+}
+
+/// The same text a streaming turn produces twice on the wire (see
+/// `turn_streamed_len`'s doc: `ResponseChunk` deltas AND, in full,
+/// `AgentTrace{TextEmitted{Final}}`, because the TUI subscribes to no
+/// topics). Both carriers must be guarded, not just the more obvious one.
+#[test]
+fn an_agent_trace_text_event_from_another_sessions_run_is_not_appended() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-elsewhere".into(),
+        session_key: "agent:main:ephemeral:btw-abc".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::AgentTrace {
+        run_id: "run-elsewhere".into(),
+        seq: 1,
+        event: AgentTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: AgentTraceTextKind::Final,
+            text: "not for you either".into(),
+        },
+    });
+    assert_eq!(state.messages.len(), 1);
+}
+
+#[test]
+fn a_response_chunk_from_this_sessions_run_is_still_appended() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-mine".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-mine".into(),
+        seq: 1,
+        content: "hello".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+    assert_eq!(state.messages.len(), 2);
+    match &state.messages[1] {
+        ChatMessage::Assistant { content, .. } => assert_eq!(content, "hello"),
+        other => panic!("Expected Assistant message, got: {other:?}"),
+    }
+}
+
+#[test]
+fn a_response_chunk_from_a_run_never_announced_is_still_appended() {
+    // No `RunAccepted` was ever seen for this run_id — a race that lost it,
+    // or a core too old to send one at all.
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-never-announced".into(),
+        seq: 1,
+        content: "hello".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+    assert_eq!(state.messages.len(), 2);
+}
+
+/// `ModelResolved` and `ContextGauge` do not append visible chat text, but a
+/// foreign run's status repainting this screen's gauge/model indicator is
+/// the same defect wearing a different hat — the guard covers both, not just
+/// the transcript-text arms.
+#[test]
+fn a_context_gauge_from_another_sessions_run_is_not_applied() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-elsewhere".into(),
+        session_key: "agent:main:ephemeral:btw-abc".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::ContextGauge {
+        run_id: "run-elsewhere".into(),
+        seq: 1,
+        context_tokens: 500,
+        context_window: 8000,
+        total_tokens: 500,
+    });
+    assert!(state.context_gauge.is_none());
+}
+
+/// `AskUser` is deliberately exempt from this guard (see `run_scoped_id`'s
+/// doc comment; the original task brief called this out of scope). This test
+/// locks the decision in so a future change to the guard's shape does not
+/// silently start hiding clarification cards for background/delegated runs.
+#[test]
+fn an_ask_user_from_another_sessions_run_is_still_shown() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-elsewhere".into(),
+        session_key: "agent:main:ephemeral:btw-abc".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::AskUser {
+        run_id: "run-elsewhere".into(),
+        seq: 1,
+        session_key: "agent:main:ephemeral:btw-abc".into(),
+        question: "Proceed?".into(),
+        options: vec!["Yes".into(), "No".into()],
+        questions: vec![],
+        answered: 0,
+    });
+    assert!(state.dialog.is_some());
+}
+
+/// A conversation switch is the same defect from a different trigger: the
+/// run left behind in the old session keeps streaming, and its frames must
+/// not leak into the new one.
+#[test]
+fn a_run_left_behind_by_a_session_switch_does_not_leak_into_the_new_session() {
+    let mut state = AppState::new("s1".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-1".into(),
+        session_key: "s1".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.switch_session("s2");
+
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-1".into(),
+        seq: 2,
+        content: "late arrival".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+
+    assert!(
+        state
+            .messages
+            .iter()
+            .all(|m| !matches!(m, ChatMessage::Assistant { .. })),
+        "the abandoned run's text must not land in the new session's transcript"
+    );
+}
+
+/// The other half of the same property: a run's home session, once learned,
+/// does not get baked in as "foreign forever" — switching away and back
+/// must let its frames resume landing where they actually belong. Without
+/// this, `mark_run_session`'s "own or foreign" recording would be pointless:
+/// a set that only ever grew stale foreign entries would trap this exact
+/// case just as badly as the leak it replaced.
+#[test]
+fn a_run_resumes_appearing_after_switching_back_to_its_own_session() {
+    let mut state = AppState::new("s1".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-1".into(),
+        session_key: "s1".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.switch_session("s2");
+    state.switch_session("s1");
+
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-1".into(),
+        seq: 2,
+        content: "still mine".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+
+    match state.messages.last() {
+        Some(ChatMessage::Assistant { content, .. }) => assert_eq!(content, "still mine"),
+        other => panic!("Expected Assistant message, got: {other:?}"),
+    }
+}

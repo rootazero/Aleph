@@ -644,6 +644,21 @@ pub struct AppState {
     cache_root_agent: Option<String>,
     pub is_connected: bool,
 
+    /// `(run_id, session_key)` pairs learned from every `RunAccepted` this
+    /// screen has observed, own or foreign. Every other run-scoped frame is
+    /// checked against this before it is applied (see
+    /// `events::run_scoped_id` and `frame_belongs_here`), which compares the
+    /// recorded session against [`Self::session_key`] *at check time* — not
+    /// baked in at learn time — so a run correctly resumes appearing here if
+    /// a `/session` switch leaves and later returns to its actual session. A
+    /// run id never recorded here is treated as "unknown", which counts as
+    /// "kept", not "foreign": proof is required to drop, absence of proof is
+    /// not.
+    ///
+    /// FIFO-bounded (`events::RUN_SESSION_CAP`) so a long-lived screen next
+    /// to a busy install does not grow this without limit.
+    run_sessions: std::collections::VecDeque<(String, String)>,
+
     // -- Run tracking --
     pub current_run: Option<String>,
     /// Wall-clock start of the active run (set on `RunAccepted`, cleared on any
@@ -726,6 +741,7 @@ impl AppState {
             cache_stat_agent: None,
             cache_root_agent: None,
             is_connected: true,
+            run_sessions: std::collections::VecDeque::new(),
 
             current_run: None,
             run_started_at: None,
@@ -1285,6 +1301,12 @@ impl AppState {
         self.session_snapshot = None;
         self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
+        // The run left behind (if any) still belongs to the OLD session, and
+        // nothing extra needs to be recorded for that here: its own
+        // `RunAccepted` already taught `run_sessions` which session it is
+        // home to (see that field's doc), so `frame_belongs_here` now
+        // answers "no" for it against the new `self.session_key` above — and
+        // "yes" again if a later switch returns to its actual session.
         self.current_run = None;
         self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
