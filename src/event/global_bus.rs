@@ -233,6 +233,13 @@ impl GlobalBus {
     /// Creates a `GlobalEvent` and notifies all subscribers whose filters
     /// match the event.
     ///
+    /// # Callback dispatch contract
+    ///
+    /// Delivery to a single subscriber is **not ordered**: each matching
+    /// callback is dispatched in its own `tokio::spawn`, so two consecutive
+    /// broadcasts may reach the same callback out of order. Consumers that
+    /// need ordering must sort on [`GlobalEvent::sequence`].
+    ///
     /// # Arguments
     ///
     /// * `agent_id` - The source agent ID
@@ -255,8 +262,14 @@ impl GlobalBus {
             trace!("No broadcast receivers: {}", e);
         }
 
-        // Collect matching callbacks and execute them asynchronously
-        // to avoid blocking the async runtime if a callback performs I/O
+        // Collect matching callbacks and dispatch each in its own task.
+        //
+        // Contract: callbacks must be non-blocking. `tokio::spawn` does NOT
+        // make a blocking closure safe — it merely moves the blockage onto
+        // another runtime worker. Subscribers that need to do async work
+        // must use the extract-and-respawn pattern: pull the data out of
+        // the event synchronously, then spawn their own task (see the
+        // `goal_wait` subscriber in `gateway::execution_engine::goal_wait`).
         let callbacks = {
             let subscriptions = self.subscriptions.read().await;
             subscriptions
@@ -276,7 +289,10 @@ impl GlobalBus {
 
     /// Subscribe to global events (async version).
     ///
-    /// Identical to `subscribe` but can be called from async context.
+    /// This is the canonical subscription entry point. The callback is a
+    /// synchronous closure dispatched per event inside its own
+    /// `tokio::spawn`; see [`broadcast`](Self::broadcast) for the dispatch
+    /// contract (non-blocking requirement, no per-subscriber ordering).
     pub async fn subscribe_async(
         &self,
         filter: EventFilter,

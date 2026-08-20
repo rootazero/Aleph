@@ -166,7 +166,7 @@ pub struct SubAgentCompletionEvent {
     pub success: bool,
     pub error: Option<String>,
     /// Request ID for result correlation (optional for backwards compatibility)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
 }
 
