@@ -49,6 +49,14 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
+    if params.skill_id.trim().is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "skill_id must not be empty".to_string(),
+        );
+    }
+
     ensure_shared_system_initialized().await;
 
     let skill_id = SkillId::new(&params.skill_id);
