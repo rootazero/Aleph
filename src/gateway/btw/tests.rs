@@ -415,6 +415,75 @@ mod seeding {
         assert_eq!(marks, 1, "the side session claims {marks} forks");
     }
 
+    /// The cold arm is reachable twice: a lost cursor write leaves the cursor
+    /// `None` while the side transcript already holds the prefix, and the next
+    /// question re-enters it. The prefix does duplicate in that window — that
+    /// is stated in the module doc and deliberately not fixed — but the marker
+    /// must not, because it is a count of how many forks happened and the
+    /// answer is still one.
+    #[tokio::test]
+    async fn a_lost_cursor_write_does_not_make_the_side_session_claim_two_forks() {
+        let session = in_memory_session_service();
+        let (store, _tmp) = in_memory_session_store();
+        let (main, side) = keys();
+
+        append_closed_turn(session.as_ref(), &main, "the prefix", "the answer").await;
+        let first = ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("cold seed");
+        assert!(first.cursor.is_some());
+
+        // Exactly what a crash between the copy and the cursor write leaves
+        // behind: the transcript is carried, the cursor is not. A `null` is
+        // how this bag clears a key, and `interpret_cursor` reads it as
+        // absent — the same state a failed `patch_session` would leave.
+        let mut bag = serde_json::Map::new();
+        bag.insert(
+            crate::gateway::btw::seed::CURSOR_KEY.to_string(),
+            serde_json::Value::Null,
+        );
+        store
+            .patch_session(
+                &side,
+                &crate::gateway::session_store::types::SessionPatch {
+                    metadata: Some(serde_json::Value::Object(bag)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("clear the cursor");
+
+        ensure_seeded(
+            session.as_ref(),
+            store.as_ref(),
+            &main,
+            &side,
+            &no_attribution(),
+            &budget(),
+        )
+        .await
+        .expect("cold seed again");
+
+        let marks = session
+            .get_events(&side, None, None)
+            .await
+            .expect("read side log")
+            .iter()
+            .filter(|r| matches!(r.event, SessionEvent::SessionForked { .. }))
+            .count();
+        assert_eq!(
+            marks, 1,
+            "the side session claims {marks} forks after one fork and one retry"
+        );
+    }
+
     /// A turn holding an unresolved tool call is left behind — it is not over,
     /// and neither of the markers that would prove it over has landed.
     #[tokio::test]

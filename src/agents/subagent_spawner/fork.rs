@@ -393,16 +393,9 @@ pub(crate) async fn seed(
         return Ok(None);
     }
 
-    session
-        .emit_event(
-            child,
-            SessionEvent::SessionForked {
-                parent_session_id: parent.to_key_string(),
-                at: crate::session::events::now_ms(),
-            },
-        )
+    mark_forked(session, parent, child)
         .await
-        .map_err(|e| format!("sub-agent failed: fork: emit SessionForked: {e}"))?;
+        .map_err(|e| format!("sub-agent failed: {e}"))?;
 
     // The prefix belongs to this function, not to the copy loop: `seed_events`
     // is also the btw side-thread's warm path, where "sub-agent failed" names a
@@ -413,6 +406,34 @@ pub(crate) async fn seed(
         .map_err(|e| format!("sub-agent failed: {e}"))?;
 
     Ok(Some(plan))
+}
+
+/// Stamp `child` as forked from `parent`.
+///
+/// The single place the `SessionForked` marker is written. Split out from
+/// [`seed`] so an incremental caller can decide *whether* a fork is beginning
+/// without owning the decision of *what the marker looks like* — a side thread
+/// topped up on every question is one fork that grew, and a cold seed whose
+/// bookkeeping was lost and is being retried is still that same one fork.
+/// Claiming N would be a lie to the provenance classification that reads it.
+///
+/// Errors are unprefixed; see [`seed_events`].
+pub(crate) async fn mark_forked(
+    session: &dyn crate::session::service::SessionService,
+    parent: &crate::session::service::SessionId,
+    child: &crate::session::service::SessionId,
+) -> Result<(), String> {
+    session
+        .emit_event(
+            child,
+            SessionEvent::SessionForked {
+                parent_session_id: parent.to_key_string(),
+                at: crate::session::events::now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| format!("fork: emit SessionForked: {e}"))
+        .map(|_seq| ())
 }
 
 /// Copy planned events into `child` verbatim, without provenance marking.

@@ -67,10 +67,11 @@
 //! * **Warm arm:** one delta arrives twice. Bounded by whatever closed since
 //!   the last question.
 //! * **Cold arm:** the cursor is still `None`, so the next question re-enters
-//!   the cold arm and re-copies the **entire** prefix up to `max_chars` — and
-//!   `fork::seed` emits a **second** `SessionForked`. So "exactly one marker
-//!   per side session" is a property of the path where every cursor write
-//!   succeeds, not an unconditional one.
+//!   the cold arm and re-copies the **entire** prefix up to `max_chars`. The
+//!   *marker* half of that is closed — the cold arm emits `SessionForked` only
+//!   when the side session does not already carry one, so "exactly one marker
+//!   per side session" holds by construction rather than only where every
+//!   cursor write succeeded. The duplicated prefix is **not** closed.
 //!
 //! The direction is chosen rather than merely tolerated: writing the cursor
 //! *first* would make a crash lose those events permanently and silently, and a
@@ -172,10 +173,32 @@ pub(crate) async fn ensure_seeded(
 
     let carried = match cursor {
         // Cold: plan against the whole settled main log, so the char ceiling
-        // is honoured and the fork is provenance-marked exactly once.
+        // is honoured.
+        //
+        // Not `fork::seed`, which would mark unconditionally. Reaching the
+        // cold arm does not prove the fork is new: a lost cursor write lands
+        // here a second time (see the module doc), and a second marker would
+        // claim two forks where one happened. So the marker is emitted only
+        // when the side session does not already carry one — the invariant
+        // then holds by construction rather than only on the path where every
+        // cursor write succeeded. The prefix still re-copies in that window;
+        // that half is stated in the module doc, not fixed here.
         None => {
             let source = fork::snapshot(session, main).await?;
-            fork::seed(session, main, side, settled_prefix(&source), budget).await?
+            let plan = fork::plan(settled_prefix(&source), budget);
+            if plan.is_empty() {
+                None
+            } else {
+                if !already_forked(session, side).await? {
+                    fork::mark_forked(session, main, side)
+                        .await
+                        .map_err(|e| format!("btw: {e}"))?;
+                }
+                fork::seed_events(session, side, &plan.events)
+                    .await
+                    .map_err(|e| format!("btw: seed side session: {e}"))?;
+                Some(plan)
+            }
         }
         // Warm: carry whatever settled since. `get_events` is `seq >= from`, so
         // the delta starts one past what we already hold. Reading a range
@@ -230,6 +253,19 @@ pub(crate) async fn ensure_seeded(
         events_added: plan.events.len(),
         cursor: Some(seq),
     })
+}
+
+/// Has this side session already been stamped as a fork?
+///
+/// Asked once per cold seed — which is once per side session on the path where
+/// nothing was lost — so the cost of the scan is not on the hot path.
+async fn already_forked(session: &dyn SessionService, side: &SessionId) -> Result<bool, String> {
+    Ok(session
+        .get_events(side, None, None)
+        .await
+        .map_err(|e| format!("btw: read side log: {e}"))?
+        .iter()
+        .any(|r| matches!(r.event, SessionEvent::SessionForked { .. })))
 }
 
 /// The prefix of `records` that main's own log proves is behind us.
