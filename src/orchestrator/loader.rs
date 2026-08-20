@@ -87,3 +87,24 @@ pub fn merge_catalogs(presets: FlowSet, user: FlowSet) -> FlowSet {
     }
     out
 }
+
+/// The single answer to "what is the flow catalog for this home directory?".
+///
+/// Both the boot path (`orchestrator_init::initialize_orchestrator`) and the
+/// `gateway.flow.reload` RPC (`gateway::handlers::flow_admin`) compose the
+/// catalog through here, and that is the whole point of the function existing:
+/// until 2026-08-20 boot called `load_presets()` alone while reload called
+/// presets + `load_user_flows_from_dir` + `merge_catalogs`. The two answers
+/// disagreed in the direction that is hardest to notice — an operator's
+/// `~/.aleph/flows/*.toml` took effect the moment they called reload and
+/// vanished on the next restart, with nothing said either time.
+///
+/// Guarded by `tests/loader.rs::the_catalog_has_exactly_one_composer`, which
+/// is a source-level check: once the two callers share this function an
+/// equality assertion between them is tautological, so the property worth
+/// pinning is that nobody grows a third, hand-rolled composition.
+pub async fn load_catalog(flow_dir: &Path) -> Result<FlowSet, FlowError> {
+    let presets = load_presets()?;
+    let user = load_user_flows_from_dir(flow_dir).await?;
+    Ok(merge_catalogs(presets, user))
+}

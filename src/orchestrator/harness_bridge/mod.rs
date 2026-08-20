@@ -7,11 +7,18 @@
 //!   4. Running the inner `AgentHarness` loop to completion.
 //!   5. Extracting the last `AssistantMessage.text` as `final_text`.
 //!
-//! # Phase 6 follow-ups
-//! * Thread `AgentDef` + `FlowOverrides` (`max_iterations`, `extra_system_prompt`,
-//!   `context_mode`) into `HarnessDeps`. Requires widening the Phase 4 API.
-//! * Honour [`BrainRef::Strict`] model selection — `AiProvider` does not
-//!   expose `select_model` at this layer yet.
+//! # State of the `FlowSpec` surface (was: "Phase 6 follow-ups")
+//! * `FlowOverrides::max_iterations` is threaded into `HarnessDeps` and into
+//!   the `SessionBudgetLayer` prompt block by `runner_impl::resolve_max_iterations`,
+//!   so the ceiling the model is told is the ceiling the loop enforces. The
+//!   sibling fields this note used to promise — `extra_system_prompt` and
+//!   `context_mode` — were cut instead: they had no reader on either side, and
+//!   `~/.aleph/flows/*.toml` is now loaded at boot, which would have shipped
+//!   them to users as knobs that accept a value and do nothing.
+//! * [`BrainRef::Strict`] **is** honoured — `llm::pick_llm` wraps the named
+//!   provider in `ModelOverrideProvider`, stamping the pinned model onto every
+//!   request. This note claimed the opposite for four rounds while the code
+//!   right next to it did the work.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;

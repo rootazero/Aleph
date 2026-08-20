@@ -10,20 +10,41 @@
 //! so Task 10 (Gateway `run_agent_loop` replacement) can reach it without a
 //! new `AppContext` holder struct.
 //!
-//! # Simplifications accepted at this phase
-//! * Shared sandbox (Phase 3 `build_sandbox` returns a single
-//!   `Arc<dyn Sandbox>`; per-session provisioning is Phase 6).
-//! * Empty routing overrides — `aleph.toml [flow_routing]` is Phase 6.
-//! * Empty `named_providers` — wired from `AuthProfileRegistry` in Phase 6.
-//! * Presets only — `~/.aleph/flows/` loader is Phase 6.
+//! # Known shape of the assembled orchestrator
+//! * Shared sandbox: `build_sandbox` returns one `Arc<dyn Sandbox>` and the
+//!   workspace builder hands the same handle to every session. Not a gap —
+//!   the flow-selected sandbox only ever reaches `.summary()` in the prompt;
+//!   tool execution is gated by `src/tools/scoped/` alone. See
+//!   `orchestrator::sandbox_factory`'s module doc.
+//! * Routing overrides are always `RoutingOverrides::default()`. There is no
+//!   `[flow_routing]` key in `src/config/`, so `resolve_flow_id`'s exact- and
+//!   wildcard-override rungs have no producer. Deliberate: "which flow serves
+//!   agent X" is already answered by `default_routing` below plus
+//!   `~/.aleph/flows/<id>.toml`, and a second answer keyed on channel would be
+//!   the third. Delete `RoutingOverrides` rather than grow a config surface
+//!   for it, if it is ever touched again.
+//! * `named_providers` is populated (see the `agent_overrides` block below):
+//!   every configured provider key maps to a route-shaped `FailoverProvider`
+//!   that pins it as primary and falls through the global chain. So a user
+//!   flow's `BrainRef::Strict { provider, model }` resolves to a real, circuit-
+//!   broken chain and the model is stamped by `ModelOverrideProvider`; an
+//!   unconfigured provider name is a `ProviderUnavailable` error rather than a
+//!   silent substitution. (The stale note this replaced said the map was empty
+//!   — it has not been since the `agent_overrides` reuse landed.)
+//! * The flow catalog is presets + `~/.aleph/flows/*.toml`, composed by
+//!   `loader::load_catalog` — the same function `gateway.flow.reload` calls.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use alephcore::orchestrator::{
     build_cheap_summary_provider, build_context_budget_config, build_context_budget_refiner,
-    build_sandbox_factory, dispatch::Orchestrator, flow_registry::FlowRegistry,
-    harness_bridge::AgentHarnessRunner, loader::load_presets, resolver::RoutingOverrides,
+    build_sandbox_factory,
+    dispatch::Orchestrator,
+    flow_registry::FlowRegistry,
+    harness_bridge::AgentHarnessRunner,
+    loader::{load_catalog, load_presets},
+    resolver::RoutingOverrides,
     sandbox_factory::WorkspaceBuilder,
 };
 use alephcore::verification::{
@@ -129,10 +150,40 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         }
     }
 
-    // Presets only — PHASE-6: load user flows from ~/.aleph/flows/.
-    let presets =
-        load_presets().map_err(|e| anyhow::anyhow!("failed to load orchestrator presets: {e}"))?;
-    let flow_registry = Arc::new(FlowRegistry::new(presets));
+    // Flow catalog = presets + `~/.aleph/flows/*.toml`, composed by the one
+    // function the `gateway.flow.reload` RPC also calls. Boot used to load
+    // presets alone, so a reload took effect and a restart silently undid it.
+    //
+    // A malformed user flow degrades to presets with a named warning rather
+    // than aborting boot: the operator cannot read a startup error from a
+    // daemon that refused to start, and this mirrors how filesystem agent
+    // definitions already fail-soft twenty lines above. The interactive
+    // surface stays strict — `handle_flow_reload` returns the parse error to
+    // its caller.
+    let flow_set = match alephcore::discovery::aleph_home_dir() {
+        Ok(home) => {
+            let flow_dir = home.join("flows");
+            match load_catalog(&flow_dir).await {
+                Ok(set) => set,
+                Err(e) => {
+                    tracing::warn!(
+                        dir = %flow_dir.display(),
+                        error = %e,
+                        "user flow catalog failed to load; serving presets only"
+                    );
+                    load_presets()
+                        .map_err(|e| anyhow::anyhow!("failed to load orchestrator presets: {e}"))?
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot resolve aleph home; serving preset flows only");
+            load_presets()
+                .map_err(|e| anyhow::anyhow!("failed to load orchestrator presets: {e}"))?
+        }
+    };
+    tracing::info!(count = flow_set.len(), "orchestrator flow catalog loaded");
+    let flow_registry = Arc::new(FlowRegistry::new(flow_set));
 
     // Default routing: agent_id → same-named FlowId, except "main" →
     // "default-agent" (the canonical preset).
@@ -337,9 +388,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // failover safety is preserved. Same enablement gate as the config.
         context_budget_refiner: build_context_budget_refiner(config, primary_provider_key),
         skill_system: Some(alephcore::skill::shared_skill_system().clone()),
-        // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
-        // aleph.toml. Path is now plumbed end-to-end; defaults stay None
-        // so behavior matches pre-Stage-7 main exactly.
+        // Stage 7 (#12): all four are loaded from aleph.toml below. (This
+        // block used to describe them as placeholders whose "defaults stay
+        // None"; every one of the four lines that follow is a real builder
+        // call, and `turn_timeout` additionally gets a 120s floor further
+        // down. The comment outlived the wiring by four rounds.)
         guardrails: build_guardrail_registry(config, shared_token_mgr, security_store),
         stall_config: stall_cfg,
         consecutive_failure_cap: failure_cap,

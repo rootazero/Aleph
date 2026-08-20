@@ -18,8 +18,8 @@ use tokio::sync::Mutex;
 
 use alephcore::agents::AgentRegistry;
 use alephcore::orchestrator::{
-    build_sandbox_factory, AgentHarnessRunner, BrainRef, DenyAllSandbox, FlowOverrides,
-    FlowRegistry, FlowSet, FlowSpec, Orchestrator, RoutingOverrides, SandboxKind, SessionStrategy,
+    build_sandbox_factory, AgentHarnessRunner, BrainRef, FlowOverrides, FlowRegistry, FlowSet,
+    FlowSpec, Orchestrator, RoutingOverrides, SessionStrategy,
 };
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload, StopReason, TokenUsage};
 use alephcore::providers::AiProvider;
@@ -138,31 +138,25 @@ impl OrchestratorFixture {
     /// Build a fixture where the scripted LLM emits exactly one text-only
     /// response — the Think loop sees no tool_calls and terminates immediately.
     pub async fn new_with_scripted_response(response: &str) -> Self {
-        let mut spec_map = FlowSet::new();
-        spec_map.insert(
-            "default-agent".into(),
-            Arc::new(FlowSpec {
-                id: "default-agent".into(),
-                description: "e2e default".into(),
-                agent: "main".into(),
-                brain: BrainRef::Default,
-                sandbox_kind: SandboxKind::None,
-                session_strategy: SessionStrategy::Fresh,
-                priority: 128,
-                overrides: FlowOverrides::default(),
-            }),
-        );
-        let flow_registry = Arc::new(FlowRegistry::new(spec_map));
+        // The SHIPPED catalog, not a hand-written stand-in. The fixture used to
+        // build its own `default-agent` with `SessionStrategy::Fresh`, which
+        // meant the one end-to-end test of the orchestrator never touched
+        // `presets/default_flows.toml` and could not have noticed that the real
+        // presets discarded the caller's session key. A fixture that constructs
+        // a state production never produces is guarding its own author.
+        let flow_registry = Arc::new(FlowRegistry::new(
+            alephcore::orchestrator::loader::load_presets().expect("presets parse"),
+        ));
 
         let mut defaults: HashMap<String, String> = HashMap::new();
         defaults.insert("main".into(), "default-agent".into());
 
         let session_service = fresh_session_service();
 
-        // Workspace builder is unused because the preset targets SandboxKind::None,
-        // but SandboxFactory requires a closure — hand it a DenyAllSandbox too.
+        // The fixture never executes anything through the sandbox; the factory
+        // just has to hand back some handle.
         let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
-            Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
+            Ok(Arc::new(alephcore::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
         }));
 
         let agent_registry = Arc::new(AgentRegistry::with_builtins());

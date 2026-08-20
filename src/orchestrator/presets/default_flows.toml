@@ -1,58 +1,30 @@
-# 7 preset FlowSpecs, 1:1 with AgentDef builtins in src/agents/registry.rs.
-# All use BrainRef::Default to preserve current provider fallback behavior.
+# The preset catalog holds exactly ONE flow.
+#
+# It used to hold seven — one per builtin `AgentDef` — and six of them were
+# actively worse than having no entry at all. `dispatch.rs` already falls back
+# to `DEFAULT_AGENT_FLOW_ID` with the requested agent stamped onto it
+# (`fallback_spec_with_agent`) whenever routing resolves to a flow id the
+# registry does not hold. That fallback is what every filesystem-, plugin-, and
+# team-created agent has always used, and it is what `resolver.rs`'s
+# `DEFAULT_AGENT_FLOW_ID` doc says the design is: "a single flow serves every
+# agent — the orchestrator routing table never needs a per-agent entry."
+#
+# The six per-agent presets declared `session_strategy = { kind = "child" }`
+# with no `parent_session_key`, while the only production `FlowRequest`
+# producer passes `parent_session: None`. `resolver::resolve_session` therefore
+# took the Child arm's no-parent fallback, which mints a fresh UUID and never
+# looks at `session_hint` — so every turn addressed to one of those six agents
+# started from an empty session log and left an orphan session row behind.
+# Deleting the rows routes them through this preset's `reuse` instead, which
+# honours the hint. Guarded by
+# `tests/loader.rs::every_registered_agent_resolves_to_a_hint_honouring_flow`.
+#
+# Per-agent flows are still supported — they belong in `~/.aleph/flows/<id>.toml`,
+# where the flow id must equal the agent id for the routing table to reach it.
 
 [[flow]]
 id = "default-agent"
-description = "Primary chat agent for user-facing interactions"
+description = "Canonical agent flow. Serves `main` directly and every other registered agent through dispatch's DEFAULT_AGENT_FLOW_ID fallback."
 agent = "main"
-sandbox_kind = "workspace"
 brain = { kind = "default" }
 session_strategy = { kind = "reuse" }
-
-[[flow]]
-id = "explore"
-description = "Read-only codebase exploration specialist"
-agent = "explore"
-sandbox_kind = "workspace"
-brain = { kind = "default" }
-session_strategy = { kind = "child" }
-
-[[flow]]
-id = "coder"
-description = "Code writing specialist with file operations"
-agent = "coder"
-sandbox_kind = "workspace"
-brain = { kind = "default" }
-session_strategy = { kind = "child" }
-
-[[flow]]
-id = "researcher"
-description = "Web and document research specialist"
-agent = "researcher"
-sandbox_kind = "none"
-brain = { kind = "default" }
-session_strategy = { kind = "child" }
-
-[[flow]]
-id = "default"
-description = "General-purpose sub-agent"
-agent = "default"
-sandbox_kind = "workspace"
-brain = { kind = "default" }
-session_strategy = { kind = "child" }
-
-[[flow]]
-id = "plan"
-description = "Read-only planning and analysis specialist"
-agent = "plan"
-sandbox_kind = "workspace"
-brain = { kind = "default" }
-session_strategy = { kind = "child" }
-
-[[flow]]
-id = "verify"
-description = "Adversarial verification specialist"
-agent = "verify"
-sandbox_kind = "workspace"
-brain = { kind = "default" }
-session_strategy = { kind = "child" }

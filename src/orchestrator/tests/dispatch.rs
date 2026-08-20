@@ -8,10 +8,10 @@ use crate::orchestrator::dispatch::{FlowRequest, Orchestrator};
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_registry::{FlowRegistry, FlowSet};
 use crate::orchestrator::flow_spec::{
-    BrainRef, FlowInput, FlowOverrides, FlowSpec, SandboxKind, SessionStrategy,
+    BrainRef, FlowInput, FlowOverrides, FlowSpec, SessionStrategy,
 };
 use crate::orchestrator::resolver::RoutingOverrides;
-use crate::orchestrator::sandbox_factory::{build_sandbox_factory, DenyAllSandbox};
+use crate::orchestrator::sandbox_factory::build_sandbox_factory;
 use crate::sandbox::Sandbox;
 
 struct MockHarness {
@@ -74,9 +74,7 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
         description: "t".into(),
         agent: "main".into(),
         brain: BrainRef::Default,
-        sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Fresh,
-        priority: 128,
         overrides: FlowOverrides::default(),
     };
     spec_map.insert("default-agent".into(), Arc::new(spec));
@@ -88,7 +86,7 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
     let session_service = fake_session_service();
 
     let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
-        Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
+        Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
     }));
 
     let invocations = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -268,9 +266,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         description: "t".into(),
         agent: "main".into(),
         brain: BrainRef::Default,
-        sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Reuse,
-        priority: 128,
         overrides: FlowOverrides::default(),
     };
     spec_map.insert("default-agent".into(), Arc::new(spec));
@@ -280,7 +276,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
 
     let session_service = fake_session_service();
     let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
-        Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
+        Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
     }));
 
     struct HangingHarness;
@@ -462,9 +458,7 @@ fn fixture_capturing_orchestrator() -> (
         description: "t".into(),
         agent: "main".into(),
         brain: BrainRef::Default,
-        sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Fresh,
-        priority: 128,
         overrides: FlowOverrides::default(),
     };
     spec_map.insert("default-agent".into(), Arc::new(spec));
@@ -475,7 +469,7 @@ fn fixture_capturing_orchestrator() -> (
 
     let session_service = fake_session_service();
     let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
-        Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
+        Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
     }));
 
     let received_tool_service = Arc::new(Mutex::new(None::<bool>));

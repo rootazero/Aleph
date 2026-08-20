@@ -2,9 +2,12 @@
 //!
 //! See design §3.8, §11 (exit criterion 9).
 //!
-//! PHASE-6: `register_flow_admin_handlers` is not yet invoked from
-//! `GatewayServer` construction. Phase 6 will wire it once the boot path
-//! threads `flow_dir` through the builder.
+//! `register_flow_admin_handlers` is invoked from the boot path
+//! (`commands/start/mod.rs`, right after `server.orchestrator` is set) with
+//! `flow_dir = <aleph_home>/flows`, so the RPC is reachable in a shipped
+//! server via `aleph-server gateway call gateway.flow.reload`. Boot composes
+//! the very same catalog through `loader::load_catalog`, so a reload and a
+//! restart now agree about what `~/.aleph/flows` means.
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
@@ -14,7 +17,7 @@ use serde::Serialize;
 use crate::gateway::handlers::HandlerRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::orchestrator::dispatch::Orchestrator;
-use crate::orchestrator::loader::{load_presets, load_user_flows_from_dir, merge_catalogs};
+use crate::orchestrator::loader::load_catalog;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReloadReport {
@@ -29,11 +32,9 @@ pub async fn handle_flow_reload(
     orchestrator: Arc<Orchestrator>,
     flow_dir: &Path,
 ) -> Result<ReloadReport, String> {
-    let presets = load_presets().map_err(|e| format!("presets: {e}"))?;
-    let user = load_user_flows_from_dir(flow_dir)
+    let merged = load_catalog(flow_dir)
         .await
-        .map_err(|e| format!("user flows: {e}"))?;
-    let merged = merge_catalogs(presets, user);
+        .map_err(|e| format!("flow catalog: {e}"))?;
     let count = merged.len();
     orchestrator
         .reload_flows(merged)
@@ -81,12 +82,19 @@ mod tests {
         let report = handle_flow_reload(orchestrator.clone(), tmp.path())
             .await
             .expect("reload");
+        // Derived, not a literal. This used to assert `7`, so collapsing the
+        // preset catalog turned a deliberate change into a red test that said
+        // nothing about the property under test — which is "an empty user dir
+        // contributes nothing", not "there are N presets". How many presets
+        // ship is `loader.rs`'s business and is pinned there.
+        let preset_count = crate::orchestrator::loader::load_presets()
+            .expect("presets parse")
+            .len();
         assert_eq!(
-            report.loaded_count, 7,
-            "expected 7 preset flows, got {}",
-            report.loaded_count
+            report.loaded_count, preset_count,
+            "an empty user flow dir must contribute nothing to the catalog"
         );
-        assert_eq!(orchestrator.flow_registry.len(), 7);
+        assert_eq!(orchestrator.flow_registry.len(), preset_count);
     }
 
     #[tokio::test]
@@ -108,7 +116,7 @@ mod tests {
     fn mk_test_orchestrator() -> Arc<Orchestrator> {
         use crate::orchestrator::flow_registry::{FlowRegistry, FlowSet};
         use crate::orchestrator::resolver::RoutingOverrides;
-        use crate::orchestrator::sandbox_factory::{build_sandbox_factory, DenyAllSandbox};
+        use crate::orchestrator::sandbox_factory::build_sandbox_factory;
         use crate::sandbox::Sandbox;
         use crate::session::in_process::InProcessActorSessionService;
         use crate::session::service::SessionService;
@@ -124,7 +132,7 @@ mod tests {
             Arc::new(InProcessActorSessionService::new(store));
 
         let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
-            Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
+            Ok(Arc::new(crate::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
         }));
 
         // No-op harness — reload doesn't dispatch.

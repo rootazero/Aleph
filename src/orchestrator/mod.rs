@@ -33,13 +33,11 @@ pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
 pub use flow_spec::{
     AgentId, BrainRef, FlowHistoryTurn, FlowId, FlowInput, FlowOverrides, FlowSpec, ProviderId,
-    SandboxKind, SessionStrategy,
+    SessionStrategy,
 };
 pub use harness_bridge::AgentHarnessRunner;
 pub use resolver::RoutingOverrides;
-pub use sandbox_factory::{
-    build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder,
-};
+pub use sandbox_factory::{build_sandbox_factory, SandboxFactory, WorkspaceBuilder};
 
 #[cfg(test)]
 mod tests;

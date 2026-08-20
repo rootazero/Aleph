@@ -40,8 +40,16 @@ pub enum FlowError {
 }
 
 impl FlowError {
-    /// `true` when the Gateway's outer retry loop should pick another
-    /// provider and dispatch again. Currently only `Transient` qualifies.
+    /// `true` when a caller should pick another provider and dispatch again.
+    /// Only `Transient` qualifies.
+    ///
+    /// The gateway's outer retry loop — which this doc used to name as the
+    /// consumer — does not call it: `run_loop/inner.rs` matches
+    /// `DispatchFailure::Transient` structurally. Kept as the named predicate
+    /// on the public error type so an out-of-crate caller does not have to
+    /// re-derive which variants are worth another attempt; if a second
+    /// definition of "retryable" ever appears, collapse it onto this one
+    /// rather than the other way round.
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
         matches!(self, Self::Transient { .. })

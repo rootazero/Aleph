@@ -19,6 +19,9 @@
 
 | 层 | 你的口语关键词 | 规范名 (EN) | 主锚点 | 状态 |
 |----|----------------|-------------|--------|------|
+| Harness | 切到 explore/coder 就没有记忆了 / 换个 agent 名字每轮都从头 / session store 里一堆孤儿行 | Per-Agent Preset Session Loss | `orchestrator/presets/default_flows.toml`（7→1）+ `resolver::resolve_session` Child 无父兜底 | ✅ (§3.16①, 2026-08-20) |
+| Harness | flow 重载完重启就没了 / `~/.aleph/flows` 不生效 / 想给某个 agent 单独钉模型 | Flow Catalog Single Composer + Per-Agent Model Pin | `orchestrator/loader.rs::load_catalog`（boot 与 `gateway.flow.reload` 同源）+ `llm.rs::pick_llm` `BrainRef::Strict` | ✅ (§3.16②, 2026-08-20) |
+| Harness | prompt 太长的报错被重试三次 / 明明是致命错却换 provider 重来 | Auth Status Digit-Boundary Match | `harness_bridge/error.rs` → `llm_retry::has_status_code`（删重复实现） | ✅ (§3.16③, 2026-08-20) |
 | Harness | 后台 build 跑一半看不见输出 / poll 只回个时间 / 20 分钟的编译是黑盒 | Background Live Output Tail | `src/sandbox/live_tail.rs` + `context.rs::LIVE_TAIL` + `bash_exec.rs::running_payload` | ✅ (§3.15②, 2026-08-10) |
 | Harness | 重启后 poll 说没这个进程 / 后台任务重启就查无此物 / 它到底跑完没有 | Background Process Journal | `src/builtin_tools/process_journal.rs`（墓碑 + 高水位 id） | ✅ (§3.15③, 2026-08-10) |
 | Harness | 关了 daemon 但 cargo build 还在跑 / 孤儿进程还在往工作区写 | Shutdown Reaper Wiring | `start/mod.rs` + `start/helpers.rs`（两条出口）+ `bash_exec::kill_all_running_background` | ✅ (§3.15①, 2026-08-10) |
@@ -1321,6 +1324,45 @@
 
   - **代码锚点（增量）**：`src/builtin_tools/partial_output.rs`（**新**，唯一的 pre-scrub 内容闸）· `sandbox/platforms/common.rs::{Drained, drain_bounded, head_tail_budgets, back_off_to_boundary, advance_to_boundary}` · `process_journal::{record_partial, flush_running_partials, highest_dir_id, read_partial_capture, PARTIAL_FILE}` · `process_registry::{journal_live_tail, running_live_tails}` · `bash_exec::recovered_row`（`recorded_output_is_partial`）
   - **本轮不做**：`partial.txt` 的写仍是 tokio task 里的同步 I/O（≤16 KiB、15s 一次、本模块既有形状）；不给 flusher 加显式取消（runtime 一走它就没了，且 shutdown 的 reaper 已经把运行集清空）。
+
+
+### 3.16 编排器 / Flow 组合层 (Orchestrator & Flow Composition · 2026-08-20 Sisyphus 对照轮)
+
+- **口语关键词**：编排器、orchestrator、flow、FlowSpec、dispatch、给某个 agent 换模型、`~/.aleph/flows`、flow 热重载、切到 explore 就没有记忆了、子代理换个 agent 名字就忘事、per-agent 模型钉死
+- **代码锚点**：`src/orchestrator/`——`flow_spec.rs`（声明形状）· `resolver.rs`（`resolve_flow_id` 三档 + `resolve_session` + `depth_guard`）· `dispatch.rs`（`Orchestrator::{resolve_spec, dispatch}`，七步）· `flow_registry.rs`（`ArcSwap` 热交换）· `loader.rs`（**`load_catalog` = 唯一的目录组装点**）· `harness_bridge/`（接进 `AgentHarness`：`llm.rs::pick_llm` / `runner_impl.rs` / `prompt_build.rs`）· `deps_builder/`（provider 链 + context 预算）· `sandbox_factory.rs`。启动装配 `src/bin/aleph-server/commands/start/orchestrator_init.rs`；热重载 RPC `src/gateway/handlers/flow_admin.rs::handle_flow_reload`（boot 已注册，`aleph-server gateway call gateway.flow.reload` 可达）。
+- **职责**：把「这次请求该由哪个 agent、用哪个大脑、写进哪个会话、在什么沙箱里、迭代上限多少」解析成一份 `FlowSpec`，再把它翻译成 `HarnessDeps` 交给笨循环。**它不是第二个 harness**——不做推理、不做工具过滤，R10 的行数棘轮不覆盖它，但同一份苦行适用。
+- **唯一的生产 `FlowRequest` 生产者**：`src/gateway/execution_engine/run_loop/inner.rs`（`session_hint` 恒 `Some`，`parent_session`/`flow_id` 恒 `None`，`depth` 恒 0）。**子代理不走这里**——`agents/subagent_spawner/` 直接驱动 `AgentHarness`，所以「委派深度」的活闸是 `ChainContext::child()`，不是 `MAX_FLOW_DEPTH`。
+
+**本轮（2026-08-20，对照 oh-my-openagent 的 Sisyphus 编排器）**
+
+① **P0 · 六个子代理预设让每一轮都写进一个随机 UUID 会话。** `explore`/`coder`/`researcher`/`default`/`plan`/`verify` 各有一条 `session_strategy = { kind = "child" }` 的预设，而唯一的生产生产者传 `parent_session: None`、预设也没写 `parent_session_key` ⇒ `resolve_session` 走 Child 的无父兜底，**返回一个新 UUID 且全程不看 `session_hint`**。症状：切到这六个 agent 的每一轮都从空 session log 开始（无跨轮记忆），并在 session store 里留一行孤儿。零报错、零红测——既有测试 `child_strategy_without_parent_falls_back_to_fresh` 传的是 `session_hint: None`，「hint 存在时被丢弃」这一半从未被测过。
+  **修法是删掉那六行，不是把它们改成 `reuse`**：`dispatch.rs` 早有 `DEFAULT_AGENT_FLOW_ID` 兜底（`fallback_spec_with_agent` 把请求的 agent 戳到默认 spec 上），那是**每一个**文件系统 / 插件 / 团队创建的 agent 一直在走的路，也正是 `resolver.rs` 里 `DEFAULT_AGENT_FLOW_ID` 的 doc 逐字描述的设计（「a single flow serves every agent」）。改成 `reuse` 只会留下六行与兜底逐字节等价的冗余——**"哪条 flow 服务 agent X" 有两个答案，而错的是那个更具体的**。目录因此从 7 条收成 1 条。
+  守卫：`tests/loader.rs::{the_preset_catalog_is_exactly_the_canonical_agent_flow, the_fallback_preset_honours_the_session_hint}`（后者跑真的 `resolve_session`，不重述结论）。
+
+② **CONNECT · `~/.aleph/flows/*.toml` boot 不读，reload 读。** `handle_flow_reload` 一直是 presets + `load_user_flows_from_dir` + `merge_catalogs`，boot 只 `load_presets()` ⇒ operator 调一次 reload 他的 flow 生效，**重启一次全部消失，两个方向都不出声**。不是「有没有客户端」的问题（`aleph-server gateway call` 是无 allowlist 的通用透传），是同一个目录有两个不同答案。
+  修法是**收敛而非补抄**：新增 `loader::load_catalog(flow_dir)` 作为唯一组装点，boot 与 RPC 同调它。boot 侧对坏 TOML **出声降级**到预设（守护进程起不来的话 operator 读不到那条错误；这与二十行上方的 agent 定义加载 fail-soft 同形），交互侧照旧把解析错误返回给调用者。
+  守卫：`the_catalog_has_exactly_one_composer`——收敛之后两边的相等断言是恒真的，所以钉的是**不许长出第三个组装点**（源码级，扫 `merge_catalogs(` / `load_user_flows_from_dir(` 在两个调用者文件里的出现）。
+  **由此交付的能力**：`BrainRef::Strict { provider, model }` 一直是活的（`pick_llm` 真包 `ModelOverrideProvider`），此前**没有任何可达的生产者**。现在 `~/.aleph/flows/coder.toml` 就能把某个 agent 钉到某个 provider+model——这是 Sisyphus 的 `AGENT_MODEL_REQUIREMENTS`（每 agent 一条模型链）在 Aleph 既有类型上的落点，零新抽象。⚠️ **flow id 必须等于 agent id**，否则路由表够不到它（`flow_id` 恒 `None`，只查 `default_routing`）。⚠️ **写这条时我自己差点犯同一个错**：`orchestrator_init.rs` 的旧模块 doc 说 `named_providers` 是空 map（那会让 `Strict` 必然 `ProviderUnavailable`，即我"交付"的旋钮设了没反应），我照抄了它的前提；实际它在 :290 起就由 `provider_chain.agent_overrides` 装配好了——每个 provider key 映射到一条以它为首、回落全局链的 `FailoverProvider`。所以 `Strict` 拿到的是真的熔断链，未配置的 provider 名是响亮的 `ProviderUnavailable` 而不是静默替换。**读到一句"这半边还没接"时，先去代码里确认它还成立**。
+
+③ **BUG · `AUTH_MARKERS` 用裸子串判状态码。** `["401","403","Unauthorized"]` 经 `msg.contains` 匹配 ⇒ 任何**嵌了**这些数字的消息（token 计数 `401234 tokens`、请求 id、13 位 epoch）被判 `Transient`，网关 outer loop 据此重试到 `MAX_FALLBACK_ATTEMPTS`，烧掉预算后给用户一个 provider 错而不是真因。**同一个文件里的 `contains_http_status` 做了数字边界检查**——两条判据同居一函数，一条对一条错；而它本身又是 `llm_retry::has_status_code` 的逐字节手抄副本。已全部收敛到 `has_status_code`，删掉重复实现（−15 行）。CLAUDE.md §9 逐字点过这一族。
+  守卫：`error.rs::{a_number_embedding_an_auth_status_is_not_an_auth_failure, a_real_auth_status_is_still_transient}`——两条一起写，否则「修好误报」和「删掉这类分类」在套件里长得一模一样。
+
+④ **CUT · `sandbox_kind` 轴（含 `SandboxKind` / `DenyAllSandbox`）。** 选择是活的（`dispatch.rs` 按它调工厂），终点只有一个：`prompt_build` 拿它 `.summary()` 渲染 `<environment>`。`HarnessDeps` 没有 sandbox 字段，**工具永远跑在 boot 那一个共享 sandbox 上**。而方向是反的——`DenyAllSandbox` 不覆写 `summary()`，所以声明 `none` 的那条 flow 既没被多限制一点，又是唯一一条对自己执行封套只字不提的 flow，尽管 `sandbox_factory.rs` 的 doc 逐字写着「exec-class tools must not run at all」。
+  **不 CONNECT**：这一问已有三个活答案（boot `[sandbox]` / `exec_tier` / `[policies.tool_permissions]`），第四个要么无效（现状）要么就是**第二个执行强制点**，而 CLAUDE.md 写死「执行档位唯一强制点是 `src/tools/scoped/`」。`req.sandbox_override` 保留（teams dispatcher 注入 `WorktreeSandbox` 是真消费者）。守卫 `the_factory_has_no_per_flow_selector` 是源码级的——运行时分不出「选了个更严的 sandbox」和「选了 boot sandbox」。
+  ⚠️ `FlowSpec` 带 `deny_unknown_fields`，删字段会让写了 `sandbox_kind` 的用户 flow 解析失败——**正因如此这一条必须排在 ② 之前**：今天没有任何用户 flow 能在 boot 被加载，影响半径为 0。
+
+⑤ **CUT · `FlowSpec.priority` / `FlowOverrides.{context_mode, extra_system_prompt}`。** 三个字段零读者（`priority` 连预设 TOML 里都没人写过），编译变异证明。留下的唯一 override 是 `max_iterations`——它是活的，同一个值既进 `HarnessDeps` 又进 `SessionBudgetLayer`，所以告诉模型的上限就是循环强制的上限。**一个没人读的旋钮和一个没人设的旋钮长得一模一样**，而 ② 之后它们会第一次被正式交付给用户，所以只能在 ② 之前删。
+
+⑥ **重构 · 从 `dispatch()` 抽出 `Orchestrator::resolve_spec`。** 七步里的第一步（flow 解析 + 兜底）此前内联在 1281 行的 `dispatch` 里，于是任何「每个已注册 agent 最终落到哪条 flow」的断言都只能自己重述一遍兜底逻辑——那正是「第二个答案就是缺陷」。现在 `dispatch` 与守卫共用同一个推导。
+
+⑦ **五条假注释。**（同一事实的两份表述，只改一份就是静默说谎）
+  - `flow_admin.rs`：「`register_flow_admin_handlers` 尚未被 boot 调用」——`start/mod.rs` 正在调用。
+  - `orchestrator_init.rs`：guardrails / stall / failure-cap / turn-timeout 是「placeholders… defaults stay None」——紧接着四行全是真赋值，`turn_timeout` 还另有 120s 兜底。
+  - `dispatch.rs` × 2：`transient_context` 「携带 project `CLAUDE.md`/`AGENTS.md`」——生产者 `run_loop/inner.rs` 逐字写着 NOT pushed here，那是 2026-07-26 修掉的重复注入。
+  - `harness_bridge/mod.rs`：「`BrainRef::Strict` 尚未被 honour」——`llm.rs` 就在隔壁把它 honour 了四轮。
+  - `resolver.rs::MAX_FLOW_DEPTH`：读起来像是委派深度上限，实际只管 flow→flow 递归（子代理根本不经过 dispatch）。**保留不删**——它 fail-closed，代价是每次 dispatch 一次比较，第一个传非零 depth 的生产者白拿一个界；但作用域必须写对。
+
+- **刻意不移植（参考项目机制 → 被哪条红线挡住）**：11 份 per-model-family 手写 prompt body + 运行时整体 swap（R9 prune-the-prompt；且 `no_sentence_is_stated_twice` 会当场红）· `String.replace` 字面量锚点叠加 prompt（锚点不匹配是**静默 no-op**）· prompt 里的 cost-sorted agent 表（Aleph 的 subagent 不自选 provider，成本对模型不可行动）· 按 agent 名字硬编码的 prompt 段（`AgentCatalogLayer` 从 registry 派生，改名不会静默删段）· 静态 fallback 链 + per-session 游标（Aleph 的 `src/providers/failover/` 有熔断/冷却/半开探测，移植等于制造第二个「provider 失败了怎么办」）· `ultrawork` 关键字正则触发的 per-message 模型覆写（R7/P8 禁止用 regex 解析自然语言；Aleph 的等价面是 `select_model` 工具与 thinking pill）· 把 delegation 收回 `Orchestrator::dispatch`（无用户可见缺陷的 L 级重构，且补偿线已 shipped——一条**有**消费者且工作正常的通道不该为架构整洁被重接）。
 
 
 ## 4. Loop 层
