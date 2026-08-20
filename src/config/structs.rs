@@ -61,7 +61,13 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub providers: HashMap<String, ProviderConfig>,
     /// Routing rules for smart AI provider selection (Phase 5)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Emitted even when empty, for the reason spelled out on
+    /// [`Config::plugin_marketplaces`]: a section that skips itself when empty
+    /// cannot be *cleared* through `save_incremental`, and `routing_rules.rs`'s
+    /// delete handler persists exactly this section. Deleting the last rule
+    /// used to report success and change nothing.
+    #[serde(default)]
     pub rules: Vec<RoutingRuleConfig>,
     /// Behavior configuration (Phase 6)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,7 +162,13 @@ pub struct Config {
     /// Channel configurations (runtime channel control)
     /// Each key is a channel name (e.g. "telegram", "discord"), value is channel-specific config.
     /// This uses opaque JSON values since each channel has a different schema.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    ///
+    /// Emitted even when empty, for the reason spelled out on
+    /// [`Config::plugin_marketplaces`]: `channel.rs`'s delete handler persists
+    /// this section, and a section that skips itself when empty cannot be
+    /// cleared — removing the last channel reported success and left it on
+    /// disk to come back at the next load.
+    #[serde(default)]
     pub channels: HashMap<String, serde_json::Value>,
     /// A2A protocol configuration
     #[serde(default)]
@@ -181,8 +193,25 @@ pub struct Config {
     /// multi-user deployments).
     #[serde(default, skip_serializing_if = "is_default_session")]
     pub session: crate::routing::config::SessionConfig,
-    /// Plugin marketplace registrations
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    /// Plugin marketplace registrations.
+    ///
+    /// Deliberately **not** `skip_serializing_if = "HashMap::is_empty"`, unlike
+    /// its neighbours. `save_incremental` persists a named section by finding
+    /// it in the serialised current config; a section that skips itself when
+    /// empty simply is not there, and `merge_sections` treats "not there" as
+    /// "the caller did not mean this one" — it warns and leaves the file
+    /// alone. That fail-soft is deliberate (the guards in `save.rs` exist
+    /// because a partially-populated `Config` once erased on-disk embedding
+    /// providers), so the fix belongs here: emitting the empty table makes
+    /// "no marketplaces" a value the merge can write rather than an absence it
+    /// has to interpret.
+    ///
+    /// Removing the *last* registration is the case that breaks. It reported
+    /// success, logged a `warn!` nobody reads, and left the entry on disk — on
+    /// both paths that persist it (`plugin.marketplace.remove` and
+    /// `aleph-server plugin marketplace remove`), which is why this is fixed on
+    /// the field rather than at either call site.
+    #[serde(default)]
     pub plugin_marketplaces: HashMap<String, PluginMarketplaceEntry>,
     /// Stop-hook entries (Phase 6b Task 10).
     /// Each entry runs a shell command before the agent loop is allowed to
