@@ -2160,7 +2160,23 @@ mod tests {
     /// and guessing wrong means telling an operator their plugin is blocked
     /// when it is loading fine, or the reverse; (3) no other tool mentions
     /// owner trust — `plugin_manage` is its only face.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 104_355;
+    /// 2026-08-20, the marketplace tool face: 104_355 -> 105_056 B, pinned to
+    /// the measured figure. The whole delta is `plugin_manage`'s five
+    /// `marketplace_*` sentences (+701 B), which close the last R8 gap in the
+    /// plugin subsystem: `plugin.marketplace.{list,add,remove}` had two
+    /// clients, the Panel and `interfaces/cli` — a binary the release workflow
+    /// does not build — so a conversation could not ask which catalogues were
+    /// registered, let alone add one. Against the three questions: (1) runtime
+    /// facts the schema cannot carry — that `marketplace_browse` reads a local
+    /// cache (so an empty answer means "run update", not "there is nothing"),
+    /// and that registering a catalogue never executes anything from it, which
+    /// is what keeps the neighbouring `cannot install` line a boundary rather
+    /// than a contradiction; (2) a stronger model cannot guess that this host
+    /// separates registering a source from installing out of it, and guessing
+    /// wrong means either refusing a harmless registration or claiming an
+    /// install it did not perform; (3) no other tool says any of it — the
+    /// `hub_*` family speaks about the Hub, which is a different catalogue.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 105_056;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2452,7 +2468,22 @@ mod tests {
     /// questions reach the model with their measured delta instead of an
     /// arithmetic one; (2) unguessable without the harness structure; (3) no
     /// other tool speaks about the sub-agent envelope.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 94_877;
+    ///
+    /// 2026-08-20 (measured): 94_877 -> 96_006 B (+1,129 B), the marketplace
+    /// half of `plugin_manage` — five `marketplace_*` variants on
+    /// `PluginAction` with their per-variant docs, plus the `source` and
+    /// `query` fields and the widened doc on `name` (it now addresses either a
+    /// plugin id or a marketplace name, and a field whose subject depends on
+    /// the action has to say so or the model will send a plugin id to
+    /// `marketplace_remove`). Against the three questions: (1) runtime facts —
+    /// `source` accepts three shapes (`owner/repo`, a GitHub URL, a local
+    /// directory) and which one it is decides everything downstream, while
+    /// `marketplace_browse`'s doc is where "reads the local cache" lives, so
+    /// an empty answer is read as "sync first" rather than "there is nothing";
+    /// (2) unguessable — nothing in the names says that browse does not fetch
+    /// or that add both registers and fetches; (3) no other tool owns the
+    /// marketplace vocabulary.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 96_006;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

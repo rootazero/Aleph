@@ -336,11 +336,16 @@ mod tests {
 
         prune_spill_dir(dir.path()).await;
 
-        let remaining: Vec<String> = tokio::fs::read_dir(dir.path()).await
-            .expect("read_dir")
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
+        // `tokio::fs::ReadDir` exposes `next_entry().await`, not `Iterator`;
+// the remote review commit used the std-style `.flatten()` chain which
+// only compiles against `std::fs::ReadDir`. Drain it the tokio way.
+        let mut entries = tokio::fs::read_dir(dir.path())
+            .await
+            .expect("read_dir");
+        let mut remaining = Vec::new();
+        while let Some(entry) = entries.next_entry().await.expect("next_entry") {
+            remaining.push(entry.file_name().to_string_lossy().to_string());
+        }
         assert_eq!(remaining.len(), MAX_SPILL_FILES_PER_SESSION);
         // The five oldest went; the newest survived.
         assert!(!remaining.contains(&"000.txt".to_string()));

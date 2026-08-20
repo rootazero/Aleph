@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
+use crate::utils::reqwest_limit::text_with_limit;
+
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
     GenerationRequest, GenerationResult, GenerationType,
@@ -264,8 +266,7 @@ impl OpenAiCompatProvider {
 
             let status = response.status();
             const MAX_POLL_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-            let body = response
-                .text_with_limit(MAX_POLL_RESPONSE_BYTES)
+            let body = text_with_limit(response, MAX_POLL_RESPONSE_BYTES)
                 .await
                 .map_err(|e| {
                     GenerationError::network(format!("Failed to read poll response: {e}"))

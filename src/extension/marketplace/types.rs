@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 // Source Types
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MarketplaceSourceType {
     Github,
@@ -19,6 +19,70 @@ pub struct MarketplaceConfig {
     pub source: String,
     #[serde(rename = "type")]
     pub source_type: MarketplaceSourceType,
+}
+
+impl MarketplaceSourceType {
+    /// The token written to `[plugin_marketplaces.<name>] type`.
+    ///
+    /// The inverse of [`from_config_str`](Self::from_config_str). Both faces
+    /// that write a registration used to spell these literals themselves.
+    #[must_use]
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            Self::Github => "github",
+            Self::Local => "local",
+        }
+    }
+
+    /// Read that token back.
+    ///
+    /// Anything other than `local` reads as `Github`, preserving the
+    /// behaviour of the four hand-written copies this replaces. A token that
+    /// is neither can only come from a hand-edited config, and both branches
+    /// refuse it loudly at sync time — GitHub because the source will not be
+    /// a valid `owner/repo`, local because the path will not exist.
+    #[must_use]
+    pub fn from_config_str(token: &str) -> Self {
+        match token {
+            "local" => Self::Local,
+            _ => Self::Github,
+        }
+    }
+}
+
+impl From<&crate::config::PluginMarketplaceEntry> for MarketplaceConfig {
+    fn from(entry: &crate::config::PluginMarketplaceEntry) -> Self {
+        Self {
+            source: entry.source.clone(),
+            source_type: MarketplaceSourceType::from_config_str(&entry.source_type),
+        }
+    }
+}
+
+impl From<&MarketplaceConfig> for crate::config::PluginMarketplaceEntry {
+    fn from(config: &MarketplaceConfig) -> Self {
+        Self {
+            source: config.source.clone(),
+            source_type: config.source_type.as_config_str().to_string(),
+        }
+    }
+}
+
+/// Read the `[plugin_marketplaces]` table into the shape
+/// [`MarketplaceManager`](super::MarketplaceManager) takes.
+///
+/// Four sites built this map inline — the CLI's `load_marketplace_configs`,
+/// the gateway's `build_marketplace_manager`, and two boot blocks in
+/// `aleph-server start` — each with its own copy of the token match. Four
+/// copies of a decode is four places for the fifth caller to differ.
+#[must_use]
+pub fn configs_from_entries(
+    entries: &std::collections::HashMap<String, crate::config::PluginMarketplaceEntry>,
+) -> std::collections::HashMap<String, MarketplaceConfig> {
+    entries
+        .iter()
+        .map(|(name, entry)| (name.clone(), MarketplaceConfig::from(entry)))
+        .collect()
 }
 
 // =============================================================================

@@ -735,19 +735,17 @@ impl ChannelRegistry {
         // Adapters are still expected to serve `list_conversations` from a
         // TTL cache (see the existing per-adapter `editing` capability
         // gate) so the read-lock window stays short in practice.
-        let channel = match channel_arc.try_read() {
-            Ok(g) => g,
-            Err(tokio::sync::TryLockError::WouldBlock) => {
-                return Err(ChannelError::Busy(format!(
-                    "channel {channel_id} is restarting; retry list_conversations"
-                )));
-            }
-            Err(tokio::sync::TryLockError::Poisoned(_)) => {
-                return Err(ChannelError::Internal(format!(
-                    "channel {channel_id} lock poisoned"
-                )));
-            }
-        };
+        // tokio 1.52's `sync::TryLockError` is a unit struct (no variant
+        // distinction between "would block" and "poisoned"); the review
+        // commit pattern-matched variants that do not exist in this
+        // version. Treat any try_read failure as "channel busy, retry":
+        // the channel will surface real failures when the next read
+        // succeeds and the guard goes out of scope.
+        let channel = channel_arc.try_read().map_err(|_| {
+            ChannelError::Busy(format!(
+                "channel {channel_id} is restarting; retry list_conversations"
+            ))
+        })?;
         channel.list_conversations(query, limit).await
     }
 

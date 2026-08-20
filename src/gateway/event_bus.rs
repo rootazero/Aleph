@@ -407,7 +407,7 @@ impl GatewayEventBus {
             // operators with no signal that frames were being silently lost.
             // Log at warn so the lag-behind case is observable; the no-
             // subscriber case is benign and stays at trace.
-            let lag = e.0;
+            let _lag = e.0;
             if self.typed_sender.receiver_count() == 0 {
                 tracing::trace!("typed event has no subscribers; dropping");
             } else {

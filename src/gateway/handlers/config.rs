@@ -1272,8 +1272,8 @@ model = "claude-opus-4-5"
             jsonrpc: "2.0".to_string(),
             method: "config.patch".to_string(),
             params: Some(json!({
-                "path": "ui",
-                "patch": { "theme": "dark" }
+                "path": "general",
+                "patch": { "language": "en" }
             })),
             id: Some(json!(1)),
         };
@@ -1287,6 +1287,55 @@ model = "claude-opus-4-5"
         assert_eq!(event["data"]["type"], "config_changed");
         let result = response.result.unwrap();
         assert_eq!(result["success"], true);
+    }
+
+    /// `path` is caller-supplied and `Config` does not `deny_unknown_fields`,
+    /// so a section that does not exist survived every check: the merge
+    /// deep-set it into a JSON copy, serde dropped it on the way back into
+    /// `Config`, `save_incremental` found nothing to write, warned, and the
+    /// handler answered `success: true` **and published `config.changed`**.
+    ///
+    /// This test used to patch `"ui"` — a section `Config` has never had — and
+    /// asserted exactly that success. It is the same shape as the marketplace
+    /// bug that started this class: a write that reports it happened.
+    #[tokio::test]
+    async fn patching_a_section_the_config_does_not_have_is_refused_not_reported_as_success() {
+        use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::security::{SecurityStore, SharedTokenManager};
+
+        let (patcher, _temp_dir) = create_test_patcher();
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let mut events = event_bus.subscribe();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            _temp_dir.path().join("test.vault"),
+        ));
+
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "config.patch".to_string(),
+            params: Some(json!({
+                "path": "ui",
+                "patch": { "theme": "dark" }
+            })),
+            id: Some(json!(1)),
+        };
+
+        let response = handle_patch_config(req, patcher, event_bus, vault).await;
+
+        let err = response
+            .error
+            .expect("a patch that cannot be persisted must not answer success");
+        assert!(
+            err.message.contains("ui") && err.message.contains("changed nothing"),
+            "the refusal must name the section and say nothing happened: {}",
+            err.message
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "a change that did not happen must not be announced"
+        );
     }
 
     #[tokio::test]

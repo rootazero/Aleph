@@ -9,6 +9,15 @@
 #   ./qa/plugins/run.sh marketplaces # the registration surface: list / add /
 #                                  # remove, and the removable bit the Panel
 #                                  # draws its button from
+#   ./qa/plugins/run.sh panel      # BOOTS AND WAITS: the same surface through
+#                                  # the browser, plus the source classifier
+#
+# `marketplaces` drives WebSocket-RPC; `panel` is the DOM half of the same
+# screen and is deliberately separate. The RPC fixture cannot see anything the
+# renderer decides -- whether the built-in row draws a Remove button the server
+# would refuse, whether a refusal is shown or silently rendered as "none
+# registered", whether an attribute a stylesheet keys off is actually set. Each
+# of those has been a real defect in this repo on a first browser run.
 #
 # The round this covers shipped with unit and source-level guards only. Two of
 # its headline fixes are `serde` all-or-nothing bugs, and those have a specific
@@ -290,8 +299,109 @@ marketplaces)
   fi
   ;;
 
+panel)
+  # BOOTS AND WAITS. Everything below is renderer behaviour, so there is no
+  # agent turn -- what the fixture supplies is a realistic registration state
+  # (a plantable local marketplace, and the built-in that can never be removed)
+  # and a Panel served from disk.
+  #
+  # The Panel is embedded with `rust_embed`, which reads from disk in debug
+  # builds -- so `interfaces/webchat/dist` must exist and be current. Built
+  # here rather than assumed: a stale dist renders the previous round, and
+  # every assertion below then passes or fails for the wrong reason.
+  if [ "${SKIP_BUILD:-0}" != "1" ]; then
+    say "build the Panel (debug rust_embed serves dist/ from disk)"
+    if ! (cd "$REPO" && HOME="$REAL_HOME" just wasm 2>&1 | tail -5); then
+      echo "wasm build failed" >&2; exit 1
+    fi
+  fi
+  [ -f "$REPO/interfaces/webchat/dist/aleph_panel_bg.wasm" ] || {
+    echo "no Panel dist -- run: just wasm" >&2; exit 1; }
+
+  say "plant a local marketplace to add"
+  python3 "$HERE/plant_plugins.py" "$INSTALLED" "$MARKETPLACES" || exit 1
+
+  say "start server"
+  start_server || exit 1
+
+  say "drive: the model-facing verbs (items 8 + 9, no agent turn needed)"
+  # The fixture's provider is a dead port on purpose, so an agent turn cannot
+  # complete -- and an agent turn is not what these two items claim anyway. The
+  # claim is that the tool face and the RPC face answer the same question with
+  # the same answer, and that the tool has no install verb. `tools.invoke`
+  # reaches the real registry with the real arguments, which is the narrowest
+  # thing that can say so.
+  python3 "$HERE/drive_tool_face.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" \
+    "$MARKETPLACES/qa-market" || RC=$?
+
+  cat <<CHECKLIST
+
+Panel: http://127.0.0.1:$GATEWAY_PORT/   ->  Settings -> Plugins -> Marketplaces
+config on disk: $CONFIG
+local marketplace to add: $MARKETPLACES/qa-market
+server pid: $SERVER_PID
+
+  1. FRESH LIST. The section lists exactly one row: aleph-official, tagged
+     'local'. It has NO trash button; in its place is the built-in label, and
+     that label's title attribute carries the server's own refusal text (hover,
+     or read getAttribute('title')). A Remove button here would be a button the
+     server refuses -- which is why 'removable' is a server-derived bit and not
+     a client-side comparison against the name 'aleph-official'.
+
+  2. NOT-CONNECTED IS NOT EMPTY. From another shell: kill $SERVER_PID, then
+     reload the page. The section must say it is loading/connecting -- NOT
+     'no marketplaces registered'. A dropped socket or a refusal rendered as
+     'there are none' is the admin_refusal class: only an Ok may assert about
+     the thing being read. Re-run this scenario to get the server back.
+
+  3. ADD A LOCAL PATH. Type $MARKETPLACES/qa-market and press Enter.
+     A row appears named 'qa-market', tagged 'local', with a trash button.
+     Then on disk:  grep -A3 plugin_marketplaces $CONFIG   ->  type = "local".
+
+  4. WINDOWS-SHAPED PATH (the classifier). Add:  C:\dir\mk
+     Before this round the RPC called this GITHUB and named it 'c:\dir\mk' --
+     a registration no fetch could ever resolve. Now the row (or the error
+     banner) must show 'local', the name must be 'mk', and the failure must be
+     about a path that does not exist -- not about an invalid GitHub repo.
+
+  5. GITHUB URL IS CANONICALISED. Add:
+       https://github.com/aleph-qa-does-not-exist/nope
+     The fetch fails (that repo is not real). This is the ONE item that leaves
+     the machine, and it fails fast. What matters is what got STORED:
+       grep -B2 -A3 aleph-qa-does-not-exist $CONFIG
+     ->  source = "aleph-qa-does-not-exist/nope"  (the URL collapsed to the
+     slug) and type = "github". Had it been classified Local instead, the error
+     would read 'Local marketplace path does not exist: https://...' -- more
+     misleading than the message it replaced.
+
+  6. REMOVE THE LAST ONE. Delete every added row until only aleph-official is
+     left, then restart the server and reload. They must stay gone. This is the
+     DOM half of the 2026-08-20 bug: a section carrying skip_serializing_if
+     could not be CLEARED, so removing the last entry reported success and came
+     back at the next load.
+
+  7. A BAD SOURCE IS REFUSED, NOT STORED. Add:  ..
+     The banner names the refusal, and the config gains no entry for it -- the
+     old handler stored anything at all and only failed at sync time.
+
+  8 + 9 already ran above (drive_tool_face.py) -- read its PASS/FAIL lines.
+     They cover: both faces list the same registrations with the same
+     'removable' bits; marketplace_add registers AND fetches; the same
+     classifier answers on the tool face (Windows path -> local, '..'
+     refused); a browse row says 'operator_can_install' rather than a bare
+     'installable' (a bit named for an action this tool does not have); and
+     there is no install action to call while the advertised description says
+     both that it cannot install and that registering executes nothing.
+
+probe verdict so far: rc=$RC   (0 = the driven half passed)
+
+Ctrl-C when done (KEEP=1 to retain $QA_ROOT).
+CHECKLIST
+  # Park in the foreground so the server outlives the checklist.
+  while kill -0 "$SERVER_PID" 2>/dev/null; do sleep 5; done
+  ;;
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces | panel)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"

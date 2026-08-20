@@ -28,15 +28,7 @@ pub fn install_plugin_from_cache(
     //    `plugin_name` originates from marketplace manifests / user input, so a
     //    crafted value like `../../etc` would let `install_dir.join(...)` write
     //    outside the managed plugins directory.
-    if plugin_name.is_empty()
-        || plugin_name.contains('/')
-        || plugin_name.contains('\\')
-        || plugin_name.contains("..")
-    {
-        return Err(format!(
-            "Invalid plugin name '{plugin_name}': must not be empty or contain path separators or '..'."
-        ));
-    }
+    super::names::reject_unsafe_segment("plugin name", plugin_name)?;
 
     // 1. Validate source exists.
     if !source_path.exists() {
@@ -98,15 +90,7 @@ pub fn update_plugin_from_cache(
     install_dir: &Path,
     plugin_name: &str,
 ) -> Result<PathBuf, String> {
-    if plugin_name.is_empty()
-        || plugin_name.contains('/')
-        || plugin_name.contains('\\')
-        || plugin_name.contains("..")
-    {
-        return Err(format!(
-            "Invalid plugin name '{plugin_name}': must not be empty or contain path separators or '..'."
-        ));
-    }
+    super::names::reject_unsafe_segment("plugin name", plugin_name)?;
 
     if !source_path.exists() {
         return Err(format!(

@@ -36,6 +36,7 @@ impl FetchRegistry {
                     base_url: None,
                     timeout_seconds: None,
                     verified: false,
+                    enabled: true,
                 };
                 if let Ok(Some(p)) = factory.build(&synthetic, ctx) {
                     providers.insert("firecrawl".to_string(), p);

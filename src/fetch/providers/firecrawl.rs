@@ -2,6 +2,7 @@ use crate::error::{AlephError, Result};
 use crate::fetch::FetchProvider;
 use crate::search::providers::base::build_client;
 use crate::security::ssrf::{validate_url_async, SsrfPolicy};
+use crate::utils::reqwest_limit::bytes_with_limit;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -91,8 +92,7 @@ impl FetchProvider for FirecrawlFetchProvider {
         let resp = crate::search::providers::base::check_status(resp, NAME)?;
         // Bound body size before deserializing to avoid OOM on hostile /
         // misconfigured upstreams that return arbitrarily large responses.
-        let body_bytes = resp
-            .bytes_with_limit(MAX_RESPONSE_BYTES)
+        let body_bytes = bytes_with_limit(resp, MAX_RESPONSE_BYTES)
             .await
             .map_err(|e| {
                 AlephError::provider(format!(

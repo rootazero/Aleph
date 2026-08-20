@@ -84,9 +84,22 @@ pub async fn handle_marketplace_browse(request: JsonRpcRequest) -> JsonRpcRespon
     }
 }
 
-/// Add a marketplace source
+/// Add a marketplace source.
+///
+/// Name and type both come from
+/// [`marketplace::classify`](crate::extension::marketplace::classify) rather
+/// than from a heuristic written here. This handler used to carry one and
+/// `aleph-server plugin marketplace add` carried another, and the two
+/// disagreed about Windows paths, relative paths, bare words and name casing
+/// — see that module for the table.
+///
+/// Registering does not fetch. The shipped subcommand syncs immediately after
+/// adding, and both the Panel and `plugin_manage` compose the two documented
+/// calls to land in the same place; `add` keeps one meaning for every client.
 pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse {
     use crate::config::PluginMarketplaceEntry;
+    use crate::extension::marketplace::{classify, MarketplaceConfig};
+    use crate::gateway::protocol::INVALID_PARAMS;
 
     let params: crate::gateway::handlers::plugins::types::MarketplaceAddParams =
         match parse_params(&request) {
@@ -94,23 +107,13 @@ pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse 
             Err(e) => return e,
         };
 
-    // Derive name from source if not provided
-    let name = params.name.unwrap_or_else(|| {
-        // GitHub: "owner/repo" → "repo" (lowercased)
-        // Local:  "/path/to/dir" → "dir" (last component)
-        params
-            .source
-            .split('/')
-            .next_back()
-            .unwrap_or(&params.source)
-            .to_lowercase()
-    });
-
-    // Determine source type: if source contains '/' but no path separator at start → github
-    let source_type = if params.source.starts_with('/') || params.source.starts_with('.') {
-        "local".to_string()
-    } else {
-        "github".to_string()
+    // A source that cannot yield a usable registration is refused here rather
+    // than written to config.toml to fail at sync time: the old handler stored
+    // anything at all, so `C:\dir\mk` became a GitHub entry named
+    // `c:\dir\mk` that no fetch could ever resolve.
+    let spec = match classify(&params.source, params.name.as_deref()) {
+        Ok(s) => s,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e),
     };
 
     let mut config = match crate::config::Config::load() {
@@ -119,11 +122,11 @@ pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse 
     };
 
     config.plugin_marketplaces.insert(
-        name.clone(),
-        PluginMarketplaceEntry {
-            source: params.source.clone(),
-            source_type,
-        },
+        spec.name.clone(),
+        PluginMarketplaceEntry::from(&MarketplaceConfig {
+            source: spec.source.clone(),
+            source_type: spec.source_type,
+        }),
     );
 
     if let Err(e) = config.save_incremental(&["plugin_marketplaces"]) {
@@ -132,7 +135,7 @@ pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse 
 
     JsonRpcResponse::success(
         request.id,
-        json!({ "ok": true, "name": name, "source": params.source }),
+        json!({ "ok": true, "name": spec.name, "source": spec.source }),
     )
 }
 

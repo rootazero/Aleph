@@ -1106,7 +1106,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the extensions.* gateway handlers below — both share the same SQLite
     // file via separate connections (rusqlite file-level locking).
     let (early_catalog_cache, early_marketplace_configs) = {
-        use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+        use alephcore::extension::marketplace::types::MarketplaceConfig;
         let catalog_path = alephcore::discovery::aleph_home_dir()
             .map(|d| d.join("hub_catalog.db"))
             .unwrap_or_else(|_| std::path::PathBuf::from("hub_catalog.db"));
@@ -1114,22 +1114,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             Ok(cache) => {
                 let configs: std::collections::HashMap<String, MarketplaceConfig> = {
                     let cfg = app_config.read().await;
-                    cfg.plugin_marketplaces
-                        .iter()
-                        .map(|(name, entry)| {
-                            let source_type = match entry.source_type.as_str() {
-                                "local" => MarketplaceSourceType::Local,
-                                _ => MarketplaceSourceType::Github,
-                            };
-                            (
-                                name.clone(),
-                                MarketplaceConfig {
-                                    source: entry.source.clone(),
-                                    source_type,
-                                },
-                            )
-                        })
-                        .collect()
+                    alephcore::extension::marketplace::configs_from_entries(
+                        &cfg.plugin_marketplaces,
+                    )
                 };
                 // Cold-start: seed official catalog (MCP + skills) into the aleph-hub slot if empty.
                 alephcore::hub::primer::prime_official_catalog_if_empty(&cache).await;
@@ -1907,27 +1894,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // (SHA256 verification + atomic copy). Separate from the catalog
                 // sync — the catalog comes from the Hub; installs still route
                 // through the marketplace for local plugin installs.
-                use alephcore::extension::marketplace::types::{
-                    MarketplaceConfig, MarketplaceSourceType,
-                };
+                use alephcore::extension::marketplace::types::MarketplaceConfig;
                 let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = {
                     let cfg = app_config.read().await;
-                    cfg.plugin_marketplaces
-                        .iter()
-                        .map(|(name, entry)| {
-                            let source_type = match entry.source_type.as_str() {
-                                "local" => MarketplaceSourceType::Local,
-                                _ => MarketplaceSourceType::Github,
-                            };
-                            (
-                                name.clone(),
-                                MarketplaceConfig {
-                                    source: entry.source.clone(),
-                                    source_type,
-                                },
-                            )
-                        })
-                        .collect()
+                    alephcore::extension::marketplace::configs_from_entries(
+                        &cfg.plugin_marketplaces,
+                    )
                 };
 
                 // Trust-gated install façade: extensions.disclosure/.configure/.install.

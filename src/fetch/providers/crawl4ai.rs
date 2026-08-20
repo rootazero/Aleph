@@ -7,9 +7,6 @@ use async_trait::async_trait;
 
 const NAME: &str = "crawl4ai";
 
-/// Maximum response body size accepted from the crawl4ai backend (16 MiB).
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
 /// Fetch provider backed by the existing crawl4ai HTTP client.
 pub struct Crawl4aiFetchProvider {
     inner: crate::builtin_tools::crawl4ai::Crawl4aiBackend,
