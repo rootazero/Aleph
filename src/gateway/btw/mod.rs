@@ -1,8 +1,10 @@
-//! `/btw` side questions — the one derivation every surface shares.
+//! `/btw` side questions — the one derivation every surface must share.
 //!
-//! A side question runs as its own turn on a *derived* ephemeral session:
-//! read-only, in its own busy-queue lane (so it answers while the main run
-//! keeps going), and never appended to the main conversation.
+//! A side question must run as its own turn on a *derived* ephemeral
+//! session: read-only, in its own busy-queue lane (so it can answer while
+//! the main run keeps going), and never appended to the main conversation.
+//! Tasks 3-7 wire this in; this module only supplies the derivations those
+//! tasks and everything downstream of them must agree on.
 //!
 //! # Why this is not a sixth session knob
 //!
@@ -17,7 +19,9 @@
 
 use crate::routing::session_key::SessionKey;
 
-/// Metadata key stamped on a run request that is a side question.
+/// Metadata key that marks a run request as a side question. Whichever
+/// surface builds that request must stamp this key (Task 3); `resolve`
+/// below only recognizes the input, it does not stamp anything itself.
 pub const BTW_METADATA_KEY: &str = "btw";
 
 /// A resolved `/btw` input.
@@ -26,19 +30,22 @@ pub struct BtwTurn {
     /// The question, with its original case preserved for the model to read
     /// verbatim. Empty when `promote` is set.
     pub question: String,
-    /// `/btw promote` — move the latest side answer into the main
-    /// conversation. Explicit by construction: nothing crosses that boundary
-    /// without the user asking out loud.
+    /// `/btw promote` — the user's explicit request that the latest side
+    /// answer be moved into the main conversation (wired in Task 10).
+    /// Explicit by construction: nothing should cross that boundary without
+    /// the user asking out loud.
     pub promote: bool,
 }
 
 impl BtwTurn {
     /// Resolve a raw input into a side question.
     ///
-    /// **Single source.** Every surface calls this one function; none of them
-    /// re-derives "is this a btw" from its own string handling. The predicate
-    /// that this replaced lived in `inbound_router`, a channel-only module, so
-    /// the TUI and Panel could not reach it at all.
+    /// **Single source.** Every surface must resolve a side question through
+    /// this function; none may re-derive "is this a btw" from its own string
+    /// handling. The predicate this is meant to replace still lives in
+    /// `inbound_router`, a channel-only module, so the TUI and Panel cannot
+    /// reach it — that old code stays in place, untouched, until Task 11
+    /// deletes it.
     #[must_use]
     pub fn resolve(input: &str) -> Option<Self> {
         let trimmed = input.trim();
@@ -82,16 +89,24 @@ impl BtwTurn {
 /// 1. `/new` bumps the epoch, so the derived key changes and the side thread
 ///    starts empty **by construction** — not because anyone remembered to
 ///    clear it.
-/// 2. The previous side session becomes unaddressable, so the retirement hook
-///    only has to *delete* it, never also to hide it. A missed retirement
-///    leaves disk residue, never a crossed side thread.
+/// 2. The previous side session becomes unaddressable, so the retirement
+///    logic (Task 7) only needs to *delete* it, never also to hide it. A
+///    missed retirement would leave disk residue, never a crossed side
+///    thread.
 ///
 /// Hashed with `Sha256` rather than `std::hash::Hash` / `DefaultHasher`: this
-/// id is persisted to disk (`workspaces/<sha256(session)[..16]>` is this
-/// repo's existing precedent for exactly this shape), and `DefaultHasher`'s
-/// algorithm is explicitly unspecified across Rust versions — a toolchain
-/// bump would silently reset every user's side thread and orphan its
-/// directory, with no error and no red test to catch it.
+/// id is persisted to disk, and `DefaultHasher`'s algorithm is explicitly
+/// unspecified across Rust versions — a toolchain bump would silently reset
+/// every user's side thread and orphan its directory, with no error and no
+/// red test to catch it. `workspaces/<sha256(session)[..16]>`
+/// (`src/sandbox/workspace/path.rs`) is this repo's existing precedent for
+/// hashing a `SessionKey` to a filesystem-safe id, though not for this exact
+/// width: that precedent keeps 16 *bytes* (32 hex chars) of the digest, while
+/// this keeps 16 *hex chars* (8 bytes, 64 bits). The narrower width is a
+/// deliberate choice, not an oversight — 64 bits inside a per-agent
+/// namespace is not a practical collision risk (a collision would mean two
+/// main sessions sharing one side thread), and a shorter id keeps the
+/// on-disk name more readable.
 #[must_use]
 pub fn side_key_for(main: &SessionKey) -> SessionKey {
     use sha2::{Digest, Sha256};
