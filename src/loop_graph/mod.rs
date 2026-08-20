@@ -91,7 +91,10 @@ pub(crate) fn publish(ev: TopologyEvent) {
 /// shutdown mechanism for boot-spawned tasks, so this one shares the
 /// daemon's lifetime and exits with the process; the synchronous SQLite
 /// append per event is microseconds and never crosses an `.await`, so the
-/// task holds no lock across yield points.
+/// task holds no lock across yield points. Known tech debt: a panic in the
+/// task body goes unobserved because no `JoinHandle` is kept and no panic
+/// hook is installed. Operators who need to monitor the audit persister
+/// should add a supervisor keyed off the bus `subscriber_count()`.
 pub fn spawn_event_persister(
     bus: TopologyEventBus,
     store: Arc<SnapshotStore>,
@@ -99,6 +102,8 @@ pub fn spawn_event_persister(
     // Subscribe BEFORE spawning: events published between the subscribe and
     // the task's first `recv` sit in the bounded channel, not in the void.
     let mut rx = bus.subscribe();
+    let bus_for_metric = bus.clone();
+    tracing::debug!("loop_graph: audit persister starting");
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -109,10 +114,14 @@ pub fn spawn_event_persister(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    bus_for_metric.record_lag(n as u64);
                     tracing::warn!(dropped = n,
                         "loop_graph: audit persister lagged — events dropped (audit may lose, never block)");
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::debug!("loop_graph: audit persister exiting (bus closed)");
+                    break;
+                }
             }
         }
     })

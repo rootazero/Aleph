@@ -32,6 +32,7 @@
 //!   refusal (`Store rejected an invalid edge`) is a separate event kind we don't
 //!   emit today, on purpose — see "NOT-build" in GRAPH_LAYER §7.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -39,12 +40,13 @@ use tokio::sync::broadcast;
 
 use crate::loop_graph::types::{EdgeKind, NodeKind};
 
-/// Capacity for the broadcast channel. Larger = more events kept under lag, smaller
+/// Default capacity for the broadcast channel. Larger = more events kept under lag, smaller
 /// = tighter backpressure. 256 covers burst writes (an `enable_audit` fan-out is
 /// one event per wired node) with ample headroom for the audit persister, and a
 /// slow consumer gets `RecvError::Lagged` rather than blocking the publisher
-/// (Tokio's default behavior).
-const BUS_CAPACITY: usize = 256;
+/// (Tokio's default behavior). Exposed as `pub const` so operators can size
+/// the constructor below against the well-known default.
+pub const BUS_CAPACITY: usize = 256;
 
 /// A topology mutation. Carries enough to identify what changed without forcing
 /// every subscriber to re-query the store — but NOT the new row's body, which can
@@ -96,6 +98,9 @@ pub enum TopologyEvent {
 #[derive(Clone)]
 pub struct TopologyEventBus {
     inner: Arc<broadcast::Sender<TopologyEvent>>,
+    /// Cumulative count of events dropped because a subscriber lagged past the
+    /// bounded channel. See [`Self::dropped_events`] / [`Self::record_lag`].
+    dropped_events: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for TopologyEventBus {
@@ -109,12 +114,23 @@ impl std::fmt::Debug for TopologyEventBus {
 impl TopologyEventBus {
     /// Build a fresh bus with the default capacity. The bus is independent of
     /// the store — both can exist, and the store does NOT hold a reference to
-    /// this bus. Wiring is done by `spawn_event_persister`.
+    /// this bus. Wiring is done at boot by `loop_graph::init_event_bus`
+    /// (install) and `spawn_event_persister` (subscribe + append to the audit
+    /// log); see `src/executor/builtin_registry/builder/constructor/mod.rs`.
     #[must_use]
     pub fn new() -> Self {
-        let (tx, _rx) = broadcast::channel(BUS_CAPACITY);
+        Self::with_capacity(BUS_CAPACITY)
+    }
+
+    /// Build a fresh bus with a custom capacity. Use [`BUS_CAPACITY`] as the
+    /// well-known default; raise it for graphs whose `enable_audit` fan-out
+    /// would otherwise overrun the bounded channel.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        let (tx, _rx) = broadcast::channel(capacity);
         Self {
             inner: Arc::new(tx),
+            dropped_events: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -144,6 +160,23 @@ impl TopologyEventBus {
     #[must_use]
     pub fn subscriber_count(&self) -> usize {
         self.inner.receiver_count()
+    }
+
+    /// Total events dropped on a Lagged receiver since this bus was created.
+    /// Incremented by subscribers when they observe a `RecvError::Lagged(n)`;
+    /// the audit layer reads this to decide whether to surface a warning to
+    /// the operator. Resetting the counter is intentionally not provided — a
+    /// dropped event is dropped, the counter is monotonic.
+    #[must_use]
+    pub fn dropped_events(&self) -> u64 {
+        self.dropped_events.load(Ordering::Acquire)
+    }
+
+    /// Record `n` events dropped by a subscriber's lag. Called by
+    /// `spawn_event_persister` (and any future subscriber) when it observes a
+    /// `RecvError::Lagged(n)` from `broadcast::Receiver::recv`.
+    pub fn record_lag(&self, n: u64) {
+        self.dropped_events.fetch_add(n, Ordering::AcqRel);
     }
 }
 
