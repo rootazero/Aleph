@@ -321,15 +321,50 @@ pub(crate) fn recovery_footer(
 #[must_use]
 pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
     let mut images = Vec::new();
-    // `DesktopOutput` wraps the screenshot object under `data`; check there
-    // first, then the value itself (covers tools that return the image at the
-    // top level). At most one image is hoisted per object.
-    if let Some(data) = value.get_mut("data") {
-        extract_image_in_place(data, &mut images);
-    }
-    extract_image_in_place(value, &mut images);
-    extract_mcp_content_images(value, &mut images);
+    hoist_walk(value, &mut images, 0);
     images
+}
+
+/// Recursion bound for [`hoist_walk`]. Tool results are serialized from Rust
+/// structs or MCP payloads — both shallow — so this only guards against
+/// pathologically deep JSON (e.g. a page that smuggled a nested document into
+/// an `evaluate` result).
+const MAX_HOIST_DEPTH: usize = 16;
+
+/// Walk the whole result tree, applying both extractors at every object node.
+///
+/// This used to check exactly two positions — the top level and a `data`
+/// child — because the producers then known (`desktop` screenshot, `file_read`
+/// of an image) both placed the payload there. `browser_exec`'s `screenshot`
+/// step broke that shape: its image arrives nested inside `results[]`, one
+/// object per step, so a procedure's screenshot stayed in the text channel and
+/// the result budget shredded it — the exact failure this function exists to
+/// prevent, one level down. The walk is still bounded twice over:
+/// [`MAX_HOISTED_IMAGES`] caps how much leaves the text channel (overflow keeps
+/// its base64 in place), and the per-payload size guard inside the extractors
+/// caps each one. Extraction replaces the payload with a short marker before
+/// the descent, so a node is never hoisted twice.
+fn hoist_walk(value: &mut serde_json::Value, out: &mut Vec<ToolImage>, depth: usize) {
+    if out.len() >= MAX_HOISTED_IMAGES || depth >= MAX_HOIST_DEPTH {
+        return;
+    }
+    if value.is_object() {
+        extract_image_in_place(value, out);
+        extract_mcp_content_images(value, out);
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                hoist_walk(v, out, depth + 1);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                hoist_walk(item, out, depth + 1);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Cap on images lifted out of one tool result.
@@ -399,6 +434,11 @@ fn supported_image_mime(mime: Option<&str>) -> Option<String> {
 /// this idempotent — the marker left behind is far shorter, so a second pass
 /// never re-hoists it.
 fn extract_image_in_place(value: &mut serde_json::Value, out: &mut Vec<ToolImage>) {
+    // The recursive walk can reach many image-bearing objects in one result;
+    // overflow keeps its base64 in the text channel (see MAX_HOISTED_IMAGES).
+    if out.len() >= MAX_HOISTED_IMAGES {
+        return;
+    }
     let Some(obj) = value.as_object_mut() else {
         return;
     };
@@ -728,6 +768,44 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].mime_type, "image/jpeg");
         // Second pass finds nothing — the short marker is below the 256 guard.
+        assert!(hoist_inline_images(&mut value).is_empty());
+    }
+
+    /// `browser_exec`'s screenshot step nests its payload one object per step
+    /// inside `results[]` — the shape the pre-recursion walk could not reach.
+    #[test]
+    fn hoists_an_image_nested_inside_a_results_array() {
+        let mut value = serde_json::json!({
+            "success": true,
+            "results": [
+                { "step": 1, "action": "navigate https://example.com", "status": "navigated" },
+                { "step": 2, "action": "screenshot", "status": "captured",
+                  "image_base64": "D".repeat(400), "format": "png" },
+            ]
+        });
+
+        let images = hoist_inline_images(&mut value);
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data.len(), 400);
+        assert_eq!(images[0].mime_type, "image/png");
+        // The marker replaces the payload in place; the sibling step is untouched.
+        assert!(value["results"][1]["image_base64"]
+            .as_str()
+            .unwrap()
+            .contains("viewable image block"));
+        assert_eq!(value["results"][0]["status"], "navigated");
+        assert!(hoist_inline_images(&mut value).is_empty());
+    }
+
+    /// The recursion cap, not the payload guards, is what bounds a hostile
+    /// nesting depth: images past [`MAX_HOIST_DEPTH`] keep their base64.
+    #[test]
+    fn hoist_walk_stops_at_the_depth_bound() {
+        let mut value = serde_json::json!({ "image_base64": "E".repeat(400), "format": "png" });
+        for _ in 0..MAX_HOIST_DEPTH + 2 {
+            value = serde_json::json!({ "wrap": value });
+        }
         assert!(hoist_inline_images(&mut value).is_empty());
     }
 

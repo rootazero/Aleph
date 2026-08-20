@@ -1177,7 +1177,16 @@
       "browse_refreshing": "Refreshing...",
       "browse_empty": "No matching plugins.",
       "browse_installed": "Installed",
-      "browse_loading": "Loading marketplace..."
+      "browse_loading": "Loading marketplace...",
+      "marketplaces_title": "Marketplaces",
+      "marketplaces_desc": "The sources Aleph searches when you install a plugin by name.",
+      "marketplaces_loading": "Loading marketplaces...",
+      "marketplaces_none": "No marketplaces registered",
+      "marketplace_source_placeholder": "owner/repo, or a path to a local folder",
+      "marketplace_add": "Add",
+      "marketplace_adding": "Adding...",
+      "marketplace_remove": "Remove marketplace",
+      "marketplace_builtin": "built-in"
     },
     "skills": {
       "add": "Add",

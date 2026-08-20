@@ -3,30 +3,36 @@ use crate::gateway::handlers::plugins::handlers::build_marketplace_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use serde_json::json;
 
-/// List all registered marketplaces (including built-in)
+/// List all registered marketplaces (including built-in).
+///
+/// Built from [`MarketplaceListResult`] rather than a `json!` literal: serde
+/// ignores unknown keys on the way in, so a test that only *parses* a real
+/// response is structurally blind to whatever else is on the wire. Constructing
+/// from the contract type makes over-sending a compile error instead of an
+/// assertion somebody has to remember to write.
+///
+/// Rows are sorted by name because `manager.list()` hands back a `HashMap`, and
+/// an unsorted response reshuffles the Panel's list on every load.
 pub async fn handle_marketplace_list(request: JsonRpcRequest) -> JsonRpcResponse {
+    use crate::gateway::handlers::plugins::types::marketplace_registration_row;
+    use aleph_protocol::plugins::{MarketplaceListResult, MarketplaceRow};
+
     let manager = match build_marketplace_manager() {
         Ok(m) => m,
         Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
     };
 
-    let marketplaces = manager.list();
-    let result: Vec<serde_json::Value> = marketplaces
+    let mut rows: Vec<MarketplaceRow> = manager
+        .list()
         .iter()
-        .map(|(name, config)| {
-            let type_str = match config.source_type {
-                crate::extension::marketplace::types::MarketplaceSourceType::Local => "local",
-                crate::extension::marketplace::types::MarketplaceSourceType::Github => "github",
-            };
-            json!({
-                "name": name,
-                "source": config.source,
-                "type": type_str,
-            })
-        })
+        .map(|(name, config)| marketplace_registration_row(name, config))
         .collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
 
-    JsonRpcResponse::success(request.id, json!({ "marketplaces": result }))
+    match serde_json::to_value(MarketplaceListResult { marketplaces: rows }) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(request.id, -32000, format!("Serialisation error: {e}")),
+    }
 }
 
 /// List the plugins a marketplace contains.

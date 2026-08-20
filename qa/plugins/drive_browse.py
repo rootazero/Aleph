@@ -41,6 +41,8 @@ import websockets  # noqa: E402
 
 WS = sys.argv[1]
 PHASE = sys.argv[2]
+# Only `registrations` uses it: a real local marketplace directory to add.
+MARKET_DIR = sys.argv[3] if len(sys.argv) > 3 else ""
 
 L = Ledger()
 BUILTIN = "aleph-official"
@@ -170,6 +172,113 @@ async def phase_install(rpc):
             f"was_present_before={target in already} rows_now={len(now)}")
 
 
+async def phase_registrations(rpc):
+    """The registration surface: list / add / remove, and the `removable` bit.
+
+    `plugin.marketplace.list` was the last member of this family the server
+    built as a `json!` literal and every client decoded by hand, so a renamed
+    key could not go red on either side. It is also the call the Panel's new
+    Marketplaces section reads, and the reason that section can exist at all:
+    `add` and `remove` were registered and admin-classed, but their only client
+    was `interfaces/cli`, a binary the release workflow never builds.
+
+    Why a real daemon. The built-in marketplace is not a fixture — it is
+    injected into every `list()` by `all_marketplaces` and refused by every
+    `remove()`. On a fresh install it is the *only* row there is, so "does the
+    Remove button appear on a row the server then rejects" is a question only a
+    process holding the real manager can answer.
+    """
+    L.log("marketplace registrations: list / add / remove")
+
+    listed = body(await rpc.call("plugin.marketplace.list", {}))
+    rows = listed.get("marketplaces") or []
+    L.check("list returns rows", bool(rows), f"n={len(rows)}")
+
+    # Key-set equality on the *real* wire. Parsing a response only ever proves
+    # a superset, because serde ignores unknown keys on the way in — so a
+    # client-side decode test is structurally blind to a key that stopped being
+    # sent. This looks at what the daemon actually put on the socket.
+    required = {"name", "source", "type", "removable"}
+    allowed = required | {"unremovable_reason"}
+    bad = [r for r in rows if not required <= set(r) or not set(r) <= allowed]
+    L.check(
+        "every row carries exactly the keys its renderers read",
+        not bad,
+        f"offenders={bad[:2]}",
+    )
+
+    by_name = {r.get("name"): r for r in rows}
+    builtin = by_name.get(BUILTIN)
+    L.check(f"the built-in '{BUILTIN}' is listed", builtin is not None)
+    if builtin:
+        L.check(
+            "the built-in says it is not removable",
+            builtin.get("removable") is False,
+            f"removable={builtin.get('removable')}",
+        )
+        L.check(
+            "and carries the server's own reason rather than a blank",
+            bool(builtin.get("unremovable_reason")),
+            str(builtin.get("unremovable_reason")),
+        )
+
+    names = [r.get("name") for r in rows]
+    L.check(
+        "rows arrive sorted by name",
+        names == sorted(names),
+        f"{names}",
+        # The server holds them in a HashMap; unsorted means the Panel list
+        # reshuffles on every load.
+    )
+
+    # --- add -------------------------------------------------------------
+    added = await rpc.call("plugin.marketplace.add", {"source": MARKET_DIR})
+    L.check("add accepts a local path", "error" not in added, json.dumps(added)[:200])
+    new_name = body(added).get("name") or ""
+    L.check("add answers with the name it derived", bool(new_name), new_name)
+
+    # The Panel composes add + update, because `add` registers without
+    # fetching while the shipped `aleph-server plugin marketplace add` syncs
+    # right after. Driving both here is what proves the pair the Panel sends.
+    synced = await rpc.call("plugin.marketplace.update", {"name": new_name})
+    L.check("update syncs the freshly added source", "error" not in synced, json.dumps(synced)[:200])
+
+    rows = body(await rpc.call("plugin.marketplace.list", {})).get("marketplaces") or []
+    fresh = {r.get("name"): r for r in rows}.get(new_name)
+    L.check(f"'{new_name}' is listed after add", fresh is not None)
+    if fresh:
+        L.check("it is typed local", fresh.get("type") == "local", str(fresh.get("type")))
+        L.check("it says it IS removable", fresh.get("removable") is True)
+        L.check("and carries no reason", fresh.get("unremovable_reason") is None)
+
+    # --- the bit and the action, on the real daemon ----------------------
+    # The unit guard asserts these agree in-process. This asserts it of the
+    # daemon a client actually talks to, for every row it will actually show.
+    for row in rows:
+        name = row.get("name")
+        claims_removable = row.get("removable") is True
+        outcome = await rpc.call("plugin.marketplace.remove", {"name": name})
+        really_removed = "error" not in outcome
+        L.check(
+            f"'{name}': the removable bit matches what remove does",
+            claims_removable == really_removed,
+            f"bit={claims_removable} remove_ok={really_removed}",
+        )
+
+    after = body(await rpc.call("plugin.marketplace.list", {})).get("marketplaces") or []
+    left = [r.get("name") for r in after]
+    L.check(
+        "the built-in survived a remove it refused",
+        BUILTIN in left,
+        f"left={left}",
+    )
+    L.check(
+        f"'{new_name}' is gone after remove",
+        new_name not in left,
+        f"left={left}",
+    )
+
+
 async def main():
     async with websockets.connect(WS, max_size=32 * 1024 * 1024) as ws:
         rpc = Rpc(ws)
@@ -178,6 +287,8 @@ async def main():
             await phase_contents(rpc)
         elif PHASE == "install":
             await phase_install(rpc)
+        elif PHASE == "registrations":
+            await phase_registrations(rpc)
         else:
             print(f"unknown phase {PHASE}")
             return 2

@@ -1177,7 +1177,16 @@
       "browse_refreshing": "刷新中...",
       "browse_empty": "没有匹配的插件。",
       "browse_installed": "已安装",
-      "browse_loading": "正在加载市场..."
+      "browse_loading": "正在加载市场...",
+      "marketplaces_title": "插件市场",
+      "marketplaces_desc": "按名字安装插件时，Aleph 会在这些来源里查找。",
+      "marketplaces_loading": "正在加载市场列表...",
+      "marketplaces_none": "尚未注册任何市场",
+      "marketplace_source_placeholder": "owner/repo，或本地文件夹路径",
+      "marketplace_add": "添加",
+      "marketplace_adding": "正在添加...",
+      "marketplace_remove": "移除市场",
+      "marketplace_builtin": "内置"
     },
     "skills": {
       "add": "添加",

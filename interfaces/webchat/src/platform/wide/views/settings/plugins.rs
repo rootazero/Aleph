@@ -18,8 +18,9 @@ pub use aleph_protocol::plugins::{PluginRow as PluginInfo, PluginRuntimeStatus};
 /// The browse rows, likewise shared with the server that builds them and the
 /// CLI that renders them.
 use aleph_protocol::plugins::{
-    MarketplaceBrowseParams, MarketplaceBrowseResult, MarketplaceInstallParams,
-    MarketplacePluginRow,
+    MarketplaceAddParams, MarketplaceBrowseParams, MarketplaceBrowseResult,
+    MarketplaceInstallParams, MarketplaceListResult, MarketplacePluginRow, MarketplaceRemoveParams,
+    MarketplaceRow, MarketplaceUpdateParams,
 };
 
 /// Load plugins list from Gateway
@@ -49,6 +50,61 @@ fn load_plugins(
                     i18n,
                     &e,
                     |e| format!("Failed to load plugins: {e}"),
+                )));
+                loading.set(false);
+            }
+        }
+    });
+}
+
+/// Load the registered marketplaces — the *sources* an install-by-name is
+/// looked up in, which is a different question from what any of them contains
+/// (`plugin.marketplace.browse`).
+///
+/// `error` is a separate signal from the rows on purpose. A refusal is not an
+/// empty list: folding an `Err` into an empty `Vec` is how "you are not an
+/// admin" renders as "you have no marketplaces", and the operator then adds a
+/// duplicate of one that is already there.
+fn load_marketplaces(
+    i18n: I18nContext<Locale>,
+    state: DashboardState,
+    rows: RwSignal<Vec<MarketplaceRow>>,
+    loading: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+) {
+    loading.set(true);
+    error.set(None);
+    spawn_local(async move {
+        match state.rpc_call("plugin.marketplace.list", json!({})).await {
+            Ok(result) => {
+                match serde_json::from_value::<MarketplaceListResult>(result) {
+                    Ok(listing) => {
+                        rows.set(listing.marketplaces);
+                    }
+                    Err(e) => {
+                        // A shape we cannot read is also not an empty list.
+                        //
+                        // Routed through the same classifier as the refusal arm
+                        // below even though a decode failure is never a
+                        // refusal: on a non-refusal string the wrapper is a
+                        // byte-for-byte no-op, and that is exactly why the rule
+                        // it satisfies has no allowlist to grow.
+                        rows.set(Vec::new());
+                        error.set(Some(crate::components::admin_refusal::settings_load_error(
+                            i18n,
+                            &e.to_string(),
+                            |e| format!("Failed to read marketplace list: {e}"),
+                        )));
+                    }
+                }
+                loading.set(false);
+            }
+            Err(e) => {
+                rows.set(Vec::new());
+                error.set(Some(crate::components::admin_refusal::settings_load_error(
+                    i18n,
+                    &e,
+                    |e| format!("Failed to load marketplaces: {e}"),
                 )));
                 loading.set(false);
             }
@@ -159,6 +215,9 @@ pub fn PluginsView() -> impl IntoView {
                     }}
                 </div>
 
+                // Marketplaces Section
+                <MarketplacesSection />
+
                 // Info Box
                 <div class="p-4 bg-primary-subtle border border-primary/20 rounded">
                     <div class="flex items-start gap-2">
@@ -179,6 +238,261 @@ pub fn PluginsView() -> impl IntoView {
                     error=error
                 />
             </Show>
+        </div>
+    }
+}
+
+/// The registered marketplaces, with the add/remove pair the Panel had no way
+/// to reach.
+///
+/// `plugin.marketplace.add` and `.remove` were registered, admin-classed and
+/// spoken by `interfaces/cli` — a binary the release workflow never builds. On
+/// a desktop App the only client that used them is not installed, so adding a
+/// third-party marketplace meant finding the embedded `aleph-server` inside the
+/// .app bundle and running it from a terminal.
+///
+/// Every row carries the server's own `removable` verdict rather than a local
+/// comparison against `"aleph-official"`: the built-in marketplace is always
+/// listed and can never be removed, and on a fresh install it is the only row
+/// there is — so a Remove button rendered unconditionally would fail on the
+/// only thing on screen.
+#[component]
+fn MarketplacesSection() -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
+    let rows = RwSignal::new(Vec::<MarketplaceRow>::new());
+    let loading = RwSignal::new(true);
+    let error = RwSignal::new(Option::<String>::None);
+    let source = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+
+    Effect::new(move || {
+        if state.is_connected.get() {
+            load_marketplaces(i18n, state, rows, loading, error);
+        } else {
+            loading.set(false);
+        }
+    });
+
+    // Read the input before the await, deliberately: by the time the call
+    // returns this section may be gone, and a signal read after an `.await` is
+    // the disposed-read hazard the guard in this crate exists for.
+    let add = move || {
+        let src = source.get_untracked().trim().to_string();
+        if src.is_empty() || busy.get_untracked() {
+            return;
+        }
+        busy.set(true);
+        error.set(None);
+        // Name omitted: the server derives it from the source, and a second
+        // derivation here would be a second answer to what the row is called.
+        let params = serde_json::to_value(MarketplaceAddParams {
+            source: src,
+            name: None,
+        })
+        .unwrap_or_else(|_| json!({}));
+        spawn_local(async move {
+            let outcome = state.rpc_call("plugin.marketplace.add", params).await;
+            match outcome {
+                Ok(added) => {
+                    source.set(String::new());
+                    // `plugin.marketplace.add` registers; it does not fetch.
+                    // The shipped `aleph-server plugin marketplace add` syncs
+                    // immediately after, and an operator who adds a source here
+                    // and then finds it empty has no way to guess that a
+                    // differently-named button in another dialog is what fills
+                    // it. Composed from the two documented calls rather than
+                    // folded into the handler, so `add` keeps one meaning for
+                    // every client — and so this surface ends up where the
+                    // shipped subcommand already leaves it.
+                    //
+                    // The name comes from the add response because the server
+                    // derives it from the source; deriving it again here would
+                    // be a second answer to what the row is called.
+                    let name = added
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                    let sync = serde_json::to_value(MarketplaceUpdateParams { name })
+                        .unwrap_or_else(|_| json!({}));
+                    let sync_failed = state
+                        .rpc_call("plugin.marketplace.update", sync)
+                        .await
+                        .err();
+                    busy.set(false);
+                    // Reload first: it clears `error` on its way in, so a note
+                    // set before it would be wiped by the very refresh that is
+                    // meant to show the new row.
+                    load_marketplaces(i18n, state, rows, loading, error);
+                    if let Some(e) = sync_failed {
+                        // Registered but not fetched is a real state, and
+                        // saying so beats an empty catalogue with no reason.
+                        error.set(Some(
+                            crate::components::admin_refusal::settings_write_error(
+                                i18n,
+                                &e,
+                                |e| format!("Added, but fetching its contents failed: {e}"),
+                            ),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    busy.set(false);
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to add marketplace: {e}")
+                        }),
+                    ));
+                }
+            }
+        });
+    };
+
+    let remove = move |name: String| {
+        busy.set(true);
+        error.set(None);
+        let params = serde_json::to_value(MarketplaceRemoveParams { name })
+            .unwrap_or_else(|_| json!({}));
+        spawn_local(async move {
+            let outcome = state.rpc_call("plugin.marketplace.remove", params).await;
+            busy.set(false);
+            match outcome {
+                Ok(_) => load_marketplaces(i18n, state, rows, loading, error),
+                Err(e) => {
+                    error.set(Some(
+                        crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
+                            format!("Failed to remove marketplace: {e}")
+                        }),
+                    ));
+                }
+            }
+        });
+    };
+
+    view! {
+        <div class="space-y-4">
+            <div>
+                <h2 class="text-lg font-medium text-text-primary">
+                    {t!(i18n, settings.plugins.marketplaces_title)}
+                </h2>
+                <p class="text-sm text-text-secondary">
+                    {t!(i18n, settings.plugins.marketplaces_desc)}
+                </p>
+            </div>
+
+            {move || error.get().map(|err| view! {
+                <div class="p-3 bg-danger-subtle border border-border rounded text-danger text-sm">
+                    {err}
+                </div>
+            })}
+
+            <div class="flex items-center gap-2">
+                <input
+                    type="text"
+                    class="flex-1 px-3 py-1.5 bg-surface-sunken border border-border rounded text-sm text-text-primary"
+                    placeholder=t_string!(i18n, settings.plugins.marketplace_source_placeholder).to_string()
+                    prop:value=move || source.get()
+                    on:input=move |ev| source.set(event_target_value(&ev))
+                    on:keydown=move |ev| {
+                        if ev.key() == "Enter" {
+                            add();
+                        }
+                    }
+                />
+                <button
+                    class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"
+                    disabled=move || busy.get() || source.get().trim().is_empty()
+                    on:click=move |_| add()
+                >
+                    {move || if busy.get() {
+                        t_string!(i18n, settings.plugins.marketplace_adding).to_string()
+                    } else {
+                        t_string!(i18n, settings.plugins.marketplace_add).to_string()
+                    }}
+                </button>
+            </div>
+
+            {move || {
+                // "Still connecting" and "refused" are both answered before
+                // the empty state gets a turn. Only a load that succeeded and
+                // really came back empty may say so — the built-in marketplace
+                // is always in a real response, so an empty list that is not
+                // one of the other two answers means the server said something
+                // we should not paper over.
+                if loading.get() || !state.is_connected.get() {
+                    view! {
+                        <p class="text-sm text-text-tertiary">
+                            {t!(i18n, settings.plugins.marketplaces_loading)}
+                        </p>
+                    }.into_any()
+                } else if error.get().is_some() {
+                    // The box above is already showing it; a second line
+                    // saying "none registered" would contradict it.
+                    ().into_any()
+                } else if rows.get().is_empty() {
+                    view! {
+                        <p class="text-sm text-text-tertiary">
+                            {t!(i18n, settings.plugins.marketplaces_none)}
+                        </p>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="space-y-2">
+                            <For
+                                each=move || rows.get()
+                                key=|row| row.name.clone()
+                                children=move |row| {
+                                    let name = row.name.clone();
+                                    let removable = row.removable;
+                                    let reason = row.unremovable_reason.clone();
+                                    view! {
+                                        <div class="flex items-center justify-between p-3 bg-surface-raised border border-border rounded">
+                                            <div class="min-w-0">
+                                                <div class="flex items-center gap-2">
+                                                    <span class="text-sm font-medium text-text-primary">
+                                                        {row.name.clone()}
+                                                    </span>
+                                                    <span class="px-1.5 py-0.5 text-xs rounded bg-surface-sunken text-text-tertiary">
+                                                        {row.source_type.clone()}
+                                                    </span>
+                                                </div>
+                                                <p class="text-xs text-text-secondary mt-1 truncate">
+                                                    {row.source.clone()}
+                                                </p>
+                                            </div>
+                                            {if removable {
+                                                let name = name.clone();
+                                                view! {
+                                                    <button
+                                                        class="p-1.5 text-danger hover:bg-danger-subtle rounded flex-shrink-0 ml-4 disabled:opacity-50"
+                                                        title=t_string!(i18n, settings.plugins.marketplace_remove).to_string()
+                                                        disabled=move || busy.get()
+                                                        on:click=move |_| remove(name.clone())
+                                                    >
+                                                        "🗑️"
+                                                    </button>
+                                                }.into_any()
+                                            } else {
+                                                // No button, and the server's
+                                                // own words for why — not a
+                                                // silently missing control.
+                                                view! {
+                                                    <span
+                                                        class="text-xs text-text-tertiary flex-shrink-0 ml-4"
+                                                        title=reason.clone().unwrap_or_default()
+                                                    >
+                                                        {t!(i18n, settings.plugins.marketplace_builtin)}
+                                                    </span>
+                                                }.into_any()
+                                            }}
+                                        </div>
+                                    }
+                                }
+                            />
+                        </div>
+                    }.into_any()
+                }
+            }}
         </div>
     }
 }

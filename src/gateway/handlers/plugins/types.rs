@@ -139,6 +139,36 @@ pub fn marketplace_row(
     }
 }
 
+/// Build the wire row for one marketplace *registration*.
+///
+/// The sibling above describes a plugin inside a marketplace; this one
+/// describes the marketplace itself. `removable` comes from
+/// [`MarketplaceManager::removal_refusal`] — the same call `remove` makes —
+/// rather than from comparing `name` against `"aleph-official"` here. Two
+/// readings drift, and the direction they drift in is a list that offers a
+/// Remove button the remove call then refuses; the built-in marketplace is
+/// always listed and is the only row a fresh install has.
+#[must_use]
+pub fn marketplace_registration_row(
+    name: &str,
+    config: &crate::extension::marketplace::types::MarketplaceConfig,
+) -> aleph_protocol::plugins::MarketplaceRow {
+    use crate::extension::marketplace::types::MarketplaceSourceType;
+
+    let source_type = match config.source_type {
+        MarketplaceSourceType::Local => "local",
+        MarketplaceSourceType::Github => "github",
+    };
+    let refusal = crate::extension::marketplace::MarketplaceManager::removal_refusal(name);
+    aleph_protocol::plugins::MarketplaceRow {
+        name: name.to_string(),
+        source: config.source.clone(),
+        source_type: source_type.to_string(),
+        removable: refusal.is_none(),
+        unremovable_reason: refusal,
+    }
+}
+
 pub use aleph_protocol::plugins::MarketplaceAddParams;
 pub use aleph_protocol::plugins::MarketplaceBrowseParams;
 pub use aleph_protocol::plugins::MarketplaceInstallParams;

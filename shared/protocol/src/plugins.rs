@@ -350,6 +350,64 @@ pub struct MarketplaceBrowseResult {
     pub problems: Vec<MarketplaceProblemRow>,
 }
 
+/// One row of `plugin.marketplace.list` — a *registration*, not its contents.
+///
+/// The sibling [`MarketplacePluginRow`] describes a plugin inside a
+/// marketplace; this one describes the marketplace itself. Reading one looking
+/// for the other is the confusion `MarketplaceBrowseParams` already documents.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceRow {
+    /// Registration key. Also what `plugin.marketplace.remove` and
+    /// `plugin.marketplace.update` take.
+    pub name: String,
+
+    /// `"owner/repo"` for GitHub, a filesystem path for local, and the
+    /// sentinel `"bundled"` for the built-in one.
+    pub source: String,
+
+    /// `"local"` or `"github"` today.
+    ///
+    /// A `String` rather than an enum on purpose: serde does not degrade field
+    /// by field, so a source kind added server-side would make the *whole*
+    /// response unparseable for an older client rather than costing it one
+    /// column. The renderers treat an unrecognised value as an opaque label.
+    #[serde(rename = "type")]
+    pub source_type: String,
+
+    /// Whether `plugin.marketplace.remove` can actually act on this row.
+    ///
+    /// Derived server-side from the predicate `remove` itself runs, not from a
+    /// client comparing `name` against a hard-coded `"aleph-official"`. The
+    /// built-in marketplace is always listed and can never be removed, and on
+    /// a fresh install it is the *only* row — so a Remove button on every row
+    /// is an invitation that fails for the only thing on screen.
+    #[serde(default = "default_true")]
+    pub removable: bool,
+
+    /// Why not, when `removable` is false. Present exactly when it is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unremovable_reason: Option<String>,
+}
+
+/// A client older than the `removable` bit must not read its absence as
+/// "nothing here can be removed" — that would hide the button on every row.
+const fn default_true() -> bool {
+    true
+}
+
+/// Result of `plugin.marketplace.list`.
+///
+/// The last member of this family that had no contract type: the handler built
+/// a `json!` literal and the CLI pretty-printed whatever came back, so neither
+/// end could go red on a renamed key. Rows arrive sorted by name — the server
+/// holds them in a `HashMap`, and an unsorted response reshuffles the Panel
+/// list on every load.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceListResult {
+    #[serde(default)]
+    pub marketplaces: Vec<MarketplaceRow>,
+}
+
 /// Parameters for `plugin.update` — upgrade an installed plugin in place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginUpdateParams {
@@ -538,5 +596,85 @@ mod tests {
         assert_eq!(row.status, PluginRuntimeStatus::Loaded);
         assert!(row.usage.is_none());
         assert!(row.status_detail.is_none());
+    }
+    /// The same reconciliation for the *registration* row, whose columns the
+    /// CLI table and the Panel's Marketplaces section both read.
+    ///
+    /// Key-set **equality**, not containment: parsing a real response only ever
+    /// proves a superset, because serde ignores unknown keys on the way in.
+    /// The expectation is spelled out because that is the wire contract; the
+    /// value under each key is what the round-trip below checks.
+    #[test]
+    fn a_marketplace_row_carries_every_column_its_renderers_read() {
+        let wire = serde_json::to_value(MarketplaceRow {
+            name: "aleph-official".into(),
+            source: "bundled".into(),
+            source_type: "local".into(),
+            removable: false,
+            unremovable_reason: Some("Cannot remove built-in marketplace".into()),
+        })
+        .unwrap();
+        let mut keys: Vec<&str> = wire
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "name",
+                "removable",
+                "source",
+                "type",
+                "unremovable_reason"
+            ],
+            "the handler used to build this row as a json! literal, so a \
+             renamed key could not go red on either side"
+        );
+        // `type` is a Rust keyword, so the field is `source_type` and only the
+        // rename carries it onto the wire. Dropping that attribute is a silent
+        // column of dashes, which is exactly the shape this family keeps
+        // repeating.
+        assert_eq!(wire["type"], "local");
+    }
+
+    /// A client built before `removable` existed must not read its absence as
+    /// "nothing is removable" — that hides the button on every row, including
+    /// the ones that would have worked.
+    #[test]
+    fn a_row_without_the_removable_bit_defaults_to_removable() {
+        let row: MarketplaceRow = serde_json::from_value(serde_json::json!({
+            "name": "third-party",
+            "source": "owner/repo",
+            "type": "github",
+        }))
+        .expect("a pre-`removable` row still parses");
+        assert!(row.removable, "an absent bit is not a refusal");
+        assert!(row.unremovable_reason.is_none());
+    }
+
+    /// The envelope is a wire key too, and it is usually the last part left
+    /// hand-copied. Round-tripped rather than asserted against a literal so it
+    /// cannot drift into testing itself.
+    #[test]
+    fn the_list_envelope_round_trips_through_its_contract_type() {
+        let result = MarketplaceListResult {
+            marketplaces: vec![MarketplaceRow {
+                name: "third-party".into(),
+                source: "owner/repo".into(),
+                source_type: "github".into(),
+                removable: true,
+                unremovable_reason: None,
+            }],
+        };
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            wire.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["marketplaces"]
+        );
+        let back: MarketplaceListResult = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, result);
     }
 }

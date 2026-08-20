@@ -94,3 +94,133 @@ similarity_threshold = 0.5
         "Memory config should be preserved"
     );
 }
+
+
+/// Removing the *last* entry of a collection must reach the file.
+///
+/// `plugin_marketplaces` is `skip_serializing_if = "HashMap::is_empty"`, so an
+/// emptied map does not appear in the serialised current config at all — and
+/// `merge_sections` treats a section it cannot find as "the caller did not
+/// mean this one", warns, and skips. That fail-soft is deliberate (the guards
+/// above exist because a partially-populated `Config` once erased on-disk
+/// providers), which is why the fix belongs on the field rather than in the
+/// merge: the section must still be *emitted* when empty, so "empty" is a
+/// value the merge can write instead of an absence it has to interpret.
+///
+/// Without it, `plugin.marketplace.remove` answers `{"ok": true}`, logs a
+/// `warn!` nobody reads, and leaves the registration exactly where it was —
+/// on every surface, since the RPC handler and the `aleph-server plugin
+/// marketplace remove` subcommand both persist this way.
+#[test]
+fn removing_the_last_plugin_marketplace_reaches_the_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = temp_dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.plugin_marketplaces.insert(
+        "third-party".to_string(),
+        PluginMarketplaceEntry {
+            source: "owner/repo".to_string(),
+            source_type: "github".to_string(),
+        },
+    );
+    config
+        .save_to_file(&config_path)
+        .expect("initial save should work");
+    let on_disk = fs::read_to_string(&config_path).expect("read back");
+    assert!(
+        on_disk.contains("third-party"),
+        "the fixture must actually register one, or the removal below proves          nothing: {on_disk}"
+    );
+
+    // What `handle_marketplace_remove` does: load, drop the key, persist the
+    // one section.
+    config.plugin_marketplaces.remove("third-party");
+    config
+        .save_incremental_to_file(&config_path, &["plugin_marketplaces"])
+        .expect("incremental save should work");
+
+    let after = fs::read_to_string(&config_path).expect("read back");
+    assert!(
+        !after.contains("third-party"),
+        "the removal was reported as successful but never reached disk, so the \
+         next `Config::load()` brings the marketplace back: {after}"
+    );
+
+    let reloaded: Config = toml::from_str(&after).expect("still valid TOML");
+    assert!(
+        reloaded.plugin_marketplaces.is_empty(),
+        "reloaded config still holds {:?}",
+        reloaded.plugin_marketplaces.keys().collect::<Vec<_>>()
+    );
+}
+
+
+/// The same defect on the channels section, which has a shipped delete button.
+///
+/// `channel.rs`'s delete handler drops the key and persists `["channels"]`.
+/// With the section skipping itself when empty, removing the *last* channel
+/// answered success, changed nothing on disk, and the channel came back on the
+/// next load — the operator's only reading of which is "the delete button is
+/// broken", after they have already stopped looking.
+#[test]
+fn removing_the_last_channel_reaches_the_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = temp_dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.channels.insert(
+        "telegram".to_string(),
+        serde_json::json!({ "enabled": true, "bot_token": "x" }),
+    );
+    config.save_to_file(&config_path).expect("initial save");
+    assert!(
+        fs::read_to_string(&config_path).unwrap().contains("telegram"),
+        "the fixture must register one, or the removal proves nothing"
+    );
+
+    config.channels.remove("telegram");
+    config
+        .save_incremental_to_file(&config_path, &["channels"])
+        .expect("incremental save");
+
+    let after = fs::read_to_string(&config_path).expect("read back");
+    assert!(
+        !after.contains("telegram"),
+        "the delete was reported as successful but never reached disk: {after}"
+    );
+}
+
+/// And on the routing rules, whose delete handler persists `["rules"]` the
+/// same way. `Vec::is_empty` rather than `HashMap::is_empty`, same outcome:
+/// deleting the last rule was a silent no-op.
+#[test]
+fn removing_the_last_routing_rule_reaches_the_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = temp_dir.path().join("config.toml");
+
+    let mut config = Config {
+        rules: vec![serde_json::from_value(serde_json::json!({
+            "regex": "^/custom",
+            "provider": "my_provider",
+        }))
+        .expect("a minimal routing rule")],
+        ..Config::default()
+    };
+    config.save_to_file(&config_path).expect("initial save");
+    assert!(
+        fs::read_to_string(&config_path).unwrap().contains("^/custom"),
+        "the fixture must register one, or the removal proves nothing"
+    );
+
+    config.rules.clear();
+    config
+        .save_incremental_to_file(&config_path, &["rules"])
+        .expect("incremental save");
+
+    let after = fs::read_to_string(&config_path).expect("read back");
+    assert!(
+        !after.contains("^/custom"),
+        "the delete was reported as successful but never reached disk: {after}"
+    );
+}

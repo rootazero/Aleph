@@ -21,6 +21,14 @@
 // any page read, `redact_wrap` on the way out, and the per-`ActionType`
 // approval gate on every action that has one. This tool is a scheduler, never
 // a second, unguarded path into the browser.
+//
+// The read set covers both halves of "look at the page": `snapshot` /
+// `evaluate` / `console` / `network` return text, and `screenshot` returns the
+// pixels — the one read hermes' `browser_exec` had and this tool lacked, so a
+// procedure that needed visual confirmation had to leave the tool mid-flow.
+// The image rides the same hoist every tool result passes through
+// (`result_processing::hoist_inline_images`, which walks the nested `results[]`
+// to find it), arriving as a viewable image block rather than shredded base64.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -29,10 +37,12 @@ use serde::{Deserialize, Serialize};
 use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::backend::BrowserBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::types::{ActionTarget, ScrollDirection, WaitCondition};
+use crate::browser::types::{ActionTarget, ScreenshotOpts, ScrollDirection, WaitCondition};
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
+
+use super::dialog::DialogAction;
 
 // The `evaluate` step's script cap is the standalone tool's cap, imported
 // rather than copied: two constants kept in step by a drift guard are still two
@@ -175,6 +185,32 @@ pub enum ExecAction {
         /// JavaScript to execute in the page context.
         js: String,
     },
+    /// Take a screenshot of the page — the visual half of a read. The image
+    /// comes back in this step's `image_base64` field and is hoisted into a
+    /// viewable image block for vision-capable models (the standalone
+    /// `browser_screenshot` contract, inside a procedure).
+    Screenshot {
+        /// Capture the full scrollable page instead of just the viewport.
+        #[serde(default)]
+        full_page: Option<bool>,
+    },
+    /// Read the console messages captured for the tab — the debug half of
+    /// "act, then see what the page said".
+    Console,
+    /// Read the network request log for the tab.
+    Network,
+    /// Respond to a pending native dialog (alert/confirm/prompt/beforeunload)
+    /// mid-procedure — a click that raises a confirm() no longer forces the
+    /// model out of the tool to answer it.
+    Dialog {
+        /// Whether to accept or dismiss the dialog. (Named `decision` because
+        /// `action` is this enum's serde tag.)
+        decision: DialogAction,
+        /// Text to fill into a prompt dialog before accepting (ignored
+        /// otherwise). Scanned by the input-secret gate like any typed text.
+        #[serde(default)]
+        prompt_text: Option<String>,
+    },
 }
 
 /// Arguments for the `browser_exec` tool.
@@ -200,11 +236,22 @@ pub struct StepResult {
     pub step: usize,
     /// Short label, e.g. `click ref=e5`.
     pub action: String,
-    /// `ok` / `navigated` / `found` / `not found`.
+    /// `ok` / `navigated` / `found` / `not found` / `captured`.
     pub status: &'static str,
-    /// The read payload for `snapshot` / `evaluate`; absent for write actions.
+    /// The read payload for `snapshot` / `evaluate` / `console` / `network`;
+    /// absent for write actions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// Screenshot payload for `screenshot` steps. Two keys, not one:
+    /// `result_processing` only hoists an inline image when `format` sits next
+    /// to the base64, and without the hoist the payload stays in the text
+    /// channel where the result budget shreds it — the failure
+    /// `browser_screenshot`'s own `format` field already fixed once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_base64: Option<String>,
+    /// Encoding of `image_base64` — always `"png"` (see above).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
 }
 
 /// Output from the `browser_exec` tool.
@@ -315,6 +362,15 @@ enum PlannedAction {
         max_chars: usize,
     },
     Evaluate(String),
+    Screenshot {
+        full_page: bool,
+    },
+    Console,
+    Network,
+    Dialog {
+        action: DialogAction,
+        prompt_text: Option<String>,
+    },
 }
 
 /// Resolve a ref_id-or-coordinates target with `browser_click` semantics:
@@ -439,6 +495,18 @@ fn plan_actions(actions: &[ExecAction]) -> std::result::Result<Vec<PlannedAction
                     }
                     PlannedAction::Evaluate(js.clone())
                 }
+                ExecAction::Screenshot { full_page } => PlannedAction::Screenshot {
+                    full_page: full_page.unwrap_or(false),
+                },
+                ExecAction::Console => PlannedAction::Console,
+                ExecAction::Network => PlannedAction::Network,
+                ExecAction::Dialog {
+                    decision,
+                    prompt_text,
+                } => PlannedAction::Dialog {
+                    action: decision.clone(),
+                    prompt_text: prompt_text.clone(),
+                },
             };
             Ok(planned)
         })
@@ -472,6 +540,11 @@ fn action_label(action: &PlannedAction) -> String {
         },
         PlannedAction::Snapshot { max_chars } => format!("snapshot max_chars={max_chars}"),
         PlannedAction::Evaluate(js) => format!("evaluate {} chars of JS", js.chars().count()),
+        PlannedAction::Screenshot { full_page } => format!("screenshot full_page={full_page}"),
+        PlannedAction::Console => "console".into(),
+        PlannedAction::Network => "network".into(),
+        // The verb only — never the prompt text (same rule as typed text).
+        PlannedAction::Dialog { action, .. } => format!("dialog {}", action.verb()),
     }
 }
 
@@ -501,7 +574,25 @@ fn approval_surface(action: &PlannedAction) -> Option<(ActionType, &'static str,
             Some((ActionType::BrowserPressKey, "press_key", key.clone()))
         }
         PlannedAction::Evaluate(js) => Some((ActionType::BrowserEvaluate, "evaluate", js.clone())),
+        // A dialog answer can submit text into the page — the standalone
+        // `browser_dialog` gate, built by that tool's own derivation so both
+        // faces hand the matcher the same string. Narrowing it here would not
+        // hide the payload (the prompt already shows only
+        // `approval_display_target`'s label); it would just exempt the
+        // in-procedure face from an operator's dialog rule.
+        PlannedAction::Dialog {
+            action,
+            prompt_text,
+        } => Some((
+            ActionType::BrowserDialog,
+            "dialog",
+            super::dialog::dialog_approval_target(action, prompt_text.as_deref()),
+        )),
         PlannedAction::Wait { .. } | PlannedAction::Snapshot { .. } => None,
+        // Reads without an approval surface of their own — the standalone
+        // `browser_screenshot` / `browser_console` / `browser_network` tools
+        // are likewise ungated; the read-time SSRF guard is their boundary.
+        PlannedAction::Screenshot { .. } | PlannedAction::Console | PlannedAction::Network => None,
     }
 }
 
@@ -569,6 +660,34 @@ fn snapshot_output(manager: &ProfileManager, raw: &str, max_chars: usize) -> Str
     }
 }
 
+/// What one executed step produced: a status word, an optional text payload
+/// (the reads), and an optional screenshot payload (kept out of `output` so it
+/// serializes as sibling `image_base64`/`format` keys — the exact shape
+/// `result_processing::hoist_inline_images` lifts into the vision channel).
+struct StepOutcome {
+    status: &'static str,
+    output: Option<String>,
+    image_base64: Option<String>,
+}
+
+impl StepOutcome {
+    fn ok(status: &'static str) -> Self {
+        Self {
+            status,
+            output: None,
+            image_base64: None,
+        }
+    }
+
+    fn read(output: String) -> Self {
+        Self {
+            status: "ok",
+            output: Some(output),
+            image_base64: None,
+        }
+    }
+}
+
 /// Run the planned actions in order against the already-resolved tab.
 ///
 /// Returns the per-step results plus `Some((ordinal, error))` at the first
@@ -619,12 +738,17 @@ async fn execute_actions(
         }
         let label = action_label(action);
         match run_one(manager, backend, tab_id, action).await {
-            Ok((status, output)) => results.push(StepResult {
-                step: ordinal,
-                action: label,
-                status,
-                output,
-            }),
+            Ok(outcome) => {
+                let has_image = outcome.image_base64.is_some();
+                results.push(StepResult {
+                    step: ordinal,
+                    action: label,
+                    status: outcome.status,
+                    output: outcome.output,
+                    image_base64: outcome.image_base64,
+                    format: has_image.then(|| "png".into()),
+                })
+            }
             Err(message) => return (results, Some((ordinal, message))),
         }
     }
@@ -638,7 +762,7 @@ async fn run_one(
     backend: &dyn BrowserBackend,
     tab_id: &str,
     action: &PlannedAction,
-) -> std::result::Result<(&'static str, Option<String>), String> {
+) -> std::result::Result<StepOutcome, String> {
     // Every backend error leaves through the same egress chokepoint the read
     // steps and every standalone tool use: `BrowserError` carries raw
     // playwright-cli stderr verbatim, which is unbounded and can echo a
@@ -646,7 +770,7 @@ async fn run_one(
     // the `aborted at #N: …` message the model reads. A bare `to_string()` on
     // the write actions was the one path around it.
     let plain = |r: std::result::Result<(), crate::browser::BrowserError>| {
-        r.map(|()| ("ok", None))
+        r.map(|()| StepOutcome::ok("ok"))
             .map_err(|e| super::backend_error_text(manager, &e))
     };
     match action {
@@ -671,7 +795,7 @@ async fn run_one(
             backend
                 .navigate(tab_id, url)
                 .await
-                .map(|()| ("navigated", None))
+                .map(|()| StepOutcome::ok("navigated"))
                 .map_err(|e| super::backend_error_text(manager, &e))
         }
         PlannedAction::Click(t) => plain(backend.click(tab_id, t.clone()).await),
@@ -693,7 +817,7 @@ async fn run_one(
         } => backend
             .wait_for(tab_id, condition, *timeout_ms)
             .await
-            .map(|found| (if found { "found" } else { "not found" }, None))
+            .map(|found| StepOutcome::ok(if found { "found" } else { "not found" }))
             .map_err(|e| super::backend_error_text(manager, &e)),
         PlannedAction::Snapshot { max_chars } => {
             read_guard(manager, backend, tab_id).await?;
@@ -701,10 +825,11 @@ async fn run_one(
                 .snapshot(tab_id)
                 .await
                 .map_err(|e| super::backend_error_text(manager, &e))?;
-            Ok((
-                "ok",
-                Some(snapshot_output(manager, &snap.snapshot_text, *max_chars)),
-            ))
+            Ok(StepOutcome::read(snapshot_output(
+                manager,
+                &snap.snapshot_text,
+                *max_chars,
+            )))
         }
         PlannedAction::Evaluate(js) => {
             read_guard(manager, backend, tab_id).await?;
@@ -719,8 +844,59 @@ async fn run_one(
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),
             };
-            Ok(("ok", Some(out)))
+            Ok(StepOutcome::read(out))
         }
+        PlannedAction::Screenshot { full_page } => {
+            // A screenshot is a page read: same current-page SSRF guard as the
+            // other reads (the standalone tool gets it from
+            // `make_backend_and_tab_guarded`), then the same pixel budget
+            // `browser_screenshot` applies. Stays PNG, so the `format: "png"`
+            // key execute_actions pairs with the base64 is a fact, not a claim.
+            read_guard(manager, backend, tab_id).await?;
+            let result = backend
+                .screenshot(
+                    tab_id,
+                    ScreenshotOpts {
+                        full_page: *full_page,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| super::backend_error_text(manager, &e))?;
+            use base64::Engine as _;
+            let png = super::bound_screenshot_png(result.png_bytes);
+            Ok(StepOutcome {
+                status: "captured",
+                output: None,
+                image_base64: Some(base64::engine::general_purpose::STANDARD.encode(&png)),
+            })
+        }
+        PlannedAction::Console => {
+            read_guard(manager, backend, tab_id).await?;
+            let raw = backend
+                .console_messages(tab_id)
+                .await
+                .map_err(|e| super::backend_error_text(manager, &e))?;
+            // The standalone tool's own pipeline: head+tail truncation keeps
+            // the entries the preceding steps just produced.
+            Ok(StepOutcome::read(super::redact_and_wrap_log(manager, &raw)))
+        }
+        PlannedAction::Network => {
+            read_guard(manager, backend, tab_id).await?;
+            let raw = backend
+                .network_log(tab_id)
+                .await
+                .map_err(|e| super::backend_error_text(manager, &e))?;
+            Ok(StepOutcome::read(super::redact_and_wrap_log(manager, &raw)))
+        }
+        PlannedAction::Dialog {
+            action,
+            prompt_text,
+        } => plain(
+            backend
+                .handle_dialog(tab_id, action.verb(), prompt_text.as_deref())
+                .await,
+        ),
     }
 }
 
@@ -728,14 +904,14 @@ async fn run_one(
 impl AlephTool for BrowserExecTool {
     const NAME: &'static str = "browser_exec";
     const DESCRIPTION: &'static str =
-        "Run a whole browser sub-procedure in ONE call: an ordered list of navigate, \
-         click/dblclick/type/fill/hover/scroll/select/press_key, wait, and the reads (snapshot, \
-         evaluate) whose output comes back in results[].output. Prefer one call per \
+        "Run a whole browser sub-procedure in ONE call: an ordered list of write steps and the \
+         reads (snapshot, evaluate, screenshot, console, network), whose text comes back in \
+         results[].output — a screenshot arrives as a viewable image block. Prefer one call per \
          sub-procedure — navigate, act, wait, read — over a call per action. Every step runs its \
          standalone tool's guards (SSRF, secret scan, redaction, approval); execution stops at \
          the first failure with {completed, failed_at, results}. A ref is only valid on the page \
-         it was captured from: put a snapshot step after anything that changes the page, and \
-         snapshot again before retrying.";
+         it was captured from: snapshot after anything that changes the page, and again before \
+         retrying.";
     type Args = BrowserExecArgs;
     type Output = BrowserExecOutput;
 
@@ -768,6 +944,12 @@ impl AlephTool for BrowserExecTool {
                 PlannedAction::Type(_, text)
                 | PlannedAction::Fill(_, text)
                 | PlannedAction::Select(_, text) => text,
+                // A prompt-dialog answer is typed into the page — the same
+                // gate `browser_dialog` applies to its own prompt_text.
+                PlannedAction::Dialog {
+                    prompt_text: Some(text),
+                    ..
+                } => text,
                 _ => continue,
             };
             if let Some(message) = super::check_input_secret_block(&self.manager, text) {
@@ -1516,5 +1698,235 @@ mod tests {
             "got: {:?}",
             out.message
         );
+    }
+
+    // ---------------------------------------------------------------
+    // The reads added in this round: the visual one and the two logs.
+    // ---------------------------------------------------------------
+
+    /// The headline claim, asserted as an *effect* rather than as a field
+    /// being populated: a screenshot taken mid-procedure leaves the text
+    /// channel and arrives as a viewable image block.
+    ///
+    /// The chain has two halves and only the pair is worth anything — the step
+    /// must emit `image_base64` and `format` as siblings, and the hoist must
+    /// reach them where they actually sit, nested one object deep inside
+    /// `results[]`. Before the walk went recursive this test's second half
+    /// failed while its first half passed, which is exactly what shipping this
+    /// step without the hoist would have looked like: a `format` key next to a
+    /// payload that the result budget then shredded.
+    ///
+    /// The output is serialized from the real [`BrowserExecOutput`], never from
+    /// a hand-written `json!` of what its wire shape is believed to be: a
+    /// literal copied from the struct has no adversary when the struct changes.
+    #[tokio::test]
+    async fn a_screenshot_step_arrives_as_a_viewable_image_not_shredded_base64() {
+        // Comfortably over the hoist's `> 256` base64 floor (400 bytes ≈ 536
+        // base64 chars); not a real PNG, which `bound_screenshot_png` passes
+        // through untouched rather than failing the capture.
+        let png = vec![0xABu8; 400];
+        let backend = FakeBackend::new(None).with_screenshot_png(png);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[
+            ExecAction::Navigate {
+                url: "https://example.com/checkout".into(),
+            },
+            ExecAction::Screenshot { full_page: None },
+        ])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        // A screenshot is a page read, so it runs the same current-page SSRF
+        // re-check the text reads do — and the navigate before it is precisely
+        // what makes that re-check load-bearing.
+        assert_eq!(
+            backend.calls(),
+            vec![
+                "navigate:1:https://example.com/checkout",
+                "list_tabs",
+                "screenshot",
+            ]
+        );
+
+        let shot = &results[1];
+        assert_eq!(shot.status, "captured");
+        assert_eq!(shot.format.as_deref(), Some("png"));
+        assert!(shot.output.is_none(), "the image is not a text payload");
+        let base64_len = shot.image_base64.as_deref().expect("a capture").len();
+        assert!(
+            base64_len > 256,
+            "payload under the hoist floor: {base64_len}"
+        );
+
+        // Second half: the hoist reaches it where it actually lives.
+        let out = BrowserExecOutput {
+            success: true,
+            total: 2,
+            completed: 2,
+            failed_at: None,
+            results,
+            message: None,
+        };
+        let mut value = serde_json::to_value(&out).expect("output serializes");
+        let images = crate::tools::result_processing::hoist_inline_images(&mut value);
+        assert_eq!(images.len(), 1, "the nested capture must be lifted");
+        assert_eq!(images[0].mime_type, "image/png");
+        assert_eq!(images[0].data.len(), base64_len);
+        // ...and what it left behind is the short marker, not the payload.
+        let left = value["results"][1]["image_base64"]
+            .as_str()
+            .expect("marker in place");
+        assert!(left.contains("viewable image block"), "got: {left}");
+        assert!(left.len() < base64_len, "the payload is still in the text");
+    }
+
+    /// The two log reads cross the same egress boundary the page reads do.
+    /// Console and network are page-adjacent bytes — a `console.log` of a
+    /// bearer token is the ordinary case, not the exotic one — so the assertion
+    /// is the strict one: credential gone AND the bytes wholly fenced.
+    #[tokio::test]
+    async fn the_log_reads_are_redacted_and_fenced_like_every_other_page_read() {
+        let backend = FakeBackend::new(None)
+            .with_console_text(format!("[error] auth failed for {FAKE_KEY}"))
+            .with_network_text(format!("GET /api?token={FAKE_KEY} 401"));
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Console, ExecAction::Network]).unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        // Each log read re-checks the current page first, same as snapshot.
+        assert_eq!(
+            backend.calls(),
+            vec!["list_tabs", "console_messages", "list_tabs", "network_log"]
+        );
+
+        let console = results[0].output.as_deref().expect("a console read");
+        assert!(assert_masked_and_wholly_fenced(console).contains("auth failed"));
+        let network = results[1].output.as_deref().expect("a network read");
+        assert!(assert_masked_and_wholly_fenced(network).contains("401"));
+    }
+
+    // ---------------------------------------------------------------
+    // The dialog step: two faces of one verb.
+    // ---------------------------------------------------------------
+
+    /// The answer reaches the page; the step label does not carry it back.
+    /// Same rule as typed text — the label rides into model context, and only
+    /// the secret gate has vetted the payload.
+    #[tokio::test]
+    async fn a_dialog_step_answers_the_page_without_echoing_the_prompt_text() {
+        let backend = FakeBackend::new(None);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Dialog {
+            decision: DialogAction::Accept,
+            prompt_text: Some("Ada Lovelace".into()),
+        }])
+        .unwrap();
+
+        let (results, failure) = run(&manager, &backend, &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+        assert_eq!(backend.calls(), vec!["handle_dialog:accept:Ada Lovelace"]);
+        assert_eq!(results[0].action, "dialog accept");
+        assert!(
+            !results[0].action.contains("Ada"),
+            "got: {}",
+            results[0].action
+        );
+    }
+
+    /// The pre-scan's reach extends to the dialog answer: a credential in a
+    /// prompt reply refuses the whole procedure at step 0, exactly as one in a
+    /// `type` step does. A dialog is a text input with a different frame
+    /// around it.
+    #[tokio::test]
+    async fn a_dialog_prompt_carrying_a_credential_is_refused_before_any_execution() {
+        let tool = BrowserExecTool::new(Arc::new(manager()));
+        let out = tool
+            .call(exec_args(vec![
+                click("e1"),
+                ExecAction::Dialog {
+                    decision: DialogAction::Accept,
+                    prompt_text: Some(format!("token {FAKE_KEY}")),
+                },
+            ]))
+            .await
+            .unwrap();
+        assert!(!out.success);
+        assert_eq!(out.completed, 0);
+        assert_eq!(out.failed_at, None);
+        assert!(
+            out.message
+                .as_deref()
+                .is_some_and(|m| m.contains("Blocked")),
+            "got: {:?}",
+            out.message
+        );
+    }
+
+    /// Both faces of the dialog verb hand the matcher the same string.
+    ///
+    /// This step used to pass the bare verb, reasoning that the payload must
+    /// not enter the policy surface. It already cannot: `check_browser_approval`
+    /// shows the human `approval_display_target`'s label and matches
+    /// allow/blocklists against the raw target. Withholding the payload
+    /// therefore hid nothing — it only made an operator's dialog-payload rule
+    /// apply to `browser_dialog` and silently not apply to the same answer
+    /// given inside a procedure. So both halves are asserted here: the matcher
+    /// sees the payload, and the prompt still does not.
+    #[tokio::test]
+    async fn both_faces_of_the_dialog_verb_hand_the_matcher_the_same_target() {
+        use crate::approval::{ActionRequest, ApprovalDecision};
+        use std::sync::Mutex;
+
+        struct Recorder {
+            seen: Mutex<Vec<(String, String)>>,
+        }
+        #[async_trait]
+        impl ApprovalPolicy for Recorder {
+            async fn check(&self, req: &ActionRequest) -> ApprovalDecision {
+                self.seen
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((req.target.clone(), req.display_target.clone()));
+                ApprovalDecision::Allow
+            }
+            async fn record(&self, _req: &ActionRequest, _dec: &ApprovalDecision) {}
+        }
+
+        let policy = Arc::new(Recorder {
+            seen: Mutex::new(Vec::new()),
+        });
+        let backend = FakeBackend::new(None);
+        let manager = permissive_manager();
+        let planned = plan_actions(&[ExecAction::Dialog {
+            decision: DialogAction::Accept,
+            prompt_text: Some("wire-transfer-9000".into()),
+        }])
+        .unwrap();
+
+        let policy_dyn: Arc<dyn ApprovalPolicy> = policy.clone();
+        let (_results, failure) =
+            execute_actions(&manager, Some(&policy_dyn), &backend, "1", &planned).await;
+        assert!(failure.is_none(), "unexpected failure: {failure:?}");
+
+        let seen = policy
+            .seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (target, display) = seen.first().expect("the dialog step is gated");
+        // The matcher's view is byte-identical to the standalone tool's, because
+        // both call the same derivation.
+        assert_eq!(
+            target,
+            &super::super::dialog::dialog_approval_target(
+                &DialogAction::Accept,
+                Some("wire-transfer-9000")
+            )
+        );
+        assert!(target.contains("wire-transfer-9000"), "got: {target}");
+        // The human-facing half is still payload-free.
+        assert_eq!(display, "browser dialog");
     }
 }

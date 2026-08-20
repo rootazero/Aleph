@@ -824,7 +824,24 @@ async fn dispatch_marketplace(
             }
         }
     } else if matches!(method, "plugin.marketplace.list") {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        // Typed for the same reason `browse` above is: this was the last member
+        // of the family the server built as a `json!` literal and the CLI
+        // pretty-printed verbatim, so neither end could go red on a renamed
+        // key. Raw JSON is still what `--json` prints.
+        let listing: aleph_protocol::plugins::MarketplaceListResult =
+            serde_json::from_value(result)?;
+        if listing.marketplaces.is_empty() {
+            println!("No marketplaces registered.");
+        }
+        for row in &listing.marketplaces {
+            println!("{}  [{}]  {}", row.name, row.source_type, row.source);
+            // Printed for exactly the rows `marketplace remove` would refuse,
+            // from the server's own predicate — a listing that invites an
+            // action the action rejects is worse than one that says so.
+            if let Some(reason) = &row.unremovable_reason {
+                println!("    (not removable: {reason})");
+            }
+        }
     } else {
         println!("{result}");
     }
