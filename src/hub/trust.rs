@@ -88,8 +88,15 @@ pub fn build_disclosure(entry: &ExtensionEntry, spec: &InstallSpec) -> Disclosur
         RiskClass::RemoteEndpoint => "Connects to a remote endpoint.",
     }
     .to_string();
-    // Ack required for anything that runs commands unless Official/Verified.
-    let ack_required = matches!(risk, RiskClass::RunsCommands)
+    // Ack required for anything that runs commands OR carries prompt-
+    // injection surface (Skills via InstructsAgent) unless Official/Verified.
+    // The original predicate covered `RunsCommands` only; a Community-tier
+    // Skill whose description reads the user's shell history was not gated by
+    // ack because the risk classifier mapped it to `InstructsAgent`. Prompt
+    // injection is exactly the human-eyes-must-look surface we want the
+    // operator to be stopped on, so `InstructsAgent` joins `RunsCommands`
+    // here.
+    let ack_required = matches!(risk, RiskClass::RunsCommands | RiskClass::InstructsAgent)
         && matches!(
             entry.trust_tier,
             TrustTier::Community | TrustTier::Unverified

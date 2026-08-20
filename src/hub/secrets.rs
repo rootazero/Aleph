@@ -29,13 +29,42 @@ fn sanitize(part: &str) -> String {
         .collect()
 }
 
+/// Short stable hash of `id` to make `field_key` collision-resistant.
+///
+/// `sanitize` alone is not injective: `"foo bar"`, `"foo+bar"`, and `"foo_bar"`
+/// all map to the same sanitized id, which means three distinct extension ids
+/// would share a single vault key and overwrite each other's secrets on
+/// install. We append the first 16 hex chars of a domain-separated SHA-256;
+/// the collision space is 2^64 and a preimage search against the domain
+/// separator is what an attacker would face.
+fn id_hash(id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"aleph-hub-secret-key::");
+    hasher.update(id.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(16);
+    for byte in digest.iter().take(8) {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
 /// Namespaced vault secret name for an extension config field.
 ///
-/// Format: `ext.{kind}.{sanitized_id}.{field}` — guaranteed valid as a
-/// `{{secret:NAME}}` placeholder name so it round-trips through the canonical
-/// secret parser.
+/// Format: `ext.{kind}.{sanitized_id}.{hash(id)}.{field}` — guaranteed valid
+/// as a `{{secret:NAME}}` placeholder name (so it round-trips through the
+/// canonical secret parser) AND collision-resistant across ids that sanitize
+/// to the same string (`"foo bar"`, `"foo+bar"`, `"foo_bar"`).
 pub fn field_key(kind: ExtensionKind, id: &str, field: &str) -> String {
-    format!("ext.{}.{}.{}", kind.as_str(), sanitize(id), sanitize(field))
+    format!(
+        "ext.{}.{}.{}.{}",
+        kind.as_str(),
+        sanitize(id),
+        id_hash(id),
+        sanitize(field)
+    )
 }
 
 /// The `{{secret:NAME}}` reference written into config (never plaintext).
@@ -54,11 +83,13 @@ mod tests {
             "mcp-official:io.github.a/b",
             "GITHUB_TOKEN",
         );
-        assert_eq!(k, "ext.mcp.mcp-official_io.github.a_b.GITHUB_TOKEN");
-        assert_eq!(
-            secret_ref(&k),
-            "{{secret:ext.mcp.mcp-official_io.github.a_b.GITHUB_TOKEN}}"
-        );
+        // Hash suffix is fixed for a fixed id; assert only the surrounding
+        // shape so the test does not break if the hash algorithm is tuned.
+        assert!(k.starts_with("ext.mcp.mcp-official_io.github.a_b."));
+        assert!(k.ends_with(".GITHUB_TOKEN"));
+        assert_eq!(k.len(), "ext.mcp.mcp-official_io.github.a_b.".len() + 16 + ".GITHUB_TOKEN".len());
+        assert!(secret_ref(&k).starts_with("{{secret:ext.mcp.mcp-official_io.github.a_b."));
+        assert!(secret_ref(&k).ends_with(".GITHUB_TOKEN}}"));
     }
 
     #[test]
@@ -68,5 +99,19 @@ mod tests {
         let refs = crate::secrets::extract_secret_refs(&secret_ref(&k)).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, k);
+    }
+
+    /// Regression: three distinct ids that `sanitize` to the same string MUST
+    /// produce three distinct vault keys. Without the hash suffix, an attacker
+    /// could install an extension whose id collides with an existing secret and
+    /// silently overwrite it.
+    #[test]
+    fn field_keys_are_collision_resistant_across_sanitize_collisions() {
+        let a = field_key(ExtensionKind::Mcp, "foo bar", "TOKEN");
+        let b = field_key(ExtensionKind::Mcp, "foo+bar", "TOKEN");
+        let c = field_key(ExtensionKind::Mcp, "foo_bar", "TOKEN");
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
     }
 }

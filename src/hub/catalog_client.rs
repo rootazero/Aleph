@@ -205,7 +205,24 @@ impl AlephHubCatalog {
         art.validate().map_err(CatalogError::Schema)?;
         let mut out = Vec::with_capacity(art.entries.len());
         for he in &art.entries {
-            let findings = scan_for_injection(&format!("{} {}", he.name, he.description));
+            // Scan EVERY user-facing wire-controlled field for injection
+            // signals, not just `name`+`description`. `tags`, `author`,
+            // `repo_url`, `via`, and `version` all reach Panel rendering in
+            // some flows (chip filters, source label, owner card), and a
+            // hostile publisher can route prompt-injection text through any
+            // of them. The scan is warn-only by design — failing the whole
+            // sync on a single finding is a denial-of-service lever.
+            let scan_blob = format!(
+                "{} {} {} {} {} {} {}",
+                he.name,
+                he.description,
+                he.author.as_deref().unwrap_or(""),
+                he.via.as_deref().unwrap_or(""),
+                he.repo_url.as_deref().unwrap_or(""),
+                he.version.as_deref().unwrap_or(""),
+                he.tags.join(" ")
+            );
+            let findings = scan_for_injection(&scan_blob);
             if !findings.is_empty() {
                 tracing::warn!(hub = %self.id, id = %he.id, ?findings, "hub entry injection findings");
             }
