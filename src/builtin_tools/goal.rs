@@ -3034,6 +3034,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
 
         let remote_clear = GoalArgs {

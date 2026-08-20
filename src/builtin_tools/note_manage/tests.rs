@@ -131,6 +131,7 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
         channel_tool_permissions: None,
         unattended: false,
         plan_gate: None,
+        side_question: false,
     }
 }
 

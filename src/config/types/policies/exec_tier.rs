@@ -128,7 +128,12 @@ const HUMAN_CONTACT_TOOLS: &[&str] = &["ask_user"];
 ///
 /// Name-keyed for the same reason the other curated sets are: Aleph defines
 /// both of these tools, so their names ARE contracts.
-const PLAN_REACHABLE_TOOLS: &[&str] = &["scratchpad", "subagent"];
+///
+/// Visible to the crate because the side-question floor is DERIVED from this
+/// set (`ScopedToolService::permission_for`): a side question revokes exactly
+/// these carve-outs. Keeping a second list would be the very drift this
+/// constant exists to prevent.
+pub(crate) const PLAN_REACHABLE_TOOLS: &[&str] = &["scratchpad", "subagent"];
 
 /// Execution permission tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]

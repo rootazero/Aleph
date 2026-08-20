@@ -68,6 +68,15 @@ pub struct TurnContext {
     /// `request_approval` (which reaches it through the [`TURN_CONTEXT`]
     /// task-local this same struct is scoped into around every dispatch).
     pub plan_gate: Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>>,
+    /// This turn is a `/btw` side question.
+    ///
+    /// Minted beside `plan_gate` in `resolve_turn_permissions` — the one place
+    /// that already resolves per-turn permission facts. Deliberately NOT
+    /// derived from the session key's shape: matching an `ephemeral_id`
+    /// prefix would be a second derivation of a fact the request already
+    /// carries, and a string match is exactly the kind of predicate that
+    /// keeps working right up until someone renames the prefix.
+    pub side_question: bool,
 }
 
 /// Canonical operator-role predicate for a raw `caller_role` string. `None`
@@ -199,6 +208,7 @@ mod caller_tier_tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         }
     }
 

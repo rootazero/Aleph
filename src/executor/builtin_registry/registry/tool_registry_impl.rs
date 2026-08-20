@@ -1694,6 +1694,7 @@ mod recall_context_identity_tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         }
     }
 
@@ -1740,7 +1741,10 @@ mod recall_context_identity_tests {
         let out = TURN_CONTEXT
             .scope(turn_ctx("alice"), async {
                 registry
-                    .execute_tool("recall_context", serde_json::json!({ "query": "alice chunk" }))
+                    .execute_tool(
+                        "recall_context",
+                        serde_json::json!({ "query": "alice chunk" }),
+                    )
                     .await
             })
             .await
@@ -1785,7 +1789,10 @@ mod recall_context_identity_tests {
         })));
 
         let out = registry
-            .execute_tool("recall_context", serde_json::json!({ "query": "bob chunk" }))
+            .execute_tool(
+                "recall_context",
+                serde_json::json!({ "query": "bob chunk" }),
+            )
             .await
             .unwrap();
 

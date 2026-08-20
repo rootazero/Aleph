@@ -457,6 +457,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         }
     }
 
@@ -498,6 +499,7 @@ mod tests {
         let turn = TurnContext {
             unattended: true,
             plan_gate: None,
+            side_question: false,
             ..routable_turn()
         };
         let err = ask_in(turn, ClarificationRequest::text("Which one?"))

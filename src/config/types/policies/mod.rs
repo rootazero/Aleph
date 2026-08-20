@@ -33,6 +33,10 @@ pub mod web_fetch;
 pub use exec_tier::{
     builtin_tiers, effective_permission, session_tiers, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
 };
+// `pub(crate)`, not `pub`: `PLAN_REACHABLE_TOOLS` is a crate-internal
+// derivation source (the side-question floor reads it), not part of this
+// module's external surface — see its doc comment in `exec_tier.rs`.
+pub(crate) use exec_tier::PLAN_REACHABLE_TOOLS;
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};

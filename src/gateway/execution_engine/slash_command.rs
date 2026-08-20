@@ -431,15 +431,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         use crate::config::types::policies::{effective_permission, ToolFacts};
         use crate::extension::PermissionAction;
 
-        // `plan_gate` is deliberately dropped: the fast path enforces nothing
-        // (it only DECLINES the shortcut), and a plan-mode slash call resolves
-        // to `Deny` on the very next line, which is a fallthrough reason. The
-        // full loop then re-evaluates it with the run's own gate — the one
-        // that a plan approval can actually lift.
+        // `plan_gate` and `side_question` are both deliberately dropped: the
+        // fast path enforces nothing (it only DECLINES the shortcut), and
+        // neither `scratchpad` nor `subagent` — the only names the
+        // side-question floor treats specially — is a registered direct-tool
+        // command here. The full loop re-evaluates every dispatch with the
+        // run's own `ScopedToolService`, which is where that floor actually
+        // lives.
         let super::turn_permissions::TurnPermissions {
             tier: exec_tier,
             explicit: tool_permissions,
             plan_gate: _,
+            side_question: _,
         } = self.resolve_turn_permissions(request, agent).await;
         // The permissions resolver above persists a request-carried tier onto
         // the session as a side effect (stamp-on-carry). The mode and

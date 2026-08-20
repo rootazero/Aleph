@@ -36,6 +36,9 @@ pub(super) struct TurnPermissions {
     /// run builds, so one human approval lifts the gate for the run and for
     /// anything it spawns.
     pub(super) plan_gate: Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>>,
+    /// This turn is a `/btw` side question — see
+    /// `crate::gateway::btw::BTW_METADATA_KEY` and `TurnContext::side_question`.
+    pub(super) side_question: bool,
 }
 
 /// Resolve this turn's execution tier.
@@ -217,6 +220,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let is_all_default = merged.default == crate::extension::PermissionAction::Allow
             && merged.overrides.is_empty();
 
+        // This turn is a `/btw` side question. Minted here — the one place
+        // that already resolves per-turn permission facts — rather than
+        // re-derived downstream from the session key's shape (see
+        // `TurnContext::side_question`).
+        let side_question = request
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY);
+
         // The plan → build handoff cell, minted only for a turn that actually
         // resolved to `Plan`.
         //
@@ -249,12 +260,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             default = ?merged.default,
             overrides = merged.overrides.len(),
             plan_restores_to = plan_gate.as_ref().map(|g| g.restore_to().id()),
+            side_question,
             "Execution permissions resolved for this turn"
         );
         TurnPermissions {
             tier,
             explicit: (!is_all_default).then_some(merged),
             plan_gate,
+            side_question,
         }
     }
 

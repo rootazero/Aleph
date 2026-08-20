@@ -73,6 +73,17 @@ pub(super) enum GateRule<'a> {
         /// The override key that denied it, as written in the config.
         pattern: &'a str,
     },
+    /// This turn is a `/btw` side question, which is read-only by
+    /// construction.
+    ///
+    /// Reported ahead of [`Self::PlanMode`] for the ordering rule this chain
+    /// already follows: a reason must never mislead the reader about **what
+    /// they could change to get a different result**. `PlanMode` points at the
+    /// plan handoff — approve the plan and the tool runs. For a side question
+    /// there is no handoff and no setting; the repair is "ask the main agent
+    /// instead". Naming the removable rule would send the reader to a fix that
+    /// cannot work.
+    SideQuestion,
     /// The tool declares its own confirmation gate — `CONFIRMATION_REQUIRED_TOOLS`
     /// for builtins, an MCP server's `destructiveHint` for external tools.
     ///
@@ -167,6 +178,7 @@ impl GateRule<'_> {
     pub(super) const fn id(self) -> &'static str {
         match self {
             Self::PolicyDeny { .. } => "policy_deny",
+            Self::SideQuestion => "side_question",
             // One spelling, shared with the decision-set derivation that must
             // refuse to offer a persistent grant on this rule's card
             // (`exec::allowed_decisions::for_confirm_gate`). A rename here is a
@@ -219,11 +231,16 @@ impl GateRule<'_> {
             // `denied_only_by_plan` above resolve `true` for a tool carrying an
             // explicit `allow` instead of never being asked at all. One rule,
             // two axes: unrelaxable by config, retired by a person.
+            // `SideQuestion` is the same shape as `PlanMode` on this axis: it
+            // refuses rather than asks, raises no card, and there is nothing
+            // for "always allow" to mean — a side question is read-only for
+            // the rest of its own single turn, not for a standing grant.
             Self::PolicyDeny { .. }
             | Self::DestructiveArguments
             | Self::PolicyAsk { .. }
             | Self::TierRaised
             | Self::PlanMode
+            | Self::SideQuestion
             | Self::OperatorRequired
             | Self::HookRequested => false,
         }
@@ -247,6 +264,9 @@ impl GateRule<'_> {
                  (`[policies.tool_permissions]`, global → agent → channel, most restrictive \
                  wins)."
             ),
+            Self::SideQuestion => "This is a read-only /btw side question — it can read and \
+                 search, but not change anything. Ask the main agent to do it instead."
+                .to_string(),
             Self::ToolDeclared => format!(
                 "`{tool}` declares its own confirmation gate, so it asks under every \
                  execution tier — including `full` — and an `allow` entry does not \
@@ -306,21 +326,27 @@ impl GateRule<'_> {
     /// on the deny path.
     ///
     /// This sentence used to be a literal at the one call site, which was fine
-    /// while that path had exactly one rule to explain. It has two now, and
-    /// they want opposite advice: an operator's `deny` is permanent and the
-    /// only way through it is a human editing config, while plan mode is one
-    /// approval away and retrying is exactly right *after* that approval. A
-    /// blanket "do not retry" on the second one would tell the model to give
-    /// up on the work it just got permission to do.
-    /// Exhaustive on purpose, with no catch-all: only two variants reach the
-    /// deny path today, and the wrong half of this fork is a sentence that
-    /// tells the model to give up on work it just got permission to do. A new
+    /// while that path had exactly one rule to explain. It has three now, and
+    /// they want different advice: an operator's `deny` is permanent and the
+    /// only way through it is a human editing config; plan mode is one
+    /// approval away and retrying is exactly right *after* that approval; a
+    /// side question has no approval and no config to edit — the repair is
+    /// asking the main agent, which its `reason` already says. A blanket "do
+    /// not retry" on the plan-mode arm would tell the model to give up on the
+    /// work it just got permission to do.
+    /// Exhaustive on purpose, with no catch-all: only three variants reach the
+    /// deny path today, and the wrong arm of this fork is a sentence that
+    /// either tells the model to give up on work it just got permission to
+    /// do, or sends it to edit a config that was never the problem. A new
     /// refusing rule should be a compile error here, not a silent inheritance
     /// of "go edit your config".
     pub(super) const fn deny_advice(self) -> &'static str {
         match self {
             Self::PlanMode => {
                 " Do not retry this call before the plan is approved — request approval first."
+            }
+            Self::SideQuestion => {
+                " Do not retry this call — nothing that mutates runs during a side question."
             }
             Self::PolicyDeny { .. }
             | Self::ToolDeclared
@@ -397,6 +423,15 @@ impl ScopedToolService {
     pub(super) fn deny_rule<'a>(&'a self, name: &str) -> Option<GateRule<'a>> {
         if self.permission_for(name) != PermissionAction::Deny {
             return None;
+        }
+        // The side question's own ceiling, checked first: every denial during
+        // a side question is reported as itself, ahead of `PlanMode` and
+        // `PolicyDeny` alike. Both of those point at a repair that runs
+        // against THIS turn (approve the plan; edit the policy) — a side
+        // question offers neither, so naming either one would send the reader
+        // to a fix that cannot work here. See `GateRule::SideQuestion`.
+        if self.is_side_question() {
+            return Some(GateRule::SideQuestion);
         }
         // A denial the PLAN tier created is reported as itself. Checked before
         // the policy arm because the policy arm is unconditionally true here

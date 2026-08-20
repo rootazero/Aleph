@@ -1192,6 +1192,7 @@ fn inv_iso_turn(session_key: SessionKey) -> crate::tools::turn_context::TurnCont
         channel_tool_permissions: None,
         unattended: false,
         plan_gate: None,
+        side_question: false,
     }
 }
 

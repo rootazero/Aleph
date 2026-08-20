@@ -265,6 +265,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tier: exec_tier,
             explicit: tool_permissions,
             plan_gate,
+            side_question,
         } = self.resolve_turn_permissions(request, &agent).await;
         // This turn's reasoning depth (composer pill / RPC `thinking` param /
         // the model's own `self_config` call, else whatever the session was
@@ -656,6 +657,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // approval that lifts the gate lifts it everywhere this run can
             // reach. `None` on every non-planning turn.
             plan_gate: plan_gate.clone(),
+            side_question,
         };
 
         loop {
