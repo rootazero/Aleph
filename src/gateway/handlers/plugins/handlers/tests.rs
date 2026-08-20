@@ -377,3 +377,56 @@ fn a_marketplace_row_reasons_exactly_when_it_is_not_installable() {
     assert_eq!(row.description, "");
     assert_eq!(row.version, "");
 }
+
+
+// ============================================================================
+// Marketplace registration rows
+// ============================================================================
+
+/// The list row's `removable` bit and its reason are one decision, and it is
+/// the decision `remove` itself makes.
+///
+/// The built-in marketplace is injected into every `list()` and refused by
+/// every `remove()`. On a fresh install it is the only row there is, so a row
+/// builder that guessed `removable` — or that hard-coded `"aleph-official"`
+/// instead of asking — would put a Remove button on the one thing on screen
+/// and have the server reject it.
+#[test]
+fn a_registration_row_is_removable_exactly_when_remove_would_allow_it() {
+    use crate::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use crate::extension::marketplace::{MarketplaceManager, BUILTIN_MARKETPLACE_NAME};
+    use crate::gateway::handlers::plugins::types::marketplace_registration_row;
+
+    let third_party = MarketplaceConfig {
+        source: "owner/repo".into(),
+        source_type: MarketplaceSourceType::Github,
+    };
+    let row = marketplace_registration_row("third-party", &third_party);
+    assert_eq!(row.name, "third-party");
+    assert_eq!(row.source, "owner/repo");
+    assert_eq!(
+        row.source_type, "github",
+        "the enum is projected to the string the wire carries under `type`"
+    );
+    assert!(row.removable);
+    assert!(row.unremovable_reason.is_none());
+
+    let builtin = MarketplaceConfig {
+        source: "bundled".into(),
+        source_type: MarketplaceSourceType::Local,
+    };
+    let row = marketplace_registration_row(BUILTIN_MARKETPLACE_NAME, &builtin);
+    assert!(
+        !row.removable,
+        "the built-in is listed by every `list()` and refused by every `remove()`"
+    );
+    let reason = row
+        .unremovable_reason
+        .expect("a row without the button must carry the server's own reason");
+    // The same words `remove` would return, not a second phrasing invented
+    // here for the UI to show.
+    assert_eq!(
+        Some(reason),
+        MarketplaceManager::removal_refusal(BUILTIN_MARKETPLACE_NAME)
+    );
+}

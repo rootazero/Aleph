@@ -6,6 +6,9 @@
 #   ./qa/plugins/run.sh scaffold   # `aleph plugin init` output really installs
 #   ./qa/plugins/run.sh browse     # marketplace contents are listable, and a
 #                                  # name found that way actually installs
+#   ./qa/plugins/run.sh marketplaces # the registration surface: list / add /
+#                                  # remove, and the removable bit the Panel
+#                                  # draws its button from
 #
 # The round this covers shipped with unit and source-level guards only. Two of
 # its headline fixes are `serde` all-or-nothing bugs, and those have a specific
@@ -245,8 +248,50 @@ browse)
   ls "$INSTALLED" 2>/dev/null | head -10
   ;;
 
+marketplaces)
+  # The *registration* surface — a different question from `browse`, which
+  # lists a marketplace's contents. `plugin.marketplace.list` was the last
+  # member of the family with no contract type (a `json!` literal server-side,
+  # a hand-decode client-side), and `add`/`remove` had exactly one client:
+  # `interfaces/cli`, a binary `aleph-app-release.yml` never builds. So on a
+  # desktop App the whole registration surface was unreachable.
+  #
+  # Needs a real boot for one specific reason: the built-in marketplace is
+  # injected into every `list()` and refused by every `remove()`, and on a
+  # fresh install it is the only row on screen. Whether the Panel draws a
+  # Remove button on a row the server then rejects is a question only the real
+  # manager can answer.
+  say "plant a local marketplace to add"
+  python3 "$HERE/plant_plugins.py" "$INSTALLED" "$MARKETPLACES" || exit 1
+
+  say "start server (the bundled extractor populates the built-in marketplace)"
+  start_server || exit 1
+
+  say "drive: registrations"
+  python3 "$HERE/drive_browse.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" \
+    registrations "$MARKETPLACES/qa-market" || RC=$?
+
+  say "the CLI renders the same registrations"
+  # `marketplace list` used to pretty-print raw JSON, so a renamed key was
+  # invisible on both sides. It now decodes through the contract type; assert
+  # real columns reach stdout rather than a dump.
+  CLI_OUT="$("$CLI" --server "ws://127.0.0.1:$GATEWAY_PORT/ws" plugin marketplace list 2>&1 | head -20)"
+  printf '%s\n' "$CLI_OUT"
+  if printf '%s' "$CLI_OUT" | grep -q "aleph-official.*\[local\]"; then
+    echo "  [PASS] the CLI prints the built-in row with its type column"
+  else
+    echo "  [FAIL] the CLI printed no typed aleph-official row"; RC=1
+  fi
+  # The row the remove call refuses must say so where a human reads it.
+  if printf '%s' "$CLI_OUT" | grep -q "not removable"; then
+    echo "  [PASS] the CLI names the refusal on the row that carries it"
+  else
+    echo "  [FAIL] the CLI listed a row it cannot remove without saying so"; RC=1
+  fi
+  ;;
+
 *)
-  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse)" >&2; exit 2;;
+  echo "unknown scenario '$SCENARIO' (manifest | scaffold | trust | browse | marketplaces)" >&2; exit 2;;
 esac
 
 say "server warnings about plugins"

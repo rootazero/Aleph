@@ -53,24 +53,47 @@ impl MarketplaceManager {
         self.marketplaces.insert(name, config);
     }
 
-    /// Remove a marketplace registration and delete its cache.
+    /// Why [`remove`](Self::remove) would refuse this name, or `None` if it
+    /// would proceed.
     ///
-    /// Returns an error if `name` refers to the built-in marketplace.
-    pub fn remove(&mut self, name: &str) -> Result<(), String> {
+    /// One derivation, two readers: the guard inside `remove` and the
+    /// `removable` bit on every `plugin.marketplace.list` row. Listing an
+    /// entry beside a Remove button that the remove call then refuses is the
+    /// failure this exists to prevent, and the built-in marketplace is not an
+    /// edge case for it — [`all_marketplaces`](Self::all_marketplaces) always
+    /// injects it, so on a fresh install it is the *only* row on screen.
+    ///
+    /// A client re-deriving this by comparing `name` against a hard-coded
+    /// `"aleph-official"` would be the second source of truth; this returns
+    /// the refusal itself so the reason shown to a human is the one the server
+    /// would actually give.
+    #[must_use]
+    pub fn removal_refusal(name: &str) -> Option<String> {
         if name == BUILTIN_MARKETPLACE_NAME {
-            return Err(format!(
+            return Some(format!(
                 "Cannot remove built-in marketplace '{BUILTIN_MARKETPLACE_NAME}'"
             ));
         }
 
         // Reject names that could traverse outside the cache directory —
         // `name` may come from user input and is joined into a deletion path
-        // below, so a crafted value like `../../etc` must never reach
+        // in `remove`, so a crafted value like `../../etc` must never reach
         // `remove_dir_all`.
         if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
-            return Err(format!(
+            return Some(format!(
                 "Invalid marketplace name '{name}': must not be empty or contain path separators or '..'."
             ));
+        }
+
+        None
+    }
+
+    /// Remove a marketplace registration and delete its cache.
+    ///
+    /// Returns an error if [`removal_refusal`](Self::removal_refusal) has one.
+    pub fn remove(&mut self, name: &str) -> Result<(), String> {
+        if let Some(reason) = Self::removal_refusal(name) {
+            return Err(reason);
         }
 
         self.marketplaces.remove(name);
@@ -693,6 +716,61 @@ mod tests {
         let mut mgr = MarketplaceManager::new(HashMap::new(), None);
         let err = mgr.remove(BUILTIN_MARKETPLACE_NAME).unwrap_err();
         assert!(err.contains("Cannot remove"), "got: {err}");
+    }
+
+    /// The `removable` bit `plugin.marketplace.list` puts on every row and the
+    /// guard `remove` runs must be the same answer, for every name either one
+    /// can see.
+    ///
+    /// A bit that drifted from the action would put a Remove button on a row
+    /// the server refuses — or, worse in the other direction, hide it from one
+    /// that would have worked. Driven from `list()`'s own output plus the
+    /// hostile spellings the traversal guard exists for, so a new refusal added
+    /// to one side and not the other fails here by name.
+    #[test]
+    fn the_removable_bit_agrees_with_what_remove_actually_does() {
+        let mut map = HashMap::new();
+        map.insert("my-market".to_string(), make_github_config("owner/repo"));
+        map.insert("local-one".to_string(), make_local_config("/tmp"));
+        let listed = MarketplaceManager::new(map.clone(), None).list();
+
+        let mut checked = 0;
+        // Every listed registration (which always includes the built-in), plus
+        // the shapes a hand-typed name can take.
+        let names: Vec<String> = listed
+            .keys()
+            .cloned()
+            .chain(
+                ["", "..", "a/b", "a\\b", "../../etc"]
+                    .into_iter()
+                    .map(String::from),
+            )
+            .collect();
+
+        for name in names {
+            let predicted = MarketplaceManager::removal_refusal(&name);
+            // A fresh manager per name: `remove` mutates, and reusing one
+            // would let an earlier removal change a later answer.
+            let actual = MarketplaceManager::new(map.clone(), None)
+                .remove(&name)
+                .err();
+            assert_eq!(
+                predicted, actual,
+                "the bit and the action disagree about '{name}'"
+            );
+            checked += 1;
+        }
+
+        // A ceiling over an empty sweep is not a ceiling: if `list()` ever
+        // stops returning registrations this must fail loudly rather than
+        // certify agreement it never tested.
+        assert!(checked >= 8, "only {checked} names checked");
+        assert!(
+            MarketplaceManager::removal_refusal(BUILTIN_MARKETPLACE_NAME).is_some(),
+            "the built-in is always listed and never removable — the one row a \
+             fresh install shows"
+        );
+        assert!(MarketplaceManager::removal_refusal("my-market").is_none());
     }
 
     #[test]
