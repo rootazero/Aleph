@@ -15,9 +15,9 @@ use tokio_util::sync::CancellationToken;
 use alephcore::agents::AgentRegistry;
 use alephcore::orchestrator::FlowError;
 use alephcore::orchestrator::{
-    build_sandbox_factory, AgentHarnessRunner, BrainRef, DenyAllSandbox, FlowInput, FlowOutcome,
-    FlowOverrides, FlowRegistry, FlowRequest, FlowSet, FlowSpec, FlowStreamEvent, HarnessRunner,
-    Orchestrator, RoutingOverrides, SandboxKind, SessionStrategy,
+    build_sandbox_factory, AgentHarnessRunner, BrainRef, FlowInput, FlowOutcome, FlowOverrides,
+    FlowRegistry, FlowRequest, FlowSet, FlowSpec, FlowStreamEvent, HarnessRunner, Orchestrator,
+    RoutingOverrides, SessionStrategy,
 };
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
@@ -166,9 +166,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
             description: "test flow".into(),
             agent: "main".into(),
             brain: BrainRef::Default,
-            sandbox_kind: SandboxKind::None,
             session_strategy: SessionStrategy::Fresh,
-            priority: 128,
             overrides: FlowOverrides::default(),
         }),
     );
@@ -178,7 +176,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
 
     let session_service = fresh_session_service();
     let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
-        Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
+        Ok(Arc::new(alephcore::sandbox::NoopSandbox) as Arc<dyn Sandbox>)
     }));
 
     // The Orchestrator requires an `AgentHarnessRunner` field for legacy

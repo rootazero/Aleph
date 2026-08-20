@@ -1,9 +1,7 @@
 use crate::sync_primitives::Arc;
 
 use crate::orchestrator::flow_registry::{FlowRegistry, FlowSet};
-use crate::orchestrator::flow_spec::{
-    BrainRef, FlowOverrides, FlowSpec, SandboxKind, SessionStrategy,
-};
+use crate::orchestrator::flow_spec::{BrainRef, FlowOverrides, FlowSpec, SessionStrategy};
 
 fn mk_spec(id: &str, agent: &str) -> FlowSpec {
     FlowSpec {
@@ -11,9 +9,7 @@ fn mk_spec(id: &str, agent: &str) -> FlowSpec {
         description: "test".into(),
         agent: agent.into(),
         brain: BrainRef::Default,
-        sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Fresh,
-        priority: 128,
         overrides: FlowOverrides::default(),
     }
 }

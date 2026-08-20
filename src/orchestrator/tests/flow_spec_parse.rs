@@ -1,6 +1,4 @@
-use crate::orchestrator::flow_spec::{
-    BrainRef, FlowOverrides, FlowSpec, SandboxKind, SessionStrategy,
-};
+use crate::orchestrator::flow_spec::{BrainRef, FlowOverrides, FlowSpec, SessionStrategy};
 
 #[test]
 fn parses_minimal_flow_spec() {
@@ -8,7 +6,6 @@ fn parses_minimal_flow_spec() {
         id = "default-agent"
         description = "Primary chat agent"
         agent = "main"
-        sandbox_kind = "workspace"
 
         [brain]
         kind = "default"
@@ -19,7 +16,6 @@ fn parses_minimal_flow_spec() {
     let flow: FlowSpec = toml::from_str(toml_src).expect("parse");
     assert_eq!(flow.id, "default-agent");
     assert_eq!(flow.agent, "main");
-    assert_eq!(flow.sandbox_kind, SandboxKind::Workspace);
     assert!(matches!(flow.brain, BrainRef::Default));
     assert!(matches!(flow.session_strategy, SessionStrategy::Reuse));
     assert!(flow.overrides.max_iterations.is_none());
@@ -31,7 +27,6 @@ fn parses_strict_brain_and_child_session() {
         id = "researcher"
         description = "Read-only web researcher"
         agent = "researcher"
-        sandbox_kind = "none"
 
         [brain]
         kind = "strict"
@@ -45,7 +40,6 @@ fn parses_strict_brain_and_child_session() {
         max_iterations = 10
     "#;
     let flow: FlowSpec = toml::from_str(toml_src).expect("parse");
-    assert_eq!(flow.sandbox_kind, SandboxKind::None);
     match flow.brain {
         BrainRef::Strict { provider, model } => {
             assert_eq!(provider, "minimax");
@@ -68,7 +62,6 @@ fn rejects_unknown_fields() {
         id = "x"
         description = "x"
         agent = "x"
-        sandbox_kind = "none"
         unknown_field = "boom"
 
         [brain]
@@ -93,9 +86,7 @@ fn roundtrips_preferred_brain() {
         brain: BrainRef::Preferred {
             provider: "chatgpt".into(),
         },
-        sandbox_kind: SandboxKind::Workspace,
         session_strategy: SessionStrategy::Fresh,
-        priority: 128,
         overrides: FlowOverrides::default(),
     };
     let s = toml::to_string(&flow).unwrap();

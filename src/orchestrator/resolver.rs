@@ -6,7 +6,18 @@ use std::collections::HashMap;
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{AgentId, FlowId, SessionStrategy};
 
-/// Hardcoded maximum depth for recursive dispatch. See design §7.
+/// Hardcoded maximum depth for **flow-to-flow** recursive dispatch (one flow's
+/// run dispatching another). See design §7.
+///
+/// Scope matters, because the obvious reading is wrong: this does **not** cap
+/// delegation depth. Sub-agents never reach `Orchestrator::dispatch` — the
+/// spawner drives `AgentHarness` directly — so the live delegation-depth guard
+/// is `ChainContext::child()` in `agents::subagent_spawner`, which refuses past
+/// its own limit with "chain depth exceeded". Today the only production
+/// `FlowRequest` producer passes `depth: 0`, so `depth_guard` is a fail-closed
+/// limit standing over a door nobody has opened yet. It is kept rather than cut
+/// precisely because it fails closed: the cost is a comparison per dispatch,
+/// and the first producer to pass a non-zero depth gets a bound for free.
 pub const MAX_FLOW_DEPTH: u8 = 4;
 
 /// Canonical generic-agent flow id. Any registered agent that has no explicit
