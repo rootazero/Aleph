@@ -415,6 +415,29 @@ impl MediaCache {
             None
         };
 
+        // Pre-decode budget check: the downstream `MAX_FILE_SIZE` guard runs *after*
+        // a full base64/percent-decoded `Vec<u8>` is allocated. A multi-GB
+        // `data:` URL would otherwise peak at ~0.75 GB before being discarded,
+        // and concurrent hostile requests can OOM the process. Reject early on
+        // the encoded length; the downstream check remains the authoritative
+        // cap on the decoded size.
+        let encoded_len = data.len();
+        if header.contains("base64") {
+            // base64 expands by 4/3, so the decoded size is at most
+            // (encoded_len / 4) * 3 (ignore padding bytes).
+            let approx = encoded_len.saturating_mul(3) / 4;
+            if approx as u64 > MAX_FILE_SIZE {
+                return Err(CacheError::Download(format!(
+                    "data URL exceeds size cap before decode (encoded={encoded_len}, approx decoded > {})",
+                    MAX_FILE_SIZE
+                )));
+            }
+        } else if encoded_len as u64 > MAX_FILE_SIZE {
+            return Err(CacheError::Download(format!(
+                "data URL exceeds size cap before decode ({encoded_len} bytes)"
+            )));
+        }
+
         let bytes = if header.contains("base64") {
             BASE64
                 .decode(data)
