@@ -5,6 +5,13 @@
 //! JSON-RPC gateway handler must reject symlinked clone targets before any
 //! network call to avoid leaking filesystem state through the clone path.
 
+// Whole file is Unix-only: the symlink rejection it proves is exercised via
+// `std::os::unix::fs::symlink`, which has no Windows counterpart (NTFS
+// symlinks are a different beast and out of scope for this gate). On Windows
+// the integration test compiles to an empty binary, which `cargo check
+// --workspace` treats as "0 tests" — no failure.
+#![cfg(unix)]
+
 use std::process::{Command, Stdio};
 
 fn plugins_dir(home: &std::path::Path) -> std::path::PathBuf {

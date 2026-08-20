@@ -193,6 +193,7 @@ impl ExtensionWatcher {
     /// parallel (an env-var switch would be shared mutable state across
     /// sibling tests).
     #[cfg(test)]
+    #[cfg(unix)] // only the two callers live behind `#[cfg(unix)]` tests
     #[must_use]
     fn with_excluded_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
         self.excluded_dirs = Some(dirs);
