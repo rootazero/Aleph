@@ -24,6 +24,12 @@ impl SkillId {
     /// The `plugin:skill_name` convention is intentionally not enforced
     /// (tests and ad-hoc skills use bare names), but an empty id can never
     /// be meaningful — it would silently become an empty registry key.
+    ///
+    /// The non-empty invariant is enforced at external input boundaries
+    /// (SKILL.md manifest parsing, JSON-RPC parameter validation); the
+    /// `debug_assert!` below is only a development-time aid. The
+    /// `From<&str>` / `From<String>` / `Deserialize` paths intentionally
+    /// skip validation because they trust already-validated sources.
     pub fn new(id: impl Into<String>) -> Self {
         let id = id.into();
         debug_assert!(!id.is_empty(), "SkillId must not be empty");
@@ -65,6 +71,12 @@ pub struct PluginId(String);
 
 impl PluginId {
     /// Create a new `PluginId`.
+    ///
+    /// As with `SkillId`, an empty id can never be meaningful — it would
+    /// silently become an empty registry key. The non-empty invariant is
+    /// enforced at external input boundaries; `debug_assert!` is only a
+    /// development-time aid, and the `From` / `Deserialize` paths
+    /// intentionally skip validation (they trust already-validated sources).
     pub fn new(id: impl Into<String>) -> Self {
         let id = id.into();
         debug_assert!(!id.is_empty(), "PluginId must not be empty");
@@ -595,7 +607,7 @@ impl SkillManifest {
 
     /// Override priority (delegates to `SkillSource::priority()`).
     #[must_use]
-    pub fn priority(&self) -> u8 {
+    pub const fn priority(&self) -> u8 {
         self.source.priority()
     }
 
@@ -679,6 +691,7 @@ impl Entity for SkillManifest {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /// Every source says something, and no two say the same thing.
     ///
@@ -711,7 +724,6 @@ mod tests {
             "a plugin's label names which plugin — 'plugin' alone cannot be acted on"
         );
     }
-    use super::*;
 
     // === Task 1 tests ===
 
