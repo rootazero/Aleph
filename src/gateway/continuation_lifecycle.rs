@@ -339,6 +339,15 @@ mod tests {
     ///
     /// So `Err` is reported as `Err`, with the error, and only `Ok(None)` — a
     /// row that is genuinely gone — prints `swept`.
+    ///
+    /// History, because the next red should not be re-diagnosed from scratch:
+    /// the bystander assertion was measured red on 2 of 5 clean-tree full-suite
+    /// runs while it folded the three answers together, and 0 of 14 after this
+    /// split plus giving each test its own agent id. That is evidence the
+    /// mechanism is gone, not an explanation of it — nobody root-caused it, and
+    /// splitting `Err` out cannot by itself turn a red green (it changes the
+    /// message, not the outcome). If this fires again, the message now says
+    /// which of the three answers arrived, which is the whole point.
     async fn assert_still_present(store: &dyn SessionStore, key: &SessionKey, swept: &str) {
         match store.get_metadata(key).await {
             Ok(Some(_)) => {}
