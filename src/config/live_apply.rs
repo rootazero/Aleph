@@ -287,7 +287,15 @@ mod tests {
     /// `dotted_prefix_matches`'s ancestor check this arm would never fire
     /// from that path — exactly the mismatch the controller ruling called
     /// out.
+    /// ⚠️ Serialised with every other test that WRITES `GLOBAL_POLICY`.
+    /// `apply_live_sections`'s spend arm calls `spend::update_policy`, which
+    /// overwrites a process-wide `ArcSwap` shared by the whole `--lib` test
+    /// binary — so two such tests running concurrently are two writers to one
+    /// cell, and the loser reads the winner's value. The precedent is
+    /// `the_execution_arm_installs_the_subagent_concurrency_cap` in this same
+    /// file, which takes the same annotation for the same shape.
     #[test]
+    #[serial_test::serial(spend_global_policy)]
     fn policies_spend_arm_fires_from_the_coarse_top_level_name() {
         crate::spend::install_policy(crate::config::types::policies::SpendPolicy::default());
         let cfg = Config::default();
@@ -330,7 +338,15 @@ mod tests {
     /// `update_policy` call returns `false` — pinned in isolation,
     /// independent of process-global ordering, by
     /// `spend::tests::update_policy_into_reports_false_with_no_handle`.
+    /// ⚠️ Serialised with every other test that WRITES `GLOBAL_POLICY`.
+    /// `apply_live_sections`'s spend arm calls `spend::update_policy`, which
+    /// overwrites a process-wide `ArcSwap` shared by the whole `--lib` test
+    /// binary — so two such tests running concurrently are two writers to one
+    /// cell, and the loser reads the winner's value. The precedent is
+    /// `the_execution_arm_installs_the_subagent_concurrency_cap` in this same
+    /// file, which takes the same annotation for the same shape.
     #[test]
+    #[serial_test::serial(spend_global_policy)]
     fn g14_spend_arm_applies_live_and_reaches_check_with_no_restart() {
         // A handle merely needs to exist for `update_policy` (which the arm
         // calls) to succeed — idempotent, so this is safe even if another
