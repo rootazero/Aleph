@@ -198,8 +198,11 @@ wasm:
     else
         echo "⚠ wasm-opt not found; skipping (cargo install wasm-opt / brew install binaryen)"
     fi
-    # 4. Runtime index.html
-    cat > {{panel_dist}}/index.html << 'HTMLEOF'
+    # 4. Runtime index.html. Written in three parts so baseline-probe.js is
+    #    inlined VERBATIM: it must run synchronously before the module script
+    #    (module scripts are deferred), and it must be byte-identical to its
+    #    source so scripts/check_webview_baseline.mjs edge C can pair them.
+    cat > {{panel_dist}}/index.html << 'HTMLHEAD'
     <!DOCTYPE html>
     <html lang="en">
       <head>
@@ -215,13 +218,20 @@ wasm:
       </head>
       <body class="bg-surface text-text-primary">
         <noscript>This application requires JavaScript to run.</noscript>
+        <script>
+    HTMLHEAD
+    cat {{panel_dir}}/baseline-probe.js >> {{panel_dist}}/index.html
+    cat >> {{panel_dist}}/index.html << 'HTMLTAIL'
+        </script>
         <script type="module">
           import init from '/aleph_panel.js';
           await init({ module_or_path: '/aleph_panel_bg.wasm' });
         </script>
       </body>
     </html>
-    HTMLEOF
+    HTMLTAIL
+    # 4.5 Baseline consistency (edges A-D).
+    node scripts/check_webview_baseline.mjs
     # 5. Guard: the freshly-written js + wasm MUST be a matched pair. Catches a
     #    js-only rebuild (the v26.6.22 blank-panel bug) before it can be committed.
     node scripts/check_panel_dist.mjs {{panel_dist}}

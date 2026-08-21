@@ -118,6 +118,39 @@ if (baseline) {
   }
 }
 
+// ── Edge C: dist/index.html carries the probe VERBATIM ────────────────────
+// Same class as the js/wasm pairing guard in check_panel_dist.mjs: catches a
+// one-sided rebuild where the probe changed but dist did not, or vice versa.
+{
+  const PROBE = 'interfaces/webchat/baseline-probe.js';
+  const INDEX = 'interfaces/webchat/dist/index.html';
+  let probe;
+  try {
+    probe = readFileSync(PROBE, 'utf8');
+  } catch (e) {
+    fail('C', `cannot read ${PROBE}: ${e.message}`);
+    probe = null;
+  }
+  let index;
+  try {
+    index = readFileSync(INDEX, 'utf8');
+  } catch (e) {
+    fail('C', `cannot read ${INDEX}: ${e.message} — run \`just wasm\``);
+    index = null;
+  }
+  if (probe !== null && index !== null) {
+    if (!index.includes(probe.trimEnd())) {
+      fail('C', `${INDEX} does not contain baseline-probe.js verbatim — run \`just wasm\` and commit dist/`);
+    }
+    // Ordering is load-bearing: the probe must precede the module script.
+    const probeAt = index.indexOf(probe.trimEnd());
+    const moduleAt = index.indexOf('<script type="module">');
+    if (probeAt >= 0 && moduleAt >= 0 && probeAt > moduleAt) {
+      fail('C', `${INDEX} runs the module script before the probe; the probe must be first (it is synchronous, the module is deferred)`);
+    }
+  }
+}
+
 if (problems.length) {
   console.error(problems.join('\n'));
   console.error(`\n${problems.length} baseline violation(s). The declaration is ${BASELINE}; fix the consumer, not the declaration, unless you are deliberately moving the floor.`);
