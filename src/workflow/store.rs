@@ -59,11 +59,42 @@ fn aleph_home() -> PathBuf {
 }
 
 /// Listed entry for a workflow file on disk.
+///
+/// Carries the fields a caller needs to *choose* a workflow, not just name one.
+/// `list` used to return a bare stem, so answering "which of these should I
+/// run?" meant one `describe` per template — and `when_to_use`, the field the
+/// `.workflow.js` format exists to put in front of that decision, had no
+/// runtime reader at all (neither `list` nor `describe` surfaced it; only
+/// `export` did).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowMeta {
+    /// Storage key — the sanitised file stem, which is what `describe` / `run`
+    /// / `delete` resolve against.
     pub name: String,
+    /// The manifest's own `description`.
+    pub description: String,
+    /// The manifest's `whenToUse` — selection guidance for the caller.
+    pub when_to_use: String,
+    /// Number of steps, so a caller can tell a two-step template from a
+    /// twenty-step one without loading it.
+    pub steps: usize,
 }
 
+/// The result of walking the workflow directory: the entries that parsed, and
+/// the ones that did not.
+///
+/// Problems are **returned, not swallowed**. A `continue` past an unreadable
+/// file is right for the listing (one bad template must not fail the whole
+/// list) and a lie for the caller, who otherwise cannot distinguish "you have
+/// no workflow called that" from "the file is there and corrupt". Each caller
+/// decides what to do with `problems`; the walk does not decide for them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkflowListing {
+    pub entries: Vec<WorkflowMeta>,
+    /// One human-readable line per file that could not be read or parsed,
+    /// naming the file.
+    pub problems: Vec<String>,
+}
 /// Resolve a logical name within `dir`: `{dir}/{sanitised}.json`. The returned
 /// path is guaranteed to be a direct child of `dir` (no traversal).
 #[must_use]
@@ -158,17 +189,23 @@ pub fn load(name: &str) -> Result<WorkflowManifest> {
     load_at(&workflow_dir(), name)
 }
 
-/// List workflows under `dir`. A missing directory yields an empty list (the
+/// List workflows under `dir`. A missing directory yields an empty listing (the
 /// caller wants "what's there", not "did the dir exist").
-pub fn list_at(dir: &Path) -> Result<Vec<WorkflowMeta>> {
+///
+/// Each `.json` is parsed so the entry can carry `description` / `whenToUse` /
+/// step count. A file that will not read or parse becomes a line in
+/// [`WorkflowListing::problems`] rather than a silent omission — otherwise a
+/// corrupt template is indistinguishable from a template that was never saved,
+/// on every surface at once.
+pub fn list_at(dir: &Path) -> Result<WorkflowListing> {
     if !dir.exists() {
-        return Ok(Vec::new());
+        return Ok(WorkflowListing::default());
     }
     let entries = fs::read_dir(dir).map_err(|e| {
         AlephError::config(format!("workflow listing {} failed: {e}", dir.display()))
     })?;
 
-    let mut out = Vec::new();
+    let mut listing = WorkflowListing::default();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some(WORKFLOW_EXT) {
@@ -177,16 +214,41 @@ pub fn list_at(dir: &Path) -> Result<Vec<WorkflowMeta>> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        out.push(WorkflowMeta {
-            name: stem.to_string(),
-        });
+        let name = stem.to_string();
+        match fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|body| {
+                serde_json::from_str::<WorkflowManifest>(&body).map_err(|e| e.to_string())
+            }) {
+            Ok(manifest) => listing.entries.push(WorkflowMeta {
+                name,
+                description: manifest.description,
+                when_to_use: manifest.when_to_use,
+                steps: manifest.steps.len(),
+            }),
+            Err(e) => {
+                // Named, so the caller can act on it. Still listed by name:
+                // `delete` works on an unparseable file, and hiding it would
+                // make the only remedy undiscoverable.
+                listing
+                    .problems
+                    .push(format!("{}: unreadable workflow ({e})", path.display()));
+                listing.entries.push(WorkflowMeta {
+                    name,
+                    description: String::new(),
+                    when_to_use: String::new(),
+                    steps: 0,
+                });
+            }
+        }
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
+    listing.entries.sort_by(|a, b| a.name.cmp(&b.name));
+    listing.problems.sort();
+    Ok(listing)
 }
 
 /// Convenience: [`list_at`] anchored to [`workflow_dir`].
-pub fn list() -> Result<Vec<WorkflowMeta>> {
+pub fn list() -> Result<WorkflowListing> {
     list_at(&workflow_dir())
 }
 
@@ -326,7 +388,7 @@ mod tests {
         d.steps.clear();
         assert!(save_at(tmp.path(), &d).is_err());
         // Nothing written.
-        assert!(list_at(tmp.path()).unwrap().is_empty());
+        assert!(list_at(tmp.path()).unwrap().entries.is_empty());
     }
 
     #[test]
@@ -337,6 +399,7 @@ mod tests {
         fs::write(tmp.path().join("notes.txt"), "ignore me").unwrap();
         let names: Vec<String> = list_at(tmp.path())
             .unwrap()
+            .entries
             .into_iter()
             .map(|m| m.name)
             .collect();
@@ -347,7 +410,7 @@ mod tests {
     fn list_missing_dir_is_empty() {
         let tmp = TempDir::new().unwrap();
         let missing = tmp.path().join("nope");
-        assert!(list_at(&missing).unwrap().is_empty());
+        assert!(list_at(&missing).unwrap().entries.is_empty());
     }
 
     #[test]
@@ -410,6 +473,49 @@ mod tests {
         assert!(
             entries.iter().all(|n| !n.ends_with(".tmp")),
             "no .tmp left behind on write failure, got: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn list_entries_carry_selection_fields() {
+        // `list` is the choosing surface: description / whenToUse / step count
+        // ride on each row so a caller does not need one `describe` per
+        // candidate — and `whenToUse` finally has a runtime reader at all.
+        let tmp = TempDir::new().unwrap();
+        let mut m = sample("chooser");
+        m.when_to_use = "when the repo needs a two-step research report".into();
+        save_at(tmp.path(), &m).unwrap();
+        let listing = list_at(tmp.path()).unwrap();
+        assert!(listing.problems.is_empty());
+        assert_eq!(listing.entries.len(), 1);
+        let entry = &listing.entries[0];
+        assert_eq!(entry.name, "chooser");
+        assert_eq!(entry.description, "demo");
+        assert_eq!(
+            entry.when_to_use,
+            "when the repo needs a two-step research report"
+        );
+        assert_eq!(entry.steps, 2);
+    }
+
+    #[test]
+    fn list_names_a_corrupt_file_instead_of_hiding_it() {
+        // A `continue` past an unreadable file is right for the walk and a lie
+        // for the caller: a corrupt template would read as "never saved" on
+        // every surface at once. The listing must (a) say which file is broken
+        // and (b) still list it by name, because `delete` works on it and
+        // hiding it makes the only remedy undiscoverable.
+        let tmp = TempDir::new().unwrap();
+        save_at(tmp.path(), &sample("good")).unwrap();
+        fs::write(tmp.path().join("broken.json"), "{ not json").unwrap();
+        let listing = list_at(tmp.path()).unwrap();
+        let names: Vec<&str> = listing.entries.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, vec!["broken", "good"], "broken is still addressable");
+        assert_eq!(listing.problems.len(), 1);
+        assert!(
+            listing.problems[0].contains("broken.json"),
+            "problem names the file: {}",
+            listing.problems[0]
         );
     }
 }
