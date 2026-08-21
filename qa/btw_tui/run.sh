@@ -44,21 +44,27 @@ cleanup() {
   [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
-# Armed HERE — immediately after `$QA_ROOT` exists and before anything that
-# can fail — rather than further down where the servers start.
+# Armed HERE — immediately after `$QA_ROOT` exists and before the HOME
+# redirect — rather than further down where the servers start. Nothing between
+# `mktemp -d` and this line can leak the scratch root, which is the general
+# shape this repo has already paid 7,623 orphaned trees and 4.0 GB for (see
+# `utils::scratch`). It is a narrowing, not a bug fix: without `set -e` the
+# statements in that window do not abort the script anyway.
 #
-# The window it closes is small and the leak it prevents is not: every failure
-# between `mktemp -d` and the trap left a scratch HOME behind, and the
-# reproducing case is the ordinary one (`qa_redirect_home` or `mkdir` failing
-# on a full or read-only $TMPDIR). This repo has already paid for the general
-# version of this — 7,623 orphaned trees and 4.0 GB from guards that dropped
-# before the thing they guarded (see `utils::scratch`).
+# `cleanup` is on EXIT and EXIT only — the same single line as the other nine
+# `qa/*/run.sh` fixtures, and it is enough on its own: a Ctrl-C runs the EXIT
+# trap and exits 130 on both bashes this fixture can run under here (measured
+# 2026-08-21 on 3.2.57 and 5.3.15, the system bash and the brew one).
 #
-# INT/TERM/HUP as well as EXIT: a Ctrl-C during the 45 s observation window is
-# the single likeliest way this script ends, and whether a bare EXIT trap runs
-# on a fatal signal is shell- and version-dependent. `- ` re-raises nothing; the
-# explicit list is what makes it not depend on that.
-trap cleanup EXIT INT TERM HUP
+# The one extra line is `exit`, not `cleanup`. A handler that *returns* is what
+# breaks this: bash runs the handler at the interrupt and then RESUMES at the
+# next statement, so a Ctrl-C during the 45 s observation window cleaned up and
+# then ran the three diagnostic dumps against the root it had just deleted —
+# destroying exactly the logs the operator interrupted the run to read — before
+# cleaning up a second time at EXIT. `exit 130` makes the interrupt terminate
+# the script, which fires the EXIT trap once, which cleans up once.
+trap cleanup EXIT
+trap 'exit 130' INT
 
 # The build must run BEFORE HOME is redirected — cargo's registry, git cache
 # and rustup toolchain all live under the real HOME. See qa/README.md.

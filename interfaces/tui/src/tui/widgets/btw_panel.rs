@@ -80,7 +80,7 @@ fn body(overlay: &BtwOverlay, spinner_frame: usize) -> (String, String, String) 
             // is rarely its first line. The body region already wraps and
             // scrolls, so the whole text is reachable; the status line keeps
             // the one word that fits a single row by construction.
-            let body = match &exchange.error {
+            let body = match exchange.error() {
                 Some(err) if exchange.answer.is_empty() => format!("Error: {err}"),
                 Some(err) => format!("Error: {err}\n\n{}", exchange.answer),
                 None => exchange.answer.clone(),
@@ -263,6 +263,35 @@ mod tests {
                 "line missing from the scrollable body: {line:?} — got {shown:?}"
             );
         }
+    }
+
+    /// A question the user walked away from is not a failure, and must not
+    /// wear the word.
+    ///
+    /// `failed` is what a provider outage gets. A superseded run may still be
+    /// running server-side and may still succeed; labelling it `failed` states
+    /// something that did not happen, in the one line that survives a glance.
+    /// It must also not acquire an `Error:` block — there is no error.
+    #[test]
+    fn a_superseded_question_is_not_reported_as_a_failure() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "first?", "r1");
+        o.push_delta("r1", "as far as it got");
+        asking(&mut o, "second?", "r2");
+        // Settle the live one first: a question still answering outranks any
+        // page of history, which is what `a_live_question_outranks_…` pins.
+        o.finish_active("r2", Some("the newer answer"));
+        o.page_left();
+
+        let (question, shown, status) = body(&o, 0);
+        assert_eq!(question, "first?");
+        assert_eq!(status, "superseded");
+        assert_ne!(status, "failed", "nothing failed here");
+        assert_eq!(
+            shown, "as far as it got",
+            "a superseded question has no error to render above its text"
+        );
+        assert!(!shown.contains("Error:"));
     }
 
     /// A failure that arrived after some text keeps both, in that order: the

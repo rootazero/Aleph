@@ -160,8 +160,26 @@ fn side_abort_params(state: &AppState) -> Option<Value> {
 /// come from the same read of the same state.
 pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClient) {
     let Some(params) = side_abort_params(state) else {
-        // Nothing is parked on this overlay server-side once the answer has
-        // settled, so closing it orphans nothing.
+        // Nothing on screen is waiting on a decision, so closing is safe for
+        // the user. It is not the same as "nothing is running".
+        //
+        // A **superseded** question — one the user replaced by asking another
+        // before the first finished — is filed with whatever text it had
+        // while its run keeps going server-side. `side_abort_params` names
+        // only `active_run_id()`, so from this client that run can no longer
+        // be shown, aborted, or reached at all; it runs to completion and its
+        // answer goes nowhere. That is a real cost, stated rather than
+        // hidden. It is also strictly better than what it replaced, which
+        // orphaned the run AND mixed its output into the next question's
+        // answer.
+        //
+        // Not fixed here on purpose: aborting it would mean `begin` — a
+        // synchronous method on the overlay, with no client and no async —
+        // reaching the network, which is a different shape of change from a
+        // key handler. A side question is read-only and short, so the leak is
+        // bounded; the alternative worth considering is keeping the
+        // superseded run addressable rather than firing an abort nobody asked
+        // for.
         state.close_btw();
         return;
     };

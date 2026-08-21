@@ -45,6 +45,36 @@ use std::collections::VecDeque;
 /// why eviction is safe.
 const CLAIM_CAP: usize = 32;
 
+/// How a side question ended.
+///
+/// One enum rather than an `aborted` flag beside an `Option<String>` error.
+/// The four endings are mutually exclusive and each owes the user a different
+/// word, and the flags-plus-option shape had already forced two of them to
+/// share one: `settle_superseded` had nowhere to put "the user moved on"
+/// except the error field, so a question nobody failed rendered as `failed` —
+/// the same word a provider outage gets, over a run that may still be running
+/// and may still succeed. A third boolean would have made eight states of
+/// which five are unrepresentable nonsense; this makes the four sayable and
+/// the rest impossible.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum BtwOutcome {
+    /// It finished. The answer may still be empty — "it said nothing" is a
+    /// real outcome and not the same as any of the others.
+    #[default]
+    Answered,
+    /// The user pressed Esc while it was still answering.
+    Aborted,
+    /// A newer side question replaced it before it finished.
+    ///
+    /// Deliberately neither `Answered` (nothing said it finished) nor
+    /// `Failed` (nothing broke). The run is very likely still going
+    /// server-side — see `commands::btw_abort_or_close` for what that costs.
+    Superseded,
+    /// The run failed, carrying the reason. Distinct from an empty answer:
+    /// "it broke" and "it said nothing" are different things to be told.
+    Failed(String),
+}
+
 /// One finished side question.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BtwExchange {
@@ -52,42 +82,49 @@ pub struct BtwExchange {
     pub question: String,
     /// The answer as raw markdown — what `c` copies.
     pub answer: String,
-    /// The user pressed Esc while it was still answering.
-    pub aborted: bool,
-    /// The run failed. Distinct from an empty answer: "it broke" and "it said
-    /// nothing" are different things to be told.
-    pub error: Option<String>,
+    /// How it ended.
+    pub outcome: BtwOutcome,
 }
 
 impl BtwExchange {
     /// A question that got an answer.
     ///
-    /// Test-only: the three production paths (`finish_active` / `fail_active`
-    /// / `abort_active`) each build the whole struct, because each has to say
-    /// something different about `aborted` and `error`. A production shorthand
-    /// that fixed both to their happy values would be an abstraction with no
-    /// consumer, and the first caller to reach for it would be the one who
-    /// wanted one of the other two endings.
+    /// Test-only: the production paths each build the whole struct, because
+    /// each has a different outcome to name. A production shorthand fixing the
+    /// outcome to its happy value would be an abstraction with no consumer,
+    /// and the first caller to reach for it would be one wanting a different
+    /// ending.
     #[cfg(test)]
     #[must_use]
     pub fn answered(question: &str, answer: &str) -> Self {
         Self {
             question: question.to_string(),
             answer: answer.to_string(),
-            aborted: false,
-            error: None,
+            outcome: BtwOutcome::Answered,
         }
     }
 
     /// The one-word status shown next to the question.
+    ///
+    /// Every word here has to be true of the thing it names — this line is
+    /// the part that survives a glance, and the body underneath it is the
+    /// part that does not.
     #[must_use]
     pub fn status(&self) -> &'static str {
-        if self.error.is_some() {
-            "failed"
-        } else if self.aborted {
-            "aborted"
-        } else {
-            "answered"
+        match self.outcome {
+            BtwOutcome::Answered => "answered",
+            BtwOutcome::Aborted => "aborted",
+            BtwOutcome::Superseded => "superseded",
+            BtwOutcome::Failed(_) => "failed",
+        }
+    }
+
+    /// The failure reason, for the surface that renders it in full.
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        match &self.outcome {
+            BtwOutcome::Failed(reason) => Some(reason),
+            _ => None,
         }
     }
 }
@@ -188,8 +225,7 @@ impl BtwOverlay {
         self.finish_exchange(BtwExchange {
             question: active.question,
             answer: active.answer,
-            aborted: false,
-            error: Some("superseded by a newer side question".to_string()),
+            outcome: BtwOutcome::Superseded,
         });
     }
 
@@ -308,8 +344,7 @@ impl BtwOverlay {
         self.finish_exchange(BtwExchange {
             question: active.question,
             answer,
-            aborted: false,
-            error: None,
+            outcome: BtwOutcome::Answered,
         });
     }
 
@@ -325,8 +360,7 @@ impl BtwOverlay {
         self.finish_exchange(BtwExchange {
             question: active.question,
             answer: active.answer,
-            aborted: false,
-            error: Some(error),
+            outcome: BtwOutcome::Failed(error),
         });
     }
 
@@ -350,8 +384,7 @@ impl BtwOverlay {
         self.finish_exchange(BtwExchange {
             question: active.question,
             answer: active.answer,
-            aborted: false,
-            error: Some(error),
+            outcome: BtwOutcome::Failed(error),
         });
     }
 
@@ -363,8 +396,7 @@ impl BtwOverlay {
         self.finish_exchange(BtwExchange {
             question: active.question,
             answer: active.answer,
-            aborted: true,
-            error: None,
+            outcome: BtwOutcome::Aborted,
         });
     }
 
@@ -611,12 +643,17 @@ mod tests {
         let filed = o.exchanges.last().expect("the first question was filed");
         assert_eq!(filed.question, "first?");
         assert_eq!(filed.answer, "first answer");
-        assert_eq!(filed.status(), "failed", "superseded is not 'answered'");
-        assert!(filed
-            .error
-            .as_deref()
-            .expect("a reason")
-            .contains("superseded"));
+        // Its own word: nothing failed here — the user moved on, and that run
+        // may well still be running and still succeed. `failed` is the word a
+        // provider outage gets, and the status line is the part that survives
+        // a glance.
+        assert_eq!(filed.status(), "superseded");
+        assert_eq!(filed.outcome, BtwOutcome::Superseded);
+        assert_eq!(
+            filed.error(),
+            None,
+            "a superseded question has no failure to report"
+        );
 
         // Both runs are still claimed — so the routing, not the claim, is what
         // keeps them apart.
