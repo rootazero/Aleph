@@ -151,6 +151,117 @@ if (baseline) {
   }
 }
 
+// ── Edge D: probes are load-bearing, and no unreviewed CSS function appears ──
+{
+  const CSS_PATH = 'interfaces/webchat/dist/tailwind.css';
+  let css;
+  try {
+    css = readFileSync(CSS_PATH, 'utf8');
+  } catch (e) {
+    fail('D', `cannot read ${CSS_PATH}: ${e.message} — run \`just wasm\``);
+    css = null;
+  }
+
+  if (css !== null) {
+    // A plain substring match (`css.includes(fn + '(')`) is a false-negative
+    // trap: `lch(` is a suffix of `oklch(`, so a probe named `lch(...)` would
+    // read as "still used" purely because a DIFFERENT, longer function is
+    // present. D1's whole job is catching a probe that stopped being
+    // load-bearing, so its match must be anchored: the character immediately
+    // before the function name must not be an identifier character
+    // (`[A-Za-z0-9_-]`), and start-of-string counts as a boundary. Implemented
+    // as a negative lookbehind rather than scanning for a preceding
+    // non-identifier char by hand, so it reads the same as the rule it
+    // enforces.
+    const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const isLoadBearing = (fn) => new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(fn)}\\(`).test(css);
+
+    // D1 (reverse, honest): every declared CSS probe must still be exercised by
+    // the built stylesheet. This catches a probe list rotting into a stale
+    // licence — a capability we still gate on that the CSS stopped using.
+    for (const [, value] of baseline.css_probes) {
+      const fn = value.slice(0, value.indexOf('('));
+      if (!fn || !isLoadBearing(fn)) {
+        fail('D', `${CSS_PATH} no longer uses ${fn}(), but ${BASELINE} still gates on it — drop the probe or find out why the CSS changed`);
+      }
+    }
+
+    // D2 (forward, over-reporting): every CSS function name in the built
+    // stylesheet must be on the reviewed list. A Tailwind upgrade that emits a
+    // new function goes RED and a human decides whether the baseline moves.
+    // False positives are the intended failure direction: a new name is cheap
+    // to review, a silently-shipped capability cliff is not.
+    //
+    // Two lists, not one, because they answer different questions and mixing
+    // them would let the second question go unasked:
+    //   IN_FLOOR        — actually supported at Safari 16.4 / WebKitGTK 2.42.
+    //   DEGRADES_UNUSED  — NOT supported at the floor, accepted anyway
+    //                      because the construct's failure mode when
+    //                      unsupported is "this rule is dropped, the feature
+    //                      is silently absent" rather than "the stylesheet is
+    //                      poisoned" (e.g. an invalid oklch() inside a
+    //                      custom property invalidates that property at
+    //                      computed-value time and can collapse an entire
+    //                      palette to initial/inherit — an unknown
+    //                      pseudo-element invalidates only its own rule).
+    //                      Every entry here must say what actually happens
+    //                      when it's unsupported, and where the JS
+    //                      feature-detect (if any) lives — this file can
+    //                      only scan CSS, so it cannot verify that detect;
+    //                      the comment is a human-checked claim, not an
+    //                      assertion this script enforces.
+    const IN_FLOOR = new Set([
+      // colour
+      'oklch', 'oklab', 'color-mix', 'rgb', 'rgba', 'hsl', 'hsla', 'color',
+      'light-dark',
+      // math / sizing
+      'calc', 'min', 'max', 'clamp', 'round', 'var', 'env',
+      // layout / transforms
+      'translate', 'translateX', 'translateY', 'translateZ', 'translate3d',
+      'rotate', 'rotateX', 'rotateY', 'rotateZ', 'scale', 'scaleX', 'scaleY',
+      'scale3d', 'skewX', 'skewY', 'perspective', 'matrix', 'matrix3d',
+      // filters / effects
+      'blur', 'brightness', 'contrast', 'grayscale', 'hue-rotate', 'invert',
+      'opacity', 'saturate', 'sepia', 'drop-shadow',
+      // gradients / images
+      'linear-gradient', 'radial-gradient', 'conic-gradient',
+      'repeating-linear-gradient', 'repeating-radial-gradient', 'url', 'image-set',
+      // basic shapes (clip-path) / grid — Baseline widely available since
+      // 2017-2020, Safari 10.1+; nowhere near the 16.4 floor
+      'circle', 'inset', 'minmax', 'repeat',
+      // selectors / at-rule conditions
+      'not', 'is', 'where', 'has', 'nth-child', 'nth-last-child', 'nth-of-type',
+      'selector', 'supports', 'lang', 'dir', 'host', 'slotted',
+      // animation
+      'cubic-bezier', 'steps', 'attr', 'counter', 'format', 'local',
+    ]);
+    const DEGRADES_UNUSED = new Set([
+      // ::view-transition-old(root) / ::view-transition-new(root) — View
+      // Transitions API, requires Safari 18; the floor is 16.4. Failure mode:
+      // an unrecognized pseudo-element invalidates only the rule it appears
+      // in, so on an unsupported browser this theme-switch reveal animation
+      // is simply absent — no other rule or custom property is affected.
+      // Also feature-detected before use, independently of this CSS, at
+      // interfaces/webchat/src/components/theme_toggle.rs:53
+      // (`document.startViewTransition` read via `Reflect.get`, only called
+      // if present).
+      'view-transition-old', 'view-transition-new',
+    ]);
+    const REVIEWED = new Set([...IN_FLOOR, ...DEGRADES_UNUSED]);
+    const seen = new Set();
+    for (const m of css.matchAll(/(?:^|[^\w-])([a-zA-Z][\w-]*)\(/g)) {
+      seen.add(m[1]);
+    }
+    const novel = [...seen].filter((n) => !REVIEWED.has(n)).sort();
+    if (novel.length) {
+      fail('D', `${CSS_PATH} uses CSS function(s) not on the reviewed list: ${novel.join(', ')}.\n` +
+        `      This is an OVER-REPORTING census: it goes red on anything new, by design.\n` +
+        `      Decide for each one whether it is inside the ${baseline.safari_min} / WebKitGTK ${baseline.webkitgtk_min} floor.\n` +
+        `      If yes, add it to REVIEWED in this file. If no, the floor moves and ${BASELINE} changes.`);
+    }
+  }
+}
+
 if (problems.length) {
   console.error(problems.join('\n'));
   console.error(`\n${problems.length} baseline violation(s). The declaration is ${BASELINE}; fix the consumer, not the declaration, unless you are deliberately moving the floor.`);
