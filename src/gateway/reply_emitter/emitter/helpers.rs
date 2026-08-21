@@ -5,6 +5,18 @@ use super::super::sanitize::sanitize_llm_output;
 use super::ReplyEmitter;
 use crate::gateway::channel::OutboundMessage;
 
+/// Whether a send is eligible for the side-answer badge.
+///
+/// `MayBeTheAnswer` does **not** mean "badge it" — `config.side_answer` and the
+/// `answering` latch still decide. It means the call site does not rule it out.
+/// `NeverTheAnswer` is the call site asserting that it knows this text is not
+/// the run's answer, so the latch being open must not reach it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Marking {
+    MayBeTheAnswer,
+    NeverTheAnswer,
+}
+
 impl ReplyEmitter {
     /// Returns true when voice output should be attempted.
     /// Dynamically check if voice output should be used.
@@ -267,30 +279,53 @@ impl ReplyEmitter {
         content.to_string()
     }
 
-    /// Mark `text` as a side answer, if this run is one and is delivering its
-    /// answer right now.
+    /// Would [`ReplyEmitter::mark_side_answer`] change the text right now?
     ///
     /// Both halves matter. `config.side_answer` is fixed for the emitter's
     /// lifetime (see its doc); [`ReplyEmitter::answering`] is what keeps the
-    /// marker off the progress messages a side question may have emitted before
-    /// its answer.
+    /// marker off the progress messages a side question emits before its answer.
+    ///
+    /// Split out from `mark_side_answer` because one arm needs to know the
+    /// answer *before* it has a string: `StreamAction::Done` means the last
+    /// debounced edit already put the whole answer on screen, so the only way to
+    /// badge it is to issue an edit that would otherwise not happen at all — and
+    /// an unconditional one would change what every ordinary run puts on the
+    /// wire.
+    pub(crate) fn is_marking(&self) -> bool {
+        self.config.side_answer && self.answering.load(Ordering::SeqCst)
+    }
+
+    /// Mark `text` as a side answer, if this run is one and is delivering its
+    /// answer right now.
     ///
     /// Every caller passes text that has already been through
     /// `sanitize_llm_output` — the marker must not be visible to the sanitizer,
     /// which strips model-authored framing and would be reasoning about a
     /// prefix no model wrote.
     pub(crate) fn mark_side_answer<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
-        if self.config.side_answer && self.answering.load(Ordering::SeqCst) {
+        if self.is_marking() {
             std::borrow::Cow::Owned(crate::gateway::btw::format_side_answer(text))
         } else {
             std::borrow::Cow::Borrowed(text)
         }
     }
 
-    /// Latch [`ReplyEmitter::answering`]: from here on, text this emitter hands
-    /// the channel is the run's answer.
+    /// Open the [`ReplyEmitter::answering`] latch: text handed to the channel
+    /// from here until [`ReplyEmitter::end_answering`] is the run's answer.
     pub(crate) fn begin_answering(&self) {
         self.answering.store(true, Ordering::SeqCst);
+    }
+
+    /// Close the latch.
+    ///
+    /// `RunComplete` is the terminal frame for this purpose — it is the only
+    /// event that carries a run's answer, so the latch is open for exactly its
+    /// duration and anything this emitter sends afterwards (a `RunError` that
+    /// somehow followed, a late media caption, whatever the next author adds)
+    /// is not badged. A latch left open would badge it, which is why this is a
+    /// pair rather than a one-way flag.
+    pub(crate) fn end_answering(&self) {
+        self.answering.store(false, Ordering::SeqCst);
     }
 
     /// Whether this emitter is delivering a `/btw` side answer.
@@ -318,6 +353,28 @@ impl ReplyEmitter {
 
         let content = sanitize_llm_output(content);
         self.send_to_channel_sanitized(&content, None).await;
+    }
+
+    /// Send text that travels *beside* the answer and is never the answer.
+    ///
+    /// The `🤔 <reasoning>` preview is the one such send, and it goes out
+    /// **after** the latch opens — a side question whose provider emitted
+    /// reasoning would otherwise get `💬 🤔 <chain of thought>` and then
+    /// `💬 <answer>`: a badge on text that is not the answer, and two badges in
+    /// one conversation for one side question, which is the interleaving the
+    /// badge exists to disambiguate, inverted.
+    ///
+    /// Deliberately a separate entry point rather than "move the reasoning send
+    /// above `begin_answering()`": the latch has to be open before it, because
+    /// the native-stream branch delivers and returns earlier still.
+    pub(crate) async fn send_aside_to_channel(&self, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+
+        let content = sanitize_llm_output(content);
+        self.deliver_to_channel(&content, None, Marking::NeverTheAnswer)
+            .await;
     }
 
     /// Send content to the channel, extracting embedded reasoning, sanitizing,
@@ -349,6 +406,13 @@ impl ReplyEmitter {
     /// Callers that have already called `sanitize_llm_output` should use this
     /// to avoid redundant sanitization passes.
     pub(crate) async fn send_to_channel_sanitized(&self, content: &str, reasoning: Option<&str>) {
+        self.deliver_to_channel(content, reasoning, Marking::MayBeTheAnswer)
+            .await;
+    }
+
+    /// THE outbound text chokepoint. Every non-streamed message this emitter
+    /// sends passes here, already sanitized and not yet split.
+    async fn deliver_to_channel(&self, content: &str, reasoning: Option<&str>, marking: Marking) {
         if content.is_empty() && reasoning.is_none_or(|r| r.is_empty()) {
             return;
         }
@@ -357,12 +421,13 @@ impl ReplyEmitter {
         self.has_sent.store(true, Ordering::SeqCst);
 
         let content = self.format_content(content, is_first_send);
-        // THE outbound text chokepoint: every non-streamed message this emitter
-        // sends passes here, already sanitized and not yet split. Marking before
-        // the split puts the badge on the first chunk only, which is what a
-        // reader scanning a conversation needs — a badge repeated on every chunk
-        // of one long answer reads as several answers.
-        let content = self.mark_side_answer(&content).into_owned();
+        // Marking before the split puts the badge on the first chunk only, which
+        // is what a reader scanning a conversation needs — a badge repeated on
+        // every chunk of one long answer reads as several answers.
+        let content = match marking {
+            Marking::MayBeTheAnswer => self.mark_side_answer(&content).into_owned(),
+            Marking::NeverTheAnswer => content,
+        };
 
         let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
         let total_chunks = chunks.len();

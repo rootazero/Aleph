@@ -257,16 +257,23 @@ pub fn side_key_for(main: &SessionKey) -> SessionKey {
 ///
 /// # Where it is applied
 ///
-/// On the **channel face only**, and after sanitization: a marker prepended
-/// before `sanitize_llm_output` would change what the sanitizer sees. The
-/// three faces that deliver a channel run's final text each apply it at the
-/// point that text settles — the base `ReplyEmitter`'s outbound chokepoint and
-/// its two edit-based finals, Feishu's streaming card `close`, and Telegram's
-/// orchestrated answer-lane `finalize`. All three learn they are a side answer
-/// once, at emitter construction, from [`BtwTurn::resolve`] — the engine stamps
-/// `BTW_METADATA_KEY` inside `execute()`, which the router-side construction
-/// never sees, so re-deriving from a string prefix there would be a second
-/// answer to a question this module already answers.
+/// On the **channel face only**, and never before that face's sanitizer: a
+/// marker prepended earlier would be a prefix no model wrote, handed to a pass
+/// whose job is stripping model-authored framing. The three faces that deliver
+/// a channel run's final text each apply it at the point that text settles —
+/// the base `ReplyEmitter`'s outbound chokepoint, its two edit-based finals and
+/// its already-settled (`StreamAction::Done`) case, Feishu's streaming card
+/// `close`, and Telegram's orchestrated answer-lane `finalize`. Two of those
+/// run after `sanitize_llm_output` / `sanitize_final_response`; the Feishu card
+/// has no sanitizer of its own (`sanitize_llm_output` has no callers outside
+/// `reply_emitter/` — the card accumulates the raw delta), so on that face
+/// "after sanitization" is vacuously satisfied rather than arranged.
+///
+/// All three learn they are a side answer once, at emitter construction, from
+/// [`BtwTurn::resolve`] — `BTW_METADATA_KEY` is not stamped until `stamp_btw`
+/// runs, which is after the emitter exists on every path, so re-deriving from
+/// a string prefix there would be a second answer to a question this module
+/// already answers.
 ///
 /// # Where it is deliberately NOT applied, and why
 ///

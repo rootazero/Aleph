@@ -41,13 +41,16 @@ pub struct ReplyEmitterConfig {
     ///
     /// **Resolved once, at emitter construction, from
     /// [`crate::gateway::btw::BtwTurn::resolve`]** — the one resolver every
-    /// surface shares. It cannot come from the run's metadata: the engine
-    /// stamps `BTW_METADATA_KEY` inside `execute()`, and the emitter is built
-    /// by the inbound router long before that `RunRequest` exists, so the stamp
-    /// never travels back out. Asking the resolver here is therefore the same
-    /// derivation the engine makes, not a second one — and it must stay that
-    /// way: re-deriving from a `/btw` string prefix on this side would be
-    /// exactly the duplicate predicate `btw/mod.rs` deleted.
+    /// surface shares. It cannot come from the run's metadata, and the reason
+    /// is ordering, not distance: `BTW_METADATA_KEY` is stamped by
+    /// `stamp_btw`, which this same router calls ~300 lines further down
+    /// (`inbound_router/executor.rs`, just before the busy lane) and which
+    /// `execute()` then re-runs idempotently. The emitter is built before
+    /// either — before the `RunRequest` it would read even exists. Asking the
+    /// resolver here is therefore the same derivation `stamp_btw` makes, from
+    /// the same bytes, not a second one — and it must stay that way:
+    /// re-deriving from a `/btw` string prefix on this side would be exactly
+    /// the duplicate predicate `btw/mod.rs` deleted.
     ///
     /// Carried in the *config* rather than on the emitter so the two custom
     /// emitters that clone `reply_config` (Feishu's streaming card, Telegram's

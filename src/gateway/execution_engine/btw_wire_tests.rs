@@ -852,7 +852,7 @@ const RIG_CHANNEL: &str = "telegram";
 /// the router's work and not the engine's, so what it captures is exactly what
 /// the channel path produced.
 ///
-/// `answer` is off by default, and has to be. Every other test on this rig
+/// The script is empty by default, and has to be. Every other test on this rig
 /// asserts on the request or on the router's *own* replies, and one of them
 /// (`a_claimed_btw_reaches_the_engine_on_the_same_rig`) asserts that the router
 /// sent nothing at all — an adapter that always answered would put a reply on
@@ -860,9 +860,34 @@ const RIG_CHANNEL: &str = "telegram";
 #[derive(Default)]
 struct CapturingAdapter {
     seen: std::sync::Mutex<std::collections::VecDeque<RunRequest>>,
-    /// The run's final text, delivered as a `RunComplete` on the emitter the
-    /// router constructed. Set through [`ChannelRig::answer_with`].
-    answer: std::sync::Mutex<Option<String>>,
+    /// Frames this adapter emits, in order, on the emitter the router built.
+    /// Set through the `ChannelRig::*_with` arming methods.
+    script: std::sync::Mutex<Vec<RigFrame>>,
+}
+
+/// One frame in a [`CapturingAdapter`] script.
+///
+/// A script rather than three optional fields because the ORDER is what several
+/// of these tests are about — the badge belongs on the answer and not on what
+/// preceded it, so "what preceded it" has to be expressible.
+#[derive(Clone)]
+enum RigFrame {
+    /// A standalone progress message: `is_intermediate: true`, non-empty. The
+    /// emitter delivers these on their own, immediately, well before it has an
+    /// answer — the exact traffic the `answering` latch exists to keep unbadged.
+    Progress(String),
+    /// An answer token: `is_intermediate: false`. Buffered, and — on a channel
+    /// that can edit — streamed out as it arrives.
+    Chunk(String),
+    /// Explicit provider reasoning. The emitter buffers it and, on a streaming
+    /// channel, sends it at `RunComplete` as its own `🤔 …` message — beside
+    /// the answer, and after the badge latch is already open.
+    Reasoning(String),
+    /// A failure receipt. Today's drain never sends one after `RunComplete` —
+    /// which is exactly why the latch's closing half needs a test that does.
+    Error(String),
+    /// The terminal frame, carrying `summary.final_response`.
+    Complete(Option<String>),
 }
 
 impl CapturingAdapter {
@@ -882,8 +907,8 @@ impl ExecutionAdapter for CapturingAdapter {
         _agent: Arc<AgentInstance>,
         emitter: Arc<dyn EventEmitter + Send + Sync>,
     ) -> Result<(), super::ExecutionError> {
-        let answer = self
-            .answer
+        let script = self
+            .script
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
@@ -891,22 +916,54 @@ impl ExecutionAdapter for CapturingAdapter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push_back(request.clone());
-        if let Some(text) = answer {
-            // The terminal event a real run ends on, carrying its answer where
-            // a real run carries it. Nothing about the delivery is built here:
-            // which emitter this is, whether it marks, and what it sends were
-            // all decided by `executor.rs` before this adapter was called.
-            let _ = emitter
-                .emit(StreamEvent::RunComplete {
+        // The frames a real run emits, in the order a real run emits them.
+        // Nothing about the delivery is built here: which emitter this is,
+        // whether it streams, whether it marks, and what it sends were all
+        // decided by `executor.rs` before this adapter was called.
+        for frame in script {
+            let event = match frame {
+                RigFrame::Progress(text) => StreamEvent::ResponseChunk {
+                    run_id: request.run_id.clone(),
+                    seq: 0,
+                    delta: text.clone(),
+                    full_text: text,
+                    chunk_index: 0,
+                    is_final: false,
+                    is_intermediate: true,
+                },
+                RigFrame::Chunk(text) => StreamEvent::ResponseChunk {
+                    run_id: request.run_id.clone(),
+                    seq: 0,
+                    delta: text.clone(),
+                    full_text: text,
+                    chunk_index: 0,
+                    is_final: false,
+                    is_intermediate: false,
+                },
+                RigFrame::Reasoning(content) => StreamEvent::Reasoning {
+                    run_id: request.run_id.clone(),
+                    seq: 0,
+                    content,
+                    is_complete: true,
+                },
+                RigFrame::Error(error) => StreamEvent::RunError {
+                    run_id: request.run_id.clone(),
+                    seq: 0,
+                    error,
+                    error_code: None,
+                    session_key: None,
+                },
+                RigFrame::Complete(final_response) => StreamEvent::RunComplete {
                     run_id: request.run_id.clone(),
                     seq: 0,
                     summary: crate::gateway::event_emitter::RunSummary {
-                        final_response: Some(text),
+                        final_response,
                         ..Default::default()
                     },
                     total_duration_ms: 0,
-                })
-                .await;
+                },
+            };
+            let _ = emitter.emit(event).await;
         }
         Ok(())
     }
@@ -948,20 +1005,42 @@ struct RigChannel {
     info: crate::gateway::channel::ChannelInfo,
     state: crate::gateway::channel::ChannelState,
     sent: Arc<std::sync::Mutex<Vec<String>>>,
+    edits: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl RigChannel {
-    fn new(sent: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+    /// `editing` is opt-in, and the default (`false`) is load-bearing.
+    ///
+    /// `apply_channel_capabilities` floors `stream_enabled` on a channel that
+    /// cannot edit, so a non-editing rig channel routes a run's answer through
+    /// the emitter's outbound chokepoint, and an editing one routes it through
+    /// the `StreamingController` instead — two different delivery arms, two
+    /// different application points for the badge. Turning this on globally
+    /// would silently move every existing rig test onto the other arm.
+    fn new(
+        sent: Arc<std::sync::Mutex<Vec<String>>>,
+        edits: Arc<std::sync::Mutex<Vec<String>>>,
+        editing: bool,
+    ) -> Self {
         Self {
             info: crate::gateway::channel::ChannelInfo {
                 id: ChannelId::new(RIG_CHANNEL),
                 name: RIG_CHANNEL.to_string(),
                 channel_type: RIG_CHANNEL.to_string(),
                 status: crate::gateway::channel::ChannelStatus::Connected,
-                capabilities: crate::gateway::channel::ChannelCapabilities::default(),
+                capabilities: crate::gateway::channel::ChannelCapabilities {
+                    editing,
+                    stream_protocol: if editing {
+                        crate::gateway::channel::StreamProtocol::EditBased
+                    } else {
+                        crate::gateway::channel::StreamProtocol::None
+                    },
+                    ..Default::default()
+                },
             },
             state: crate::gateway::channel::ChannelState::new(8),
             sent,
+            edits,
         }
     }
 }
@@ -993,6 +1072,25 @@ impl crate::gateway::channel::Channel for RigChannel {
             timestamp: chrono::Utc::now(),
         })
     }
+
+    /// Records the settled text of an edit-based stream.
+    ///
+    /// The default body is an `Err`, and an emitter that streams then settles
+    /// drops that error on the floor — so without this the settling rewrite,
+    /// which is where the badge goes on this arm, would be invisible AND
+    /// unobservably broken.
+    async fn edit(
+        &self,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+        new_text: &str,
+    ) -> crate::gateway::channel::ChannelResult<()> {
+        self.edits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(new_text.to_string());
+        Ok(())
+    }
 }
 
 /// A router wired the way a channel deployment wires one: an agent registry, an
@@ -1009,9 +1107,29 @@ struct ChannelRig {
     /// Everything the router sent back to the channel. A message the router
     /// answered itself leaves a trace here and no trace in `adapter`.
     replies: Arc<std::sync::Mutex<Vec<String>>>,
+    /// The settled text of every edit-based stream. Empty unless the rig was
+    /// built [`ChannelRig::editing`].
+    edits: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl ChannelRig {
+    /// The ordinary rig: a channel that cannot edit, so a run's answer is
+    /// delivered as one message through the emitter's outbound chokepoint.
+    async fn new(catalog_resolves_btw: bool) -> Self {
+        Self::build(catalog_resolves_btw, false).await
+    }
+
+    /// The same rig over an **edit-capable** channel, which is what turns
+    /// streaming on (`apply_channel_capabilities` widens on `EditBased` and
+    /// floors on `editing`). A run's answer then arrives as an initial send
+    /// plus a settling rewrite, and the badge rides the rewrite — a different
+    /// arm of `RunComplete` from the one `new()` exercises, and the one that
+    /// `output_mode = "typewriter"` makes the default on any real channel that
+    /// can edit.
+    async fn editing() -> Self {
+        Self::build(false, true).await
+    }
+
     /// `catalog_resolves_btw` seeds the catalog with a tool literally named
     /// `btw`. That is not the shipped state — `no_shipped_command_word_resolves_as_a_side_question`
     /// pins that it is not — it is the world in which falling through to the
@@ -1019,7 +1137,7 @@ impl ChannelRig {
     /// the ordering here testable rather than merely true today. Registering
     /// `btw` for discovery would create exactly this world on every surface;
     /// see that guard for why the listing was not shipped.
-    async fn new(catalog_resolves_btw: bool) -> Self {
+    async fn build(catalog_resolves_btw: bool, editing: bool) -> Self {
         let temp = tempfile::tempdir().expect("tempdir");
 
         let sessions = Arc::new(
@@ -1062,9 +1180,14 @@ impl ChannelRig {
         }
 
         let replies: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let edits: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
         let channels = Arc::new(ChannelRegistry::new());
         channels
-            .register(Box::new(RigChannel::new(replies.clone())))
+            .register(Box::new(RigChannel::new(
+                replies.clone(),
+                edits.clone(),
+                editing,
+            )))
             .await;
 
         let adapter = Arc::new(CapturingAdapter::default());
@@ -1102,6 +1225,7 @@ impl ChannelRig {
             temp,
             next_id: std::sync::atomic::AtomicU64::new(0),
             replies,
+            edits,
         }
     }
 
@@ -1147,16 +1271,74 @@ impl ChannelRig {
         );
     }
 
-    /// Arm the adapter to finish every subsequent run with `text` as its final
-    /// response, delivered through the emitter `executor.rs` built.
+    /// Arm the adapter with the frames every subsequent run will emit, in
+    /// order, on the emitter `executor.rs` built.
     ///
-    /// Off until asked for: see [`CapturingAdapter::answer`].
-    fn answer_with(&self, text: &str) {
+    /// Off until asked for: see [`CapturingAdapter::script`].
+    fn script(&self, frames: Vec<RigFrame>) {
         *self
             .adapter
-            .answer
+            .script
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text.to_string());
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = frames;
+    }
+
+    /// Finish every subsequent run with `text` as its final response, and
+    /// nothing before it.
+    fn answer_with(&self, text: &str) {
+        self.script(vec![RigFrame::Complete(Some(text.to_string()))]);
+    }
+
+    /// Emit a standalone progress message, then finish with `answer`.
+    ///
+    /// The two arrive as two separate channel messages, which is what makes the
+    /// `answering` latch observable: the first goes out before the run has an
+    /// answer at all.
+    fn progress_then_answer(&self, progress: &str, answer: &str) {
+        self.script(vec![
+            RigFrame::Progress(progress.to_string()),
+            RigFrame::Complete(Some(answer.to_string())),
+        ]);
+    }
+
+    /// Stream `chunk` as the run's answer and then complete with no
+    /// `final_response`.
+    ///
+    /// On an [`ChannelRig::editing`] rig this is the shape that drives
+    /// `StreamingController::finalize()` into `StreamAction::Done`: one chunk
+    /// long enough to cross `min_initial_chars` is sent as the initial message,
+    /// `record_sent` sets `last_edit_len` to the whole buffer, and nothing
+    /// arrives after it — so the controller reports there is nothing left to
+    /// write, and any badge that depends on a settling rewrite has to ask for
+    /// one.
+    fn stream_then_complete(&self, chunk: &str) {
+        self.script(vec![
+            RigFrame::Chunk(chunk.to_string()),
+            RigFrame::Complete(None),
+        ]);
+    }
+
+    /// Answer, then fail — the sequence that shows whether the badge latch was
+    /// closed or merely opened.
+    fn answer_then_fail(&self, answer: &str, error: &str) {
+        self.script(vec![
+            RigFrame::Complete(Some(answer.to_string())),
+            RigFrame::Error(error.to_string()),
+        ]);
+    }
+
+    /// The same stream, preceded by explicit provider reasoning.
+    ///
+    /// On a streaming channel the emitter delivers the reasoning as its own
+    /// `🤔 …` message during `RunComplete` — i.e. after the badge latch has
+    /// already opened, which is the one place a call site has to say "this is
+    /// beside the answer, not the answer".
+    fn reason_then_stream(&self, reasoning: &str, chunk: &str) {
+        self.script(vec![
+            RigFrame::Reasoning(reasoning.to_string()),
+            RigFrame::Chunk(chunk.to_string()),
+            RigFrame::Complete(None),
+        ]);
     }
 
     /// Block until something reaches the channel, and return the first thing
@@ -1167,16 +1349,48 @@ impl ChannelRig {
     /// because `deliver` returns as soon as the adapter has *recorded* the
     /// request, which is one statement before it answers on the emitter.
     async fn wait_for_reply(&self) -> String {
+        self.wait_for_replies(1).await.remove(0)
+    }
+
+    /// Block until at least `n` messages have reached the channel.
+    async fn wait_for_replies(&self, n: usize) -> Vec<String> {
         for _ in 0..400 {
-            if let Some(first) = self.replies_so_far().into_iter().next() {
-                return first;
+            let seen = self.replies_so_far();
+            if seen.len() >= n {
+                return seen;
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         panic!(
-            "the run's answer never reached the channel — the adapter was armed \
-             but nothing was sent. Check that the emitter still delivers \
-             `RunComplete`'s `summary.final_response`."
+            "the run sent {} message(s), expected at least {n} — the adapter was \
+             armed but the emitter did not deliver. Saw: {:?}",
+            self.replies_so_far().len(),
+            self.replies_so_far()
+        );
+    }
+
+    /// Block until at least one edit has landed, and return the settled text.
+    ///
+    /// Only an [`ChannelRig::editing`] rig can produce these; on the ordinary
+    /// rig `Channel::edit`'s default body is an `Err` the emitter drops, so a
+    /// wait here would time out rather than mislead.
+    async fn wait_for_edit(&self) -> String {
+        for _ in 0..400 {
+            if let Some(last) = self
+                .edits
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .last()
+                .cloned()
+            {
+                return last;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!(
+            "no settling edit reached the channel. The run streamed {:?} and \
+             edited nothing.",
+            self.replies_so_far()
         );
     }
 
@@ -1579,6 +1793,182 @@ async fn an_ordinary_channel_answer_reaches_the_channel_unmarked() {
         "an ordinary reply must reach the channel exactly as the run produced \
          it — a side-answer marker here means the predicate is not reading the \
          run's input at all"
+    );
+}
+
+/// The badge lands on the **answer**, not on what the side question said while
+/// it was working.
+///
+/// This is the `answering` latch's own guard, and until it existed the latch
+/// could be deleted outright — predicate reduced to `config.side_answer` — with
+/// the whole suite still green, because every other assertion here looks only at
+/// a run whose single message IS its answer.
+///
+/// A side question can send before it has an answer: an approval prompt, a
+/// scratchpad tick, any standalone intermediate chunk. Badging those puts two
+/// `💬` messages in one conversation for one side question, which is the
+/// interleaving the badge exists to disambiguate, inverted.
+#[tokio::test]
+async fn the_badge_is_on_the_answer_and_not_on_the_progress_before_it() {
+    let rig = ChannelRig::new(false).await;
+    rig.progress_then_answer("still looking...", "the file is config.toml");
+
+    rig.deliver("/btw what was that file called?").await;
+    let replies = rig.wait_for_replies(2).await;
+
+    assert_eq!(
+        replies[0], "still looking...",
+        "the progress message a side question sent BEFORE it had an answer was \
+         badged. `ReplyEmitter::answering` is what keeps the badge off it; if \
+         the latch half of `is_marking()` is gone, this is what it costs."
+    );
+    assert!(
+        replies[1].starts_with("💬 "),
+        "the answer itself lost its badge: {:?}",
+        replies[1]
+    );
+}
+
+/// The badge reaches an **edit-based** channel too, on the arm where the last
+/// debounced edit already delivered everything.
+///
+/// `StreamingController::finalize()` answers `Done` when `buffer.len() ==
+/// last_edit_len`: the text is on screen, there is nothing left to write, and
+/// so — before this was fixed — nothing wrote the badge either. That is not an
+/// exotic path. `output_mode` defaults to `"typewriter"` and
+/// `apply_channel_capabilities` keeps streaming on for any channel that can
+/// edit, so it is the default one.
+///
+/// It needs an edit-capable rig, and that is the whole reason the escape could
+/// exist with the suite green: `ChannelRig::new`'s channel cannot edit, so
+/// streaming is floored off and every other arrival test here exercises the
+/// outbound chokepoint instead.
+#[tokio::test]
+async fn a_streamed_side_answer_is_badged_when_it_settles_with_nothing_left_to_write() {
+    let rig = ChannelRig::editing().await;
+    // Long enough to cross `min_initial_chars` (30) so the controller sends an
+    // initial message and records the whole buffer as delivered.
+    rig.stream_then_complete("the file you are thinking of is config.toml");
+
+    rig.deliver("/btw what was that file called?").await;
+    let settled = rig.wait_for_edit().await;
+
+    assert!(
+        settled.starts_with("💬 "),
+        "the streamed side answer settled unbadged: {settled:?}. \
+         `StreamAction::Done` means no settling rewrite happens on its own — the \
+         badge has to ask for one."
+    );
+    assert!(
+        settled.contains("config.toml"),
+        "the settling edit replaced the answer instead of badging it: {settled:?}"
+    );
+}
+
+/// The control for the test above: the same edit-capable rig, the same stream,
+/// an ordinary message — and **no edit at all**.
+///
+/// The fix issues an edit that would otherwise not happen. Asserting only that
+/// an ordinary settle is unbadged would pass even if it had started making an
+/// extra API call on every streamed reply on every channel that can edit; this
+/// asserts the byte-identical no-op that claim rests on.
+/// The badge latch closes with the answer, so nothing sent afterwards inherits
+/// it.
+///
+/// `RunComplete` is the terminal frame for this purpose — the only event that
+/// carries a run's answer. Today's drain sends exactly one terminal event, so
+/// no shipped path emits anything after it; the latch's closing half therefore
+/// has no producer to prove it, and a one-way flag would look identical. This
+/// test supplies the producer: a failure receipt after the answer, badged if
+/// and only if the latch was left open.
+///
+/// It is not a claim that the sequence happens — it is what makes "the latch is
+/// a pair, not a flag" a fact about the code rather than about its comments.
+#[tokio::test]
+async fn the_badge_latch_closes_with_the_answer() {
+    let rig = ChannelRig::new(false).await;
+    rig.answer_then_fail("the file is config.toml", "provider hung up");
+
+    rig.deliver("/btw what was that file called?").await;
+    let replies = rig.wait_for_replies(2).await;
+
+    assert!(
+        replies[0].starts_with("💬 "),
+        "the answer lost its badge: {:?}",
+        replies[0]
+    );
+    assert!(
+        !replies[1].starts_with("💬 "),
+        "a message sent after the answer inherited its badge: {:?}. The latch \
+         must be closed by `end_answering`, not left open for the emitter's \
+         lifetime.",
+        replies[1]
+    );
+}
+
+/// The reasoning preview is **not** the answer, and does not get the badge —
+/// even though it is sent after the latch opens.
+///
+/// It is the one message this emitter delivers between opening the latch and
+/// settling the answer, and it goes out through the same chokepoint. Badging it
+/// gives one side question TWO `💬` messages — the second of which is a chain
+/// of thought — which is the interleaving the badge exists to disambiguate,
+/// inverted. It also falsifies the invariant written on
+/// `ReplyEmitter::answering`, and a doc that disagrees with the code is the
+/// half a future author will trust.
+#[tokio::test]
+async fn the_reasoning_preview_is_never_badged_though_it_follows_the_latch() {
+    let rig = ChannelRig::editing().await;
+    rig.reason_then_stream(
+        "weighing two candidates",
+        "the file you are thinking of is config.toml",
+    );
+
+    rig.deliver("/btw what was that file called?").await;
+    let settled = rig.wait_for_edit().await;
+    let replies = rig.replies_so_far();
+
+    let preview = replies
+        .iter()
+        .find(|r| r.contains("weighing two candidates"))
+        .unwrap_or_else(|| panic!("the reasoning preview never reached the channel: {replies:?}"));
+    assert!(
+        preview.starts_with("🤔 "),
+        "the reasoning preview was badged: {preview:?}. It travels beside the \
+         answer, so it must go out through `send_aside_to_channel`, not the \
+         marked path."
+    );
+    assert!(
+        settled.starts_with("💬 "),
+        "the answer itself lost its badge: {settled:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_ordinary_streamed_answer_settles_without_an_extra_edit() {
+    let rig = ChannelRig::editing().await;
+    rig.stream_then_complete("the file you are thinking of is config.toml");
+
+    rig.deliver("what was that file called?").await;
+    let sent = rig.wait_for_reply().await;
+
+    assert!(
+        sent.contains("config.toml"),
+        "the streamed answer never reached the channel: {sent:?}"
+    );
+    // Give the settle every chance to happen before concluding it did not.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        rig.edits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "an ordinary run took the `StreamAction::Done` arm and issued an edit \
+         anyway: {:?}. That arm must stay a no-op unless the badge would change \
+         the text.",
+        rig.edits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     );
 }
 
