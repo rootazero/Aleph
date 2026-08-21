@@ -645,7 +645,27 @@ mod tests {
     ///
     /// A file whose tests module is spelled some other way is scanned whole.
     /// That errs toward a false positive, which is red and therefore visible —
-    /// the opposite of the failure above. Measured over the tree, no file does.
+    /// the opposite of the failure above.
+    ///
+    /// This used to end "Measured over the tree, no file does", which was false
+    /// when it was written and is load-bearing: it is the stated reason this
+    /// scanner may stay simple, and a later dispatch document quoted it rather
+    /// than re-measuring. Re-measured 2026-08-22: **twelve** files under `src/`
+    /// spell it with a visibility qualifier (`#[cfg(test)] pub(crate) mod tests`
+    /// in `memory/embedding_provider.rs`, `gateway/handlers/auth/mod.rs`,
+    /// `gateway/handlers/graph/mod.rs`, `builtin_tools/agent_manage/mod.rs`,
+    /// `browser/mod.rs`, `acp/mock_server.rs`; `pub mod` or a differently-named
+    /// module in `acp/mod.rs`, `sandbox/mod.rs`, `security/ssrf/dns.rs`,
+    /// `teams/mod.rs`, `memory/session_search_summary/synthesizer.rs`, and
+    /// `gateway/btw/guard_tests.rs`). Six of the twelve are read whole and six
+    /// are cut later than a qualifier-aware scanner would cut them; either way
+    /// this scanner reads MORE text, which is the safe direction, so no census
+    /// here is currently lying — the measurement claim was. A qualifier-aware
+    /// version lives in
+    /// `gateway::btw::guard_tests::test_module_offset`; adopting it here would
+    /// make those twelve files cut **earlier**, i.e. read less text, so it needs
+    /// every census that depends on this helper re-measured and is deliberately
+    /// not done as a drive-by.
     fn production_source(raw: &str) -> String {
         let no_cr = raw.replace('\r', "");
         let head = match test_module_offset(&no_cr) {

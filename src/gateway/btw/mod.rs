@@ -17,9 +17,16 @@
 //! onto the session** so the choice outlives its turn. `btw` is the opposite:
 //! it must affect exactly one call. Filing it with the knobs would make a
 //! single side question permanently drop the main conversation to `Plan`.
-//! It therefore does NOT appear in `turn_*.rs`, in `sessions.patch`'s
-//! `knob_validators()`, or in `session_snapshot.rs`, and nothing downstream
-//! should add it there.
+//! It therefore does NOT appear in `sessions.patch`'s `knob_validators()` or in
+//! `session_snapshot.rs`, and the only mention of it anywhere in `turn_*.rs` is
+//! `turn_permissions.rs`'s `contains_key` — a query of *this* request, for
+//! *this* turn, which stores nothing. Nothing downstream should add more.
+//!
+//! That is a rule rather than a remembered sentence: `guard_tests::
+//! btw_is_not_filed_with_the_five_session_knobs` is the authority, and it
+//! sanctions exactly the one read. An earlier wording of this paragraph said
+//! `btw` appears in no `turn_*.rs` at all, which was already false about the
+//! ceiling when it was written.
 
 pub(crate) mod promote;
 pub(crate) mod seed;

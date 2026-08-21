@@ -7,36 +7,63 @@
 //!
 //! # What is already pinned elsewhere, and is therefore not repeated here
 //!
+//! Each citation states what the cited guard *actually* pins, which in two
+//! cases is narrower than its name suggests. A citation that overstates its
+//! referent is worse than no citation: it is how a gap gets counted as covered.
+//!
 //! * `interfaces/tui/.../commands.rs::this_client_resolves_a_side_question_in_exactly_one_place`
 //!   — that crate calls [`BtwTurn::resolve`](aleph_protocol::btw::BtwTurn::resolve)
-//!   exactly once. It counts *calls to the resolver*, so it cannot see a
-//!   hand-rolled prefix test that never calls it; that half is
-//!   [`only_the_shared_resolver_decides_what_a_side_question_is`] below.
+//!   exactly once. Two limits: it counts *calls to the resolver*, so it cannot
+//!   see a hand-rolled prefix test that never calls one (that half is
+//!   [`only_the_shared_resolver_decides_what_a_side_question_is`] below); and it
+//!   splits on the bare `#[cfg(test)]`, which in that crate cuts
+//!   `tui/btw_overlay.rs` at line 97 of 853 and `tui/keys.rs` at 749 of 1510 —
+//!   the two most `/btw`-relevant files in it — so a second resolver call below
+//!   either cut keeps its count at one.
 //! * `execution_engine/btw_wire_tests.rs::no_shipped_command_word_resolves_as_a_side_question`
 //!   — no catalog command word resolves *as* a side question (behavioural).
 //! * `execution_engine/slash_command.rs::stamp_btw_runs_before_admission_and_is_never_gated_on_slash_command_mode_key`
 //!   — `execute()` stamps before `admit_run` and outside the slash gate.
 //! * `execution_engine/slash_command.rs::every_run_start_handler_stamps_the_slash_mode_before_the_busy_lane`
-//!   — phrased over whichever handlers spawn, so a fourth surface inherits the
-//!   requirement; `stamp_slash_mode` calls `stamp_btw` first, so every surface
-//!   that satisfies it also stamps `btw`.
+//!   — phrased over whichever `pub async fn handle_*` spawn, **but only inside
+//!   `src/bin/aleph-server/server_init.rs`**, which is a hardcoded path. A
+//!   run-start handler added in another file inherits nothing from it. Where it
+//!   does apply, `stamp_slash_mode` calls `stamp_btw` first, so a handler that
+//!   satisfies it also stamps `btw`.
 //! * `continuation_lifecycle.rs::every_epoch_bump_or_content_wipe_reaches_a_side_session_retirement`
 //!   — retirement reaches every surface that rolls or wipes a conversation.
 //! * `inbound_router/command_handler.rs` — `/btw` stays on the router-owned
 //!   help lines, the only place a channel user can learn the verb exists.
 //!
-//! # The one place this file diverges from the repo's scanning precedent
+//! Taken together the positive half — "every surface that could carry a side
+//! question resolves it through the one resolver" — is pinned for `execute()`
+//! and for handlers in one file. Nothing here closes the rest of it.
 //!
-//! [`test_module_offset`] here also steps over a visibility qualifier, so
-//! `#[cfg(test)] pub(crate) mod tests` cuts like `#[cfg(test)] mod tests`. The
-//! precedent in `continuation_lifecycle.rs` does not, and its doc records that
-//! as a limit "measured empty today" — it is not empty:
-//! `src/memory/embedding_provider.rs`, `src/gateway/handlers/auth/mod.rs` and
-//! others spell it that way, so for those files that scanner treats the test
-//! module as production. Nothing this file scans for appears in one, which is
-//! why the counts below are the same either way; handling it is still the
-//! honest thing, because a scanner reading a test module as production is the
-//! shape where a test's own literal certifies the rule it was written to catch.
+//! # Why this file has its own scanner instead of the shared one
+//!
+//! `gateway::source_census::production_prefix` is `pub(crate)` and is the
+//! repo's nearest thing to a single source; six further private copies exist,
+//! and [`production_source`] here is a seventh. That is a real cost
+//! (「这个问题在仓里已经有几个答案」), so the reason has to be precise rather
+//! than a preference. The shared one differs in three ways, each of which would
+//! weaken a guard below:
+//!
+//! 1. it cuts at the **bare** `#[cfg(test)]`, so a `#[cfg(test)] use …` near the
+//!    top of a file blinds the scan to everything under it — the failure the
+//!    precedent's own doc calls worse than none;
+//! 2. it **drops** comment lines rather than blanking them, so every line number
+//!    it could report is counted in a file nobody has (see [`production_source`]);
+//! 3. it does not step over a visibility qualifier, so `#[cfg(test)]
+//!    pub(crate) mod tests` is read as production.
+//!
+//! Fixes 1 and 2 could be pushed down into the shared helper — every existing
+//! caller wants them, and both widen or preserve what is read. Fix 3 cannot go
+//! with them: it makes twelve files under `src/` cut **earlier**, i.e. read
+//! *less* text, and one of those files feeding a census that currently passes on
+//! the wider view could go green by blindness. Migrating therefore means
+//! re-measuring every census that depends on the shared helper, which is a
+//! change of its own and not one this task can honestly land. Recorded as a
+//! follow-up rather than as a comment.
 
 use std::path::{Path, PathBuf};
 
@@ -146,24 +173,37 @@ fn test_module_offset(src: &str) -> Option<usize> {
 }
 
 /// The part of a file that ships: CR stripped (a CRLF checkout makes
-/// `\n`-anchored splits match nothing), the tests module dropped, and comment
-/// lines **blanked** — the "the only hit is the comment explaining the rule"
+/// `\n`-anchored splits match nothing), comment lines **blanked**, and then the
+/// tests module dropped. The "the only hit is the comment explaining the rule"
 /// trap is the standard way a scan like this reports green.
 ///
-/// Blanked rather than dropped, which is where this diverges from the two
-/// scanners it is modelled on. They delete the line, so every offender they
-/// report carries a line number counted in a file nobody has: in a
-/// comment-heavy file the number can be off by hundreds, and a guard that
-/// points the reader at the wrong line spends its own credibility. Blanking
-/// costs one `String::new()` per comment and keeps `n + 1` meaning what the
-/// editor means.
+/// # Blanked rather than dropped
+///
+/// Every scanner this is modelled on deletes the line, so any line number they
+/// report is counted in a file nobody has. `slash_command.rs:903` is the live
+/// instance in this repo — it enumerates a comment-dropped text and prints
+/// `{rel}:{n+1}`. Blanking costs one empty string per comment and keeps
+/// `n + 1` meaning what the editor means.
+///
+/// # Blanked *before* the cut, which is the whole point of the ordering
+///
+/// A comment is not only a place a match can hide; it is a place the **cut**
+/// can hide. One production line spelled
+/// ``//! the test module below is `#[cfg(test)] mod tests;` `` truncates that
+/// file's production view to whatever sits above it, and every guard in this
+/// module then reports green on a file it can no longer see. Not hypothetical:
+/// planting exactly that comment plus a hand-rolled `/btw` predicate in
+/// `inbound_router/executor.rs` passed all four guards, and this module's own
+/// doc contained such a line.
+///
+/// Cutting the blanked text closes it, and the ordering *is* the fix: a scanner
+/// that blanks (or drops) comments after computing the offset still has the
+/// hole. Nothing downstream can see this class of failure — the file is still
+/// counted, just emptied — so the order has to be right rather than checked.
 fn production_source(raw: &str) -> String {
-    let no_cr = raw.replace('\r', "");
-    let head = match test_module_offset(&no_cr) {
-        Some(at) => &no_cr[..at],
-        None => &no_cr,
-    };
-    head.lines()
+    let blanked = raw
+        .replace('\r', "")
+        .lines()
         .map(|l| {
             if l.trim_start().starts_with("//") {
                 ""
@@ -172,7 +212,31 @@ fn production_source(raw: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    match test_module_offset(&blanked) {
+        Some(at) => blanked[..at].to_string(),
+        None => blanked,
+    }
+}
+
+/// Panic unless the scan is reading a whole tree rather than a fragment of one.
+///
+/// Two numbers, because they fail differently. The **file count** catches a walk
+/// that stopped walking. The **byte count** catches a walk that still visits
+/// every file but reads almost nothing out of them: a cut regressing, a
+/// separator that stopped matching, `is_test_only` over-matching. A file-count
+/// floor is structurally blind to that, because the files are all still counted,
+/// just emptied. Neither number can see a *single* file being truncated; only
+/// getting [`production_source`]'s ordering right does.
+fn assert_the_scan_read_the_tree(sources: &[(String, String)]) {
+    let bytes: usize = sources.iter().map(|(_, src)| src.len()).sum();
+    assert!(
+        sources.len() > 2_000 && bytes > 10_000_000,
+        "the scan read {} shipping file(s) / {bytes} byte(s) of production \
+         source, against a workspace of roughly 2 900 files and 18 MB. A scan \
+         of almost nothing reports the same green as a scan of everything",
+        sources.len()
+    );
 }
 
 /// `(relative path, production source)` for every shipping `.rs` in the
@@ -270,20 +334,22 @@ fn as_command_word(literal: &str) -> String {
 ///   line itself — that is `BTW_METADATA_KEY`, the metadata stamp's own single
 ///   source, which is a name for a map key and not a test of an input.
 ///
-/// # Known limit
+/// # Known limits
 ///
-/// A predicate that never writes the word — one comparing against a constant
-/// imported from elsewhere — is invisible here. That constant's own definition
-/// is not: it is a `const … = "btw"` line and there may be exactly one.
+/// Three, all of them predicates that never write the word:
+///
+/// * one comparing against a constant imported from elsewhere. That constant's
+///   own definition is visible — it is a `const … = "btw"` line and there may be
+///   exactly one — but an *aliasing* constant (`const S: &str = BTW_METADATA_KEY;`)
+///   carries no literal at all and defeats this guard and guard 6 together;
+/// * a regex (`Regex::new(r"^/btw\b")` normalises to `^/btw\b`, not `btw`) —
+///   low probability, since R7/P8 bans regex for reading user intent, but it is
+///   a comparison this scan does not see;
+/// * anything below a file's first `#[cfg(test)] mod`, by construction.
 #[test]
 fn only_the_shared_resolver_decides_what_a_side_question_is() {
     let sources = workspace_production_sources();
-    assert!(
-        sources.len() > 2_000,
-        "scanned only {} shipping source file(s) — the walk is not reading the \
-         tree, and its green would mean nothing",
-        sources.len()
-    );
+    assert_the_scan_read_the_tree(&sources);
 
     let resolver_files: Vec<&String> = sources
         .iter()
@@ -367,11 +433,7 @@ fn only_the_shared_resolver_decides_what_a_side_question_is() {
 #[test]
 fn the_side_key_prefix_is_defined_once_and_built_once() {
     let sources = workspace_production_sources();
-    assert!(
-        sources.len() > 2_000,
-        "scanned only {} shipping source file(s) — the walk is not reading the tree",
-        sources.len()
-    );
+    assert_the_scan_read_the_tree(&sources);
 
     let mut mentions = Vec::new();
     let mut definitions = Vec::new();
@@ -442,6 +504,10 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
 /// The identifier naming the call whose argument list encloses `at`, together
 /// with the offset of that call's opening parenthesis.
 fn enclosing_call(src: &str, at: usize) -> Option<(String, usize)> {
@@ -467,12 +533,49 @@ fn enclosing_call(src: &str, at: usize) -> Option<(String, usize)> {
     (start < open).then(|| (src[start..open].to_string(), open))
 }
 
-/// Every site where the bare identifier `main` is passed as an argument, as
-/// `(callee, offset of the callee's opening paren)`.
+/// Byte offset just past the `)` that matches the `(` at `open`.
+fn matching_paren(src: &str, open: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut depth = 0i32;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Every site where the main session is passed as an argument, as
+/// `(callee, spelling, offset of the callee's opening paren)`.
 ///
 /// Whole-text rather than per-line: the one call that matters here spreads its
 /// argument list over four lines, and a line-based scan would miss exactly it.
-fn main_argument_sites(src: &str) -> Vec<(String, usize)> {
+///
+/// # It has to see the value through its decorations
+///
+/// The first version required the byte before `main` to be `(` or `,` and the
+/// byte after to be `)` or `,` — i.e. it recognised only a bare, undecorated
+/// argument. `emit_event(&*main, …)` planted in `seed/mod.rs` — an unlabelled
+/// write into the main conversation, exactly the defect the guard exists to
+/// catch — therefore left every guard green, and so did `&main`,
+/// `main.clone()` and `main.as_ref()`. That is not the disclosed *alias* limit:
+/// `&*main` **is** spelled `main`. A block recogniser that does not recognise
+/// its own value wearing a sigil is the shape whose green means "I cannot see
+/// you", and `emit_event` taking a `SessionId` by value would make `&main` the
+/// natural spelling — an ordinary refactor away.
+///
+/// So an optional `&` / `*` sigil run before the identifier and an optional
+/// chain of `.method(…)` calls after it are accepted, and **the spelling is
+/// carried into the census key**: a respelling then shows up as a visible diff
+/// (`emit_event(main)` → `emit_event(&*main)`) rather than as a disappearance.
+fn main_argument_sites(src: &str) -> Vec<(String, String, usize)> {
     let bytes = src.as_bytes();
     let mut out = Vec::new();
     let mut cursor = 0;
@@ -486,16 +589,55 @@ fn main_argument_sites(src: &str) -> Vec<(String, usize)> {
         if end < bytes.len() && is_ident_byte(bytes[end]) {
             continue;
         }
-        let before = src[..at].trim_end();
-        let after = src[end..].trim_start();
-        if !(before.ends_with('(') || before.ends_with(',')) {
+
+        // Walk left over `&`, `&*`, `*` (whitespace-tolerant).
+        let mut lo = at;
+        loop {
+            let head = src[..lo].trim_end();
+            if head.ends_with('&') || head.ends_with('*') {
+                lo = head.len() - 1;
+            } else {
+                break;
+            }
+        }
+        if !{
+            let before = src[..lo].trim_end();
+            before.ends_with('(') || before.ends_with(',')
+        } {
             continue;
         }
-        if !(after.starts_with(')') || after.starts_with(',')) {
+
+        // Walk right over a `.method(…)` chain (`.clone()`, `.as_ref()`, …).
+        let mut hi = end;
+        loop {
+            let tail = src[hi..].trim_start();
+            let Some(after_dot) = tail.strip_prefix('.') else {
+                break;
+            };
+            let after_dot = after_dot.trim_start();
+            let name = after_dot.len() - after_dot.trim_start_matches(is_ident_char).len();
+            if name == 0 {
+                break;
+            }
+            let rest = after_dot[name..].trim_start();
+            if !rest.starts_with('(') {
+                break;
+            }
+            let Some(close) = matching_paren(src, src.len() - rest.len()) else {
+                break;
+            };
+            hi = close;
+        }
+        if !{
+            let after = src[hi..].trim_start();
+            after.starts_with(')') || after.starts_with(',')
+        } {
             continue;
         }
-        if let Some(call) = enclosing_call(src, at) {
-            out.push(call);
+
+        let spelling: String = src[lo..hi].chars().filter(|c| !c.is_whitespace()).collect();
+        if let Some((callee, open)) = enclosing_call(src, at) {
+            out.push((callee, spelling, open));
         }
     }
     out
@@ -503,23 +645,15 @@ fn main_argument_sites(src: &str) -> Vec<(String, usize)> {
 
 /// The text between `open`'s parenthesis and its match.
 fn call_body(src: &str, open: usize) -> &str {
-    let bytes = src.as_bytes();
-    let mut depth = 0i32;
-    let mut i = open;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return &src[open + 1..i];
-                }
-            }
-            _ => {}
-        }
-        i += 1;
+    match matching_paren(src, open) {
+        Some(close) => &src[open + 1..close - 1],
+        None => &src[open + 1..],
     }
-    &src[open + 1..]
+}
+
+/// The 1-based line `offset` falls on, for a message a reader can navigate to.
+fn line_of(src: &str, offset: usize) -> usize {
+    src[..offset].lines().count().max(1)
 }
 
 /// `promote` is the only traffic from the side thread back into the main
@@ -553,11 +687,13 @@ fn call_body(src: &str, open: usize) -> &str {
 /// # Known limit
 ///
 /// `main` is a parameter *name*. Renaming it in `seed`/`promote` reddens this
-/// guard for no safety reason; that is the cost of a census, and the message
-/// says what to do. The scan is also blind to a write that reaches the main
-/// session through a value that is not spelled `main` — a local alias. Nothing
-/// in this module has one, and inventing one would itself be the kind of
-/// indirection this rule makes expensive.
+/// guard for no safety reason; that is the cost of a census, and the census
+/// assertion — which runs first, so that it is the one a rename hits — says what
+/// to do. The scan is blind to a write that reaches the main session through a
+/// value that is not *spelled* `main` — a local alias, or a field read. Sigils
+/// and method-call decorations are **not** in that class and are recognised; see
+/// [`main_argument_sites`], which is where the first version of this guard was
+/// silently defeated.
 #[test]
 fn promote_is_the_only_crossing_back_into_the_main_conversation() {
     let root = repo_root().join("src/gateway/btw");
@@ -567,7 +703,7 @@ fn promote_is_the_only_crossing_back_into_the_main_conversation() {
 
     let mut scanned = 0usize;
     let mut census: Vec<String> = Vec::new();
-    let mut emits: Vec<(String, String)> = Vec::new();
+    let mut emits: Vec<String> = Vec::new();
 
     for path in &files {
         let rel = path
@@ -580,35 +716,41 @@ fn promote_is_the_only_crossing_back_into_the_main_conversation() {
         }
         scanned += 1;
         let src = production_source(&read_file(path));
-        let carrier_built_at = src.find("promoted_side_answer").unwrap_or(usize::MAX);
-        for (callee, open) in main_argument_sites(&src) {
-            census.push(format!("{rel}: {callee}"));
+        // Anchored on the CALL, not the name: a `use crate::thinker::nudges::
+        // promoted_side_answer;` would otherwise put the first occurrence on the
+        // `use` line and make the ordering assertion below unconditionally true
+        // — an assertion that stops asserting without ever reddening.
+        let carrier_built_at = src.find("promoted_side_answer(");
+        for (callee, spelling, open) in main_argument_sites(&src) {
+            let at = line_of(&src, open);
+            census.push(format!("{rel}: {callee}({spelling})"));
             if callee != "emit_event" {
                 continue;
             }
             let body = call_body(&src, open).to_string();
+            let one_line = body.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
                 rel.ends_with("/promote.rs"),
-                "{rel} appends to the MAIN session. Promote — one event, asked \
-                 for out loud, labelled as not the user's words — is the only \
-                 sanctioned crossing:\n  emit_event({})",
-                body.split_whitespace().collect::<Vec<_>>().join(" ")
+                "{rel}:{at} appends to the MAIN session. Promote — one event, \
+                 asked for out loud, labelled as not the user's words — is the \
+                 only sanctioned crossing:\n  emit_event({one_line})"
             );
             assert!(
                 body.contains("SessionEvent::synthetic_user"),
-                "{rel}: the crossing must carry `SessionEvent::synthetic_user`. \
-                 A plain user event would be re-wrapped by the prompt builder as \
-                 words the user typed — the exact failure this carrier \
-                 exists to prevent:\n  emit_event({body})"
+                "{rel}:{at}: the crossing must carry \
+                 `SessionEvent::synthetic_user`. A plain user event would be \
+                 re-wrapped by the prompt builder as words the user typed — the \
+                 exact failure this carrier exists to prevent:\n  \
+                 emit_event({one_line})"
             );
             assert!(
-                carrier_built_at < open,
-                "{rel}: the promoted carrier must be built by \
+                carrier_built_at.is_some_and(|built| built < open),
+                "{rel}:{at}: the promoted carrier must be built by a call to \
                  `nudges::promoted_side_answer` before it is appended — that \
                  function is what makes the text classifiable as a promoted side \
                  answer rather than as user speech"
             );
-            emits.push((rel.clone(), body));
+            emits.push(format!("{rel}:{at}: emit_event({one_line})"));
         }
     }
 
@@ -617,24 +759,28 @@ fn promote_is_the_only_crossing_back_into_the_main_conversation() {
         "scanned only {scanned} shipping file(s) under src/gateway/btw — the \
          walk or the cfg(test) split stopped matching"
     );
-    assert_eq!(
-        emits.len(),
-        1,
-        "exactly one event may cross into the main conversation; found: {emits:#?}"
-    );
 
+    // The census runs BEFORE the count below, deliberately. The likeliest
+    // maintenance event is a rename of the `main` parameter, which empties both
+    // — and only this assertion's message says what to do about it. Ordered the
+    // other way a rename reds with "exactly one event may cross … found: []",
+    // which reads as "the crossing vanished".
     census.sort();
     let expected: Vec<String> = [
-        // Pure derivations of the side key from the main one.
-        "src/gateway/btw/mod.rs: is_side_key",
-        "src/gateway/btw/mod.rs: side_key_for",
+        // Pure derivations of the side key from the main one. The `digest`
+        // entry is the one the first version of this census could not see:
+        // `main.to_key_string()` wears a method call, and the old matcher
+        // required a bare identifier. It was already in the tree.
+        "src/gateway/btw/mod.rs: digest(main.to_key_string().as_bytes())",
+        "src/gateway/btw/mod.rs: is_side_key(main)",
+        "src/gateway/btw/mod.rs: side_key_for(main)",
         // The crossing.
-        "src/gateway/btw/promote.rs: emit_event",
+        "src/gateway/btw/promote.rs: emit_event(main)",
         // Reads of the main log, and a marker written onto the SIDE session
         // that merely names the main one in its payload.
-        "src/gateway/btw/seed/mod.rs: get_events",
-        "src/gateway/btw/seed/mod.rs: mark_forked",
-        "src/gateway/btw/seed/mod.rs: snapshot",
+        "src/gateway/btw/seed/mod.rs: get_events(main)",
+        "src/gateway/btw/seed/mod.rs: mark_forked(main)",
+        "src/gateway/btw/seed/mod.rs: snapshot(main)",
     ]
     .into_iter()
     .map(String::from)
@@ -646,7 +792,14 @@ fn promote_is_the_only_crossing_back_into_the_main_conversation() {
          each needs a human to say which it is: if the new call reads (or writes \
          the side session and merely names the main one), add it here with that \
          reason; if it writes the main session, it is the defect this guard \
-         exists to catch."
+         exists to catch. If both sides look empty the `main` parameter was \
+         renamed — retarget the entries rather than deleting them."
+    );
+
+    assert_eq!(
+        emits.len(),
+        1,
+        "exactly one event may cross into the main conversation; found: {emits:#?}"
     );
 }
 
