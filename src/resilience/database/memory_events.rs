@@ -13,7 +13,21 @@ impl StateDatabase {
     // Memory Events CRUD
     // =========================================================================
 
-    /// Append a single memory event. Returns the assigned global ID.
+    /// Append a single memory event. Returns the assigned global row ID.
+    ///
+    /// `seq` is **atomically allocated by SQLite inside the INSERT**, not by the
+    /// caller. The caller-supplied `envelope.seq` is ignored — supplying a
+    /// pre-computed value would re-introduce a TOCTOU race (two writers
+    /// reading `MAX(seq)` back-to-back would both compute the same `seq+1`
+    /// and the second `INSERT` would fail with `UNIQUE constraint failed`).
+    /// The atomic form (`SELECT COALESCE(MAX(seq),0)+1 ... FROM memory_events
+    /// WHERE fact_id = ?1`) evaluates the sub-query and writes the new row in
+    /// a single SQLite statement, so concurrent writers serialize through
+    /// SQLite's statement-level lock and never collide.
+    ///
+    /// Callers that need the post-insert `seq` must re-read via
+    /// [`get_memory_events_for_fact`] (or [`get_memory_event_latest_seq`]);
+    /// the append path itself does not surface it.
     pub async fn append_memory_event(
         &self,
         envelope: &MemoryEventEnvelope,
@@ -27,14 +41,20 @@ impl StateDatabase {
         };
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Single statement: compute next seq for this fact_id and INSERT in
+        // one go. SQLite serializes this through its per-connection write
+        // lock, so two concurrent appends on the same fact_id cannot both
+        // observe the same MAX(seq) and then collide on UNIQUE(fact_id, seq).
         conn.execute(
             r#"
             INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            SELECT ?1,
+                   COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
+                   ?3, ?4, ?5, ?6, ?7, ?8
             "#,
             params![
                 envelope.fact_id,
-                envelope.seq,
+                envelope.fact_id, // fact_id appears twice: once for the row, once for the sub-query scope
                 envelope.event.event_type_tag(),
                 event_json,
                 envelope.actor.to_string(),
@@ -49,6 +69,13 @@ impl StateDatabase {
     }
 
     /// Batch-append memory events.
+    ///
+    /// Each envelope's `seq` is atomically allocated inside its own INSERT,
+    /// mirroring [`append_memory_event`]. A single SQLite transaction wraps
+    /// the batch so the whole batch either commits or rolls back, but the
+    /// per-row `seq` allocation is independent (concurrent writers on the
+    /// same fact_id serialize through SQLite's per-connection write lock,
+    /// not through the batch transaction).
     pub async fn append_memory_events(
         &self,
         envelopes: &[MemoryEventEnvelope],
@@ -67,7 +94,9 @@ impl StateDatabase {
                 .prepare(
                     r#"
                     INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    SELECT ?1,
+                           COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
+                           ?3, ?4, ?5, ?6, ?7, ?8
                     "#,
                 )
                 .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
@@ -83,7 +112,7 @@ impl StateDatabase {
 
                 stmt.execute(params![
                     envelope.fact_id,
-                    envelope.seq,
+                    envelope.fact_id,
                     envelope.event.event_type_tag(),
                     event_json,
                     envelope.actor.to_string(),
@@ -649,7 +678,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unique_constraint() {
+    async fn test_atomic_seq_allocation_is_monotonic() {
+        // Two sequential appends on the same `fact_id` must produce strictly
+        // increasing seq values (1, 2) — even though both envelopes supply
+        // the same caller-side seq=1. The DB's atomic
+        // `SELECT COALESCE(MAX(seq),0)+1` overrides the caller-supplied value,
+        // so `UNIQUE(fact_id, seq)` cannot fire through the public append
+        // path (the original race window that motivated the constraint).
         let db = make_test_db();
         let e1 = MemoryEventEnvelope::new(
             "fact-dup".into(),
@@ -660,7 +695,9 @@ mod tests {
         );
         db.append_memory_event(&e1).await.unwrap();
 
-        // Same fact_id + seq should fail
+        // Same fact_id + caller-supplied seq=1 should NOT cause failure:
+        // the atomic allocation ignores envelope.seq and assigns the next
+        // monotonic value.
         let e2 = MemoryEventEnvelope::new(
             "fact-dup".into(),
             1,
@@ -668,6 +705,98 @@ mod tests {
             EventActor::Agent,
             None,
         );
-        assert!(db.append_memory_event(&e2).await.is_err());
+        db.append_memory_event(&e2).await.unwrap();
+
+        let events = db.get_memory_events_for_fact("fact-dup", "").await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].seq, 1);
+        assert_eq!(events[1].seq, 2);
+        assert!(
+            events[1].seq > events[0].seq,
+            "atomic allocation must produce strictly monotonic seq"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unique_constraint_remains_for_direct_sql_bypass() {
+        // The `UNIQUE(fact_id, seq)` schema constraint must still trigger when
+        // a raw `INSERT` bypasses `append_memory_event` (e.g. a future bug,
+        // ad-hoc migration script, or out-of-band writer). Defense-in-depth:
+        // even if the application-level atomic allocation regresses, the
+        // schema itself rejects duplicate (fact_id, seq) pairs.
+        let db = make_test_db();
+        let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        conn.execute(
+            "INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id) \
+             VALUES ('fact-x', 1, 'Test', '{}', 'Agent', 'pulse', 0, NULL)",
+            [],
+        )
+        .expect("first direct INSERT must succeed");
+
+        let result = conn.execute(
+            "INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id) \
+             VALUES ('fact-x', 1, 'Test', '{}', 'Agent', 'pulse', 0, NULL)",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "UNIQUE(fact_id, seq) must fire on direct SQL bypass; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_append_assigns_unique_seqs() {
+        // Spawn N concurrent tasks appending to the SAME fact_id. Each task
+        // submits an envelope with caller-side seq=1 (the worst case for the
+        // old TOCTOU race). The atomic allocation must produce N distinct
+        // monotonic seqs, with no UNIQUE-constraint failures and no lost
+        // writes.
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let db = Arc::new(make_test_db());
+        const N: usize = 32;
+
+        let mut set = JoinSet::new();
+        for i in 0..N {
+            let db = Arc::clone(&db);
+            set.spawn(async move {
+                let event = make_created_event("fact-race");
+                let envelope = MemoryEventEnvelope::new(
+                    "fact-race".into(),
+                    1, // all callers race on the same value
+                    event,
+                    EventActor::Agent,
+                    None,
+                );
+                db.append_memory_event(&envelope)
+                    .await
+                    .map_err(|e| (i, e.to_string()))
+            });
+        }
+
+        let mut errors = Vec::new();
+        while let Some(res) = set.join_next().await {
+            if let Err((i, msg)) = res.unwrap() {
+                errors.push(format!("task {i}: {msg}"));
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "concurrent appends must not fail: {errors:?}"
+        );
+
+        let events = db.get_memory_events_for_fact("fact-race", "").await.unwrap();
+        assert_eq!(
+            events.len(),
+            N,
+            "all {N} concurrent appends must persist; got {} events",
+            events.len()
+        );
+        // Strictly monotonic, 1..=N
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e.seq as usize, i + 1, "event {i} must have seq {}", i + 1);
+        }
     }
 }
