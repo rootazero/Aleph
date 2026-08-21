@@ -234,3 +234,158 @@ fn the_question_is_resolved_not_stripped() {
 fn an_empty_side_log_promotes_nothing() {
     assert_eq!(latest_complete_exchange(&[]), None);
 }
+
+/// The crossing itself, against a real event log.
+///
+/// The tests above decide *what* to carry; these assert *where it lands* and
+/// *what it is once it gets there* — the two halves a shape test cannot see.
+mod crossing {
+    use std::sync::Arc;
+
+    use super::super::promote_latest_exchange;
+    use crate::gateway::btw::side_key_for;
+    use crate::session::events::{MessageContent, RunOutcome, SessionEvent, TurnTrigger};
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::service::{SessionId, SessionService};
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+
+    /// A real event log on an in-memory SQLite connection — the same fixture the
+    /// seeding tests build, so what these assert about appending is what
+    /// production does rather than what a stub agreed to.
+    fn service() -> Arc<dyn SessionService> {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory sqlite");
+        migrate_add_session_events(&conn).expect("migrate session_events");
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        Arc::new(InProcessActorSessionService::new(store))
+    }
+
+    fn text(s: &str) -> MessageContent {
+        MessageContent {
+            text: s.to_string(),
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        }
+    }
+
+    /// One answered side question, written the way a side run writes one.
+    async fn answered_side_turn(session: &dyn SessionService, side: &SessionId) {
+        let turn_id = uuid::Uuid::new_v4();
+        for event in [
+            SessionEvent::TurnStarted {
+                turn_id,
+                trigger: TurnTrigger::UserMessage,
+                at: 0,
+            },
+            SessionEvent::UserMessage {
+                turn_id,
+                content: text("/btw what is X?"),
+                at: 0,
+                synthetic: false,
+                author_user_id: None,
+            },
+            SessionEvent::AssistantMessage {
+                turn_id,
+                content: text("X is the config loader."),
+                usage: None,
+                at: 0,
+            },
+            SessionEvent::RunFinished {
+                run_id: "run-side".into(),
+                outcome: RunOutcome::Completed,
+                at: 0,
+            },
+        ] {
+            session.emit_event(side, event).await.expect("emit");
+        }
+    }
+
+    #[tokio::test]
+    async fn what_crosses_is_a_carrier_the_prompt_layer_can_tell_from_user_speech() {
+        let session = service();
+        let main = SessionId::main("promote-crossing");
+        let side = side_key_for(&main);
+        answered_side_turn(session.as_ref(), &side).await;
+
+        let carried = promote_latest_exchange(session.as_ref(), &side, &main)
+            .await
+            .expect("the read and the append both succeed")
+            .expect("there is a completed exchange to carry");
+        assert_eq!(carried.question, "what is X?");
+
+        let main_log = session
+            .get_events(&main, None, None)
+            .await
+            .expect("read the main log");
+        assert_eq!(
+            main_log.len(),
+            1,
+            "the crossing is ONE event: the model reads `session_events` and the \
+             projector materialises that same append into `messages`, so a second \
+             append would be a second answer to what crossed"
+        );
+        let SessionEvent::UserMessage {
+            content,
+            synthetic,
+            author_user_id,
+            ..
+        } = &main_log[0].event
+        else {
+            panic!("the carrier rides the user role: {:?}", main_log[0].event);
+        };
+        assert!(
+            *synthetic,
+            "an unflagged user event is re-wrapped by the prompt builder in the \
+             interjection fence, which re-classifies the carrier as words the user \
+             typed — the one failure this carrier exists to prevent"
+        );
+        assert_eq!(
+            author_user_id.as_deref(),
+            None,
+            "nobody said this; in a room it must not be attributed to whoever typed \
+             `/btw promote`"
+        );
+        assert!(
+            crate::thinker::nudges::is_synthetic_reminder(&content.text),
+            "the text that crossed must classify as scaffolding: {:?}",
+            content.text
+        );
+        assert!(content.text.contains("X is the config loader."));
+        assert!(
+            content.text.contains("what is X?"),
+            "the question gives the answer its referent"
+        );
+
+        assert_eq!(
+            session
+                .get_events(&side, None, None)
+                .await
+                .expect("read the side log")
+                .len(),
+            4,
+            "promoting reads the side thread; it must not write to it, or the next \
+             promote would carry its own output"
+        );
+    }
+
+    /// Nothing to promote is an answer, and it leaves no trace.
+    #[tokio::test]
+    async fn an_absent_side_thread_carries_nothing_and_writes_nothing() {
+        let session = service();
+        let main = SessionId::main("promote-empty");
+        let side = side_key_for(&main);
+
+        let carried = promote_latest_exchange(session.as_ref(), &side, &main)
+            .await
+            .expect("an absent side thread is not a fault");
+        assert!(carried.is_none());
+        assert!(
+            session
+                .get_events(&main, None, None)
+                .await
+                .expect("read the main log")
+                .is_empty(),
+            "an empty promote must not put an empty carrier in the conversation"
+        );
+    }
+}
