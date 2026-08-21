@@ -1054,6 +1054,40 @@ risk_segments}`.
 Security *events* (not approvals) still log through
 `src/security/audit.rs`; SSRF has its own trail (see below).
 
+### Reading the security trail — `aleph audit` (2026-08-21)
+
+`security_audit_log` had **five producers and no reader**. `AuthFailure`,
+`RateLimited`, `CommandPolicy`, `ScopedContentRead` and `AuthorityChange` were
+all persisted, indexed by timestamp and event type, and purged behind a 30-day
+horizon — and nothing in the repository ever ran a `SELECT` against them outside
+the drain task's own tests. `AuthorityChange` was added (round-5) specifically so
+that *what authority changed, in order* is answerable with one `WHERE` clause,
+and there was no surface from which that clause could be run.
+
+- **Store**: `SecurityStore::query_audit_entries` — SQL-side filters (event type,
+  actor, relative window), newest first with `id` breaking same-second ties, and
+  one row over-fetched so a full page can be distinguished from a truncated one.
+- **Wire**: `security.audit.query`, contract in
+  `aleph_protocol::audit`. Admin-gated by the new `security.` prefix in
+  `method_admin.rs` (prefix, not method, so a future `security.audit.export`
+  arrives gated). Census entry pins the ruling.
+- **Client**: `aleph audit [--type] [--actor] [--since 90s|5m|2h|7d] [--limit]`.
+
+Two honesty properties are carried on **every** response rather than left to the
+reader: `retention_secs`, because an empty window otherwise means *nothing
+happened* / *nothing matched* / *it was deleted and you cannot tell which*; and
+`truncated`, because "the window is clean" and "I stopped counting" must not
+render the same.
+
+⚠️ **This is not the `aleph-server audit` deleted on 2026-07-14 coming back.**
+That command queried `approval_audit.db`, three tables **whose only writers were
+test helpers** — it reported zeros about a trail that never existed, while the
+real approval trail sat in the session event log. This is the opposite defect:
+a table with five real producers and no way to read it. The deletion rule that
+removed the old command ("a reader with no writers is worse than dead code")
+and the connection rule that added this one ("a writer with no reader is a
+capability that was never delivered") are the same rule seen from its two ends.
+
 ### Signed agent ledger (2026-07-25, hardened 2026-07-26 … 2026-08-10)
 
 The session event log answers *what the run did*. It does not answer *who,
