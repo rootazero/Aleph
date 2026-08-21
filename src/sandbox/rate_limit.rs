@@ -91,13 +91,21 @@ impl Default for SandboxRateLimitConfig {
 /// Categorize a tool name into a `ToolCategory`.
 #[must_use]
 pub fn categorize_tool(tool_name: &str) -> ToolCategory {
-    // `ALEPH_TOOL_NAME` carries "code_exec:python" / "code_exec:javascript" /
-    // "bash" (see `code_exec.rs`); the rate-limit bucket only cares about the
-    // tool family, so drop any `:language` suffix before matching.
+    // Fed from `SandboxCommand::tool_name`, which carries "bash" /
+    // "code_exec:python" / "code_exec:javascript" / "code_check" /
+    // "sandbox_debug". The bucket only cares about the tool family, so drop
+    // any `:language` suffix before matching.
     let base = tool_name.split(':').next().unwrap_or(tool_name);
     match base {
         "self_config" | "skill_install" => ToolCategory::Admin,
-        "code_exec" | "bash" => ToolCategory::Dangerous,
+        // `code_check` is here to *preserve* the allowance it already had: it
+        // shells its checker out through `bash`, and while this hook still
+        // bucketed on `command.program` that spelled `"bash"` → Dangerous.
+        // Letting the honest name fall to the `_ => Read` default would have
+        // been a silent 6x loosening (60/min vs 10/min) that nobody decided.
+        // It also forks a compiler per call, so the tight bucket is where it
+        // belongs on the merits, not only on the history.
+        "code_exec" | "bash" | "code_check" => ToolCategory::Dangerous,
         "file_ops" | "apply_patch" => ToolCategory::Write,
         _ => ToolCategory::Read,
     }
@@ -201,16 +209,15 @@ impl RateLimitHook {
 impl SandboxBeforeHook for RateLimitHook {
     async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult {
         let session_id = &ctx.command.session_id;
-        // `SandboxHookContext::tool_name` is `command.program` ("bash"/
-        // "python3"/"node"), which would send Python/JS `code_exec` into the
-        // loose Read bucket (6x the Dangerous allowance). The tools stamp the
-        // real identity into `ALEPH_TOOL_NAME`, so prefer that when present.
-        let tool_name = ctx
-            .command
-            .env
-            .get("ALEPH_TOOL_NAME")
-            .map(String::as_str)
-            .unwrap_or(ctx.tool_name);
+        // The producer names itself on the command. This used to read
+        // `ALEPH_TOOL_NAME` out of the child environment as a workaround,
+        // because the hook context's `tool_name` was really `command.program`
+        // — but that bag is populated by only one of the three producers, so
+        // `code_check` (program `"bash"`) and the `sandbox_debug` CLI fell
+        // through to whichever bucket their binary happened to name, and the
+        // bag itself is one model-supplied-env change away from letting the
+        // caller pick its own rate-limit bucket.
+        let tool_name = ctx.command.tool_name.as_str();
         let category = categorize_tool(tool_name);
 
         if let Err(reason) = self.limiter.check_and_record(session_id, &category) {
@@ -273,6 +280,19 @@ mod tests {
             categorize_tool("code_exec:javascript"),
             ToolCategory::Dangerous
         );
+    }
+
+    /// `code_check` forks a compiler per call, so it belongs in the tight
+    /// bucket — and it was *already* in it, by accident: the hook used to
+    /// bucket on `command.program`, which this tool sets to `"bash"`.
+    ///
+    /// Naming the real tool would have moved it to the `_ => Read` default and
+    /// handed it 6x the allowance (60/min vs 10/min). That loosening is not
+    /// something anyone decided; this pins the pre-existing behaviour so the
+    /// identity fix stays byte-for-byte neutral on admission.
+    #[test]
+    fn code_check_keeps_the_dangerous_budget_it_had_under_the_program_name() {
+        assert_eq!(categorize_tool("code_check"), ToolCategory::Dangerous);
     }
 
     #[test]

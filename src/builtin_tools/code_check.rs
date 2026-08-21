@@ -196,6 +196,10 @@ impl CodeCheckTool {
 
         let cmd = SandboxCommand {
             session_id,
+            // The checker is shelled out through `bash`, so `program` says
+            // "bash" for both this tool and the bash tool. The admission hooks
+            // need the caller, not the interpreter.
+            tool_name: <Self as AlephTool>::NAME.to_string(),
             program: "bash".to_string(),
             args: vec!["-c".to_string(), plan.script.clone()],
             env,
@@ -828,6 +832,54 @@ not json at all"#;
             scoped.calls.lock().await.len(),
             1,
             "the scoped override must receive the check command"
+        );
+    }
+
+    /// The identity that reaches the sandbox hook seam must name the *tool*
+    /// that asked, not the OS program it happens to run. `code_check` shells
+    /// out through `bash`, so a seam keyed on `program` cannot tell it apart
+    /// from the `bash` tool: it spends the same rate-limit bucket and every
+    /// hook audit line names the wrong thing.
+    ///
+    /// This is only observable at a real producer. Every `SandboxHookContext`
+    /// fixture in the tree passes a literal tool name (`"bash_exec"`,
+    /// `"test_tool"`) that no production call site sends — which is exactly
+    /// why the whole sandbox suite stayed green while the field lied.
+    #[tokio::test]
+    async fn code_check_reaches_the_sandbox_as_itself_not_as_bash() {
+        use crate::routing::session_key::SessionKey;
+        use crate::sandbox::context::SESSION_ID;
+        use crate::sandbox::test_util::MockSandbox;
+
+        let mock = MockSandbox::new(SandboxOutput {
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        let sandbox: Arc<dyn Sandbox> = mock.clone();
+        let tool = CodeCheckTool::new().with_sandbox(sandbox);
+
+        SESSION_ID
+            .scope(SessionKey::ephemeral("code-check-identity"), async {
+                tool.call(CodeCheckArgs {
+                    path: None,
+                    command: Some("true".to_string()),
+                    timeout_seconds: Some(5),
+                })
+                .await
+                .expect("tool call");
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        let cmd = calls.first().expect("one sandboxed command");
+        assert_eq!(
+            cmd.program, "bash",
+            "code_check shells its checker out through bash"
+        );
+        assert_eq!(
+            cmd.tool_name,
+            <CodeCheckTool as AlephTool>::NAME,
+            "...so `program` cannot be the identity the hooks key on"
         );
     }
 }

@@ -202,6 +202,7 @@ fn test_session() -> SessionKey {
 fn strict_cmd(session: SessionKey) -> SandboxCommand {
     SandboxCommand {
         session_id: session,
+        tool_name: "bash".into(),
         program: "echo".into(),
         args: vec!["hi".into()],
         env: HashMap::new(),
@@ -215,6 +216,7 @@ fn strict_cmd(session: SessionKey) -> SandboxCommand {
 fn network_cmd(session: SessionKey) -> SandboxCommand {
     SandboxCommand {
         session_id: session,
+        tool_name: "bash".into(),
         program: "curl".into(),
         args: vec!["https://example.com".into()],
         env: HashMap::new(),
@@ -231,6 +233,7 @@ fn network_cmd(session: SessionKey) -> SandboxCommand {
 fn spawn_cmd(session: SessionKey) -> SandboxCommand {
     SandboxCommand {
         session_id: session,
+        tool_name: "bash".into(),
         program: "bash".into(),
         args: vec!["-c".into(), "true".into()],
         env: HashMap::new(),
@@ -353,6 +356,7 @@ async fn max_memory_mb_threads_capabilities_to_driver_profile() {
 
     let cmd = SandboxCommand {
         session_id: test_session(),
+        tool_name: "bash".into(),
         program: "echo".into(),
         args: vec!["hi".into()],
         env: HashMap::new(),
@@ -391,6 +395,7 @@ async fn dns_resolution_threads_resolved_ips_to_driver_profile() {
 
     let cmd = SandboxCommand {
         session_id: test_session(),
+        tool_name: "bash".into(),
         program: "echo".into(),
         args: vec!["hi".into()],
         env: HashMap::new(),

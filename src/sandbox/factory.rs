@@ -224,6 +224,7 @@ mod tests {
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: make_sid(),
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec!["hi".into()],
                 env: HashMap::new(),
@@ -285,6 +286,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: make_sid(),
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec!["hi".into()],
                 env: HashMap::new(),
@@ -340,6 +342,7 @@ mod tests {
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: make_sid(),
+                tool_name: "bash".into(),
                 program: "bash".into(),
                 args: vec!["-c".into(), ":(){ :|:& };:".into()],
                 env: HashMap::new(),
@@ -393,6 +396,7 @@ mod tests {
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: make_sid(),
+                tool_name: "bash".into(),
                 program: "bash".into(),
                 args: vec!["-c".into(), "dd if=/dev/zero of=/dev/sda".into()],
                 env: HashMap::new(),

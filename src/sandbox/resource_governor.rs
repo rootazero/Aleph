@@ -195,7 +195,7 @@ impl SandboxBeforeHook for ResourceGovernor {
             AdmissionDecision::Reject { reason } => {
                 tracing::warn!(
                     target: "resource_governor",
-                    tool_name = ctx.tool_name,
+                    tool_name = %ctx.command.tool_name,
                     reason = %reason,
                     "heavy task refused by resource governor"
                 );
@@ -380,7 +380,7 @@ mod tests {
         );
         gov.enabled = false;
         let cmd = mk_cmd("bash");
-        let ctx = SandboxHookContext::new("bash", &cmd);
+        let ctx = SandboxHookContext::new(&cmd);
         assert!(matches!(gov.before(ctx).await, SandboxHookResult::Allow));
     }
 
@@ -397,7 +397,7 @@ mod tests {
         );
         // `program` at this seam is the interpreter — any value is gated.
         let cmd = mk_cmd("bash");
-        let ctx = SandboxHookContext::new("bash", &cmd);
+        let ctx = SandboxHookContext::new(&cmd);
         assert!(matches!(
             gov.before(ctx).await,
             SandboxHookResult::Deny { .. }
@@ -407,6 +407,7 @@ mod tests {
     fn mk_cmd(program: &str) -> crate::sandbox::command::SandboxCommand {
         crate::sandbox::command::SandboxCommand {
             session_id: crate::routing::session_key::SessionKey::ephemeral("test"),
+            tool_name: "bash".into(),
             program: program.into(),
             args: vec![],
             env: std::collections::HashMap::new(),

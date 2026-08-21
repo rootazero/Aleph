@@ -12,6 +12,23 @@ use crate::session::service::SessionId;
 #[derive(Debug, Clone)]
 pub struct SandboxCommand {
     pub session_id: SessionId,
+    /// Which *tool* asked for this execution — `"bash"`, `"code_exec:python"`,
+    /// `"code_check"`. Distinct from [`Self::program`], which is the OS binary
+    /// that will be spawned: `code_check` runs its checker through `bash`, so
+    /// keying anything on `program` cannot tell the two apart.
+    ///
+    /// Required rather than `Option`, and deliberately not defaulted: this is
+    /// the identity the admission hooks bucket, log and audit on, and a new
+    /// producer that stays silent about it would silently inherit whichever
+    /// bucket `program` happens to land in. A compile error is the only thing
+    /// that reliably makes the next producer answer the question.
+    ///
+    /// Not to be confused with the `ALEPH_TOOL_NAME` entry in [`Self::env`]:
+    /// that one exists so the *child script* can self-identify, it is part of
+    /// a bag whose contents a future producer could plumb from model input,
+    /// and it is absent entirely on two of the three producers. The hooks read
+    /// this field and never that one.
+    pub tool_name: String,
     pub program: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
