@@ -22,9 +22,10 @@ impl OffsetTracker {
     /// Create a new tracker, loading the persisted offset from the database.
     ///
     /// Returns offset 0 if no prior offset exists (first startup).
-    pub fn new(db: Arc<StateDatabase>, channel_id: String) -> Self {
+    pub async fn new(db: Arc<StateDatabase>, channel_id: String) -> Self {
         let persisted = db
             .get_channel_offset(&channel_id)
+            .await
             .unwrap_or_else(|e| {
                 tracing::warn!(
                     channel_id = %channel_id,
@@ -64,7 +65,7 @@ impl OffsetTracker {
     ///
     /// The advance is monotonic: stale or duplicate `update_ids` are ignored.
     /// On success the new offset is persisted to `SQLite`.
-    pub fn advance(&self, update_id: i64, bot_id: &str) {
+    pub async fn advance(&self, update_id: i64, bot_id: &str) {
         loop {
             let prev = self.current.load(Ordering::Acquire);
             if update_id <= prev {
@@ -85,6 +86,7 @@ impl OffsetTracker {
                 if let Err(e) = self
                     .db
                     .set_channel_offset(&self.channel_id, bot_id, update_id)
+                    .await
                 {
                     tracing::error!(
                         channel_id = %self.channel_id,
@@ -104,48 +106,48 @@ impl OffsetTracker {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_offset_tracker_starts_at_zero_without_db_entry() {
+    #[tokio::test]
+    async fn test_offset_tracker_starts_at_zero_without_db_entry() {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
-        let tracker = OffsetTracker::new(db, "test-channel".to_string());
+        let tracker = OffsetTracker::new(db, "test-channel".to_string()).await;
         assert_eq!(tracker.load(), 0);
     }
 
-    #[test]
-    fn test_offset_tracker_advances_monotonically() {
+    #[tokio::test]
+    async fn test_offset_tracker_advances_monotonically() {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
-        let tracker = OffsetTracker::new(db, "test-channel".to_string());
+        let tracker = OffsetTracker::new(db, "test-channel".to_string()).await;
 
-        tracker.advance(10, "bot-1");
+        tracker.advance(10, "bot-1").await;
         assert_eq!(tracker.load(), 10);
 
         // Stale update should be ignored
-        tracker.advance(5, "bot-1");
+        tracker.advance(5, "bot-1").await;
         assert_eq!(tracker.load(), 10);
 
         // Equal update should be ignored
-        tracker.advance(10, "bot-1");
+        tracker.advance(10, "bot-1").await;
         assert_eq!(tracker.load(), 10);
 
         // Higher update should advance
-        tracker.advance(20, "bot-1");
+        tracker.advance(20, "bot-1").await;
         assert_eq!(tracker.load(), 20);
     }
 
-    #[test]
-    fn test_offset_tracker_persists_and_reloads() {
+    #[tokio::test]
+    async fn test_offset_tracker_persists_and_reloads() {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
 
         // Advance offset
         {
-            let tracker = OffsetTracker::new(db.clone(), "test-channel".to_string());
-            tracker.advance(42, "bot-1");
+            let tracker = OffsetTracker::new(db.clone(), "test-channel".to_string()).await;
+            tracker.advance(42, "bot-1").await;
             assert_eq!(tracker.load(), 42);
         }
 
         // New tracker should load persisted value
         {
-            let tracker = OffsetTracker::new(db, "test-channel".to_string());
+            let tracker = OffsetTracker::new(db, "test-channel".to_string()).await;
             assert_eq!(tracker.load(), 42);
         }
     }

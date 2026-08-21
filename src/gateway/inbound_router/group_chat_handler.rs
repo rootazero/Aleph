@@ -195,6 +195,7 @@ impl InboundMessageRouter {
                     channel_id.clone(),
                     conversation_key.to_string(),
                 )
+                .await
                 .map_err(|e| e.to_string())?
         };
 
@@ -279,7 +280,7 @@ impl InboundMessageRouter {
         // End the session via orchestrator (removes from map + persists)
         let session_handle = {
             let mut orch_guard = orch.lock().await;
-            orch_guard.end_session(&session_id)
+            orch_guard.end_session(&session_id).await
         };
 
         if let Some(handle) = session_handle {

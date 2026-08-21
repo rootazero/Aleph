@@ -450,45 +450,52 @@ impl StateDatabase {
     }
 
     /// Store or update a sticker description in the cache.
-    pub fn store_sticker_description(
+    pub async fn store_sticker_description(
         &self,
         file_unique_id: &str,
         description: &str,
     ) -> Result<(), AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
-            [file_unique_id, description],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to store sticker description: {e}")))?;
-        Ok(())
+        let file_unique_id = file_unique_id.to_string();
+        let description = description.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
+            params![file_unique_id, description],
+            )
+            .map_err(|e| AlephError::config(format!("Failed to store sticker description: {e}")))?;
+            Ok(())
+        })
+        .await
     }
 
     /// Load a cached sticker description by its unique file id.
-    pub fn load_sticker_description(
+    pub async fn load_sticker_description(
         &self,
         file_unique_id: &str,
     ) -> Result<Option<String>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {e}")))?;
-        let mut rows = stmt
-            .query([file_unique_id])
-            .map_err(|e| AlephError::config(format!("Failed to query sticker description: {e}")))?;
-        if let Some(row) = rows
-            .next()
-            .map_err(|e| AlephError::config(format!("Failed to read sticker row: {e}")))?
-        {
-            row.get(0)
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to deserialize sticker description: {e}"))
-                })
-                .map(Some)
-        } else {
-            Ok(None)
-        }
+        let file_unique_id = file_unique_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {e}")))?;
+            let mut rows = stmt
+                .query(params![file_unique_id])
+                .map_err(|e| AlephError::config(format!("Failed to query sticker description: {e}")))?;
+            if let Some(row) = rows
+                .next()
+                .map_err(|e| AlephError::config(format!("Failed to read sticker row: {e}")))?
+            {
+                row.get(0)
+                    .map_err(|e| {
+                        AlephError::config(format!("Failed to deserialize sticker description: {e}"))
+                    })
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .await
     }
 }
