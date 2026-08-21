@@ -36,7 +36,6 @@ pub use flow_spec::{
     SessionStrategy,
 };
 pub use harness_bridge::AgentHarnessRunner;
-pub use resolver::RoutingOverrides;
 pub use sandbox_factory::{build_sandbox_factory, SandboxFactory, WorkspaceBuilder};
 
 #[cfg(test)]

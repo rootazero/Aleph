@@ -38,40 +38,27 @@ pub const fn depth_guard(depth: u8) -> Result<(), FlowError> {
     }
 }
 
-/// User-provided routing overrides from `aleph.toml [flow_routing]`.
-#[derive(Debug, Default, Clone)]
-pub struct RoutingOverrides {
-    /// `(agent, channel) → flow_id` — exact match.
-    pub exact: HashMap<(AgentId, String), FlowId>,
-    /// `agent → flow_id` — wildcard (any channel).
-    pub wildcard: HashMap<AgentId, FlowId>,
-}
-
-/// Map `(agent_id, channel)` → `flow_id`. Precedence:
-/// 1. exact `(agent, channel)` override
-/// 2. wildcard `agent` override
-/// 3. default table (`agent_id` == `flow_id` fallback from builtin table)
+/// Map `agent_id` → `flow_id` through the default routing table.
+///
+/// There is deliberately only one rung. Two override rungs — exact
+/// `(agent, channel)` and wildcard `agent` — used to sit above this one, fed
+/// by a `RoutingOverrides` struct whose only producer was to have been an
+/// `[flow_routing]` config key. That key was never implemented, so every
+/// construction site passed `RoutingOverrides::default()` and neither rung
+/// ever fired. Both were cut rather than given a config surface: "which flow
+/// serves agent X" is already answered by this table plus
+/// `~/.aleph/flows/<id>.toml`, and a third answer keyed on channel is the one
+/// answer too many. `FlowRequest.channel` survives as a diagnostics-only
+/// field; it is no longer a routing input.
 pub fn resolve_flow_id(
     agent_id: &str,
-    channel: Option<&str>,
-    overrides: &RoutingOverrides,
     defaults: &HashMap<AgentId, FlowId>,
 ) -> Result<FlowId, FlowError> {
-    if let Some(ch) = channel {
-        if let Some(id) = overrides.exact.get(&(agent_id.to_string(), ch.to_string())) {
-            // rust-doctor-disable-next-line excessive-clone
-            return Ok(id.clone());
-        }
-    }
-    if let Some(id) = overrides.wildcard.get(agent_id) {
+    defaults
+        .get(agent_id)
         // rust-doctor-disable-next-line excessive-clone
-        return Ok(id.clone());
-    }
-    if let Some(id) = defaults.get(agent_id) {
-        // rust-doctor-disable-next-line excessive-clone
-        return Ok(id.clone());
-    }
-    Err(FlowError::UnknownAgent(agent_id.to_string()))
+        .cloned()
+        .ok_or_else(|| FlowError::UnknownAgent(agent_id.to_string()))
 }
 
 /// Decide which `SessionKey` a dispatch writes to.

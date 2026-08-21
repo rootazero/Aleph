@@ -2,19 +2,13 @@ use std::collections::HashMap;
 
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::{AgentId, FlowId};
-use crate::orchestrator::resolver::{
-    depth_guard, resolve_flow_id, RoutingOverrides, MAX_FLOW_DEPTH,
-};
+use crate::orchestrator::resolver::{depth_guard, resolve_flow_id, MAX_FLOW_DEPTH};
 
 fn default_table() -> HashMap<AgentId, FlowId> {
     let mut m = HashMap::new();
     m.insert("main".into(), "default-agent".into());
     m.insert("researcher".into(), "researcher".into());
     m
-}
-
-fn no_overrides() -> RoutingOverrides {
-    RoutingOverrides::default()
 }
 
 #[test]
@@ -32,49 +26,14 @@ fn depth_guard_rejects_above_max() {
 
 #[test]
 fn default_table_resolves_known_agent() {
-    let got = resolve_flow_id("main", None, &no_overrides(), &default_table()).unwrap();
+    let got = resolve_flow_id("main", &default_table()).unwrap();
     assert_eq!(got, "default-agent");
 }
 
 #[test]
 fn unknown_agent_returns_error() {
-    let err = resolve_flow_id("unknown", None, &no_overrides(), &default_table()).unwrap_err();
+    let err = resolve_flow_id("unknown", &default_table()).unwrap_err();
     assert!(matches!(err, FlowError::UnknownAgent(ref id) if id == "unknown"));
-}
-
-#[test]
-fn exact_channel_override_wins() {
-    let mut ov = no_overrides();
-    ov.exact
-        .insert(("main".into(), "telegram".into()), "main-lite".into());
-    ov.wildcard.insert("main".into(), "default-agent".into());
-    let got = resolve_flow_id("main", Some("telegram"), &ov, &default_table()).unwrap();
-    assert_eq!(got, "main-lite");
-}
-
-#[test]
-fn wildcard_override_used_for_non_matching_channel() {
-    let mut ov = no_overrides();
-    ov.exact
-        .insert(("main".into(), "telegram".into()), "main-lite".into());
-    ov.wildcard.insert("main".into(), "main-overridden".into());
-    let got = resolve_flow_id("main", Some("slack"), &ov, &default_table()).unwrap();
-    assert_eq!(got, "main-overridden");
-}
-
-#[test]
-fn default_table_is_last_resort() {
-    let ov = no_overrides();
-    let got = resolve_flow_id("main", Some("slack"), &ov, &default_table()).unwrap();
-    assert_eq!(got, "default-agent");
-}
-
-#[test]
-fn no_channel_uses_wildcard_then_default() {
-    let mut ov = no_overrides();
-    ov.wildcard.insert("main".into(), "main-wild".into());
-    let got = resolve_flow_id("main", None, &ov, &default_table()).unwrap();
-    assert_eq!(got, "main-wild");
 }
 
 use crate::orchestrator::flow_spec::SessionStrategy;
