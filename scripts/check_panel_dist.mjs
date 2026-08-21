@@ -19,6 +19,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { brotliDecompressSync } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 import { MIN_BYTES } from './precompress_dist.mjs';
 
 const dir = process.argv[2] || 'interfaces/webchat/dist';
@@ -85,6 +86,33 @@ if (missing.length > 0) {
 // when you converge them.)
 {
   const brProblems = [];
+
+  // The two directions below only work because importing MIN_BYTES from
+  // precompress_dist.mjs (above) is inert. That inertness is enforced by an
+  // entry-point guard in that file's own source — a runtime check cannot
+  // tell "the import did nothing because it is guarded" from "the import did
+  // nothing because there was nothing to compress", so this has to read the
+  // source text. If the guard is ever removed or renamed, the bare import
+  // above silently re-runs the whole compression pass on every invocation of
+  // this file and heals any corrupt/missing sibling before either direction
+  // below ever runs — reintroducing, invisibly, the exact defect this file
+  // exists to catch. Fail by name instead of letting that happen silently.
+  const precompressPath = fileURLToPath(new URL('./precompress_dist.mjs', import.meta.url));
+  const precompressSrc = readFileSync(precompressPath, 'utf8');
+  if (
+    !precompressSrc.includes('import.meta.url === pathToFileURL(process.argv[1]).href') ||
+    !precompressSrc.includes('if (isMain)')
+  ) {
+    brProblems.push(
+      `precompress_dist.mjs no longer guards its body with an entry-point check — ` +
+        `importing MIN_BYTES from it (see the top of this file) would silently re-run ` +
+        `the whole compression pass on every invocation of this guard and heal a ` +
+        `corrupt/missing sibling before the checks below ever run. Restore ` +
+        `\`if (isMain) { ... }\` gated by ` +
+        `\`import.meta.url === pathToFileURL(process.argv[1]).href\`.`,
+    );
+  }
+
   const entries = readdirSync(dir).filter((n) => statSync(`${dir}/${n}`).isFile());
 
   // Direction 1: every sibling round-trips to its source.
