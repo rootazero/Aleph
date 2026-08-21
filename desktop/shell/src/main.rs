@@ -76,9 +76,21 @@ struct RevealGate {
 }
 
 /// Injected into every document the webview loads (splash and Panel).
-/// Marks the page as shell-hosted, and on macOS records the platform so
-/// the Panel's CSS can adapt — leave room for the overlay traffic
-/// lights, let its translucent theme show the vibrancy material through.
+/// Marks the page as shell-hosted and records the platform.
+///
+/// macOS uses it to leave room for the overlay traffic lights and let the
+/// vibrancy material show through; Linux uses it to drop glass to opaque
+/// solids (`html[data-flat="1"]`, see the Panel's tailwind.css); Windows uses
+/// it for neither today, and is declared anyway so the attribute is never
+/// absent on a shell-hosted page — a reader that has to distinguish "Windows"
+/// from "the marker did not run" has no way to.
+///
+/// This is NOT the only writer. `baseline-probe.js` resolves and writes the
+/// same attribute before the WASM boots, because this script is an
+/// `initialization_script` and therefore runs before page scripts only for
+/// SAME-ORIGIN pages — a panel-only shell pointed at a remote Gateway does not
+/// get it until `on_page_load`, which is too late. The two agree by
+/// construction: the probe keeps a value it finds already set.
 ///
 /// The `alephShell.pickDirectory` / `alephShell.createProjectDirectory`
 /// bridge that used to live here was removed: the directory picker now
@@ -91,8 +103,14 @@ struct RevealGate {
 const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
     e.setAttribute('data-shell','aleph-tauri');\
     e.setAttribute('data-platform','macos');";
-#[cfg(not(target_os = "macos"))]
-const SHELL_MARKER_JS: &str = "document.documentElement.setAttribute('data-shell','aleph-tauri');";
+#[cfg(target_os = "windows")]
+const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
+    e.setAttribute('data-shell','aleph-tauri');\
+    e.setAttribute('data-platform','windows');";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const SHELL_MARKER_JS: &str = "var e=document.documentElement;\
+    e.setAttribute('data-shell','aleph-tauri');\
+    e.setAttribute('data-platform','linux');";
 
 /// The window-geometry facets the shell persists across restarts. Visibility
 /// stays out of it — the shell drives that itself (created hidden so geometry is

@@ -34,6 +34,7 @@ pub mod memory_graph;
 pub mod models;
 pub mod panic_overlay;
 pub mod platform;
+pub mod platform_host;
 pub mod preset_providers;
 pub mod state;
 
