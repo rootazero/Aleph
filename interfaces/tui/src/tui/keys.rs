@@ -1283,6 +1283,28 @@ mod btw_key_tests {
         ));
     }
 
+    /// …and the global handler must not eat Esc before the overlay sees it.
+    ///
+    /// `handle_global_key` runs first for every key and owns Esc for the
+    /// purely local overlays. It answers `None` here only because none of the
+    /// conditions it checks happens to be true — which is a fact about the
+    /// order of a chain of `if`s, not a decision anyone wrote down. Routing
+    /// through the real entry point is what makes it a fact about behaviour.
+    #[test]
+    fn esc_reaches_the_overlay_through_the_real_key_path() {
+        let mut state = opened();
+        let mut textarea = TextArea::default();
+        let action = handle_key_event(
+            &mut state,
+            &mut textarea,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(
+            matches!(action, Action::BtwAbortOrClose),
+            "the global Esc chain swallowed the overlay's key, got: {action:?}"
+        );
+    }
+
     /// The overlay opens in browse mode, so the bare shortcuts work on the
     /// answer that just arrived — which is when a user reaches for them.
     #[test]

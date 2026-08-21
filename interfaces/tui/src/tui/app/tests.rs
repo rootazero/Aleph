@@ -1900,6 +1900,65 @@ fn no_side_question_frame_reaches_the_main_transcript() {
     );
 }
 
+/// The case where the intercept is the ONLY thing standing between a side
+/// answer and the main transcript: a side run whose recorded home session is
+/// this screen's.
+///
+/// Ordinarily it is the second line of defence — a side run's `RunAccepted`
+/// carries the derived key, so `frame_belongs_here` drops everything that
+/// follows and the intercept only decides whether the user gets to *see* it.
+/// That is not guaranteed. `mark_run_session` is first-write-wins, and the
+/// Simulated-fallback handler emits a pre-dispatch `RunAccepted` carrying the
+/// **routed (main)** key before the engine emits the canonical one. Today the
+/// two live in mutually exclusive `agent.run` registrations, so they cannot
+/// race — but "cannot race today" is a fact about how the server is wired this
+/// month, and the client should not be one refactor away from replaying a side
+/// answer into the conversation it was kept out of.
+///
+/// So the guard is set up to say "mine" here, deliberately, and the assertion
+/// is that nothing arrives anyway.
+#[test]
+fn the_intercept_holds_even_when_the_screen_thinks_the_side_run_is_its_own() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    let before = state.messages.len();
+
+    // The screen learns `run-side` under its OWN key — the pre-dispatch frame
+    // winning first-write-wins.
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-side".into(),
+        session_key: "agent:main:main".into(),
+        accepted_at: "2026-08-20T00:00:00Z".into(),
+    });
+    assert!(
+        state.frame_belongs_here("run-side"),
+        "precondition: the cross-session guard now believes this run is ours, \
+         so it will NOT drop what follows"
+    );
+
+    state.open_btw("what files are in src?".into());
+    state.btw.claim_pending_run("run-side".into());
+
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-side".into(),
+        seq: 1,
+        content: "main.rs, lib.rs".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+
+    assert_eq!(
+        state.btw.active.as_ref().expect("still answering").answer,
+        "main.rs, lib.rs"
+    );
+    assert_eq!(
+        state.messages.len(),
+        before,
+        "the side answer reached the main transcript: {:?}",
+        &state.messages[before..]
+    );
+}
+
 /// The intercept must be exactly as wide as the runs the overlay asked for.
 /// A frame from the main run has to reach the transcript even while a side
 /// question is streaming, or `/btw` would silently freeze the conversation it
