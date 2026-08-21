@@ -19,7 +19,27 @@ const LITE_CONF = 'desktop/shell/tauri.lite.conf.json';
 const problems = [];
 const fail = (edge, msg) => problems.push(`✗ ${edge}: ${msg}`);
 
-const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
+// A read failure (missing file) or a parse failure (malformed JSON) is itself
+// an edge A violation, not a new edge: every file this reads today only feeds
+// the macOS install-gate check. Reports and returns null instead of throwing —
+// a raw JSON.parse SyntaxError names no file at all, and with two
+// structurally identical Tauri configs (base + lite) a stack trace can't tell
+// an operator which one they broke.
+const readJson = (p) => {
+  let raw;
+  try {
+    raw = readFileSync(p, 'utf8');
+  } catch (e) {
+    fail('A', `cannot read ${p}: ${e.message}`);
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    fail('A', `cannot parse ${p} as JSON: ${e.message}`);
+    return null;
+  }
+};
 const baseline = readJson(BASELINE);
 
 // ── Edge A: the macOS install gate ────────────────────────────────────────
@@ -28,16 +48,24 @@ const baseline = readJson(BASELINE);
 // over the base (justfile shell-build-lite) — duplicating the value there would
 // create a second source of truth. The overlay is only checked for a
 // CONTRADICTION.
-{
+//
+// Guarded by `if (baseline)`/`if (base)`/`if (lite)`: when readJson has
+// already recorded why a file couldn't be read, comparing against a null
+// value would just re-report the same failure as a confusing second message.
+if (baseline) {
   const base = readJson(BASE_CONF);
-  const got = base?.bundle?.macOS?.minimumSystemVersion;
-  if (got !== baseline.macos_min) {
-    fail('A', `${BASE_CONF} bundle.macOS.minimumSystemVersion is ${JSON.stringify(got)}, expected ${JSON.stringify(baseline.macos_min)}`);
+  if (base) {
+    const got = base?.bundle?.macOS?.minimumSystemVersion;
+    if (got !== baseline.macos_min) {
+      fail('A', `${BASE_CONF} bundle.macOS.minimumSystemVersion is ${JSON.stringify(got)}, expected ${JSON.stringify(baseline.macos_min)}`);
+    }
   }
   const lite = readJson(LITE_CONF);
-  const liteGot = lite?.bundle?.macOS?.minimumSystemVersion;
-  if (liteGot !== undefined && liteGot !== baseline.macos_min) {
-    fail('A', `${LITE_CONF} overrides minimumSystemVersion to ${JSON.stringify(liteGot)}; the overlay must omit it or match ${JSON.stringify(baseline.macos_min)}`);
+  if (lite) {
+    const liteGot = lite?.bundle?.macOS?.minimumSystemVersion;
+    if (liteGot !== undefined && liteGot !== baseline.macos_min) {
+      fail('A', `${LITE_CONF} overrides minimumSystemVersion to ${JSON.stringify(liteGot)}; the overlay must omit it or match ${JSON.stringify(baseline.macos_min)}`);
+    }
   }
 }
 
