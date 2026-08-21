@@ -110,7 +110,19 @@ impl MemoryCommandHandler {
                     })?;
             }
             None => {
-                // Fact deleted — find and remove the note file
+                // Fact deleted — find and remove the note file.
+                //
+                // Scan every immediate subdir of `memory_dir` as a possible
+                // agent namespace (not just `[DEFAULT_AGENT_ID, "owner"]`)
+                // because the create path writes to `fact.agent` from the
+                // event payload, which can be any agent id the caller
+                // supplied. Restricting the scan to a fixed list would
+                // silently leave orphan files under arbitrary agent
+                // namespaces — same latent bug the reconciler's stale-file
+                // detection already had to work around by scanning every
+                // agent dir instead. Mirrors the reconciler's behaviour
+                // here so the dual-write path and the diagnostic surface
+                // agree.
                 let title = match sanitize_title(fact_id) {
                     Ok(t) => t,
                     Err(e) => {
@@ -118,8 +130,20 @@ impl MemoryCommandHandler {
                         return Ok(());
                     }
                 };
+                let agent_dirs: Vec<String> = std::fs::read_dir(indexer.memory_dir())
+                    .ok()
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().is_dir())
+                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                            .collect()
+                    })
+                    .unwrap_or_else(|| {
+                        vec![DEFAULT_AGENT_ID.to_string(), "owner".to_string()]
+                    });
                 let mut found = false;
-                for agent_id in [DEFAULT_AGENT_ID, "owner"] {
+                for agent_id in &agent_dirs {
                     match indexer.store().find_by_filename(&title, agent_id).await {
                         Ok(paths) if !paths.is_empty() => {
                             for note_path in paths {
@@ -152,7 +176,7 @@ impl MemoryCommandHandler {
                     }
                 }
                 if !found {
-                    for agent_id in [DEFAULT_AGENT_ID, "owner"] {
+                    for agent_id in &agent_dirs {
                         for cat in crate::memory::notes::CATEGORY_DIRS {
                             let file = indexer
                                 .memory_dir()
@@ -1340,6 +1364,83 @@ mod tests {
         assert!(
             report.stale_files.is_empty(),
             "clean state must report no stale files; got {:?}",
+            report.stale_files
+        );
+    }
+
+    /// Risk 6 regression test: `project_to_notes`'s `None` branch used to
+    /// only scan the fixed agent list `[main, owner]` to find the note
+    /// file to delete, which silently left orphans whenever `fact.agent`
+    /// was something else (e.g. `"default"`, project sub-cycles under
+    /// `main__proj-*`). After the fix the scan walks every immediate
+    /// subdir of `memory_dir` as a possible agent namespace, so the file
+    /// under the create-time agent gets removed on delete.
+    #[tokio::test]
+    async fn test_delete_fact_cleans_orphan_under_non_default_agent() {
+        let (_memory_dir, handler) = make_handler_with_indexer().await;
+
+        let fact_id = handler
+            .create_fact(CreateNoteCommand {
+                content: "User prefers Rust".into(),
+                note_type: NoteType::Preference,
+                path: "/user/preferences/lang".into(),
+                namespace: "owner".into(),
+                // Critical: an agent id outside the historical
+                // [main, owner] scan list. Before the fix, the delete
+                // path would never see the file under `default/` and
+                // would silently leak it.
+                agent: "default".into(),
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Sanity: the file actually landed under `default/`, not under
+        // main/owner. If it didn't, the rest of the test wouldn't be
+        // exercising the bug we're fixing.
+        let sanitized = sanitize_title(&fact_id).unwrap();
+        let category = NoteType::Preference.to_category_dir();
+        let created_path = _memory_dir
+            .path()
+            .join("default")
+            .join(category)
+            .join(format!("{sanitized}.md"));
+        assert!(
+            created_path.exists(),
+            "create_fact must have written the file under `default/`; \
+             got missing path = {}",
+            created_path.display()
+        );
+
+        // Now delete the fact. Before the fix this would silently leave
+        // the file behind because project_to_notes' None-branch scanned
+        // only `[main, owner]` and could not see `default/`.
+        handler
+            .delete_fact(DeleteNoteCommand {
+                note_path: fact_id.clone(),
+                reason: "user requested".into(),
+                actor: EventActor::User,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            !created_path.exists(),
+            "delete_fact must remove the note file under the create-time \
+             agent namespace; file still present at {}",
+            created_path.display()
+        );
+
+        // And the reconciler must now report zero stale files under any
+        // agent dir \u2014 the dual-write and the diagnostic surface agree.
+        let report = handler.reconcile_once().await.unwrap();
+        assert!(
+            report.stale_files.is_empty(),
+            "after delete_fact there must be no stale files anywhere; got {:?}",
             report.stale_files
         );
     }
