@@ -623,16 +623,26 @@ mod tests {
     fn plan_secret_env_routes_secret_to_vault_ref() {
         let incoming = env(&[("GITHUB_TOKEN", "ghp_real"), ("REGION", "us")]);
         let (stored, writes) = super::plan_secret_env("srv", incoming, &HashMap::new());
-        // secret value never stored inline; a {{secret:..}} ref is written instead
-        assert_eq!(
-            stored.get("GITHUB_TOKEN"),
-            Some(&"{{secret:ext.mcp.srv.GITHUB_TOKEN}}".to_string())
+        // secret value never stored inline; a {{secret:..}} ref is written instead.
+        // The ref includes a per-id hash suffix to keep field_key collision-free
+        // when two extension ids sanitize to the same string (see
+        // crate::hub::secrets::field_key doc); we assert on the field_key shape
+        // the helper produces rather than hard-coding the hash, so a future
+        // hash-function change here only needs to update one place.
+        let expected_ref = format!(
+            "{{{{secret:{}}}}}",
+            crate::hub::secrets::field_key(crate::hub::types::ExtensionKind::Mcp, "srv", "GITHUB_TOKEN")
         );
+        assert_eq!(stored.get("GITHUB_TOKEN"), Some(&expected_ref));
         assert_eq!(stored.get("REGION"), Some(&"us".to_string()));
         assert_eq!(
             writes,
             vec![(
-                "ext.mcp.srv.GITHUB_TOKEN".to_string(),
+                crate::hub::secrets::field_key(
+                    crate::hub::types::ExtensionKind::Mcp,
+                    "srv",
+                    "GITHUB_TOKEN"
+                ),
                 "ghp_real".to_string()
             )]
         );
@@ -681,15 +691,30 @@ mod tests {
         assert_eq!(cfg.command.as_deref(), Some("npx"));
         assert!(!cfg.auto_start); // enabled=false -> auto_start=false
         assert_eq!(cfg.requires_runtime.as_deref(), Some("node"));
-        // secret -> vault ref + a write; non-secret stays inline
-        assert_eq!(
-            cfg.env.get("API_TOKEN"),
-            Some(&"{{secret:ext.mcp.My_Srv.API_TOKEN}}".to_string())
+        // secret -> vault ref + a write; non-secret stays inline. Same
+        // field_key-with-hash shape as the inline test above; derive
+        // expected values through the helper so a future hash change
+        // only updates one place.
+        let expected_token_ref = format!(
+            "{{{{secret:{}}}}}",
+            crate::hub::secrets::field_key(
+                crate::hub::types::ExtensionKind::Mcp,
+                "My_Srv",
+                "API_TOKEN"
+            )
         );
+        assert_eq!(cfg.env.get("API_TOKEN"), Some(&expected_token_ref));
         assert_eq!(cfg.env.get("REGION"), Some(&"us".to_string()));
         assert_eq!(
             writes,
-            vec![("ext.mcp.My_Srv.API_TOKEN".to_string(), "t-real".to_string())]
+            vec![(
+                crate::hub::secrets::field_key(
+                    crate::hub::types::ExtensionKind::Mcp,
+                    "My_Srv",
+                    "API_TOKEN"
+                ),
+                "t-real".to_string()
+            )]
         );
     }
 }
