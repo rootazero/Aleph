@@ -20,13 +20,15 @@
 //!   every unit test stayed green;
 //! - the two principal resolvers ([`ambient_principal`] /
 //!   [`principal_from_metadata`]) that answer "who is this run's spend
-//!   charged to" from the two places that question is askable.
-//!
-//! No call site reads any of this yet — that lands with `spend::check`
-//! (admission) and the metering floor arm in later rounds.
+//!   charged to" from the two places that question is askable;
+//! - [`check`], the single admission/floor predicate: is a principal still
+//!   inside its ceiling for the period containing "now". No call site reads
+//!   it yet — that lands with the metering floor arm and the admission arm
+//!   in later tasks of this round.
 
 use std::collections::HashMap;
 
+use crate::config::types::policies::SpendPolicy;
 use crate::sync_primitives::{Arc, Mutex};
 
 pub mod period;
@@ -68,8 +70,25 @@ pub struct Spent {
     pub unpriced_calls: u64,
     /// `CostStatus::PartialMissingPrice` calls — `usd` is a lower bound.
     pub partial_calls: u64,
+    /// Start of the period this figure covers — an echo of the key the
+    /// caller queried by, not a value the ledger derives.
     pub period_start_ms: i64,
-    pub period_end_ms: i64,
+    /// End of the period this figure covers (the reset instant).
+    ///
+    /// Always `None` out of every [`SpendLedger`] method: the ledger is
+    /// keyed by `period_start_ms` alone and has no notion of period
+    /// *length* (`Day` vs `Month`), so it cannot compute this value — only
+    /// [`check`], which knows the configured
+    /// [`SpendPeriod`](crate::config::types::policies::SpendPeriod), can.
+    /// Before this was `Option`, both backends filled it with
+    /// `period_start_ms` as a placeholder documented "the real value is
+    /// computed later by `check`" — a value that type-checks, reads as a
+    /// plausible instant, and is simply false on every direct ledger read.
+    /// A raw `ledger.spent_for(..)` call (as a future read surface over the
+    /// ledger will make) can no longer produce a plausible-but-wrong reset
+    /// time: it gets `None` and must resolve the window itself, the same
+    /// way `check` does.
+    pub period_end_ms: Option<i64>,
 }
 
 /// One increment, keyed to the `CostStatus` that produced it. A caller can
@@ -173,13 +192,9 @@ impl SpendLedger for InMemorySpendLedger {
             unpriced_calls: row.map_or(0, |r| r.unpriced_calls),
             partial_calls: row.map_or(0, |r| r.partial_calls),
             period_start_ms,
-            // The ledger has no notion of period length (Day vs Month) — it
-            // only ever sees `period_start_ms`. The true reset instant is
-            // computed by `spend::check` (which does know the configured
-            // `SpendPeriod`) and folded into the `Spent` it returns; this
-            // placeholder is never the value a consumer outside `check`
-            // should read.
-            period_end_ms: period_start_ms,
+            // See `Spent::period_end_ms`'s doc: the ledger does not know
+            // `SpendPeriod`, so it cannot compute this — only `check` can.
+            period_end_ms: None,
         })
     }
 
@@ -201,7 +216,8 @@ impl SpendLedger for InMemorySpendLedger {
             unpriced_calls,
             partial_calls,
             period_start_ms,
-            period_end_ms: period_start_ms,
+            // See `Spent::period_end_ms`'s doc.
+            period_end_ms: None,
         })
     }
 
@@ -337,4 +353,157 @@ pub fn principal_from_metadata(meta: &HashMap<String, String>) -> Principal {
         .or_else(|| crate::scope::scope_from_metadata(meta).map(|attr| attr.owner_user_id))
         .map(Principal::User)
         .unwrap_or(Principal::Unattributed)
+}
+
+// ============================================================================
+// check — the single admission/floor predicate
+// ============================================================================
+
+/// Is `principal` still inside its spend ceiling for the period containing
+/// `now_ms`? The single predicate both the metering floor arm (every LLM
+/// call) and the admission arm (every run) call — see the plan for why a
+/// second, open-coded copy of this logic in either arm is exactly the bug
+/// this function exists to rule out.
+///
+/// Reads the process-wide policy and ledger ([`current_policy`],
+/// [`global_ledger`]) and delegates to [`check_with`], which takes both
+/// explicitly and carries the actual logic — see that function's doc for
+/// why the split exists.
+#[must_use]
+pub fn check(principal: &Principal, now_ms: i64) -> Verdict {
+    let policy = current_policy();
+    check_with(principal, now_ms, &policy, &*global_ledger())
+}
+
+/// The logic [`check`] delegates to, with `policy` and `ledger` taken as
+/// parameters instead of read from the process globals.
+///
+/// This split exists for testability, not layering for its own sake:
+/// [`install_ledger`] and [`install_policy`] populate `OnceLock`s that are
+/// set once for the life of the process, and `cargo test --lib` runs every
+/// unit test in this crate in one process. G8 needs a `SpendLedger` whose
+/// every method panics, to turn "the disabled policy never touches the
+/// ledger" from a claim into an assertion; G9 and G10 each need their own
+/// freshly-seeded ledger. None of that is expressible by racing to install
+/// a single process-wide `OnceLock` from three different tests — the first
+/// `install_ledger` call anywhere in this binary would win, and the other
+/// two would silently get its ledger instead of their own. Taking `policy`
+/// and `ledger` as plain parameters sidesteps the whole hazard: every test
+/// builds its own, with no shared mutable process state to race on.
+fn check_with(principal: &Principal, now_ms: i64, policy: &SpendPolicy, ledger: &dyn SpendLedger) -> Verdict {
+    let period_start_ms = period::period_start_ms(now_ms, policy.period);
+    let period_end_ms = period::period_end_ms(now_ms, policy.period);
+
+    if !policy.enabled() {
+        // Neither ceiling is configured: return without calling a single
+        // `SpendLedger` method — no query, no cache fill, no row. A
+        // single-user box with `[policies.spend]` absent must be
+        // byte-identical, on every request, to one without this feature at
+        // all. See G8.
+        return Verdict::Allowed(zero_spent(period_start_ms, period_end_ms));
+    }
+
+    // `principal`'s own spend rides every returned `Verdict` — `Allowed`
+    // and both `Denied` shapes — as `spent`, because that field is always
+    // the caller's own number, read unconditionally once the policy is
+    // enabled. Never the machine total: see `Limit::Total`'s doc on why the
+    // machine total must never ride alongside it, in this field or any
+    // other the caller can reach.
+    let spent = resolve_read(ledger.spent_for(principal, period_start_ms), period_start_ms, period_end_ms, |error| {
+        tracing::error!(
+            %error,
+            principal = principal.as_key(),
+            period_start_ms,
+            "spend::check: SpendLedger::spent_for failed; treating this principal's spend as \
+             zero for this check rather than turning a ledger read failure into a denial for \
+             every request",
+        );
+    });
+
+    // Total first: it is the ceiling `principal` cannot move by asking
+    // someone else to raise their own line, so it is the one named when
+    // both are blown. Only read it when the axis is actually configured —
+    // an install with `total_usd` unset must not pay for a query whose
+    // answer can never matter.
+    if let Some(total_limit) = policy.total_usd {
+        let total = resolve_read(ledger.total_for(period_start_ms), period_start_ms, period_end_ms, |error| {
+            tracing::error!(
+                %error,
+                period_start_ms,
+                "spend::check: SpendLedger::total_for failed; treating the machine total as \
+                 zero for this check rather than turning a ledger read failure into a denial \
+                 for every request",
+            );
+        });
+        if ceiling_blown(total.usd, total_limit) {
+            return Verdict::Denied {
+                limit: Limit::Total,
+                spent,
+            };
+        }
+    }
+
+    if let Some(per_user_limit) = policy.per_user_usd {
+        if ceiling_blown(spent.usd, per_user_limit) {
+            return Verdict::Denied {
+                limit: Limit::PerUser {
+                    spent: spent.usd,
+                    limit: per_user_limit,
+                },
+                spent,
+            };
+        }
+    }
+
+    Verdict::Allowed(spent)
+}
+
+/// The one place the ceiling comparison is written. `>=`, not `>`: a
+/// principal exactly at the ceiling is denied, not let through for one more
+/// call — see G10.
+fn ceiling_blown(spent_usd: f64, limit_usd: f64) -> bool {
+    spent_usd >= limit_usd
+}
+
+/// A zero-spend `Spent` for `period_start_ms`/`period_end_ms` — the
+/// disabled-policy fast path (no ledger involved at all) and the fail-open
+/// fallback in [`resolve_read`] (a ledger read that errored) both need
+/// exactly this value.
+fn zero_spent(period_start_ms: i64, period_end_ms: i64) -> Spent {
+    Spent {
+        usd: 0.0,
+        unpriced_calls: 0,
+        partial_calls: 0,
+        period_start_ms,
+        period_end_ms: Some(period_end_ms),
+    }
+}
+
+/// Fold one `SpendLedger` read into a `Spent` carrying the real reset
+/// instant (every `SpendLedger` method hands back `period_end_ms: None` —
+/// see that field's doc — `check` is where it gets resolved).
+///
+/// Fails open on a ledger error: logs loudly via `on_error` and returns a
+/// zero `Spent` rather than propagating the error out of `check` as a
+/// denial. A spend ceiling is a governance feature, not a safety wall —
+/// letting a transient ledger read failure deny *every* request for as long
+/// as the failure lasts would turn a database hiccup into a full outage,
+/// which is a worse failure mode than a bounded, loudly-logged window of
+/// unmetered spend (P7: graceful degradation over a hard failure).
+fn resolve_read(
+    result: anyhow::Result<Spent>,
+    period_start_ms: i64,
+    period_end_ms: i64,
+    on_error: impl FnOnce(&anyhow::Error),
+) -> Spent {
+    match result {
+        Ok(mut spent) => {
+            spent.period_end_ms = Some(period_end_ms);
+            spent
+        }
+        Err(error) => {
+            on_error(&error);
+            zero_spent(period_start_ms, period_end_ms)
+        }
+    }
 }

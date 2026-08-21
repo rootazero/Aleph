@@ -161,7 +161,9 @@ impl SpendLedger for SqliteSpendLedger {
                 unpriced_calls: row.unpriced_calls,
                 partial_calls: row.partial_calls,
                 period_start_ms,
-                period_end_ms: period_start_ms,
+                // See `Spent::period_end_ms`'s doc: only `check` can
+                // compute this — the ledger does not know `SpendPeriod`.
+                period_end_ms: None,
             });
         }
 
@@ -195,7 +197,8 @@ impl SpendLedger for SqliteSpendLedger {
             unpriced_calls: unpriced_calls as u64,
             partial_calls: partial_calls as u64,
             period_start_ms,
-            period_end_ms: period_start_ms,
+            // See `Spent::period_end_ms`'s doc.
+            period_end_ms: None,
         })
     }
 
@@ -220,7 +223,8 @@ impl SpendLedger for SqliteSpendLedger {
             unpriced_calls: unpriced_calls.unwrap_or(0) as u64,
             partial_calls: partial_calls.unwrap_or(0) as u64,
             period_start_ms,
-            period_end_ms: period_start_ms,
+            // See `Spent::period_end_ms`'s doc.
+            period_end_ms: None,
         })
     }
 

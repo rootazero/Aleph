@@ -1,11 +1,12 @@
 //! Tests for `spend::mod` — the core types, the in-process ledger default,
-//! and `principal_from_metadata`. `ambient_principal`'s equivalence with
-//! `principal_from_metadata` (G13) lives in
+//! `principal_from_metadata`, and `check` (via its injectable core,
+//! `check_with` — see that function's doc for why its tests never call
+//! `install_ledger`/`install_policy`). `ambient_principal`'s equivalence
+//! with `principal_from_metadata` (G13) lives in
 //! `gateway::execution_engine::run_loop::tests`, next to
 //! `with_request_scope`, because it needs that function's `pub(super)`
 //! visibility — see this round's task-3 brief for why widening that
-//! visibility instead was rejected. G8–G10 (the `spend::check` guards) land
-//! here in a later task.
+//! visibility instead was rejected.
 
 use std::collections::HashMap;
 
@@ -206,6 +207,213 @@ fn sweep_before_removes_only_rows_strictly_older_than_the_cutoff() {
     assert_eq!(ledger.spent_for(&alice, 1_000).unwrap().usd, 0.0);
     assert_eq!(ledger.spent_for(&alice, 2_000).unwrap().usd, 2.0);
     assert_eq!(ledger.spent_for(&alice, 3_000).unwrap().usd, 3.0);
+}
+
+// ============================================================================
+// check_with (the injectable core of `check`)
+// ============================================================================
+
+/// A `SpendLedger` whose every method panics. Supplied to `check_with` in
+/// place of a real ledger, this is what turns "the disabled policy never
+/// touches the ledger" from a claim into an assertion (G8): if `check_with`
+/// ever called a ledger method on the disabled fast path, this test would
+/// panic instead of quietly passing because the correct answer happened to
+/// be reachable without that call.
+struct PanicOnAnyCall;
+
+impl SpendLedger for PanicOnAnyCall {
+    fn record(&self, _principal: &Principal, _period_start_ms: i64, _delta: Delta) -> anyhow::Result<()> {
+        panic!("check_with must not call SpendLedger::record when the policy is disabled");
+    }
+
+    fn spent_for(&self, _principal: &Principal, _period_start_ms: i64) -> anyhow::Result<Spent> {
+        panic!("check_with must not call SpendLedger::spent_for when the policy is disabled");
+    }
+
+    fn total_for(&self, _period_start_ms: i64) -> anyhow::Result<Spent> {
+        panic!("check_with must not call SpendLedger::total_for when the policy is disabled");
+    }
+
+    fn sweep_before(&self, _period_start_ms: i64) -> anyhow::Result<usize> {
+        panic!("check_with must not call SpendLedger::sweep_before when the policy is disabled");
+    }
+}
+
+/// G8 — a disabled policy (`SpendPolicy::default()`: neither ceiling set)
+/// never touches the ledger at all, proven by supplying one that panics on
+/// every method. See `PanicOnAnyCall`'s doc for why a panic, not a call
+/// counter, is the right instrument here.
+#[test]
+fn g8_disabled_policy_never_touches_the_ledger() {
+    let policy = SpendPolicy::default();
+    assert!(!policy.enabled(), "test setup: this policy must be disabled");
+    let alice = Principal::User("u-alice".to_string());
+
+    let verdict = check_with(&alice, 1_700_000_000_000, &policy, &PanicOnAnyCall);
+
+    match verdict {
+        Verdict::Allowed(spent) => {
+            assert_eq!(spent.usd, 0.0);
+            assert_eq!(spent.unpriced_calls, 0);
+            assert_eq!(spent.partial_calls, 0);
+            assert!(spent.period_end_ms.is_some(), "the window still rides a disabled verdict");
+        }
+        Verdict::Denied { .. } => panic!("a disabled policy must never deny: {verdict:?}"),
+    }
+}
+
+/// G9 — with both ceilings configured and both blown, the verdict names
+/// `Limit::Total`, not `Limit::PerUser`, even though `alice` (the queried
+/// principal) is also individually over her own line. `Limit::Total` is the
+/// one she cannot move by asking bob to spend less.
+#[test]
+fn g9_both_ceilings_blown_reports_total_not_per_user() {
+    let policy = SpendPolicy {
+        per_user_usd: Some(5.0),
+        total_usd: Some(50.0),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000i64;
+    let period_start_ms = period::period_start_ms(now_ms, policy.period);
+
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    let bob = Principal::User("u-bob".to_string());
+    // Alice alone blows her own $5 ceiling; alice + bob together blow the
+    // $50 machine ceiling.
+    ledger.record(&alice, period_start_ms, Delta::Usd(5.0)).unwrap();
+    ledger.record(&bob, period_start_ms, Delta::Usd(45.0)).unwrap();
+
+    let verdict = check_with(&alice, now_ms, &policy, &ledger);
+
+    match verdict {
+        Verdict::Denied {
+            limit: Limit::Total, ..
+        } => {}
+        other => panic!("expected Denied{{ limit: Limit::Total, .. }}, got {other:?}"),
+    }
+}
+
+/// The `PerUser` counterpart to G9: only the per-principal ceiling is
+/// configured (and blown) — nothing to prefer over, so the verdict names
+/// `Limit::PerUser` and carries alice's own numbers.
+#[test]
+fn per_user_ceiling_alone_reports_per_user_with_both_numbers() {
+    let policy = SpendPolicy {
+        per_user_usd: Some(5.0),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000i64;
+    let period_start_ms = period::period_start_ms(now_ms, policy.period);
+
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    ledger.record(&alice, period_start_ms, Delta::Usd(7.0)).unwrap();
+
+    let verdict = check_with(&alice, now_ms, &policy, &ledger);
+
+    match verdict {
+        Verdict::Denied {
+            limit: Limit::PerUser { spent, limit },
+            spent: outer_spent,
+        } => {
+            assert_eq!(spent, 7.0);
+            assert_eq!(limit, 5.0);
+            assert_eq!(outer_spent.usd, 7.0, "the outer Spent must agree with Limit::PerUser's own number");
+        }
+        other => panic!("expected Denied{{ limit: Limit::PerUser {{ .. }}, .. }}, got {other:?}"),
+    }
+}
+
+/// G10 — the boundary is `>=`, stated once in `ceiling_blown`: a principal
+/// exactly at the ceiling is denied, and one cent under it is allowed.
+#[test]
+fn g10_exactly_at_ceiling_denies_one_cent_under_allows() {
+    let policy = SpendPolicy {
+        per_user_usd: Some(10.0),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000i64;
+    let period_start_ms = period::period_start_ms(now_ms, policy.period);
+    let alice = Principal::User("u-alice".to_string());
+
+    let at_ceiling = InMemorySpendLedger::default();
+    at_ceiling.record(&alice, period_start_ms, Delta::Usd(10.0)).unwrap();
+    assert!(
+        matches!(
+            check_with(&alice, now_ms, &policy, &at_ceiling),
+            Verdict::Denied {
+                limit: Limit::PerUser { .. },
+                ..
+            }
+        ),
+        "exactly at the ceiling must be denied"
+    );
+
+    let under_ceiling = InMemorySpendLedger::default();
+    under_ceiling.record(&alice, period_start_ms, Delta::Usd(9.99)).unwrap();
+    assert!(
+        matches!(check_with(&alice, now_ms, &policy, &under_ceiling), Verdict::Allowed(_)),
+        "one cent under the ceiling must be allowed"
+    );
+}
+
+/// With neither ceiling blown, `check_with` allows and the returned `Spent`
+/// is `alice`'s own current spend — not zero, not the machine total.
+#[test]
+fn neither_ceiling_blown_allows_with_the_principals_own_spend() {
+    let policy = SpendPolicy {
+        per_user_usd: Some(10.0),
+        total_usd: Some(1000.0),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000i64;
+    let period_start_ms = period::period_start_ms(now_ms, policy.period);
+    let alice = Principal::User("u-alice".to_string());
+
+    let ledger = InMemorySpendLedger::default();
+    ledger.record(&alice, period_start_ms, Delta::Usd(3.0)).unwrap();
+
+    match check_with(&alice, now_ms, &policy, &ledger) {
+        Verdict::Allowed(spent) => assert_eq!(spent.usd, 3.0),
+        other => panic!("expected Allowed, got {other:?}"),
+    }
+}
+
+/// The window rides every verdict: `period_start_ms` matches
+/// `spend::period::period_start_ms` and `period_end_ms` is populated
+/// (`Some`, not the pre-Task-5 `period_start_ms` placeholder) whether the
+/// call lands in `Allowed` or `Denied`.
+#[test]
+fn the_window_rides_both_allowed_and_denied_verdicts() {
+    let policy = SpendPolicy {
+        per_user_usd: Some(5.0),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000i64;
+    let expected_start = period::period_start_ms(now_ms, policy.period);
+    let expected_end = period::period_end_ms(now_ms, policy.period);
+    assert_ne!(expected_start, expected_end, "test setup: a real period is never zero-length");
+    let alice = Principal::User("u-alice".to_string());
+
+    let allowed_ledger = InMemorySpendLedger::default();
+    match check_with(&alice, now_ms, &policy, &allowed_ledger) {
+        Verdict::Allowed(spent) => {
+            assert_eq!(spent.period_start_ms, expected_start);
+            assert_eq!(spent.period_end_ms, Some(expected_end));
+        }
+        other => panic!("expected Allowed, got {other:?}"),
+    }
+
+    let denied_ledger = InMemorySpendLedger::default();
+    denied_ledger.record(&alice, expected_start, Delta::Usd(5.0)).unwrap();
+    match check_with(&alice, now_ms, &policy, &denied_ledger) {
+        Verdict::Denied { spent, .. } => {
+            assert_eq!(spent.period_start_ms, expected_start);
+            assert_eq!(spent.period_end_ms, Some(expected_end));
+        }
+        other => panic!("expected Denied, got {other:?}"),
+    }
 }
 
 // ============================================================================
