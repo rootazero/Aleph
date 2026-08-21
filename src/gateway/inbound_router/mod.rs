@@ -595,6 +595,14 @@ impl InboundMessageRouter {
                     "[Router] Permission granted for {}:{}",
                     channel_id, ctx.sender_normalized
                 );
+                // A human reached us through a channel — the DreamDaemon idle
+                // sensor's second producer (the first is the gateway's
+                // `build_run_request`). Stamped only on the permission-granted
+                // arm: a stranger the policy refused is not "the user", and a
+                // busy group chat the agent merely lurks in must not starve
+                // nightly maintenance. Guarded by
+                // `dreaming::record_activity_has_its_two_human_producers`.
+                crate::memory::dreaming::record_activity();
                 ctx
             }
             Err(e) => {

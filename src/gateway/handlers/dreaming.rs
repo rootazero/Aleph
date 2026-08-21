@@ -90,6 +90,7 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
     // in BOTH branches (it is not scoped to the corpus they asked about), so
     // withholding it here would leak the refusal just as loudly as omitting it.
     if !crate::gateway::visibility::partition_visible(agent_id) {
+        let (daemon, last_run) = daemon_and_last_run(&db).await;
         return match visible_namespaces(&db, limit) {
             Ok(namespaces) => JsonRpcResponse::success(
                 request.id,
@@ -99,6 +100,8 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
                     "synthesis": [],
                     "runs": [],
                     "namespaces": namespaces,
+                    "daemon": daemon,
+                    "last_run": last_run,
                 }),
             ),
             Err(err) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, err),
@@ -209,6 +212,11 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
         Err(err) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, err),
     };
 
+    // 5. Scheduling status: the zero-side-effect answer to "why didn't
+    // dreaming run tonight" — enabled / window / idle gate as the daemon
+    // holds them, plus the last persisted run with its crash tombstone.
+    let (daemon, last_run) = daemon_and_last_run(&db).await;
+
     JsonRpcResponse::success(
         request.id,
         json!({
@@ -217,7 +225,62 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
             "synthesis": synthesis,
             "runs": runs,
             "namespaces": namespaces,
+            "daemon": daemon,
+            "last_run": last_run,
         }),
+    )
+}
+
+/// The scheduling-status half of the response: the daemon's live gate snapshot
+/// (`null` when no daemon is registered — memory disabled, unit tests) and the
+/// persisted last-run row with the crash tombstone derived.
+///
+/// One builder for both response branches, for the same reason
+/// [`visible_namespaces`] is: the refusal must stay key- and shape-identical
+/// to an empty success. Carrying it in the refusal branch leaks nothing — it
+/// is operational state (window times, idle gate, last run of the *shared*
+/// daemon) and names no partition.
+///
+/// The tombstone: a `dream_status` row can say `running` forever after the
+/// process died mid-cycle, because nothing that could correct it is alive to
+/// do so. `running` older than the cycle's own hard timeout (plus slack) is
+/// re-reported as `stale_running` — derived on read, no writer's cooperation
+/// needed. The timeout comes from the running daemon when there is one, else
+/// from the config default the dead process would have used.
+async fn daemon_and_last_run(db: &MemoryBackend) -> (Value, Value) {
+    use crate::memory::store::DreamStore;
+
+    let daemon = crate::memory::dreaming::daemon_status();
+    let last_run = match db.get_dream_status().await {
+        Ok(status) => match status.last_run_at {
+            Some(run_at) => {
+                let raw = status.last_status.unwrap_or_else(|| "unknown".to_string());
+                let max_duration = daemon.as_ref().map_or_else(
+                    crate::config::types::memory::defaults::default_dreaming_max_duration_seconds,
+                    |d| d.max_duration_seconds,
+                );
+                let now = chrono::Utc::now().timestamp();
+                let shown = if raw == "running"
+                    && crate::memory::dreaming::running_status_is_stale(run_at, max_duration, now)
+                {
+                    "stale_running".to_string()
+                } else {
+                    raw
+                };
+                json!({
+                    "run_at": run_at,
+                    "status": shown,
+                    "duration_ms": status.last_duration_ms,
+                })
+            }
+            None => Value::Null,
+        },
+        // "I don't know" renders as nothing — never as "healthy".
+        Err(_) => Value::Null,
+    };
+    (
+        serde_json::to_value(daemon).unwrap_or(Value::Null),
+        last_run,
     )
 }
 
@@ -725,5 +788,57 @@ mod tests {
         assert!(run["decision"].is_null());
         assert!(run["evolution"].is_null());
         assert_eq!(run["notes_consolidated"], 3);
+    }
+
+    /// The crash tombstone: a persisted `running` row older than the cycle's
+    /// hard timeout is re-reported as `stale_running` on read — the process
+    /// that wrote it died mid-cycle and nothing alive can correct the row. A
+    /// *recent* `running` row is left alone: that one may be a live cycle.
+    #[tokio::test]
+    async fn a_dead_processes_running_status_reads_as_stale() {
+        use crate::memory::dreaming::DreamStatus;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::memory::store::DreamStore;
+        use crate::sync_primitives::Arc;
+
+        let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
+        let db: MemoryBackend = Arc::new(backend);
+        let now = chrono::Utc::now().timestamp();
+        let list = |db: MemoryBackend| async move {
+            let resp = handle_list_insights(
+                JsonRpcRequest::with_id("dreaming.list_insights", None, json!(1)),
+                db,
+            )
+            .await;
+            resp.result.expect("success")
+        };
+
+        // Ancient `running` (well past any max_duration_seconds + slack).
+        db.set_dream_status(DreamStatus {
+            last_run_at: Some(now - 100_000),
+            last_status: Some("running".to_string()),
+            last_duration_ms: None,
+        })
+        .await
+        .unwrap();
+        let v = list(db.clone()).await;
+        assert_eq!(
+            v["last_run"]["status"], "stale_running",
+            "a running row a dead process left behind must be tombstoned: {v}"
+        );
+        // No daemon is registered in a unit-test process; that must render as
+        // null ("not running"), never as an error.
+        assert!(v["daemon"].is_null());
+
+        // A running row started seconds ago may be a live cycle — untouched.
+        db.set_dream_status(DreamStatus {
+            last_run_at: Some(now - 30),
+            last_status: Some("running".to_string()),
+            last_duration_ms: None,
+        })
+        .await
+        .unwrap();
+        let v = list(db).await;
+        assert_eq!(v["last_run"]["status"], "running");
     }
 }

@@ -61,8 +61,8 @@ use super::evolution::{
 use super::validation::{self, DreamValidationReport};
 use super::{
     compute_raw_metrics, l1_over_corpus, now_timestamp, CycleDecision, DreamContext,
-    DreamCycleOutcome, DreamEvent, DreamPipeline, DreamReport, DreamReportStatus, DreamRunStatus,
-    EventLog, MutationGate, NoteEntry, SignalSnapshot, StrategySelector, DREAM_HISTORY_WINDOW,
+    DreamCycleOutcome, DreamEvent, DreamPipeline, DreamReport, DreamRunStatus, EventLog,
+    MutationGate, NoteEntry, SignalSnapshot, StrategySelector, DREAM_HISTORY_WINDOW,
 };
 
 /// Everything a project sub-cycle borrows from the daemon.
@@ -378,11 +378,11 @@ pub(super) async fn run_namespace_cycle(
         stages: report.stages_executed.clone(),
         validation_passed: validation_report.overall_ok(),
     };
-    let status = if report.status == DreamReportStatus::Interrupted {
-        DreamRunStatus::Cancelled
-    } else {
-        DreamRunStatus::Success
-    };
+    // Same mapping as the base cycle (`DreamRunStatus::for_report`): only a
+    // vacuous yield reads as `Cancelled`; a partially-executed cycle did real
+    // work and is spent. Two hand-written mappings here answered "what did an
+    // interrupted night cost" differently from the base path once.
+    let status = DreamRunStatus::for_report(&report);
 
     // A cycle that yielded before running a single stage produced nothing to
     // account for — see `DreamReport::is_vacuous_interruption` for why neither

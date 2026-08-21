@@ -385,6 +385,55 @@ pub struct DreamInsightsResponse {
     /// Every corpus that has ever dreamed, most recently active first.
     #[serde(default)]
     pub namespaces: Vec<DreamNamespaceDto>,
+    /// The daemon's live scheduling gates. `None` when no daemon runs in the
+    /// server process (memory disabled) — render that as "not running", never
+    /// as an error.
+    #[serde(default)]
+    pub daemon: Option<DreamDaemonDto>,
+    /// The last persisted run, whatever its outcome — the half of "did
+    /// anything happen last night" that the `runs` list cannot answer, because
+    /// a cycle that errored, timed out or yielded files no row there.
+    #[serde(default)]
+    pub last_run: Option<DreamLastRunDto>,
+}
+
+/// The daemon's scheduling preconditions, read without moving any of them —
+/// the answer to "why didn't dreaming run last night", which the run history
+/// structurally cannot give (a cycle that never started leaves no row).
+/// Every field here must have a rendering site in `DreamInsightsPanel`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamDaemonDto {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub within_window: bool,
+    /// True means a cycle starting now would defer to the user.
+    #[serde(default)]
+    pub user_active: bool,
+    #[serde(default)]
+    pub idle_seconds: i64,
+    #[serde(default)]
+    pub idle_threshold_seconds: u32,
+    #[serde(default)]
+    pub window_start_local: String,
+    #[serde(default)]
+    pub window_end_local: String,
+    #[serde(default)]
+    pub is_running: bool,
+}
+
+/// The last run's persisted status row.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamLastRunDto {
+    #[serde(default)]
+    pub run_at: i64,
+    /// `success` | `cancelled` | `error` | `timeout` | `running` |
+    /// `stale_running`. The last is derived on read: a `running` row older
+    /// than the cycle's hard timeout belongs to a process that died mid-cycle.
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
 
 /// One corpus in the dream history: the base agent, or a `{base}__proj-*`
@@ -511,8 +560,17 @@ pub struct DreamRunDto {
     pub synthesis_count: u32,
     #[serde(default)]
     pub notes_consolidated: u32,
+    /// Orphan notes woven into the link graph. Server-side since the notes-era
+    /// counters migration; this DTO had no field for it, so serde dropped it.
+    #[serde(default)]
+    pub notes_woven: u32,
     #[serde(default)]
     pub notes_archived: u32,
+    /// Correction rules that LANDED on disk this cycle — the Goodhart
+    /// counter-metric the governance audit pairs against the user's correction
+    /// count. Same story as `notes_woven`: emitted all along, never rendered.
+    #[serde(default)]
+    pub feedback_distilled: u32,
     #[serde(default)]
     pub errors: Option<String>,
     /// `None` on pre-migration rows.
