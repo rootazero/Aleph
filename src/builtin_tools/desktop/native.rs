@@ -1204,29 +1204,52 @@ impl super::DesktopTool {
                     ("right", delta_x)
                 };
                 let (clicks, quantized) = scroll_clicks(pixels);
+                // A point is optional for scroll, and the two rails read a
+                // missing one differently. The targeted rail *requires* it: the
+                // event carries no cursor, so the point is the only thing that
+                // routes the wheel into the right view. The global rail treats a
+                // given point as "scroll THIS view" — it lands the real cursor
+                // on the point first and then scrolls, so the wheel goes where
+                // the model looked instead of wherever the cursor happened to
+                // sit. Dropping the point on the global rail (the old behaviour)
+                // scrolled an arbitrary view and still reported success; on
+                // Windows/Linux, which have no targeted rail, moving-then-
+                // scrolling is the ONLY way to scroll a chosen view. No point at
+                // all stays valid on the global rail: it scrolls at the real
+                // cursor, unchanged.
+                let point = require_xy(args, "scroll").ok();
                 let result = match rail {
                     Rail::Targeted(pid) => {
-                        // A targeted scroll never moves the cursor, so the event
-                        // carries the only location the app can route it by:
-                        // without a point it would scroll whatever the app
-                        // decides — not what the model looked at. Refuse rather
-                        // than scroll somewhere arbitrary and report success.
-                        let (x, y) = match require_xy(args, "scroll") {
-                            Ok(xy) => xy,
-                            Err(_) => {
-                                return Ok(Some(invalid_args(
-                                    "a scroll delivered into a specific process needs `x`/`y`: \
-                                     the user's cursor never moves, so the point on the event is \
-                                     the only thing that tells the app which view to scroll. Pass \
-                                     a point inside the target (an element `center` from \
-                                     desktop_som / desktop_ax_snapshot works), or drop \
-                                     app/pid/window_id to scroll at the real cursor.",
-                                )));
-                            }
+                        let Some((x, y)) = point else {
+                            return Ok(Some(invalid_args(
+                                "a scroll delivered into a specific process needs `x`/`y`: \
+                                 the user's cursor never moves, so the point on the event is \
+                                 the only thing that tells the app which view to scroll. Pass \
+                                 a point inside the target (an element `center` from \
+                                 desktop_som / desktop_ax_snapshot works), or drop \
+                                 app/pid/window_id to scroll at the real cursor.",
+                            )));
                         };
                         screen.scroll_targeted(pid, x, y, direction, clicks).await
                     }
-                    Rail::Global => screen.scroll(direction, clicks).await,
+                    Rail::Global => {
+                        // Position the cursor on the requested view before
+                        // scrolling. If the move itself fails, report it rather
+                        // than scrolling blind and claiming the point mattered.
+                        if let Some((x, y)) = point {
+                            if let Err(e) = screen.hover(x, y).await {
+                                return Ok(Some(DesktopOutput {
+                                    success: false,
+                                    data: None,
+                                    message: Some(super::recovery::with_hint(format!(
+                                        "Could not move the cursor to ({x:.0},{y:.0}) before \
+                                         scrolling there: {e}"
+                                    ))),
+                                }));
+                            }
+                        }
+                        screen.scroll(direction, clicks).await
+                    }
                 };
                 match result {
                     Ok(()) => Ok(Some(DesktopOutput {
@@ -1238,6 +1261,12 @@ impl super::DesktopTool {
                             "wheel_clicks": clicks,
                             "approx_pixels_moved": f64::from(clicks) * PIXELS_PER_SCROLL_CLICK,
                             "delivery": rail.delivery(),
+                            // Where the wheel landed. `[x, y]` when the model
+                            // named a point (the cursor was moved there first on
+                            // the global rail, or the event was routed there on
+                            // the targeted rail); `null` means "at the real
+                            // cursor", the global-rail default.
+                            "at": point.map(|(x, y)| serde_json::json!([x, y])),
                         })),
                         message: quantized.then(|| {
                             format!(
@@ -1912,6 +1941,46 @@ impl super::DesktopTool {
                 let region = args.region.clone();
                 let output =
                     super::wait_visual::run_wait_visual(screen, args.timeout_ms, region).await;
+                Ok(Some(output))
+            }
+            "verify_state" => {
+                let ax = match platform.ax() {
+                    Some(a) => a,
+                    None => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(super::recovery::with_hint(
+                                "verify_state needs the accessibility layer, which is not \
+                                 available on this platform — use wait_visual (pixel settle) \
+                                 or re-screenshot to confirm the result instead."
+                                    .into(),
+                            )),
+                        }))
+                    }
+                };
+                // Resolve app/pid/window_id to a pid the same way the rest of
+                // the tool does, so a postcondition can be scoped to the app the
+                // model just acted on. `None` means the frontmost app, matching
+                // the AX query contract.
+                let pid = match resolve_target_pid(platform, screen, args).await {
+                    Ok(pid) => pid,
+                    Err(message) => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(super::recovery::with_hint(message)),
+                        }))
+                    }
+                };
+                let output = super::verify_state::run_verify_state(
+                    ax,
+                    pid,
+                    &args.expect,
+                    args.timeout_ms,
+                    args.stable_samples,
+                )
+                .await;
                 Ok(Some(output))
             }
             "set_value" => {

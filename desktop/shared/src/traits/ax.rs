@@ -17,8 +17,11 @@ use crate::error::Result;
 ///
 /// All methods are async because the backing implementation is I/O-bound
 /// (macOS marshals over the Swift-helper RPC; Windows runs UI Automation COM
-/// on a blocking thread). Platforms without an accessibility tree (currently
-/// Linux) return `None` from `ax()`, so these methods are never called there;
+/// on a blocking thread; Linux talks to AT-SPI2 over D-Bus). All three
+/// platforms implement AX read **and** write today (macOS Swift bridge,
+/// Windows UIA, Linux AT-SPI2); a platform still returns `None` from `ax()`
+/// when its accessibility bus is simply unreachable at runtime (e.g. no AT-SPI
+/// registry on the box), in which case these methods are never called there.
 /// `set_value` / `perform_action` also keep a `NotImplemented` default so a
 /// platform can offer read-only AX without a write path.
 #[async_trait]

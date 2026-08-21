@@ -394,6 +394,10 @@ const fn blank_batch_action() -> DesktopBatchAction {
         // The UI-TARS action script has no syntax for it: `force` is an explicit
         // escape hatch the model opts into per call, never a script default.
         force: None,
+        // No script verb maps to a postcondition check; verify_state is issued
+        // as its own JSON action, never expanded from a UI-TARS line.
+        expect: Vec::new(),
+        stable_samples: None,
     }
 }
 
