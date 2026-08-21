@@ -49,6 +49,12 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
                                  # withdraw. Three restarts, because the policy is a LOAD gate
+
+./qa/memory_curated/run.sh       # the curated hot tier's three verbs + the note window's
+                                 # load-more. Seeds through `remember` / `note_manage` over
+                                 # `tools.invoke`, then answers each checkpoint out-of-band
+                                 # with `probe.py` (the FILE on disk and the TOOL face — never
+                                 # the RPC being driven).
 ```
 
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like
