@@ -96,13 +96,24 @@ if (baseline) {
       // Match the LAST segment as a property access or a bare global, so
       // "CSS.registerProperty" matches `typeof CSS.registerProperty` and
       // "WebAssembly" matches `typeof WebAssembly`.
-      if (new RegExp(`\\b${name.replace('.', '\\.')}\\b`).test(src)) found.add(name);
+      if (new RegExp(`\\b${name.replace(/\./g, '\\.')}\\b`).test(src)) found.add(name);
     }
     for (const d of declared) {
       if (!found.has(d)) fail('B', `${PROBE} does not probe declared capability ${JSON.stringify(d)}`);
     }
     for (const f of found) {
       if (!declared.has(f)) fail('B', `${PROBE} probes ${JSON.stringify(f)}, which is not declared in ${BASELINE} — add it to the declaration or drop the probe`);
+    }
+    // Version numbers: the fallback page shows the minimum system versions
+    // (e.g., "macOS 13.3+"), which must match the declaration. Check them in
+    // the "Minimum:" line that the user sees.
+    const macOsCheck = `macOS ${baseline.macos_min}+`;
+    const webKitGtkCheck = `WebKitGTK ${baseline.webkitgtk_min}+`;
+    if (!src.includes(macOsCheck)) {
+      fail('B', `${PROBE} fallback text does not contain ${JSON.stringify(macOsCheck)} — the version number in the user-facing "Minimum:" line must match ${BASELINE}`);
+    }
+    if (!src.includes(webKitGtkCheck)) {
+      fail('B', `${PROBE} fallback text does not contain ${JSON.stringify(webKitGtkCheck)} — the version number in the user-facing "Minimum:" line must match ${BASELINE}`);
     }
   }
 }

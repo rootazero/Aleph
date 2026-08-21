@@ -103,17 +103,19 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
   var items = missing.map(function (m) { return '<li><code>' + esc(m) + '</code></li>'; }).join('');
-  document.body.innerHTML =
-    '<div style="font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;' +
-    'max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#1a1a1f;background:#fff">' +
-    '<h1 style="font-size:1.4rem;margin:0 0 .75rem">This system&rsquo;s WebView is too old for the Aleph Panel</h1>' +
-    '<p style="margin:0 0 1rem;color:#4a4a55">The Panel needs a browser engine that supports modern CSS colour. ' +
-    'These capabilities are missing here:</p>' +
-    '<ul style="margin:0 0 1.25rem;color:#4a4a55">' + items + '</ul>' +
-    '<p style="margin:0 0 1rem;color:#4a4a55"><strong>Minimum:</strong> macOS 13.3+ &middot; WebKitGTK 2.42+ &middot; ' +
-    'any evergreen Chromium or Edge WebView2.</p>' +
-    '<p style="margin:0;color:#4a4a55">Aleph itself is still running. You can keep working through the ' +
-    '<code>aleph</code> CLI, the <code>aleph-tui</code> terminal client, or the Panel on a phone or another ' +
-    'machine &mdash; the core is one service with many front ends.</p></div>';
-  document.body.setAttribute('style', 'margin:0;background:#fff');
+  if (document.body) {
+    document.body.innerHTML =
+      '<div style="font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;' +
+      'max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#1a1a1f;background:#fff">' +
+      '<h1 style="font-size:1.4rem;margin:0 0 .75rem">This system&rsquo;s WebView is too old for the Aleph Panel</h1>' +
+      '<p style="margin:0 0 1rem;color:#4a4a55">The Panel needs a browser engine that supports modern CSS colour. ' +
+      'These capabilities are missing here:</p>' +
+      '<ul style="margin:0 0 1.25rem;color:#4a4a55">' + items + '</ul>' +
+      '<p style="margin:0 0 1rem;color:#4a4a55"><strong>Minimum:</strong> macOS 13.3+ &middot; WebKitGTK 2.42+ &middot; ' +
+      'any evergreen Chromium or Edge WebView2.</p>' +
+      '<p style="margin:0;color:#4a4a55">Aleph itself is still running. You can keep working through the ' +
+      '<code>aleph</code> CLI, the <code>aleph-tui</code> terminal client, or the Panel on a phone or another ' +
+      'machine &mdash; the core is one service with many front ends.</p></div>';
+    document.body.setAttribute('style', 'margin:0;background:#fff');
+  }
 })();
