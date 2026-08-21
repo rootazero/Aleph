@@ -51,6 +51,14 @@ impl MemoryCommandHandler {
     /// fact is `Some`, writes/overwrites the corresponding markdown note. When
     /// `None` (fact deleted), removes the note file and index entry.
     /// If `note_indexer` is None, this is a no-op.
+    ///
+    /// Failure semantics: this function returns the first error it encounters
+    /// so the caller can decide whether to swallow it (events are already
+    /// persisted in the event log — the source of truth — so an unwritable
+    /// notes filesystem must NOT roll back the event append). The caller
+    /// pattern in this file matches on the result and logs a structured error
+    /// with `fact_id` + `phase`, turning divergence into an observable event
+    /// rather than a silent success.
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn project_to_notes(&self, fact_id: &str) -> Result<(), AlephError> {
         let Some(ref indexer) = self.note_indexer else {
@@ -92,9 +100,14 @@ impl MemoryCommandHandler {
                 // with the correct content_hash; a second index_note with this
                 // empty-hash struct overwrote the row and defeated the
                 // hash-skip on every subsequent rebuild.
-                if let Err(e) = indexer.write_note(&fact.agent, category, &note).await {
-                    tracing::error!(fact_id, error = %e, "Notes dual-write: failed to write note file");
-                }
+                indexer
+                    .write_note(&fact.agent, category, &note)
+                    .await
+                    .map_err(|e| {
+                        AlephError::other(format!(
+                            "Notes dual-write failed at write phase: fact_id={fact_id} error={e}"
+                        ))
+                    })?;
             }
             None => {
                 // Fact deleted — find and remove the note file
@@ -116,17 +129,22 @@ impl MemoryCommandHandler {
                                     .join(agent_id)
                                     .join(format!("{safe_path}.md"));
                                 if file.exists() {
-                                    if let Err(e) = tokio::fs::remove_file(&file).await {
-                                        tracing::error!(fact_id, path = %file.display(), error = %e, "Notes dual-write: failed to remove note file");
-                                    }
+                                    tokio::fs::remove_file(&file).await.map_err(|e| {
+                                        AlephError::other(format!(
+                                            "Notes dual-write failed at remove-file phase: fact_id={fact_id} path={} error={e}",
+                                            file.display()
+                                        ))
+                                    })?;
                                 }
-                                if let Err(e) = indexer
+                                indexer
                                     .store()
                                     .remove_note_index(&note_path, agent_id)
                                     .await
-                                {
-                                    tracing::error!(fact_id, error = %e, "Notes dual-write: failed to remove note index");
-                                }
+                                    .map_err(|e| {
+                                        AlephError::other(format!(
+                                            "Notes dual-write failed at remove-index phase: fact_id={fact_id} path={note_path} error={e}"
+                                        ))
+                                    })?;
                             }
                             found = true;
                         }
@@ -142,17 +160,22 @@ impl MemoryCommandHandler {
                                 .join(cat)
                                 .join(format!("{title}.md"));
                             if file.exists() {
-                                if let Err(e) = tokio::fs::remove_file(&file).await {
-                                    tracing::error!(fact_id, path = %file.display(), error = %e, "Notes dual-write: failed to remove note file");
-                                }
+                                tokio::fs::remove_file(&file).await.map_err(|e| {
+                                    AlephError::other(format!(
+                                        "Notes dual-write failed at fallback-remove phase: fact_id={fact_id} path={} error={e}",
+                                        file.display()
+                                    ))
+                                })?;
                                 let note_path = format!("{cat}/{title}");
-                                if let Err(e) = indexer
+                                indexer
                                     .store()
                                     .remove_note_index(&note_path, agent_id)
                                     .await
-                                {
-                                    tracing::error!(fact_id, error = %e, "Notes dual-write: failed to remove note index");
-                                }
+                                    .map_err(|e| {
+                                        AlephError::other(format!(
+                                            "Notes dual-write failed at fallback-remove-index phase: fact_id={fact_id} note_path={note_path} error={e}"
+                                        ))
+                                    })?;
                             }
                         }
                     }
@@ -185,7 +208,21 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_notes(&fact_id).await?;
+        // Best-effort projection: the event log is the source of truth and is already
+        // persisted above, so a notes-filesystem failure must NOT roll back the
+        // event append. Surface the divergence as an observable log event so a future
+        // background reconciler (out of scope for this PR) can replay it. The error
+        // message already carries the failing phase (write / remove-file / remove-index)
+        // and the fact_id, so the reconciler can route repair from the log alone.
+        if let Err(e) = self.project_to_notes(&fact_id).await {
+            tracing::error!(
+                fact_id = %fact_id,
+                error = %e,
+                "Notes dual-write failed; event log is persisted but the notes filesystem is now divergent. \
+                 A future background reconciler must scan memory_events vs the notes/ directory and replay \
+                 divergent events. Until then, the note file is stale."
+            );
+        }
         Ok(fact_id)
     }
 
@@ -214,7 +251,21 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_notes(&fact_id_ref).await?;
+        // Best-effort projection: the event log is the source of truth and is already
+        // persisted above, so a notes-filesystem failure must NOT roll back the
+        // event append. Surface the divergence as an observable log event so a future
+        // background reconciler (out of scope for this PR) can replay it. The error
+        // message already carries the failing phase (write / remove-file / remove-index)
+        // and the fact_id, so the reconciler can route repair from the log alone.
+        if let Err(e) = self.project_to_notes(&fact_id_ref).await {
+            tracing::error!(
+                fact_id = %fact_id_ref,
+                error = %e,
+                "Notes dual-write failed; event log is persisted but the notes filesystem is now divergent. \
+                 A future background reconciler must scan memory_events vs the notes/ directory and replay \
+                 divergent events. Until then, the note file is stale."
+            );
+        }
         Ok(())
     }
 
@@ -236,7 +287,21 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_notes(&fact_id_ref).await?;
+        // Best-effort projection: the event log is the source of truth and is already
+        // persisted above, so a notes-filesystem failure must NOT roll back the
+        // event append. Surface the divergence as an observable log event so a future
+        // background reconciler (out of scope for this PR) can replay it. The error
+        // message already carries the failing phase (write / remove-file / remove-index)
+        // and the fact_id, so the reconciler can route repair from the log alone.
+        if let Err(e) = self.project_to_notes(&fact_id_ref).await {
+            tracing::error!(
+                fact_id = %fact_id_ref,
+                error = %e,
+                "Notes dual-write failed; event log is persisted but the notes filesystem is now divergent. \
+                 A future background reconciler must scan memory_events vs the notes/ directory and replay \
+                 divergent events. Until then, the note file is stale."
+            );
+        }
         Ok(())
     }
 
@@ -260,7 +325,21 @@ impl MemoryCommandHandler {
         );
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_notes(&fact_id_ref).await?;
+        // Best-effort projection: the event log is the source of truth and is already
+        // persisted above, so a notes-filesystem failure must NOT roll back the
+        // event append. Surface the divergence as an observable log event so a future
+        // background reconciler (out of scope for this PR) can replay it. The error
+        // message already carries the failing phase (write / remove-file / remove-index)
+        // and the fact_id, so the reconciler can route repair from the log alone.
+        if let Err(e) = self.project_to_notes(&fact_id_ref).await {
+            tracing::error!(
+                fact_id = %fact_id_ref,
+                error = %e,
+                "Notes dual-write failed; event log is persisted but the notes filesystem is now divergent. \
+                 A future background reconciler must scan memory_events vs the notes/ directory and replay \
+                 divergent events. Until then, the note file is stale."
+            );
+        }
         Ok(())
     }
 
@@ -293,7 +372,21 @@ impl MemoryCommandHandler {
         );
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_notes(&fact_id_ref).await?;
+        // Best-effort projection: the event log is the source of truth and is already
+        // persisted above, so a notes-filesystem failure must NOT roll back the
+        // event append. Surface the divergence as an observable log event so a future
+        // background reconciler (out of scope for this PR) can replay it. The error
+        // message already carries the failing phase (write / remove-file / remove-index)
+        // and the fact_id, so the reconciler can route repair from the log alone.
+        if let Err(e) = self.project_to_notes(&fact_id_ref).await {
+            tracing::error!(
+                fact_id = %fact_id_ref,
+                error = %e,
+                "Notes dual-write failed; event log is persisted but the notes filesystem is now divergent. \
+                 A future background reconciler must scan memory_events vs the notes/ directory and replay \
+                 divergent events. Until then, the note file is stale."
+            );
+        }
         Ok(())
     }
 
@@ -314,7 +407,21 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_notes(&fact_id).await?;
+        // Best-effort projection: the event log is the source of truth and is already
+        // persisted above, so a notes-filesystem failure must NOT roll back the
+        // event append. Surface the divergence as an observable log event so a future
+        // background reconciler (out of scope for this PR) can replay it. The error
+        // message already carries the failing phase (write / remove-file / remove-index)
+        // and the fact_id, so the reconciler can route repair from the log alone.
+        if let Err(e) = self.project_to_notes(&fact_id).await {
+            tracing::error!(
+                fact_id = %fact_id,
+                error = %e,
+                "Notes dual-write failed; event log is persisted but the notes filesystem is now divergent. \
+                 A future background reconciler must scan memory_events vs the notes/ directory and replay \
+                 divergent events. Until then, the note file is stale."
+            );
+        }
         Ok(fact_id)
     }
 
@@ -334,7 +441,21 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_notes(&fact_id_ref).await?;
+        // Best-effort projection: the event log is the source of truth and is already
+        // persisted above, so a notes-filesystem failure must NOT roll back the
+        // event append. Surface the divergence as an observable log event so a future
+        // background reconciler (out of scope for this PR) can replay it. The error
+        // message already carries the failing phase (write / remove-file / remove-index)
+        // and the fact_id, so the reconciler can route repair from the log alone.
+        if let Err(e) = self.project_to_notes(&fact_id_ref).await {
+            tracing::error!(
+                fact_id = %fact_id_ref,
+                error = %e,
+                "Notes dual-write failed; event log is persisted but the notes filesystem is now divergent. \
+                 A future background reconciler must scan memory_events vs the notes/ directory and replay \
+                 divergent events. Until then, the note file is stale."
+            );
+        }
         Ok(())
     }
 
