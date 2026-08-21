@@ -674,6 +674,11 @@ pub enum MemoryAction {
     },
     /// Compress and optimize memory
     Compress,
+    /// Why the nightly dream cycle did or didn't run
+    ///
+    /// Reads the daemon's live scheduling gates. The run history cannot
+    /// answer this: a cycle that never started leaves no row behind.
+    Dreaming,
     /// Delete a specific memory entry
     Delete {
         /// Memory entry ID

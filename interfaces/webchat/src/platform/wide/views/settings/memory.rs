@@ -12,6 +12,7 @@ use leptos::task::spawn_local;
 use crate::api::{MemoryConfig, MemoryConfigApi, RetrieveWithTraceResponse};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use aleph_protocol::dreaming::DreamGateBlock;
 
 #[component]
 #[must_use]
@@ -1207,28 +1208,41 @@ fn DreamInsightsPanel() -> impl IntoView {
                             let last_run = resp.last_run.clone();
                             view! {
                                 {daemon.map(|d| {
-                                    // Ordered by what actually blocks a cycle:
-                                    // the master switch, then the clock, then
-                                    // the user. Only the first blocking reason
-                                    // is worth showing — the rest are moot.
-                                    let (state, blocking) = if !d.enabled {
-                                        (t_string!(i18n, settings.memory.dream_daemon_disabled).to_string(), true)
-                                    } else if d.is_running {
-                                        (t_string!(i18n, settings.memory.dream_daemon_running).to_string(), false)
-                                    } else if !d.within_window {
-                                        (format!(
+                                    // Which gate is shut is decided by
+                                    // `DaemonStatus::blocking_gate` — shared
+                                    // with `aleph memory dreaming`, because
+                                    // the wording differs between the two
+                                    // faces (this one has a translation
+                                    // catalogue, the CLI does not) and two
+                                    // surfaces re-deriving one predicate from
+                                    // raw fields is how they drift. Only the
+                                    // first shut gate is shown: they are
+                                    // sequential, so naming a later one would
+                                    // send the operator to change something
+                                    // that would not have mattered.
+                                    //
+                                    // Wording only lives here. "Running" is
+                                    // not a blocked state — the gates already
+                                    // said yes — so it is read off the field
+                                    // rather than added as a gate variant.
+                                    let (state, blocking) = match d.blocking_gate() {
+                                        Some(DreamGateBlock::Disabled) => {
+                                            (t_string!(i18n, settings.memory.dream_daemon_disabled).to_string(), true)
+                                        }
+                                        Some(DreamGateBlock::OutsideWindow) => (format!(
                                             "{} ({}–{})",
                                             t_string!(i18n, settings.memory.dream_daemon_outside_window),
                                             d.window_start_local, d.window_end_local,
-                                        ), true)
-                                    } else if d.user_active {
-                                        (format!(
+                                        ), true),
+                                        Some(DreamGateBlock::UserActive) => (format!(
                                             "{} ({}s / {}s)",
                                             t_string!(i18n, settings.memory.dream_daemon_user_active),
                                             d.idle_seconds, d.idle_threshold_seconds,
-                                        ), true)
-                                    } else {
-                                        (t_string!(i18n, settings.memory.dream_daemon_ready).to_string(), false)
+                                        ), true),
+                                        None if d.is_running => {
+                                            (t_string!(i18n, settings.memory.dream_daemon_running).to_string(), false)
+                                        }
+                                        None => (t_string!(i18n, settings.memory.dream_daemon_ready).to_string(), false),
                                     };
                                     // A crashed cycle is the one status worth an
                                     // alarm colour: it means a night was lost and

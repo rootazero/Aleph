@@ -389,52 +389,25 @@ pub struct DreamInsightsResponse {
     /// server process (memory disabled) — render that as "not running", never
     /// as an error.
     #[serde(default)]
-    pub daemon: Option<DreamDaemonDto>,
+    pub daemon: Option<aleph_protocol::dreaming::DaemonStatus>,
     /// The last persisted run, whatever its outcome — the half of "did
     /// anything happen last night" that the `runs` list cannot answer, because
     /// a cycle that errored, timed out or yielded files no row there.
     #[serde(default)]
-    pub last_run: Option<DreamLastRunDto>,
+    pub last_run: Option<aleph_protocol::dreaming::DreamLastRun>,
 }
 
-/// The daemon's scheduling preconditions, read without moving any of them —
-/// the answer to "why didn't dreaming run last night", which the run history
-/// structurally cannot give (a cycle that never started leaves no row).
-/// Every field here must have a rendering site in `DreamInsightsPanel`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct DreamDaemonDto {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub within_window: bool,
-    /// True means a cycle starting now would defer to the user.
-    #[serde(default)]
-    pub user_active: bool,
-    #[serde(default)]
-    pub idle_seconds: i64,
-    #[serde(default)]
-    pub idle_threshold_seconds: u32,
-    #[serde(default)]
-    pub window_start_local: String,
-    #[serde(default)]
-    pub window_end_local: String,
-    #[serde(default)]
-    pub is_running: bool,
-}
-
-/// The last run's persisted status row.
-#[derive(Debug, Clone, Deserialize)]
-pub struct DreamLastRunDto {
-    #[serde(default)]
-    pub run_at: i64,
-    /// `success` | `cancelled` | `error` | `timeout` | `running` |
-    /// `stale_running`. The last is derived on read: a `running` row older
-    /// than the cycle's hard timeout belongs to a process that died mid-cycle.
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub duration_ms: Option<u64>,
-}
+// The daemon's scheduling gates and last-run row used to be two hand-written
+// DTOs here. They are now `aleph_protocol::dreaming::{DaemonStatus,
+// DreamLastRun}` — the same types the server builds its response from and the
+// CLI's `aleph memory dreaming` reads, so a renamed key is a compile error in
+// three crates instead of a dash in one of them.
+//
+// The local copies were not hypothetically at risk, they had already drifted:
+// `max_duration_seconds` was on the wire and absent from the struct above, so
+// it parsed clean and vanished. That is the quiet end of the failure — the
+// loud end is `aleph providers list`, which rendered two columns the server
+// never sent and printed a dash on every row for as long as it existed.
 
 /// One corpus in the dream history: the base agent, or a `{base}__proj-*`
 /// project namespace.

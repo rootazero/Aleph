@@ -716,8 +716,10 @@ pub async fn build_run_request(
     // `session_send`) build their requests elsewhere and deliberately do not
     // stamp, or overnight automation would starve dreaming forever. Stamped
     // before the authorization gate below on purpose: a refused attempt is
-    // still a person at the keyboard. Guarded by
-    // `dreaming::record_activity_has_its_two_human_producers`.
+    // still a person at the keyboard. Guarded by `run_loop::tests::
+    // every_run_producer_declares_whether_a_human_is_at_the_other_end`, which
+    // derives that whitelist from the run-producer census rather than naming
+    // it — so a third human entrance is asked the question when it appears.
     crate::memory::dreaming::record_activity();
 
     // The agent axis of authorization, and it runs FIRST — before the voice
@@ -1741,8 +1743,8 @@ mod tests {
     /// cannot turn a real regression green... except in the narrow window
     /// where a sibling stamps between our back-date and our assert — which is
     /// why the load-bearing guard is the source-level census in
-    /// `dreaming::record_activity_has_its_two_human_producers`; this test
-    /// adds the behavioural half.
+    /// `run_loop::tests::every_run_producer_declares_whether_a_human_is_at_the_
+    /// other_end`; this test adds the behavioural half.
     #[tokio::test]
     async fn build_run_request_stamps_the_dream_idle_sensor() {
         let session_key = AgentRouter::new().route(None, None, None, None).await;

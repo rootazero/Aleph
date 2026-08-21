@@ -467,8 +467,13 @@ pub(crate) fn now_timestamp() -> i64 {
 /// * `gateway::inbound_router::handle_message` — a channel message, after its
 ///   permission check passes (a stranger refused by policy is not "the user").
 ///
-/// Pinned by `record_activity_has_its_two_human_producers` below — a producer
-/// quietly dropped in a refactor is this bug's third occurrence, not a new one.
+/// Pinned by `run_loop::tests::every_run_producer_declares_whether_a_human_is_
+/// at_the_other_end` — a producer quietly dropped in a refactor is this bug's
+/// third occurrence, not a new one. The guard lives beside
+/// `RUN_REQUEST_PRODUCERS` rather than here because that census is the thing
+/// that knows who starts runs: asking the ingress question there means a
+/// *third* human entrance has to answer it the moment it appears, and — the
+/// half a list of names cannot have — that no machine producer may stamp.
 pub fn record_activity() {
     LAST_ACTIVITY_TS.store(now_timestamp(), Ordering::Release);
 }
@@ -517,26 +522,15 @@ pub async fn try_run_now() -> Result<DreamReport, AlephError> {
 /// `check_and_run`'s entry gates, so the surface that renders this describes
 /// the same decision the daemon actually makes (EverOS's `inspect_dispatch`
 /// shape: explain the gates without moving any of them).
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DaemonStatusSnapshot {
-    /// `[memory.dreaming] enabled`, as the running daemon holds it.
-    pub enabled: bool,
-    /// Whether local time is currently inside the dream window.
-    pub within_window: bool,
-    /// The same probe `check_and_run` consults: true means a cycle starting
-    /// now would be deferred (or, mid-pipeline, would yield at the next
-    /// stage boundary).
-    pub user_active: bool,
-    /// Seconds since the last human message (`record_activity` stamp).
-    pub idle_seconds: i64,
-    pub idle_threshold_seconds: u32,
-    pub window_start_local: String,
-    pub window_end_local: String,
-    /// A cycle is executing right now.
-    pub is_running: bool,
-    /// Outer timeout on a cycle — the tombstone bound for `running` rows.
-    pub max_duration_seconds: u32,
-}
+///
+/// The shape is [`aleph_protocol::dreaming::DaemonStatus`], not a struct local
+/// to this module, because it has two client faces — the Panel's memory pane
+/// and `aleph memory dreaming` — and a wire contract whose halves live in
+/// different crates drifts unless one type spans them. It began life local and
+/// single-face; the Panel's hand-written DTO had already quietly dropped
+/// `max_duration_seconds` on the way in, which is the benign end of the same
+/// spectrum whose expensive end is a column of dashes.
+pub type DaemonStatusSnapshot = aleph_protocol::dreaming::DaemonStatus;
 
 /// Snapshot the registered daemon's gates, or `None` when no daemon exists in
 /// this process (memory disabled, or a unit-test binary — `ensure_dream_daemon`
@@ -2705,39 +2699,18 @@ mod tests {
         );
     }
 
-    /// The idle sensor's producers are the two chokepoints every human message
-    /// passes through. Source-level because a dropped call compiles clean and
-    /// fails nothing at runtime — that is precisely how the sensor died the
-    /// first time (cut as "zero callers" in 2026-08-08's audit while the
-    /// consumers it feeds were being restored in a parallel branch).
-    /// Comment lines are stripped first: a doc sentence naming the function is
-    /// exactly what must NOT satisfy this guard.
-    #[test]
-    fn record_activity_has_its_two_human_producers() {
-        let producers: [(&str, &str); 2] = [
-            (
-                "gateway/handlers/agent.rs",
-                include_str!("../../gateway/handlers/agent.rs"),
-            ),
-            (
-                "gateway/inbound_router/mod.rs",
-                include_str!("../../gateway/inbound_router/mod.rs"),
-            ),
-        ];
-        for (name, source) in producers {
-            let code: String = source
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(
-                code.contains("dreaming::record_activity()"),
-                "{name} must stamp dreaming::record_activity() on the human \
-                 message path — without a producer the daemon's whole \
-                 yield-to-user apparatus is unreachable code"
-            );
-        }
-    }
+    // The guard that the idle sensor has producers at all — and that only
+    // human entrances have them — is
+    // `gateway::execution_engine::run_loop::tests::
+    // every_run_producer_declares_whether_a_human_is_at_the_other_end`.
+    //
+    // It used to live here and name two files. Naming them was the weaker
+    // half: it could say "these two still stamp" but never "a third entrance
+    // appeared and nobody asked it to", and never "cron started stamping".
+    // Both of those are silent, and the second one turns dreaming off
+    // permanently. Deriving the set from `RUN_REQUEST_PRODUCERS` answers all
+    // three, so the roster is deliberately gone rather than kept alongside —
+    // two lists of the same two files is the drift this repo keeps paying for.
 
     /// A `running` status row older than the cycle's hard timeout (plus slack)
     /// is a crash tombstone — nothing alive can still be running it.
