@@ -107,9 +107,12 @@ if (missing.length > 0) {
       `precompress_dist.mjs no longer guards its body with an entry-point check — ` +
         `importing MIN_BYTES from it (see the top of this file) would silently re-run ` +
         `the whole compression pass on every invocation of this guard and heal a ` +
-        `corrupt/missing sibling before the checks below ever run. Restore ` +
-        `\`if (isMain) { ... }\` gated by ` +
-        `\`import.meta.url === pathToFileURL(process.argv[1]).href\`.`,
+        `corrupt/missing sibling before the checks below ever run. If this was ` +
+        `accidental, restore \`if (isMain) { ... }\` gated by ` +
+        `\`import.meta.url === pathToFileURL(process.argv[1]).href\`. If you changed ` +
+        `the guard's form on purpose, update the two matching \`.includes(...)\` ` +
+        `checks a few lines above in THIS file (check_panel_dist.mjs) to match — ` +
+        `do not revert precompress_dist.mjs.`,
     );
   }
 
