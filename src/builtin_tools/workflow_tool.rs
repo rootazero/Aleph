@@ -730,6 +730,42 @@ fn step_row(task: &CoordTask, include_output: bool) -> WorkflowRunStep {
     }
 }
 
+/// Per-phase tallies for one run. `done + failed + skipped` need not equal
+/// `settled`: a status can be settled without being any of the three (there
+/// is no such status today, and writing the marker off `settled` rather than
+/// off a sum keeps that true tomorrow).
+#[derive(Default, Clone, Copy)]
+struct PhaseTally {
+    done: usize,
+    failed: usize,
+    skipped: usize,
+    settled: usize,
+    total: usize,
+}
+
+impl PhaseTally {
+    /// One character for the whole phase, most-alarming-first.
+    ///
+    /// The three predicates are deliberately distinct: "produced a result"
+    /// (`Completed`), "stopped badly" (`Failed`/`Cancelled`/`Unsatisfiable`),
+    /// and "stopped at all" (`CoordTaskStatus::is_settled`, whose own doc
+    /// names it the honest completion predicate for a workflow run). An
+    /// earlier draft of this had only the first two and inferred the third
+    /// from `done == total`, which renders a phase whose step was
+    /// deliberately `Skipped` as `0/1 ▶` — running, forever, when it had in
+    /// fact finished. That is the same "stopped is not succeeded" mistake as
+    /// counting a cancelled step as done, pointed the other way.
+    const fn marker(self) -> &'static str {
+        if self.failed > 0 {
+            "✗"
+        } else if self.settled == self.total {
+            "✓"
+        } else {
+            "▶"
+        }
+    }
+}
+
 /// Render a run's progress grouped by phase, the way the `.workflow.js` live
 /// view does: `Scan 1/1 ✓ · Analyze 1/2 ▶`.
 ///
@@ -739,11 +775,12 @@ fn step_row(task: &CoordTask, include_output: bool) -> WorkflowRunStep {
 /// (topological) order, i.e. the order the run actually walks them.
 ///
 /// Pure aggregation. It says how many steps of each phase have settled, not
-/// whether the phase "went well" — judging that is the LLM's job (R7).
+/// whether the phase "went well" — judging that is the LLM's job (R7). A
+/// non-zero skip count is spelled out rather than folded into `done`, because
+/// `1/2 ✓` is only honest if the reader can see where the other step went.
 fn summarize_phases(tasks: &[CoordTask]) -> Option<String> {
     let mut order: Vec<String> = Vec::new();
-    // (done, failed, total) per phase.
-    let mut counts: std::collections::HashMap<String, (usize, usize, usize)> =
+    let mut counts: std::collections::HashMap<String, PhaseTally> =
         std::collections::HashMap::new();
     for task in tasks {
         let Some(phase) = task
@@ -757,20 +794,23 @@ fn summarize_phases(tasks: &[CoordTask]) -> Option<String> {
         };
         let entry = counts.entry(phase.to_string()).or_insert_with(|| {
             order.push(phase.to_string());
-            (0, 0, 0)
+            PhaseTally::default()
         });
-        entry.2 += 1;
+        entry.total += 1;
+        if task.status.is_settled() {
+            entry.settled += 1;
+        }
         match task.status {
-            CoordTaskStatus::Completed => entry.0 += 1,
+            CoordTaskStatus::Completed => entry.done += 1,
             // "Stopped" and "succeeded" are two predicates: a cancelled or
             // unsatisfiable step has settled without producing anything, and
             // folding it into `done` would let a phase report ✓ for work that
             // never happened.
             CoordTaskStatus::Failed
             | CoordTaskStatus::Cancelled
-            | CoordTaskStatus::Unsatisfiable => {
-                entry.1 += 1;
-            }
+            | CoordTaskStatus::Unsatisfiable => entry.failed += 1,
+            // Deliberately not run. Settled, not failed, produced nothing.
+            CoordTaskStatus::Skipped => entry.skipped += 1,
             _ => {}
         }
     }
@@ -780,17 +820,13 @@ fn summarize_phases(tasks: &[CoordTask]) -> Option<String> {
     let parts: Vec<String> = order
         .iter()
         .map(|phase| {
-            let (done, failed, total) = counts[phase];
-            // Most-alarming-wins: a phase with any failure is ✗ even if the
-            // rest completed, because the actionable fact is the failure.
-            let marker = if failed > 0 {
-                "✗"
-            } else if done == total {
-                "✓"
+            let t = counts[phase];
+            let skipped = if t.skipped > 0 {
+                format!(" ({} skipped)", t.skipped)
             } else {
-                "▶"
+                String::new()
             };
-            format!("{phase} {done}/{total} {marker}")
+            format!("{phase} {}/{} {}{skipped}", t.done, t.total, t.marker())
         })
         .collect();
     Some(parts.join(" · "))
@@ -3709,12 +3745,11 @@ mod tests {
         assert_eq!(rows[1].phase.as_deref(), Some("Write"));
     }
 
-    #[test]
-    fn summarize_phases_marks_failures_most_alarming() {
-        // The failure marker wins over the done marker within a phase: a
-        // settled-but-failed step must not let the phase report success, and
-        // cancelled/unsatisfiable are "stopped", not "succeeded".
-        let mk = |phase: &str, status: CoordTaskStatus| CoordTask {
+    /// A bare task carrying only a phase stamp and a status — the two inputs
+    /// `summarize_phases` reads. Shared so the marker tests cannot drift apart
+    /// on how a task is built.
+    fn phase_task(phase: &str, status: CoordTaskStatus) -> CoordTask {
+        CoordTask {
             id: uuid::Uuid::new_v4().to_string(),
             team_id: Some("t".into()),
             subject: "s".into(),
@@ -3732,17 +3767,59 @@ mod tests {
             completed_at: None,
             locked_by: None,
             locked_at: None,
-        };
+        }
+    }
+
+    #[test]
+    fn summarize_phases_marks_failures_most_alarming() {
+        // The failure marker wins over the done marker within a phase: a
+        // settled-but-failed step must not let the phase report success, and
+        // cancelled/unsatisfiable are "stopped", not "succeeded".
         let tasks = vec![
-            mk("Scan", CoordTaskStatus::Completed),
-            mk("Scan", CoordTaskStatus::Failed),
-            mk("Fix", CoordTaskStatus::Completed),
+            phase_task("Scan", CoordTaskStatus::Completed),
+            phase_task("Scan", CoordTaskStatus::Failed),
+            phase_task("Fix", CoordTaskStatus::Completed),
         ];
         let line = summarize_phases(&tasks).expect("phased");
         assert!(line.contains("Scan 1/2 ✗"), "{line}");
         assert!(line.contains("Fix 1/1 ✓"), "{line}");
         // No phases → None (message byte-identical to the legacy one).
-        assert!(summarize_phases(&[mk("", CoordTaskStatus::Completed)]).is_none());
+        assert!(summarize_phases(&[phase_task("", CoordTaskStatus::Completed)]).is_none());
+    }
+
+    #[test]
+    fn a_skipped_step_settles_its_phase_instead_of_pinning_it_at_running() {
+        // `Skipped` is settled, not failed, and produced nothing. Inferring
+        // "finished" from `done == total` renders it as `0/1 ▶` — a phase that
+        // has stopped, displayed as still running, forever. The marker reads
+        // `CoordTaskStatus::is_settled`, whose doc names it the honest
+        // completion predicate for a workflow run.
+        let one = |status| vec![phase_task("Scan", status)];
+        assert_eq!(
+            summarize_phases(&one(CoordTaskStatus::Skipped)).as_deref(),
+            Some("Scan 0/1 ✓ (1 skipped)"),
+            "settled, nothing failed, and the skip is spelled out"
+        );
+        // Still-running statuses keep the running marker.
+        for live in [
+            CoordTaskStatus::Pending,
+            CoordTaskStatus::Blocked,
+            CoordTaskStatus::InProgress,
+            CoordTaskStatus::WaitingReview,
+            CoordTaskStatus::Paused,
+        ] {
+            let line = summarize_phases(&one(live)).expect("phased");
+            assert!(line.ends_with('▶'), "{live:?} is not settled: {line}");
+        }
+        // Every settled-and-bad status is the alarming marker.
+        for bad in [
+            CoordTaskStatus::Failed,
+            CoordTaskStatus::Cancelled,
+            CoordTaskStatus::Unsatisfiable,
+        ] {
+            let line = summarize_phases(&one(bad)).expect("phased");
+            assert!(line.ends_with('✗'), "{bad:?} must not read as done: {line}");
+        }
     }
 
     #[tokio::test]
