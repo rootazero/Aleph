@@ -302,14 +302,26 @@ impl AgentHarness {
         turn_id: TurnId,
         calls: &[NativeToolCall],
     ) -> Result<(), HarnessError> {
+        // Emit a `ToolResult` (not `ToolError`) so the next Think sees
+        // these calls as "ran with output `{"deferred": true}`" — that
+        // matches the model-visible contract (`ToolError` would prompt the
+        // model to think the tool itself failed, which is wrong: the
+        // harness chose not to run it because a newer user message
+        // arrived). The `deferred: true` marker is the audit signal; the
+        // rest of the output shape is left to the model to inspect.
         for call in calls {
-            let event = SessionEvent::ToolError {
+            let value = serde_json::json!({
+                "deferred": true,
+                "reason": DEFERRED_TOOL_RESULT_REASON,
+                "tool": call.name,
+            });
+            let event = SessionEvent::ToolResult {
                 turn_id,
                 call_id: call.id.clone(),
-                error: format!(
-                    "[Deferred by harness: not executed because a newer user message arrived. {}]",
-                    DEFERRED_TOOL_RESULT_REASON
-                ),
+                output: crate::session::events::ToolOutput {
+                    value,
+                    metadata: crate::session::events::ToolOutputMetadata::default(),
+                },
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, event).await?;

@@ -359,9 +359,17 @@ async fn a_block_on_the_summary_redacts_it_instead_of_ending_the_turn() {
     let SessionInputScreen::Pass(out) = r.screen_session_input(events, 1).await else {
         panic!("a block on the summary must not end the turn");
     };
+    // See the seq-suffix note in `screen_blocks_only_this_turns_message_...`
+    // — every redacted message in the post-`C1` registry carries a
+    // `[redacted:seq=N]` suffix for audit-trail correlation.
+    let expected_redacted = format!(
+        "{} [redacted:seq={}]",
+        crate::thinker::nudges::REDACTED_USER_MESSAGE,
+        1
+    );
     assert_eq!(
         texts(&out),
-        vec![crate::thinker::nudges::REDACTED_USER_MESSAGE.to_string()],
+        vec![expected_redacted],
     );
 }
 
@@ -384,12 +392,18 @@ async fn screen_blocks_only_this_turns_message_and_redacts_older_ones() {
     let SessionInputScreen::Pass(out) = r.screen_session_input(events, 1).await else {
         panic!("a block on a replayed message must not end the turn");
     };
+    // The redacted message now carries a `[redacted:seq=N]` suffix so the
+    // audit trail can correlate the redaction with the event seq that
+    // held the original text. This is the post-`C1` format; the older
+    // test (which asserted on the bare constant) predates the suffix.
+    let expected_redacted = format!(
+        "{} [redacted:seq={}]",
+        crate::thinker::nudges::REDACTED_USER_MESSAGE,
+        1
+    );
     assert_eq!(
         texts(&out),
-        vec![
-            crate::thinker::nudges::REDACTED_USER_MESSAGE.to_string(),
-            "harness nudge".to_string(),
-        ],
+        vec![expected_redacted, "harness nudge".to_string(),],
         "the replayed message is redacted; the synthetic one is left alone",
     );
 }
@@ -400,10 +414,16 @@ async fn redact_session_input_never_blocks() {
         .with_input(Arc::new(AlwaysBlock))
         .build();
     // The grace turn's face: everything is redacted, nothing ends the turn.
+    // Each redacted message starts with the canonical redaction constant
+    // and gains a `[redacted:seq=N]` audit-trail suffix (see the
+    // seq-suffix note in `screen_blocks_only_this_turns_message_...`).
     let out = r
         .redact_session_input(vec![rec(1, "old", false), rec(2, "new", false)])
         .await;
-    assert!(texts(&out)
-        .iter()
-        .all(|t| t == crate::thinker::nudges::REDACTED_USER_MESSAGE));
+    let prefix = crate::thinker::nudges::REDACTED_USER_MESSAGE;
+    assert!(
+        texts(&out).iter().all(|t| t.starts_with(prefix)),
+        "every redacted message must carry the canonical prefix; got {:?}",
+        texts(&out)
+    );
 }

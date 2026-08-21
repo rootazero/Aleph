@@ -1592,11 +1592,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             // chunks under). RecallContextTool predates AlephTool, so dispatch
             // via call_impl.
             "recall_context" => {
+                // Resolve the same (optionally project-scoped) agent id the
+                // compaction pipeline writes raw chunks under. Done first so
+                // it lands inside the ratchet's 20-line arm window (see
+                // `every_memory_dispatch_arm_composes_the_partition`); moving
+                // it past the session-key fallback would push it past line
+                // 1613 and the ratchet would falsely flag this arm.
+                let agent_id = self.caller_memory_partition("default");
                 // Per-task turn context first (race-free), then the
                 // process-global session context mirror: the handle is
                 // rewritten at every run start, so a concurrent run of
                 // another agent can swap the session mid-turn and split it
-                // from the agent id resolved below. Taking both from the same
+                // from the agent id resolved above. Taking both from the same
                 // TurnContext keeps the (agent, session) pair coherent — the
                 // same rule memory_search scope=current_session follows.
                 let session_id = crate::tools::turn_context::current_session_key().or_else(|| {
@@ -1614,11 +1621,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                         })
                         .map(|ctx| ctx.session_key_str.clone())
                 });
-                // Resolve the same (optionally project-scoped) agent id the
-                // compaction pipeline writes raw chunks under. This arm was the
-                // only one in this file that composed; it now shares the one
-                // resolver with the six that did not.
-                let agent_id = self.caller_memory_partition("default");
                 Box::pin(async move {
                     let db = self.recall_context_db.as_ref().ok_or_else(|| {
                         AlephError::tool(
