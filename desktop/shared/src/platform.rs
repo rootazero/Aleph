@@ -58,7 +58,11 @@ pub trait DesktopPlatform: Send + Sync {
 
     /// Accessibility (AX) tree queries, if available.
     ///
-    /// Only macOS currently implements this; other platforms return `None`.
+    /// macOS (Swift bridge), Windows (UI Automation) and Linux (AT-SPI2) all
+    /// implement this. A platform returns `None` only when its accessibility
+    /// bus is unreachable at runtime (e.g. no AT-SPI registry on a headless
+    /// Linux box) — an honest absence is quieter than a capability that errors
+    /// on every call.
     fn ax(&self) -> Option<&dyn AccessibilityCapability> {
         None
     }
