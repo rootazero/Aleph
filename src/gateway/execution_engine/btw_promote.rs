@@ -65,6 +65,15 @@ where
         // the reason `run_loop::ensure_session_under_request_scope` gives: the
         // task-local does not survive the `tokio::spawn` every producer of a
         // run performs, so the attribution lives only in the metadata map.
+        //
+        // Known cost, taken deliberately: an empty promote — nothing to carry —
+        // persists a conversation that gained no message, which is the one case
+        // `AgentRouter::route`'s "only persisted when the first message is sent"
+        // note is otherwise careful about. The alternative is a receipt no
+        // connection can be shown (`BySessionKey` fails closed on a missing
+        // row), and a silent empty case is exactly the asymmetry this path
+        // exists to refuse. A user who typed `/btw promote` did interact with
+        // the conversation; a refreshed-and-abandoned tab still does not.
         crate::scope::with_scope(
             crate::scope::scope_from_metadata(&request.metadata),
             agent.ensure_session(main),

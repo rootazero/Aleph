@@ -23,6 +23,14 @@ What only a real gateway can say:
      the carrier, fenced as `<system-reminder>` and naming both the question and
      the side answer's text.
   4. The receipt names the question that crossed, so the user knows WHAT moved.
+  5. The EMPTY arm is reachable and says its own thing. `Ok(None)` — "there is
+     nothing completed to promote" — converges with `Ok(Some)` on one
+     `RunComplete` emit, which is what keeps the "a terminal announcement
+     written only on the success arm" hazard away by construction. The cost is
+     that no in-process test can reach it (every one of them faults before the
+     match), so without this the copy would be two locales of a guess wearing a
+     type. Hence the script promotes FIRST, on a conversation that has never had
+     a side question.
 
 Usage:  drive_btw_promote.py WS_URL --db PATH_TO_sessions.db
 """
@@ -85,6 +93,44 @@ async def main():
         r = await reply(ws, 1)
         log("connect ->", r["result"]["role"])
 
+        # --- the empty arm, in a conversation that has never had a side
+        # question ------------------------------------------------------------
+        #
+        # Its own conversation by construction, not by arrangement: an
+        # `agent.run` with no `session_key` mints the next epoch
+        # (`AgentRouter::route` step 5), so this promote and the exchange below
+        # cannot collide even though both name the same channel.
+        await rpc(
+            ws,
+            "agent.run",
+            {"input": "/btw promote", "channel": "gui:qa-btw-promote"},
+            10,
+        )
+        r = await reply(ws, 10)
+        empty_key = r["result"]["session_key"]
+        run_empty = r["result"]["run_id"]
+        log(f"empty promote {run_empty} on {empty_key}")
+        empty_frames = await collect_until_complete(ws, run_empty, args.budget)
+        empty_receipt = ""
+        for m in empty_frames:
+            if m.get("method") == "stream.run_complete":
+                empty_receipt = (
+                    ((m.get("params") or {}).get("summary") or {}).get("final_response") or ""
+                )
+        check(
+            bool(empty_receipt.strip()),
+            "promoting with nothing to promote still answers — silence is the "
+            "failure this arm exists to refuse",
+            f"receipt={empty_receipt[:120]!r}",
+        )
+        await rpc(ws, "chat.history", {"session_key": empty_key, "limit": 50}, 11)
+        r = await reply(ws, 11)
+        check(
+            not ((r.get("result") or {}).get("messages") or []),
+            "an empty promote wrote nothing into the conversation",
+            f"{(r.get('result') or {}).get('messages')!r}",
+        )
+
         # --- a side question, answered to completion ------------------------
         await rpc(
             ws,
@@ -94,6 +140,12 @@ async def main():
         )
         r = await reply(ws, 2)
         main_key = r["result"]["session_key"]
+        check(
+            main_key != empty_key,
+            "the exchange got its own conversation — if it shared the empty "
+            "arm's, the carrier count below would be reading two runs' output",
+            f"{main_key!r} vs {empty_key!r}",
+        )
         run_side = r["result"]["run_id"]
         log(f"side run {run_side} on main session {main_key}")
 
@@ -192,6 +244,21 @@ async def main():
                 summary = (m.get("params") or {}).get("summary") or {}
                 receipt = summary.get("final_response") or ""
                 tokens = summary.get("total_tokens")
+        # (5) The two arms say different things. Compared to each other rather
+        # than to a literal, which keeps the locale out of this probe: the copy
+        # is owned by `Msg::BtwPromoted` / `Msg::BtwNothingToPromote`, and
+        # restating either here would be the second place it lives.
+        check(
+            empty_receipt.strip() != receipt.strip(),
+            "the empty arm and the success arm say different things",
+            f"empty={empty_receipt[:60]!r} success={receipt[:60]!r}",
+        )
+        check(
+            SIDE_QUESTION not in empty_receipt,
+            "the empty receipt must not name a question — there was none",
+            f"{empty_receipt[:120]!r}",
+        )
+
         # (4)
         check(
             SIDE_QUESTION in receipt,

@@ -31,9 +31,21 @@
 //! have written.
 //!
 //! The failure direction is therefore "I found nothing" rather than "here is
-//! half of something": a side answer whose terminal marker was lost (the emit
-//! is fail-soft) is unpromotable and says so, which is the harmless half of the
-//! trade.
+//! half of something", and BOTH markers carry that risk rather than just the
+//! terminal one:
+//!
+//! * `RunFinished` is emitted fail-soft — a store error is warned and
+//!   swallowed, and a run that returns before `harness.run` never reaches the
+//!   emit at all;
+//! * `TurnStarted` is emitted by `harness_bridge::session_seed` for the
+//!   `History` and `Multimodal` inputs **only** — `Prompt` and `Messages` seed
+//!   a user message without opening a turn. Every gateway turn is one of the
+//!   first two shapes today (the same fact `seed::settled_prefix` rests on),
+//!   which is why this holds; a producer that stopped being either would make
+//!   its exchanges unpromotable rather than half-promotable.
+//!
+//! Unpromotable is the harmless half of the trade: nothing crosses, and the
+//! receipt says nothing crossed.
 
 use crate::session::events::{RunOutcome, SessionEvent, SessionEventRecord};
 use crate::session::service::{SessionId, SessionService};

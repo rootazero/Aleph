@@ -93,18 +93,26 @@ fn the_stamps_value_is_what_tells_a_promote_from_a_question() {
     );
 }
 
-/// The flagship: a promote is served while the side lane is **occupied**.
+/// The flagship: a promote is served while the side session is **already
+/// answering something**.
 ///
 /// The side session's run slot is claimed by somebody else before `execute()`
 /// is called, which is not a corner case — it is the ordinary one. `/btw`
 /// exists to be asked alongside a running turn, so the user who then asks for
-/// the answer to cross is asking while a run holds that lane.
+/// the answer to cross is asking while a run holds that session.
 ///
 /// Reaching `admit_run` in that state means the busy-input policy applies and
 /// the message is steered into, queued behind, or refused by the sibling: no
 /// `RunAccepted`, and nothing crosses until that run ends. So the assertion is
 /// on the frame — and on the key it names, which is the conversation the user
 /// is looking at rather than the derived session no client has heard of.
+///
+/// **Scope of this test, stated because it is narrower than "a promote never
+/// waits":** it enters at `execute()`, so the layer it can see is the engine's
+/// admission gate. The busy-queue **arrival ticket** is taken one layer further
+/// out (`busy_queue::spawn_queued_run` → `register_run`, keyed on the side
+/// lane) and is structurally invisible from here — see the seam comment in
+/// `execute.rs` for what that layer does and does not do to a promote.
 ///
 /// Break `is_promote` (or delete the branch that reads it) and this reds: the
 /// occupied lane sends the request down the busy-input path, which emits no

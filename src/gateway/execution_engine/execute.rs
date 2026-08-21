@@ -400,7 +400,27 @@ where
         //   to be asked alongside a running turn. Admitted, it would be steered
         //   into (or queued behind) whatever holds the side lane, and the user
         //   who asked for the answer to cross would get nothing until that run
-        //   ended. It claims no slot, so it withdraws no ticket either.
+        //   ended.
+        //
+        // What "not a run" does and does NOT cover, because the two halves live
+        // in different files and only one of them is here:
+        //
+        // * **No engine admission.** No `SessionRunRegistry::try_claim`, so no
+        //   run slot, no `RunSlot`, no concurrency permit, and no
+        //   `mark_admitted` — a promote cannot displace or be displaced by the
+        //   run holding the side session.
+        // * **The busy-queue ARRIVAL ticket still applies**, and it is taken
+        //   before `execute()` is ever called: `busy_queue::spawn_queued_run`
+        //   → `register_run` keys the lane on `btw::execution_session`, i.e.
+        //   the side key, for any stamped request including this one. A full
+        //   side lane therefore rejects a promote, and side questions already
+        //   waiting there make it wait FIFO. Nothing leaks (`TicketGuard` is
+        //   RAII and `deliver_with_ticket` runs the attempt as soon as the
+        //   ticket is at the front — the lane is a waiting room, not a run
+        //   registry), and a *running* side question holds no ticket at all,
+        //   so the ordinary case reaches here immediately. Serving promote
+        //   ahead of ticketing would mean a second dispatch path outside the
+        //   queue, which costs more than the corner it removes.
         //
         // `promote_is_bound_by_the_same_ceiling` stays green and stays
         // meaningful: it pins the read-only tier a promote still resolves to,
