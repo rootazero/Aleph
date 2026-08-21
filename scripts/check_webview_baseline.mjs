@@ -176,6 +176,22 @@ if (baseline) {
     const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const isLoadBearing = (fn) => new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(fn)}\\(`).test(css);
 
+    // D1 and D2's extraction regex (below) deliberately disagree about a
+    // leading hyphen, and that is not a bug to unify. They answer different
+    // questions, and each must fail in the opposite direction to be safe:
+    // D2 has to over-report — a vendor-prefixed function it failed to see
+    // (e.g. -webkit-foo() reported as nothing at all) would break the one
+    // property that makes the census worth trusting, that its silence means
+    // something. D1 has to never silently pass — a probe whose only
+    // remaining occurrence is prefixed (e.g. -webkit-oklch() but not a
+    // standalone oklch()) must NOT read as "still load-bearing", because a
+    // vendor prefix is not the same guarantee as the standard function the
+    // probe declares. So D1 stays conservative and treats `-` as part of an
+    // identifier: a prefixed-only occurrence produces a spurious red here,
+    // not a false green. If a future edit ever makes these two regexes
+    // identical, that is a sign one of them lost its failure-direction
+    // guarantee, not a cleanup.
+
     // D1 (reverse, honest): every declared CSS probe must still be exercised by
     // the built stylesheet. This catches a probe list rotting into a stale
     // licence — a capability we still gate on that the CSS stopped using.
@@ -194,7 +210,7 @@ if (baseline) {
     //
     // Two lists, not one, because they answer different questions and mixing
     // them would let the second question go unasked:
-    //   IN_FLOOR        — actually supported at Safari 16.4 / WebKitGTK 2.42.
+    //   IN_FLOOR         — actually supported at Safari 16.4 / WebKitGTK 2.42.
     //   DEGRADES_UNUSED  — NOT supported at the floor, accepted anyway
     //                      because the construct's failure mode when
     //                      unsupported is "this rule is dropped, the feature
@@ -249,15 +265,35 @@ if (baseline) {
     ]);
     const REVIEWED = new Set([...IN_FLOOR, ...DEGRADES_UNUSED]);
     const seen = new Set();
-    for (const m of css.matchAll(/(?:^|[^\w-])([a-zA-Z][\w-]*)\(/g)) {
+    // The captured name allows an optional leading `-` so a vendor-prefixed
+    // function (-webkit-foo(), -moz-foo()) is captured as its own name
+    // instead of structurally invisible: without it, every scan position
+    // inside "-webkit-foo(" is preceded by a hyphen, which `[^\w-]` rejects
+    // as a boundary — including the leading one — so the match can never
+    // start. This census's entire value is that its silence can be trusted
+    // (never false-negative); a class of function it cannot see by
+    // construction contradicts that, even with zero occurrences today.
+    for (const m of css.matchAll(/(?:^|[^\w-])(-?[a-zA-Z][\w-]*)\(/g)) {
       seen.add(m[1]);
     }
     const novel = [...seen].filter((n) => !REVIEWED.has(n)).sort();
     if (novel.length) {
-      fail('D', `${CSS_PATH} uses CSS function(s) not on the reviewed list: ${novel.join(', ')}.\n` +
+      fail('D', `${CSS_PATH} uses CSS function(s) this census has not reviewed: ${novel.join(', ')}.\n` +
         `      This is an OVER-REPORTING census: it goes red on anything new, by design.\n` +
-        `      Decide for each one whether it is inside the ${baseline.safari_min} / WebKitGTK ${baseline.webkitgtk_min} floor.\n` +
-        `      If yes, add it to REVIEWED in this file. If no, the floor moves and ${BASELINE} changes.`);
+        `      For each name, first: is it supported at Safari ${baseline.safari_min} / WebKitGTK ${baseline.webkitgtk_min}?\n` +
+        `        Yes -> add it to IN_FLOOR.\n` +
+        `        No  -> then answer the question that actually decides this: on an in-floor\n` +
+        `               browser, what happens when this is unsupported? Does the rule simply\n` +
+        `               get dropped (safe — e.g. an unrecognized selector or pseudo-element\n` +
+        `               invalidates only itself), or does it get invalidated somewhere that\n` +
+        `               poisons OTHER declarations too (e.g. an unparseable value inside a\n` +
+        `               custom property can collapse everything that reads that property)?\n` +
+        `               Drops safely -> add it to DEGRADES_UNUSED, with a comment stating the\n` +
+        `               failure mode and where the JS feature-detect (if any) lives.\n` +
+        `               Poisons anything else -> this is a real floor violation: rework the\n` +
+        `               CSS/JS, or move the floor in ${BASELINE}.\n` +
+        `      Do not add it to REVIEWED — that Set is derived from IN_FLOOR + DEGRADES_UNUSED\n` +
+        `      and is not meant to be edited directly.`);
     }
   }
 }
