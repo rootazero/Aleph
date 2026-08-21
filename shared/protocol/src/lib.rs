@@ -14,6 +14,7 @@
 //! - [`session_thread`] - Thread-continuity contract (`agent.run` request, attach snapshot)
 
 pub mod artifact;
+pub mod audit;
 pub mod auth;
 pub mod canvas;
 pub mod channel_pairing;
@@ -35,6 +36,7 @@ pub mod thinking;
 pub mod tool_permissions;
 pub mod trace_presentation;
 pub mod trace_replay;
+pub mod users;
 pub mod voice_text;
 pub mod workspace;
 

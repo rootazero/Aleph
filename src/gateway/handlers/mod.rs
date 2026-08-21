@@ -123,6 +123,7 @@ pub mod tools_cancel;
 pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
+pub mod security_audit;
 pub mod users;
 pub mod version;
 pub mod voice;

@@ -666,13 +666,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let s = s.clone();
             async move { alephcore::gateway::handlers::users::handle_create(req, s).await }
         });
-        let s = users_store;
+        let s = users_store.clone();
         let kick = users_kick;
         server.handlers_mut().register("users.update", move |req| {
             let s = s.clone();
             let kick = kick.clone();
             async move { alephcore::gateway::handlers::users::handle_update(req, s, kick).await }
         });
+        // The read face of `security_audit_log`. Registered beside `users.*`
+        // because it is the same store handle and the same question: this
+        // table's largest producer family is the one those handlers write.
+        let s = users_store;
+        server
+            .handlers_mut()
+            .register("security.audit.query", move |req| {
+                let s = s.clone();
+                async move {
+                    alephcore::gateway::handlers::security_audit::handle_query(req, s).await
+                }
+            });
     }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).

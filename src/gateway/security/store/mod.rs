@@ -336,6 +336,73 @@ impl SecurityStore {
         Ok(())
     }
 
+    /// Read back the audit trail, newest first — the `SELECT` half of a table
+    /// that had only ever been written to.
+    ///
+    /// `limit` is asked for **one more row than the caller wants**, so the
+    /// handler can tell a full page from a page with more behind it without a
+    /// second `COUNT(*)`. The extra row is dropped before it reaches the
+    /// caller; only the boolean survives.
+    ///
+    /// Filters are applied in SQL rather than in Rust because the retention
+    /// horizon is 30 days and the row count is unbounded within it: filtering
+    /// after materialising is a memory profile that depends on how noisy the
+    /// deployment has been, which is the wrong thing for it to depend on.
+    ///
+    /// An unrecognised `event_type` matches nothing rather than erroring — see
+    /// [`AuditQueryParams::event_type`](aleph_protocol::audit::AuditQueryParams::event_type)
+    /// for why an older client must still be able to ask about a newer name.
+    pub fn query_audit_entries(
+        &self,
+        params: &aleph_protocol::audit::AuditQueryParams,
+    ) -> rusqlite::Result<(Vec<aleph_protocol::audit::AuditEntryRow>, bool)> {
+        let limit = params.effective_limit();
+        let mut sql = String::from(
+            "SELECT timestamp, event_type, severity, source_ip, session_id, actor_user, detail \
+             FROM security_audit_log WHERE 1=1",
+        );
+        let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(t) = params.event_type.as_deref() {
+            sql.push_str(" AND event_type = ?");
+            binds.push(Box::new(t.to_string()));
+        }
+        if let Some(a) = params.actor_user.as_deref() {
+            sql.push_str(" AND actor_user = ?");
+            binds.push(Box::new(a.to_string()));
+        }
+        if let Some(secs) = params.since_secs {
+            // Clamp at zero: a negative window is a typo, and letting it become
+            // `now + n` would answer with the future's emptiness rather than
+            // saying the filter was nonsense.
+            sql.push_str(" AND timestamp >= strftime('%s','now') - ?");
+            binds.push(Box::new(secs.max(0)));
+        }
+        // `id` breaks ties: `timestamp` has one-second resolution, so a burst
+        // of entries inside one second would otherwise come back in whatever
+        // order the planner chose — and "in order" is what this trail is for.
+        sql.push_str(" ORDER BY timestamp DESC, id DESC LIMIT ?");
+        binds.push(Box::new(limit as i64 + 1));
+
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(&sql)?;
+        let refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(std::convert::AsRef::as_ref).collect();
+        let rows = stmt.query_map(refs.as_slice(), |r| {
+            Ok(aleph_protocol::audit::AuditEntryRow {
+                timestamp: r.get(0)?,
+                event_type: r.get(1)?,
+                severity: r.get(2)?,
+                source_ip: r.get(3)?,
+                session_id: r.get(4)?,
+                actor_user: r.get(5)?,
+                detail: r.get(6)?,
+            })
+        })?;
+        let mut out: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+        let truncated = out.len() > limit;
+        out.truncate(limit);
+        Ok((out, truncated))
+    }
+
     /// Delete audit entries older than `retention_secs`. Returns the number of
     /// rows removed. Called periodically by the audit drain task so the
     /// `security_audit_log` table does not grow without bound.

@@ -370,6 +370,7 @@ mod tests {
     ("secrets.providers", Class::Admin),
     ("secrets.set", Class::Admin),
     ("secrets.verify", Class::Admin),
+    ("security.audit.query", Class::Admin),
     ("security_config.get", Class::Admin),
     ("security_config.update", Class::Admin),
     ("services.list", Class::Admin),

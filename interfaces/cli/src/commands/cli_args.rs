@@ -169,6 +169,22 @@ pub enum Commands {
         action: UsersAction,
     },
 
+    /// Read the security audit trail (who changed what authority, and when)
+    Audit {
+        /// Only this event type, e.g. `authority_change`, `scoped_content_read`
+        #[arg(long = "type")]
+        event_type: Option<String>,
+        /// Only actions taken by this principal (`u-…`)
+        #[arg(long)]
+        actor: Option<String>,
+        /// Only the last window: `90s`, `5m`, `2h`, `7d` (a bare number is seconds)
+        #[arg(long)]
+        since: Option<String>,
+        /// Maximum entries to show
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
     /// Log management
     Logs {
         #[command(subcommand)]
