@@ -13,12 +13,21 @@ one being driven —
     just mutated. A duplicate `add` is the cheapest way to ask it: the tool
     can only call the text a duplicate if it can already see it.
 
+The two retrieval phases (`xray`, `fixes`) are the exception that proves the
+rule: there is no second face to ask, because the retrieval funnel and the
+correction queue each have exactly one reader. So they assert against what the
+SEED wrote — a specific note body and a specific correction string, both put
+there by the production writers — rather than against the reader's own idea of
+what it should have found.
+
 Phases:
   baseline                      what the seed left behind
   after-edit --new T --old T    item 3
   after-remove --gone T         item 4
   ledger                        item 5/6 — how many write-decision rows exist
   notes                         item 7/8 — the store's note total
+  xray                          item 11 — the retrieval funnel, stage by stage
+  fixes                         item 10 — the correction queue's pending row
 """
 import argparse
 import asyncio
@@ -34,7 +43,13 @@ import websockets  # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("ws")
 ap.add_argument("home")
-ap.add_argument("phase", choices=["baseline", "after-edit", "after-remove", "ledger", "notes"])
+ap.add_argument(
+    "phase",
+    choices=[
+        "baseline", "after-edit", "after-remove", "ledger",
+        "notes", "xray", "fixes", "addressing",
+    ],
+)
 ap.add_argument("--new", default=None)
 ap.add_argument("--old", default=None)
 ap.add_argument("--gone", default=None)
@@ -128,6 +143,117 @@ async def main():
             total = msg.get("result", {}).get("total")
             print(f"NOTE_TOTAL={total}", flush=True)
             return 0
+
+        elif args.phase == "xray":
+            # `memory.retrieve_with_trace` is the ONLY reader of this funnel, so
+            # there is no second face to cross-check against. The oracle is the
+            # seed instead: it created `qa-note-0001` through `note_manage`, so a
+            # search for its body text has a known-present target. A funnel whose
+            # every stage reports 0 in / 0 out here means the reader is probing a
+            # partition the writer never wrote to — which is exactly what it did
+            # before `read_partitions`, and exactly what a regression looks like.
+            msg = await rpc.call(
+                "memory.retrieve_with_trace",
+                {"agent_id": AGENT, "query": "Seeded note for the note-window growth check", "limit": 10},
+            )
+            res = msg.get("result", {})
+            stages = res.get("trace", {}).get("stages", [])
+            results = res.get("results", [])
+            L.log(f"stages: {len(stages)}")
+            for st in stages:
+                L.log(
+                    f"  {st.get('name')}: {st.get('input_count')} -> "
+                    f"{st.get('output_count')} ({st.get('duration_ms')}ms)"
+                )
+            L.check(
+                "the funnel reports at least one stage",
+                bool(stages),
+                json.dumps(res.get("trace", {}), ensure_ascii=False)[:200],
+            )
+            L.check(
+                "some stage actually retrieved something (not a 0 -> 0 funnel)",
+                any(int(st.get("output_count") or 0) > 0 for st in stages),
+                "; ".join(
+                    f"{st.get('name')}={st.get('input_count')}->{st.get('output_count')}"
+                    for st in stages
+                ),
+            )
+            L.check(
+                "the seeded notes are what came back",
+                any("Seeded note" in (r.get("content") or "") for r in results),
+                json.dumps(results[:2], ensure_ascii=False)[:300],
+            )
+            print(f"XRAY_STAGES={len(stages)} XRAY_RESULTS={len(results)}", flush=True)
+
+        elif args.phase == "fixes":
+            correction = seeded().get("correction", "")
+            msg = await rpc.call(
+                "memory.list_corrections",
+                {"agent_id": AGENT, "limit": 50, "include_distilled": True},
+            )
+            rows = msg.get("result", {}).get("corrections", [])
+            L.log(f"corrections: {len(rows)}")
+            for r in rows[:5]:
+                L.log(f"  [{r.get('status')}] {r.get('severity')} / {r.get('content', '')[:70]}")
+            L.check(
+                "the correction the seed flagged is in the queue",
+                any(correction in (r.get("content") or "") for r in rows),
+                f"looking for {correction[:50]!r} in {len(rows)} rows",
+            )
+            L.check(
+                "it is pending, not distilled (no dream cycle has run)",
+                any(
+                    correction in (r.get("content") or "") and r.get("status") == "pending"
+                    for r in rows
+                ),
+                json.dumps(rows[:2], ensure_ascii=False)[:300],
+            )
+            print(f"FIX_ROWS={len(rows)}", flush=True)
+
+        elif args.phase == "addressing":
+            # Checklist item 12 asks whether the DRAWER used the row's own
+            # partition or the agent picker's id. You cannot see which argument
+            # the client sent -- so instead find a server verb where the two
+            # candidate arguments give DIFFERENT answers, and ask it both ways.
+            #
+            # `graph.node_detail` is that verb: it is an ADDRESSING verb, so it
+            # takes the partition verbatim and never resolves a union (that is
+            # the whole distinction `memory_scope::read_partitions` exists to
+            # draw). The picker's bare id therefore cannot reach a note the
+            # writers composed into a session partition, and if the drawer
+            # rendered a body, the id it sent can only have come from the row.
+            #
+            # Keep this asymmetric on purpose: if BOTH ids started answering,
+            # the control stops separating them and item 12 becomes untestable
+            # -- so the failure of the picker id is an assertion, not a bug.
+            node = "reference/qa-note-0001"
+            picker = AGENT
+            row = seeded().get("write_partition", "")
+            L.log(f"picker id {picker!r} vs row id {row!r}")
+            L.check(
+                "the two ids actually differ (else this control proves nothing)",
+                bool(row) and row != picker,
+                f"{picker!r} vs {row!r}",
+            )
+
+            miss = await rpc.call("graph.node_detail", {"node_id": node, "agent_id": picker})
+            hit = await rpc.call("graph.node_detail", {"node_id": node, "agent_id": row})
+
+            def body_of(msg):
+                return ((msg.get("result") or {}).get("content") or "")
+
+            L.check(
+                "the picker's bare id cannot reach the note (addressing is verbatim)",
+                "error" in miss or not body_of(miss),
+                json.dumps(miss.get("error") or miss.get("result"), ensure_ascii=False)[:160],
+            )
+            L.check(
+                "the row's own partition reaches it",
+                bool(body_of(hit)),
+                body_of(hit)[:80].replace("\n", " "),
+            )
+            print(f"ADDRESSING picker={'miss' if not body_of(miss) else 'hit'} "
+                  f"row={'hit' if body_of(hit) else 'miss'}", flush=True)
 
     return L.verdict()
 

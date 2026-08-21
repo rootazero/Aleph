@@ -24,6 +24,22 @@ for it, and writes both that id and the curated file's own self-reported
 destination to `<ALEPH_HOME>/qa-seeded.json` for `probe.py` to read. Recomputing the server's
 scope resolution here would make this fixture a second answer to the exact
 question the round is about.
+
+The two ids being different is the NORMAL state of a stock install, not a
+defect: `read_partitions` resolves the base id the picker holds into the union
+`[org tier, this session's partition]`, so the Panel finds what the writers
+wrote without either side hard-coding the other's answer. This file therefore
+asserts the equality of the COUNTS while still reporting both ids — the
+identity that matters is "the reader reached the writer's rows", not "the two
+strings match".
+
+An earlier revision shipped a `relocate_notes.py` that re-keyed the corpus into
+the partition the readers looked in. It was deleted with the fix: it re-keyed
+`notes_index` and `notes_links` only, leaving the FTS and vector rows where the
+writer put them, so every retrieval-facing surface in this fixture reported an
+honest 0 → 0 funnel through a partition whose index rows had moved out from
+under it. Seeding where the writer actually writes is what makes items 10-11
+answerable at all.
 """
 import asyncio
 import json
@@ -47,6 +63,10 @@ ENTRIES = [
     "QA-2 the operator's timezone is Asia/Shanghai",
     "QA-3 用户偏好中文回复，代码注释用英文",
 ]
+
+# Distinctive enough that the x-ray (item 11) can be asked for it by name and
+# the funnel's output count means something.
+CORRECTION = "QA-FIX stop reformatting the changelog when I only asked for a version bump"
 
 L = Ledger()
 
@@ -103,14 +123,57 @@ async def main():
                 L.log(f"  {i}/{NOTE_COUNT}")
         L.check("every seeded note was created", failed == 0, f"{failed} failed")
 
-        # What the store answers for the id the Panel asks about. NOT asserted
-        # to equal NOTE_COUNT: that equality is one of the things the browser
-        # half is here to find out, and pre-judging it in the fixture would
-        # turn a product finding into a fixture failure.
+        # Seed one correction, so the fix queue (item 10) has a pending row to
+        # show. `flag_user_correction` composes the session scope exactly like
+        # `remember` and `note_manage`, which is the whole point: it is the
+        # third writer whose partition the reader has to reach.
+        ok, body = await rpc.invoke(
+            "flag_user_correction",
+            {
+                # `content`, not `correction`, and the severity token is `med`
+                # — both taken from `FlagUserCorrectionArgs`, which is the only
+                # thing that gets a vote. Guessing either produced a Validation
+                # error, which is at least loud; a fixture that guessed a
+                # *valid* wrong value would have been silent.
+                "content": CORRECTION,
+                "severity": "med",
+                "suggested_rule": "Ask before rewriting a file the user just edited.",
+            },
+        )
+        L.check(
+            "a correction was flagged (the fix queue's pending row)",
+            ok,
+            json.dumps(body, ensure_ascii=False)[:200],
+        )
+        seeded["correction"] = CORRECTION
+
+        # What the store answers for the id the PANEL asks about. This is now an
+        # assertion rather than a report: `memory.listFacts` resolves the base id
+        # through `memory_scope::read_partitions`, so it must reach the rows
+        # `note_manage` just composed a partition for. It answered 0 for a store
+        # holding every one of these notes until that was fixed, and 0 is exactly
+        # what a regression here would produce again — silently, because an empty
+        # list renders as an empty list.
         msg = await rpc.call("memory.listFacts", {"agent_id": panel_agent, "limit": 1})
         panel_total = msg.get("result", {}).get("total")
         seeded["panel_note_total"] = panel_total
-        L.log(f"memory.listFacts(agent_id={panel_agent!r}).total = {panel_total}")
+        L.check(
+            "the Panel's note reader reaches the partition the writer wrote to",
+            panel_total == NOTE_COUNT,
+            f"memory.listFacts(agent_id={panel_agent!r}).total = {panel_total}, "
+            f"seeded {NOTE_COUNT}",
+        )
+
+        # The stat cards read the same union. Asserted here rather than only in
+        # the browser because a stat card disagreeing with its own list is the
+        # phantom-page family, and a number is cheaper to check than a card.
+        msg = await rpc.call("memory.stats", {"agent_id": panel_agent})
+        stats = msg.get("result", {})
+        L.check(
+            "memory.stats agrees with the note list",
+            stats.get("totalFacts") == NOTE_COUNT,
+            f"totalFacts={stats.get('totalFacts')} vs {NOTE_COUNT}",
+        )
 
     # Where the curated file actually landed, per the tool's own report.
     dest = seeded.get("destination", "")

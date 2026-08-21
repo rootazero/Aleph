@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Real-machine QA for the memory tab's round-2 surfaces: the curated hot tier's
-# three verbs (`memory.curated.list|replace|remove`) and the note window's
-# grow-by-a-page control.
+# Real-machine QA for the memory tab: the curated hot tier's three verbs
+# (`memory.curated.list|replace|remove`), the note window's grow-by-a-page
+# control, and the partition contract every enumerating reader now resolves
+# through (`gateway::handlers::memory_scope::read_partitions`) — the note list,
+# the stat cards, the fix queue and the retrieval x-ray.
 #
 #   ./qa/memory_curated/run.sh          # boot an isolated server, seed, print the checklist
 #   KEEP=1 ./qa/memory_curated/run.sh   # keep the scratch dir for post-mortem
@@ -36,10 +38,30 @@
 # ## Instrument caveats inherited from earlier rounds (qa/picker_nav/run.sh)
 #
 #   * A browser that reports itself as local may still fail to reach this
-#     machine's loopback. Check the server log for the request before believing
-#     the Panel is broken.
+#     machine's loopback. Seen for real on 2026-08-21: the connected extension
+#     said `isLocal: true` and still returned ERR_CONNECTION_REFUSED for both
+#     127.0.0.1 and localhost while curl got 200. It was that extension
+#     instance, not the Panel. Two lessons:
+#       - Have a SECOND instrument. `chrome-devtools-mcp` drives a Chrome it
+#         launches itself and does not go through the extension at all.
+#       - `isLocal` is the browser describing itself. The cheap proof is data
+#         that exists nowhere else: this fixture seeds ${NOTE_COUNT} notes into
+#         a fresh scratch db, so the page reading "1040" IS the proof. Prefer
+#         that over the self-report, and over a server log that may not even
+#         record per-request lines (this one does not).
 #   * `fill(uid, "")` sets `.value` without dispatching `input`; clear text
-#     inputs with keystrokes.
+#     inputs with keystrokes. Same for scripted writes: go through the native
+#     value setter and dispatch `input`, or Leptos never sees it.
+#   * `textContent` is the RAW text; `innerText` is what the user sees. The
+#     partition badge is uppercased by CSS, so it is `main__u-owner` in
+#     textContent and `MAIN__U-OWNER` on screen. Matching the rendered string
+#     against textContent finds nothing -- and "found nothing" reads exactly
+#     like "the badge is not rendered", i.e. it would have been reported as a
+#     product defect.
+#   * A before/after comparison has to hold the READING FRAME constant. Diffing
+#     the entry list across a rejected save reported "changed" because the card
+#     was still in edit mode on the second read: the shape moved, not the
+#     content. Leave the transient state first, then measure.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,16 +141,27 @@ python3 "$HERE/seed.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" "$ALEPH_HOME" "$NOTE_C
 PANEL_AGENT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["panel_agent"])' "$ALEPH_HOME/qa-seeded.json")"
 WRITE_PARTITION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["write_partition"])' "$ALEPH_HOME/qa-seeded.json")"
 
-say "relocate the note corpus into the partition the Panel reads"
-# NOT a convenience — see relocate_notes.py's docstring. The Panel's note
-# readers do not compose the session scope, so the corpus the real writer just
-# produced is invisible to them. Skipped when the two ids already agree, which
-# is what it would look like once that is fixed.
-if [ "$PANEL_AGENT" != "$WRITE_PARTITION" ]; then
-  python3 "$HERE/relocate_notes.py" "$ALEPH_HOME" \
-    --from-agent "$WRITE_PARTITION" --to-agent "$PANEL_AGENT" || exit 1
-else
-  echo "panel agent == write partition ($PANEL_AGENT); nothing to relocate"
+# The two ids are expected to DIFFER on a stock loopback install, and the seed
+# has already asserted that the Panel's reader reaches the writer's rows anyway
+# (`read_partitions` unions them). Printed rather than reconciled: an earlier
+# revision re-keyed the corpus here to make the reader find it, which hid the
+# defect and broke every retrieval surface in the process.
+
+# The checklist heredoc below is UNQUOTED — it has to be, because it
+# interpolates ${GATEWAY_PORT} and ${NOTE_COUNT}. That also means backticks and
+# $(...) inside it RUN. Not hypothetical: `flag_user_correction` in item 10 was
+# executed as a command, which printed "command not found" above the checklist
+# and left the sentence with a hole exactly where the tool's name should be —
+# i.e. the one word that item was telling you to care about.
+#
+# Escaping the instances is not the fix; the next one would land the same way.
+# Fail here instead, by rule, before printing a checklist with a hole in it.
+live="$(awk '/^cat <<CHECKLIST$/,/^CHECKLIST$/' "${BASH_SOURCE[0]}" \
+  | sed 's/\\`//g; s/\\[$](/(/g' | grep -n -e '`' -e '[$](' || true)"
+if [ -n "$live" ]; then
+  echo "checklist heredoc contains live command substitution; escape it:" >&2
+  echo "$live" >&2
+  exit 70
 fi
 
 say "checklist"
@@ -136,8 +169,12 @@ cat <<CHECKLIST
 Panel:  http://127.0.0.1:${GATEWAY_PORT}/memory  (左栏「列表」)
 Probe:  python3 ${HERE}/probe.py ws://127.0.0.1:${GATEWAY_PORT}/ws ${ALEPH_HOME} <phase>
         phases: baseline | after-edit | after-remove | ledger | notes
+                | fixes | xray | addressing
 Agent the Panel asks about: ${PANEL_AGENT}
 Partition the writers composed: ${WRITE_PARTITION}
+  ^ these two DIFFER by design on a stock install. The readers resolve the base
+    id into the union [org tier, this session's partition], which is why the
+    Panel sees rows written under the second one.
 
 --- A. curated hot tier (facet 「Hot Memory / 热区记忆」, first chip) ---
  1  The facet leads the bar and its badge reads 3 — the three entries the
@@ -147,6 +184,13 @@ Partition the writers composed: ${WRITE_PARTITION}
     Chinese on purpose, so a byte count would over-report it by ~3x (21, not 57).
  3  Edit entry 2 -> Save. The list re-renders from the SERVER's snapshot (the
     reply carries the whole post-write state) and the toast says Saved.
+      NOTE the toast auto-dismisses. Measured 2026-08-21: it appears +54ms
+      after the click and is gone by +2478ms. One extra round trip does not fit
+      in that window -- which is why an earlier round saw it once and then
+      recorded a "timeout". So poll for it INSIDE the same evaluate() that
+      clicks Save; "the toast was gone when I looked" is not evidence either
+      way. The durable half of this claim is the probe below — the toast is a
+      nicety, the file is the fact.
       probe after-edit --new T --old T
       -> MEMORY.md on disk holds the new text and not the old, and
          remember{add: <new text>} is refused as a DUPLICATE, i.e. the tool's
@@ -169,6 +213,31 @@ Partition the writers composed: ${WRITE_PARTITION}
     disappears (nothing left to load). Badge ${NOTE_COUNT}. Pager: 21 pages.
  9  Go to the last page. It renders the tail — rows page 21 could not have
     shown before, because page 21 did not exist.
+
+--- C. the third pillar's readers (D2: base id -> partition union) ---
+10  Facet 「Feedback / 反馈」. The seeded correction is listed at the top as
+    PENDING with severity medium:
+      "QA-FIX stop reformatting the changelog when I only asked for a version bump"
+      probe fixes  -> FIX_ROWS >= 1, and the seeded string is among them with
+      status=pending. It was written by \`flag_user_correction\`, which composes
+      the session scope — so a 0 here means the reader is back on the bare
+      persona.
+11  Console toolbar -> expand 「Retrieval / 检索透视」. Type a query that the
+    seeded notes answer (e.g. "note-window growth check") and run it. The
+    funnel lists stages with non-zero in/out counts and the result rows below
+    are seeded notes.
+      probe xray  -> XRAY_STAGES >= 1 and at least one stage with output > 0.
+      A funnel of all 0 -> 0 is the D2 signature: every stage honestly reports
+      nothing because it is probing a partition nothing wrote to.
+12  Pick a note row and open it. The drawer loads a body (not "not found").
+    This is the addressing half: the row reports its own partition and the
+    drawer must use THAT, not the agent picker's id.
+      probe addressing  -> the negative control that turns this from inference
+      into proof. You cannot observe which id the drawer sent, so ask a verb
+      where the two candidate ids give DIFFERENT answers: graph.node_detail is
+      an ADDRESSING verb (verbatim partition, never a union), so the picker's
+      bare id answers -32602 Note not found while the row's own partition
+      answers with content. The drawer rendered content => it sent the row's.
 
 Server log: ${QA_ROOT}/server.log
 CHECKLIST
