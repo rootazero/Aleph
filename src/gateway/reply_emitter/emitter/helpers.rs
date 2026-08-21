@@ -280,7 +280,6 @@ impl ReplyEmitter {
     /// which strips model-authored framing and would be reasoning about a
     /// prefix no model wrote.
     pub(crate) fn mark_side_answer<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
-        use crate::sync_primitives::Ordering;
         if self.config.side_answer && self.answering.load(Ordering::SeqCst) {
             std::borrow::Cow::Owned(crate::gateway::btw::format_side_answer(text))
         } else {
@@ -291,7 +290,6 @@ impl ReplyEmitter {
     /// Latch [`ReplyEmitter::answering`]: from here on, text this emitter hands
     /// the channel is the run's answer.
     pub(crate) fn begin_answering(&self) {
-        use crate::sync_primitives::Ordering;
         self.answering.store(true, Ordering::SeqCst);
     }
 
@@ -304,7 +302,7 @@ impl ReplyEmitter {
     /// growing a second constructor argument that a future call site could
     /// forget to pass.
     #[must_use]
-    pub fn is_side_answer(&self) -> bool {
+    pub(crate) fn is_side_answer(&self) -> bool {
         self.config.side_answer
     }
 
