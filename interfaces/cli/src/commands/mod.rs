@@ -37,6 +37,7 @@ pub mod secret_cmd;
 pub mod services_cmd;
 pub mod session;
 pub mod skills_cmd;
+pub mod spend_cmd;
 pub mod tools;
 pub mod trace_cmd;
 pub mod users_cmd;

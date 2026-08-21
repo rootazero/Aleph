@@ -232,6 +232,7 @@ async fn dispatch(
             )
             .await
         }
+        Commands::Spend {} => commands::spend_cmd::query(server_url, config, json).await,
         Commands::Gateway { action } => dispatch_gateway(server_url, config, action, json).await,
         Commands::Logs { action } => dispatch_logs(server_url, config, action, json).await,
         Commands::Trace { action } => dispatch_trace(server_url, config, action, json).await,

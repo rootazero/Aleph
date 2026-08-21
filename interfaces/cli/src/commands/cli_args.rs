@@ -185,6 +185,9 @@ pub enum Commands {
         limit: Option<usize>,
     },
 
+    /// Read the per-principal spend ledger for the period that is open now
+    Spend {},
+
     /// Log management
     Logs {
         #[command(subcommand)]
