@@ -1900,6 +1900,75 @@ fn no_side_question_frame_reaches_the_main_transcript() {
     );
 }
 
+/// The side thread does not survive a `/session` switch.
+///
+/// `AppState` is a singleton — one conversation's worth of everything — so
+/// per-conversation state that outlives a switch reports the previous
+/// conversation under the new one's name (`switch_session` wipes `messages`,
+/// `total_tokens`, the gauge and the cache stat for exactly this reason). The
+/// overlay is per-conversation twice over: its exchanges are that
+/// conversation's, and its run claims would route the OLD conversation's side
+/// frames into the NEW screen's overlay.
+///
+/// It is cleared rather than keyed per conversation — see `switch_session` for
+/// why, the short version being that the side key embeds the old key's epoch,
+/// so after a switch the retained thread is one the server can no longer
+/// address at all.
+#[test]
+fn switching_sessions_takes_the_side_thread_with_it() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    state.open_btw("what files are in src?".into());
+    state.btw.claim_pending_run("run-side".into());
+    state.btw.push_delta("run-side", "main.rs");
+    state.btw.finish_active("run-side", None);
+    state.open_btw("and tests?".into());
+    state.btw.claim_pending_run("run-side-2".into());
+    assert_eq!(state.btw.exchanges.len(), 1);
+    assert!(state.btw.open);
+
+    state.switch_session("agent:main:main:s2");
+
+    assert!(
+        state.btw.exchanges.is_empty(),
+        "the old conversation's side questions are still pageable: {:?}",
+        state.btw.exchanges
+    );
+    assert!(
+        state.btw.active.is_none(),
+        "an old side run is still active"
+    );
+    assert!(!state.btw.open, "the overlay is still on screen");
+    // The run CLAIMS survive on purpose — they are per-run, not
+    // per-conversation, and they are the only thing that can still tell a
+    // side frame apart from an ordinary one when that run's `RunAccepted`
+    // never arrived. Dropping them is what let the old side answer render
+    // into the new conversation.
+    assert!(
+        state.btw.accepts_frame(Some("run-side-2")),
+        "the old conversation's side run is no longer recognised, so its \
+         frames will be treated as this conversation's"
+    );
+
+    // …and a frame from it now lands nowhere: intercepted, but matching no
+    // active question.
+    let before = state.messages.len();
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-side-2".into(),
+        seq: 1,
+        content: "the old side answer".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+    assert!(state.btw.active.is_none());
+    assert_eq!(
+        state.messages.len(),
+        before,
+        "the old side answer reached the new conversation: {:?}",
+        &state.messages[before..]
+    );
+}
+
 /// A modal raised over the side-question overlay must hand focus back to it,
 /// not to the composer.
 ///

@@ -1374,6 +1374,34 @@ impl AppState {
         self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
         self.current_run_trace_summary_applied = false;
+        // The side thread belongs to the conversation we just left, and it is
+        // cleared rather than kept per-conversation. Two reasons, and the
+        // second is the decisive one:
+        //
+        // 1. This client has no per-conversation container to key it into.
+        //    `AppState` holds exactly one of everything and `messages` is
+        //    wiped outright above — the Panel's `SessionMap<ConvId, ChatState>`
+        //    has no counterpart here. A map with one live entry, in a
+        //    singleton, is an abstraction with no consumer (R10); it would
+        //    also be the only per-conversation field in the struct, which is
+        //    how the next reader gets it wrong.
+        // 2. The side key is derived from the main key **including its
+        //    epoch** (`gateway::btw::side_key_for`). A `/session` switch —
+        //    and `/new` — therefore leaves the old side session unaddressable
+        //    server-side. Keeping its exchanges pageable would display a
+        //    thread that no longer exists anywhere but in this process, and
+        //    offer `p`/follow-up keys that address the wrong conversation.
+        //
+        // The run CLAIMS are kept, and that is not an oversight — see
+        // `BtwOverlay::clear_for_session_switch`. A side run whose
+        // `RunAccepted` has not landed yet is unknown to `run_sessions`, and
+        // an unknown run id is deliberately kept by `frame_belongs_here`, so
+        // forgetting the claim would render that run's answer into the
+        // conversation we just switched TO. (The run itself keeps going
+        // server-side, exactly as the main run left behind does a few lines
+        // up: this client does not cancel on switch, and making the side
+        // question the one exception would be a surprise, not a fix.)
+        self.btw.clear_for_session_switch();
         // New session = different context window; drop the stale gauge until
         // the next run's first `ContextGauge` refreshes it.
         self.context_gauge = None;

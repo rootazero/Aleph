@@ -1259,6 +1259,9 @@ mod btw_key_tests {
     fn opened() -> AppState {
         let mut state = AppState::new("agent:main:main".into(), "m".into());
         state.open_btw("why?".into());
+        // Claim a run for it: frame applications name their run now, so a
+        // question with no run id can never be settled by one.
+        state.btw.claim_pending_run("run-side".into());
         state
     }
 
@@ -1276,7 +1279,7 @@ mod btw_key_tests {
             press(&mut state, KeyCode::Esc),
             Action::BtwAbortOrClose
         ));
-        state.btw.finish_active(Some("because"));
+        state.btw.finish_active("run-side", Some("because"));
         assert!(matches!(
             press(&mut state, KeyCode::Esc),
             Action::BtwAbortOrClose
@@ -1359,7 +1362,7 @@ mod btw_key_tests {
     #[test]
     fn enter_sends_the_follow_up_as_a_side_question() {
         let mut state = opened();
-        state.btw.finish_active(Some("because"));
+        state.btw.finish_active("run-side", Some("because"));
         press(&mut state, KeyCode::Char('a'));
         press(&mut state, KeyCode::Char('n'));
         press(&mut state, KeyCode::Char('d'));
@@ -1390,7 +1393,7 @@ mod btw_key_tests {
     fn paging_works_in_both_modes() {
         use crate::tui::btw_overlay::BtwExchange;
         let mut state = opened();
-        state.btw.finish_active(Some("a1"));
+        state.btw.finish_active("run-side", Some("a1"));
         state.btw.finish_exchange(BtwExchange::answered("q2", "a2"));
         assert_eq!(state.btw.view_index, 1);
 

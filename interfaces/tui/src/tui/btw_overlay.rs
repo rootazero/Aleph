@@ -151,14 +151,59 @@ impl BtwOverlay {
     /// while an action's RPC is being awaited, so no frame can arrive between
     /// the reply and the claim.
     pub fn begin(&mut self, question: String) {
+        // A side question can be asked while the previous one is still
+        // answering — `Enter` in the overlay does not wait, and neither does a
+        // second `/btw` typed in the main composer. Overwriting `active` used
+        // to discard that question's run id AND its partial answer, after
+        // which the old run's remaining frames (still claimed) appended
+        // themselves to the NEW question's answer. File it instead: whatever
+        // text arrived is worth reading, and once its run id is no longer the
+        // active one, `for_active_run` drops its tail rather than
+        // misattributing it.
+        self.settle_superseded();
         self.active = Some(BtwActive {
             question,
             ..BtwActive::default()
         });
         self.open = true;
         self.scroll = 0;
-        self.composer.clear();
+        // The composer is deliberately NOT cleared here. The send path already
+        // clears it at the moment it takes the text (`handle_btw_key`), so the
+        // only drafts this would reach are ones nobody sent — a `/btw` typed
+        // in the main composer while a half-written follow-up sits in the
+        // overlay. Clearing that is silent data loss with no undo.
         self.composing = false;
+    }
+
+    /// File a still-answering question because a newer one has replaced it.
+    ///
+    /// Recorded as an error rather than as an answer, because it is neither:
+    /// nothing said the run finished, and the text on file is whatever had
+    /// arrived by the time the user moved on. Saying "answered" would present
+    /// a truncated answer as a complete one.
+    fn settle_superseded(&mut self) {
+        let Some(active) = self.active.take() else {
+            return;
+        };
+        self.finish_exchange(BtwExchange {
+            question: active.question,
+            answer: active.answer,
+            aborted: false,
+            error: Some("superseded by a newer side question".to_string()),
+        });
+    }
+
+    /// The active question, but only when `run_id` is the run answering it.
+    ///
+    /// **Every frame application goes through this.** `claimed` deliberately
+    /// outlives an exchange (a settled run can still emit), so "this frame is
+    /// ours" and "this frame belongs to what is on screen right now" are two
+    /// different questions — and answering the second with the first is how a
+    /// finished question's tail ends up appended to the next one's answer.
+    fn for_active_run(&mut self, run_id: &str) -> Option<&mut BtwActive> {
+        self.active
+            .as_mut()
+            .filter(|active| active.run_id.as_deref() == Some(run_id))
     }
 
     /// Record that `run_id` is answering the active side question.
@@ -214,8 +259,8 @@ impl BtwOverlay {
     }
 
     /// Append a streamed delta to the active answer.
-    pub fn push_delta(&mut self, delta: &str) {
-        if let Some(active) = &mut self.active {
+    pub fn push_delta(&mut self, run_id: &str, delta: &str) {
+        if let Some(active) = self.for_active_run(run_id) {
             active.streamed_len += delta.len();
             active.answer.push_str(delta);
         }
@@ -227,8 +272,8 @@ impl BtwOverlay {
     /// `.get()` rather than a slice: an out-of-range or non-boundary index
     /// yields `None` and appends nothing, instead of panicking mid-render if
     /// the counter is ever out of step with the bytes.
-    pub fn push_final(&mut self, text: &str) {
-        if let Some(active) = &mut self.active {
+    pub fn push_final(&mut self, run_id: &str, text: &str) {
+        if let Some(active) = self.for_active_run(run_id) {
             let fresh = text.get(active.streamed_len..).unwrap_or("").to_string();
             active.streamed_len = text.len();
             active.answer.push_str(&fresh);
@@ -236,8 +281,8 @@ impl BtwOverlay {
     }
 
     /// Note which tool the side question is running, for the status line.
-    pub fn note_tool(&mut self, name: Option<String>) {
-        if let Some(active) = &mut self.active {
+    pub fn note_tool(&mut self, run_id: &str, name: Option<String>) {
+        if let Some(active) = self.for_active_run(run_id) {
             active.tool_name = name;
         }
     }
@@ -248,7 +293,10 @@ impl BtwOverlay {
     /// only when nothing streamed — a turn that produced no deltas and no
     /// trace mirror still has an answer, and an empty bubble would report the
     /// opposite.
-    pub fn finish_active(&mut self, fallback: Option<&str>) {
+    pub fn finish_active(&mut self, run_id: &str, fallback: Option<&str>) {
+        if self.for_active_run(run_id).is_none() {
+            return;
+        }
         let Some(active) = self.active.take() else {
             return;
         };
@@ -267,7 +315,35 @@ impl BtwOverlay {
 
     /// Settle the active question as failed, keeping whatever text arrived
     /// before the failure — a partial answer is still worth reading.
-    pub fn fail_active(&mut self, error: String) {
+    pub fn fail_active(&mut self, run_id: &str, error: String) {
+        if self.for_active_run(run_id).is_none() {
+            return;
+        }
+        let Some(active) = self.active.take() else {
+            return;
+        };
+        self.finish_exchange(BtwExchange {
+            question: active.question,
+            answer: active.answer,
+            aborted: false,
+            error: Some(error),
+        });
+    }
+
+    /// Settle a question whose `agent.run` never came back with a run id.
+    ///
+    /// Separate from [`Self::fail_active`] because it is the one failure that
+    /// cannot name a run: there is no run. Folding the two would mean giving
+    /// `fail_active` a "match nothing" mode, and that mode would then be
+    /// reachable by every caller that has a run id and gets it wrong.
+    pub fn fail_unclaimed(&mut self, error: String) {
+        if self
+            .active
+            .as_ref()
+            .is_none_or(|active| active.run_id.is_some())
+        {
+            return;
+        }
         let Some(active) = self.active.take() else {
             return;
         };
@@ -344,6 +420,38 @@ impl BtwOverlay {
         self.composing = false;
     }
 
+    /// Drop everything that belonged to the conversation being left — and
+    /// nothing that did not.
+    ///
+    /// # Why this is not `*self = Self::default()`
+    ///
+    /// Two kinds of state live here and only one of them is
+    /// per-conversation. The exchanges, the page on screen, the draft and the
+    /// active question are that conversation's and must go, for the reason
+    /// `switch_session` wipes `messages` and `total_tokens`: this is a
+    /// singleton, so state that outlives the switch reports the previous
+    /// conversation under the new one's name.
+    ///
+    /// **`claimed` is not per-conversation — it is per-run, and clearing it
+    /// re-opens the leak this overlay exists to close.** A side run whose
+    /// `RunAccepted` has not landed yet is unknown to
+    /// `AppState::run_sessions`, and an unknown run id is deliberately KEPT by
+    /// `frame_belongs_here` ("I cannot tell" must not become "not mine"). So a
+    /// forgotten claim means that run's answer renders into the transcript of
+    /// a conversation it has nothing to do with — the exact defect, arriving
+    /// through the fix for a different one. Keeping the claims costs nothing:
+    /// the frames are still intercepted, `for_active_run` matches no active
+    /// question, and they land nowhere. The FIFO bound still caps the memory.
+    pub fn clear_for_session_switch(&mut self) {
+        self.exchanges.clear();
+        self.view_index = 0;
+        self.active = None;
+        self.open = false;
+        self.scroll = 0;
+        self.composer.clear();
+        self.composing = false;
+    }
+
     pub const fn scroll_down(&mut self, n: u16) {
         self.scroll = self.scroll.saturating_add(n);
     }
@@ -408,6 +516,13 @@ fn base64_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// Open a question and claim the run answering it — the state every frame
+    /// application now requires, because applications name their run.
+    fn asking(o: &mut BtwOverlay, question: &str, run_id: &str) {
+        o.begin(question.to_string());
+        o.claim_pending_run(run_id.to_string());
+    }
+
     #[test]
     fn the_overlay_pages_through_history_without_running_off_either_end() {
         let mut o = BtwOverlay::default();
@@ -468,12 +583,103 @@ mod tests {
     #[test]
     fn a_settled_runs_late_frames_are_still_claimed() {
         let mut o = BtwOverlay::default();
-        o.begin("why?".into());
-        o.claim_run("r1".into());
-        o.push_delta("because");
-        o.finish_active(None);
+        asking(&mut o, "why?", "r1");
+        o.push_delta("r1", "because");
+        o.finish_active("r1", None);
         assert!(o.active.is_none());
         assert!(o.accepts_frame(Some("r1")));
+    }
+
+    /// A second side question asked while the first is still answering must
+    /// not inherit the first's frames.
+    ///
+    /// `claimed` outlives an exchange on purpose, so `accepts_frame` says yes
+    /// to BOTH runs — which is right for "is this the overlay's", and useless
+    /// for "does this belong to what is on screen". Before frame application
+    /// named its run, the first question's remaining deltas appended
+    /// themselves to the second question's answer, and the first question's
+    /// partial answer was discarded outright.
+    #[test]
+    fn a_second_question_does_not_inherit_the_first_ones_frames() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "first?", "r1");
+        o.push_delta("r1", "first answer");
+
+        asking(&mut o, "second?", "r2");
+
+        // The first question was filed with what it had, and said so.
+        let filed = o.exchanges.last().expect("the first question was filed");
+        assert_eq!(filed.question, "first?");
+        assert_eq!(filed.answer, "first answer");
+        assert_eq!(filed.status(), "failed", "superseded is not 'answered'");
+        assert!(filed
+            .error
+            .as_deref()
+            .expect("a reason")
+            .contains("superseded"));
+
+        // Both runs are still claimed — so the routing, not the claim, is what
+        // keeps them apart.
+        assert!(o.accepts_frame(Some("r1")));
+        assert!(o.accepts_frame(Some("r2")));
+
+        // r1's tail must not land on q2.
+        o.push_delta("r1", " ...tail");
+        o.push_final("r1", "a whole different answer");
+        o.note_tool("r1", Some("bash".into()));
+        let active = o.active.as_ref().expect("q2 is answering");
+        assert_eq!(active.question, "second?");
+        assert_eq!(active.answer, "", "r1's tail leaked onto q2");
+        assert_eq!(active.tool_name, None, "r1's tool leaked onto q2");
+
+        // Nor may r1 settle q2.
+        o.finish_active("r1", Some("r1 summary"));
+        assert!(
+            o.active.is_some(),
+            "r1 settled the question it does not own"
+        );
+        o.fail_active("r1", "r1 blew up".into());
+        assert!(o.active.is_some(), "r1 failed the question it does not own");
+
+        // r2 does own it.
+        o.push_delta("r2", "second answer");
+        o.finish_active("r2", None);
+        let filed = o.exchanges.last().expect("q2 filed");
+        assert_eq!(filed.question, "second?");
+        assert_eq!(filed.answer, "second answer");
+        assert_eq!(filed.status(), "answered");
+    }
+
+    /// Two sends in flight get their OWN run ids: a claim only lands on a
+    /// question that has none yet, and `begin` files the previous one, so the
+    /// second send cannot resolve to the first run.
+    #[test]
+    fn each_send_claims_its_own_run_even_when_the_text_is_identical() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "same question", "r1");
+        asking(&mut o, "same question", "r2");
+        assert_eq!(o.active_run_id(), Some("r2"));
+
+        // A late claim cannot overwrite a run id already in hand.
+        o.claim_pending_run("r3".to_string());
+        assert_eq!(o.active_run_id(), Some("r2"));
+    }
+
+    /// A send that never came back with a run id has to be settleable, and it
+    /// is the one failure that cannot name a run.
+    #[test]
+    fn a_send_that_never_got_a_run_id_still_settles() {
+        let mut o = BtwOverlay::default();
+        o.begin("why?".into());
+        o.fail_unclaimed("the side question was not accepted".to_string());
+        assert!(o.active.is_none());
+        assert_eq!(o.current().expect("filed").status(), "failed");
+
+        // ...and it must not settle a question that DOES have a run: that one
+        // has a real answer coming.
+        asking(&mut o, "live", "r1");
+        o.fail_unclaimed("nope".to_string());
+        assert!(o.active.is_some(), "a claimed question is not unclaimed");
     }
 
     /// Claims are bounded, and eviction is FIFO — the oldest claim is the one
@@ -499,17 +705,17 @@ mod tests {
     #[test]
     fn the_final_text_appends_only_what_streaming_missed() {
         let mut o = BtwOverlay::default();
-        o.begin("q".into());
-        o.push_delta("hello ");
-        o.push_final("hello world");
-        o.finish_active(None);
+        asking(&mut o, "q", "r1");
+        o.push_delta("r1", "hello ");
+        o.push_final("r1", "hello world");
+        o.finish_active("r1", None);
         assert_eq!(o.current().expect("exchange").answer, "hello world");
 
         // A turn that never streamed lands in full.
         let mut o = BtwOverlay::default();
-        o.begin("q".into());
-        o.push_final("whole thing");
-        o.finish_active(None);
+        asking(&mut o, "q", "r1");
+        o.push_final("r1", "whole thing");
+        o.finish_active("r1", None);
         assert_eq!(o.current().expect("exchange").answer, "whole thing");
     }
 
@@ -518,8 +724,8 @@ mod tests {
     #[test]
     fn an_unstreamed_answer_falls_back_to_the_run_summary() {
         let mut o = BtwOverlay::default();
-        o.begin("q".into());
-        o.finish_active(Some("from the summary"));
+        asking(&mut o, "q", "r1");
+        o.finish_active("r1", Some("from the summary"));
         assert_eq!(o.current().expect("exchange").answer, "from the summary");
     }
 
@@ -529,19 +735,19 @@ mod tests {
     #[test]
     fn the_three_endings_stay_distinguishable() {
         let mut o = BtwOverlay::default();
-        o.begin("q1".into());
-        o.push_delta("partial");
-        o.fail_active("provider unreachable".into());
+        asking(&mut o, "q1", "r1");
+        o.push_delta("r1", "partial");
+        o.fail_active("r1", "provider unreachable".into());
         let failed = o.current().expect("exchange");
         assert_eq!(failed.status(), "failed");
         assert_eq!(failed.answer, "partial");
 
-        o.begin("q2".into());
+        asking(&mut o, "q2", "r2");
         o.abort_active();
         assert_eq!(o.current().expect("exchange").status(), "aborted");
 
-        o.begin("q3".into());
-        o.finish_active(None);
+        asking(&mut o, "q3", "r3");
+        o.finish_active("r3", None);
         let silent = o.current().expect("exchange");
         assert_eq!(silent.status(), "answered");
         assert!(silent.answer.is_empty());
@@ -558,13 +764,13 @@ mod tests {
         o.finish_exchange(BtwExchange::answered("q1", "old answer"));
         assert_eq!(o.copyable(), Some("old answer"));
 
-        o.begin("q2".into());
+        asking(&mut o, "q2", "r2");
         assert_eq!(
             o.copyable(),
             Some("old answer"),
             "a question that has not answered yet must not shadow the page on screen"
         );
-        o.push_delta("new answer");
+        o.push_delta("r2", "new answer");
         assert_eq!(o.copyable(), Some("new answer"));
     }
 
@@ -595,14 +801,14 @@ mod tests {
     #[test]
     fn closing_keeps_the_history() {
         let mut o = BtwOverlay::default();
-        o.begin("q1".into());
-        o.push_delta("a1");
-        o.finish_active(None);
+        asking(&mut o, "q1", "r1");
+        o.push_delta("r1", "a1");
+        o.finish_active("r1", None);
         o.close();
         assert!(!o.open);
         assert_eq!(o.exchanges.len(), 1);
 
-        o.begin("q2".into());
+        asking(&mut o, "q2", "r2");
         assert!(o.open);
         assert_eq!(o.exchanges.len(), 1);
     }

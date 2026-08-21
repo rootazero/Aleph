@@ -171,6 +171,13 @@ impl AppState {
     fn apply_btw_frame(&mut self, event: StreamEvent) -> Action {
         use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
 
+        // Every application below names the run, never just "the active
+        // question". `accepts_frame` says the frame is the overlay's; it does
+        // NOT say it belongs to what is on screen, because a claim outlives
+        // its exchange and a second side question can be asked while the first
+        // is still answering. See `BtwOverlay::for_active_run`.
+        let run_id = event.run_id().to_string();
+
         match event {
             StreamEvent::RunAccepted {
                 run_id,
@@ -186,7 +193,7 @@ impl AppState {
                 Action::None
             }
             StreamEvent::ResponseChunk { content, .. } => {
-                self.btw.push_delta(&content);
+                self.btw.push_delta(&run_id, &content);
                 Action::None
             }
             StreamEvent::AgentTrace { event, .. } => {
@@ -196,21 +203,22 @@ impl AppState {
                         stream: AgentTraceTextKind::Final,
                         text,
                         ..
-                    } => self.btw.push_final(&text),
+                    } => self.btw.push_final(&run_id, &text),
                     AgentTraceEvent::ToolCallStarted { call, .. } => {
-                        self.btw.note_tool(Some(call.tool_name));
+                        self.btw.note_tool(&run_id, Some(call.tool_name));
                     }
-                    AgentTraceEvent::ToolCallCompleted { .. } => self.btw.note_tool(None),
+                    AgentTraceEvent::ToolCallCompleted { .. } => self.btw.note_tool(&run_id, None),
                     _ => {}
                 }
                 Action::None
             }
             StreamEvent::RunComplete { summary, .. } => {
-                self.btw.finish_active(summary.final_response.as_deref());
+                self.btw
+                    .finish_active(&run_id, summary.final_response.as_deref());
                 Action::None
             }
             StreamEvent::RunError { error, .. } => {
-                self.btw.fail_active(error);
+                self.btw.fail_active(&run_id, error);
                 Action::None
             }
             _ => Action::None,

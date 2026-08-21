@@ -119,7 +119,7 @@ pub(super) async fn dispatch_gateway_text(
                 // that was never accepted.
                 state
                     .btw
-                    .fail_active("the side question was not accepted".to_string());
+                    .fail_unclaimed("the side question was not accepted".to_string());
             }
         }
         _ => {
@@ -1094,7 +1094,7 @@ mod tests {
         state.btw.claim_pending_run("run-side".into());
         assert!(side_abort_params(&state).is_some());
 
-        state.btw.finish_active(Some("because"));
+        state.btw.finish_active("run-side", Some("because"));
         assert!(
             side_abort_params(&state).is_none(),
             "a settled answer is closed, not aborted"

@@ -183,14 +183,21 @@ mod tests {
     use super::*;
     use crate::tui::btw_overlay::BtwExchange;
 
+    /// Open a question and claim the run answering it — frame applications
+    /// name their run.
+    fn asking(o: &mut BtwOverlay, question: &str, run_id: &str) {
+        o.begin(question.to_string());
+        o.claim_pending_run(run_id.to_string());
+    }
+
     /// A live question is what the user is waiting for, so it is what the
     /// panel shows — even when they had paged back through history first.
     #[test]
     fn a_live_question_outranks_the_page_that_was_on_screen() {
         let mut o = BtwOverlay::default();
         o.finish_exchange(BtwExchange::answered("old q", "old a"));
-        o.begin("new q".into());
-        o.push_delta("partial");
+        asking(&mut o, "new q", "r1");
+        o.push_delta("r1", "partial");
         let (question, answer, status) = body(&o, 0);
         assert_eq!(question, "new q");
         assert_eq!(answer, "partial");
@@ -202,8 +209,8 @@ mod tests {
     #[test]
     fn the_status_line_names_the_running_tool() {
         let mut o = BtwOverlay::default();
-        o.begin("q".into());
-        o.note_tool(Some("file_read".into()));
+        asking(&mut o, "q", "r1");
+        o.note_tool("r1", Some("file_read".into()));
         let (_, _, status) = body(&o, 0);
         assert!(status.contains("file_read"), "got: {status}");
     }
@@ -213,8 +220,8 @@ mod tests {
     #[test]
     fn a_failed_exchange_shows_the_reason() {
         let mut o = BtwOverlay::default();
-        o.begin("q".into());
-        o.fail_active("provider unreachable".into());
+        asking(&mut o, "q", "r1");
+        o.fail_active("r1", "provider unreachable".into());
         let (_, _, status) = body(&o, 0);
         assert!(status.contains("provider unreachable"), "got: {status}");
     }
@@ -232,7 +239,7 @@ mod tests {
         o.page_left();
         assert_eq!(title(&o), " Side question 1/2 ");
 
-        o.begin("q3".into());
+        asking(&mut o, "q3", "r3");
         assert_eq!(title(&o), " Side question (answering) ");
     }
 
