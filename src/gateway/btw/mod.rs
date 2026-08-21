@@ -47,11 +47,13 @@ impl BtwTurn {
     ///
     /// **Single source.** Every surface must resolve a side question through
     /// this function; none may re-derive "is this a btw" from its own string
-    /// handling. The predicate this is meant to replace still lives in
-    /// `inbound_router`, a channel-only module, so the TUI and Panel cannot
-    /// reach it. That older predicate is still in place and still live for
-    /// channels; until it is removed, the two must agree on what counts as a
-    /// side question, and this one is the definition.
+    /// handling. There was a second predicate — `classify_special_slash`'s
+    /// `btw` arm in `inbound_router`, a channel-only module the TUI and Panel
+    /// cannot reach — and it did not merely duplicate this one: it also
+    /// stripped the prefix and substituted a fresh ephemeral key, so a channel
+    /// side question reached the engine with neither the stamp nor a derivable
+    /// session. It is gone; the router now claims `/btw` by calling this, and
+    /// hands the turn on untouched.
     #[must_use]
     pub fn resolve(input: &str) -> Option<Self> {
         let trimmed = input.trim();

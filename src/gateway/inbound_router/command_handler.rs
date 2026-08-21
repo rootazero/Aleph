@@ -35,45 +35,37 @@ pub(super) fn strip_bot_mention(input: &str) -> String {
 
 /// Special slash-command variants intercepted in the inbound router before the
 /// generic `CommandParser` path. Case-insensitive over the command word, with
-/// the `@botname` Telegram suffix tolerated. `Btw` carries the verbatim body
-/// (original case preserved) so the model reads the user's actual phrasing
-/// rather than a lowercased copy.
+/// the `@botname` Telegram suffix tolerated.
+///
+/// Both variants here are answered by the router itself and never reach an
+/// agent. `/btw` deliberately does NOT belong: a side question is an ordinary
+/// agent turn, resolved by [`crate::gateway::btw::BtwTurn::resolve`] — the one
+/// resolver every surface shares — and claimed by `handle_message` only to keep
+/// it away from the slash fast path. A second variant here would be a second
+/// predicate for the same question.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SpecialSlash {
     Help,
     Stop,
-    Btw { body: String },
 }
 
 /// Classify a raw inbound text as a `SpecialSlash` variant.
 ///
-/// Returns `None` for anything that is not `/help`, `/stop`, `/abort`, or
-/// `/btw <body>` (case-insensitive, optional `@botname`). `/btw` without a
-/// non-empty body is rejected — an empty sidebar question has no place to go.
+/// Returns `None` for anything that is not `/help`, `/stop` or `/abort`
+/// (case-insensitive, optional `@botname`).
 pub(super) fn classify_special_slash(text: &str) -> Option<SpecialSlash> {
     let trimmed = text.trim();
     if !trimmed.starts_with('/') {
         return None;
     }
-    let (head, rest) = match trimmed.split_once(char::is_whitespace) {
-        Some((h, r)) => (h, r),
-        None => (trimmed, ""),
-    };
+    let head = trimmed
+        .split_once(char::is_whitespace)
+        .map_or(trimmed, |(h, _)| h);
     let cmd = head.split_once('@').map_or(head, |(c, _)| c);
     let cmd_lower = cmd.strip_prefix('/').unwrap_or(cmd).to_lowercase();
     match cmd_lower.as_str() {
         "help" => Some(SpecialSlash::Help),
         "stop" | "abort" => Some(SpecialSlash::Stop),
-        "btw" => {
-            let body = rest.trim();
-            if body.is_empty() {
-                None
-            } else {
-                Some(SpecialSlash::Btw {
-                    body: body.to_string(),
-                })
-            }
-        }
         _ => None,
     }
 }
@@ -247,62 +239,6 @@ impl InboundMessageRouter {
             "[Router] Sent unknown-command suggestions"
         );
         true
-    }
-
-    /// Handle /btw command: sidebar conversation that does not affect the
-    /// conversation's own context.
-    ///
-    /// Mints a `SessionKey::Ephemeral` so the question and answer are never
-    /// appended **into the current session's** history. That is a statement
-    /// about which transcript they join, not about storage: the key it mints is
-    /// persisted like any other session, and — because that key is a fresh uuid
-    /// rather than the derived side key — nothing can address it again. See the
-    /// block on the mint below.
-    pub(super) async fn handle_btw(
-        &self,
-        msg: &InboundMessage,
-        agent_id: &str,
-        btw_text: &str,
-    ) -> Result<(), RoutingError> {
-        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
-
-        let reply_route = ReplyRoute::new(msg.channel_id.clone(), msg.conversation_id.clone())
-            .with_inbound_message_id(msg.id.clone());
-
-        // A fresh `SessionKey::ephemeral` — a new random uuid per call, NOT the
-        // side session `gateway::btw::side_key_for` derives from the conversation.
-        // These rows persist like any other session (the name is not a
-        // storage claim; see `routing::session_key::SessionKey::Ephemeral`), and
-        // because nothing derives this key, nothing can address it a second time,
-        // seed it incrementally, or retire it.
-        //
-        // Reaching the derived side session instead means letting the engine's
-        // `slash_command::stamp_btw` see the `/btw` prefix on the conversation's
-        // own key; this path rewrites the text without the prefix (below) and
-        // substitutes a key, so the stamp never fires and `btw::execution_session`
-        // has nothing to redirect.
-        let session_key = SessionKey::ephemeral(agent_id);
-
-        // Create a modified message with just the btw text
-        let mut btw_msg = msg.clone();
-        btw_msg.text = btw_text.to_string();
-
-        let ctx = InboundContext::new(btw_msg, reply_route, session_key);
-
-        // /btw is a plain ephemeral turn — it does NOT take the slash-command
-        // fast path. Sending a non-mode JSON through
-        // `execute_for_context_with_metadata` previously injected `{"btw":true}`
-        // into the SLASH_COMMAND_MODE_KEY, which the engine's fast path
-        // parsed as an unknown `mode_type` and rejected with
-        // "Unknown slash command type:". Route through the regular
-        // execution path so the model gets the btw prompt directly.
-        self.execute_for_context(&ctx).await?;
-
-        info!(
-            "[Router] /btw handled as ephemeral session for agent '{}'",
-            agent_id
-        );
-        Ok(())
     }
 
     /// Handle /new command: close current session with topic, create new epoch
@@ -616,65 +552,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_btw_lowercase() {
-        assert_eq!(
-            classify_special_slash("/btw What is X?"),
-            Some(SpecialSlash::Btw {
-                body: "What is X?".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_uppercase_preserves_body_case() {
-        let body = "What is the Weather Forecast for Tokyo?";
-        assert_eq!(
-            classify_special_slash("/BTW What is the Weather Forecast for Tokyo?"),
-            Some(SpecialSlash::Btw {
-                body: body.to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_at_bot_preserves_body_case() {
-        assert_eq!(
-            classify_special_slash("/btw@MyBot Explain Async/Await in Rust"),
-            Some(SpecialSlash::Btw {
-                body: "Explain Async/Await in Rust".to_string()
-            })
-        );
-        assert_eq!(
-            classify_special_slash("/BTW@MyBot Hello, World!"),
-            Some(SpecialSlash::Btw {
-                body: "Hello, World!".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_newline_separator() {
-        assert_eq!(
-            classify_special_slash("/btw\nQuestion on next line"),
-            Some(SpecialSlash::Btw {
-                body: "Question on next line".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_empty_body_is_not_a_command() {
-        assert_eq!(classify_special_slash("/btw"), None);
-        assert_eq!(classify_special_slash("/btw "), None);
-        assert_eq!(classify_special_slash("/btw@MyBot"), None);
-        assert_eq!(classify_special_slash("/BTW\n   "), None);
-    }
-
-    #[test]
     fn classify_no_slash_prefix_is_not_a_command() {
         assert_eq!(classify_special_slash("help"), None);
         assert_eq!(classify_special_slash("STOP"), None);
-        assert_eq!(classify_special_slash("btw hi"), None);
+        assert_eq!(classify_special_slash("abort now"), None);
     }
 
     #[test]

@@ -806,3 +806,491 @@ fn the_redirect_reads_the_stamp_not_the_text() {
         crate::gateway::btw::side_key_for(&main).to_key_string()
     );
 }
+
+// ---------------------------------------------------------------------------
+// From an inbound channel message
+// ---------------------------------------------------------------------------
+//
+// Everything above starts at `execute()`, from a request whose `input` this
+// file set by hand. That is one hand-built half: it proves the engine honours a
+// `/btw` it is handed, and says nothing about whether any channel hands it one.
+//
+// For most of this feature's life no channel did. An inbound-router special
+// case claimed `/btw` first, stripped the prefix and substituted a fresh
+// `SessionKey::ephemeral` uuid, so the request that reached `execute()` was
+// indistinguishable from an ordinary message: `stamp_btw` saw no prefix, the
+// ceiling never applied, and the derived side session — with its seeding, its
+// own lane and its retirement — was never addressed. Every test in this file
+// stayed green throughout, because each was handed the input that special case
+// never produced.
+//
+// So these start one layer further out: at `handle_message`, with an
+// `InboundMessage` exactly as a channel adapter delivers one, and carry the
+// request the router actually produced the rest of the way down.
+
+use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
+use crate::gateway::event_emitter::EventEmitter;
+use crate::gateway::inbound_router::ChannelPermissionLevel;
+use crate::gateway::{
+    ChannelRegistry, DmPolicy, ExecutionAdapter, InboundMessageRouter, RouterChannelConfig,
+    RoutingConfig, RunStatus, SqlitePairingStore,
+};
+use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
+
+/// The router's own default agent id. Registering the rig's agent under any
+/// other name makes `resolve_agent_id_async` fall back to this one and every
+/// delivery dies as `AgentNotFound` — which is the deployment default, so the
+/// rig uses it rather than working around it.
+const RIG_AGENT: &str = "main";
+const RIG_CHANNEL: &str = "telegram";
+
+/// Records the `RunRequest` the router hands the engine, and nothing else.
+///
+/// The boundary matters: this is the last point at which the request is still
+/// the router's work and not the engine's, so what it captures is exactly what
+/// the channel path produced.
+#[derive(Default)]
+struct CapturingAdapter {
+    seen: std::sync::Mutex<std::collections::VecDeque<RunRequest>>,
+}
+
+impl CapturingAdapter {
+    fn take(&self) -> Option<RunRequest> {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionAdapter for CapturingAdapter {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), super::ExecutionError> {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(request);
+        Ok(())
+    }
+
+    async fn cancel(&self, _run_id: &str) -> Result<(), super::ExecutionError> {
+        Ok(())
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        Some(RunStatus {
+            run_id: run_id.to_string(),
+            state: super::RunState::Completed,
+            started_at: None,
+            completed_at: None,
+            steps_completed: 0,
+            current_tool: None,
+        })
+    }
+
+    async fn active_run_count(&self) -> usize {
+        0
+    }
+}
+
+/// A router wired the way a channel deployment wires one: an agent registry, an
+/// execution adapter, a `CommandParser` over a real builtin catalog, and a
+/// channel whose DM policy lets the message through.
+struct ChannelRig {
+    router: InboundMessageRouter,
+    adapter: Arc<CapturingAdapter>,
+    agent: Arc<AgentInstance>,
+    temp: tempfile::TempDir,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+impl ChannelRig {
+    /// `catalog_resolves_btw` seeds the catalog with a tool literally named
+    /// `btw`. That is not the shipped state — `no_catalog_command_resolves_as_a_side_question`
+    /// pins that it is not — it is the world in which falling through to the
+    /// unified interception has an observable consequence, which is what makes
+    /// the ordering here testable rather than merely true today. Registering
+    /// `btw` for discovery would create exactly this world on every surface;
+    /// see that guard for why the listing was not shipped.
+    async fn new(catalog_resolves_btw: bool) -> Self {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let sessions = Arc::new(
+            crate::gateway::session_manager::SessionManager::new(
+                crate::gateway::session_manager::SessionManagerConfig {
+                    db_path: temp.path().join("sessions.db"),
+                    ..Default::default()
+                },
+            )
+            .expect("session manager"),
+        );
+        let agents = Arc::new(AgentRegistry::new());
+        agents
+            .register(
+                AgentInstance::new(
+                    AgentInstanceConfig {
+                        agent_id: RIG_AGENT.to_string(),
+                        workspace: temp.path().join("workspace"),
+                        agent_dir: temp.path().join("agent"),
+                        ..Default::default()
+                    },
+                    sessions,
+                )
+                .expect("agent instance"),
+            )
+            .await;
+        let agent = agents.get(RIG_AGENT).await.expect("registered agent");
+
+        let catalog = Arc::new(ToolCatalog::new());
+        catalog.register_builtin_tools().await;
+        if catalog_resolves_btw {
+            catalog
+                .register_with_conflict_resolution(UnifiedTool::new(
+                    "builtin:btw",
+                    "btw",
+                    "a tool that happens to be called btw",
+                    ToolSource::Builtin,
+                ))
+                .await;
+        }
+
+        let adapter = Arc::new(CapturingAdapter::default());
+        let execution: Arc<dyn ExecutionAdapter> = adapter.clone();
+        let mut router = InboundMessageRouter::with_execution(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().expect("pairing store")),
+            RoutingConfig::default(),
+            agents,
+            execution,
+        )
+        .with_command_parser(Arc::new(crate::command::CommandParser::new(catalog)));
+        router.register_channel_config(
+            RIG_CHANNEL,
+            RouterChannelConfig {
+                dm_policy: DmPolicy::Open,
+                require_mention: false,
+                // The channel is at its most privileged tier on purpose. At the
+                // default `Chat` tier the router stamps `caller_role: guest`,
+                // which clamps every turn to `Ask` — and with no approval
+                // channel wired, an ordinary message is refused too. The
+                // refusal under test would then be indistinguishable from the
+                // ambient one, and the control arm below could not write.
+                // At `Config` an ordinary turn really does execute, so the side
+                // question's refusal is the side question's alone.
+                permission_level: ChannelPermissionLevel::Config,
+                ..Default::default()
+            },
+        );
+
+        Self {
+            router,
+            adapter,
+            agent,
+            temp,
+            next_id: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Deliver `text` as an inbound DM and return the request the router handed
+    /// the engine.
+    ///
+    /// Polls rather than awaits because `execute_for_context` takes the busy
+    /// lane's FIFO ticket synchronously and then `tokio::spawn`s the delivery —
+    /// there is no handle to join, by design.
+    async fn deliver(&self, text: &str) -> RunRequest {
+        let n = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let msg = InboundMessage {
+            id: MessageId::new(format!("m-{n}")),
+            channel_id: ChannelId::new(RIG_CHANNEL),
+            conversation_id: ConversationId::new("conv-1"),
+            sender_id: UserId::new("u1"),
+            sender_name: None,
+            text: text.to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        self.router
+            .handle_message(msg)
+            .await
+            .expect("the router must not error on a plain DM");
+
+        for _ in 0..400 {
+            if let Some(request) = self.adapter.take() {
+                return request;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("{text:?} never reached the engine — the router answered it itself");
+    }
+
+    /// Carry a request the router produced the rest of the way down, through
+    /// the same three calls the agent loop makes.
+    ///
+    /// `stamp_btw` and `redirect_to_side_session` are `execute()`'s first two
+    /// statements and are run here in that order; on this path the stamp is
+    /// already present, so the first is a no-op — which is the point, and is
+    /// asserted by the caller before this is reached.
+    async fn tools_for(&self, request: &RunRequest) -> (Arc<dyn ToolService>, SessionKey) {
+        let engine = test_engine();
+        let mut request = request.clone();
+        stamp_btw(&request.input, &mut request.metadata);
+        redirect_to_side_session(&mut request);
+
+        let permissions = engine.resolve_turn_permissions(&request, &self.agent).await;
+        let turn_context = permissions.turn_context(&request, &request.run_id, false);
+        let tools = build_request_tool_service(
+            write_registry(),
+            BTreeSet::new(),
+            None,
+            Some(turn_context),
+            None,
+            request.session_key.to_key_string(),
+            permissions.explicit.clone(),
+            permissions.tier,
+            false,
+            &[],
+            false,
+            crate::tools::scoped::DeferredTools::empty(),
+            None,
+        );
+        (tools, request.session_key)
+    }
+}
+
+/// The arrival property, and the one the deleted special case broke on both
+/// counts.
+///
+/// Nothing here is constructed by the test but the user's sentence: the
+/// metadata key is whatever `executor.rs` stamped, and the session key is
+/// whatever the router resolved for this conversation — compared against an
+/// ordinary message in the same conversation rather than against a key this
+/// test derives, because a derivation here would just be a second copy of the
+/// router's.
+#[tokio::test]
+async fn a_channel_side_question_arrives_stamped_on_the_conversations_own_key() {
+    let rig = ChannelRig::new(false).await;
+
+    let ordinary = rig.deliver("what is the plan?").await;
+    let side = rig.deliver("/btw what does epoch mean here?").await;
+
+    assert!(
+        side.metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY),
+        "a channel `/btw` must arrive stamped — without the stamp there is no \
+         read-only ceiling and no side session, and nothing downstream can tell \
+         it apart from an ordinary message"
+    );
+    assert!(
+        !ordinary
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY),
+        "the control must be unstamped, or the assertion above proves nothing"
+    );
+
+    assert_eq!(
+        side.session_key.to_key_string(),
+        ordinary.session_key.to_key_string(),
+        "a side question must reach the engine on the conversation's OWN key: \
+         `btw::execution_session` derives the persistent side session from it, \
+         and a substituted key derives a session nothing can seed or retire"
+    );
+
+    assert!(
+        side.input.trim_start().starts_with("/btw"),
+        "the `/btw` prefix must survive the router: `stamp_btw` is the only \
+         thing that recognises a side question, and it reads the text, got {:?}",
+        side.input
+    );
+    assert!(
+        !side
+            .metadata
+            .contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY),
+        "a side question must not carry a slash-command mode: that key sends \
+         `execute()` down the fast path, which dispatches on the raw tool \
+         registry and never builds the ScopedToolService the ceiling lives in"
+    );
+}
+
+/// The same message, carried the rest of the way: a `/btw` typed into a channel
+/// cannot change anything, measured on the filesystem.
+///
+/// This is `a_side_question_cannot_write_a_file` with its one hand-built half
+/// replaced by a real inbound message. Under the deleted special case it fails
+/// at the first assertion below rather than the last — the file gets written,
+/// because the request that arrived was not a side question at all.
+#[tokio::test]
+async fn a_channel_side_question_cannot_write_a_file() {
+    let rig = ChannelRig::new(false).await;
+    let proof: PathBuf = rig.temp.path().join("proof.txt");
+
+    let request = rig
+        .deliver("/btw create a file called proof.txt with the word hi in it")
+        .await;
+    assert!(
+        request
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY),
+        "the router did not stamp it, so what follows would be testing this \
+         test's own input"
+    );
+
+    let (tools, executes_on) = rig.tools_for(&request).await;
+    assert_eq!(
+        executes_on.to_key_string(),
+        crate::gateway::btw::side_key_for(&request.session_key).to_key_string(),
+        "the run must move to the side session derived from the conversation"
+    );
+
+    let outcome = tools.execute("file_write", write_call(&proof)).await;
+    assert!(
+        !proof.exists(),
+        "a channel side question wrote {} — the read-only ceiling did not reach \
+         this surface",
+        proof.display()
+    );
+    let refusal = outcome
+        .expect_err("a mutating tool must be refused during a side question")
+        .to_string();
+    assert!(
+        refusal.contains("/btw side question"),
+        "the refusal must name the side question, got: {refusal}"
+    );
+}
+
+/// The control. Same rig, same conversation, same tool — only the leading
+/// `/btw` removed — must still write, or the refusal above could be any rig
+/// that refuses everything.
+#[tokio::test]
+async fn an_ordinary_channel_message_still_writes_the_file() {
+    let rig = ChannelRig::new(false).await;
+    let proof: PathBuf = rig.temp.path().join("proof.txt");
+
+    let request = rig
+        .deliver("create a file called proof.txt with the word hi in it")
+        .await;
+
+    let (tools, executes_on) = rig.tools_for(&request).await;
+    assert_eq!(
+        executes_on.to_key_string(),
+        request.session_key.to_key_string(),
+        "an ordinary channel message stays on the conversation it was typed in"
+    );
+
+    tools
+        .execute("file_write", write_call(&proof))
+        .await
+        .expect("an ordinary channel turn writes files");
+    assert!(proof.exists(), "the control arm must actually write");
+}
+
+/// The ordering, in the world where it has consequences.
+///
+/// `/btw` is claimed **before** the unified slash interception. Below that
+/// point there are two ways to lose it and they fail differently: a name the
+/// `CommandParser` resolves is serialized into `SLASH_COMMAND_MODE_KEY` and
+/// taken by the engine's fast path (no `ScopedToolService`, no ceiling); a name
+/// it does not resolve reaches `try_send_unknown_command_help`, which answers
+/// "did you mean …?" and returns without running the agent at all.
+///
+/// This rig gives the catalog a tool called `btw` so the first of those has an
+/// observable effect. Nothing ships in that state — but "nothing currently
+/// resolves as `btw`" is a fact about today's tool list, not a property of the
+/// router, and the claim has to hold either way.
+#[tokio::test]
+async fn the_router_claims_btw_ahead_of_a_catalog_that_could_resolve_it() {
+    let rig = ChannelRig::new(true).await;
+    let request = rig.deliver("/btw what does epoch mean here?").await;
+
+    assert!(
+        !request
+            .metadata
+            .contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY),
+        "a resolvable `/btw` was sent through the slash fast path — that path \
+         never builds the ScopedToolService the read-only ceiling lives in"
+    );
+    assert!(
+        request
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY),
+        "the side-question stamp must survive a catalog that knows the name"
+    );
+    assert!(
+        request.input.trim_start().starts_with("/btw"),
+        "the prefix must survive, got {:?}",
+        request.input
+    );
+}
+
+/// Why `/btw` is not registered for discovery.
+///
+/// `commands.list`, the TUI command tree and `/help` are all rendered from the
+/// `ToolCatalog`, and `CommandParser::parse_async` resolves against that same
+/// table — there is no listed-but-unresolvable state. So an entry added to make
+/// `/btw` discoverable would also make it resolvable, and `execute()`'s own
+/// `stamp_slash_mode` safety net resolves every `/`-prefixed input it is handed
+/// — on Panel and TUI too, where the router's claim cannot help. The listing
+/// would cost the ceiling on every surface.
+///
+/// Stated as a rule rather than as the name `btw`: every shipped command word
+/// is asked whether [`BtwTurn::resolve`] — the one resolver — would read it as
+/// a side question. A second side-question spelling would be covered without
+/// this guard being told about it.
+///
+/// The three tables are the ones this binary ships: the curated catalog
+/// entries, the builtin definitions the catalog builder turns into commands,
+/// and the shorthand aliases seeded onto them. Skills, MCP servers and plugins
+/// add names at runtime and are out of reach of any compile-time guard — a
+/// user-installed extension called `btw` would shadow the side question on
+/// every surface, and nothing here can prevent that.
+///
+/// [`BtwTurn::resolve`]: crate::gateway::btw::BtwTurn::resolve
+#[tokio::test]
+async fn no_shipped_command_word_resolves_as_a_side_question() {
+    let catalog = ToolCatalog::new();
+    catalog.register_builtin_tools().await;
+
+    let mut words: Vec<String> = Vec::new();
+    for tool in catalog.list_all_for_ui().await {
+        words.push(tool.name);
+        words.extend(tool.aliases);
+    }
+    for def in crate::executor::BUILTIN_TOOL_DEFINITIONS {
+        words.push(def.name.to_string());
+    }
+    for (alias, canonical) in crate::tool_metadata::aliases::SHORTHAND_ALIASES {
+        words.push((*alias).to_string());
+        words.push((*canonical).to_string());
+    }
+
+    // Self-check: three tables, and the smallest of them is not small. A guard
+    // that iterates an empty list is indistinguishable from one that passes.
+    assert!(
+        words.len() > 100,
+        "only {} command words came back — one of the three tables went empty, \
+         so this guard checked almost nothing",
+        words.len()
+    );
+
+    for word in &words {
+        assert!(
+            crate::gateway::btw::BtwTurn::resolve(&format!("/{word} some argument")).is_none(),
+            "`{word}` is a shipped command word that the one side-question \
+             resolver reads as a side question. Discovery and resolution share \
+             the catalog, so such an entry is also dispatchable: \
+             `stamp_slash_mode` would stamp SLASH_COMMAND_MODE_KEY and the \
+             engine's fast path would run it without the read-only ceiling."
+        );
+    }
+}
