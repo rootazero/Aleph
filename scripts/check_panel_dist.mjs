@@ -139,7 +139,15 @@ if (missing.length > 0) {
   for (const name of entries.filter((n) => !n.endsWith('.br'))) {
     if (statSync(`${dir}/${name}`).size < MIN_BYTES) continue;
     if (!entries.includes(`${name}.br`)) {
-      brProblems.push(`${name} is over ${MIN_BYTES} bytes but has no ${name}.br — run \`node scripts/precompress_dist.mjs\``);
+      brProblems.push(
+        `${name} is over ${MIN_BYTES} bytes but has no ${name}.br. Two possible ` +
+          `causes: (1) the sibling is genuinely missing — run ` +
+          `\`node scripts/precompress_dist.mjs\` to produce it; or (2) ${name} ` +
+          `does not compress smaller than its source, so the producer correctly ` +
+          `skipped it — in that case this check and the producer now disagree ` +
+          `and both need extending together (see precompress_dist.mjs's own note ` +
+          `on this), because re-running the producer alone will not help.`,
+      );
     }
   }
 
