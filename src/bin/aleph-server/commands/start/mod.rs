@@ -1626,10 +1626,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // LockOrIpc when this server holds the singleton lock. Bearer auth is
     // enforced by the existing OpenAI-compat handler upstream.
     {
+        // The reconciler endpoint surfaces the most recent `ReconcileReport`
+        // from the daemon operator opt-in starts via
+        // `MemoryCommandHandler::spawn_reconciler_daemon`. Construct one
+        // here so the admin API can query it; the reconciler daemon itself
+        // is started by config (out of scope here).
+        let memory_handler = agent_result
+            .state_db
+            .as_ref()
+            .map(|state_db| {
+                std::sync::Arc::new(
+                    alephcore::memory::events::handler::MemoryCommandHandler::new(
+                        std::sync::Arc::clone(state_db),
+                    ),
+                )
+            });
         let admin_state = alephcore::gateway::admin_api::AdminApiState {
             shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
             agent_manager: agent_manager.clone(),
             session_store: session_store.clone(),
+            memory_handler,
         };
         server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
     }

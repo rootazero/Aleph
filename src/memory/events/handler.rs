@@ -5,7 +5,7 @@
 //! 2. Append to `SQLite` event store
 //! 3. Project to notes store via `project_to_notes` (primary write path)
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::error::AlephError;
@@ -27,14 +27,23 @@ pub struct MemoryCommandHandler {
     /// `NoteIndexer` for the notes write path.
     /// When present, every create/update/delete also writes to the notes filesystem layer.
     note_indexer: Option<Arc<NoteIndexer<SqliteMemoryBackend>>>,
+    /// Most recent `ReconcileReport` produced by the background daemon.
+    ///
+    /// `None` until the daemon runs its first scan (or until an explicit
+    /// `reconcile_once` call has happened). The daemon's tick replaces
+    /// this value atomically on every successful run; failure paths
+    /// preserve the prior report rather than wiping the last known
+    /// good state.
+    last_reconcile: Arc<Mutex<Option<ReconcileReport>>>,
 }
 
 impl MemoryCommandHandler {
     #[must_use]
-    pub const fn new(db: Arc<StateDatabase>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self {
             db,
             note_indexer: None,
+            last_reconcile: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -703,7 +712,102 @@ impl MemoryCommandHandler {
             }
         }
 
+        // Publish to the operator-facing slot so `last_reconcile_report`
+        // returns the freshest result regardless of whether the caller
+        // was the daemon or a direct invocation.
+        *self
+            .last_reconcile
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(report.clone());
+
         Ok(report)
+    }
+
+    /// The most recent `ReconcileReport` produced either by a direct
+    /// `reconcile_once` call or by the background daemon spawned via
+    /// [`spawn_reconciler_daemon`]. `None` until the first scan has
+    /// completed.
+    #[must_use]
+    pub fn last_reconcile_report(&self) -> Option<ReconcileReport> {
+        self.last_reconcile
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Spawn a background task that periodically calls `reconcile_once`
+    /// and stores each report in [`last_reconcile_report`].
+    ///
+    /// Off by default — `MemoryCommandHandler::new` does not start the
+    /// daemon. Operator opt-in is required because the scan walks the
+    /// whole `memory_events` table plus the notes filesystem, which is
+    /// not free for installations that have accumulated millions of
+    /// fact rows. Recommended cadence: minutes, not seconds; the first
+    /// run happens immediately after spawn so the operator can
+    /// confirm wiring without waiting a full cycle.
+    ///
+    /// The daemon tolerates reconcile failures: a failed scan leaves
+    /// the prior report in place (no wiping) and tries again on the
+    /// next tick. This way a transient DB hiccup doesn't lose the
+    /// last known good state.
+    ///
+    /// Returns the `JoinHandle` so the operator can abort the daemon
+    /// (e.g. during shutdown) by calling `.abort()`. The handle is
+    /// intentionally not stored on `Self` — Aleph today has no notion of
+    /// a single owner for long-lived background tasks, and `tokio::spawn`
+    /// outlives any single component cleanly.
+    ///
+    /// The daemon's clone of the handler shares the outer handler's
+    /// `last_reconcile` slot (via `Arc::clone`), so `last_reconcile_report`
+    /// on the outer handler immediately returns whatever the daemon
+    /// most recently wrote. Direct `reconcile_once` calls on the outer
+    /// handler also populate the same slot.
+    pub fn spawn_reconciler_daemon(
+        &self,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let last_reconcile = Arc::clone(&self.last_reconcile);
+        let handler = Arc::new(Self {
+            db: Arc::clone(&self.db),
+            note_indexer: self.note_indexer.as_ref().map(Arc::clone),
+            // Share the outer handler's slot so the daemon's writes are
+            // visible through `last_reconcile_report()` on the original.
+            last_reconcile: Arc::clone(&self.last_reconcile),
+        });
+        tokio::spawn(async move {
+            // Run an immediate first scan so the operator sees fresh
+            // data without waiting a full interval.
+            run_one_tick(&handler, &last_reconcile).await;
+            let mut ticker = tokio::time::interval(interval);
+            // Skip the immediate first tick (`interval` fires once
+            // on entry); we already ran one above.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                run_one_tick(&handler, &last_reconcile).await;
+            }
+        })
+    }
+}
+
+/// One daemon tick: scan, log divergences, store the report under the
+/// shared `last_reconcile` slot.
+async fn run_one_tick(
+    handler: &MemoryCommandHandler,
+    last_reconcile: &Mutex<Option<ReconcileReport>>,
+) {
+    match handler.reconcile_once().await {
+        Ok(report) => {
+            let mut guard = last_reconcile.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some(report);
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "Reconciler daemon tick failed; prior report (if any) preserved. \
+                 Next tick will retry."
+            );
+        }
     }
 }
 
@@ -1443,5 +1547,89 @@ mod tests {
             "after delete_fact there must be no stale files anywhere; got {:?}",
             report.stale_files
         );
+    }
+
+    // ── Daemon tests ─────────────────────────────────────────────────────────
+
+    /// Default state: `last_reconcile_report()` returns None until the
+    /// first reconcile has run.
+    #[tokio::test]
+    async fn test_last_reconcile_report_initially_none() {
+        let handler = make_handler();
+        assert!(
+            handler.last_reconcile_report().is_none(),
+            "fresh handler must have no last report"
+        );
+    }
+
+    /// `reconcile_once` populates the last-reconcile slot (via the
+    /// shared `Arc<Mutex<...>>` set by `new`).
+    #[tokio::test]
+    async fn test_reconcile_once_populates_last_reconcile_report() {
+        let handler = make_handler();
+        handler
+            .create_fact(CreateNoteCommand {
+                content: "User prefers Rust".into(),
+                note_type: NoteType::Preference,
+                path: "/user/preferences/lang".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let report = handler.reconcile_once().await.unwrap();
+        let snapshot = handler.last_reconcile_report().expect(
+            "last_reconcile_report must be populated after a reconcile_once call",
+        );
+        assert_eq!(snapshot.scanned_facts, report.scanned_facts);
+        assert_eq!(snapshot.missing_files.len(), report.missing_files.len());
+        assert_eq!(snapshot.stale_files.len(), report.stale_files.len());
+    }
+
+    /// Spawn the daemon with a tiny interval, wait long enough for at
+    /// least one tick, abort, and verify the outer handler sees the
+    /// daemon's report through `last_reconcile_report`. Uses a 50 ms
+    /// interval so the test runs in well under a second.
+    #[tokio::test]
+    async fn test_spawn_reconciler_daemon_writes_through_to_outer_handler() {
+        let handler = make_handler();
+        handler
+            .create_fact(CreateNoteCommand {
+                content: "User prefers Rust".into(),
+                note_type: NoteType::Preference,
+                path: "/user/preferences/lang".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let handle = handler.spawn_reconciler_daemon(std::time::Duration::from_millis(50));
+
+        // The daemon runs one immediate scan plus periodic ticks;
+        // give it 250 ms total (>= 4 ticks at 50 ms) to populate the slot.
+        let mut populated = false;
+        for _ in 0..50 {
+            if handler.last_reconcile_report().is_some() {
+                populated = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            populated,
+            "daemon must populate last_reconcile_report within the wait window"
+        );
+
+        handle.abort();
     }
 }
