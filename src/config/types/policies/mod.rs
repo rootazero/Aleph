@@ -27,6 +27,7 @@ pub mod exec_tier;
 pub mod memory;
 pub mod metrics;
 pub mod session_mode;
+pub mod spend;
 pub mod tool_permissions;
 pub mod web_fetch;
 
@@ -36,6 +37,7 @@ pub use exec_tier::{
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
+pub use spend::{SpendPeriod, SpendPolicy};
 pub use tool_permissions::{PermissionMatch, ToolPermissionsConfig};
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 
@@ -107,6 +109,12 @@ pub struct PoliciesConfig {
     /// Tool permission levels (Allow / Ask / Deny)
     #[serde(default)]
     pub tool_permissions: ToolPermissionsConfig,
+
+    /// Per-principal and machine-total USD spend ceilings.
+    ///
+    /// Absent ⇒ disabled.
+    #[serde(default)]
+    pub spend: SpendPolicy,
 }
 
 #[cfg(test)]
