@@ -363,6 +363,127 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 mod tests {
     use super::*;
 
+    /// Every file that is expected to record an authority change, and the verb
+    /// it records.
+    ///
+    /// # What this census can and cannot do
+    ///
+    /// The **backward** direction is mechanical and is the half that catches
+    /// drift on its own: any file that calls `authority_change(` and is not
+    /// listed here fails, so a new producer cannot appear un-reviewed.
+    ///
+    /// The **forward** direction is a name list, and name lists only describe
+    /// the world on the day they are written — "a write that changes who can do
+    /// what" is a judgement, not a grep. That limit is declared rather than
+    /// papered over. What the list does buy is the failure this round found:
+    /// [`AuditEventType::AuthorityChange`]'s own doc names *device revoked* in
+    /// its list of covered writes, and no producer existed. Prose naming a
+    /// behaviour is not the behaviour, and a doc comment has no test.
+    const AUTHORITY_PRODUCERS: &[(&str, &str)] = &[
+        ("src/gateway/handlers/users.rs", "principal created / role / status"),
+        ("src/gateway/handlers/projects.rs", "room roster add / remove"),
+        ("src/gateway/handlers/pairing.rs", "channel sender approve / revoke"),
+        ("src/gateway/handlers/gateway_ticket.rs", "bootstrap ticket minted"),
+        (
+            "src/gateway/handlers/gateway_devices.rs",
+            "device credential revoked",
+        ),
+        ("src/gateway/handlers/agents.rs", "allowed_users rewritten (RPC)"),
+        (
+            "src/builtin_tools/agent_manage/update.rs",
+            "allowed_users rewritten (tool)",
+        ),
+    ];
+
+    /// Strip `//` line comments before scanning.
+    ///
+    /// A scanner judges code; a comment is documentation. Without this, the
+    /// sentence explaining why a producer was removed would satisfy the check
+    /// that the producer still exists — the exact way a guard reports green on
+    /// the bug it was written to catch.
+    fn code_only(src: &str) -> String {
+        src.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn repo_root() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    #[test]
+    fn every_declared_authority_producer_still_records_one() {
+        let root = repo_root();
+        for (path, verb) in AUTHORITY_PRODUCERS {
+            let full = root.join(path);
+            let src = std::fs::read_to_string(&full)
+                .unwrap_or_else(|e| panic!("{path} (declared producer of {verb}) unreadable: {e}"));
+            assert!(
+                code_only(&src).contains("authority_change("),
+                "{path} is the declared producer of the authority change {verb:?}, and it no \
+                 longer records one. Either restore the call or remove the row — an authority \
+                 write that leaves no record is invisible to `aleph audit`, which is the only \
+                 surface that can answer what changed."
+            );
+        }
+    }
+
+    #[test]
+    fn no_authority_producer_exists_outside_the_census() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = repo_root();
+        let src_root = root.join("src");
+        let mut files = Vec::new();
+        walk(&src_root, &mut files);
+        assert!(
+            files.len() > 100,
+            "the scan found {} files — it is not looking at the source tree it thinks it is",
+            files.len()
+        );
+
+        // This file defines the constructor and the census, so it names the
+        // call unavoidably; it is not a producer.
+        let this_file = root.join("src/security/audit.rs");
+        let declared: std::collections::HashSet<_> = AUTHORITY_PRODUCERS
+            .iter()
+            .map(|(p, _)| root.join(p))
+            .collect();
+
+        let mut undeclared = Vec::new();
+        for file in files {
+            if file == this_file || declared.contains(&file) {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            if code_only(&src).contains("authority_change(") {
+                undeclared.push(file.strip_prefix(&root).unwrap_or(&file).display().to_string());
+            }
+        }
+        assert!(
+            undeclared.is_empty(),
+            "these files record authority changes but are not in AUTHORITY_PRODUCERS: {undeclared:?}. \
+             Add them with the verb they record — the census is how the next round learns which \
+             writes are supposed to leave a trail."
+        );
+    }
+
+
     #[tokio::test]
     async fn test_audit_log_send_receive() {
         let (log, mut rx) = SecurityAuditLog::new(100);
