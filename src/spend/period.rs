@@ -116,9 +116,26 @@ pub fn period_end_ms_in<Tz: TimeZone>(now_ms: i64, period: SpendPeriod, tz: &Tz)
 /// defensive floor (P7), not a path any current caller can reach, matching
 /// the fallback [`crate::tasks::shared::clock::Clock::now_utc`] uses for
 /// the same reason.
+///
+/// The fallback is silent about its *value* on purpose (P7: no panic on bad
+/// input) but not about its *occurrence* — it logs, because the ledger keys
+/// spend rows by [`period_start_ms`]/[`period_end_ms`], so a caller that
+/// ever passes the wrong unit (e.g. nanoseconds instead of milliseconds) or
+/// a corrupted value would otherwise silently compute 1970-01-01 boundaries
+/// and write spend into a row no query for the current period will ever
+/// find — a bug the ledger itself cannot detect, since a wrong-but-valid
+/// key looks identical to a right one.
 fn to_local<Tz: TimeZone>(now_ms: i64, tz: &Tz) -> DateTime<Tz> {
     DateTime::from_timestamp_millis(now_ms)
-        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now))
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                now_ms,
+                "spend period: now_ms out of chrono's representable range, \
+                 falling back to the Unix epoch — period boundaries for this \
+                 call will be computed for 1970",
+            );
+            DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now)
+        })
         .with_timezone(tz)
 }
 
@@ -254,6 +271,36 @@ mod tests {
                 .single()
                 .unwrap()
                 .timestamp_millis()
+        );
+
+        // The year-rollover case: December -> January must roll the year
+        // forward, not just wrap the month. This is the branch
+        // `next_month`'s `date.month() == 12` arm exists for — a slip like
+        // writing `date.year()` instead of `date.year() + 1` would silently
+        // tile December 2024 into January **2024** instead of January 2025,
+        // with no panic and (before this case) no test to catch it.
+        let dec_now_ms = tz
+            .with_ymd_and_hms(2024, 12, 15, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let dec_start = period_start_ms_in(dec_now_ms, SpendPeriod::Month, &tz);
+        let dec_end = period_end_ms_in(dec_now_ms, SpendPeriod::Month, &tz);
+        assert_eq!(
+            dec_start,
+            tz.with_ymd_and_hms(2024, 12, 1, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis()
+        );
+        assert_eq!(
+            dec_end,
+            tz.with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis(),
+            "December's period should end at January 1 of the *following* \
+             year, not the same year"
         );
     }
 
