@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use crate::sync_primitives::{Arc, Mutex};
 
 pub mod period;
+pub mod sqlite;
 
 #[cfg(test)]
 mod tests;

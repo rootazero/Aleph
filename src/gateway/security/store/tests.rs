@@ -153,6 +153,50 @@ fn v16_is_idempotent_when_the_ledger_column_is_already_there() {
     assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
 }
 
+/// Proves the v17 arm actually runs `migrate()` from a pre-v17 state and
+/// leaves a real, usable table behind — not just that a store already at
+/// `SCHEMA_VERSION` happens to have one (a fresh `in_memory()` store would
+/// pass that trivially even if this arm's SQL were never reached).
+#[test]
+fn v17_creates_the_spend_ledger_table_from_a_pre_v17_store() {
+    let store = SecurityStore::in_memory().unwrap();
+    store.set_schema_version(16).unwrap();
+    {
+        // `in_memory()` already ran every arm, including v17 — drop what it
+        // built so this store is genuinely pre-v17, not just labeled as one.
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute("DROP TABLE spend_ledger", []).unwrap();
+        assert!(
+            conn.prepare("SELECT 1 FROM spend_ledger LIMIT 0").is_err(),
+            "the fixture must start WITHOUT the table or this test proves nothing"
+        );
+    }
+
+    store.migrate().unwrap();
+
+    {
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO spend_ledger \
+             (principal_id, period_start, usd, unpriced_calls, partial_calls, updated_at) \
+             VALUES ('u-bob', 1000, 1.5, 0, 0, 1000)",
+            [],
+        )
+        .expect("the v17 arm must have created spend_ledger");
+        let usd: f64 = conn
+            .query_row(
+                "SELECT usd FROM spend_ledger WHERE principal_id = 'u-bob' AND period_start = 1000",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(usd, 1.5);
+        // `conn`'s guard must drop before `get_schema_version()` below takes
+        // the same non-reentrant lock, or this test deadlocks itself.
+    }
+    assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
+}
+
 #[test]
 fn test_device_crud() {
     let store = SecurityStore::in_memory().unwrap();

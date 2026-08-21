@@ -37,7 +37,7 @@ pub use types::*;
 pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 16;
+const SCHEMA_VERSION: i32 = 17;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -303,6 +303,18 @@ impl SecurityStore {
             }
             drop(conn);
             self.set_schema_version(16)?;
+        }
+        if version < 17 {
+            info!(
+                from = version,
+                to = 17,
+                "Migrating security schema to v17 (spend ledger)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V17)?;
+            drop(conn);
+            self.set_schema_version(17)?;
         }
 
         // After all versioned migrations (runs on every open, idempotent):
@@ -620,4 +632,21 @@ CREATE TABLE IF NOT EXISTS bootstrap_tickets (
 );
 CREATE INDEX IF NOT EXISTS idx_bootstrap_expires ON bootstrap_tickets(expires_at);
 CREATE INDEX IF NOT EXISTS idx_bootstrap_consumed ON bootstrap_tickets(consumed_at);
+"#;
+
+/// Schema v17 SQL — the durable per-principal, per-period spend ledger (see
+/// `crate::spend::sqlite`). `CREATE TABLE IF NOT EXISTS` makes this
+/// unconditional, unlike v15/v16: there is no pre-v17 shape of this table to
+/// collide with, so it does not need their duplicate-column probe.
+const SCHEMA_V17: &str = r#"
+CREATE TABLE IF NOT EXISTS spend_ledger (
+    principal_id    TEXT    NOT NULL,
+    period_start    INTEGER NOT NULL,
+    usd             REAL    NOT NULL DEFAULT 0,
+    unpriced_calls  INTEGER NOT NULL DEFAULT 0,
+    partial_calls   INTEGER NOT NULL DEFAULT 0,
+    updated_at      INTEGER NOT NULL,
+    PRIMARY KEY (principal_id, period_start)
+);
+CREATE INDEX IF NOT EXISTS idx_spend_period ON spend_ledger(period_start);
 "#;
