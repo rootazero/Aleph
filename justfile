@@ -365,6 +365,9 @@ wasm:
     HTMLTAIL
     # 4.5 Baseline consistency (edges A-D).
     node scripts/check_webview_baseline.mjs
+    # 4.6 Brotli siblings. Committed alongside dist/ because the release
+    #     workflow embeds dist verbatim; check_panel_dist.mjs pairs them.
+    node scripts/precompress_dist.mjs
     # 5. Guard: the freshly-written js + wasm MUST be a matched pair. Catches a
     #    js-only rebuild (the v26.6.22 blank-panel bug) before it can be committed.
     node scripts/check_panel_dist.mjs {{panel_dist}}
