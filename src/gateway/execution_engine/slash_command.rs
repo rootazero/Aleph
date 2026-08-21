@@ -65,7 +65,7 @@ pub(crate) fn is_continuation_driven_slash(name: &str) -> bool {
 /// request a channel's shared parser has already resolved must still be
 /// checked for `/btw`.
 pub(crate) fn stamp_btw(input: &str, metadata: &mut HashMap<String, String>) {
-    use crate::gateway::btw::{BtwTurn, BTW_METADATA_KEY};
+    use crate::gateway::btw::{BtwTurn, BTW_METADATA_KEY, PROMOTE_STAMP};
     if metadata.contains_key(BTW_METADATA_KEY) {
         return;
     }
@@ -73,7 +73,9 @@ pub(crate) fn stamp_btw(input: &str, metadata: &mut HashMap<String, String>) {
         metadata.insert(
             BTW_METADATA_KEY.to_string(),
             if turn.promote {
-                "promote".to_string()
+                // The sentinel, from its owner — `btw::is_promote` reads it
+                // back, and a second literal here is how the two ends drift.
+                PROMOTE_STAMP.to_string()
             } else {
                 turn.question
             },

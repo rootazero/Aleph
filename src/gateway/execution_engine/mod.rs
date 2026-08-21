@@ -10,6 +10,7 @@
 
 mod adapter;
 mod agent_trace_emit_sink;
+mod btw_promote;
 mod callback;
 mod concurrency;
 pub(crate) mod concurrency_handle;

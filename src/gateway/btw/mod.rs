@@ -21,6 +21,7 @@
 //! `knob_validators()`, or in `session_snapshot.rs`, and nothing downstream
 //! should add it there.
 
+pub(crate) mod promote;
 pub(crate) mod seed;
 
 use crate::routing::session_key::SessionKey;
@@ -31,6 +32,36 @@ use crate::routing::session_key::SessionKey;
 /// itself, so an unstamped request is indistinguishable from an ordinary one
 /// all the way down.
 pub const BTW_METADATA_KEY: &str = "btw";
+
+/// The value [`BTW_METADATA_KEY`] carries when the turn is `/btw promote`
+/// rather than a question.
+///
+/// The stamp is a single string field holding two different things — the
+/// question's text, or this sentinel — so it needs an owner rather than a
+/// literal at each end. [`is_promote`] is the only reader of the sentinel and
+/// `stamp_btw` is the only writer; a second spelling of `"promote"` anywhere
+/// is a second answer to "which kind of side turn is this".
+///
+/// The two cannot collide: [`BtwTurn::resolve`] routes a body that reads
+/// `promote` (in any case) to the promote arm, so a stamp carrying a question
+/// is never this string.
+pub(crate) const PROMOTE_STAMP: &str = "promote";
+
+/// Does this stamped request ask to **promote** rather than to ask?
+///
+/// The first reader of the stamp's *value*. The other three
+/// ([`execution_session`], `resolve_turn_permissions`'s read-only ceiling and
+/// `steering::carries_more_than_text`) ask `contains_key`, which is right for
+/// them — a promote is still a side turn for the purpose of which lane it uses,
+/// what tier it runs at, and whether it may be folded into a running sibling.
+/// It is only the *dispatch* that differs, and only this predicate decides it.
+///
+/// False for an unstamped request by construction, so a surface that forgot to
+/// stamp gets an ordinary turn rather than an unasked-for crossing.
+#[must_use]
+pub(crate) fn is_promote(metadata: &std::collections::HashMap<String, String>) -> bool {
+    metadata.get(BTW_METADATA_KEY).map(String::as_str) == Some(PROMOTE_STAMP)
+}
 
 /// The one `/btw` resolver, re-exported from the crate both sides share.
 ///

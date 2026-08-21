@@ -380,6 +380,40 @@ where
         // source the side session is seeded from, further down.
         let btw_main_session = redirect_to_side_session(&mut request);
 
+        // `/btw promote` is served HERE, and it is the only branch of this
+        // function that is not a run: a read off the side log, an append onto
+        // the main one, and a receipt. Nothing about it needs a model.
+        //
+        // Placed after the redirect and before `admit_run` for two separate
+        // reasons, and both directions matter:
+        //
+        // * **After the redirect**, because the redirect has already asked
+        //   `btw::execution_session` and written the answer down. Deriving the
+        //   side key again here would be a second answer to "which session is
+        //   the side thread" — the exact duplication that function's doc
+        //   refuses — and this way promote reads the log that side questions
+        //   actually ran on, by construction rather than by agreement. The two
+        //   keys it needs are then both in hand: `request.session_key` is the
+        //   side thread, `btw_main_session` the conversation to append to.
+        // * **Before `admit_run`**, because promote must work while the
+        //   conversation is busy — which is the normal case, since `/btw` exists
+        //   to be asked alongside a running turn. Admitted, it would be steered
+        //   into (or queued behind) whatever holds the side lane, and the user
+        //   who asked for the answer to cross would get nothing until that run
+        //   ended. It claims no slot, so it withdraws no ticket either.
+        //
+        // `promote_is_bound_by_the_same_ceiling` stays green and stays
+        // meaningful: it pins the read-only tier a promote still resolves to,
+        // which is what governs any path that reaches the loop with this stamp
+        // rather than being served here.
+        if let Some(main) = btw_main_session.as_ref() {
+            if crate::gateway::btw::is_promote(&request.metadata) {
+                return self
+                    .serve_btw_promote(main, &request, &agent, emitter.as_ref(), &run_id)
+                    .await;
+            }
+        }
+
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
 
