@@ -614,6 +614,71 @@ Knobs live in `[execution]`: `busy_queue_max_per_session` (32),
 `max_pending_steering` (16). Backlog is observable via
 `gateway.metrics.run_concurrency` → `busy_queue`.
 
+### A side question gets its own lane, and the arrival layers must agree
+
+`/btw <question>` runs as an ordinary turn on a session **derived** from the
+conversation it was typed in, so that it can be answered while the main run
+keeps going. That promise is entirely a routing property, and routing it is not
+one chokepoint — it is **one writer plus one query**, because the lane is
+claimed before the engine is ever entered.
+
+**The writer** is `execution_engine::stamp_btw`
+(`execution_engine/slash_command.rs:67`) — parser-free, idempotent, and the only
+thing that ever sets `btw::BTW_METADATA_KEY`. It runs at three places, all of
+them *before* the busy lane: the inbound router's execute path
+(`inbound_router/executor.rs:451`), inside `stamp_slash_mode`
+(`slash_command.rs:98`, whose first statement it is) which the `agent.run` and
+`chat.send` run-start handlers call before `busy_queue::spawn_queued_run`
+(`src/bin/aleph-server/server_init.rs:272,466`; the guard
+`every_run_start_handler_stamps_the_slash_mode_before_the_busy_lane` is phrased
+over that file's handlers and inherits nothing outside it), and as the first
+statement of `ExecutionEngine::execute` (`execution_engine/execute.rs:374`).
+
+*Stamped after the lane gate, every `/btw` sent during a run is folded into that
+run as steering text* — `steering::carries_more_than_text` reads the same key to
+decide that a message must be redelivered as its own run rather than injected
+into a running sibling.
+
+**The query** is `btw::execution_session(addressed_to, metadata)`
+(`gateway/btw/mod.rs:142`), deliberately a query and not a mutation, because two
+layers that are not adjacent both need the answer:
+
+- `busy_queue::register_run` (`busy_queue/mod.rs:238`) keys the lane on it, so a
+  side question waits in its own lane rather than behind the very run it is
+  asking about;
+- `ExecutionEngine::execute`'s `redirect_to_side_session`
+  (`execute.rs:98`, called at `:381`) moves the request onto the derived key
+  **before `admit_run`** (`:458`), so the engine's per-session slot claim and the
+  busy-input policy both see the side session.
+
+Asking twice is free; *writing* twice would derive the side key of the side key
+and land the run where neither layer named. The idempotence is
+`btw::is_side_key` (`btw/mod.rs:203`), and it is load-bearing beyond the two
+arrival layers: `steering::build_steering_rescue_request` re-enters `execute()`
+with the metadata *and* the already-derived key cloned, so a completed side
+question with an unanswered steering burst is a third ask.
+
+Channels reach that path through an explicit claim at
+`inbound_router/mod.rs:872`, placed **above** the unified slash interception and
+keeping both things the turn needs — the `/btw` prefix (so `stamp_btw` fires) and
+the conversation's own session key (so `execution_session` has something to
+derive from). It has to be a claim rather than a fall-through because both paths
+below it are wrong in their own way: the unified interception routes anything the
+shared `CommandParser` resolves into the engine's slash fast path, which
+dispatches on the raw `ToolRegistry` and never builds the `ScopedToolService` the
+read-only ceiling lives in; and anything it does *not* resolve reaches
+`try_send_unknown_command_help`, which answers "did you mean …?" and returns
+without running the agent — `suggest_commands("btw", 3)` returns
+`["session_new"]` today (alias `new`, edit distance 2), so the fall-through is
+broken now, not latently.
+
+`/stop` in the main conversation reaches the side question too:
+`ExecutionEngine::cancel_session` (`execution_engine/engine.rs:549`) walks
+`btw::side_session_of` (`:557`), which returns `None` for an already-derived key
+so the walk is one level deep by construction. Full account, including the
+read-only ceiling and the retirement surfaces, in
+[FEATURE_LOCATOR §4.14](FEATURE_LOCATOR.md#414-btw-侧问派生的只读侧会话-side-questions--2026-08-20).
+
 ## Many clients, one thread
 
 A session key names a **conversation**, not a viewer. Any number of clients can

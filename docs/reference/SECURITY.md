@@ -303,6 +303,80 @@ put this conversation into read-only planning and an autonomous continuation
 must not act for them — but it is a dead end whose only exit is a person moving
 the tier back.
 
+### A `/btw` side question composes `Plan`, then revokes two of its carve-outs
+
+A `/btw` side question (see
+[FEATURE_LOCATOR §4.14](FEATURE_LOCATOR.md#414-btw-侧问派生的只读侧会话-side-questions--2026-08-20))
+runs on a session derived from the conversation it was typed in, and it is
+read-only whatever that conversation's own tier says. The ceiling is **composed,
+not assigned**: `resolve_turn_permissions` mints `side_question` from the request
+stamp (`execution_engine/turn_permissions.rs:291` — one minting site, never
+re-derived downstream from the key's shape) and folds it in with
+`ExecTier::most_restrictive(tier, ExecTier::Plan)` (`:303`), the same rule the
+channel clamp and the non-operator ceiling already compose through. So it can
+only tighten: a conversation already at `Plan` is byte-identical, and no tier, no
+explicit `[policies.tool_permissions]` entry and no request-carried pick can
+raise it, because `Plan`'s refusal is rung 0 rather than a default. It rides to
+the tool layer on `TurnContext::side_question` (`tools/turn_context.rs:85`).
+
+**Both `PLAN_REACHABLE_TOOLS` carve-outs are revoked** — a side question is
+strictly narrower than planning — at
+`ScopedToolService::permission_for`'s rung −1 (`tools/scoped/builder.rs:250`),
+above the tier verdict, because neither is removable by configuration nor
+resolvable by approving a plan, which are the two repairs everything beneath it
+points at. The reasons differ and both are load-bearing:
+
+- **`scratchpad`** writes the **main** session's execution list. A side question
+  is by definition not the main turn's work; letting it edit that file is a write
+  into the very conversation the side session exists to stay out of.
+- **`subagent`** can spawn a child that **outlives the side session**, with no
+  surface able to enumerate it — the side key is derived, so nothing on the
+  user's screen names the session the child is parented to.
+
+The revocation is read directly off the same `PLAN_REACHABLE_TOOLS` constant
+`ExecTier::rule_for` reads for the carve-out itself, not restated as a second
+list, so a third member added there is denied to side questions with no edit
+here. `Plan`'s **third** carve-out is untouched: `ask_user` lives in
+`HUMAN_CONTACT_TOOLS`, not in this constant, and asking the user a clarifying
+question is as circular to deny here as it is while planning.
+
+⚠️ **It cannot ride on the allow set.** The narrowing that reads most naturally
+— drop `subagent` from `allowed` — is a **no-op for exactly `subagent`**:
+`ScopedToolService::is_allowed` (`builder.rs:443`) returns `true`
+unconditionally for the attached `SubagentTool`, because that tool is appended
+to listings independently of `allowed` (it is not in the builtin registry) and
+would otherwise vanish from the model's list on every real gateway path. The
+exemption is correct and predates this; what matters is that a rule written to
+narrow *through* that filter never runs for the member it was written for — and
+it *does* run for every other tool, so a test written with any other tool is
+green. Narrow where the verdict is actually made.
+
+Two further consequences:
+
+- **No `PlanGate` is minted** (`turn_permissions.rs:337`). The gate is the one
+  thing that can move a turn's tier mid-run, and a side question's ceiling is not
+  the conversation asking to plan — it is a bound on this single turn with
+  nothing to hand back to when the turn ends. Withholding it makes the bound
+  immovable by construction rather than by the fact that `scratchpad`, the only
+  thing that flips a gate, happens to be revoked. ⚠️ Argued at the source and
+  **not pinned by a test of its own** — restoring the gate for a side question
+  would go unnoticed until something else made `scratchpad` reachable again.
+- **The refusal names itself and then keeps its promise**
+  (`a_side_question_refusal_names_itself_not_the_plan_handoff`,
+  `a_side_question_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest`,
+  `the_side_question_refusal_promises_reads_that_really_run`).
+  `GateRule::SideQuestion` is checked **ahead of** `PlanMode` and `PolicyDeny`
+  (`tools/scoped/gate_chain.rs:433`), because both of those name a repair that
+  cannot work here (approve the plan; edit the policy). Its sentence tells the
+  model the side question "can read and search" — so the per-call read
+  re-admission in `dispatch.rs:238` is keyed on **`PlanMode | SideQuestion`**,
+  the property rather than the reporting rule. Keyed on the rule name alone, a
+  side question missed that arm entirely and `file_ops list/search/stats`,
+  `doctor`, `note_schema read` and `inbox_read peek` — the exploration a side
+  question is mostly made of — were refused by a sentence promising the opposite.
+  `denied_only_by_plan` still does the scoping, and it does **not** consult rung
+  −1, so the two revoked carve-outs stay refused.
+
 ### The rules read declared metadata, never the tool's name
 
 `ToolFacts { name, idempotent, requires_approval }` is filled from the tool's own
