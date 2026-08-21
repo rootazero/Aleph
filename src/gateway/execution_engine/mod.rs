@@ -607,6 +607,7 @@ mod shared_room_lane_tests {
 #[cfg(test)]
 mod user_receipt_tests {
     use super::{ExecutionError, Locale, ReceiptKind};
+    use crate::tasks::shared::retry_hint::classify;
 
     #[test]
     fn rate_limit_failure_reads_as_retryable() {
@@ -768,6 +769,70 @@ mod user_receipt_tests {
                 assert_eq!(got, reset_ms);
             }
             other => panic!("expected ReceiptKind::SpendExhausted, got {other:?}"),
+        }
+    }
+
+    /// **CRITICAL INVARIANT**: `ExecutionError::SpendExhausted` must be
+    /// classified as permanent (not retryable) by **both**:
+    ///
+    /// 1. The typed path: `receipt_kind().is_transient()` in this file
+    /// 2. The string path: `cron/executor.rs`'s `classify(&err.to_string())`
+    ///    for fallback classification when a typed `ReceiptKind` is unavailable
+    ///
+    /// # Why this guard exists
+    ///
+    /// `SpendExhausted`'s Display is `#[error("spend ceiling reached")]`, a
+    /// terse string chosen for brevity, not to dodge the regex patterns in
+    /// `retry_hint::classify`. If that string is ever made more informative
+    /// (e.g., "spend quota exhausted", "rate limit for this period"), the
+    /// absence of this test would let it silently start matching one of the
+    /// `classify` regexes, flipping the error to retryable. The cron executor
+    /// would then retry-storm a permanent condition while suppressing alerts,
+    /// and the user would be neither served nor told.
+    ///
+    /// This test asserts the invariant is enforced, not left to chance.
+    #[test]
+    fn cron_string_classifier_agrees_spend_denial_is_permanent() {
+        // Test both variants: per-principal and fleet-wide.
+        let per_user = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::PerUser {
+                spent: 100.0,
+                limit: 100.0,
+            },
+            reset_ms: 1_000,
+        };
+        let total = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+            reset_ms: 1_000,
+        };
+
+        // Both variants must agree with the typed path.
+        for err in &[&per_user, &total] {
+            let err_text = err.to_string();
+
+            // String classifier must say "not retryable".
+            let hint = classify(&err_text);
+            assert!(
+                !hint.retryable,
+                "spend denial '{}' must not be retryable by string classifier, got: {:?}",
+                err_text,
+                hint
+            );
+
+            // Typed path must also say "not transient".
+            let is_transient = err.receipt_kind().is_transient();
+            assert!(
+                !is_transient,
+                "spend denial must not be transient by receipt_kind"
+            );
+
+            // Both mechanisms must agree.
+            assert_eq!(
+                hint.retryable, is_transient,
+                "string classifier and typed path must agree: \
+                 string says retryable={}, typed says transient={}",
+                hint.retryable, is_transient
+            );
         }
     }
 }
