@@ -37,6 +37,22 @@ use crate::mcp::transport::{McpTransport, NotificationCallback};
 /// Default timeout for RPC calls (30 seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
+/// Maximum bytes per JSON-RPC frame read from a child MCP server's stdout.
+///
+/// Defends against a malicious or compromised MCP server that emits a single
+/// unbounded line without a newline terminator. Without this cap, the
+/// underlying `read_until(b'\n', ...)` would keep appending bytes into the
+/// reader buffer until the host process is OOM-killed by the kernel — a single
+/// compromised child could then take down the entire Aleph daemon. 8 MiB is
+/// well above any legitimate `tools/call` payload (most responses are <1 MiB;
+/// embedded image/audio blobs are bounded elsewhere by the same-kind
+/// media/processor OOM pre-checks) while bounding worst-case per-reader
+/// memory at ~8 MiB per connected server.
+///
+/// Stderr uses the same cap so a server that writes unbounded diagnostic spam
+/// to stderr cannot OOM the daemon either.
+const MAX_MCP_FRAME_BYTES: usize = 8 * 1024 * 1024;
+
 /// Environment-variable keys that change how an interpreter or dynamic loader
 /// bootstraps a process. A third-party MCP server's `env` block must never set
 /// these against the child we spawn: they enable code-prelude injection,
@@ -501,26 +517,69 @@ async fn reader_loop(
     pending: Arc<PendingMap>,
     notification_handler: Arc<StdMutex<Option<NotificationCallback>>>,
 ) {
+    reader_loop_with_cap(stdout, server_name, pending, notification_handler, MAX_MCP_FRAME_BYTES)
+        .await
+}
+
+/// Inner reader loop with a configurable per-frame byte cap.
+///
+/// Extracted so tests can drive the loop with a smaller cap (and thus a
+/// smaller attack payload) without changing the production wiring. The cap
+/// protects against an unbounded `read_until` filling the buffer until the
+/// host process is OOM-killed — see [`MAX_MCP_FRAME_BYTES`].
+async fn reader_loop_with_cap(
+    stdout: ChildStdout,
+    server_name: String,
+    pending: Arc<PendingMap>,
+    notification_handler: Arc<StdMutex<Option<NotificationCallback>>>,
+    max_frame_bytes: usize,
+) {
     let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
+    let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
     loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf).await {
             Ok(0) => {
                 tracing::debug!(server = %server_name, "MCP server closed stdout (EOF)");
                 break;
             }
-            Ok(_) => {}
+            Ok(n) => {
+                if n > max_frame_bytes {
+                    // A single frame (no newline within `max_frame_bytes`) would
+                    // otherwise grow `buf` without limit. Abort the reader: the
+                    // `pending` map is cleared below so every in-flight caller
+                    // receives a clean error instead of hanging.
+                    tracing::error!(
+                        server = %server_name,
+                        bytes = n,
+                        max = max_frame_bytes,
+                        "MCP stdout frame exceeded cap; aborting reader to prevent OOM"
+                    );
+                    break;
+                }
+                let line = match std::str::from_utf8(&buf) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(
+                            server = %server_name,
+                            error = %e,
+                            bytes = n,
+                            "MCP server emitted non-UTF8 frame; dropping"
+                        );
+                        continue;
+                    }
+                };
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                dispatch_line(&server_name, trimmed, &pending, &notification_handler);
+            }
             Err(e) => {
                 tracing::warn!(server = %server_name, error = %e, "MCP stdio read error");
                 break;
             }
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        dispatch_line(&server_name, trimmed, &pending, &notification_handler);
     }
 
     // The reader is gone: fail every in-flight request so callers stop waiting.
@@ -537,19 +596,45 @@ async fn reader_loop(
 /// `tracing` (rather than a flat shared log file, as the reference does) keeps
 /// per-server context and lets the existing log filters control verbosity.
 /// The task ends at EOF, which arrives when the child closes stderr on exit.
+///
+/// Same per-line byte cap as stdout (see [`MAX_MCP_FRAME_BYTES`]) so a server
+/// that writes unbounded diagnostic spam to stderr cannot OOM the daemon
+/// either.
 async fn stderr_loop(stderr: ChildStderr, server_name: String) {
     let mut reader = BufReader::new(stderr);
-    let mut line = String::new();
+    let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
     loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf).await {
             Ok(0) => break, // EOF — child closed stderr
-            Ok(_) => {}
+            Ok(n) => {
+                if n > MAX_MCP_FRAME_BYTES {
+                    tracing::warn!(
+                        server = %server_name,
+                        bytes = n,
+                        max = MAX_MCP_FRAME_BYTES,
+                        "MCP stderr line exceeded cap; aborting stderr drain"
+                    );
+                    break;
+                }
+                match std::str::from_utf8(&buf) {
+                    Ok(s) => {
+                        let trimmed = s.trim_end();
+                        if !trimmed.is_empty() {
+                            tracing::debug!(
+                                server = %server_name,
+                                "mcp server stderr: {}",
+                                trimmed
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        // stderr is free-form text — don't fight the server
+                        // over encoding. The cap above still bounds memory.
+                    }
+                }
+            }
             Err(_) => break, // pipe error; nothing actionable, stop draining
-        }
-        let trimmed = line.trim_end();
-        if !trimmed.is_empty() {
-            tracing::debug!(server = %server_name, "mcp server stderr: {}", trimmed);
         }
     }
 }
@@ -884,6 +969,60 @@ mod tests {
             "inherited secret env must be stripped; got: {contents}"
         );
         assert!(!contents.contains("topsecret_value"));
+    }
+
+    /// A frame larger than the reader's per-line byte cap must abort the
+    /// reader instead of letting `read_line` grow the buffer without limit.
+    /// Without this cap, a single malicious MCP server could OOM the entire
+    /// Aleph daemon by streaming bytes without a newline terminator. The test
+    /// uses a small cap (64 KiB) and a 256 KiB payload to keep runtime +
+    /// memory bounded while still crossing the cap.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_reader_aborts_on_oversized_stdout_frame() {
+        let payload_size: usize = 256 * 1024;
+        let cap: usize = 64 * 1024;
+        // `head -c N /dev/zero | tr '\0' 'x'` emits N bytes of 'x' with no
+        // newline, then closes stdout (EOF). `read_until(b'\n', ...)` will
+        // keep filling the buffer past `cap`, at which point the cap check
+        // must abort the reader.
+        let script = format!("head -c {payload_size} /dev/zero | tr '\\0' 'x'");
+
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .no_window()
+            .spawn()
+            .expect("spawn sh");
+        let stdout = child.stdout.take().expect("stdout pipe");
+
+        let pending: Arc<PendingMap> = Arc::new(StdMutex::new(HashMap::new()));
+        let notification_handler: Arc<StdMutex<Option<NotificationCallback>>> =
+            Arc::new(StdMutex::new(None));
+
+        let start = std::time::Instant::now();
+        reader_loop_with_cap(
+            stdout,
+            "oversized-test".to_string(),
+            Arc::clone(&pending),
+            Arc::clone(&notification_handler),
+            cap,
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        // Reader must abort promptly (well under the time it would take to
+        // read 256 KiB on a healthy box if the cap were missing) and the
+        // pending map must be cleared so no in-flight caller hangs.
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "reader did not abort on oversized frame in 5s; took {elapsed:?}"
+        );
+        assert!(lock(&pending).is_empty());
+
+        let _ = child.wait().await;
     }
 
     /// Non-secret env vars inherited from the parent must remain visible to
