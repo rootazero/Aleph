@@ -1319,6 +1319,22 @@ mod btw_key_tests {
             matches!(action, Action::BtwAbortOrClose),
             "the global Esc chain swallowed the overlay's key, got: {action:?}"
         );
+
+        // The keep-draft arm has to survive the same chain: it is a second
+        // `Esc` arm, and a guard that only proved the general one reachable
+        // would say nothing about it.
+        state.btw.composing = true;
+        state.btw.composer = "half a thought".to_string();
+        let action = handle_key_event(
+            &mut state,
+            &mut textarea,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        assert!(
+            matches!(action, Action::None),
+            "Esc with a draft took the abort/close path, got: {action:?}"
+        );
+        assert_eq!(state.btw.composer, "half a thought");
     }
 
     /// Esc must not throw away a half-written follow-up.
