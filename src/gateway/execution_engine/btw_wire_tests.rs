@@ -830,7 +830,7 @@ fn the_redirect_reads_the_stamp_not_the_text() {
 
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
-use crate::gateway::event_emitter::EventEmitter;
+use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::ChannelPermissionLevel;
 use crate::gateway::{
     ChannelRegistry, DmPolicy, ExecutionAdapter, InboundMessageRouter, RouterChannelConfig,
@@ -845,14 +845,24 @@ use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
 const RIG_AGENT: &str = "main";
 const RIG_CHANNEL: &str = "telegram";
 
-/// Records the `RunRequest` the router hands the engine, and nothing else.
+/// Records the `RunRequest` the router hands the engine, and — when armed —
+/// answers through the emitter the router built for it.
 ///
 /// The boundary matters: this is the last point at which the request is still
 /// the router's work and not the engine's, so what it captures is exactly what
 /// the channel path produced.
+///
+/// `answer` is off by default, and has to be. Every other test on this rig
+/// asserts on the request or on the router's *own* replies, and one of them
+/// (`a_claimed_btw_reaches_the_engine_on_the_same_rig`) asserts that the router
+/// sent nothing at all — an adapter that always answered would put a reply on
+/// that wire and make the assertion mean something else.
 #[derive(Default)]
 struct CapturingAdapter {
     seen: std::sync::Mutex<std::collections::VecDeque<RunRequest>>,
+    /// The run's final text, delivered as a `RunComplete` on the emitter the
+    /// router constructed. Set through [`ChannelRig::answer_with`].
+    answer: std::sync::Mutex<Option<String>>,
 }
 
 impl CapturingAdapter {
@@ -870,12 +880,34 @@ impl ExecutionAdapter for CapturingAdapter {
         &self,
         request: RunRequest,
         _agent: Arc<AgentInstance>,
-        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
     ) -> Result<(), super::ExecutionError> {
+        let answer = self
+            .answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         self.seen
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(request);
+            .push_back(request.clone());
+        if let Some(text) = answer {
+            // The terminal event a real run ends on, carrying its answer where
+            // a real run carries it. Nothing about the delivery is built here:
+            // which emitter this is, whether it marks, and what it sends were
+            // all decided by `executor.rs` before this adapter was called.
+            let _ = emitter
+                .emit(StreamEvent::RunComplete {
+                    run_id: request.run_id.clone(),
+                    seq: 0,
+                    summary: crate::gateway::event_emitter::RunSummary {
+                        final_response: Some(text),
+                        ..Default::default()
+                    },
+                    total_duration_ms: 0,
+                })
+                .await;
+        }
         Ok(())
     }
 
@@ -1112,6 +1144,39 @@ impl ChannelRig {
             "{text:?} never reached the engine — the router answered it itself. \
              It replied: {:?}",
             self.replies_so_far()
+        );
+    }
+
+    /// Arm the adapter to finish every subsequent run with `text` as its final
+    /// response, delivered through the emitter `executor.rs` built.
+    ///
+    /// Off until asked for: see [`CapturingAdapter::answer`].
+    fn answer_with(&self, text: &str) {
+        *self
+            .adapter
+            .answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text.to_string());
+    }
+
+    /// Block until something reaches the channel, and return the first thing
+    /// that did.
+    ///
+    /// Polls for the same reason [`ChannelRig::deliver`] does — the delivery is
+    /// `tokio::spawn`ed with no handle to join — and separately from `deliver`,
+    /// because `deliver` returns as soon as the adapter has *recorded* the
+    /// request, which is one statement before it answers on the emitter.
+    async fn wait_for_reply(&self) -> String {
+        for _ in 0..400 {
+            if let Some(first) = self.replies_so_far().into_iter().next() {
+                return first;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!(
+            "the run's answer never reached the channel — the adapter was armed \
+             but nothing was sent. Check that the emitter still delivers \
+             `RunComplete`'s `summary.final_response`."
         );
     }
 
@@ -1460,6 +1525,60 @@ async fn a_claimed_btw_reaches_the_engine_on_the_same_rig() {
         rig.replies_so_far().is_empty(),
         "the router answered a claimed side question itself: {:?}",
         rig.replies_so_far()
+    );
+}
+
+/// The marker **arrives**.
+///
+/// `format_side_answer` has a unit test, and a unit test on a formatter proves
+/// the formatter. The thing that can silently stop being true is the wire:
+/// nothing here constructs the emitter, chooses the config, or decides whether
+/// to mark — `executor.rs` did all three before the adapter was handed the
+/// emitter, and what is read at the end is a byte string a registered channel
+/// was actually asked to send.
+///
+/// A side answer arrives in the same conversation as the main run's replies and
+/// deliberately does not queue behind them, so it can land between two of them.
+/// This assertion is the whole of what makes that legible.
+#[tokio::test]
+async fn a_channel_side_answer_reaches_the_channel_marked() {
+    let rig = ChannelRig::new(false).await;
+    rig.answer_with("the file is config.toml");
+
+    rig.deliver("/btw what was that file called?").await;
+    let reply = rig.wait_for_reply().await;
+
+    assert!(
+        reply.starts_with("💬 "),
+        "the side answer reached the channel unmarked: {reply:?}. Check that \
+         `executor.rs` still resolves `ReplyEmitterConfig::side_answer` through \
+         `BtwTurn::resolve`, and that the emitter still marks at its outbound \
+         chokepoint."
+    );
+    assert!(
+        reply.contains("the file is config.toml"),
+        "the marker replaced the answer instead of prefixing it: {reply:?}"
+    );
+}
+
+/// The control for the test above, on the same rig, with the same adapter and
+/// the same answer text: an ordinary message is delivered **unmarked**.
+///
+/// Without it, a marker applied unconditionally — to every reply this emitter
+/// ever sends — reads exactly like a working feature.
+#[tokio::test]
+async fn an_ordinary_channel_answer_reaches_the_channel_unmarked() {
+    let rig = ChannelRig::new(false).await;
+    rig.answer_with("the file is config.toml");
+
+    rig.deliver("what was that file called?").await;
+    let reply = rig.wait_for_reply().await;
+
+    assert_eq!(
+        reply, "the file is config.toml",
+        "an ordinary reply must reach the channel exactly as the run produced \
+         it — a side-answer marker here means the predicate is not reading the \
+         run's input at all"
     );
 }
 

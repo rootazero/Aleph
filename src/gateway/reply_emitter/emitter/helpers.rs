@@ -267,6 +267,47 @@ impl ReplyEmitter {
         content.to_string()
     }
 
+    /// Mark `text` as a side answer, if this run is one and is delivering its
+    /// answer right now.
+    ///
+    /// Both halves matter. `config.side_answer` is fixed for the emitter's
+    /// lifetime (see its doc); [`ReplyEmitter::answering`] is what keeps the
+    /// marker off the progress messages a side question may have emitted before
+    /// its answer.
+    ///
+    /// Every caller passes text that has already been through
+    /// `sanitize_llm_output` — the marker must not be visible to the sanitizer,
+    /// which strips model-authored framing and would be reasoning about a
+    /// prefix no model wrote.
+    pub(crate) fn mark_side_answer<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        use crate::sync_primitives::Ordering;
+        if self.config.side_answer && self.answering.load(Ordering::SeqCst) {
+            std::borrow::Cow::Owned(crate::gateway::btw::format_side_answer(text))
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        }
+    }
+
+    /// Latch [`ReplyEmitter::answering`]: from here on, text this emitter hands
+    /// the channel is the run's answer.
+    pub(crate) fn begin_answering(&self) {
+        use crate::sync_primitives::Ordering;
+        self.answering.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether this emitter is delivering a `/btw` side answer.
+    ///
+    /// Read by the two channel emitters that own text delivery themselves
+    /// (Feishu's streaming card, Telegram's orchestrated lanes) and therefore
+    /// never reach this emitter's own `RunComplete` arm. They hold a
+    /// `ReplyEmitter` already — for the media leg — so they ask it rather than
+    /// growing a second constructor argument that a future call site could
+    /// forget to pass.
+    #[must_use]
+    pub fn is_side_answer(&self) -> bool {
+        self.config.side_answer
+    }
+
     // ── Shared helpers ──────────────────────────────────────────────────
 
     const MAX_MESSAGE_LENGTH: usize = 4000;
@@ -318,6 +359,12 @@ impl ReplyEmitter {
         self.has_sent.store(true, Ordering::SeqCst);
 
         let content = self.format_content(content, is_first_send);
+        // THE outbound text chokepoint: every non-streamed message this emitter
+        // sends passes here, already sanitized and not yet split. Marking before
+        // the split puts the badge on the first chunk only, which is what a
+        // reader scanning a conversation needs — a badge repeated on every chunk
+        // of one long answer reads as several answers.
+        let content = self.mark_side_answer(&content).into_owned();
 
         let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
         let total_chunks = chunks.len();

@@ -748,9 +748,7 @@ pub(crate) async fn edit_message(
 // Orchestrator delivery wrapper
 // ---------------------------------------------------------------------------
 
-use crate::gateway::event_emitter::StreamEvent;
 use crate::sync_primitives::Arc;
-use tokio::sync::mpsc;
 
 /// Cloneable wrapper around Telegram delivery primitives for the streaming orchestrator.
 #[derive(Clone)]
@@ -845,18 +843,6 @@ impl TelegramDelivery {
                 Ok(())
             }
         }
-    }
-
-    /// Create a streaming orchestrator for this conversation.
-    #[must_use]
-    pub fn send_streaming_orchestrated(
-        &self,
-        config: &super::config_v2::StreamingOptions,
-    ) -> (
-        super::streaming::StreamOrchestrator,
-        mpsc::Sender<StreamEvent>,
-    ) {
-        super::streaming::StreamOrchestrator::new(self.clone(), config.clone())
     }
 }
 

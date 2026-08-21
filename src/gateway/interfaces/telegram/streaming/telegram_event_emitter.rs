@@ -63,7 +63,14 @@ impl TelegramEventEmitter {
             conversation_id.clone(),
         );
 
-        let (orchestrator, event_tx) = StreamOrchestrator::new(delivery, config);
+        // The orchestrator owns text on this channel, so it is the face that
+        // has to apply the side-answer marker. `media` is the run's
+        // `ReplyEmitter` and already carries the one resolution of "is this a
+        // side question" (`ReplyEmitterConfig::side_answer`) — read it here so
+        // this emitter grows no second constructor argument for a fact it is
+        // already holding.
+        let (orchestrator, event_tx) =
+            StreamOrchestrator::new(delivery, config, media.is_side_answer());
 
         let inbound = crate::gateway::channel::InboundMessage {
             id: MessageId::new("1"),

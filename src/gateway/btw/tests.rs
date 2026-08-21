@@ -52,6 +52,13 @@ fn resolve_recognises_the_promote_verb() {
 }
 
 #[test]
+fn a_side_answer_is_marked_so_it_reads_as_a_side_answer() {
+    let out = super::format_side_answer("the file is config.toml");
+    assert!(out.starts_with("💬 "), "got: {out}");
+    assert!(out.contains("the file is config.toml"));
+}
+
+#[test]
 fn the_side_key_is_derived_from_the_main_key_including_its_epoch() {
     let main = SessionKey::main("assistant");
     let bumped = main.with_epoch(1);

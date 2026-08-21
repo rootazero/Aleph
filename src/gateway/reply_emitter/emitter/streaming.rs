@@ -308,6 +308,13 @@ impl EventEmitter for ReplyEmitter {
                     if !self.config.stream_enabled && is_final && self.native_handler.is_none() {
                         let mut buffer = self.buffer.lock().await;
                         if !buffer.is_empty() {
+                            // A producer that closes the answer here rather than
+                            // at `RunComplete` — the slash fast path is the one
+                            // that does; the real agent-loop drain always emits
+                            // `is_final: false`. Same answer arriving through a
+                            // second door, so it latches the same flag rather
+                            // than getting a rule of its own.
+                            self.begin_answering();
                             let text = std::mem::take(&mut *buffer);
                             drop(buffer);
                             let reasoning = self.take_reasoning_buffer().await;
@@ -332,6 +339,12 @@ impl EventEmitter for ReplyEmitter {
                     return Ok(());
                 }
 
+                // From here down, every text this emitter hands the channel is
+                // the run's answer — see `ReplyEmitter::answering`. Set after
+                // the duplicate guard so a second `RunComplete` cannot latch it
+                // for a delivery that already happened.
+                self.begin_answering();
+
                 // Stop the persistent typing indicator
                 self.typing_cancel.cancel();
 
@@ -346,9 +359,13 @@ impl EventEmitter for ReplyEmitter {
                                 sanitize_llm_output(&raw).into_owned()
                             };
                             if !text.is_empty() {
+                                // Marked here rather than into `text`: the
+                                // failure arm below re-fills the buffer with
+                                // `text` for the ordinary path to deliver, and
+                                // that path marks again at the chokepoint.
                                 let message = OutboundMessage::text(
                                     self.route.conversation_id.as_str(),
-                                    &text,
+                                    self.mark_side_answer(&text).as_ref(),
                                 );
                                 match handler
                                     .stream_finalize(
@@ -465,6 +482,15 @@ impl EventEmitter for ReplyEmitter {
                             }
                             StreamAction::EditFinal(final_text) => {
                                 let final_text = sanitize_llm_output(&final_text);
+                                // Edit-based streaming: the message is already
+                                // on screen, unmarked, growing. The badge
+                                // therefore arrives ATOMICALLY AT SETTLE, in
+                                // this one rewrite, rather than from the first
+                                // frame — the alternative would mean marking
+                                // every debounced edit, i.e. marking the
+                                // streaming chunks, which is precisely what the
+                                // marker is not for.
+                                let final_text = self.mark_side_answer(&final_text);
                                 let msg_id = ctrl.message_id().cloned();
                                 drop(ctrl);
                                 if let Some(msg_id) = msg_id {

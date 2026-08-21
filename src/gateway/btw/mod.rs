@@ -245,5 +245,59 @@ pub fn side_key_for(main: &SessionKey) -> SessionKey {
     }
 }
 
+/// Prefix a side answer so it is visually separable from the main run's
+/// replies, which arrive in the same conversation.
+///
+/// A side answer deliberately does NOT wait behind the main session's queued
+/// replies: ordering protects a causal chain (reply B may quote reply A), and
+/// a side answer is on no such chain. Making it queue would trade the entire
+/// value of the feature — an immediate answer — for an ordering property that
+/// says nothing about it. The visible cost is that a side answer can land
+/// between two main replies; this marker is what makes that legible.
+///
+/// # Where it is applied
+///
+/// On the **channel face only**, and after sanitization: a marker prepended
+/// before `sanitize_llm_output` would change what the sanitizer sees. The
+/// three faces that deliver a channel run's final text each apply it at the
+/// point that text settles — the base `ReplyEmitter`'s outbound chokepoint and
+/// its two edit-based finals, Feishu's streaming card `close`, and Telegram's
+/// orchestrated answer-lane `finalize`. All three learn they are a side answer
+/// once, at emitter construction, from [`BtwTurn::resolve`] — the engine stamps
+/// `BTW_METADATA_KEY` inside `execute()`, which the router-side construction
+/// never sees, so re-deriving from a string prefix there would be a second
+/// answer to a question this module already answers.
+///
+/// # Where it is deliberately NOT applied, and why
+///
+/// [`crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter`] also
+/// delivers a run's final reply to a channel, and it has four construction
+/// sites. **None of them can carry a side question**, each for its own reason,
+/// so none of them marks:
+///
+/// * `announce_delivery.rs` — both halves are machine-authored. `input` is a
+///   `[system] …` literal (`subagent_announce.rs`, `process_announce.rs`) and
+///   the metadata map is built fresh from one key, so nothing inherits the
+///   stamp and `stamp_btw` resolves the input to `None`.
+/// * `resume_coordinator.rs` — `input` is `String::new()` (`FlowInput::Resume`
+///   ignores it), which `resolve` rejects, and `resume_metadata` never writes
+///   `BTW_METADATA_KEY`.
+/// * `execute.rs`'s `spawn_continuation_run` — `continuation_metadata` starts
+///   from `carry_policy_metadata`, a four-key allowlist that does not include
+///   `BTW_METADATA_KEY`, and the prompt is a goal AUDIT contract or loop tick
+///   directive.
+/// * `handlers::agent`'s `start_run` — reached only through the Simulated
+///   fallback registration of `agent.run` / `chat.send`; the real-engine
+///   registrations use a plain `GatewayEventEmitter` with no fan-out at all.
+///   `SimpleExecutionEngine` has no btw handling whatsoever — no stamp, no
+///   side-session redirect, no read-only ceiling — so on that adapter a
+///   `/btw …` is not a side question anywhere in the system.
+///
+/// A fifth fan-out site owes the same question before it inherits that answer.
+#[must_use]
+pub(crate) fn format_side_answer(text: &str) -> String {
+    format!("💬 {text}")
+}
+
 #[cfg(test)]
 mod tests;

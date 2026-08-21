@@ -126,6 +126,27 @@ impl InboundMessageRouter {
         // Defaults to disabled when never installed (tests, host-only paths).
         reply_config.footer = crate::gateway::runtime_footer::global_config();
 
+        // A side answer arrives in the same conversation as the main run's
+        // replies and — by design — does not queue behind them, so it can land
+        // between two of them. Mark it here so that is legible.
+        //
+        // Resolved from the ONE resolver, at construction, because that is the
+        // only moment this side of the wire can answer the question:
+        // `execute()` stamps `BTW_METADATA_KEY` on the `RunRequest`, and that
+        // request is built below and never comes back. This is the same
+        // derivation `stamp_btw` makes from the same bytes
+        // (`request.input == ctx.message.text`), not a second one — and it must
+        // stay a call to `BtwTurn::resolve`, never a `/btw` prefix test of its
+        // own. Set before the clones below so the Feishu and Telegram emitters
+        // inherit it.
+        //
+        // `/btw promote` resolves too, and is marked for the same reason every
+        // other side question is: today it runs on the side session like any
+        // other. If promotion ever delivers INTO the main conversation, that
+        // delivery is a different emission and owes its own decision.
+        reply_config.side_answer =
+            crate::gateway::btw::BtwTurn::resolve(&ctx.message.text).is_some();
+
         // Reconcile the global `output_mode` preference with what this channel
         // can physically do: EditBased widens, `editing` floors. The floor is
         // the half that was missing — see `apply_channel_capabilities`.
