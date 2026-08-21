@@ -3,9 +3,12 @@
 //! A side question must run as its own turn on a *derived* ephemeral
 //! session: read-only, in its own busy-queue lane (so it can answer while
 //! the main run keeps going), and never appended to the main conversation.
-//! This module supplies only the derivations every one of those surfaces has
-//! to agree on; the dispatch, tier and retirement machinery lives elsewhere
-//! and depends on this, never the other way round.
+//! This module supplies the derivations every one of those surfaces has to
+//! agree on, plus the re-export of the one that a thin client needs too:
+//! [`BtwTurn`] lives in `aleph_protocol::btw` and is re-exported here, so
+//! core-side callers and clients that may not depend on `alephcore` resolve a
+//! side question through the same function. The dispatch, tier and retirement
+//! machinery lives elsewhere and depends on this, never the other way round.
 //!
 //! # Why this is not a sixth session knob
 //!

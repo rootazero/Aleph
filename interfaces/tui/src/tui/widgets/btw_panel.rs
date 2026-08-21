@@ -45,7 +45,12 @@ fn title(overlay: &BtwOverlay) -> String {
 /// so advertising `c copy` there would name a key that does something else.
 fn legend(overlay: &BtwOverlay) -> &'static str {
     if overlay.composing {
-        "Enter send · Tab browse · ←→ page · ↑↓ scroll · Esc abort/close"
+        // Esc says "keep draft" rather than "abort/close" because that is
+        // what it does with text in the buffer — it steps back to browse and
+        // keeps the draft, and only the NEXT Esc aborts or closes. A legend
+        // that named the second behaviour would be advertising data loss the
+        // key does not perform.
+        "Enter send · Tab browse · ←→ page · ↑↓ scroll · Esc keep draft"
     } else {
         "Tab or type to reply · c copy · p promote · ←→ page · ↑↓ scroll · Esc abort/close"
     }
@@ -67,11 +72,24 @@ fn body(overlay: &BtwOverlay, spinner_frame: usize) -> (String, String, String) 
     }
     match overlay.current() {
         Some(exchange) => {
-            let status = match &exchange.error {
-                Some(err) => format!("failed: {err}"),
-                None => exchange.status().to_string(),
+            // The failure goes in the BODY, not in the status line.
+            //
+            // That line is one row tall, so a multi-line provider error
+            // rendered there showed its first line and dropped the rest with
+            // nowhere else to read it — and the interesting part of an error
+            // is rarely its first line. The body region already wraps and
+            // scrolls, so the whole text is reachable; the status line keeps
+            // the one word that fits a single row by construction.
+            let body = match &exchange.error {
+                Some(err) if exchange.answer.is_empty() => format!("Error: {err}"),
+                Some(err) => format!("Error: {err}\n\n{}", exchange.answer),
+                None => exchange.answer.clone(),
             };
-            (exchange.question.clone(), exchange.answer.clone(), status)
+            (
+                exchange.question.clone(),
+                body,
+                exchange.status().to_string(),
+            )
         }
         None => (
             String::new(),
@@ -215,15 +233,54 @@ mod tests {
         assert!(status.contains("file_read"), "got: {status}");
     }
 
-    /// A failure says what failed. `status()` alone would render the word
-    /// "failed" with no way to find out why.
+    /// A failure says what failed — all of it.
+    ///
+    /// The status line is one row tall, so an error rendered there loses
+    /// every line after the first and there is nowhere else on screen to read
+    /// it. Providers do not keep their errors to one line: the useful part is
+    /// usually the response body, several lines down.
     #[test]
-    fn a_failed_exchange_shows_the_reason() {
+    fn a_failed_exchange_shows_every_line_of_the_reason() {
         let mut o = BtwOverlay::default();
         asking(&mut o, "q", "r1");
-        o.fail_active("r1", "provider unreachable".into());
-        let (_, _, status) = body(&o, 0);
-        assert!(status.contains("provider unreachable"), "got: {status}");
+        o.fail_active(
+            "r1",
+            "provider unreachable\nHTTP 503 from api.example.com\nretry-after: 30".into(),
+        );
+
+        let (_, shown, status) = body(&o, 0);
+        assert_eq!(
+            status, "failed",
+            "the one-row line holds a word, not a body"
+        );
+        for line in [
+            "provider unreachable",
+            "HTTP 503 from api.example.com",
+            "retry-after: 30",
+        ] {
+            assert!(
+                shown.contains(line),
+                "line missing from the scrollable body: {line:?} — got {shown:?}"
+            );
+        }
+    }
+
+    /// A failure that arrived after some text keeps both, in that order: the
+    /// reason it stopped, then how far it got.
+    #[test]
+    fn a_partial_answer_survives_its_failure() {
+        let mut o = BtwOverlay::default();
+        asking(&mut o, "q", "r1");
+        o.push_delta("r1", "as far as I got");
+        o.fail_active("r1", "connection reset".into());
+
+        let (_, shown, _) = body(&o, 0);
+        assert!(shown.contains("connection reset"));
+        assert!(shown.contains("as far as I got"));
+        assert!(
+            shown.find("connection reset") < shown.find("as far as I got"),
+            "the reason belongs above the partial answer: {shown:?}"
+        );
     }
 
     /// The title is the only thing that tells the user paging exists, so it

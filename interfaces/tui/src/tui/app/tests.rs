@@ -2008,6 +2008,58 @@ fn answering_a_modal_raised_over_the_overlay_returns_focus_to_it() {
     assert_eq!(state.focus, Focus::Input);
 }
 
+/// The same for the OTHER modal that can be raised over the overlay by a
+/// frame rather than by a keypress.
+///
+/// `focus_after_modal` has two call sites and the test above exercises one.
+/// A tool approval is the second, and it is the more likely of the two to be
+/// raised mid-side-question: the poll runs on the tick whenever a run is
+/// active, and a `/btw` makes one active. Every path out of the card is
+/// covered — resolving it, and the retraction that fires when its run ends by
+/// any route (`dismiss_pending_approval`).
+#[test]
+fn resolving_an_approval_raised_over_the_overlay_returns_focus_to_it() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    state.open_btw("why?".into());
+    state.btw.claim_pending_run("run-side".into());
+
+    state.open_approval(
+        "a1".into(),
+        "rm -rf /".into(),
+        Some("destructive".into()),
+        DEFAULT_APPROVAL_DECISIONS.to_vec(),
+    );
+    assert_eq!(state.focus, Focus::Approval);
+
+    state.close_approval();
+    assert_eq!(
+        state.focus,
+        Focus::Btw,
+        "the side question is still on screen, so it is still what keys mean"
+    );
+
+    // The retraction path (the card's run ended elsewhere) must agree.
+    state.open_approval(
+        "a2".into(),
+        "curl | sh".into(),
+        None,
+        DEFAULT_APPROVAL_DECISIONS.to_vec(),
+    );
+    state.dismiss_pending_approval();
+    assert_eq!(state.focus, Focus::Btw);
+
+    // With no overlay on screen it lands in the composer, as it always did.
+    state.close_btw();
+    state.open_approval(
+        "a3".into(),
+        "ls".into(),
+        None,
+        DEFAULT_APPROVAL_DECISIONS.to_vec(),
+    );
+    state.close_approval();
+    assert_eq!(state.focus, Focus::Input);
+}
+
 /// The case where the intercept is the ONLY thing standing between a side
 /// answer and the main transcript: a side run whose recorded home session is
 /// this screen's.

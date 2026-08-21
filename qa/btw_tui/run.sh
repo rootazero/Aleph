@@ -31,17 +31,6 @@ KEEP="${KEEP:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-18797}"
 MOCK_PORT="${MOCK_PORT:-18998}"
 
-# The build must run BEFORE HOME is redirected — cargo's registry, git cache
-# and rustup toolchain all live under the real HOME. See qa/README.md.
-. "$HERE/../lib/scratch_home.sh"
-qa_redirect_home "$QA_ROOT"
-mkdir -p "$ALEPH_HOME"
-CONFIG="$ALEPH_HOME/config.toml"
-
-# A debug-built agent run with tools overflows main.rs's 32 MB worker stack.
-export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
-
-BIN="$REPO/target/debug/aleph-server"
 MOCK_PID=""
 SERVER_PID=""
 
@@ -55,7 +44,33 @@ cleanup() {
   [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
-trap cleanup EXIT
+# Armed HERE — immediately after `$QA_ROOT` exists and before anything that
+# can fail — rather than further down where the servers start.
+#
+# The window it closes is small and the leak it prevents is not: every failure
+# between `mktemp -d` and the trap left a scratch HOME behind, and the
+# reproducing case is the ordinary one (`qa_redirect_home` or `mkdir` failing
+# on a full or read-only $TMPDIR). This repo has already paid for the general
+# version of this — 7,623 orphaned trees and 4.0 GB from guards that dropped
+# before the thing they guarded (see `utils::scratch`).
+#
+# INT/TERM/HUP as well as EXIT: a Ctrl-C during the 45 s observation window is
+# the single likeliest way this script ends, and whether a bare EXIT trap runs
+# on a fatal signal is shell- and version-dependent. `- ` re-raises nothing; the
+# explicit list is what makes it not depend on that.
+trap cleanup EXIT INT TERM HUP
+
+# The build must run BEFORE HOME is redirected — cargo's registry, git cache
+# and rustup toolchain all live under the real HOME. See qa/README.md.
+. "$HERE/../lib/scratch_home.sh"
+qa_redirect_home "$QA_ROOT"
+mkdir -p "$ALEPH_HOME"
+CONFIG="$ALEPH_HOME/config.toml"
+
+# A debug-built agent run with tools overflows main.rs's 32 MB worker stack.
+export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
+
+BIN="$REPO/target/debug/aleph-server"
 
 say "build"
 if [ "${SKIP_BUILD:-0}" != "1" ]; then

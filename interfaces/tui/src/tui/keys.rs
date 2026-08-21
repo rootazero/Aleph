@@ -74,6 +74,19 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
 /// ever flips back on its own.
 fn handle_btw_key(state: &mut AppState, key: KeyEvent) -> Action {
     match key.code {
+        // Esc backs out one level at a time, and the first level is the
+        // draft.
+        //
+        // A half-written follow-up is unrecoverable once it is gone — this
+        // composer has no undo, and the only route back into the overlay
+        // (`/btw <question>`) does not restore it. So Esc on a non-empty
+        // draft returns to browse and KEEPS the text; a second Esc, now with
+        // nothing to lose, aborts or closes. Losing work should take two
+        // deliberate keystrokes, not one reflex.
+        KeyCode::Esc if state.btw.composing && !state.btw.composer.trim().is_empty() => {
+            state.btw.composing = false;
+            Action::None
+        }
         // Abort while it is answering, close when it is idle. The two are one
         // key because they are one intent — "I am done with this" — and the
         // overlay knows which of them applies.
@@ -1305,6 +1318,75 @@ mod btw_key_tests {
         assert!(
             matches!(action, Action::BtwAbortOrClose),
             "the global Esc chain swallowed the overlay's key, got: {action:?}"
+        );
+    }
+
+    /// Esc must not throw away a half-written follow-up.
+    ///
+    /// The composer has no undo and nothing restores a lost draft — `/btw
+    /// <question>` opens a fresh one. So Esc on a non-empty draft steps back
+    /// to browse and keeps the text; only a second Esc, with nothing left to
+    /// lose, abandons the overlay.
+    #[test]
+    fn esc_keeps_a_half_written_follow_up() {
+        let mut state = opened();
+        press(&mut state, KeyCode::Char('h'));
+        press(&mut state, KeyCode::Char('i'));
+        assert!(state.btw.composing);
+
+        assert!(
+            matches!(press(&mut state, KeyCode::Esc), Action::None),
+            "Esc with a draft must not reach the abort/close path"
+        );
+        assert!(!state.btw.composing);
+        assert_eq!(state.btw.composer, "hi", "the draft was thrown away");
+
+        // Tab returns to it, unchanged.
+        press(&mut state, KeyCode::Tab);
+        assert_eq!(state.btw.composer, "hi");
+
+        // A second Esc — now the user has said it twice — does abandon it.
+        press(&mut state, KeyCode::Esc);
+        assert!(matches!(
+            press(&mut state, KeyCode::Esc),
+            Action::BtwAbortOrClose
+        ));
+    }
+
+    /// A whitespace-only draft is not a draft: Esc must not require two
+    /// presses to leave an overlay whose composer holds a stray space.
+    #[test]
+    fn esc_does_not_stall_on_an_empty_or_blank_draft() {
+        let mut state = opened();
+        assert!(matches!(
+            press(&mut state, KeyCode::Esc),
+            Action::BtwAbortOrClose
+        ));
+
+        state.btw.composing = true;
+        state.btw.composer = "   ".to_string();
+        assert!(matches!(
+            press(&mut state, KeyCode::Esc),
+            Action::BtwAbortOrClose
+        ));
+    }
+
+    /// A new question must not clear a draft nobody sent.
+    ///
+    /// The send path clears the composer at the moment it takes the text, so
+    /// the only drafts `begin` could reach are unsent ones — a `/btw` typed
+    /// in the main composer while a half-written follow-up sits here.
+    #[test]
+    fn opening_a_new_question_keeps_an_unsent_draft() {
+        let mut state = opened();
+        press(&mut state, KeyCode::Char('d'));
+        press(&mut state, KeyCode::Char('r'));
+        assert_eq!(state.btw.composer, "dr");
+
+        state.open_btw("a different question".into());
+        assert_eq!(
+            state.btw.composer, "dr",
+            "a draft nobody sent was silently discarded"
         );
     }
 
