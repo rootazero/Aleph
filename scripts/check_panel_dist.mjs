@@ -17,7 +17,9 @@
 //
 // Usage: node scripts/check_panel_dist.mjs [dist-dir]   (default: interfaces/webchat/dist)
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { brotliDecompressSync } from 'node:zlib';
+import { MIN_BYTES } from './precompress_dist.mjs';
 
 const dir = process.argv[2] || 'interfaces/webchat/dist';
 const jsPath = `${dir}/aleph_panel.js`;
@@ -71,6 +73,52 @@ if (missing.length > 0) {
       `${missing.length > 25 ? `, … (+${missing.length - 25} more)` : ''}`,
   );
   process.exit(1);
+}
+
+// ── Brotli siblings: both directions ──────────────────────────────────────
+// dist/ is embedded verbatim by the release workflow, so a `.br` out of sync
+// with its source ships WRONG BYTES — a strictly worse failure than the
+// runtime compression it replaced. Both directions are required: checking only
+// that existing siblings decompress correctly cannot tell you a NEW asset was
+// never compressed, and checking only that large files have siblings cannot
+// tell you an existing one is stale. (CLAUDE.md section 0: count the writers
+// when you converge them.)
+{
+  const brProblems = [];
+  const entries = readdirSync(dir).filter((n) => statSync(`${dir}/${n}`).isFile());
+
+  // Direction 1: every sibling round-trips to its source.
+  for (const name of entries.filter((n) => n.endsWith('.br'))) {
+    const sourceName = name.slice(0, -3);
+    if (!entries.includes(sourceName)) {
+      brProblems.push(`${name} has no source file ${sourceName} — delete the stale sibling`);
+      continue;
+    }
+    const source = readFileSync(`${dir}/${sourceName}`);
+    let back;
+    try {
+      back = brotliDecompressSync(readFileSync(`${dir}/${name}`));
+    } catch (e) {
+      brProblems.push(`${name} is not valid brotli: ${e.message}`);
+      continue;
+    }
+    if (!back.equals(source)) {
+      brProblems.push(`${name} decompresses to something other than ${sourceName} — it is STALE, and serving it would send wrong bytes`);
+    }
+  }
+
+  // Direction 2: every compressible source has a sibling.
+  for (const name of entries.filter((n) => !n.endsWith('.br'))) {
+    if (statSync(`${dir}/${name}`).size < MIN_BYTES) continue;
+    if (!entries.includes(`${name}.br`)) {
+      brProblems.push(`${name} is over ${MIN_BYTES} bytes but has no ${name}.br — run \`node scripts/precompress_dist.mjs\``);
+    }
+  }
+
+  if (brProblems.length) {
+    console.error(brProblems.map((p) => `✗ ${p}`).join('\n'));
+    process.exit(1);
+  }
 }
 
 console.log(
