@@ -92,7 +92,22 @@ CREATE TABLE IF NOT EXISTS spend_ledger (
 
 ### 4.3 主体（谁被记账）
 
-键 = `scope::current_room_author()`。它就是 `AUTHOR_USER_KEY` 那条线，且已在 `CarriedAttribution` 的六个 task-local 里，因此**后台子代理、detached run、团队成员 run 全部自带**，无需新增载体。
+> ⚠️ **本节在写实施计划、逐个核签名时被推翻重写过一次。** 初稿写的是「键 = `scope::current_room_author()`」。去读代码才发现 `scope::room_author()` 第一行就是 `if !matches!(attr.scope, ScopeId::Project(_)) { return None }` ——它是**房间转录的署名器**，doc 逐字写着「一个 personal 或 org 会话只有一个人，署名是噪音」。拿它当花费主体，**每一个非房间会话的花费都会落进 `@unattributed`**，per-user 限额对绝大多数装机是个 no-op，而没有任何测试会红。这正是「一个字段回答的是另一个问题」。
+
+**两种形状，两个调用点，同样的两个事实、同样的顺序**（判据：「每个可见性谓词都欠一个显式 actor 孪生，因为工具面取不到 task-local」）：
+
+| 臂 | 位置 | 解析 |
+|---|---|---|
+| 准入 | 在 `with_request_scope` 的 task-local 巢**之外** | `meta[AUTHOR_USER_KEY]` → 否则 `meta[OWNER_META_KEY]` |
+| 地板 | 在巢**之内**（`MeteringProvider`） | `scope::current_room_author()` → 否则 `scope::ambient_owner()` |
+
+两者**可证同源**：`with_request_scope` 逐字用 `request.metadata[AUTHOR_USER_KEY]` 去 seed `CURRENT_ROOM_AUTHOR`（**不过 Project 过滤**），而 `ambient_owner()` 在 run 内等于 `current_scope().owner_user_id`，`current_scope()` 又是从 `meta[OWNER_META_KEY]` 重建的。所以两条路径读的是同一张 map 上的同两个键、同一顺序。这一点由 G13 钉住。
+
+`AUTHOR_USER_KEY` 由 `handlers::agent::build_run_request` **无条件**从 `current_caller_user()` 盖上（不是只在房间盖），所以 personal 会话有主体；房间里它是**说话人**而不是房主。
+
+> ⚠️ **刻意不用 `visibility::ambient_actor()`**，尽管它的前两条臂正是上表第二行。它的**第三条臂**回落到 `turn_context::current_agent_id()` —— 那是一个 **agent id 而不是 user id**。拿它当主体会静默地按 agent 开桶，而 agent 轴的键是**请求携带的字符串**（`chat.send{agent_id}`），正是 §7 列为 non-goal 的那条绕闸轴。花费主体必须是自己的函数，只取前两条臂。
+
+`CarriedAttribution` 已经同时携带 `room_author` 与 `scope`（六个 task-local 之二），因此**后台子代理、detached run、团队成员 run 全部自带**，无需新增载体。
 
 `None` 的处置（cron / heartbeat / webhook / 内部 run）：记在保留主体 **`@unattributed`**（`@` 前缀，`users.user_id` 铸不出这种 id），**只计入全局总额，不适用 per-user 限额**。
 
@@ -184,7 +199,9 @@ pub struct SpendPolicy {
 - 因此**不需要给 loopback 排一条特例臂**——round-6 那条「三臂顺序承重、loopback 必须排第一」的坑在这里结构上不存在，因为默认根本没有闸。
 - 设了限额就对**所有人**成立，包括机主。一条限额就是一条限额；跑飞的 loop 花的正是机主的钱。
 - `period` 只在账本开启时有意义。
-- **live-apply**：`[policies.spend]` 进 `reload_impact.rs::LIVE_SECTIONS` 并在 `config/live_apply.rs::apply_live_sections` 里有真正的执行点——提额必须立刻生效，因为那是**唯一的反悔的路**（见 §4.7）。
+- **live-apply**：提额必须立刻生效，因为那是**唯一的反悔的路**（见 §4.7）。
+  ⚠️ **不能把 `"policies"` 加进 `LIVE_SECTIONS`**——那张表是**顶层**粒度，而 `policies` 底下另有六个字段（`exec_tier` / `tool_permissions` / `memory` / `web_fetch` / `metrics` / `mode` / `guardian_review`）没有一个被验证过是 live 的；声明整段 live 就是 `live_apply.rs` 模块 doc 逐字在防的那个 bug（「advertise 『no restart needed』 and do nothing」）。
+  正确形状是在**恰好有执行点的那条路径上**声明：新增 `reload_impact.rs::LIVE_SUBSECTIONS = &["policies.spend"]`，`classify()` 先查它；`apply_live_sections` 加一个把 `cfg.policies.spend` 存进 `spend::policy_handle()` 的臂（形状照抄 `"route"`：**句柄缺席就诚实降级**，CLI 进程 / 测试里没装句柄就不算 live）；`classify_verified` 的匹配从「只比顶层」放宽到也接受精确/前缀命中子路径。配对守卫 `every_live_subsection_has_an_apply_arm` 与既有那条同形。
 
 ### 4.7 读取面与反悔的路
 
@@ -196,7 +213,7 @@ pub struct SpendPolicy {
   - `configured: bool` —— **未配置时答「未配置」而不是「$0」**（round-6 已付过学费：`0` 与「没测量」要分开说）
   - 空窗随响应带 `period_end_ms`，满页带 `truncated`（同 round-6 的审计读取面契约）
 - **`aleph spend` CLI**（`--json` 带全部列）。CLI-only，沿用 `users.*` / `aleph audit` 的既定裁定。
-- **反悔的路 = 提额，且立刻生效**（live-apply），加上周期自己会翻篇。
+- **反悔的路 = 提额，且立刻生效**（§4.6 的 `LIVE_SUBSECTIONS` 那条路径），加上周期自己会翻篇。写这条时要记住被闸住的人只有这一条出路——「把用户往宽设置上推」和「让他只能等到下个月」是同一种失败。
 
 > **本轮不做 `spend.reset` / 补贴账本。** 那是改写历史；而「熔断了怎么恢复」这一问已经有答案了（下个周期 + 提额）。这一条是**有意的**，不是遗漏——写在这里是为了不让下一个人把它当 bug 修掉。
 
@@ -234,6 +251,9 @@ pub struct SpendPolicy {
 | G10 | `both_limits_blown_reports_the_total` | §4.4 的排序判据 |
 | G11 | `a_spend_denial_is_classified_terminal_not_transient` | `receipt_kind()` 的分档（§4.8）。分错会让 goal/cron 对着一堵墙重试到周期结束 |
 | G12 | `the_total_limit_refusal_carries_no_machine_numbers` | §4.8 的形状——`Limit::Total` 是无字段变体，源码级即可 |
+| G13 | `the_two_principal_resolvers_agree_on_the_same_run` | §4.3 的两条臂读同一张 map 的同两个键、同一顺序。**这条是本轮最贵的一条**——初稿的锚点错了，而错法是静默的 |
+| G14 | `every_live_subsection_has_an_apply_arm` | §4.6 的表↔码配对，与既有的 `every_live_section_has_an_apply_arm` 同形 |
+| G15 | `the_spend_principal_never_falls_back_to_an_agent_id` | 源码级：`spend` 模块里不出现 `ambient_actor` / `current_agent_id`。堵住那条被列为 non-goal 的按-agent 开桶 |
 
 **源码级守卫的通用要求**（本仓已收过账）：分隔符不锚行首行尾（CRLF 检出下 `\n#[cfg(test)]\n` 永不匹配），扫描前先剥 `//` 注释行，且自保断言要能区分「扫到的是生产代码」而非测试模块里的字面量。
 
@@ -265,6 +285,7 @@ cargo clippy --all-targets
 8. 房间里 member 的花费记在 member 名下而非房主
 9. 后台子代理的花费记在派发它的 principal 名下
 10. cron run 记在 `@unattributed`，只进总额
+11. **personal（非房间）会话的花费记在那个人名下，不是 `@unattributed`** ← §4.3 那次推翻的真机证据；用 `room_author()` 实现会在这一条上红
 
 ---
 
