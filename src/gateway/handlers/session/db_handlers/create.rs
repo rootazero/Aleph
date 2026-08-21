@@ -61,7 +61,6 @@ pub async fn handle_new_session_db(
     request: JsonRpcRequest,
     manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
-
     let session_key_str = match request
         .params
         .as_ref()

@@ -121,6 +121,28 @@ pub fn block_abandonable_session_goal(session: &str, note: &str) -> bool {
 /// SSOT event log first, so a failure afterwards leaves a recoverable row
 /// pointing at retired events rather than live events with no row.
 ///
+/// # Three of that twin's five, and why the other two are out
+///
+/// `sessions.delete` also runs `purge_session_artifacts` and
+/// `purge_session_snapshot`. Both are omitted here because a side session
+/// cannot produce what they clean:
+///
+/// * **Artifacts.** A side turn is clamped to `ExecTier::Plan`
+///   (`execution_engine::turn_permissions`), which refuses mutating tools, and
+///   the only builtin that emits the `_media` key the artifact harvest consumes
+///   is `canvas` — mutating, therefore denied. The one path not closed by
+///   construction is a *read-only* MCP tool that returns `_media`; if that ever
+///   becomes real, this is the line that has to grow.
+/// * **Resume snapshot.** `resume.json` is written by the session-end
+///   reflector, which a side session never reaches.
+///
+/// Both helpers are also private to `db_handlers::modify`, so wiring them would
+/// mean lifting them — worth doing only for a reason better than symmetry, and
+/// the reasons above say there is not one yet. Stated rather than left to the
+/// reader, because a section that counts its own deletions against a twin
+/// without saying why the twin has more is how the next reader concludes the
+/// list is complete.
+///
 /// # Exactly one key, deliberately
 ///
 /// This touches `side_key_for(old_key)` and nothing else. It must not grow into
@@ -128,7 +150,11 @@ pub fn block_abandonable_session_goal(session: &str, note: &str) -> bool {
 /// sub-agent children and the OpenAI-compatible completions face live, so a
 /// variant-wide sweep would delete work that is currently running. See the
 /// `Ephemeral` doc in `routing::session_key`.
-pub(crate) async fn retire_side_session_now(old_key: &SessionKey, cause: &str, store: &dyn SessionStore) {
+pub(crate) async fn retire_side_session_now(
+    old_key: &SessionKey,
+    cause: &str,
+    store: &dyn SessionStore,
+) {
     // A key that is already derived has no side session of its own; asking for
     // one would mint a phantom key nothing ever ran on.
     let Some(side) = crate::gateway::btw::side_session_of(old_key) else {
@@ -210,7 +236,11 @@ pub(crate) async fn retire_side_session_now(old_key: &SessionKey, cause: &str, s
 /// running". Every caller today is an `async fn` on the gateway runtime; a new
 /// synchronous caller must either be on one or use
 /// [`retire_side_session_now`] directly.
-pub fn retire_side_session(old_key: &SessionKey, cause: &str, store: Option<Arc<dyn SessionStore>>) {
+pub fn retire_side_session(
+    old_key: &SessionKey,
+    cause: &str,
+    store: Option<Arc<dyn SessionStore>>,
+) {
     let Some(store) = store else {
         return;
     };
@@ -238,6 +268,11 @@ pub fn retire_side_session(old_key: &SessionKey, cause: &str, store: Option<Arc<
 /// parse (`SessionKey::parse` and `from_key_string`, which differ on legacy
 /// input) — picking the wrong one derives a different side key, deletes
 /// nothing, and reports success. Taking the key removes the class.
+///
+/// Like [`retire_side_session`], which it calls, this must run inside a Tokio
+/// runtime: the side-session delete is spawned. A reader arriving here — the
+/// entry point the module doc advertises — would otherwise not pass that
+/// sentence.
 ///
 /// `store` is passed in rather than fetched because there is deliberately no
 /// process-global `SessionStore`, and adding one for this single caller would
@@ -290,6 +325,32 @@ mod tests {
     use crate::gateway::session_store::error::SessionStoreError;
     use crate::gateway::session_store::types::SessionMetadata;
 
+    /// Assert that `key` still resolves, keeping the three answers apart.
+    ///
+    /// `matches!(…, Ok(Some(_)))` folds `Err` into whatever the failure message
+    /// accuses the code of — the exact mistake [`wait_until_absent`] was
+    /// written to avoid for the absence check. It matters more here than it
+    /// looks: the accusation these callers print is "a sweep by variant would
+    /// delete live sub-agent work", and a store that failed to answer is not
+    /// evidence of a sweep. A guard that makes a false accusation is worse than
+    /// no guard, because the next reader who re-runs it, sees green, and files
+    /// it under flake has been taught to disbelieve the one thing standing
+    /// between this function and a variant sweep.
+    ///
+    /// So `Err` is reported as `Err`, with the error, and only `Ok(None)` — a
+    /// row that is genuinely gone — prints `swept`.
+    async fn assert_still_present(store: &dyn SessionStore, key: &SessionKey, swept: &str) {
+        match store.get_metadata(key).await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("{swept}"),
+            Err(e) => panic!(
+                "the store failed to answer for {} — that is not evidence of a \
+                 sweep, it is a store error: {e}",
+                key.to_key_string()
+            ),
+        }
+    }
+
     /// Wait long enough that "nothing happened to this key" is a finding
     /// rather than a race.
     ///
@@ -337,7 +398,7 @@ mod tests {
     #[tokio::test]
     async fn an_epoch_bump_retires_the_old_side_session() {
         let (store, _tmp) = test_utils::session_store();
-        let main = SessionKey::main("assistant");
+        let main = SessionKey::main("btw-epoch-bump");
         let side = side_key_for(&main);
 
         store
@@ -369,12 +430,12 @@ mod tests {
     #[tokio::test]
     async fn retirement_deletes_the_derived_key_and_no_other_ephemeral() {
         let (store, _tmp) = test_utils::session_store();
-        let main = SessionKey::main("assistant");
+        let main = SessionKey::main("btw-bystander");
         let side = side_key_for(&main);
         // Shaped like `subagent_spawner::ephemeral_for`: same agent, same
         // variant, different id.
         let bystander = SessionKey::Ephemeral {
-            agent_id: "assistant".to_string(),
+            agent_id: "btw-bystander".to_string(),
             ephemeral_id: "subagent-bg-live-work".to_string(),
         };
 
@@ -391,11 +452,13 @@ mod tests {
             "the derived side session should have been retired"
         );
         settle_window().await;
-        assert!(
-            matches!(store.get_metadata(&bystander).await, Ok(Some(_))),
+        assert_still_present(
+            store.as_ref(),
+            &bystander,
             "retirement reached an ephemeral session it does not own — a sweep by \
-             variant would delete live sub-agent work"
-        );
+             variant would delete live sub-agent work",
+        )
+        .await;
     }
 
     /// A side key has no side session of its own, so retiring one must derive
@@ -410,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn retiring_a_side_key_derives_nothing_and_deletes_nothing() {
         let (store, _tmp) = test_utils::session_store();
-        let main = SessionKey::main("assistant");
+        let main = SessionKey::main("btw-idempotent");
         let side = side_key_for(&main);
         let derived_of_derived = side_key_for(&side);
 
@@ -423,16 +486,119 @@ mod tests {
         terminate_session_continuations(&side, "sessions.delete", Some(store.clone()));
 
         settle_window().await;
-        assert!(
-            matches!(store.get_metadata(&derived_of_derived).await, Ok(Some(_))),
+        assert_still_present(
+            store.as_ref(),
+            &derived_of_derived,
             "retiring a side key derived a second one and deleted it — the derivation \
              must be idempotent, or a side question's own retirement mints keys \
-             nothing ever ran on"
+             nothing ever ran on",
+        )
+        .await;
+        assert_still_present(
+            store.as_ref(),
+            &side,
+            "retiring a side key must not delete the side session itself — the delete \
+             targets the key derived FROM the retiring key",
+        )
+        .await;
+    }
+
+    /// The side session's bytes live in the event log, and deleting the row
+    /// does not touch them.
+    ///
+    /// This is the leg the whole task is about, one level down: a row-only
+    /// deletion looked like success for as long as anyone cared to check, and
+    /// the log line said "retired". `btw::seed` copies a prefix of the main
+    /// transcript into the **side** session's own event log, so the content a
+    /// user would be alarmed to find surviving is here, not in the row — plus
+    /// its BM25 mirror, which is what makes it findable rather than merely
+    /// present.
+    ///
+    /// Mirrors `db_handlers::modify`'s
+    /// `delete_retires_the_event_log_so_nothing_replays_or_searches`: install
+    /// the process-wide store so `retire_live_events` is not a silent `Ok(0)`,
+    /// then assert on **both** read paths. Asserting only that the call was
+    /// made would be the "assert the effect arrived, not that the call
+    /// happened" mistake — and without the installed store there is nothing to
+    /// assert at all: delete the `retire_live_events` line and every other test
+    /// here stays green.
+    ///
+    /// Own agent id, deliberately: `install_test_event_store` hands every
+    /// caller the same process-wide instance, so two tests using
+    /// `SessionKey::main("assistant")` would be retiring each other's events.
+    #[tokio::test]
+    async fn retirement_empties_the_side_transcript_and_its_search_mirror() {
+        use crate::session::events::{MessageContent, SessionEvent};
+        use crate::session::store::SessionEventStore;
+
+        let events = crate::session::store::install_test_event_store();
+        let (store, _tmp) = test_utils::session_store();
+        let main = SessionKey::main("btw-ssot-probe");
+        let side = side_key_for(&main);
+
+        store.get_or_create(&side).await.expect("side row");
+        events
+            .append(
+                &side,
+                1,
+                &SessionEvent::UserMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: MessageContent {
+                        text: "the side thread remembers hunter2".into(),
+                        blocks: vec![],
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    at: 0,
+                    synthetic: false,
+                    author_user_id: None,
+                },
+                0,
+            )
+            .await
+            .expect("seed the side transcript");
+
+        // Anchor before negating: prove both read paths can see this content,
+        // or the two assertions below would pass on an empty fixture.
+        assert_eq!(
+            events.load_all_events(&side).await.expect("replay").len(),
+            1,
+            "fixture: the side transcript must exist before the retirement runs"
+        );
+        assert_eq!(
+            events
+                .search_events(&side, "hunter2", 5)
+                .await
+                .expect("search")
+                .len(),
+            1,
+            "fixture: the side transcript must be findable before the retirement runs"
+        );
+
+        terminate_session_continuations(&main, "/new", Some(store.clone()));
+        assert!(
+            matches!(wait_until_absent(store.as_ref(), &side).await, Ok(None)),
+            "the side session row should have been retired"
+        );
+        settle_window().await;
+
+        assert!(
+            events
+                .load_all_events(&side)
+                .await
+                .expect("replay")
+                .is_empty(),
+            "the retired side session still replays — the model can read a \
+             transcript the log already called retired"
         );
         assert!(
-            matches!(store.get_metadata(&side).await, Ok(Some(_))),
-            "retiring a side key must not delete the side session itself — the delete \
-             targets the key derived FROM the retiring key"
+            events
+                .search_events(&side, "hunter2", 5)
+                .await
+                .expect("search")
+                .is_empty(),
+            "the retired side session is still searchable — its BM25 mirror \
+             outlived the row that was reported deleted"
         );
     }
 
@@ -455,16 +621,48 @@ mod tests {
     }
 
     /// Production source of one file: CR stripped (a CRLF checkout makes
-    /// `\n`-anchored splits match nothing), the `#[cfg(test)]` tail dropped,
-    /// and comment lines removed — a scanner that reads its own explanation is
-    /// how a lexical guard certifies the thing it was written to catch.
+    /// `\n`-anchored splits match nothing), the tests **module** dropped, and
+    /// comment lines removed — a scanner that reads its own explanation is how
+    /// a lexical guard certifies the thing it was written to catch.
+    ///
+    /// The cut is at the first `#[cfg(test)]` that introduces a `mod`, not at
+    /// the first `#[cfg(test)]` of any kind. Those are not the same file:
+    /// `agent_instance.rs:15` is a `#[cfg(test)] use …`, so cutting at the bare
+    /// attribute left this scanner looking at fourteen lines of a thousand-line
+    /// file and blind to the production `reset_session` far below it — one of
+    /// the very call sites this guard was written to cover. A source-level
+    /// guard that goes blind rather than red is worse than none, because its
+    /// green reads as "you are wired" when it means "I cannot see you".
+    ///
+    /// A file whose tests module is spelled some other way is scanned whole.
+    /// That errs toward a false positive, which is red and therefore visible —
+    /// the opposite of the failure above. Measured over the tree, no file does.
     fn production_source(raw: &str) -> String {
         let no_cr = raw.replace('\r', "");
-        let head = no_cr.split("#[cfg(test)]").next().unwrap_or("").to_string();
+        let head = match test_module_offset(&no_cr) {
+            Some(at) => &no_cr[..at],
+            None => &no_cr,
+        };
         head.lines()
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Byte offset of the first `#[cfg(test)]` whose next item is a `mod`
+    /// (covering both `mod tests {` and `mod tests;`), or `None`.
+    fn test_module_offset(src: &str) -> Option<usize> {
+        const ATTR: &str = "#[cfg(test)]";
+        let mut cursor = 0;
+        while let Some(hit) = src[cursor..].find(ATTR) {
+            let at = cursor + hit;
+            let rest = src[at + ATTR.len()..].trim_start();
+            if rest.starts_with("mod ") {
+                return Some(at);
+            }
+            cursor = at + ATTR.len();
+        }
+        None
     }
 
     /// Count calls to `.<method>(` whose receiver is not the bare `self`.
@@ -522,19 +720,27 @@ mod tests {
     ///
     /// # What it does not see, stated so nobody reads it as more than it is
     ///
-    /// A file passes by containing any retirement entry point *anywhere* in it,
-    /// so this proves the wire exists in the file, not that it is on every path
-    /// through it. Concretely: it names `session_split.rs`, `new_tool.rs` and
-    /// `chat.rs` when their wires are removed, but it would **not** have caught
-    /// the `sessions.reset` gap on its own, because `modify.rs` already
-    /// contained a retirement for its delete arm.
+    /// **One limit, and it is the only one.** A file passes by containing any
+    /// retirement entry point *anywhere* in it, so this proves the wire exists
+    /// in the file, not that it is on every path through it. Concretely: it
+    /// names `session_split.rs`, `new_tool.rs`, `chat.rs` and
+    /// `agent_instance.rs` when their wires are removed, but it would **not**
+    /// have caught the `sessions.reset` gap on its own, because `modify.rs`
+    /// already contained a retirement for its delete arm.
     ///
     /// Going finer would mean guessing where one `fn` ends inside a lexical
     /// scan, and a window whose boundary is a character count rather than the
-    /// syntax it is scanning is its own well-documented failure. The three
+    /// syntax it is scanning is its own well-documented failure. The
     /// behavioural guards above cover the wire actually firing; this one covers
     /// the wire existing at all, which is the failure that has now happened
     /// three times.
+    ///
+    /// Two limits this doc used to have and no longer does, recorded because
+    /// each made the guard report green for a reason unrelated to the code:
+    /// it cut the file at the first `#[cfg(test)]` of *any* kind rather than at
+    /// the tests module (see [`production_source`]), and it did not count
+    /// `delete_session`, so the "delete" third of the seam's own contract was
+    /// covered only by coincidence.
     #[test]
     fn every_epoch_bump_or_content_wipe_reaches_a_side_session_retirement() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -569,10 +775,16 @@ mod tests {
 
             // `with_next_epoch()` with empty parens is a *call*; the definition
             // reads `with_next_epoch(&self)` and so is not matched.
+            // The seam's contract names three categories — epoch bump,
+            // delete, content wipe. `delete_session` is here because the
+            // delete category was previously covered only by accident:
+            // `modify.rs` happens to also contain a `.reset_session(`, so a
+            // delete surface in a file of its own was invisible.
             let n = src.matches("with_next_epoch()").count()
                 + calls_on_non_self(&src, "register_epoch")
                 + calls_on_non_self(&src, "close_session")
-                + calls_on_non_self(&src, "reset_session");
+                + calls_on_non_self(&src, "reset_session")
+                + calls_on_non_self(&src, "delete_session");
             if n == 0 {
                 continue;
             }
@@ -586,8 +798,11 @@ mod tests {
         // Self-check: distinguishes "every file is wired" from "the scanner
         // stopped seeing anything", which read identically in the report that
         // let two of these through.
+        // Tight against today's tree (8 files / 12 sites), so shrinkage — a
+        // marker that stops matching, a split that swallows a file — reddens
+        // instead of quietly narrowing the guard's world.
         assert!(
-            with_markers.len() >= 6 && sites >= 8,
+            with_markers.len() >= 8 && sites >= 12,
             "census went blind: {} file(s) / {} site(s) — the markers or the \
              cfg(test) split stopped matching",
             with_markers.len(),

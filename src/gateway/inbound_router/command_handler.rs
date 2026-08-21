@@ -249,10 +249,15 @@ impl InboundMessageRouter {
         true
     }
 
-    /// Handle /btw command: ephemeral sidebar conversation that doesn't affect context.
+    /// Handle /btw command: sidebar conversation that does not affect the
+    /// conversation's own context.
     ///
-    /// Creates a `SessionKey::Ephemeral` so the question/answer is not persisted
-    /// to the current session history.
+    /// Mints a `SessionKey::Ephemeral` so the question and answer are never
+    /// appended **into the current session's** history. That is a statement
+    /// about which transcript they join, not about storage: the key it mints is
+    /// persisted like any other session, and — because that key is a fresh uuid
+    /// rather than the derived side key — nothing can address it again. See the
+    /// block on the mint below.
     pub(super) async fn handle_btw(
         &self,
         msg: &InboundMessage,
