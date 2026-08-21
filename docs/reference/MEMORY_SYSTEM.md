@@ -577,14 +577,21 @@ are derived and rebuildable — the same shape as Aleph).
 
 ## Panel 呈现面与 RPC 形状
 
-The desktop Panel's Memory Vault tab (`interfaces/webchat/src/platform/wide/views/memory/`, see [FEATURE_LOCATOR.md §6.7](FEATURE_LOCATOR.md)) is a pure-I/O consumer (R4) of five gateway RPCs. Each one now has exactly **one shape** — the 2026-07-26 refactor's core fix was that `memory.search` used to also answer queries with note rows, which the desktop view rendered into the Raw table (wrong data, undeletable rows, no error surfaced).
+The desktop Panel's Memory Vault tab (`interfaces/webchat/src/platform/wide/views/memory/`, see [FEATURE_LOCATOR.md §6.7](FEATURE_LOCATOR.md)) is a pure-I/O consumer (R4) of these gateway RPCs. Each one has exactly **one shape** — the 2026-07-26 refactor's core fix was that `memory.search` used to also answer queries with note rows, which the desktop view rendered into the Raw table (wrong data, undeletable rows, no error surfaced).
 
 | RPC | 返回什么 | 谁消费 |
 |---|---|---|
-| `memory.listFacts` | 笔记页 + `total`（含 tags / link_count / updated_at） | Panel 笔记层、phone Vault |
-| `memory.search` | **只有**原始对话行（`query` 做 content LIKE 过滤） | Panel Raw 层、CLI `memory search` |
-| `graph.search` | **只有**笔记 FTS 命中（完整索引行，`SearchResultDto` 9 字段） | Panel SearchHits 层、星系高亮、抽屉 wikilink 解析 |
-| `memory.stats` | 单一 scope 的四项计数 + `scope` 字段 | Panel 统计卡、CLI `memory stats` |
-| `memory.trace` | 证据链（notes + evidence，含 `pruned`） | `memory_trace` 工具、Panel 抽屉溯源区（`provenance.rs`，2026-07-26 前零消费者） |
+| `memory.listFacts` | 笔记页 + `total`（含 tags / link_count / updated_at）。`offset` 由 Panel 的累载按钮驱动 —— 在 2026-08-21 之前每个调用者都写死 `0` | Panel 笔记层、phone Vault |
+| `memory.search` | **只有**原始对话行（`query` 做 content LIKE 过滤）。一行一个 `content`，**没有** `ai_output`/`window_title`——那两个字段在这条 wire 上活了很久，每一行都是 `""` | Panel Raw 层、CLI `memory search` |
+| `graph.search` | **只有**笔记 FTS 命中（完整索引行，`SearchResultDto` 9 字段，含 `match_field`） | Panel SearchHits 层、星系高亮、抽屉 wikilink 解析 |
+| `memory.stats` | 单一 scope 的三项计数 + `scope` 字段（`validFacts` 已 CUT：它与 `totalFacts` 恒等） | Panel 统计卡、CLI `memory stats` |
+| `memory.trace` | 证据链（notes + evidence，含 `pruned`）；`kind: "write_decision"` 时改为写入台账，空 `target` = 不加主题过滤 | `memory_trace` 工具、Panel 抽屉溯源区（`provenance.rs`）、Panel 热区 ledger（`curated.rs`） |
+| `memory.list_corrections` | 用户修正行 + 蒸馏状态（由 FeedbackDistill 水位线推导，不是行上的标志位） | Panel Feedback facet 顶部的修正队列（`corrections.rs`，2026-08-21 前零消费者） |
+| `memory.curated.list` | 热区条目 + 预算用量（chars，不是 bytes） | Panel Curated facet |
+| `memory.curated.replace` / `.remove` | 写后的**整份**快照（Panel 因此不需要第二次取数，也就没有「列表与刚写下的文件不一致」的窗口） | Panel Curated facet |
+
+**`memory.curated.*` 的分区解析有且只有一个来源，而且不在 handler 里**：它们把 wire 上的 **base** agent id 原样交给 `MemoryContextProvider::get_or_load_curated_store` —— `remember` 工具调的同一个函数 —— 所以「Panel 读的文件 == 工具写的文件」是按构造成立的。Handler **不得**自行组合 scope：`session_write_id` 非幂等，把一个已组合的 id 再喂进去会得到 `main__u-bob__u-bob`，一个没有写者的幽灵分区。因此调用方自带后缀的 id 被拒（形状与真实空 store 逐字节相同，`limit` 也一样，否则「被拒」与「空的」就能靠一个字段分辨）。突变后必须驱逐冻结的 per-session envelope（`invalidate_curated_for_agent`，键是**已解析**的 id —— 从 store 对象读回来，不要再算一次），否则改过的条目会以旧措辞继续注入每一个已开的会话。
+
+`memory.clear` / `memory.clearFacts` 曾在这张表下方作为「无条件报错的墓碑」被记录；两者已于 2026-08-21 CUT（唯一调用者 `aleph memory clear` 从未成功过一次，现由 CLI 本地解释并返回非零）。
 
 `graph.neighbors` is intentionally absent from this table — it was cut on 2026-07-26 (zero callers repo-wide; see FEATURE_LOCATOR.md §6.3/附录 A #7). `NoteStore::get_neighbors` remains as a Rust-level API for `note_graph_query`.
