@@ -28,52 +28,74 @@ const failures = [];
 let written = 0;
 let skipped = 0;
 
-for (const name of readdirSync(dir).sort()) {
+// A read failure (missing dir), a mid-loop fs error (deleted/permission-denied
+// file), or a compressor error would otherwise surface as a raw Node stack
+// trace that names no file. Every fs/zlib call below is caught and turned
+// into a named `name: message` entry instead (Node's own error messages
+// already carry the syscall and path, e.g. "ENOENT: ... open 'X'").
+let entries;
+try {
+  entries = readdirSync(dir).sort();
+} catch (err) {
+  console.error(`✗ ${dir}: could not read directory — ${err.message}`);
+  process.exit(1);
+}
+
+for (const name of entries) {
   if (name.endsWith('.br')) continue;
   const path = `${dir}/${name}`;
-  const st = statSync(path);
-  if (!st.isFile()) continue;
-
   const brPath = `${path}.br`;
 
-  if (st.size < MIN_BYTES) {
-    // Remove a stale sibling if the file shrank below the threshold, so the
-    // bidirectional guard in check_panel_dist.mjs cannot trip on a leftover.
-    try { unlinkSync(brPath); } catch { /* nothing to remove */ }
-    skipped++;
-    continue;
+  try {
+    const st = statSync(path);
+    if (!st.isFile()) continue;
+
+    if (st.size < MIN_BYTES) {
+      // Remove a stale sibling if the file shrank below the threshold, so the
+      // bidirectional guard in check_panel_dist.mjs cannot trip on a leftover.
+      try { unlinkSync(brPath); } catch { /* nothing to remove */ }
+      console.log(`  ${name}: below ${MIN_BYTES}-byte threshold (${st.size} < ${MIN_BYTES}), skipped`);
+      skipped++;
+      continue;
+    }
+
+    const source = readFileSync(path);
+    const compressed = brotliCompressSync(source, {
+      params: {
+        [constants.BROTLI_PARAM_QUALITY]: 11,
+        // 24 is the maximum window for STANDARD brotli. Anything above it is the
+        // Large-Window extension, which `Content-Encoding: br` does not cover.
+        [constants.BROTLI_PARAM_LGWIN]: 24,
+        [constants.BROTLI_PARAM_SIZE_HINT]: source.length,
+      },
+    });
+
+    if (compressed.length >= source.length) {
+      try { unlinkSync(brPath); } catch { /* nothing to remove */ }
+      console.log(`  ${name}: brotli is not smaller (${compressed.length} >= ${source.length}), skipped`);
+      skipped++;
+      continue;
+    }
+
+    // Round-trip immediately. A corrupt sibling is the one failure mode that
+    // reaches users as wrong bytes rather than as an error.
+    const back = brotliDecompressSync(compressed);
+    if (!back.equals(source)) {
+      // Same invariant as the two skip branches above: never leave a `.br`
+      // on disk that doesn't match its source. A stale sibling here would be
+      // read by rust_embed (debug builds) and served as the real asset.
+      try { unlinkSync(brPath); } catch { /* nothing to remove */ }
+      failures.push(`${name}: brotli round-trip did not reproduce the source`);
+      continue;
+    }
+
+    writeFileSync(brPath, compressed);
+    const pct = ((1 - compressed.length / source.length) * 100).toFixed(1);
+    console.log(`  ${name}: ${source.length} -> ${compressed.length} (-${pct}%)`);
+    written++;
+  } catch (err) {
+    failures.push(`${name}: ${err.message}`);
   }
-
-  const source = readFileSync(path);
-  const compressed = brotliCompressSync(source, {
-    params: {
-      [constants.BROTLI_PARAM_QUALITY]: 11,
-      // 24 is the maximum window for STANDARD brotli. Anything above it is the
-      // Large-Window extension, which `Content-Encoding: br` does not cover.
-      [constants.BROTLI_PARAM_LGWIN]: 24,
-      [constants.BROTLI_PARAM_SIZE_HINT]: source.length,
-    },
-  });
-
-  if (compressed.length >= source.length) {
-    try { unlinkSync(brPath); } catch { /* nothing to remove */ }
-    console.log(`  ${name}: brotli is not smaller (${compressed.length} >= ${source.length}), skipped`);
-    skipped++;
-    continue;
-  }
-
-  // Round-trip immediately. A corrupt sibling is the one failure mode that
-  // reaches users as wrong bytes rather than as an error.
-  const back = brotliDecompressSync(compressed);
-  if (!back.equals(source)) {
-    failures.push(`${name}: brotli round-trip did not reproduce the source`);
-    continue;
-  }
-
-  writeFileSync(brPath, compressed);
-  const pct = ((1 - compressed.length / source.length) * 100).toFixed(1);
-  console.log(`  ${name}: ${source.length} -> ${compressed.length} (-${pct}%)`);
-  written++;
 }
 
 if (failures.length) {
