@@ -1251,3 +1251,136 @@ mod provider_key_tests {
         assert!(matches!(action, Some(Action::CloseOverlay)));
     }
 }
+
+#[cfg(test)]
+mod btw_key_tests {
+    use super::*;
+
+    fn opened() -> AppState {
+        let mut state = AppState::new("agent:main:main".into(), "m".into());
+        state.open_btw("why?".into());
+        state
+    }
+
+    fn press(state: &mut AppState, code: KeyCode) -> Action {
+        handle_btw_key(state, KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Esc is one key for one intent — "I am done with this" — and the
+    /// overlay, not the key table, decides which of abort/close applies. The
+    /// key handler's whole job is to say so without deciding.
+    #[test]
+    fn esc_asks_for_abort_or_close_either_way() {
+        let mut state = opened();
+        assert!(matches!(
+            press(&mut state, KeyCode::Esc),
+            Action::BtwAbortOrClose
+        ));
+        state.btw.finish_active(Some("because"));
+        assert!(matches!(
+            press(&mut state, KeyCode::Esc),
+            Action::BtwAbortOrClose
+        ));
+    }
+
+    /// The overlay opens in browse mode, so the bare shortcuts work on the
+    /// answer that just arrived — which is when a user reaches for them.
+    #[test]
+    fn browse_mode_binds_the_bare_shortcuts() {
+        let mut state = opened();
+        assert!(!state.btw.composing, "the overlay opens ready to read");
+        assert!(matches!(
+            press(&mut state, KeyCode::Char('c')),
+            Action::BtwCopy
+        ));
+        match press(&mut state, KeyCode::Char('p')) {
+            Action::GatewayCommand(text) => assert_eq!(text, "/btw promote"),
+            other => panic!("p must send the promote verb, got: {other:?}"),
+        }
+    }
+
+    /// Typing an ordinary letter in browse mode starts a follow-up and keeps
+    /// the letter. Tab is the way to a follow-up that starts with `c` or `p`,
+    /// and the only way back — the mode never flips to browse on its own.
+    #[test]
+    fn typing_starts_a_follow_up_and_only_tab_goes_back() {
+        let mut state = opened();
+        press(&mut state, KeyCode::Char('h'));
+        press(&mut state, KeyCode::Char('i'));
+        assert!(state.btw.composing);
+        assert_eq!(state.btw.composer, "hi");
+
+        // In compose mode the shortcuts are letters again.
+        press(&mut state, KeyCode::Char('c'));
+        press(&mut state, KeyCode::Char('p'));
+        assert_eq!(state.btw.composer, "hicp");
+
+        press(&mut state, KeyCode::Backspace);
+        assert_eq!(state.btw.composer, "hic");
+
+        // Emptying the buffer must NOT drop back to browse: the next letter
+        // would silently mean something else.
+        for _ in 0..3 {
+            press(&mut state, KeyCode::Backspace);
+        }
+        assert!(state.btw.composer.is_empty());
+        assert!(state.btw.composing, "the mode is structural, not derived");
+
+        press(&mut state, KeyCode::Tab);
+        assert!(!state.btw.composing);
+    }
+
+    /// Enter sends the composer as the side thread's next question. The
+    /// `/btw` is CONSTRUCTED here, never tested for — asking whether the text
+    /// "is already a btw" would be a second copy of a predicate this client
+    /// answers in exactly one place.
+    #[test]
+    fn enter_sends_the_follow_up_as_a_side_question() {
+        let mut state = opened();
+        state.btw.finish_active(Some("because"));
+        press(&mut state, KeyCode::Char('a'));
+        press(&mut state, KeyCode::Char('n'));
+        press(&mut state, KeyCode::Char('d'));
+
+        match press(&mut state, KeyCode::Enter) {
+            Action::GatewayCommand(text) => assert_eq!(text, "/btw and"),
+            other => panic!("expected a side question, got: {other:?}"),
+        }
+        assert!(
+            state.btw.composer.is_empty(),
+            "the composer must clear on send, or Enter twice sends twice"
+        );
+    }
+
+    /// Enter on an empty composer sends nothing and puts the user where
+    /// typing works, rather than doing nothing at all.
+    #[test]
+    fn enter_on_an_empty_composer_is_not_a_silent_no_op() {
+        let mut state = opened();
+        assert!(matches!(press(&mut state, KeyCode::Enter), Action::None));
+        assert!(state.btw.composing);
+    }
+
+    /// Paging stays live in compose mode: the composer is a single line that
+    /// is only ever appended to, so ←→ has nothing else to do, and re-reading
+    /// the answer you are replying to is exactly when you want it.
+    #[test]
+    fn paging_works_in_both_modes() {
+        use crate::tui::btw_overlay::BtwExchange;
+        let mut state = opened();
+        state.btw.finish_active(Some("a1"));
+        state.btw.finish_exchange(BtwExchange::answered("q2", "a2"));
+        assert_eq!(state.btw.view_index, 1);
+
+        press(&mut state, KeyCode::Left);
+        assert_eq!(state.btw.view_index, 0);
+
+        state.btw.composing = true;
+        press(&mut state, KeyCode::Right);
+        assert_eq!(state.btw.view_index, 1);
+        assert!(
+            state.btw.composer.is_empty(),
+            "an arrow key must never land in the composer"
+        );
+    }
+}

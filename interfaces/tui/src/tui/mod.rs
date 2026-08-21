@@ -40,7 +40,7 @@ use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 use app::{Action, AppState, Focus};
 use commands::{
-    abort_side_question, attach_session, confirm_provider_pick, confirm_session_switch,
+    attach_session, btw_abort_or_close, confirm_provider_pick, confirm_session_switch,
     dispatch_gateway_text, execute_local_command, fetch_gateway_commands, refresh_picker_provider,
     send_to_agent, shadowed_gateway_commands,
 };
@@ -419,13 +419,7 @@ async fn main_loop(
 
             // -- Side question (`/btw`) --
             Action::BtwAbortOrClose => {
-                if state.btw.active_run_id().is_some() {
-                    abort_side_question(state, client).await;
-                } else {
-                    // Nothing is parked on this overlay server-side once the
-                    // answer has settled, so closing it orphans nothing.
-                    state.close_btw();
-                }
+                btw_abort_or_close(state, client).await;
             }
             Action::BtwCopy => {
                 // Fire-and-forget: OSC 52 has no reply, so the notice says

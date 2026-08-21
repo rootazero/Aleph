@@ -129,20 +129,42 @@ pub(super) async fn dispatch_gateway_text(
     }
 }
 
-/// Stop the side question the overlay is showing.
+/// The `chat.abort` params that stop the side question the overlay is
+/// showing, or `None` when nothing is being answered.
 ///
-/// `session_key` is deliberately omitted, unlike `/stop`'s abort. The server
-/// uses that field to purge the addressed session's busy-queue backlog, and
-/// the only key this client holds is the MAIN conversation's — passing it
-/// would drop the messages queued behind the main run, which is the opposite
-/// of "stop the side question". The side session's own key is not derivable
-/// here by design (see `aleph_protocol::btw`), and the run id alone is enough:
-/// the server gates it on its own (`caller_may_address_run`).
-pub(super) async fn abort_side_question(state: &mut AppState, client: &AlephClient) {
-    let Some(run_id) = state.btw.active_run_id().map(ToOwned::to_owned) else {
+/// Two things this gets right that the obvious version does not, which is why
+/// it is a function with a test rather than two lines inline:
+///
+/// 1. **The run id is the overlay's, not the screen's.** `/stop`'s helper
+///    aborts `state.current_run`, which during a side question is the *main*
+///    run (or nothing at all). Reusing it would stop the wrong work, or
+///    silently refuse — and this overlay is the only surface from which a
+///    running side question can be aimed at.
+/// 2. **`session_key` is deliberately omitted.** The server uses that field to
+///    purge the addressed session's busy-queue backlog. The only key this
+///    client holds is the main conversation's, so passing it would drop the
+///    messages queued behind the main run — the opposite of "stop the side
+///    question". The side session's key is not derivable here by design (see
+///    `aleph_protocol::btw`), and the run id alone suffices: the server gates
+///    it on its own (`caller_may_address_run`).
+fn side_abort_params(state: &AppState) -> Option<Value> {
+    let run_id = state.btw.active_run_id()?;
+    Some(json!({ "run_id": run_id }))
+}
+
+/// Esc in the side-question overlay: stop the side run when one is answering,
+/// close the overlay when none is.
+///
+/// One function, one decision. Splitting "is it answering?" from "abort it"
+/// would let a caller reach one without the other, and the two answers have to
+/// come from the same read of the same state.
+pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClient) {
+    let Some(params) = side_abort_params(state) else {
+        // Nothing is parked on this overlay server-side once the answer has
+        // settled, so closing it orphans nothing.
+        state.close_btw();
         return;
     };
-    let params = json!({ "run_id": run_id });
     if let Err(e) = client.call::<_, Value>("chat.abort", Some(params)).await {
         state.add_system_message(format!("Side question abort error: {e}"));
     }
@@ -1028,5 +1050,116 @@ mod tests {
             "Cost estimate (claude-sonnet-4-6): $1.2345"
         );
         assert!(cost_line("mystery-model", None).contains("n/a"));
+    }
+
+    /// Esc while a side question is answering must stop the SIDE run.
+    ///
+    /// The screen's `current_run` is the main run — reusing `/stop`'s abort
+    /// would stop the wrong work — and `session_key` must not travel at all,
+    /// because the only key this client holds is the main conversation's and
+    /// the server would use it to purge that conversation's queue.
+    #[test]
+    fn the_side_abort_names_the_side_run_and_no_session() {
+        let mut state = AppState::new("agent:main:main".into(), "m".into());
+        state.current_run = Some("run-main".into());
+        state.open_btw("why?".into());
+        state.btw.claim_pending_run("run-side".into());
+
+        let params = side_abort_params(&state).expect("a side question is answering");
+        assert_eq!(params["run_id"], "run-side");
+        assert_ne!(
+            params["run_id"], "run-main",
+            "aborting a side question must not stop the main run"
+        );
+        assert!(
+            params.get("session_key").is_none(),
+            "a session key here would purge the MAIN conversation's queue: {params}"
+        );
+    }
+
+    /// Esc with nothing answering is a close, not an abort — and the way that
+    /// is expressed is `None`, so the caller cannot send an abort naming
+    /// nothing.
+    #[test]
+    fn there_is_nothing_to_abort_once_the_answer_has_settled() {
+        let mut state = AppState::new("agent:main:main".into(), "m".into());
+        assert!(side_abort_params(&state).is_none(), "nothing asked yet");
+
+        state.open_btw("why?".into());
+        assert!(
+            side_abort_params(&state).is_none(),
+            "no run id yet: agent.run has not replied, so there is nothing to abort"
+        );
+
+        state.btw.claim_pending_run("run-side".into());
+        assert!(side_abort_params(&state).is_some());
+
+        state.btw.finish_active(Some("because"));
+        assert!(
+            side_abort_params(&state).is_none(),
+            "a settled answer is closed, not aborted"
+        );
+    }
+
+    /// This client asks "is this a side question?" in exactly one place.
+    ///
+    /// A source-level census, because the failure it guards against is not a
+    /// wrong answer but a *second* answer: a prefix test written somewhere
+    /// else would agree with the shared resolver today and drift from it the
+    /// first time the server learns a spelling (`/BTW`, `/btw@bot`, the empty
+    /// body that is deliberately NOT a side question). Runtime cannot tell the
+    /// two apart — both say yes to `/btw x` — so only the source can.
+    ///
+    /// Comment lines are stripped first: the doc above this very test names
+    /// the resolver, and a scanner that counted prose would be satisfied by a
+    /// sentence rather than by a call. The `#[cfg(test)]` split is not
+    /// anchored to line ends, because this repo's Windows checkout is CRLF and
+    /// `"\n#[cfg(test)]\n"` matches nothing there — which would silently turn
+    /// the whole file into "production" and let a test's own literals satisfy
+    /// the census.
+    #[test]
+    fn this_client_resolves_a_side_question_in_exactly_one_place() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut hits: Vec<String> = Vec::new();
+        let mut files_scanned = 0usize;
+
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's own src is readable") {
+                let path = entry.expect("a readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("a readable .rs file");
+                files_scanned += 1;
+                // Production code only: a test may name the resolver freely.
+                let source = source.replace('\r', "");
+                let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+                for line in production.lines() {
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    if line.contains("BtwTurn::resolve(") {
+                        hits.push(format!("{}: {}", path.display(), line.trim()));
+                    }
+                }
+            }
+        }
+
+        assert!(files_scanned > 5, "the scan found nothing to scan");
+        assert_eq!(
+            hits.len(),
+            1,
+            "exactly one production call site, found: {hits:#?}"
+        );
+        assert!(
+            hits[0].contains("commands.rs"),
+            "the one resolver call belongs at the send chokepoint, found: {}",
+            hits[0]
+        );
     }
 }
