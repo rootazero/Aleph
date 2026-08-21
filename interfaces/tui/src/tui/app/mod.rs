@@ -1002,15 +1002,33 @@ impl AppState {
         true
     }
 
+    /// Where focus lands when a modal that was covering the screen goes away.
+    ///
+    /// Not unconditionally `Input`. The `/btw` overlay is the one surface that
+    /// can still be **on screen** when another modal closes: a clarification
+    /// or an approval card can open over it (both are raised by frames, not by
+    /// keys, so neither needs the user to have left the overlay first), and
+    /// answering one used to hand focus to the composer while the side
+    /// question stayed painted over the transcript — visible, unreachable, and
+    /// unclosable, because `Esc` at `Focus::Input` is a no-op and every key
+    /// went to a textarea the user could not see.
+    const fn focus_after_modal(&self) -> Focus {
+        if self.btw.open {
+            Focus::Btw
+        } else {
+            Focus::Input
+        }
+    }
+
     /// Close any open overlay (palette, dialog, session picker, provider
-    /// picker) and return focus to input.
+    /// picker) and return focus to whatever is still on screen.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
         self.session_picker = None;
         self.provider_picker = None;
         self.approval = None;
-        self.focus = Focus::Input;
+        self.focus = self.focus_after_modal();
     }
 
     // -- Session picker -------------------------------------------------
@@ -1241,7 +1259,7 @@ impl AppState {
     /// server-side approval expired) and return focus to input.
     pub fn close_approval(&mut self) {
         self.approval = None;
-        self.focus = Focus::Input;
+        self.focus = self.focus_after_modal();
     }
 
     /// Drop a showing approval overlay when its run ends by any path (complete,

@@ -1900,6 +1900,45 @@ fn no_side_question_frame_reaches_the_main_transcript() {
     );
 }
 
+/// A modal raised over the side-question overlay must hand focus back to it,
+/// not to the composer.
+///
+/// A clarification and an approval card are both raised by *frames*, so
+/// neither needs the user to have left the overlay first. Returning focus to
+/// `Input` left the side question painted over the transcript with every key
+/// going to a textarea the user could not see — and `Esc` at `Focus::Input` is
+/// a no-op, so there was no way out but `/stop` or quitting.
+#[test]
+fn answering_a_modal_raised_over_the_overlay_returns_focus_to_it() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    state.open_btw("why?".into());
+    assert_eq!(state.focus, Focus::Btw);
+
+    state.show_dialog(
+        "agent:main:main".into(),
+        AskDialogView {
+            question: "which one?".into(),
+            options: vec!["a".into()],
+            multi_select: false,
+            secret: false,
+        },
+    );
+    assert_eq!(state.focus, Focus::Dialog);
+
+    state.close_overlay();
+    assert_eq!(
+        state.focus,
+        Focus::Btw,
+        "the side question is still on screen, so it is still what keys mean"
+    );
+
+    // And once it is closed, focus goes where it always did.
+    state.close_btw();
+    assert_eq!(state.focus, Focus::Input);
+    state.close_overlay();
+    assert_eq!(state.focus, Focus::Input);
+}
+
 /// The case where the intercept is the ONLY thing standing between a side
 /// answer and the main transcript: a side run whose recorded home session is
 /// this screen's.
