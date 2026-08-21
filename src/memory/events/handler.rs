@@ -538,6 +538,192 @@ impl MemoryCommandHandler {
         self.db.append_memory_event(&envelope).await?;
         Ok(())
     }
+
+    /// One-shot divergence scan between the event log and the notes
+    /// filesystem projection.
+    ///
+    /// Walks every distinct `fact_id` in `memory_events`, folds its event
+    /// history into the expected current state, and compares the
+    /// expected file path against the filesystem. Does **not** repair:
+    /// returns a structured [`ReconcileReport`] the caller (or operator)
+    /// can act on. Auto-replay is intentionally out of scope — the
+    /// reconciler cannot tell whether a divergent file was deliberately
+    /// hand-edited by the user, so any repair must go through a review
+    /// step rather than silently overwrite.
+    ///
+    /// If no `note_indexer` is attached, the filesystem side of the
+    /// comparison is skipped and the report carries only event-log
+    /// statistics. This lets callers wire the reconciler before the
+    /// notes layer is configured and still get a sane baseline.
+    pub async fn reconcile_once(&self) -> Result<ReconcileReport, AlephError> {
+        let start = std::time::Instant::now();
+        let fact_ids = self.db.list_memory_fact_ids().await?;
+        let scanned = fact_ids.len();
+
+        let memory_dir = self
+            .note_indexer
+            .as_ref()
+            .map(|i| i.memory_dir().to_path_buf());
+
+        let mut missing_files: Vec<DivergentFact> = Vec::new();
+        let mut stale_files: Vec<DivergentFact> = Vec::new();
+
+        for (fact_id, latest_seq) in &fact_ids {
+            // Skip the filesystem side if no indexer is attached — we
+            // can still report event-log statistics without one.
+            let Some(ref dir) = memory_dir else {
+                continue;
+            };
+
+            let events = self
+                .db
+                .get_memory_events_for_fact(fact_id, "")
+                .await?;
+            let projected = super::projector::EventProjector::fold_events_to_note(&events)?;
+
+            match projected {
+                Some(fact) if fact.is_valid => {
+                    // Fact exists and is valid: the file should exist at
+                    // `{memory_dir}/{agent}/{category}/{title}.md`.
+                    let category = fact.note_type.to_category_dir();
+                    let title = match sanitize_title(&fact.id) {
+                        Ok(t) => t,
+                        Err(_) => continue, // unsanitizable — matches dual-write skip policy
+                    };
+                    let expected = dir
+                        .join(&fact.agent)
+                        .join(category)
+                        .join(format!("{title}.md"));
+                    if !expected.exists() {
+                        missing_files.push(DivergentFact {
+                            fact_id: fact_id.clone(),
+                            latest_seq: *latest_seq,
+                            expected_path: expected,
+                        });
+                    }
+                }
+                _ => {
+                    // Fact is deleted, invalidated, or never reached a
+                    // valid state. Any matching file on disk is stale
+                    // and should be cleaned up by a future replay. Scan
+                    // every immediate subdir of `memory_dir` as a possible
+                    // agent namespace (not just `[DEFAULT_AGENT_ID,
+                    // "owner"]`) because the create path uses
+                    // `fact.agent` from the event payload, which can be
+                    // any agent id the caller supplied. Restricting the
+                    // scan to a fixed list would silently miss orphans
+                    // written under arbitrary agent namespaces.
+                    let title = match sanitize_title(fact_id) {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    };
+                    let Ok(agent_entries) = std::fs::read_dir(dir) else {
+                        continue;
+                    };
+                    for agent_entry in agent_entries.flatten() {
+                        let agent_path = agent_entry.path();
+                        if !agent_path.is_dir() {
+                            continue;
+                        }
+                        for cat in crate::memory::notes::CATEGORY_DIRS {
+                            let candidate = agent_path
+                                .join(cat)
+                                .join(format!("{title}.md"));
+                            if candidate.exists() {
+                                stale_files.push(DivergentFact {
+                                    fact_id: fact_id.clone(),
+                                    latest_seq: *latest_seq,
+                                    expected_path: candidate,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let duration = start.elapsed();
+        let report = ReconcileReport {
+            scanned_facts: scanned,
+            missing_files: missing_files.clone(),
+            stale_files: stale_files.clone(),
+            duration,
+        };
+
+        if !missing_files.is_empty() || !stale_files.is_empty() {
+            tracing::warn!(
+                scanned = scanned,
+                missing = missing_files.len(),
+                stale = stale_files.len(),
+                duration_ms = duration.as_millis() as u64,
+                "Notes dual-write divergence detected: event log and filesystem have diverged. \
+                 A future replay should re-project the listed fact_ids from their event logs."
+            );
+            for d in &missing_files {
+                tracing::warn!(
+                    fact_id = %d.fact_id,
+                    latest_seq = d.latest_seq,
+                    expected_path = %d.expected_path.display(),
+                    phase = "missing-file",
+                    "divergence: event log says this fact exists but the note file does not"
+                );
+            }
+            for d in &stale_files {
+                tracing::warn!(
+                    fact_id = %d.fact_id,
+                    latest_seq = d.latest_seq,
+                    stale_path = %d.expected_path.display(),
+                    phase = "stale-file",
+                    "divergence: event log says this fact is deleted but the note file is still on disk"
+                );
+            }
+        }
+
+        Ok(report)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reconciler types
+// ---------------------------------------------------------------------------
+
+/// Outcome of one [`MemoryCommandHandler::reconcile_once`] scan.
+///
+/// A non-empty `missing_files` or `stale_files` indicates the event log
+/// and notes filesystem have diverged — most often because
+/// [`MemoryCommandHandler::project_to_notes`] failed after the event
+/// append had already committed. The report is the operator-facing
+/// surface for the divergence; replay/repair is out of scope for this
+/// type.
+#[derive(Debug, Clone)]
+pub struct ReconcileReport {
+    /// Number of distinct `fact_id`s scanned from `memory_events`.
+    pub scanned_facts: usize,
+    /// Events say the fact exists and is valid, but the corresponding
+    /// markdown file is not on disk. A replay that re-projects from the
+    /// event log can repair this without operator judgement (the file
+    /// is missing, so there is nothing to overwrite).
+    pub missing_files: Vec<DivergentFact>,
+    /// Events say the fact is deleted (or never reached a valid state),
+    /// but a markdown file still exists on disk. A replay that removes
+    /// the file must distinguish operator hand-edits from genuine
+    /// staleness — this is why auto-replay is out of scope and the
+    /// report is the manual next step.
+    pub stale_files: Vec<DivergentFact>,
+    /// Wall-clock time of the scan.
+    pub duration: std::time::Duration,
+}
+
+/// One divergent fact identified by [`ReconcileReport`].
+#[derive(Debug, Clone)]
+pub struct DivergentFact {
+    /// The `fact_id` whose event log disagrees with its filesystem state.
+    pub fact_id: String,
+    /// The latest sequence number in the event log for this fact.
+    pub latest_seq: u64,
+    /// The file path the projection should occupy (or should have been
+    /// removed from in the stale case).
+    pub expected_path: std::path::PathBuf,
 }
 
 #[cfg(test)]
@@ -952,5 +1138,209 @@ mod tests {
         assert_eq!(events[2].event.event_type_tag(), "NoteDeleted");
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[2].seq, 3);
+    }
+
+    // ── reconcile_once tests ──────────────────────────────────────────────────
+
+    /// Construct a handler wired to a real `NoteIndexer` + on-disk memory_dir,
+    /// so reconcile_once has both the event-log and filesystem sides to
+    /// compare. Returns the temp dir guard (must stay in scope) plus the
+    /// handler ready for use.
+    async fn make_handler_with_indexer()
+    -> (tempfile::TempDir, MemoryCommandHandler) {
+        let (_scratch, db_path) = crate::utils::scratch::scratch_root();
+        let memory_dir = tempfile::TempDir::new().unwrap();
+        let db = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(memory_dir.path().to_path_buf(), db.clone()));
+        let state_db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
+        (memory_dir, MemoryCommandHandler::new(state_db).with_note_indexer(indexer))
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_without_indexer_returns_empty_report() {
+        // No indexer attached → the reconciler has no filesystem to compare
+        // against, so the report must still scan the event log but carry
+        // zero divergence (this is the baseline before the notes layer is
+        // configured).
+        let handler = make_handler();
+        let fact_id = handler
+            .create_fact(CreateNoteCommand {
+                content: "no indexer yet".into(),
+                note_type: NoteType::Preference,
+                path: "/user/prefs".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let report = handler.reconcile_once().await.unwrap();
+        assert_eq!(report.scanned_facts, 1);
+        assert!(
+            report.missing_files.is_empty(),
+            "no indexer → no missing-files detection; got {:?}",
+            report.missing_files
+        );
+        assert!(
+            report.stale_files.is_empty(),
+            "no indexer → no stale-files detection; got {:?}",
+            report.stale_files
+        );
+        assert_ne!(fact_id, "");
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_detects_missing_file() {
+        // The dual-write succeeded for create_fact (event + file both on
+        // disk), then the file went missing. reconcile_once must surface it
+        // as a `missing-file` divergence so a future replay can re-project.
+        let (_memory_dir, handler) = make_handler_with_indexer().await;
+
+        handler
+            .create_fact(CreateNoteCommand {
+                content: "User prefers Rust".into(),
+                note_type: NoteType::Preference,
+                path: "/user/preferences/lang".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Simulate the failure mode: walk the file tree and delete every
+        // .md under memory_dir/{default,owner}/*. This is what would
+        // happen if, e.g., the disk lost the directory between the event
+        // append and the dual-write, or a user wiped the notes folder.
+        for agent in ["default", "owner"] {
+            let agent_dir = _memory_dir.path().join(agent);
+            if agent_dir.exists() {
+                let _ = std::fs::remove_dir_all(&agent_dir);
+            }
+        }
+
+        let report = handler.reconcile_once().await.unwrap();
+        assert_eq!(report.scanned_facts, 1);
+        assert_eq!(
+            report.missing_files.len(),
+            1,
+            "missing file must be reported; got report = {report:?}"
+        );
+        assert_eq!(report.stale_files.len(), 0);
+        assert_eq!(report.missing_files[0].latest_seq, 1);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_detects_stale_file() {
+        // Event log says the fact was deleted (NoteDeleted), but a file
+        // matching the fact's title is still on disk (e.g. the dual-write's
+        // remove_file path failed). reconcile_once must surface this as
+        // `stale-file`.
+        //
+        // We construct the orphan directly rather than going through
+        // delete_fact, because the latter's underlying `project_to_notes`
+        // None-branch only scans the fixed agent list `[main, owner]` —
+        // writing under `agent = "default"` would leave an orphan that
+        // delete_fact cannot itself clean up, confounding the test with
+        // a separate latent bug (Risk 4 round 2 candidate). By planting
+        // the orphan explicitly we isolate the reconciler's job: any
+        // matching file under any agent namespace must be reported.
+        let (_memory_dir, handler) = make_handler_with_indexer().await;
+
+        let fact_id = handler
+            .create_fact(CreateNoteCommand {
+                content: "User prefers Rust".into(),
+                note_type: NoteType::Preference,
+                path: "/user/preferences/lang".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Delete the fact in the event log only. Then plant a matching
+        // file on disk to simulate the orphan-leftover failure mode.
+        handler
+            .delete_fact(DeleteNoteCommand {
+                note_path: fact_id.clone(),
+                reason: "user requested".into(),
+                actor: EventActor::User,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let sanitized = sanitize_title(&fact_id).unwrap();
+        let category = NoteType::Preference.to_category_dir();
+        let orphan_path = _memory_dir
+            .path()
+            .join("default")
+            .join(category)
+            .join(format!("{sanitized}.md"));
+        std::fs::create_dir_all(orphan_path.parent().unwrap()).unwrap();
+        std::fs::write(&orphan_path, "# orphan\n").unwrap();
+
+        let report = handler.reconcile_once().await.unwrap();
+        assert_eq!(report.scanned_facts, 1);
+        assert_eq!(report.missing_files.len(), 0);
+        assert!(
+            !report.stale_files.is_empty(),
+            "orphan file must be reported; got report = {report:?}"
+        );
+        assert!(
+            report
+                .stale_files
+                .iter()
+                .any(|d| d.expected_path == orphan_path),
+            "stale entry must point at the planted orphan; got {:?}",
+            report.stale_files
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_no_divergence_on_clean_state() {
+        // Happy path: a single fact created through the normal write path
+        // (event log + filesystem both populated), no divergence. This is
+        // the steady-state a healthy daemon should always report.
+        let (_memory_dir, handler) = make_handler_with_indexer().await;
+
+        handler
+            .create_fact(CreateNoteCommand {
+                content: "User prefers Rust".into(),
+                note_type: NoteType::Preference,
+                path: "/user/preferences/lang".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let report = handler.reconcile_once().await.unwrap();
+        assert_eq!(report.scanned_facts, 1);
+        assert!(
+            report.missing_files.is_empty(),
+            "clean state must report no missing files; got {:?}",
+            report.missing_files
+        );
+        assert!(
+            report.stale_files.is_empty(),
+            "clean state must report no stale files; got {:?}",
+            report.stale_files
+        );
     }
 }

@@ -297,6 +297,37 @@ impl StateDatabase {
         Ok(u64::try_from(result.unwrap_or(0)).unwrap_or(0))
     }
 
+    /// List every distinct `fact_id` along with its latest seq.
+    ///
+    /// Used by `MemoryCommandHandler::reconcile_once` to scan the event log
+    /// for divergence against the filesystem projection. Returns pairs in
+    /// ascending `fact_id` order so the caller can take a deterministic
+    /// prefix of the result and reproduce a partial report across runs.
+    ///
+    /// No filtering by actor: the reconciler operates across all agents
+    /// because divergence is a system-wide invariant (one agent's
+    /// filesystem vs the global event log).
+    pub async fn list_memory_fact_ids(&self) -> Result<Vec<(String, u64)>, AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                "SELECT fact_id, MAX(seq) FROM memory_events GROUP BY fact_id ORDER BY fact_id",
+            )
+            .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let fact_id: String = row.get(0)?;
+                let seq: i64 = row.get(1)?;
+                Ok((fact_id, u64::try_from(seq).unwrap_or(0)))
+            })
+            .map_err(|e| AlephError::other(format!("Failed to list fact_ids: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::other(format!("Row error: {e}")))?);
+        }
+        Ok(out)
+    }
+
     /// Check if any migration events exist (indicates migration has been run).
     ///
     /// Recognizes both the new `NoteMigrated` tag and the legacy `FactMigrated`
