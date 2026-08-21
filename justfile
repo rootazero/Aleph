@@ -193,54 +193,80 @@ wasm:
         "$target_dir/wasm32-unknown-unknown/wasm-release/aleph_panel.wasm"
     # 3.5 Shrink wasm AND fence its feature set.
     #
-    # This step is REQUIRED, not an optional optimisation, but it does NOT
-    # lean on wasm-opt's own exit code to reject an out-of-floor module.
-    # Verified against wasm-opt 130: Binaryen auto-detects the module's
-    # required feature set from the `target_features` custom section LLVM
-    # embeds, and trusts it unconditionally at parse time -- no combination
-    # of -mvp / --enable-* on the CLI restricts that (--detect-features is
-    # documented as doing nothing).
+    # This step is REQUIRED, not an optional optimisation, and it validates
+    # the module in TWO separate wasm-opt invocations, not one.
     #
-    # Instead: read what `wasm-opt --print-features` reports (no -mvp --
-    # see below) and fence THAT against the allow-list declared in
-    # interfaces/webchat/webview-baseline.json's "wasm_features" key -- the
-    # single declaration of the floor. Do not duplicate that list here or
-    # anywhere else; if you're adding an entry, adjudicate it against
-    # Safari 16.4 first and add it there.
+    # Binaryen auto-detects a module's required feature set from the
+    # `target_features` custom section LLVM embeds, and trusts it
+    # unconditionally at PARSE time -- before any pass, including
+    # --strip-target-features itself, gets a chance to run. So a single
+    # `wasm-opt --strip-target-features -mvp --enable-... in -o out` does
+    # NOT fence anything: verified against wasm-opt 130, it silently
+    # accepted a module built with `-C target-feature=+simd128` with no
+    # --enable-simd anywhere on the command line. The strip has to be its
+    # own invocation, so the SECOND invocation parses a file that never had
+    # the auto-detecting section to begin with.
     #
-    # IMPORTANT -- what --print-features (no -mvp) actually reports: the
-    # UNION of Binaryen's own always-on default feature baseline and
-    # whatever the module's target_features section adds. It is NOT a pure
-    # reading of what the module itself needs. Verified: printing features
-    # on a genuinely empty (8-byte, zero-content) .wasm module still
-    # reports --enable-mutable-globals and --enable-sign-ext -- features
-    # that module cannot possibly use. A two-pass alternative
-    # (--strip-target-features as its own invocation, then validate under
-    # -mvp + an explicit --enable-* list -- a real validator, not a report)
-    # was built and tested and would have given a purer reading, but was
-    # deliberately rejected: if a future Binaryen makes
-    # --strip-target-features a no-op (there is precedent on this exact
-    # command -- --detect-features is *already* documented as doing
-    # nothing), that fence silently falls back to auto-detection and
-    # passes -- exactly the defect this step exists to catch, made
-    # invisible. This union can only OVER-report, so it can flag a floor
-    # entry as over-conservative but can never silently miss a feature the
-    # module actually uses -- loud-when-wrong beats
-    # precise-but-silently-degradable. Full writeup, including the
-    # rejected two-pass recipe verbatim, is in the Task 5 report.
+    #   Pass 1 (strip): remove the target_features section that would
+    #   otherwise silently allow whatever the compiler happened to emit.
+    #   Pass 2 (fence + shrink): -mvp starts validation from an EMPTY
+    #   feature set, so only the explicit --enable-* flags built from
+    #   interfaces/webchat/webview-baseline.json's "wasm_features" key are
+    #   allowed. A feature the module actually uses that isn't on that list
+    #   makes wasm-opt's own validator reject the module and name the
+    #   feature in its error output -- a real validation failure, not a
+    #   report we'd have to interpret ourselves.
     #
-    # A toolchain bump that silently starts requiring a feature outside
-    # wasm_features fails here, loudly, naming the feature -- instead of
-    # white-screening on an older WebKit. If it fires, re-derive the real
-    # set with the SAME invocation this step uses (no -mvp -- see above):
-    #   wasm-opt --print-features {{panel_dist}}/aleph_panel_bg.wasm
+    # Between the two passes: a precondition check that pass 1 actually
+    # worked. If a future Binaryen makes --strip-target-features a no-op
+    # (there is precedent for exactly this on this machine -- wasm-opt 130's
+    # own --detect-features is already documented as doing nothing), pass 2
+    # would parse a module that still carries its target_features section,
+    # auto-detect from it, validate cleanly against whatever the compiler
+    # emitted, and this whole fence would pass silently -- the exact defect
+    # this step exists to catch, reintroduced invisibly. `wasm-opt
+    # --print-features` cannot be used to detect this: tried it, and on any
+    # real, non-trivial module -- stripped or not -- it either reports
+    # Binaryen's own baseline union whatever it can detect (if a section is
+    # present) or floods with unrelated validator errors (if the module's
+    # real content needs more than the tiny always-on baseline and there's
+    # no section left to fill the gap, which is the NORMAL, EXPECTED state
+    # of a correctly-stripped module -- this is not a bug, but it makes
+    # "empty output" unusable as a success signal). What DOES work, and is
+    # what's checked below: the target_features custom section is a
+    # length-prefixed name field in the wasm binary's own custom-section
+    # format, so its literal ASCII bytes ("target_features") are still
+    # findable by grep if and only if the section is still there --
+    # confirmed byte-for-byte against a real build (the 15-byte LEB128
+    # length prefix immediately precedes the name, exactly as the format
+    # requires). If grep finds it in the pass-1 output, pass 1 didn't do
+    # its job and the build stops right there, loudly, before pass 2 gets a
+    # chance to validate against a section that should not exist any more.
     #
-    # The node script below also refuses to trust an empty or malformed
-    # capture as "nothing required": `set -euo pipefail` catches wasm-opt
-    # exiting nonzero, but not wasm-opt exiting 0 with garbage on stdout --
-    # a broken capture must fail loudly, not silently pass as an empty set.
+    # wasm_features is the single declaration of the floor -- do not
+    # duplicate it here or anywhere else. If you're adding an entry,
+    # adjudicate it against Safari 16.4 first (see the notes already in that
+    # file) and add it there. If a toolchain bump makes this fence go red,
+    # `wasm-opt --print-features` on the pre-strip artifact (still intact at
+    # {{panel_dist}}/aleph_panel_bg.wasm if pass 2 failed -- it only gets
+    # overwritten on success) shows the module's real required set to
+    # compare against the floor.
     #
-    # -g keeps the name section for crash diagnostics.
+    # What this DOES guarantee: the shipped module validates under MVP plus
+    # exactly the features in wasm_features -- nothing else, regardless of
+    # what the compiler's target_features section claims -- AND the strip
+    # this guarantee depends on is itself checked, not assumed. What it
+    # does NOT guarantee: that every feature on that list is actually still
+    # inside the Safari/WebKitGTK floor declared elsewhere in the same file
+    # -- that's a human adjudication made once per entry, not something
+    # this step re-checks.
+    #
+    # -g (both passes) keeps the name section for crash diagnostics --
+    # dropped by pass 1 if omitted there, and pass 2 can't recover what
+    # pass 1 already discarded. The intermediate stripped file is written
+    # OUTSIDE dist/ (via mktemp): an aborted build (set -euo pipefail skips
+    # the cleanup line below on failure) must not leave a stray file for
+    # later dist/-scoped tasks to trip over.
     if ! command -v wasm-opt >/dev/null 2>&1; then
         echo "✗ wasm-opt (binaryen) is required." >&2
         echo "  It is not a size optimisation any more: it fences the WASM feature set" >&2
@@ -251,35 +277,36 @@ wasm:
         echo "    winget install WebAssembly.binaryen   # Windows" >&2
         exit 1
     fi
-    wasm_required_features=$(wasm-opt -Oz -g --print-features \
-        {{panel_dist}}/aleph_panel_bg.wasm -o {{panel_dist}}/aleph_panel_bg.wasm)
-    node -e '
-        const raw = process.argv[1];
-        const required = raw.split(/\r?\n/).filter(Boolean);
-        const looksLikeFeatureList =
-            required.length > 0 && required.every((f) => /^--[a-z0-9-]+$/.test(f));
-        if (!looksLikeFeatureList) {
-            console.error("✗ wasm-opt --print-features returned something that is not a");
-            console.error("  feature list -- treating this as a BROKEN capture, not an empty");
-            console.error("  requirement set (an empty set would mean nothing is required,");
-            console.error("  which --print-features never actually returns -- see the comment");
-            console.error("  above this step).");
-            console.error("  Raw capture (" + raw.length + " bytes): " + JSON.stringify(raw));
-            process.exit(1);
-        }
+    wasm_enable_flags=$(node -e '
         const baseline = JSON.parse(require("fs").readFileSync("interfaces/webchat/webview-baseline.json", "utf8"));
-        const allowed = new Set(baseline.wasm_features.map(([flag]) => flag));
-        const outOfFloor = required.filter((f) => !allowed.has(f));
-        if (outOfFloor.length > 0) {
-            console.error("✗ wasm module requires WASM feature(s) outside the declared WebView floor:");
-            for (const f of outOfFloor) console.error("    " + f);
-            console.error("  Floor: interfaces/webchat/webview-baseline.json (wasm_features)");
-            console.error("  Re-derive with the SAME invocation this step uses (no -mvp):");
-            console.error("    wasm-opt --print-features {{panel_dist}}/aleph_panel_bg.wasm");
-            process.exit(1);
-        }
-        console.log("✓ wasm-opt applied (feature set fenced): " + required.join(", "));
-    ' -- "$wasm_required_features"
+        process.stdout.write(baseline.wasm_features.map(([flag]) => flag).join(" "));
+    ')
+    wasm_opt_tmp=$(mktemp)
+    wasm-opt --strip-target-features -g \
+        {{panel_dist}}/aleph_panel_bg.wasm -o "$wasm_opt_tmp"
+    if grep -q "target_features" "$wasm_opt_tmp"; then
+        echo "✗ wasm-opt --strip-target-features did not remove the target_features" >&2
+        echo "  section -- this fence's precondition (pass 2 parses a module with no" >&2
+        echo "  auto-detecting section left) does not hold, so pass 2 would silently" >&2
+        echo "  validate against whatever the compiler emitted instead of against" >&2
+        echo "  wasm_features. This usually means a Binaryen upgrade changed" >&2
+        echo "  --strip-target-features's behaviour -- do not delete this check to" >&2
+        echo "  work around it; find out why it's no longer stripping." >&2
+        rm -f "$wasm_opt_tmp"
+        exit 1
+    fi
+    if ! wasm-opt -mvp -Oz -g $wasm_enable_flags \
+        "$wasm_opt_tmp" -o {{panel_dist}}/aleph_panel_bg.wasm; then
+        echo "✗ wasm module requires a WASM feature outside the declared WebView floor" >&2
+        echo "  (see the validator error above for which one)." >&2
+        echo "  Floor: interfaces/webchat/webview-baseline.json (wasm_features)" >&2
+        echo "  Re-derive the module's real required feature set with:" >&2
+        echo "    wasm-opt --print-features {{panel_dist}}/aleph_panel_bg.wasm" >&2
+        rm -f "$wasm_opt_tmp"
+        exit 1
+    fi
+    rm -f "$wasm_opt_tmp"
+    echo "✓ wasm-opt applied (feature set fenced)"
     # 4. Runtime index.html. Written in three parts so baseline-probe.js is
     #    inlined VERBATIM: it must run synchronously before the module script
     #    (module scripts are deferred), and it must be byte-identical to its
