@@ -771,4 +771,102 @@ mod tests {
             SYNTHETIC_FENCED_CONSTS.len()
         );
     }
+
+    /// Every function in this module that *builds* a fenced block, and what
+    /// [`is_synthetic_reminder`] must say about it.
+    ///
+    /// The twin of [`SYNTHETIC_FENCED_CONSTS`], and it exists because the scan
+    /// above recognises exactly one shape — a `pub const` with the fence inline
+    /// — while this module has always had fenced **formatters** too, and they
+    /// are the ones that can carry somebody else's bytes. Three of them now;
+    /// the const census was structurally blind to all three, which is the
+    /// "a guard's green only covers the shapes its recognizer knows" failure
+    /// applied to this file's own guard.
+    ///
+    /// `false` is the interesting entry, and there is exactly one: a wrapper
+    /// around words the user really typed. Getting that wrong in the `true`
+    /// direction throws away the user's most recent instruction at compaction
+    /// time and skips a perfectly stable cache breakpoint.
+    #[allow(clippy::type_complexity)]
+    const FENCED_FORMATTERS: &[(&str, fn() -> String, bool)] = &[
+        (
+            "user_interjection_note",
+            || user_interjection_note("ship it"),
+            false,
+        ),
+        (
+            "orphan_tool_result_note",
+            || orphan_tool_result_note("call_1", "grep", "{}"),
+            true,
+        ),
+        (
+            "promoted_side_answer",
+            || promoted_side_answer("what is X?", "X is the config loader."),
+            true,
+        ),
+    ];
+
+    #[test]
+    fn every_fenced_formatter_is_classified_as_declared() {
+        for (name, build, synthetic) in FENCED_FORMATTERS {
+            assert_eq!(
+                is_synthetic_reminder(&build()),
+                *synthetic,
+                "`{name}` must classify as synthetic={synthetic}"
+            );
+        }
+    }
+
+    /// The formatter half of the drift guard.
+    ///
+    /// Keyed on the **closing** fence rather than the opening one: every
+    /// formatter that emits a block has to close it, while
+    /// `is_synthetic_reminder` mentions the opening fence and emits nothing —
+    /// so the closing tag is the marker that separates the emitters from the
+    /// one function that merely reads them.
+    ///
+    /// Each candidate is cut at its own `\n}` (the body's syntactic end under
+    /// rustfmt), not at a character count: a fixed window would run past the
+    /// function into whatever const happens to be declared next, and attribute
+    /// that const's fence to the function above it.
+    #[test]
+    fn no_fenced_formatter_escapes_classification() {
+        let src = include_str!("nudges.rs").replace('\r', "");
+        // Split on the bare attribute — never on `\n#[cfg(test)]\n`, which
+        // matches nothing on a CRLF checkout and silently widens the
+        // "production prefix" to the whole file, including this list.
+        let production = src.split("#[cfg(test)]").next().unwrap_or_default();
+
+        let emitters: Vec<&str> = production
+            .split("\npub fn ")
+            .skip(1)
+            .filter_map(|chunk| {
+                let body = chunk.split("\n}").next()?;
+                body.contains("</system-reminder>")
+                    .then(|| chunk.split('(').next().unwrap_or_default().trim())
+            })
+            .collect();
+
+        assert!(
+            !emitters.is_empty(),
+            "the scan found no fenced formatters at all — it stopped matching, so \
+             its green means nothing"
+        );
+        for name in &emitters {
+            assert!(
+                FENCED_FORMATTERS.iter().any(|(n, _, _)| n == name),
+                "`{name}` builds a <system-reminder> block but is not listed in \
+                 FENCED_FORMATTERS. Decide what it is: harness scaffolding \
+                 (synthetic = true) or a wrapper around content the user really \
+                 wrote (synthetic = false, and say why in its doc)."
+            );
+        }
+        assert_eq!(
+            emitters.len(),
+            FENCED_FORMATTERS.len(),
+            "the scan found {} fenced formatters but {} are listed: {emitters:?}",
+            emitters.len(),
+            FENCED_FORMATTERS.len()
+        );
+    }
 }
