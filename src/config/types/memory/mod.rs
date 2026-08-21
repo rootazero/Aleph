@@ -34,6 +34,37 @@ pub enum MemoryInjectionMode {
     Hybrid,
 }
 
+/// Background reconciler daemon config (event-log \u2194 notes filesystem
+/// divergence scan).
+///
+/// The daemon walks every fact_id in `memory_events` and compares the
+/// expected file path against the notes filesystem, surfacing
+/// divergence as `tracing::warn!` lines + an introspection endpoint
+/// (`/v1/admin/reconciler/latest`). Off by default — the scan is
+/// non-trivial on installations with millions of rows so the operator
+/// must explicitly opt in via `[memory.reconciler] enabled = true`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct ReconcilerConfig {
+    /// Start the daemon on boot. First scan runs immediately on
+    /// spawn (not after a full interval) so the operator can confirm
+    /// wiring without waiting.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Cadence between scans, in seconds. Recommended: minutes, not
+    /// seconds — see `default_reconciler_interval_secs`.
+    #[serde(default = "defaults::default_reconciler_interval_secs")]
+    pub interval_secs: u64,
+}
+
+impl Default for ReconcilerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: defaults::default_reconciler_interval_secs(),
+        }
+    }
+}
+
 /// Memory module configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryConfig {
@@ -97,6 +128,11 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub curated: CuratedSection,
 
+    /// Background reconciler daemon (event-log \u2194 notes filesystem).
+    /// Disabled by default; opt-in via `[memory.reconciler] enabled = true`.
+    #[serde(default)]
+    pub reconciler: ReconcilerConfig,
+
     /// Isolate memory per project directory (Claude-Code-style workspaces).
     ///
     /// When `true` and a project root is active for the run, general notes and
@@ -155,6 +191,7 @@ impl Default for MemoryConfig {
             profile: UserProfileConfig::default(),
             query_filer: QueryFilerConfig::default(),
             curated: CuratedSection::default(),
+            reconciler: ReconcilerConfig::default(),
             project_scoped: false,
         }
     }
