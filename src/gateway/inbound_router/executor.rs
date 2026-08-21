@@ -140,12 +140,17 @@ impl InboundMessageRouter {
         // own. Set before the clones below so the Feishu and Telegram emitters
         // inherit it.
         //
-        // `/btw promote` resolves too, and is marked for the same reason every
-        // other side question is: today it runs on the side session like any
-        // other. If promotion ever delivers INTO the main conversation, that
-        // delivery is a different emission and owes its own decision.
-        reply_config.side_answer =
-            crate::gateway::btw::BtwTurn::resolve(&ctx.message.text).is_some();
+        // `/btw promote` resolves too, and is deliberately NOT marked. The
+        // badge's whole meaning is "this reply is not part of your main
+        // conversation"; a promote's reply announces something ENTERING it, and
+        // the crossing itself has already landed in this very transcript. That
+        // question used to be deferred here — "if promotion ever delivers INTO
+        // the main conversation, that delivery owes its own decision" — and
+        // this is the decision, taken when promotion became a served verb
+        // rather than a side turn. The predicate reads the resolver's own
+        // `promote` field, never a second string test.
+        reply_config.side_answer = crate::gateway::btw::BtwTurn::resolve(&ctx.message.text)
+            .is_some_and(|turn| !turn.promote);
 
         // Reconcile the global `output_mode` preference with what this channel
         // can physically do: EditBased widens, `editing` floors. The floor is

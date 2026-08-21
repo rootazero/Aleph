@@ -1775,6 +1775,37 @@ async fn a_channel_side_answer_reaches_the_channel_marked() {
     );
 }
 
+/// The third arm, and the one the badge's own definition demands: a
+/// **promote** receipt reaches the channel unmarked.
+///
+/// `💬` means "this reply is not part of your main conversation". A promote's
+/// reply announces something entering it — and by the time the receipt is sent,
+/// the crossing has already landed in this very transcript. Badging it says the
+/// opposite of what happened.
+///
+/// This is a decision the code had already written down as pending: the comment
+/// above `reply_config.side_answer` said promotion delivering into the main
+/// conversation "is a different emission and owes its own decision". This is
+/// that decision, and the two tests above are what keep it from being taken
+/// for every side answer as well.
+#[tokio::test]
+async fn a_promote_receipt_reaches_the_channel_unmarked() {
+    let rig = ChannelRig::new(false).await;
+    let receipt = "Promoted the side answer into this conversation: why?";
+    rig.answer_with(receipt);
+
+    rig.deliver("/btw promote").await;
+    let reply = rig.wait_for_reply().await;
+
+    assert_eq!(
+        reply, receipt,
+        "the promote receipt was badged as a side answer. The badge means \"not \
+         part of your main conversation\", worn by the one message announcing \
+         something entering it — check that `executor.rs` still reads the \
+         resolver\'s own `promote` field rather than `is_some()`."
+    );
+}
+
 /// The control for the test above, on the same rig, with the same adapter and
 /// the same answer text: an ordinary message is delivered **unmarked**.
 ///
