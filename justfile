@@ -191,13 +191,54 @@ wasm:
     wasm-bindgen --target web --no-typescript \
         --out-dir {{panel_dist}} --out-name aleph_panel \
         "$target_dir/wasm32-unknown-unknown/wasm-release/aleph_panel.wasm"
-    # 3.5 Shrink wasm (optional; -g keeps the name section for crash diagnostics)
-    if command -v wasm-opt >/dev/null 2>&1; then
-        wasm-opt -Oz -g {{panel_dist}}/aleph_panel_bg.wasm -o {{panel_dist}}/aleph_panel_bg.wasm
-        echo "✓ wasm-opt applied"
-    else
-        echo "⚠ wasm-opt not found; skipping (cargo install wasm-opt / brew install binaryen)"
+    # 3.5 Shrink wasm AND fence its feature set.
+    #
+    # This step is REQUIRED, not an optional optimisation, but it does NOT
+    # lean on wasm-opt's own exit code to reject an out-of-floor module.
+    # Verified against wasm-opt 130: Binaryen auto-detects the module's
+    # required feature set from the `target_features` custom section LLVM
+    # embeds, and trusts it unconditionally at parse time -- no combination
+    # of -mvp / --enable-* on the CLI restricts that (--detect-features is
+    # documented as doing nothing). A module built with
+    # `RUSTFLAGS="-C target-feature=+simd128"` was accepted with exit 0 even
+    # with no --enable-simd anywhere on the command line, so an --enable-*
+    # allow-list here would be silent theatre, not a gate.
+    #
+    # Instead: read what wasm-opt reports the module actually needs via
+    # --print-features, and fence THAT list ourselves against the allow-list
+    # declared in interfaces/webchat/webview-baseline.json's "wasm_features"
+    # key -- the single declaration of the floor. Do not duplicate that list
+    # here or anywhere else; if you're adding an entry, adjudicate it against
+    # Safari 16.4 first and add it there. A toolchain bump that silently
+    # starts requiring a feature outside that list fails here, loudly, naming
+    # the feature -- instead of white-screening on an older WebKit.
+    #
+    # -g keeps the name section for crash diagnostics.
+    if ! command -v wasm-opt >/dev/null 2>&1; then
+        echo "✗ wasm-opt (binaryen) is required." >&2
+        echo "  It is not a size optimisation any more: it fences the WASM feature set" >&2
+        echo "  against the declared WebView baseline. Install it with one of:" >&2
+        echo "    cargo install wasm-opt" >&2
+        echo "    brew install binaryen        # macOS" >&2
+        echo "    apt install binaryen         # Debian/Ubuntu" >&2
+        echo "    winget install WebAssembly.binaryen   # Windows" >&2
+        exit 1
     fi
+    wasm_required_features=$(wasm-opt -Oz -g --print-features \
+        {{panel_dist}}/aleph_panel_bg.wasm -o {{panel_dist}}/aleph_panel_bg.wasm)
+    node -e '
+        const required = process.argv[1].split(/\r?\n/).filter(Boolean);
+        const baseline = JSON.parse(require("fs").readFileSync("interfaces/webchat/webview-baseline.json", "utf8"));
+        const allowed = new Set(baseline.wasm_features.map(([flag]) => flag));
+        const outOfFloor = required.filter((f) => !allowed.has(f));
+        if (outOfFloor.length > 0) {
+            console.error("✗ wasm module requires WASM feature(s) outside the declared WebView floor:");
+            for (const f of outOfFloor) console.error("    " + f);
+            console.error("  Floor: interfaces/webchat/webview-baseline.json (wasm_features)");
+            process.exit(1);
+        }
+    ' -- "$wasm_required_features"
+    echo "✓ wasm-opt applied (feature set fenced)"
     # 4. Runtime index.html. Written in three parts so baseline-probe.js is
     #    inlined VERBATIM: it must run synchronously before the module script
     #    (module scripts are deferred), and it must be byte-identical to its
