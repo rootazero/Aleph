@@ -56,7 +56,10 @@ pub fn PhoneMemoryDetail() -> impl IntoView {
         if !dashboard.is_connected.get() {
             return;
         }
-        let agent = mem.agent_id.get_untracked();
+        // The row's OWN partition, not the agent picker's id: `graph.node_detail`
+        // is an addressing verb and takes a partition verbatim, while the list
+        // that produced this row spans the union the gateway resolves.
+        let agent = fact.agent_id.clone();
         spawn_local(async move {
             match GraphApi::node_detail(&dashboard, &agent, &fact.path).await {
                 Ok(d) => {
@@ -152,17 +155,26 @@ fn navigate_phone(
     let dashboard = *dashboard;
     let mem = *mem;
     spawn_local(async move {
+        // Wikilinks resolve WITHIN the partition the current note lives in —
+        // `notes_links` is partitioned, so a link never crosses one. Carrying
+        // the source note's partition keeps the stub addressable; falling back
+        // to the picker's id is what left `agent_id` empty and sent the next
+        // `node_detail` at the wrong store.
+        let partition = st
+            .selected
+            .get_untracked()
+            .map_or_else(|| mem.agent_id.get_untracked(), |f| f.agent_id);
         let id = if target.contains('/') {
             Some(target)
         } else {
-            let agent = mem.agent_id.get_untracked();
-            GraphApi::search(&dashboard, &agent, &target, 1)
+            GraphApi::search(&dashboard, &partition, &target, 1)
                 .await
                 .ok()
                 .and_then(|r| r.results.first().map(|f| f.id.clone()))
         };
         if let Some(id) = id {
-            st.selected.set(Some(CompressedFact::stub_from_path(&id)));
+            st.selected
+                .set(Some(CompressedFact::stub_from_path(&partition, &id)));
         }
     });
 }

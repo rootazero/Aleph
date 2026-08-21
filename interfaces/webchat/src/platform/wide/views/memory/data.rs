@@ -4,6 +4,8 @@
 
 use std::collections::HashSet;
 
+use super::selection::RowRef;
+
 use crate::api::{CompressedFact, RawMemory};
 
 /// Window of notes pulled in one `list_facts` call, then faceted/paginated
@@ -296,12 +298,15 @@ pub struct RawExport {
 /// `node_detail` fetch on the notes side.
 #[must_use]
 pub fn stage_raw_export(
-    selected: &HashSet<String>,
+    selected: &HashSet<RowRef>,
     page_rows: &[RawMemory],
 ) -> (Vec<RawMemory>, usize) {
+    // Matched on (partition, id), not id alone: the list spans the partition
+    // union the gateway resolves, and a row is only the row the user ticked if
+    // both halves agree.
     let staged: Vec<RawMemory> = page_rows
         .iter()
-        .filter(|r| selected.contains(&r.id))
+        .filter(|r| selected.contains(&RowRef::new(&r.agent_id, &r.id)))
         .cloned()
         .collect();
     let dropped = selected.len().saturating_sub(staged.len());
@@ -753,9 +758,13 @@ mod tests {
     // ── stage_raw_export ─────────────────────────────────────────────────────
 
     fn raw_row(id: &str) -> RawMemory {
+        raw_row_in("main", id)
+    }
+
+    fn raw_row_in(partition: &str, id: &str) -> RawMemory {
         RawMemory {
             id: id.into(),
-            agent_id: "main".into(),
+            agent_id: partition.into(),
             content: "q".into(),
             session_id: None,
             created_at: None,
@@ -770,16 +779,33 @@ mod tests {
         // reported as dropped, not silently omitted from an export that still
         // claims success.
         let page: Vec<RawMemory> = (25..50).map(|i| raw_row(&format!("r{i}"))).collect();
-        let selected: HashSet<String> = (0..50).map(|i| format!("r{i}")).collect();
+        let selected: HashSet<RowRef> = (0..50).map(|i| RowRef::new("main", format!("r{i}"))).collect();
         let (staged, dropped) = stage_raw_export(&selected, &page);
         assert_eq!(staged.len(), 25);
         assert_eq!(dropped, 25);
     }
 
+    /// A row is staged only when BOTH halves of its identity match. Ticking
+    /// `r0` in one partition must not export the `r0` sitting in the other —
+    /// which is what an id-only match did once the list started spanning the
+    /// partition union.
+    #[test]
+    fn stage_raw_export_matches_on_the_partition_too_not_the_id_alone() {
+        let page = vec![
+            raw_row_in("main", "r0"),
+            raw_row_in("main__u-owner", "r0"),
+        ];
+        let selected: HashSet<RowRef> = [RowRef::new("main__u-owner", "r0")].into_iter().collect();
+        let (staged, dropped) = stage_raw_export(&selected, &page);
+        assert_eq!(staged.len(), 1, "exactly the ticked row, not its namesake");
+        assert_eq!(staged[0].agent_id, "main__u-owner");
+        assert_eq!(dropped, 0);
+    }
+
     #[test]
     fn stage_raw_export_no_drop_when_the_whole_selection_is_on_page() {
         let page: Vec<RawMemory> = (0..10).map(|i| raw_row(&format!("r{i}"))).collect();
-        let selected: HashSet<String> = (0..5).map(|i| format!("r{i}")).collect();
+        let selected: HashSet<RowRef> = (0..5).map(|i| RowRef::new("main", format!("r{i}"))).collect();
         let (staged, dropped) = stage_raw_export(&selected, &page);
         assert_eq!(staged.len(), 5);
         assert_eq!(dropped, 0);

@@ -8,7 +8,7 @@
 use leptos::prelude::*;
 
 use super::data::EXPORT_MAX;
-use super::selection::AgentSelection;
+use super::selection::{AgentSelection, RowRef};
 use crate::components::ui::{Button, ButtonSize, ButtonVariant, ConfirmButton};
 use crate::i18n::{t, t_string, use_i18n};
 
@@ -55,8 +55,10 @@ pub fn BatchBar(
     /// through it, so the bar reports (and acts on) nothing after a switch
     /// until the user ticks boxes under the new agent.
     agent: Signal<String>,
-    /// Ids currently rendered, for the select-page toggle.
-    page_ids: Signal<Vec<String>>,
+    /// Rows currently rendered, for the select-page toggle. Partition-qualified
+    /// because one page can span the partition union the gateway resolves — see
+    /// [`RowRef`].
+    page_ids: Signal<Vec<RowRef>>,
     /// `Some((done, total))` while a clipboard export is in flight.
     exporting: RwSignal<Option<(usize, usize)>>,
     on_copy_md: impl Fn() + Clone + Send + 'static,
@@ -70,7 +72,10 @@ pub fn BatchBar(
         let sel = selected.get();
         let a = agent.get();
         let ids = page_ids.get();
-        !ids.is_empty() && ids.iter().all(|id| sel.contains(&a, id))
+        !ids.is_empty()
+            && ids
+                .iter()
+                .all(|r| sel.contains(&a, &r.partition, &r.id))
     });
     let over_cap = Signal::derive(move || plan_export(count.get()).is_capped());
     let busy = Signal::derive(move || exporting.get().is_some());

@@ -66,11 +66,16 @@ impl CompressedFact {
     /// Minimal fact for drill-into-note navigation: only `path`/`category`/
     /// `content`(title) are load-bearing for the detail views' fetch flow.
     #[must_use]
-    pub fn stub_from_path(path: &str) -> Self {
+    pub fn stub_from_path(partition: &str, path: &str) -> Self {
         let (category, filename) = path.split_once('/').unwrap_or(("other", path));
         Self {
             id: path.to_string(),
-            agent_id: String::new(),
+            // A stub is an ADDRESS, and a note's address is (partition, path) —
+            // a path alone does not say which store to look in now that one
+            // list can span the union `memory_scope::read_partitions` resolves.
+            // This used to be `String::new()`, which every caller then had to
+            // paper over by re-reading the agent picker, i.e. by guessing.
+            agent_id: partition.to_string(),
             content: filename.to_string(),
             fact_type: String::new(),
             created_at: 0,
@@ -541,12 +546,16 @@ mod tests {
 
     #[test]
     fn stub_from_path_splits_category_and_filename() {
-        let fact = CompressedFact::stub_from_path("facts/rust-notes.md");
+        let fact = CompressedFact::stub_from_path("main", "facts/rust-notes.md");
         assert_eq!(fact.id, "facts/rust-notes.md");
         assert_eq!(fact.path, "facts/rust-notes.md");
         assert_eq!(fact.category, "facts");
         assert_eq!(fact.content, "rust-notes.md");
-        assert_eq!(fact.agent_id, "");
+        assert_eq!(
+            fact.agent_id, "main",
+            "a stub is an address, so it carries the partition it was built for \
+             rather than an empty string every caller then has to guess around"
+        );
         assert_eq!(fact.created_at, 0);
         assert!(fact.tags.is_empty());
         assert_eq!(fact.link_count, 0);
@@ -554,7 +563,7 @@ mod tests {
 
     #[test]
     fn stub_from_path_falls_back_to_other_for_bare_filename() {
-        let fact = CompressedFact::stub_from_path("rust-notes.md");
+        let fact = CompressedFact::stub_from_path("main", "rust-notes.md");
         assert_eq!(fact.category, "other");
         assert_eq!(fact.content, "rust-notes.md");
     }

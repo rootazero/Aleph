@@ -42,7 +42,7 @@ impl DrawerTarget {
     fn note_stub(agent: &str, path: &str) -> Self {
         Self::Note {
             agent: agent.to_string(),
-            fact: CompressedFact::stub_from_path(path),
+            fact: CompressedFact::stub_from_path(agent, path),
         }
     }
 }

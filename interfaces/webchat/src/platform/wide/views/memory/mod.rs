@@ -42,7 +42,7 @@ use loader::{
     load_more_notes, load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow,
 };
 use pager::{LoadMoreNotes, Pager};
-use selection::AgentSelection;
+use selection::{AgentSelection, RowRef};
 use stats::{MemoryHeader, StatCards};
 use toast::{push_toast, ToastHost, ToastKind, ToastMsg};
 use xray::RetrievalXray;
@@ -306,8 +306,15 @@ pub fn Memory() -> impl IntoView {
         }
         let path = path.expect("note_param_decision only processes when has_path was true");
         let window = window.expect("note_param_decision only processes when window_ready was true");
-        // The window was loaded for this agent, so it is the agent the opened
-        // note belongs to — stamp it rather than letting the drawer re-resolve.
+        // A `?note=` link carries a PATH and no partition, while the window it
+        // is resolved against spans the union `memory_scope::read_partitions`
+        // returns. When the note is in the window its own row answers "which
+        // store" and is stamped verbatim; only the outside-the-window stub has
+        // to fall back to the picker's base id, which addresses the org tier.
+        // That fallback is byte-identical to what this did before the union
+        // existed — a share link simply cannot name a partition — and is
+        // recorded as a narrow known gap in FEATURE_LOCATOR §6.7 rather than
+        // papered over with a guess that looks authoritative.
         let agent = mem.agent_id.get_untracked();
         match locate_note(&window.facts, &path, page_size.get_untracked()) {
             Some((f, pg)) => {
@@ -316,7 +323,7 @@ pub fn Memory() -> impl IntoView {
                 highlight_id.set(Some(path.clone()));
                 if let Some(found) = window.facts.iter().find(|x| x.path == path) {
                     drawer_target.set(Some(DrawerTarget::Note {
-                        agent,
+                        agent: found.agent_id.clone(),
                         fact: found.clone(),
                     }));
                 }
@@ -325,8 +332,8 @@ pub fn Memory() -> impl IntoView {
                 // Outside the loaded window: open it directly rather than
                 // shrugging with "not in the current window" like the old view.
                 drawer_target.set(Some(DrawerTarget::Note {
-                    agent,
-                    fact: CompressedFact::stub_from_path(&path),
+                    agent: agent.clone(),
+                    fact: CompressedFact::stub_from_path(&agent, &path),
                 }));
             }
         }
@@ -344,6 +351,12 @@ pub fn Memory() -> impl IntoView {
         let Some(window) = notes.get().as_ready().cloned() else {
             return;
         };
+        // Same split as the `?note=` handler above: the row knows its partition,
+        // a bare path does not. The galaxy only ever draws
+        // `memory_scope::primary_read_partition`, so a node that misses the
+        // window is in that one — but the Panel is not told which id that is,
+        // and inventing the suffix client-side would be a second, drifting copy
+        // of a derivation the server owns.
         let agent = mem.agent_id.get_untracked();
         if let Some((f, pg)) = locate_note(&window.facts, &path, page_size.get()) {
             facet.set(f);
@@ -351,14 +364,14 @@ pub fn Memory() -> impl IntoView {
             highlight_id.set(Some(path.clone()));
             if let Some(found) = window.facts.iter().find(|x| x.path == path) {
                 drawer_target.set(Some(DrawerTarget::Note {
-                    agent,
+                    agent: found.agent_id.clone(),
                     fact: found.clone(),
                 }));
             }
         } else {
             drawer_target.set(Some(DrawerTarget::Note {
-                agent,
-                fact: CompressedFact::stub_from_path(&path),
+                agent: agent.clone(),
+                fact: CompressedFact::stub_from_path(&agent, &path),
             }));
         }
         mem.highlight_note_id.set(None);
@@ -442,10 +455,21 @@ pub fn Memory() -> impl IntoView {
                 selected=selected
                 agent=Signal::derive(move || mem.agent_id.get())
                 page_ids=Signal::derive(move || {
+                    // Each row reports the partition that owns it; the agent
+                    // picker's value names an AGENT and cannot stand in for it
+                    // once the list spans a partition union.
                     if is_notes.get() {
-                        note_page_rows.get().into_iter().map(|f| f.path).collect()
+                        note_page_rows
+                            .get()
+                            .into_iter()
+                            .map(|f| RowRef::new(f.agent_id, f.path))
+                            .collect()
                     } else {
-                        raw_rows.get().into_iter().map(|r| r.id).collect()
+                        raw_rows
+                            .get()
+                            .into_iter()
+                            .map(|r| RowRef::new(r.agent_id, r.id))
+                            .collect()
                     }
                 })
                 exporting=exporting
@@ -462,7 +486,7 @@ pub fn Memory() -> impl IntoView {
                         let rows: Vec<CompressedFact> = note_rows
                             .get_untracked()
                             .into_iter()
-                            .filter(|f| sel.contains(&f.path))
+                            .filter(|f| sel.contains(&RowRef::new(&f.agent_id, &f.path)))
                             .collect();
                         let total = rows.len();
                         exporting.set(Some((0, total)));
@@ -470,7 +494,12 @@ pub fn Memory() -> impl IntoView {
                             let mut staged = Vec::with_capacity(total);
                             let mut failures = 0usize;
                             for (i, f) in rows.into_iter().enumerate() {
-                                let body = GraphApi::node_detail(&state, &agent, &f.path)
+                                // Addressed at the row's OWN partition, not the
+                                // picker's base id: `graph.node_detail` is an
+                                // addressing verb and takes a partition verbatim,
+                                // so a base id here would miss every note the
+                                // session's own writers wrote.
+                                let body = GraphApi::node_detail(&state, &f.agent_id, &f.path)
                                     .await
                                     .map(|d| d.content);
                                 if body.is_err() {
@@ -562,7 +591,7 @@ pub fn Memory() -> impl IntoView {
                     // makes it impossible to delete agent B's notes with boxes
                     // ticked under agent A.
                     let agent = mem.agent_id.get_untracked();
-                    let ids: Vec<String> =
+                    let ids: Vec<RowRef> =
                         selected.get_untracked().ids_for(&agent).into_iter().collect();
                     if ids.is_empty() {
                         return;
@@ -574,11 +603,18 @@ pub fn Memory() -> impl IntoView {
                     let notes_layer = is_notes.get_untracked();
                     spawn_local(async move {
                         let mut failed = 0usize;
-                        for id in ids {
+                        for row in ids {
                             let res = if notes_layer {
-                                GraphApi::delete_note(&state, &agent, &id).await
+                                // `row.partition`, never `agent`: deleting is the
+                                // one place where addressing the wrong partition
+                                // destroys somebody else's note that happens to
+                                // share a path.
+                                GraphApi::delete_note(&state, &row.partition, &row.id).await
                             } else {
-                                MemoryApi::delete(&state, id).await
+                                // `memory.delete` resolves the owning partition
+                                // server-side from the bare row id and gates on it,
+                                // so the id alone is the whole address here.
+                                MemoryApi::delete(&state, row.id).await
                             };
                             if res.is_err() {
                                 failed += 1;
@@ -659,9 +695,20 @@ pub fn Memory() -> impl IntoView {
                     >
                         <For
                             each=move || note_page_rows.get()
-                            key=|f| f.path.clone()
+                            // (partition, path), not path alone: the list spans
+                            // the union the gateway resolves and the same
+                            // `category/filename` can exist in two partitions.
+                            // Duplicate keys make Leptos render one row and drop
+                            // the other, silently.
+                            key=|f| (f.agent_id.clone(), f.path.clone())
                             children=move |fact| {
                                 let path = fact.path.clone();
+                                // The partition this row reported. Captured once
+                                // per row so every action below addresses the store
+                                // the row actually lives in.
+                                let owner_sel = fact.agent_id.clone();
+                                let owner_tog = fact.agent_id.clone();
+                                let owner_open = fact.agent_id.clone();
                                 let p_sel = path.clone();
                                 let p_tog = path.clone();
                                 let p_hl = path.clone();
@@ -671,11 +718,15 @@ pub fn Memory() -> impl IntoView {
                                 view! {
                                     <NoteCard
                                         fact=fact
-                                        checked=Signal::derive(move || selected.get().contains(&mem.agent_id.get(), &p_sel))
+                                        checked=Signal::derive(move || selected.get().contains(&mem.agent_id.get(), &owner_sel, &p_sel))
                                         highlighted=Signal::derive(move || highlight_id.get().as_deref() == Some(p_hl.as_str()))
-                                        on_toggle=move || selected.update(|s| s.toggle(&mem.agent_id.get_untracked(), &p_tog))
+                                        on_toggle=move || selected.update(|s| s.toggle(&mem.agent_id.get_untracked(), RowRef::new(&owner_tog, &p_tog)))
                                         on_open=move || drawer_target.set(Some(DrawerTarget::Note {
-                                            agent: mem.agent_id.get_untracked(),
+                                            // The row's own partition, latched at
+                                            // open time. Every verb the drawer runs
+                                            // (detail / update / rename / delete /
+                                            // provenance) is an addressing verb.
+                                            agent: owner_open.clone(),
                                             fact: fact_open.clone(),
                                         }))
                                         on_locate=move || {
@@ -734,9 +785,17 @@ pub fn Memory() -> impl IntoView {
                     >
                         <For
                             each=move || raw_rows.get()
-                            key=|r| r.id.clone()
+                            // Raw ids are uuids and unique across partitions, so
+                            // the partition is not needed to disambiguate. Kept
+                            // symmetric with the note key above so the two lists
+                            // do not read as having different identity rules.
+                            key=|r| (r.agent_id.clone(), r.id.clone())
                             children=move |raw| {
                                 let id = raw.id.clone();
+                                // The partition this row reported, same contract
+                                // as the note rows above.
+                                let owner_sel = raw.agent_id.clone();
+                                let owner_tog = raw.agent_id.clone();
                                 let id_sel = id.clone();
                                 let id_tog = id.clone();
                                 let id_del = id.clone();
@@ -744,8 +803,8 @@ pub fn Memory() -> impl IntoView {
                                 view! {
                                     <RawCard
                                         raw=raw
-                                        checked=Signal::derive(move || selected.get().contains(&mem.agent_id.get(), &id_sel))
-                                        on_toggle=move || selected.update(|s| s.toggle(&mem.agent_id.get_untracked(), &id_tog))
+                                        checked=Signal::derive(move || selected.get().contains(&mem.agent_id.get(), &owner_sel, &id_sel))
+                                        on_toggle=move || selected.update(|s| s.toggle(&mem.agent_id.get_untracked(), RowRef::new(&owner_tog, &id_tog)))
                                         on_open=move || drawer_target.set(Some(DrawerTarget::Raw(raw_open.clone())))
                                         on_delete={
                                             let id_del = id_del.clone();
