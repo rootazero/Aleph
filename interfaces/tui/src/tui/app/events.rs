@@ -287,6 +287,7 @@ impl AppState {
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
                 self.turn_streamed_len = 0;
+                self.run_rendered_assistant_text = false;
                 self.is_connected = true;
                 Action::None
             }
@@ -411,6 +412,21 @@ impl AppState {
                 // first, then settle whatever it did not mention.
                 self.reconcile_tools_from_summary(&summary.tool_summaries, &summary.errors);
                 self.settle_orphan_tools();
+                // The terminal answer, when this run produced no other copy of
+                // it. On an ordinary streamed turn the text is already on
+                // screen (twice on the wire, de-duped by `turn_streamed_len`)
+                // and `final_response` is a duplicate, so the flag is what
+                // keeps this from doubling every reply. On a run the gateway
+                // SERVED rather than dispatched — `/btw promote` is the first —
+                // this frame is the only carrier the answer ever gets, and
+                // without this the surface that owns the `p` key showed a
+                // spinner and then silence for both of the outcomes that are
+                // not errors.
+                if !self.run_rendered_assistant_text {
+                    if let Some(text) = summary.final_response.as_deref() {
+                        self.append_assistant_content(text.trim_end());
+                    }
+                }
                 self.mark_current_assistant_complete();
 
                 // Surface non-clean terminations (a hit cap / exhausted budget)

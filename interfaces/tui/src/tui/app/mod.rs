@@ -695,6 +695,28 @@ pub struct AppState {
     /// provider, output guardrail) still lands in full.
     pub turn_streamed_len: usize,
 
+    /// Has THIS run put any assistant text on screen yet?
+    ///
+    /// Set by [`AppState::append_assistant_content`] — the one place either
+    /// carrier (`ResponseChunk` deltas, `AgentTrace{TextEmitted{Final}}`)
+    /// reaches the transcript — and cleared on `RunAccepted`.
+    ///
+    /// It exists because `RunComplete` carries `summary.final_response`, which
+    /// `reply_emitter/extract.rs` calls the run's authoritative terminal
+    /// answer, and for an ordinary streamed turn that field is a duplicate of
+    /// what is already rendered. For a run that produced no text at all it is
+    /// the ONLY copy, and the TUI used to drop it: a `/btw promote` — served
+    /// by the gateway without a model, so no chunk and no trace ever
+    /// arrives — showed a spinner and then nothing, for the success receipt
+    /// and the "nothing to promote" receipt alike, while the failure receipt
+    /// (`RunError`) spoke. This is the general repair rather than a promote
+    /// special case: any served-not-run branch added later inherits it.
+    ///
+    /// A per-run flag rather than "is the last assistant bubble empty":
+    /// a run that appended nothing leaves the previous turn's bubble as the
+    /// last one, so that question answers about the wrong turn.
+    pub run_rendered_assistant_text: bool,
+
     // -- Settings --
     pub verbose: bool,
     pub tool_progress_mode: ToolProgressMode,
@@ -768,6 +790,7 @@ impl AppState {
             last_run_duration: None,
             current_run_uses_agent_trace: false,
             turn_streamed_len: 0,
+            run_rendered_assistant_text: false,
             current_run_trace_summary_applied: false,
 
             verbose: false,

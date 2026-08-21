@@ -2184,3 +2184,150 @@ fn the_overlay_does_not_swallow_a_run_less_frame() {
         "a session-keyed clarification must still reach its overlay"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The terminal answer of a run that produced no other copy of it
+// ---------------------------------------------------------------------------
+
+/// A run the gateway SERVED rather than dispatched — `/btw promote` is the
+/// first — never emits a chunk or a trace, so `summary.final_response` is the
+/// only carrier its answer ever gets.
+///
+/// This is the surface that owns the `p` key, and before this it showed a
+/// spinner and then nothing: for the success receipt AND for "nothing to
+/// promote", while the failure receipt (`RunError`) spoke. The asymmetry fell
+/// exactly the wrong way round, and it compounded — a user who presses `p`,
+/// sees nothing, and presses it again carries a second full-size answer into
+/// the main conversation with no signal either time.
+#[test]
+fn a_run_that_streamed_nothing_still_renders_its_terminal_answer() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-promote".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-promote".into(),
+        seq: 1,
+        summary: RunSummary {
+            final_response: Some("Promoted the side answer into this conversation: why?".into()),
+            ..Default::default()
+        },
+        total_duration_ms: 0,
+    });
+
+    let rendered: Vec<&String> = state
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Assistant { content, .. } => Some(content),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rendered.len(),
+        1,
+        "the receipt must reach the transcript: {:?}",
+        state.messages
+    );
+    assert_eq!(
+        rendered[0], "Promoted the side answer into this conversation: why?",
+        "the terminal answer is the only copy a served run ever sends"
+    );
+}
+
+/// The other half, and the reason this is a per-run flag rather than an
+/// unconditional render: an ordinary streamed turn puts the same text on the
+/// wire twice (deltas, then `final_response`), so rendering the summary
+/// unconditionally would double every reply in the transcript.
+#[test]
+fn a_streamed_answer_is_not_doubled_by_its_own_summary() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-ordinary".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-ordinary".into(),
+        seq: 1,
+        content: "the answer".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-ordinary".into(),
+        seq: 2,
+        summary: RunSummary {
+            final_response: Some("the answer".into()),
+            ..Default::default()
+        },
+        total_duration_ms: 0,
+    });
+
+    match state.messages.last().unwrap() {
+        ChatMessage::Assistant { content, .. } => assert_eq!(
+            content, "the answer",
+            "the summary is a duplicate of what streaming already rendered"
+        ),
+        other => panic!("expected an assistant message, got {other:?}"),
+    }
+}
+
+/// The flag belongs to the run, not to the screen: a second served run in the
+/// same session must render its own answer even though the first one rendered
+/// text a moment earlier.
+#[test]
+fn the_streamed_flag_is_cleared_when_the_next_run_is_accepted() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-one".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:00Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-one".into(),
+        seq: 1,
+        content: "first".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-one".into(),
+        seq: 2,
+        summary: RunSummary::default(),
+        total_duration_ms: 0,
+    });
+
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-two".into(),
+        session_key: "s".into(),
+        accepted_at: "2026-03-04T00:00:01Z".into(),
+    });
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-two".into(),
+        seq: 3,
+        summary: RunSummary {
+            final_response: Some("there is nothing to promote".into()),
+            ..Default::default()
+        },
+        total_duration_ms: 0,
+    });
+
+    let joined: String = state
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Assistant { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    assert!(
+        joined.contains("there is nothing to promote"),
+        "the second run's receipt was suppressed by the first run's text: {joined:?}"
+    );
+}
