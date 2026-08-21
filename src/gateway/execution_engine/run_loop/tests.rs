@@ -416,7 +416,18 @@ fn scope_stamping_producers_are_all_accounted_for() {
             .split("#[cfg(test)]\nmod tests")
             .next()
             .unwrap_or_default();
-        if head.contains("RunRequest {") {
+        // A *construction*, not a return type. `fn f(..) -> RunRequest {` ends
+        // in the same three characters this scans for, so a file that merely
+        // hands one back was reported as producing one — and the only honest
+        // response to that prompt is to write a non-producer into a census
+        // whose whole value is that its entries are true. Every entry above is
+        // still matched by a real construction with this in place, so it
+        // narrows nothing that was ever a producer.
+        let constructs = head
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .any(|l| l.contains("RunRequest {") && !l.contains("->"));
+        if constructs {
             found.push(rel);
         }
     }
