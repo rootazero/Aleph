@@ -195,15 +195,15 @@ pub enum ReceiptKind {
     /// the [`Limit`] that fired (wording is chosen by *its* shape — see
     /// `Limit::PerUser`/`Limit::Total`'s own docs — never by asking "may this
     /// caller see that number", a question nothing at render time can
-    /// answer) and the reset instant, resolved fresh at
-    /// `ExecutionError::receipt_kind()` time rather than carried on the
-    /// error itself: `ExecutionError::SpendExhausted` carries only `limit`,
-    /// so the same period boundary `spend::check` just computed is not
-    /// duplicated into a second field that could read stale after a live
-    /// policy reload. Every `receipt_kind()`/`user_receipt()` call site in
-    /// this crate runs synchronously, moments after the denial — see those
-    /// call sites — so recomputing here is not a second answer, it is the
-    /// same computation `check` made, made again a few instructions later.
+    /// answer) and the reset instant `spend::check` computed for this exact
+    /// denial. That instant is carried through unchanged from
+    /// `ExecutionError::SpendExhausted` — never recomputed here or at
+    /// `receipt_kind()` time — because a fresh `period_end_ms(Utc::now(),
+    /// ..)` call moments later can name the *next* window's end (if
+    /// rendering crosses a period boundary, or the run was parked and
+    /// retried) or read a since-reloaded `current_policy()` (spend policy
+    /// is hot-swappable via `spend::update_policy`). See
+    /// `ExecutionError::SpendExhausted`'s own doc for the full argument.
     SpendExhausted { limit: Limit, reset_ms: i64 },
 }
 

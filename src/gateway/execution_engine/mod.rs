@@ -446,8 +446,21 @@ pub enum ExecutionError {
     /// raised by `run_loop::deny_if_over_spend` before either engine claims
     /// any run resource. See [`crate::spend`] for the floor arm this is the
     /// run-admission sibling of.
+    ///
+    /// `reset_ms` is the period boundary [`crate::spend::check`] itself
+    /// computed for this denial — carried on `Verdict::Denied`'s own
+    /// `Spent::period_end_ms` — captured here at denial time rather than
+    /// recomputed later at `receipt_kind()` time. Recomputing would not be
+    /// "the same answer, asked again a few instructions later": (1) if
+    /// rendering happens to cross a period boundary, or the run was parked
+    /// and retried later, a fresh computation names the *next* window's
+    /// end, not the one the caller actually hit; (2) `spend::current_policy`
+    /// is hot-swappable (`spend::update_policy`, and this task's own plan
+    /// makes `[policies.spend]` apply live), so "moments later, under the
+    /// same policy" is not a premise a fresh read can rely on. Carrying the
+    /// value sidesteps both.
     #[error("spend ceiling reached")]
-    SpendExhausted { limit: crate::spend::Limit },
+    SpendExhausted { limit: crate::spend::Limit, reset_ms: i64 },
 }
 
 impl ExecutionError {
@@ -499,17 +512,11 @@ impl ExecutionError {
             | Self::RunNotActive(_)
             | Self::Fallthrough { .. }
             | Self::Orchestrator(_) => ReceiptKind::Failed,
-            // Resolve the reset instant fresh, here, rather than carrying it
-            // on the error: every call site of this method runs
-            // synchronously, moments after `spend::check` computed the same
-            // period boundary (see those call sites and `ReceiptKind::
-            // SpendExhausted`'s doc), so this is that computation made
-            // again, not a second answer that could drift from it.
-            Self::SpendExhausted { limit } => {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                let reset_ms =
-                    crate::spend::period::period_end_ms(now_ms, crate::spend::current_policy().period);
-                ReceiptKind::SpendExhausted { limit: *limit, reset_ms }
+            // `reset_ms` is carried on the error (see `Self::SpendExhausted`'s
+            // doc) rather than recomputed here — this arm must not read
+            // `Utc::now()` or `spend::current_policy()`.
+            Self::SpendExhausted { limit, reset_ms } => {
+                ReceiptKind::SpendExhausted { limit: *limit, reset_ms: *reset_ms }
             }
         }
     }
@@ -599,7 +606,7 @@ mod shared_room_lane_tests {
 
 #[cfg(test)]
 mod user_receipt_tests {
-    use super::{ExecutionError, Locale};
+    use super::{ExecutionError, Locale, ReceiptKind};
 
     #[test]
     fn rate_limit_failure_reads_as_retryable() {
@@ -701,6 +708,7 @@ mod user_receipt_tests {
                 spent: 42.0,
                 limit: 40.0,
             },
+            reset_ms: 1_000,
         };
         let (code, message) = e.user_receipt(Locale::En);
         assert_eq!(code, "SPEND_EXHAUSTED");
@@ -713,6 +721,7 @@ mod user_receipt_tests {
     fn spend_exhausted_total_never_leaks_a_number() {
         let e = ExecutionError::SpendExhausted {
             limit: crate::spend::Limit::Total,
+            reset_ms: 1_000,
         };
         let (code, message) = e.user_receipt(Locale::En);
         assert_eq!(code, "SPEND_EXHAUSTED");
@@ -725,7 +734,40 @@ mod user_receipt_tests {
     fn spend_exhausted_receipt_kind_is_not_transient() {
         let e = ExecutionError::SpendExhausted {
             limit: crate::spend::Limit::Total,
+            reset_ms: 1_000,
         };
         assert!(!e.receipt_kind().is_transient());
+    }
+
+    /// The reset instant is *carried* on the error, not recomputed at
+    /// `receipt_kind()` time — see `Self::SpendExhausted`'s doc for the two
+    /// ways recomputing could drift (a period boundary crossed between
+    /// denial and render; a live policy reload, which this plan's own
+    /// Task 10 makes possible). Pin `reset_ms` to an instant nowhere near
+    /// "now" (2000-01-01T00:00:00Z) so a fresh `period_end_ms(Utc::now(),
+    /// ..)` call could never coincidentally reproduce it: if `receipt_kind()`
+    /// ever regressed to recomputing instead of reading the field, this
+    /// assertion would fail rather than passing by accident.
+    #[test]
+    fn spend_exhausted_receipt_names_the_carried_reset_instant_not_a_recomputed_one() {
+        let reset_ms: i64 = 946_684_800_000; // 2000-01-01T00:00:00Z
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+            reset_ms,
+        };
+        let (_, message) = e.user_receipt(Locale::En);
+        assert!(
+            message.contains("2000-01-01"),
+            "receipt must name the carried reset instant verbatim, got: {message}"
+        );
+
+        // Same property through `receipt_kind()` directly, without going
+        // through rendering.
+        match e.receipt_kind() {
+            ReceiptKind::SpendExhausted { reset_ms: got, .. } => {
+                assert_eq!(got, reset_ms);
+            }
+            other => panic!("expected ReceiptKind::SpendExhausted, got {other:?}"),
+        }
     }
 }

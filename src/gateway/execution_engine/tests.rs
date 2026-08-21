@@ -2094,6 +2094,7 @@ async fn a_spend_exhausted_failure_blocks_the_goal_instead_of_parking_it() {
         &session_str,
         &ExecutionError::SpendExhausted {
             limit: crate::spend::Limit::Total,
+            reset_ms: 1_000,
         },
         None,
     )

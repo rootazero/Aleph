@@ -571,13 +571,20 @@ fn admission_result_for_denies_carrying_the_verdicts_own_limit() {
     match admission_result_for(per_user) {
         Err(ExecutionError::SpendExhausted {
             limit: crate::spend::Limit::PerUser { spent, limit },
+            reset_ms,
         }) => {
             assert_eq!(spent, 11.0);
             assert_eq!(limit, 10.0);
+            // Carried from the verdict's own `Spent::period_end_ms`, not
+            // recomputed — see `ExecutionError::SpendExhausted`'s doc.
+            assert_eq!(reset_ms, 1_000);
         }
         other => panic!("expected Err(SpendExhausted {{ limit: PerUser {{ .. }} }}), got {other:?}"),
     }
 
+    // A different `period_end_ms` than the `PerUser` verdict above, so a
+    // pass here cannot be explained by a hardcoded/default `reset_ms` —
+    // each verdict's own boundary must come through.
     let total = crate::spend::Verdict::Denied {
         limit: crate::spend::Limit::Total,
         spent: crate::spend::Spent {
@@ -585,13 +592,16 @@ fn admission_result_for_denies_carrying_the_verdicts_own_limit() {
             unpriced_calls: 0,
             partial_calls: 0,
             period_start_ms: 0,
-            period_end_ms: Some(1_000),
+            period_end_ms: Some(2_000),
         },
     };
     match admission_result_for(total) {
         Err(ExecutionError::SpendExhausted {
             limit: crate::spend::Limit::Total,
-        }) => {}
+            reset_ms,
+        }) => {
+            assert_eq!(reset_ms, 2_000);
+        }
         other => panic!("expected Err(SpendExhausted {{ limit: Total }}), got {other:?}"),
     }
 }

@@ -99,7 +99,21 @@ pub(super) fn deny_if_over_spend(request: &RunRequest) -> Result<(), ExecutionEr
 fn admission_result_for(verdict: crate::spend::Verdict) -> Result<(), ExecutionError> {
     match verdict {
         crate::spend::Verdict::Allowed(_) => Ok(()),
-        crate::spend::Verdict::Denied { limit, .. } => Err(ExecutionError::SpendExhausted { limit }),
+        crate::spend::Verdict::Denied { limit, spent } => {
+            // `spent.period_end_ms` is `None` only out of a raw
+            // `SpendLedger` read (see `Spent::period_end_ms`'s doc) — this
+            // `spent` came from `spend::check`/`check_with`, which always
+            // fills it in before returning `Denied` (the only early-return
+            // that skips filling it is `Verdict::Allowed`, taken while the
+            // policy is disabled). A `None` here means an earlier layer
+            // broke that guarantee; recomputing a plausible-looking instant
+            // would hide exactly the drift this field exists to prevent, so
+            // this is `expect`, not a fallback.
+            let reset_ms = spent.period_end_ms.expect(
+                "spend::check always fills period_end_ms before returning Verdict::Denied",
+            );
+            Err(ExecutionError::SpendExhausted { limit, reset_ms })
+        }
     }
 }
 

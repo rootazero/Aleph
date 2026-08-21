@@ -2109,6 +2109,7 @@ mod transient_loop_park_tests {
             session,
             &ExecutionError::SpendExhausted {
                 limit: crate::spend::Limit::Total,
+                reset_ms: 1_000,
             },
             None,
         )
