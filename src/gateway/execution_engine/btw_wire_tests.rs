@@ -1463,6 +1463,46 @@ async fn a_claimed_btw_reaches_the_engine_on_the_same_rig() {
     );
 }
 
+/// `/help` on a channel really carries the `/btw` line — asserted on the wire,
+/// not on the constant.
+///
+/// The two guards next to `ROUTER_OWNED_HELP_LINES` in `command_handler.rs` both
+/// read the constant and neither calls `handle_help`. Delete the `push_str` that
+/// appends it and both stay green, `grep` still finds three hits, and `/btw`'s
+/// **only** discovery surface disappears without a sound. That is the weaker
+/// cousin of 守卫要断言「效果到达了」，不是「调用发生了」 — here neither the effect
+/// nor the call was asserted.
+///
+/// It matters more than a missing test usually does: discovery is not a nicety
+/// here. The catalog registration was refused because a listed `/btw` would also
+/// be a dispatchable one, and the escape clause was re-taken specifically on the
+/// strength of this line existing. If it silently stops being emitted, the
+/// refusal loses the thing that justified it.
+///
+/// Uses the recording channel the rig grew when the arrival tests were fixed:
+/// `/help` is answered by the router, so it never reaches the engine, and the
+/// reply is only observable because an outbound send actually succeeds.
+#[tokio::test]
+async fn channel_help_really_carries_the_btw_line() {
+    let rig = ChannelRig::new(false).await;
+
+    let reached = rig.try_deliver("/help").await;
+    assert!(
+        reached.is_none(),
+        "`/help` is answered by the router and must not reach the engine"
+    );
+
+    let replies = rig.replies_so_far();
+    assert!(
+        replies.iter().any(|r| r.contains("/btw")),
+        "the channel `/help` listing does not mention `/btw`, which is its only \
+         discovery surface anywhere — the catalog listing was deliberately \
+         refused. Check that `handle_help` still appends \
+         `ROUTER_OWNED_HELP_LINES`; the two guards on the constant itself cannot \
+         see that append. Replies were: {replies:?}"
+    );
+}
+
 /// Why `/btw` is not registered in the `ToolCatalog`, and what stops one
 /// appearing there by accident.
 ///
@@ -1506,6 +1546,29 @@ async fn a_claimed_btw_reaches_the_engine_on_the_same_rig() {
 /// both halves of `SHORTHAND_ALIASES`, the bundled skills tree, and the bundled
 /// plugins tree (its `[[tools]]` and its `commands/`, through the loader's own
 /// parsers).
+///
+/// # A bundled plugin has five components; three cannot shadow a bare verb
+///
+/// `component_source` resolves skills / commands / agents / hooks / mcp-servers,
+/// and the list above accounts for two of them. The other three are not an
+/// omission — they are namespaced or are not command words at all, which is a
+/// property worth stating rather than a gap worth hiding:
+///
+/// * **commands** and a plugin's own **skills** register under
+///   `namespaced_component_key(plugin_id, name)` → `plugin-id:name`. A slash
+///   token containing `:` can never equal a bare `btw`.
+/// * **mcp-servers** register their tools as `{server_id}__{tool}`
+///   (`McpHandler::qualified_name`, used verbatim as the `UnifiedTool` command
+///   name in `tools/handlers/registration.rs`) — same argument, different
+///   separator.
+/// * **hooks** and **agents** are not slash commands; they never become catalog
+///   command words.
+///
+/// So `[[tools]]` is the only bundled-plugin route that can shadow `/btw`, and
+/// it is the route with no ceiling behind it. The commands arm is collected
+/// anyway so that the guard keeps asking the one resolver about what boot
+/// registers, instead of encoding today's namespacing as an assumption — but do
+/// not read it as covering the tools arm.
 ///
 /// The honest answer to "is that all of them" is **no, and nothing here makes
 /// the list stay complete.** What is in reach is what the binary carries; what
@@ -1558,8 +1621,8 @@ async fn no_shipped_command_word_resolves_as_a_side_question() {
     // loader's own parser rather than a second one written here.
     let bundled_skills = bundled_skill_command_words();
     let bundled_plugins = bundled_plugin_command_words();
-    words.extend(bundled_skills.iter().cloned());
-    words.extend(bundled_plugins.iter().cloned());
+    words.extend(bundled_skills.words.iter().cloned());
+    words.extend(bundled_plugins.words.iter().cloned());
 
     // The bundled arms get their OWN non-empty check, and it is a hard failure.
     //
@@ -1572,12 +1635,19 @@ async fn no_shipped_command_word_resolves_as_a_side_question() {
     // uninitialised submodule is a fact about the checkout, and the honest
     // response is to say so out loud rather than to pass.
     //
+    // ⚠️ Counts **units walked**, not words produced. A plugin whose components
+    // live under a non-default directory name (`commands = "cmds"`) yields no
+    // words while being entirely present, and a word-count check would then
+    // accuse the submodules and send the reader to `git submodule update`, which
+    // would not help. Units answer the question actually being asked — was the
+    // tree there — and words answer the predicate.
+    //
     // Deliberately paired: both trees are submodules of the same repo,
     // initialised by the same `--recursive`, so one message covers the one
     // condition that produces both.
     assert!(
-        !bundled_skills.is_empty() && !bundled_plugins.is_empty(),
-        "the bundled trees contributed {} skill and {} plugin command word(s) — \
+        bundled_skills.units > 0 && bundled_plugins.units > 0,
+        "the bundled walk parsed {} skill(s) and {} plugin director(ies) — \
          `skills/` and `plugins/` are git submodules and this checkout has not \
          initialised them, so those two sources were not checked at all. This is \
          a statement about the checkout, not about the guard: run \
@@ -1585,8 +1655,8 @@ async fn no_shipped_command_word_resolves_as_a_side_question() {
          `submodules: recursive`, which is where this arm earns its keep. Do not \
          relax this into a soft skip — a census that scans an empty directory and \
          reports closure is worse than one that is absent.",
-        bundled_skills.len(),
-        bundled_plugins.len()
+        bundled_skills.units,
+        bundled_plugins.units
     );
 
     for word in &words {
@@ -1601,6 +1671,23 @@ async fn no_shipped_command_word_resolves_as_a_side_question() {
     }
 }
 
+/// What a bundled tree contributed, and how much of it the walk actually saw.
+///
+/// The second number exists because "produced no command words" and "was not
+/// there" are different facts with different fixes, and the non-emptiness check
+/// below must not confuse them. A plugin whose components live under a
+/// non-default directory name contributes zero words while being perfectly
+/// present; blaming that on an uninitialised submodule sends the reader to run
+/// `git submodule update`, which will not help.
+struct BundledWalk {
+    /// Command words the catalog will register from this tree.
+    words: Vec<String>,
+    /// Units the walk parsed successfully — skills for the skills tree, plugin
+    /// directories for the plugins tree. Zero means the tree is absent or
+    /// unreadable; non-zero means it was walked, whatever it yielded.
+    units: usize,
+}
+
 /// Every command word the bundled **skills** tree contributes to the catalog.
 ///
 /// Walks `crate::bundled::BUNDLED_SKILLS` for `SKILL.md` files and parses each
@@ -1611,8 +1698,8 @@ async fn no_shipped_command_word_resolves_as_a_side_question() {
 /// deriving it.
 ///
 /// Empty in a bare checkout (the tree is a git submodule); non-empty in CI.
-fn bundled_skill_command_words() -> Vec<String> {
-    fn walk(dir: &include_dir::Dir<'_>, out: &mut Vec<String>) {
+fn bundled_skill_command_words() -> BundledWalk {
+    fn walk(dir: &include_dir::Dir<'_>, out: &mut BundledWalk) {
         for file in dir.files() {
             let is_skill_md = file
                 .path()
@@ -1630,7 +1717,8 @@ fn bundled_skill_command_words() -> Vec<String> {
                 crate::domain::skill::SkillSource::Bundled,
             ) {
                 use crate::domain::Entity as _;
-                out.push(manifest.id().to_string());
+                out.units += 1;
+                out.words.push(manifest.id().to_string());
             }
         }
         for sub in dir.dirs() {
@@ -1638,7 +1726,10 @@ fn bundled_skill_command_words() -> Vec<String> {
         }
     }
 
-    let mut out = Vec::new();
+    let mut out = BundledWalk {
+        words: Vec::new(),
+        units: 0,
+    };
     walk(&crate::bundled::BUNDLED_SKILLS, &mut out);
     out
 }
@@ -1646,62 +1737,102 @@ fn bundled_skill_command_words() -> Vec<String> {
 /// Every command word the bundled **plugins** tree contributes to the catalog.
 ///
 /// This is the arm that matters most, and it was missing for a round. A bundled
-/// plugin reaches the catalog by two routes and they are not equally dangerous:
+/// plugin reaches the catalog by two routes, and only one of them can shadow a
+/// bare verb:
 ///
-/// * **`[[tools]]`** → `register_plugin_tools` → `ToolSource::Plugin` →
-///   `CommandContext::Builtin` → `execute_direct_tool`, i.e. the raw tool
-///   registry, **with no `ScopedToolService` and therefore no read-only
-///   ceiling.** A bundled plugin exposing a tool named `btw` would take every
-///   side question on Panel and TUI straight past the thing this whole feature
-///   exists to deliver.
+/// * **`[[tools]]`** (top level in the deprecated `aleph.plugin.toml`,
+///   `[[aleph.tools]]` in the CC format — both land in `tools_v2`) →
+///   `register_plugin_tools` → `ToolSource::Plugin` → `CommandContext::Builtin`
+///   → `execute_direct_tool`, i.e. the raw tool registry, **with no
+///   `ScopedToolService` and therefore no read-only ceiling.** A bundled plugin
+///   exposing a tool named `btw` would take every side question on Panel and TUI
+///   straight past the thing this whole feature exists to deliver. **This is the
+///   only bundled-plugin route that can shadow `/btw`.**
 /// * **`commands/`** → `register_skills` → `ToolSource::Skill`, whose fast path
 ///   returns `Fallthrough`, so the ceiling survives and only the command's
-///   prompt is overlaid.
+///   prompt is overlaid. Its catalog word is
+///   `SkillRegistration::qualified_name()` = `namespaced_component_key(plugin_id, name)`
+///   = `plugin-id:name`, and boot registers that same qualified form — so a
+///   plugin command called `btw` becomes `some-plugin:btw` and **cannot** equal
+///   a bare `btw`. It is collected anyway, because the guard's job is to ask the
+///   one resolver about what boot registers rather than to reason about which
+///   answers are foregone conclusions; if `namespaced_component_key` ever stops
+///   namespacing, this arm notices without being told.
 ///
-/// Both are collected here, through the loader's own calls rather than a second
+/// ⚠️ **Do not read that as redundancy and trim the `tools_v2` arm.** The two
+/// arms are not two ways of finding the same thing: the commands arm structurally
+/// cannot fail the predicate, and the tools arm is the only thing standing
+/// between a bundled plugin and an unceilinged `/btw`.
+///
+/// Both are collected through the loader's own calls rather than a second
 /// parser: `manifest::parse_manifest_from_dir_sync` (the exact call
 /// `tool_catalog_init` makes) for `tools_v2`, and `manifest::parsers::parse_commands_dir`
 /// with `SkillRegistration::qualified_name()` (the exact derivation boot
 /// registers) for commands.
 ///
+/// # No pre-filter: the parser decides what a plugin is
+///
+/// This used to skip any directory without `.claude-plugin/plugin.{toml,json}`
+/// before calling the parser — a two-entry enumeration standing in front of a
+/// parser that accepts four shapes, and the shape it dropped was the one that
+/// mattered: the deprecated `aleph.plugin.toml` puts `[[tools]]` at top level,
+/// `toml_types.rs` maps it straight to `tools_v2`, and boot registers it exactly
+/// like any other. A bundled plugin in that format declaring `name = "btw"` was
+/// invisible to this guard — the same fail-soft skip the guard exists to
+/// prevent, one level down, in its own detection.
+///
+/// The filter was also redundant, which is what makes deleting it the whole fix
+/// rather than half of one: `Err(_) => continue` below already discards anything
+/// the parser refuses, and a README-only directory falls through auto-discovery
+/// to zero command words. The parser is the authority on what it can read; a
+/// second opinion in front of it could only ever be narrower.
+///
 /// ⚠️ **Reads the tree from disk, not from `crate::bundled::BUNDLED_PLUGINS`.**
-/// The parser takes a `&Path` and the plugin formats are four files in a
-/// directory (`.claude-plugin/plugin.toml`, `plugin.json`, the deprecated
-/// `aleph.plugin.toml`, or auto-discovery from component directories) — there is
-/// no content-string entry point to hand an `include_dir` file to, and inventing
-/// one would be the second parser this is written to avoid. `plugins/` on disk
-/// is the same tree `include_dir!` embeds at build time, and
-/// `every_bundled_plugin_passes_the_installers_own_validation` already asks its
-/// question the same way.
-fn bundled_plugin_command_words() -> Vec<String> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return Vec::new();
+/// `parse_manifest_from_dir_sync` takes a `&Path` and a plugin manifest is a
+/// directory shape, not a file — there is no content-string entry point to hand
+/// an `include_dir` file to, and inventing one would be the second parser this
+/// is written to avoid. `plugins/` on disk is the same tree `include_dir!`
+/// embeds at build time.
+///
+/// ⚠️ **Known narrowing: the commands directory name is hard-coded.** Production
+/// resolves it through `component_source::resolve_dirs(raw.commands, "commands", …)`,
+/// so a manifest saying `commands = "cmds"` is walked at boot and missed here.
+/// Reaching that field means re-parsing the raw manifest, i.e. the second parser
+/// again. It cannot hide a `btw` — every command word from that route is
+/// namespaced (above) — and it can no longer produce a false "the submodules are
+/// missing" accusation either, because the non-empty check below counts **plugin
+/// directories parsed**, not words produced.
+fn bundled_plugin_command_words() -> BundledWalk {
+    let mut out = BundledWalk {
+        words: Vec::new(),
+        units: 0,
     };
 
-    let mut out = Vec::new();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return out;
+    };
+
     for entry in entries.flatten() {
         let dir = entry.path();
-        // A plugin is a directory carrying a manifest; `plugins/` also holds
-        // README files and the submodule's own metadata. Same detection as
-        // `every_bundled_plugin_passes_the_installers_own_validation`.
-        if !dir.join(".claude-plugin").join("plugin.toml").exists()
-            && !dir.join(".claude-plugin").join("plugin.json").exists()
-        {
+        if !dir.is_dir() {
             continue;
         }
 
         let plugin_id = match crate::extension::manifest::parse_manifest_from_dir_sync(&dir) {
             Ok(manifest) => {
+                out.units += 1;
                 for tool in manifest.tools_v2.clone().unwrap_or_default() {
-                    out.push(tool.name);
+                    out.words.push(tool.name);
                 }
                 manifest.id
             }
             // A manifest this crate cannot parse registers nothing, so it
-            // contributes no command word. It is not silently fine — it is
-            // exactly what `every_bundled_plugin_passes_the_installers_own_validation`
-            // exists to fail on, and that guard is the one that should report it.
+            // contributes no command word — and a directory that is not a plugin
+            // at all lands here too. It is not silently fine when it IS meant to
+            // be a plugin: that is exactly what
+            // `every_bundled_plugin_passes_the_installers_own_validation` exists
+            // to fail on, and that guard is the one that should report it.
             Err(_) => continue,
         };
 
@@ -1710,7 +1841,7 @@ fn bundled_plugin_command_words() -> Vec<String> {
         {
             for cap in commands {
                 if let crate::extension::CapabilityDeclaration::Skill(skill) = cap {
-                    out.push(skill.qualified_name());
+                    out.words.push(skill.qualified_name());
                 }
             }
         }
