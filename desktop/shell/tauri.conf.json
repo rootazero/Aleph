@@ -29,7 +29,14 @@
     ],
     "shortDescription": "Your resident AI assistant",
     "longDescription": "Aleph desktop shell — a native window, system tray, and lifecycle host for the Aleph Panel, backed by the local aleph-server daemon.",
+    "macOS": {
+      "minimumSystemVersion": "13.3"
+    },
     "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
       "nsis": {
         "installerIcon": "icons/icon.ico"
       }

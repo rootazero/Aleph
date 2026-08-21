@@ -1,0 +1,11 @@
+{
+  "_comment": "The ONE declaration of the Panel's minimum WebView. Three consumers derive from it and one guard covers all their edges: desktop/shell/tauri.conf.json (macOS install gate), interfaces/webchat/baseline-probe.js (runtime probe), scripts/check_webview_baseline.mjs (build gate). Never retype these values anywhere else. Rationale and the asymmetry of the guard's forward/reverse assertions: docs/superpowers/specs/2026-08-21-tauri-webview-resource-control-design.md sections 3.3 and 4.2.",
+  "macos_min": "13.3",
+  "safari_min": "16.4",
+  "webkitgtk_min": "2.42",
+  "css_probes": [
+    ["color", "oklch(0 0 0)"],
+    ["color", "color-mix(in oklab, red, red)"]
+  ],
+  "js_probes": ["CSS.registerProperty", "WebAssembly"]
+}

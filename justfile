@@ -232,6 +232,12 @@ wasm:
 check-dist:
     node scripts/check_panel_dist.mjs {{panel_dist}}
 
+# Verify the Panel's declared WebView baseline is consistent across every
+# consumer. Run by `just wasm`, and in CI on any change under
+# interfaces/webchat/ or desktop/shell/.
+check-baseline:
+    node scripts/check_webview_baseline.mjs
+
 # ─── Testing ───
 
 # Quick check: core compiles
