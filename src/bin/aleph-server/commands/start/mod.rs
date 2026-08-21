@@ -1714,6 +1714,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &event_bus,
         &app_config,
         &auth_bundle.auth_ctx.shared_token_mgr,
+        // Curated (`MEMORY.md`) hot-tier RPCs resolve their per-scope store
+        // through the same provider the `remember` tool uses, so the Panel
+        // reads exactly the file the tool writes. `None` in a gateway with no
+        // agent runtime: those three methods then answer SERVICE_UNAVAILABLE
+        // rather than serving a convincing empty hot tier.
+        agent_result.memory_context_provider.clone(),
         args.daemon,
     );
     register_daemon_handlers(&mut server, start_time, args.daemon);
@@ -2004,12 +2010,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Graph visualization handlers (wired with MemoryBackend + default agent +
     // the shared NoteIndexer for the write path)
-    register_graph_handlers(
-        &mut server,
-        &memory_db,
-        &default_agent_id,
-        Some(&note_indexer),
-    );
+    // No default agent id: every `graph.*` handler takes `agent_id` off the
+    // request (defaulting internally), so the parameter was read by nothing.
+    register_graph_handlers(&mut server, &memory_db, Some(&note_indexer));
 
     // Reconcile the note index with disk at startup, across EVERY corpus under
     // ~/.aleph/memory/note/ — not just the default agent. Each project

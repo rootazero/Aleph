@@ -92,6 +92,7 @@ pub mod mcp;
 pub mod mcp_config;
 pub mod memory;
 pub mod memory_config;
+pub mod memory_curated;
 pub mod moa;
 pub mod oauth;
 pub mod pairing;
@@ -864,6 +865,19 @@ impl HandlerRegistry {
         // handler is wired in Gateway startup (register_memory_handlers).
         registry.register("insights.tools", |req| async move {
             service_unavailable(req, "insights.tools requires MemoryBackend (boot phase 2)")
+        });
+
+        // Its sibling from the same registration function, which had no
+        // phase-1 placeholder: before boot phase 2 it answered
+        // METHOD_NOT_FOUND, which a client reads as "this core is too old to
+        // have dream insights" rather than "ask again in a moment". Two
+        // methods registered side by side should not disagree about what
+        // "not ready yet" looks like.
+        registry.register("dreaming.list_insights", |req| async move {
+            service_unavailable(
+                req,
+                "dreaming.list_insights requires MemoryBackend (boot phase 2)",
+            )
         });
 
         // Agent management handlers (placeholders — actual handlers wired with AgentManager)

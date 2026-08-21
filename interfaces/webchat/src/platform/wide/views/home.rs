@@ -911,7 +911,6 @@ mod tests {
         let stats = MemoryStats {
             total_facts: 10,
             total_memories: 5,
-            valid_facts: 10,
             total_graph_nodes: Some(10),
             total_graph_edges: Some(3),
             scope: "agent".to_string(),
@@ -926,7 +925,6 @@ mod tests {
         let stats = MemoryStats {
             total_facts: 3,
             total_memories: 7,
-            valid_facts: 3,
             total_graph_nodes: None,
             total_graph_edges: None,
             scope: "global".to_string(),

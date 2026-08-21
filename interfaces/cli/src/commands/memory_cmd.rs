@@ -30,10 +30,8 @@ fn search_rows(result: &Value) -> Vec<Vec<String>> {
                 .map_or_else(|| "-".to_string(), |t| t.to_string());
             let agent = item.get("agent_id").and_then(|v| v.as_str()).unwrap_or("-");
             let content = item
-                .get("user_input")
+                .get("content")
                 .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .or_else(|| item.get("ai_output").and_then(|v| v.as_str()))
                 .unwrap_or("-");
             rows.push(vec![ts, agent.to_string(), truncate(content, 80)]);
         }
@@ -105,33 +103,28 @@ pub async fn stats(server_url: &str, config: &CliConfig, json: bool) -> CliResul
     Ok(())
 }
 
-/// Clear memory
-pub async fn clear(
-    server_url: &str,
-    config: &CliConfig,
-    facts_only: bool,
-    json: bool,
-) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url, config).await?;
-
-    let method = if facts_only {
-        "memory.clearFacts"
-    } else {
-        "memory.clear"
-    };
-
-    let result: Value = client.call(method, None::<()>).await?;
-
-    if json {
-        output::print_json(&result);
-    } else if facts_only {
-        println!("Memory facts cleared.");
-    } else {
-        println!("All memory cleared.");
-    }
-
-    client.close().await?;
-    Ok(())
+/// Explain why bulk clearing does not exist, and what to use instead.
+///
+/// This used to dispatch `memory.clear` / `memory.clearFacts`. Both server
+/// handlers were unconditional `INTERNAL_ERROR` tombstones — bulk clearing is
+/// not a thing in the notes-based memory model — so every invocation since
+/// they were stubbed has been a round-trip that could only fail. The two
+/// handlers are gone (zero consumers once this stopped calling them); the
+/// explanation they carried is the part worth keeping, so it is stated here
+/// with no server involved.
+///
+/// Still an `Err`: the user asked for a wipe and no wipe happened, so a
+/// zero exit code would be its own small lie.
+pub fn clear(facts_only: bool) -> CliResult<()> {
+    let what = if facts_only { "notes" } else { "memory" };
+    Err(aleph_client::CliError::Other(format!(
+        "Bulk clearing of {what} is not supported.\n\
+         \n\
+         Knowledge notes are curated individually (the `note_manage` tool) and \n\
+         retired by the dream daemon's decay pass; raw conversation rows are \n\
+         deleted one at a time from the Panel's memory tab, or with the \n\
+         `memory.delete` RPC."
+    )))
 }
 
 /// Compress and optimize memory
@@ -183,18 +176,14 @@ mod tests {
                 {
                     "id": "m1",
                     "agent_id": "main",
-                    "window_title": "",
-                    "user_input": "what's the weather",
-                    "ai_output": "",
+                    "content": "what's the weather",
                     "session_id": "s1",
                     "timestamp": 1_700_000_000_i64,
                 },
                 {
                     "id": "m2",
                     "agent_id": "main",
-                    "window_title": "",
-                    "user_input": "",
-                    "ai_output": "it's sunny",
+                    "content": "it's sunny",
                     "session_id": "s1",
                     "timestamp": 1_700_000_001_i64,
                 },
@@ -223,22 +212,23 @@ mod tests {
         );
     }
 
+    /// A row with no body renders a dash, not an empty cell. There is no
+    /// second half to fall back to: `raw_memories` has one `content` column,
+    /// and the `user_input`/`ai_output` pair this used to read was a shape the
+    /// server filled with `("the whole row", "")` on every response.
     #[test]
-    fn search_rows_falls_back_to_ai_output_when_user_input_is_empty() {
+    fn search_rows_renders_a_dash_for_a_row_with_no_body() {
         let response = serde_json::json!({
             "memories": [{
                 "id": "m1",
                 "agent_id": "main",
-                "window_title": "",
-                "user_input": "",
-                "ai_output": "the reply",
                 "session_id": "s1",
                 "timestamp": 1_700_000_000_i64,
             }],
             "total": 1,
         });
         let rows = search_rows(&response);
-        assert_eq!(rows[0][2], "the reply");
+        assert_eq!(rows[0][2], "-");
     }
 
     #[test]
@@ -255,7 +245,6 @@ mod tests {
         let response = serde_json::json!({
             "totalMemories": 42,
             "totalFacts": 10,
-            "validFacts": 10,
             "totalGraphNodes": 7,
             "totalGraphEdges": 3,
             "scope": "agent",
@@ -281,7 +270,6 @@ mod tests {
         let response = serde_json::json!({
             "totalMemories": 5,
             "totalFacts": 0,
-            "validFacts": 0,
             "totalGraphNodes": null,
             "totalGraphEdges": null,
             "scope": "global",

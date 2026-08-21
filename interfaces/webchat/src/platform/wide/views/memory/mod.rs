@@ -12,11 +12,14 @@ use crate::state::memory::{MemoryState, MemoryView};
 
 mod batch_bar;
 mod cards;
+mod corrections;
+mod curated;
 pub mod data;
 mod drawer;
 mod facets;
 pub mod galaxy;
 mod loader;
+pub(crate) mod note_links;
 mod pager;
 mod provenance;
 mod selection;
@@ -25,6 +28,8 @@ mod toast;
 
 use batch_bar::BatchBar;
 use cards::{CardListShell, NoteCard, RawCard};
+use corrections::CorrectionQueue;
+use curated::CuratedPanel;
 use data::{
     bucket_counts, facet_slice, filter_notes, locate_note, notes_to_markdown, notes_truncated,
     page_slice, raws_to_markdown, stage_raw_export, Loadable, MemoryFacet, NoteExport, RawExport,
@@ -32,7 +37,9 @@ use data::{
 };
 use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
-use loader::{load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow};
+use loader::{
+    load_more_notes, load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow,
+};
 use pager::Pager;
 use selection::AgentSelection;
 use stats::{MemoryHeader, StatCards};
@@ -85,6 +92,11 @@ pub fn Memory() -> impl IntoView {
     let exporting = RwSignal::new(None::<(usize, usize)>);
     let toast_slot = RwSignal::new(None::<ToastMsg>);
     let refresh_nonce = RwSignal::new(0u32);
+    // True while a "load more" append is in flight. Separate from the notes
+    // slot's `Loading` arm on purpose: that arm renders skeletons in place of
+    // the list, and blanking the rows the user is reading in order to add to
+    // them is worse than a busy button.
+    let loading_more = RwSignal::new(false);
 
     // ── Agent bootstrap (only if the canvas hasn't populated it yet) ─────────
     Effect::new(move || {
@@ -384,6 +396,21 @@ pub fn Memory() -> impl IntoView {
             .unwrap_or_default()
     });
 
+    // The Raw badge counts the rows the Raw list is actually showing, which
+    // under an active query is the FILTERED count. It used to read
+    // `stats.total_memories` — a count taken with no query at all — so during
+    // a search the chip and the list beneath it disagreed, and only the pager
+    // (which already read `raws.total`) was right.
+    let raw_badge = Signal::derive(move || {
+        raws.get()
+            .as_ready()
+            .and_then(|w| w.total)
+            .or_else(|| stats.get().as_ready().map(|s| s.total_memories))
+    });
+    // `None` while the curated fetch is in flight or failed: a blank badge is
+    // honest, a `0` would claim an empty hot tier.
+    let curated_count = RwSignal::new(None::<usize>);
+
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-6">
             <MemoryHeader on_refresh=move || refresh_nonce.update(|n| *n += 1) />
@@ -393,7 +420,8 @@ pub fn Memory() -> impl IntoView {
                 <FacetBar
                     active=facet
                     counts=counts
-                    raw_count=Signal::derive(move || stats.get().as_ready().map(|s| s.total_memories))
+                    curated_count=curated_count.into()
+                    raw_count=raw_badge
                     hits_count=Signal::derive(move || {
                         search_live
                             .get()
@@ -496,8 +524,7 @@ pub fn Memory() -> impl IntoView {
                                 agent_id: r.agent_id,
                                 session_id: r.session_id,
                                 created_at: r.created_at.unwrap_or_default(),
-                                user_input: r.user_input,
-                                ai_output: r.ai_output,
+                                content: r.content,
                             })
                             .collect();
                         spawn_local(async move {
@@ -565,8 +592,27 @@ pub fn Memory() -> impl IntoView {
                 }
             />
 
-            {move || if is_notes.get() {
+            {move || if facet.get() == MemoryFacet::Curated {
                 view! {
+                    <CuratedPanel
+                        state=state
+                        agent=Signal::derive(move || mem.agent_id.get())
+                        refresh_nonce=refresh_nonce
+                        toast_slot=toast_slot
+                        on_count=Callback::new(move |n: Option<usize>| curated_count.set(n))
+                    />
+                }.into_any()
+            } else if is_notes.get() {
+                view! {
+                    // The pending half of the same pipeline whose distilled
+                    // half is this facet's list.
+                    <Show when=move || facet.get() == MemoryFacet::Feedback>
+                        <CorrectionQueue
+                            state=state
+                            agent=Signal::derive(move || mem.agent_id.get())
+                            refresh_nonce=refresh_nonce
+                        />
+                    </Show>
                     <CardListShell
                         state=Signal::derive(move || {
                             if facet.get() == MemoryFacet::SearchHits {
@@ -638,11 +684,44 @@ pub fn Memory() -> impl IntoView {
                         .then(|| view! {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.search_hits_capped)}</p>
                         })}
+                    // The window GROWS rather than reporting a fixed cap:
+                    // `memory.listFacts` has always accepted `offset`, and the
+                    // static "showing the first 1000" notice was the only thing
+                    // standing between the user and note 1001.
                     {move || notes.get().as_ready()
-                        .map(|w| notes_truncated(w.total, w.facts.len()))
-                        .unwrap_or(false)
-                        .then(|| view! {
-                            <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.notes_truncated)}</p>
+                        .filter(|w| notes_truncated(w.total, w.facts.len()))
+                        .map(|w| {
+                            let loaded = w.facts.len();
+                            let total = w.total;
+                            view! {
+                                <div class="flex items-center gap-3 pt-1 text-xs">
+                                    <span class="text-text-tertiary">
+                                        {move || total.map_or_else(
+                                            || t_string!(i18n, memory.notes_load_more).to_string(),
+                                            |t| t_string!(i18n, memory.notes_loaded_of)
+                                                .replace("{loaded}", &loaded.to_string())
+                                                .replace("{total}", &t.to_string()),
+                                        )}
+                                    </span>
+                                    <button
+                                        class="text-primary hover:underline disabled:opacity-50"
+                                        prop:disabled=move || loading_more.get()
+                                        on:click=move |_| load_more_notes(
+                                            state,
+                                            mem.agent_id.get_untracked(),
+                                            NOTE_WINDOW,
+                                            notes,
+                                            loading_more,
+                                        )
+                                    >
+                                        {move || if loading_more.get() {
+                                            t_string!(i18n, memory.notes_loading_more).to_string()
+                                        } else {
+                                            t_string!(i18n, memory.notes_load_more).to_string()
+                                        }}
+                                    </button>
+                                </div>
+                            }
                         })}
                     <Pager
                         page=page

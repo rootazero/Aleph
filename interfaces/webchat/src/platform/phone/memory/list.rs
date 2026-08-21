@@ -18,13 +18,15 @@ use crate::views::memory::data::{
 use super::cell::PhoneMemoryCell;
 use super::PhoneMemoryState;
 
-/// The four note-layer facet chips (Raw is desktop-only). Index aligns with
-/// `bucket_counts` → `[AllNotes, Facts, Feedback, Lessons]`.
-const FACETS: [(&str, MemoryFacet); 4] = [
-    ("All", MemoryFacet::AllNotes),
-    ("Facts", MemoryFacet::Facts),
-    ("Feedback", MemoryFacet::Feedback),
-    ("Lessons", MemoryFacet::Lessons),
+/// The four note-layer facets shown on phone (Raw and the hot tier are
+/// desktop-only). Index aligns with `bucket_counts` →
+/// `[AllNotes, Facts, Feedback, Lessons]`; labels are resolved through i18n
+/// at render time rather than baked in as literals here.
+const FACETS: [MemoryFacet; 4] = [
+    MemoryFacet::AllNotes,
+    MemoryFacet::Facts,
+    MemoryFacet::Feedback,
+    MemoryFacet::Lessons,
 ];
 
 #[component]
@@ -52,7 +54,10 @@ pub fn PhoneMemoryList() -> impl IntoView {
     let counts = move || bucket_counts(&st.window.get());
 
     view! {
-        <PhoneShell title="Memory" back="/memory" back_label="Memory">
+        // `back_label` stays an English literal: the prop is `&'static str`
+        // by design (see PhoneShell's doc) and all 21 phone screens pass one.
+        // Translating it is a crate-wide type change, not a memory-tab fix.
+        <PhoneShell title=t_string!(i18n, memory.phone_title).to_string() back="/memory" back_label="Memory">
         // Single element child for PhoneShell (mixed static+dynamic siblings
         // must live inside one element — see the PhoneShell footgun note).
         <div style="display:flex; flex-direction:column; gap:12px;">
@@ -65,8 +70,14 @@ pub fn PhoneMemoryList() -> impl IntoView {
             />
 
             <div class="cc-hide-scroll" style="display:flex; gap:8px; overflow-x:auto; margin:0 -16px; padding:1px 16px;">
-                {FACETS.iter().enumerate().map(|(i, (label, f))| {
+                {FACETS.iter().enumerate().map(|(i, f)| {
                     let f = *f;
+                    let label = move || match f {
+                        MemoryFacet::Facts => t_string!(i18n, memory.facet_facts).to_string(),
+                        MemoryFacet::Feedback => t_string!(i18n, memory.facet_feedback).to_string(),
+                        MemoryFacet::Lessons => t_string!(i18n, memory.facet_lessons).to_string(),
+                        _ => t_string!(i18n, memory.facet_all_notes).to_string(),
+                    };
                     view! {
                         <button
                             class="chip"
@@ -74,7 +85,7 @@ pub fn PhoneMemoryList() -> impl IntoView {
                             style="flex:none;"
                             on:click=move |_| st.facet.set(f)
                         >
-                            {*label}
+                            {label}
                             <span class="tabular-nums" style="opacity:0.7;">
                                 {move || counts()[i].to_string()}
                             </span>
@@ -94,22 +105,26 @@ pub fn PhoneMemoryList() -> impl IntoView {
 
             {move || {
                 if !st.loaded.get() {
-                    let label = if dashboard.is_connected.get() { "Loading…" } else { "Connecting…" };
+                    let label = if dashboard.is_connected.get() {
+                        t_string!(i18n, memory.phone_loading).to_string()
+                    } else {
+                        t_string!(i18n, memory.phone_connecting).to_string()
+                    };
                     return view! { <div class="list-header">{label}</div> }.into_any();
                 }
                 if let Some(err) = st.error.get() {
                     return view! {
                         <div class="list">
-                            <div class="cell"><div class="cell-body"><div class="cell-title">"Couldn't load memories"</div><div class="cell-sub">{err}</div></div></div>
+                            <div class="cell"><div class="cell-body"><div class="cell-title">{t!(i18n, memory.phone_load_failed)}</div><div class="cell-sub">{err}</div></div></div>
                             <div class="cell" on:click=move |_| st.reload_nonce.update(|n| *n += 1)>
-                                <div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">"Retry"</div></div>
+                                <div class="cell-body"><div class="cell-title" style="color:var(--color-primary);">{t!(i18n, memory.phone_retry)}</div></div>
                             </div>
                         </div>
                     }.into_any();
                 }
                 let items = visible();
                 if items.is_empty() {
-                    return view! { <div class="list-header">"No memories"</div> }.into_any();
+                    return view! { <div class="list-header">{t!(i18n, memory.phone_empty)}</div> }.into_any();
                 }
                 let total = items.len();
                 let shown = (st.page.get() + 1) * PAGE_SIZE; // u32
@@ -128,7 +143,7 @@ pub fn PhoneMemoryList() -> impl IntoView {
                         </div>
                         {(total > shown as usize).then(|| view! {
                             <button class="chip" style="align-self:center;" on:click=move |_| st.page.update(|p| *p += 1)>
-                                "Load more"
+                                {t!(i18n, memory.phone_load_more)}
                             </button>
                         })}
                     </div>

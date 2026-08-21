@@ -12,16 +12,19 @@ use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization.
 ///
-/// One raw conversation record. `user_input` / `ai_output` stay separate so the
-/// panel can style the two halves independently — joining them into one string
-/// server-side threw that away.
+/// One raw conversation record, one body. It used to advertise `user_input` /
+/// `ai_output` "so the panel can style the two halves independently" — but
+/// `raw_memories` stores a single `content` column, so `ai_output` went out as
+/// `""` on every row this handler ever returned, and `window_title` likewise.
+/// The Panel's two-weight Q/A card was styling a distinction the store cannot
+/// make; both fields are gone rather than kept as permanently-empty strings a
+/// future reader would try to fill.
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryEntry {
     pub id: String,
     pub agent_id: String,
-    pub window_title: String,
-    pub user_input: String,
-    pub ai_output: String,
+    /// The recorded turn text.
+    pub content: String,
     /// Session the row was recorded in, when known. Already selected by the
     /// dashboard query — previously dropped on the floor here.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,9 +45,6 @@ pub struct SearchParams {
     /// Filter by agent ID (workspace isolation)
     #[serde(default)]
     pub agent_id: Option<String>,
-    /// Filter by window title
-    #[serde(default)]
-    pub window_title: Option<String>,
     /// Maximum results (default: 20)
     #[serde(default = "default_limit")]
     pub limit: u32,
@@ -62,7 +62,6 @@ impl Default for SearchParams {
         Self {
             query: None,
             agent_id: None,
-            window_title: None,
             limit: default_limit(),
             offset: 0,
         }
@@ -153,9 +152,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .map(|m| MemoryEntry {
             id: m.id,
             agent_id: m.agent_id,
-            window_title: String::new(),
-            user_input: m.content,
-            ai_output: String::new(),
+            content: m.content,
             session_id: m.session_id,
             timestamp: m.created_at,
         })
@@ -230,38 +227,6 @@ pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
 }
 
 // ============================================================================
-// Clear
-// ============================================================================
-
-/// Parameters for memory.clear
-#[derive(Debug, Default, Deserialize)]
-pub struct ClearParams {
-    /// Filter by window title (optional)
-    #[serde(default)]
-    pub window_title: Option<String>,
-}
-
-/// Clear memories in bulk.
-///
-/// Bulk clearing is not a supported operation: raw conversation history lives
-/// in the session store and knowledge notes are curated individually. The
-/// handler previously returned `{ "deletedCount": 0 }`, which made
-/// `aleph memory clear` print "All memory cleared" for a wipe that never ran.
-pub async fn handle_clear(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    let _params: ClearParams = request
-        .params
-        .as_ref()
-        .and_then(|p| serde_json::from_value(p.clone()).ok())
-        .unwrap_or_default();
-
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "Bulk memory clearing is not supported in the notes-based memory model.".to_string(),
-    )
-}
-
-// ============================================================================
 // List Facts
 // ============================================================================
 
@@ -277,9 +242,6 @@ pub struct ListFactsParams {
     /// Number of rows to skip for pagination (default: 0)
     #[serde(default)]
     pub offset: usize,
-    /// Include invalidated facts (default: false)
-    #[serde(default)]
-    pub include_invalid: bool,
 }
 
 const fn default_facts_limit() -> usize {
@@ -361,26 +323,6 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
 }
 
 // ============================================================================
-// Clear Facts
-// ============================================================================
-
-/// Clear all knowledge notes.
-///
-/// Notes are not bulk-deletable through this RPC: they are curated
-/// individually via the `note_manage` tool and decayed by the dream daemon.
-/// The handler previously faked `{ "deletedCount": 0 }`, making
-/// `aleph memory clear --facts-only` report a successful wipe that never ran.
-pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "Bulk note clearing is not supported; manage knowledge notes via the \
-         note_manage tool."
-            .to_string(),
-    )
-}
-
-// ============================================================================
 // Stats
 // ============================================================================
 
@@ -438,7 +380,6 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
                     json!({
                         "totalMemories": 0,
                         "totalFacts": 0,
-                        "validFacts": 0,
                         "totalGraphNodes": 0,
                         "totalGraphEdges": 0,
                         "scope": "agent",
@@ -476,9 +417,6 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         json!({
             "totalMemories": raw_count,
             "totalFacts": note_count,
-            // Notes have no invalidated state (unlike the retired fact model),
-            // so this mirrors totalFacts. Kept for response compatibility.
-            "validFacts": note_count,
             "totalGraphNodes": graph_nodes,
             "totalGraphEdges": graph_edges,
             "scope": scope,
@@ -1017,15 +955,14 @@ mod tests {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
-            window_title: "Test Window".to_string(),
-            user_input: "Hello".to_string(),
-            ai_output: "Hi there".to_string(),
+            content: "Hello".to_string(),
             session_id: Some("s-1".to_string()),
             timestamp: 1234567890,
         };
 
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(json["id"], "test-id");
+        assert_eq!(json["content"], "Hello");
         assert_eq!(json["session_id"], "s-1");
     }
 
@@ -1034,15 +971,47 @@ mod tests {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
-            window_title: "".to_string(),
-            user_input: "".to_string(),
-            ai_output: "".to_string(),
+            content: String::new(),
             session_id: None,
             timestamp: 0,
         };
 
         let json = serde_json::to_value(&entry).unwrap();
         assert!(json.get("session_id").is_none());
+    }
+
+    /// The row shape carries one body and no permanently-empty companions.
+    /// `ai_output` / `window_title` were on this wire for as long as it
+    /// existed and were `""` in every response, because `raw_memories` has a
+    /// single `content` column — a Panel card that styled "the answer half"
+    /// was rendering a distinction the store cannot make.
+    #[test]
+    fn the_raw_row_has_no_permanently_empty_companion_fields() {
+        let entry = MemoryEntry {
+            id: "test-id".to_string(),
+            agent_id: "main".to_string(),
+            content: "one body".to_string(),
+            session_id: None,
+            timestamp: 0,
+        };
+
+        let json = serde_json::to_value(&entry).unwrap();
+        for gone in ["ai_output", "user_input", "window_title"] {
+            assert!(json.get(gone).is_none(), "{gone} is back on the wire");
+        }
+    }
+
+    /// `validFacts` mirrored `totalFacts` exactly (notes have no invalidated
+    /// state), so it was a second number that could only ever agree with the
+    /// first — and three clients rendered it as if it meant something.
+    #[test]
+    fn stats_no_longer_advertises_a_duplicate_fact_count() {
+        let src = std::fs::read_to_string("src/gateway/handlers/memory.rs").unwrap();
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            !production.contains("validFacts"),
+            "handle_stats is emitting validFacts again"
+        );
     }
 }
 
@@ -1099,6 +1068,57 @@ mod trace_tests {
             evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),
             "evidence references seeded raw raw-ev1"
         );
+    }
+
+    /// The Panel's write-decision ledger asks for an agent's RECENT decisions
+    /// rather than one fact's history, and it does that by sending an empty
+    /// `target` — `recent_write_decisions` drops a blank subject filter.
+    ///
+    /// That behaviour is load-bearing for a shipped surface but reads like an
+    /// accident at the call site (a required `String` parameter, deliberately
+    /// empty), so it is pinned here: tightening this handler to reject an
+    /// empty target would silently empty the Panel's ledger, and nothing else
+    /// in the tree would go red.
+    #[tokio::test]
+    async fn an_empty_write_decision_target_lists_the_recent_ledger() {
+        use crate::memory::store::sqlite::memory_write_decisions::MemoryWriteReason;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        db.record_write_decision("main", "add", MemoryWriteReason::OverBudget, "likes tea")
+            .unwrap();
+        db.record_write_decision("main", "remove", MemoryWriteReason::Written, "ships fridays")
+            .unwrap();
+
+        let resp = handle_trace(
+            JsonRpcRequest::with_id(
+                "memory.trace",
+                Some(json!({
+                    "agent_id": "main",
+                    "target": "",
+                    "kind": "write_decision",
+                    "max_results": 20,
+                })),
+                json!(1),
+            ),
+            db,
+        )
+        .await;
+
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let rows = resp.result.unwrap()["write_decisions"]
+            .as_array()
+            .expect("write_decisions array")
+            .clone();
+        assert_eq!(rows.len(), 2, "an empty target must not filter anything out");
+        // Newest first, and the refusal is present — a ledger that only kept
+        // the writes that landed could not answer "why was that not
+        // remembered", which is the entire reason it exists.
+        assert_eq!(rows[0]["action"], "remove");
+        assert!(rows.iter().any(|r| r["reason"] == "over_budget"));
     }
 
     /// P1 partition isolation: bob tracing alice's partition by name gets an
@@ -1321,7 +1341,7 @@ mod search_tests {
         assert_eq!(memories[0]["id"], "raw-1");
         assert_eq!(memories[0]["session_id"], "s-77");
         assert!(
-            memories[0]["user_input"]
+            memories[0]["content"]
                 .as_str()
                 .unwrap()
                 .contains("smoke tests"),

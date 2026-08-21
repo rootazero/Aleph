@@ -269,9 +269,13 @@ mod tests {
     ("mcp_config.get", Class::Admin),
     ("mcp_config.list", Class::Admin),
     ("mcp_config.update", Class::Admin),
-    ("memory.clear", Class::Open),
-    ("memory.clearFacts", Class::Open),
     ("memory.compress", Class::Admin),
+    // Curated hot tier: per-caller partition, so member-reachable like the
+    // other `memory.*` reads. The mutations edit the caller's OWN MEMORY.md
+    // (the resolver composes their scope), never a shared one.
+    ("memory.curated.list", Class::Open),
+    ("memory.curated.remove", Class::Open),
+    ("memory.curated.replace", Class::Open),
     ("memory.delete", Class::Open),
     ("memory.listFacts", Class::Open),
     ("memory.list_corrections", Class::Open),

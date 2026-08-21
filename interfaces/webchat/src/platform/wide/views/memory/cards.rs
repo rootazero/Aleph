@@ -124,6 +124,11 @@ pub fn NoteCard(
     // Only show "updated" when it actually differs — a note written once
     // carries updated_at == created_at and repeating it is noise.
     let updated = (fact.updated_at > fact.created_at).then(|| format_ts(fact.updated_at));
+    // Which column the full-text index hit. Present only on search results,
+    // where "the title says this" and "the body mentions this somewhere" are
+    // very different reasons for a row to be in front of you — and until now
+    // they looked identical.
+    let match_field = fact.match_field.clone();
 
     view! {
         <div
@@ -161,6 +166,21 @@ pub fn NoteCard(
 
                 <div class="flex items-center gap-1.5 flex-wrap mt-2">
                     <Badge variant=variant>{category}</Badge>
+                    {match_field.map(|field| {
+                        let label = move || match field.as_str() {
+                            "title" => t_string!(i18n, memory.match_title).to_string(),
+                            // Any other value the index grows later renders
+                            // verbatim rather than being silently dropped or
+                            // mislabelled as one of the two we know today.
+                            "content" => t_string!(i18n, memory.match_content).to_string(),
+                            other => other.to_string(),
+                        };
+                        view! {
+                            <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-primary-subtle text-primary">
+                                {label}
+                            </span>
+                        }
+                    })}
                     <Badge variant=BadgeVariant::Indigo>{agent_id}</Badge>
                     {tags.into_iter().map(|tag| view! {
                         <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface-sunken \
@@ -235,8 +255,7 @@ pub fn RawCard(
         .created_at
         .clone()
         .unwrap_or_else(|| "\u{2014}".to_string());
-    let question = (!raw.user_input.is_empty()).then(|| raw.user_input.clone());
-    let answer = (!raw.ai_output.is_empty()).then(|| raw.ai_output.clone());
+    let body = (!raw.content.is_empty()).then(|| raw.content.clone());
 
     view! {
         <div
@@ -257,21 +276,8 @@ pub fn RawCard(
             />
 
             <div class="min-w-0 flex-1 space-y-1">
-                {question.map(|q| view! {
-                    <div class="text-sm text-text-primary line-clamp-2 break-words">
-                        <span class="mr-1.5 text-[10px] font-bold uppercase text-primary">
-                            {move || t_string!(i18n, memory.raw_question).to_string()}
-                        </span>
-                        {q}
-                    </div>
-                })}
-                {answer.map(|a| view! {
-                    <div class="text-sm text-text-secondary line-clamp-2 break-words">
-                        <span class="mr-1.5 text-[10px] font-bold uppercase text-success">
-                            {move || t_string!(i18n, memory.raw_answer).to_string()}
-                        </span>
-                        {a}
-                    </div>
+                {body.map(|text| view! {
+                    <div class="text-sm text-text-primary line-clamp-3 break-words">{text}</div>
                 })}
                 <div class="flex items-center gap-2 flex-wrap pt-1">
                     <Badge variant=BadgeVariant::Indigo>{agent_id}</Badge>
