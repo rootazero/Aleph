@@ -32,16 +32,16 @@ use cards::{CardListShell, NoteCard, RawCard};
 use corrections::CorrectionQueue;
 use curated::CuratedPanel;
 use data::{
-    bucket_counts, facet_slice, filter_notes, locate_note, notes_to_markdown, notes_truncated,
-    page_slice, raws_to_markdown, stage_raw_export, Loadable, MemoryFacet, NoteExport, RawExport,
-    EXPORT_MAX, NOTE_WINDOW, PAGE_SIZE,
+    bucket_counts, facet_slice, filter_notes, locate_note, notes_to_markdown, page_slice,
+    raws_to_markdown, stage_raw_export, Loadable, MemoryFacet, NoteExport, RawExport, EXPORT_MAX,
+    NOTE_WINDOW, PAGE_SIZE,
 };
 use drawer::{DetailDrawer, DrawerTarget};
 use facets::FacetBar;
 use loader::{
     load_more_notes, load_notes, load_raw, load_search_hits, load_stats, NotesWindow, RawWindow,
 };
-use pager::Pager;
+use pager::{LoadMoreNotes, Pager};
 use selection::AgentSelection;
 use stats::{MemoryHeader, StatCards};
 use toast::{push_toast, ToastHost, ToastKind, ToastMsg};
@@ -703,45 +703,17 @@ pub fn Memory() -> impl IntoView {
                         .then(|| view! {
                             <p class="text-xs text-text-tertiary italic pt-1">{t!(i18n, memory.search_hits_capped)}</p>
                         })}
-                    // The window GROWS rather than reporting a fixed cap:
-                    // `memory.listFacts` has always accepted `offset`, and the
-                    // static "showing the first 1000" notice was the only thing
-                    // standing between the user and note 1001.
-                    {move || notes.get().as_ready()
-                        .filter(|w| notes_truncated(w.total, w.facts.len()))
-                        .map(|w| {
-                            let loaded = w.facts.len();
-                            let total = w.total;
-                            view! {
-                                <div class="flex items-center gap-3 pt-1 text-xs">
-                                    <span class="text-text-tertiary">
-                                        {move || total.map_or_else(
-                                            || t_string!(i18n, memory.notes_load_more).to_string(),
-                                            |t| t_string!(i18n, memory.notes_loaded_of)
-                                                .replace("{loaded}", &loaded.to_string())
-                                                .replace("{total}", &t.to_string()),
-                                        )}
-                                    </span>
-                                    <button
-                                        class="text-primary hover:underline disabled:opacity-50"
-                                        prop:disabled=move || loading_more.get()
-                                        on:click=move |_| load_more_notes(
-                                            state,
-                                            mem.agent_id.get_untracked(),
-                                            NOTE_WINDOW,
-                                            notes,
-                                            loading_more,
-                                        )
-                                    >
-                                        {move || if loading_more.get() {
-                                            t_string!(i18n, memory.notes_loading_more).to_string()
-                                        } else {
-                                            t_string!(i18n, memory.notes_load_more).to_string()
-                                        }}
-                                    </button>
-                                </div>
-                            }
-                        })}
+                    <LoadMoreNotes
+                        notes=notes
+                        busy=loading_more
+                        on_more=Callback::new(move |()| load_more_notes(
+                            state,
+                            mem.agent_id.get_untracked(),
+                            NOTE_WINDOW,
+                            notes,
+                            loading_more,
+                        ))
+                    />
                     <Pager
                         page=page
                         page_size=page_size

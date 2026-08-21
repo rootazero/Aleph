@@ -23,7 +23,7 @@ Spec: [2026-08-21-panel-memory-round2-design.md](../specs/2026-08-21-panel-memor
 | C14 星系截断提示 | ⚠️ **报告不成立** | badge 一直存在；真缺陷是硬编码英文，已随 C15 修 |
 | C15 硬编码英文 | ✅ FIX | drawer 2 处 + phone 9 处 + galaxy badge（15 个新 key，en/zh 对称） |
 | C16 死参数 `_default_agent_id` | ✅ CUT | `register_graph_handlers` |
-| C17 mod.rs 拆层 | ✅ | 新功能各自成文件；`mod.rs` 只新增编排与一个分支 |
+| C17 mod.rs 拆层 | ✅（部分） | 四个新功能各自成文件（`curated.rs` 392 · `xray.rs` 243 · `corrections.rs` 114 · `note_links.rs` 96），`LoadMoreNotes` 归 `pager.rs`；`mod.rs` **910 → 980**：三处新编排的净增，不是重复代码。**没有**做到 spec 里写的「≤900 不再膨胀」——如实记下而不是继续凑数字 |
 
 ## 明确未做（本轮范围外，非遗忘）
 
