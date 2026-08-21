@@ -525,3 +525,89 @@ async fn spend_principal_resolvers_agree_on_an_owner_key_with_no_scope_key() {
     );
     assert_eq!(admission, crate::spend::Principal::Unattributed);
 }
+
+// ============================================================================
+// Task 7 — the run-admission spend arm
+// ============================================================================
+//
+// `admission_result_for` is tested directly, against a hand-built `Verdict`,
+// rather than through `deny_if_over_spend` end-to-end: `deny_if_over_spend`
+// calls `spend::check`, which reads the process-wide ledger/policy, and
+// `cargo test --lib` shares one binary across this crate —
+// `providers::metering`'s tests already install a real (if generously high)
+// policy for their own wiring tests. A second, low-ceiling install here to
+// force a `Denied` verdict would race whichever test installs or reads that
+// global next. Taking the `Verdict` as a plain parameter is exactly the
+// hazard-free split `spend::check_with` itself exists for — see
+// `admission_result_for`'s own doc.
+
+#[test]
+fn admission_result_for_is_ok_when_allowed() {
+    let verdict = crate::spend::Verdict::Allowed(crate::spend::Spent {
+        usd: 3.0,
+        unpriced_calls: 0,
+        partial_calls: 0,
+        period_start_ms: 0,
+        period_end_ms: Some(1_000),
+    });
+    assert!(admission_result_for(verdict).is_ok());
+}
+
+#[test]
+fn admission_result_for_denies_carrying_the_verdicts_own_limit() {
+    let per_user = crate::spend::Verdict::Denied {
+        limit: crate::spend::Limit::PerUser {
+            spent: 11.0,
+            limit: 10.0,
+        },
+        spent: crate::spend::Spent {
+            usd: 11.0,
+            unpriced_calls: 0,
+            partial_calls: 0,
+            period_start_ms: 0,
+            period_end_ms: Some(1_000),
+        },
+    };
+    match admission_result_for(per_user) {
+        Err(ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::PerUser { spent, limit },
+        }) => {
+            assert_eq!(spent, 11.0);
+            assert_eq!(limit, 10.0);
+        }
+        other => panic!("expected Err(SpendExhausted {{ limit: PerUser {{ .. }} }}), got {other:?}"),
+    }
+
+    let total = crate::spend::Verdict::Denied {
+        limit: crate::spend::Limit::Total,
+        spent: crate::spend::Spent {
+            usd: 4.0,
+            unpriced_calls: 0,
+            partial_calls: 0,
+            period_start_ms: 0,
+            period_end_ms: Some(1_000),
+        },
+    };
+    match admission_result_for(total) {
+        Err(ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+        }) => {}
+        other => panic!("expected Err(SpendExhausted {{ limit: Total }}), got {other:?}"),
+    }
+}
+
+/// `deny_if_over_spend` end-to-end, against whatever policy is currently
+/// installed in this shared test binary — safe regardless of which test ran
+/// first: a brand-new, never-before-seen principal has zero recorded spend,
+/// which `spend::check` allows against the disabled default AND against
+/// `providers::metering`'s shared (generously high) test policy alike.
+#[test]
+fn deny_if_over_spend_allows_a_principal_with_no_recorded_spend() {
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(
+        crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+        "u-run-loop-t7-never-spent".to_string(),
+    );
+    let request = minimal_request(metadata);
+    assert!(deny_if_over_spend(&request).is_ok());
+}

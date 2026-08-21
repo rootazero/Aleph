@@ -76,6 +76,13 @@ impl SimpleExecutionEngine {
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
 
+        // Run-admission spend arm — this engine has no `admit_run` to gate
+        // alongside, so this is its own first act, before it transitions the
+        // agent to `Running` below. See `run_loop::deny_if_over_spend`'s
+        // doc: a floor only the full `ExecutionEngine` honoured would not be
+        // a floor.
+        super::run_loop::deny_if_over_spend(&request)?;
+
         // Ensure the session row exists before any state transitions; tests and
         // fallback paths may run without the global SessionService initialized.
         // Scoped for the same reason the full engine scopes it — see

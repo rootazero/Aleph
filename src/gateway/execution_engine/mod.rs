@@ -440,6 +440,14 @@ pub enum ExecutionError {
 
     #[error("orchestrator: {0}")]
     Orchestrator(String),
+
+    /// The run's principal ([`crate::spend::principal_from_metadata`]) is
+    /// over its spend ceiling for the period — the admission arm's denial,
+    /// raised by `run_loop::deny_if_over_spend` before either engine claims
+    /// any run resource. See [`crate::spend`] for the floor arm this is the
+    /// run-admission sibling of.
+    #[error("spend ceiling reached")]
+    SpendExhausted { limit: crate::spend::Limit },
 }
 
 impl ExecutionError {
@@ -491,6 +499,18 @@ impl ExecutionError {
             | Self::RunNotActive(_)
             | Self::Fallthrough { .. }
             | Self::Orchestrator(_) => ReceiptKind::Failed,
+            // Resolve the reset instant fresh, here, rather than carrying it
+            // on the error: every call site of this method runs
+            // synchronously, moments after `spend::check` computed the same
+            // period boundary (see those call sites and `ReceiptKind::
+            // SpendExhausted`'s doc), so this is that computation made
+            // again, not a second answer that could drift from it.
+            Self::SpendExhausted { limit } => {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let reset_ms =
+                    crate::spend::period::period_end_ms(now_ms, crate::spend::current_policy().period);
+                ReceiptKind::SpendExhausted { limit: *limit, reset_ms }
+            }
         }
     }
 }
@@ -670,5 +690,42 @@ mod user_receipt_tests {
         let (_, en) = ExecutionError::Timeout.user_receipt(Locale::En);
         assert_ne!(zh, en);
         assert!(!en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
+    }
+
+    /// A denied run's receipt carries the wire code and, by shape, the
+    /// caller's own numbers.
+    #[test]
+    fn spend_exhausted_carries_the_wire_code_and_the_callers_own_numbers() {
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::PerUser {
+                spent: 42.0,
+                limit: 40.0,
+            },
+        };
+        let (code, message) = e.user_receipt(Locale::En);
+        assert_eq!(code, "SPEND_EXHAUSTED");
+        assert!(message.contains("42.0") && message.contains("40.0"), "{message}");
+    }
+
+    /// `Limit::Total` never renders a dollar figure — there is no actor at
+    /// render time to ask whether this caller may see the machine total.
+    #[test]
+    fn spend_exhausted_total_never_leaks_a_number() {
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+        };
+        let (code, message) = e.user_receipt(Locale::En);
+        assert_eq!(code, "SPEND_EXHAUSTED");
+        assert!(!message.contains('$'), "{message}");
+    }
+
+    /// G11 — a spend denial is terminal, never one of the two provider-hiccup
+    /// buckets a caller of `receipt_kind()` might park-and-retry.
+    #[test]
+    fn spend_exhausted_receipt_kind_is_not_transient() {
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+        };
+        assert!(!e.receipt_kind().is_transient());
     }
 }

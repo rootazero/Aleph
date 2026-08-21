@@ -58,6 +58,50 @@ where
     .await
 }
 
+/// The run-admission spend arm: deny before this run claims any resource if
+/// its principal ([`crate::spend::principal_from_metadata`], resolved off
+/// `request.metadata` the same way [`with_request_scope`] resolves scope —
+/// see that resolver's doc for why it is unconditionally equivalent to the
+/// floor arm's `ambient_principal`) is over its ceiling for the period.
+///
+/// Both engines call this — `ExecutionEngine::execute` (`execute.rs`, ahead
+/// of `admit_run`) and `SimpleExecutionEngine::execute` (`simple.rs`, which
+/// has no `admit_run` to gate alongside and so calls this as its own first
+/// act) — as the very first thing they do, before either claims a session
+/// run slot, a concurrency permit, or (`SimpleExecutionEngine`) transitions
+/// the agent to `Running`. A principal already over the line should never be
+/// handed a resource it is about to be denied anyway, and a shared call site
+/// is what keeps `SimpleExecutionEngine`, which has no `admit_run` to
+/// piggyback on, from silently skipping a floor the full engine enforces —
+/// see this module's doc and the plan this task belongs to for why "a floor
+/// only one engine honours is not a floor".
+///
+/// One helper rather than each engine open-coding `spend::principal_from_metadata`
+/// + `spend::check`: a second, hand-written copy of that pairing is exactly
+/// the kind of drift [`crate::spend::check`]'s own doc warns against.
+pub(super) fn deny_if_over_spend(request: &RunRequest) -> Result<(), ExecutionError> {
+    let principal = crate::spend::principal_from_metadata(&request.metadata);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    admission_result_for(crate::spend::check(&principal, now_ms))
+}
+
+/// The translation [`deny_if_over_spend`] applies to whatever
+/// [`crate::spend::check`] returns — split out so it is testable without
+/// touching the process-global ledger/policy `check` reads. `cargo test
+/// --lib` runs every test in this crate in one binary, and
+/// `providers::metering`'s tests already install a real (if generously
+/// high) process-wide policy for their own wiring tests; a second test here
+/// racing `spend::check`'s global read would either see that policy or the
+/// pre-install default depending on execution order. Taking the `Verdict`
+/// as a plain parameter sidesteps the hazard entirely — same reasoning as
+/// `spend::check_with`'s own doc.
+fn admission_result_for(verdict: crate::spend::Verdict) -> Result<(), ExecutionError> {
+    match verdict {
+        crate::spend::Verdict::Allowed(_) => Ok(()),
+        crate::spend::Verdict::Denied { limit, .. } => Err(ExecutionError::SpendExhausted { limit }),
+    }
+}
+
 /// Create this run's session row **under the run's own attribution**.
 ///
 /// `SessionMetadata::stamp_attribution` reads `scope::current_scope()` on the

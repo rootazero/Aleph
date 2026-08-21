@@ -2063,6 +2063,54 @@ async fn a_transiently_parked_goal_is_actually_woken() {
     );
 }
 
+/// G11 — a spend-ceiling denial must `Blocked` a pursuit, not park it on the
+/// wait barrier the sweep above wakes: the ceiling does not lift until the
+/// period resets, so a park here would retry the same denial forever,
+/// costing no iteration each time (see `ReceiptKind::is_transient`'s doc).
+#[tokio::test]
+async fn a_spend_exhausted_failure_blocks_the_goal_instead_of_parking_it() {
+    use crate::goal::{ContinuationDecision, Goal, GoalStatus, PursuitMode};
+
+    let _sweep_guard = GOAL_SWEEP_LOCK.lock().await;
+    let store = goal_store_global();
+
+    let session = SessionKey::main("g11-spend-exhausted-blocks");
+    let session_str = session.to_key_string();
+    let now = super::goal_continuation::now_ms();
+    store
+        .put(
+            &Goal::new(&session_str, "keep going", 0, now)
+                .with_pursuit(PursuitMode::Active { max_iterations: 5 }),
+        )
+        .unwrap();
+    let ContinuationDecision::Fire { .. } = store
+        .try_claim_continuation(&session_str, None, now, false, None)
+        .unwrap()
+    else {
+        panic!("an Active goal with runway must claim a continuation");
+    };
+
+    super::goal_continuation::block_goal_on_failure(
+        &session_str,
+        &ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+        },
+        None,
+    )
+    .await;
+
+    let blocked = store.get(&session_str).unwrap().unwrap();
+    assert_eq!(
+        blocked.status,
+        GoalStatus::Blocked,
+        "a spend denial must block the pursuit, not park it for retry"
+    );
+    assert!(
+        blocked.waiting_until_ms.is_none(),
+        "a blocked goal carries no timer barrier — nothing should auto-wake it"
+    );
+}
+
 /// The sweep that fixed the un-woken transient park (above) claims an elapsed
 /// timer barrier carrying no pending marker. A FIRED timer wake reads as exactly
 /// that shape: `confirm_fire`'s `Proceed` arm consumed the marker, and the

@@ -14,17 +14,21 @@
 //! - the two process-global handles ([`global_ledger`] / [`install_ledger`]
 //!   for the ledger, [`current_policy`] / [`install_policy`] /
 //!   [`update_policy`] for the policy) — process-global rather than
-//!   constructor parameters because `MeteringProvider` has 8 production
-//!   construction sites; threading a handle through them would wire some and
-//!   miss others, and the missed ones would meter without a floor while
-//!   every unit test stayed green;
+//!   constructor parameters because `MeteringProvider` has 7 production
+//!   construction sites (`context::compact::compactor`,
+//!   `providers::moa::provider`, `agents::subagent_spawner::mod` ×2,
+//!   `orchestrator::harness_bridge::runner_impl` ×3); threading a handle
+//!   through them would wire some and miss others, and the missed ones would
+//!   meter without a floor while every unit test stayed green;
 //! - the two principal resolvers ([`ambient_principal`] /
 //!   [`principal_from_metadata`]) that answer "who is this run's spend
 //!   charged to" from the two places that question is askable;
 //! - [`check`], the single admission/floor predicate: is a principal still
-//!   inside its ceiling for the period containing "now". No call site reads
-//!   it yet — that lands with the metering floor arm and the admission arm
-//!   in later tasks of this round.
+//!   inside its ceiling for the period containing "now". Both call sites
+//!   this doc used to describe as "later tasks" now exist: the metering
+//!   floor arm (`providers::metering::MeteringProvider::enforce_spend_ceiling`)
+//!   and the run-admission arm
+//!   (`gateway::execution_engine::run_loop::deny_if_over_spend`).
 
 use std::collections::HashMap;
 
@@ -112,7 +116,16 @@ pub enum Delta {
 }
 
 /// Which ceiling was hit. Shape, not role predicate — see spec §4.8.
-#[derive(Debug, Clone)]
+///
+/// `Copy` + `PartialEq` (not `Eq` — `f64` has no total order), unlike its
+/// siblings [`Spent`]/[`Verdict`]: every field is an `f64`, and
+/// `ExecutionError::SpendExhausted` / `i18n::ReceiptKind`
+/// (`gateway::execution_engine`/`gateway::i18n`) both carry one and need to
+/// stay `Copy`/`PartialEq` themselves — `ReceiptKind` already derives both
+/// and is matched on by value at every `receipt_kind()` call site, so a
+/// non-`Copy` field here would force every one of those sites to
+/// restructure around a reference instead.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Limit {
     /// The caller's own ceiling: both numbers are his own spend, so both are
     /// safe to tell him.

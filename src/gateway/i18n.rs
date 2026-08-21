@@ -16,6 +16,7 @@
 use std::sync::OnceLock;
 
 use crate::orchestrator::dispatch::TerminateReason;
+use crate::spend::Limit;
 
 /// Supported locales.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,7 +168,12 @@ pub enum Msg<'a> {
 /// engine had no auth bucket), and the engine's naive `contains("connection")`
 /// matched `disconnection_policy` (exactly the foot-gun [`contains_phrase`]
 /// was written to avoid).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Eq` is deliberately absent (only `PartialEq`): [`SpendExhausted`](Self::SpendExhausted)
+/// carries a [`Limit`], and `Limit::PerUser`'s two `f64` fields cannot
+/// implement `Eq`. `Copy` stays — `Limit` is itself `Copy` (all-`f64`
+/// fields), so nothing here forces a move.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ReceiptKind {
     /// The run exceeded its wall-clock budget.
     Timeout,
@@ -185,6 +191,20 @@ pub enum ReceiptKind {
     /// Anything else. Deliberately opaque: the raw chain goes to the server
     /// log, never onto the wire (hermes GAP-5).
     Failed,
+    /// `principal`'s spend ceiling was reached — see `spend::check`. Carries
+    /// the [`Limit`] that fired (wording is chosen by *its* shape — see
+    /// `Limit::PerUser`/`Limit::Total`'s own docs — never by asking "may this
+    /// caller see that number", a question nothing at render time can
+    /// answer) and the reset instant, resolved fresh at
+    /// `ExecutionError::receipt_kind()` time rather than carried on the
+    /// error itself: `ExecutionError::SpendExhausted` carries only `limit`,
+    /// so the same period boundary `spend::check` just computed is not
+    /// duplicated into a second field that could read stale after a live
+    /// policy reload. Every `receipt_kind()`/`user_receipt()` call site in
+    /// this crate runs synchronously, moments after the denial — see those
+    /// call sites — so recomputing here is not a second answer, it is the
+    /// same computation `check` made, made again a few instructions later.
+    SpendExhausted { limit: Limit, reset_ms: i64 },
 }
 
 impl ReceiptKind {
@@ -200,7 +220,26 @@ impl ReceiptKind {
             Self::Auth => "AUTH",
             Self::Unreachable => "PROVIDERS_UNREACHABLE",
             Self::Failed => "FAILED",
+            Self::SpendExhausted { .. } => "SPEND_EXHAUSTED",
         }
+    }
+
+    /// Worth parking-and-retrying (the two provider-hiccup buckets), as
+    /// opposed to terminal.
+    ///
+    /// The single predicate `execute.rs::park_loop_on_transient_failure` and
+    /// `goal_continuation.rs::block_goal_on_failure` both call — before this
+    /// existed each hand-wrote `matches!(kind, RateLimited | Unreachable)`,
+    /// and two hand-written copies is exactly how one of them would end up
+    /// answering `SpendExhausted` differently from the other. It must not: a
+    /// spend ceiling does not lift until the period resets, a park costs no
+    /// iteration (see `park_loop_on_transient_failure`'s own doc), and
+    /// nothing else bounds how many times a tick can re-fire against a wall
+    /// that has not moved — parking it would be an infinite billing-denial
+    /// loop, not a bounded retry.
+    #[must_use]
+    pub const fn is_transient(self) -> bool {
+        matches!(self, Self::RateLimited | Self::Unreachable)
     }
 }
 
@@ -329,6 +368,36 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
             "The task failed. Please try again.".into()
         }
 
+        // Wording is chosen by `Limit`'s SHAPE, never by asking who is
+        // asking: `PerUser` renders both numbers because they are the
+        // caller's own; `Total` renders none — see `Limit::Total`'s doc.
+        // G12 pins the `Total` arms carrying no dollar figure.
+        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::PerUser { spent, limit }, reset_ms }), Locale::Zh) => {
+            format!(
+                "本周期个人支出已达上限：已花费 ${spent:.2}，上限 ${limit:.2}。将于 {} 重置。",
+                format_reset_instant(reset_ms)
+            )
+        }
+        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::PerUser { spent, limit }, reset_ms }), Locale::En) => {
+            format!(
+                "Spend ceiling reached: ${spent:.2} spent against a ${limit:.2} per-user limit \
+                 for this period. Resets at {}.",
+                format_reset_instant(reset_ms)
+            )
+        }
+        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::Total, reset_ms }), Locale::Zh) => {
+            format!(
+                "本机共享支出额度已用尽，本周期暂时无法继续。将于 {} 重置。",
+                format_reset_instant(reset_ms)
+            )
+        }
+        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::Total, reset_ms }), Locale::En) => {
+            format!(
+                "This machine's shared spend limit for the period has been reached. Resets at {}.",
+                format_reset_instant(reset_ms)
+            )
+        }
+
         (Msg::QueuedMessagesDropped { count }, Locale::Zh) => {
             format!("已随本次停止取消 {count} 条排队中的消息。")
         }
@@ -389,6 +458,19 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         (Msg::PlanApprovePrompt, Locale::En) => "Approve this plan?".into(),
         (Msg::PlanApprovePrompt, Locale::Zh) => "是否批准这份计划？".into(),
     }
+}
+
+/// Render a `ReceiptKind::SpendExhausted` reset instant as RFC3339 — a
+/// machine-parseable timestamp rather than free text, in both locales; the
+/// same choice `metering::spend_denied_message` already made for the floor
+/// arm's (model-facing, unlocalized) message. Falls back to the raw
+/// millisecond value only if the timestamp is out of `chrono`'s
+/// representable range — defensive only: `reset_ms` is always
+/// `spend::period::period_end_ms`'s return value, which never produces one.
+fn format_reset_instant(reset_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(reset_ms)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| reset_ms.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -784,6 +866,148 @@ mod tests {
             "PROVIDERS_UNREACHABLE",
             "wire code is client-visible API"
         );
+    }
+
+    /// The wording is chosen by `Limit`'s shape, not by who is asking:
+    /// `PerUser` renders both numbers (they are the caller's own),
+    /// `Total` renders none — see `Limit::Total`'s doc for why a role
+    /// predicate cannot substitute (there is no actor at render time to ask
+    /// "may this caller see the machine total").
+    #[test]
+    fn spend_exhausted_receipt_renders_by_limit_shape() {
+        let per_user = ReceiptKind::SpendExhausted {
+            limit: Limit::PerUser {
+                spent: 12.5,
+                limit: 10.0,
+            },
+            reset_ms: 1_700_000_000_000,
+        };
+        let total = ReceiptKind::SpendExhausted {
+            limit: Limit::Total,
+            reset_ms: 1_700_000_000_000,
+        };
+
+        for kind in [per_user, total] {
+            assert_eq!(kind.code(), "SPEND_EXHAUSTED");
+            assert!(!kind.is_transient(), "a spend denial is never transient");
+        }
+
+        for locale in [Locale::Zh, Locale::En] {
+            let per_user_msg = t(Msg::ErrReceipt(per_user), locale);
+            assert!(
+                per_user_msg.contains("12.5") && per_user_msg.contains("10.0"),
+                "{locale:?} PerUser receipt must render both of the caller's own numbers: \
+                 {per_user_msg}"
+            );
+
+            let total_msg = t(Msg::ErrReceipt(total), locale);
+            assert!(
+                !total_msg.contains('$'),
+                "{locale:?} Total receipt must render no dollar figure: {total_msg}"
+            );
+        }
+    }
+
+    /// Every receipt names the reset instant, in both locales — the answer
+    /// to "what do I do now" is on the card, not a second round trip away.
+    #[test]
+    fn spend_exhausted_receipt_names_the_reset_instant() {
+        let reset_ms = 1_700_000_000_000_i64;
+        let expected = chrono::DateTime::from_timestamp_millis(reset_ms)
+            .unwrap()
+            .to_rfc3339();
+        for limit in [
+            Limit::PerUser {
+                spent: 5.0,
+                limit: 5.0,
+            },
+            Limit::Total,
+        ] {
+            let kind = ReceiptKind::SpendExhausted { limit, reset_ms };
+            for locale in [Locale::Zh, Locale::En] {
+                let msg = t(Msg::ErrReceipt(kind), locale);
+                assert!(
+                    msg.contains(&expected),
+                    "{limit:?}/{locale:?} must name the reset instant: {msg}"
+                );
+            }
+        }
+    }
+
+    /// `is_transient()` — the single predicate `park_loop_on_transient_failure`
+    /// and `block_goal_on_failure` both now call. Every bucket except the two
+    /// provider-hiccup ones must read as terminal.
+    #[test]
+    fn is_transient_is_true_only_for_the_two_provider_hiccup_buckets() {
+        let terminal = [
+            ReceiptKind::Timeout,
+            ReceiptKind::Cancelled,
+            ReceiptKind::AgentBusy,
+            ReceiptKind::Auth,
+            ReceiptKind::Failed,
+            ReceiptKind::SpendExhausted {
+                limit: Limit::Total,
+                reset_ms: 0,
+            },
+        ];
+        for kind in terminal {
+            assert!(!kind.is_transient(), "{kind:?} must not be transient");
+        }
+        assert!(ReceiptKind::RateLimited.is_transient());
+        assert!(ReceiptKind::Unreachable.is_transient());
+    }
+
+    /// G12 — source-level: neither `Limit::Total` receipt arm (Zh or En) ever
+    /// formats a dollar figure. Structurally near-impossible today — the
+    /// `Limit::Total` pattern binds no numeric field, so `spent`/`limit`
+    /// simply are not in scope inside that arm — but pinned as a source scan
+    /// so a future refactor that pulls a number into scope (e.g. reads it
+    /// off some other field in the outer error) cannot silently make the
+    /// wrong figure formattable again. See `Limit::Total`'s own doc for why
+    /// the machine-wide number must never reach this text.
+    ///
+    /// Scans only the production prefix (before `#[cfg(test)]`) with comment
+    /// lines stripped, so this guard's own rule text — which necessarily
+    /// contains the same needles it searches for — can never match itself
+    /// and pass vacuously.
+    #[test]
+    fn no_limit_total_receipt_arm_formats_a_dollar_figure() {
+        let full = include_str!("i18n.rs").replace('\r', "");
+        let production = full
+            .split("#[cfg(test)]")
+            .next()
+            .expect("this file always has a #[cfg(test)] boundary");
+        let src: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!src.trim().is_empty(), "scan read nothing; the split point moved");
+
+        let mut checked = 0;
+        for (locale_tag, needle) in [
+            ("Zh", "Limit::Total, reset_ms }), Locale::Zh) => {"),
+            ("En", "Limit::Total, reset_ms }), Locale::En) => {"),
+        ] {
+            let start = src
+                .find(needle)
+                .unwrap_or_else(|| panic!("{locale_tag} Limit::Total receipt arm not found"));
+            let body_start = start + needle.len();
+            let rel_end = src[body_start..]
+                .find("\n        }")
+                .expect("arm body has a closing brace at the arm's own indent");
+            let body = &src[body_start..body_start + rel_end];
+            assert!(
+                !body.contains('$'),
+                "{locale_tag} Limit::Total arm must never render a dollar figure:\n{body}"
+            );
+            assert!(
+                !body.contains("{spent") && !body.contains("{limit"),
+                "{locale_tag} Limit::Total arm interpolated a spend number:\n{body}"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 2, "expected exactly two Limit::Total arms (Zh + En)");
     }
 
     /// An English-locale deployment must not receive Chinese error text — the
