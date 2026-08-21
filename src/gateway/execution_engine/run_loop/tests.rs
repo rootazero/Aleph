@@ -389,6 +389,21 @@ fn scope_stamping_producers_are_all_accounted_for() {
             .replace('\\', "/");
         // Test-only files build requests freely; they are not producers.
         // The struct definition and its Debug impl are not constructions.
+        //
+        // ⚠️ This is a name-shaped rule and it is demonstrably incomplete:
+        // `find src -name '*_tests.rs'` returns eight files today (plus
+        // everything under `src/**/tests/`), none of which this matches.
+        // `src/gateway/execution_engine/btw_wire_tests.rs` is the living
+        // counter-example — as test-gated as any `tests.rs` (`#[cfg(test)] mod
+        // btw_wire_tests;` in `execution_engine/mod.rs`), and invisible to this
+        // skip. It does not currently trip the scan, but the day one of those
+        // files writes a legitimate `RunRequest { … }` literal the failure
+        // message will invite its author to register a non-producer in a census
+        // whose only value is that its entries are true.
+        // The precise repair is to derive test-only-ness from the parent
+        // module's `#[cfg(test)] mod <name>;` declaration rather than from the
+        // filename; it is not done here because widening the name list would
+        // trade a false positive for a blind spot, which is the worse direction.
         if rel.ends_with("/tests.rs") || rel.ends_with("src/gateway/execution_engine/mod.rs") {
             continue;
         }
@@ -423,10 +438,19 @@ fn scope_stamping_producers_are_all_accounted_for() {
         // whose whole value is that its entries are true. Every entry above is
         // still matched by a real construction with this in place, so it
         // narrows nothing that was ever a producer.
+        //
+        // The arrow is looked for **before the match site**, not anywhere on the
+        // line: `fn r() -> RunRequest { RunRequest { … } }` and a short closure
+        // with an explicit return type both construct AND carry an arrow, and a
+        // whole-line test would skip them silently. Unlike the `stale` half,
+        // nothing else catches a producer that goes missing.
         let constructs = head
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
-            .any(|l| l.contains("RunRequest {") && !l.contains("->"));
+            .any(|l| {
+                l.match_indices("RunRequest {")
+                    .any(|(at, _)| !l[..at].contains("->"))
+            });
         if constructs {
             found.push(rel);
         }

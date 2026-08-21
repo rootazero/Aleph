@@ -899,20 +899,89 @@ impl ExecutionAdapter for CapturingAdapter {
     }
 }
 
+/// An outbound channel that accepts sends and remembers them.
+///
+/// **Registering this is not decoration — without it the rig cannot observe the
+/// trap it exists to observe.** `try_send_unknown_command_help` has exactly two
+/// `false` exits: no suggestions, and `channel_registry.send(...)` returning
+/// `Err`. On an empty `ChannelRegistry` every send errors, so the helper always
+/// reported "I did not answer" and the router fell through to the agent — the
+/// same outcome as the claim, by a mechanism no deployment has. The rig read
+/// green and the green meant nothing.
+///
+/// It records what it was asked to send so a swallowed message is visible as an
+/// effect (a "did you mean" reply on the wire), not merely as the absence of a
+/// run.
+struct RigChannel {
+    info: crate::gateway::channel::ChannelInfo,
+    state: crate::gateway::channel::ChannelState,
+    sent: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl RigChannel {
+    fn new(sent: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+        Self {
+            info: crate::gateway::channel::ChannelInfo {
+                id: ChannelId::new(RIG_CHANNEL),
+                name: RIG_CHANNEL.to_string(),
+                channel_type: RIG_CHANNEL.to_string(),
+                status: crate::gateway::channel::ChannelStatus::Connected,
+                capabilities: crate::gateway::channel::ChannelCapabilities::default(),
+            },
+            state: crate::gateway::channel::ChannelState::new(8),
+            sent,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::channel::Channel for RigChannel {
+    fn info(&self) -> &crate::gateway::channel::ChannelInfo {
+        &self.info
+    }
+    fn state(&self) -> &crate::gateway::channel::ChannelState {
+        &self.state
+    }
+    async fn start(&mut self) -> crate::gateway::channel::ChannelResult<()> {
+        Ok(())
+    }
+    async fn stop(&mut self) -> crate::gateway::channel::ChannelResult<()> {
+        Ok(())
+    }
+    async fn send(
+        &self,
+        message: crate::gateway::channel::OutboundMessage,
+    ) -> crate::gateway::channel::ChannelResult<crate::gateway::channel::SendResult> {
+        self.sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(message.text.clone());
+        Ok(crate::gateway::channel::SendResult {
+            message_id: MessageId::new("rig-out"),
+            timestamp: chrono::Utc::now(),
+        })
+    }
+}
+
 /// A router wired the way a channel deployment wires one: an agent registry, an
-/// execution adapter, a `CommandParser` over a real builtin catalog, and a
-/// channel whose DM policy lets the message through.
+/// execution adapter, a `CommandParser` over a real builtin catalog, and — the
+/// part that took a review round to get right — a **registered, connected
+/// outbound channel**, so the router's own replies succeed the way they do in
+/// production.
 struct ChannelRig {
     router: InboundMessageRouter,
     adapter: Arc<CapturingAdapter>,
     agent: Arc<AgentInstance>,
     temp: tempfile::TempDir,
     next_id: std::sync::atomic::AtomicU64,
+    /// Everything the router sent back to the channel. A message the router
+    /// answered itself leaves a trace here and no trace in `adapter`.
+    replies: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl ChannelRig {
     /// `catalog_resolves_btw` seeds the catalog with a tool literally named
-    /// `btw`. That is not the shipped state — `no_catalog_command_resolves_as_a_side_question`
+    /// `btw`. That is not the shipped state — `no_shipped_command_word_resolves_as_a_side_question`
     /// pins that it is not — it is the world in which falling through to the
     /// unified interception has an observable consequence, which is what makes
     /// the ordering here testable rather than merely true today. Registering
@@ -960,10 +1029,16 @@ impl ChannelRig {
                 .await;
         }
 
+        let replies: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let channels = Arc::new(ChannelRegistry::new());
+        channels
+            .register(Box::new(RigChannel::new(replies.clone())))
+            .await;
+
         let adapter = Arc::new(CapturingAdapter::default());
         let execution: Arc<dyn ExecutionAdapter> = adapter.clone();
         let mut router = InboundMessageRouter::with_execution(
-            Arc::new(ChannelRegistry::new()),
+            channels,
             Arc::new(SqlitePairingStore::in_memory().expect("pairing store")),
             RoutingConfig::default(),
             agents,
@@ -994,6 +1069,7 @@ impl ChannelRig {
             agent,
             temp,
             next_id: std::sync::atomic::AtomicU64::new(0),
+            replies,
         }
     }
 
@@ -1032,7 +1108,59 @@ impl ChannelRig {
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        panic!("{text:?} never reached the engine — the router answered it itself");
+        panic!(
+            "{text:?} never reached the engine — the router answered it itself. \
+             It replied: {:?}",
+            self.replies_so_far()
+        );
+    }
+
+    /// What the router sent back to the channel instead of running the agent.
+    ///
+    /// Only meaningful because the rig registers a channel that accepts sends;
+    /// on an empty registry every one of these fails and the router's own
+    /// answers are invisible.
+    fn replies_so_far(&self) -> Vec<String> {
+        self.replies
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Deliver `text` and report whether it reached the engine at all.
+    ///
+    /// The twin of [`ChannelRig::deliver`] for the case where being swallowed
+    /// is the outcome under test rather than a test failure.
+    async fn try_deliver(&self, text: &str) -> Option<RunRequest> {
+        let n = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let msg = InboundMessage {
+            id: MessageId::new(format!("m-{n}")),
+            channel_id: ChannelId::new(RIG_CHANNEL),
+            conversation_id: ConversationId::new("conv-1"),
+            sender_id: UserId::new("u1"),
+            sender_name: None,
+            text: text.to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        self.router
+            .handle_message(msg)
+            .await
+            .expect("the router must not error on a plain DM");
+
+        for _ in 0..40 {
+            if let Some(request) = self.adapter.take() {
+                return Some(request);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        None
     }
 
     /// Carry a request the router produced the rest of the way down, through
@@ -1233,27 +1361,156 @@ async fn the_router_claims_btw_ahead_of_a_catalog_that_could_resolve_it() {
     );
 }
 
-/// Why `/btw` is not registered for discovery.
+/// The claim is load-bearing **today**, and this pins the fact that says so.
+///
+/// I reported the opposite in review round 1: that `suggest_commands("btw", 3)`
+/// found nothing on the shipped catalog, so a fallen-through `/btw` would reach
+/// the agent anyway and deleting the claim was a latent break. That was wrong,
+/// and the way it was wrong is worth keeping. I walked the tool **names**
+/// looking for one within two edits of `btw` and found none — but
+/// `suggest_commands` scores canonical names **and aliases**
+/// (`registry/query.rs`), and `session_new` carries the alias `new`:
+/// `levenshtein("new", "btw") == 2`, and with `max(len) == 3 <= 6` the threshold
+/// is 2. A hit. Enumerating one axis of a two-axis search and reporting the
+/// result as the search's answer is the same列举法 shape this file's other
+/// guards exist to prevent.
+///
+/// So Trap 2 fires now: without the claim, a channel `/btw why is X slow?` is
+/// answered `Unknown command /btw. Did you mean: /session_new?` and the question
+/// is thrown away. `an_unclaimed_btw_is_swallowed_by_the_did_you_mean_helper`
+/// demonstrates that as an effect; this pins the input that makes it true, so
+/// the day the alias table changes the record changes with it rather than
+/// quietly becoming a story about a world that no longer exists.
+///
+/// Deliberately **not** asserting *which* command is suggested: the value under
+/// test is "the fall-through has something to say", not `session_new`.
+#[tokio::test]
+async fn the_fall_through_has_a_near_match_for_btw_so_the_claim_is_load_bearing() {
+    let catalog = ToolCatalog::new();
+    catalog.register_builtin_tools().await;
+
+    let suggestions = catalog.suggest_commands("btw", 3).await;
+    assert!(
+        !suggestions.is_empty(),
+        "`btw` has no near-match in the shipped catalog any more. That makes the \
+         router's claim look optional — it is not: it is also what keeps a \
+         resolvable `/btw` out of the slash fast path. Re-read \
+         `the_router_claims_btw_ahead_of_a_catalog_that_could_resolve_it` before \
+         relaxing anything here, and correct the round-1 review record, which \
+         states this set is non-empty."
+    );
+}
+
+/// The trap, as an effect: an unclaimed `/btw` is thrown away.
+///
+/// This is the arm the round-1 rig could not reach. `try_send_unknown_command_help`
+/// returns `false` — "I did not answer, fall through to the agent" — on exactly
+/// two conditions: no suggestions, and the outbound send failing. The rig used
+/// to register no channel, so the second was always true, the router always fell
+/// through, and four channel tests stayed green with the claim disabled. That
+/// green was reported as a fact about production. It was a fact about the rig.
+///
+/// Here the rig has a connected channel, so the helper behaves as it does on a
+/// deployment, and the swallow is observable in the only two places it shows: no
+/// run reached the engine, and a "did you mean" reply went out on the wire.
+///
+/// The fall-through is exercised **without disabling anything**: a bare `/btw`
+/// has an empty body, `BtwTurn::resolve` rejects it by design, so it takes the
+/// identical path a body-carrying `/btw` would take the moment the claim is
+/// removed.
+#[tokio::test]
+async fn an_unclaimed_btw_is_swallowed_by_the_did_you_mean_helper() {
+    let rig = ChannelRig::new(false).await;
+
+    let reached = rig.try_deliver("/btw").await;
+
+    assert!(
+        reached.is_none(),
+        "an unclaimed `/btw` reached the engine — then the fall-through is \
+         harmless and this test is guarding nothing. Check whether \
+         `try_send_unknown_command_help` still answers, and whether the rig's \
+         channel is still registered."
+    );
+    let replies = rig.replies_so_far();
+    assert!(
+        replies.iter().any(|r| r.contains("Unknown command")),
+        "the router neither ran the agent nor answered: {replies:?}"
+    );
+}
+
+/// The control for the test above: the same rig, the same helper, a `/btw` that
+/// **is** claimed — reaches the engine.
+///
+/// Without this arm, a rig that swallowed everything (a broken agent registry, a
+/// permission denial, a channel config typo) would look exactly like a working
+/// claim.
+#[tokio::test]
+async fn a_claimed_btw_reaches_the_engine_on_the_same_rig() {
+    let rig = ChannelRig::new(false).await;
+
+    let reached = rig.try_deliver("/btw what does epoch mean here?").await;
+
+    assert!(
+        reached.is_some(),
+        "the claimed side question did not reach the engine; the router replied \
+         {:?} instead",
+        rig.replies_so_far()
+    );
+    assert!(
+        rig.replies_so_far().is_empty(),
+        "the router answered a claimed side question itself: {:?}",
+        rig.replies_so_far()
+    );
+}
+
+/// Why `/btw` is not registered in the `ToolCatalog`, and what stops one
+/// appearing there by accident.
 ///
 /// `commands.list`, the TUI command tree and `/help` are all rendered from the
 /// `ToolCatalog`, and `CommandParser::parse_async` resolves against that same
 /// table — there is no listed-but-unresolvable state. So an entry added to make
 /// `/btw` discoverable would also make it resolvable, and `execute()`'s own
 /// `stamp_slash_mode` safety net resolves every `/`-prefixed input it is handed
-/// — on Panel and TUI too, where the router's claim cannot help. The listing
-/// would cost the ceiling on every surface.
+/// — on Panel and TUI too, where the router's claim cannot help. The catalog
+/// listing would cost the ceiling on every surface.
+///
+/// Channels get their discovery elsewhere and for free: the router owns its own
+/// `/help` answer, so a line is appended there (`handle_help`) with no catalog
+/// entry and therefore no resolvability. Panel and TUI stay undiscoverable until
+/// the catalog grows a discoverable-but-not-dispatchable bit.
 ///
 /// Stated as a rule rather than as the name `btw`: every shipped command word
 /// is asked whether [`BtwTurn::resolve`] — the one resolver — would read it as
 /// a side question. A second side-question spelling would be covered without
 /// this guard being told about it.
 ///
-/// The three tables are the ones this binary ships: the curated catalog
-/// entries, the builtin definitions the catalog builder turns into commands,
-/// and the shorthand aliases seeded onto them. Skills, MCP servers and plugins
-/// add names at runtime and are out of reach of any compile-time guard — a
-/// user-installed extension called `btw` would shadow the side question on
-/// every surface, and nothing here can prevent that.
+/// # The four sources, and what makes the list stay complete
+///
+/// The first version of this guard named **three** tables and its doc asserted
+/// that "no compile-time guard can prevent" a bundled extension shadowing
+/// `/btw`. Both halves were wrong in the same way: `crate::bundled::BUNDLED_SKILLS`
+/// and `BUNDLED_PLUGINS` are `include_dir!` trees embedded **into the binary**
+/// and extracted to `~/.aleph/` on first start, so a skill named `btw` ships out
+/// of the box — and being a `static Dir`, it is exactly as walkable as the other
+/// three. A sentence saying a thing is impossible had foreclosed its own fix.
+///
+/// So: four sources, and the honest answer to "is that all of them" is **no, and
+/// nothing here makes the list stay complete.** What is in reach of a
+/// compile-time guard is what the binary carries: the curated catalog entries,
+/// `BUILTIN_TOOL_DEFINITIONS`, both halves of `SHORTHAND_ALIASES`, and the two
+/// bundled trees. What is out of reach is genuinely out of reach — a skill, MCP
+/// server or plugin the operator installs at runtime becomes a catalog command
+/// word this test never sees, and an installed extension named `btw` would
+/// shadow the side question on Panel and TUI. That is a declared limit, not a
+/// claim of closure: if a fifth compile-time registration surface is added, this
+/// guard will not know, and the only thing that will catch it is someone reading
+/// this paragraph.
+///
+/// ⚠️ The two bundled trees are git submodules and are **empty in a bare
+/// checkout**, so that arm is vacuously green here and earns its keep in CI
+/// (`submodules: recursive`). The `words.len()` self-check below cannot notice
+/// an empty fourth source — it is dominated by the first three — which is why
+/// the bundled arm reports its own count separately rather than folding in.
 ///
 /// [`BtwTurn::resolve`]: crate::gateway::btw::BtwTurn::resolve
 #[tokio::test]
@@ -1274,14 +1531,21 @@ async fn no_shipped_command_word_resolves_as_a_side_question() {
         words.push((*canonical).to_string());
     }
 
-    // Self-check: three tables, and the smallest of them is not small. A guard
-    // that iterates an empty list is indistinguishable from one that passes.
+    // Self-check for the three in-binary tables: a guard that iterates an empty
+    // list is indistinguishable from one that passes.
     assert!(
         words.len() > 100,
-        "only {} command words came back — one of the three tables went empty, \
-         so this guard checked almost nothing",
+        "only {} command words came back — one of the first three tables went \
+         empty, so this guard checked almost nothing",
         words.len()
     );
+
+    // Fourth source: the bundled trees. A skill's command word is its id, and
+    // the id is derived from the `name:` frontmatter — not from the directory
+    // name — so this asks the real parser rather than re-deriving it here. A
+    // second derivation would be a second answer to a question that has one.
+    let bundled = bundled_skill_command_words();
+    words.extend(bundled.iter().cloned());
 
     for word in &words {
         assert!(
@@ -1293,4 +1557,43 @@ async fn no_shipped_command_word_resolves_as_a_side_question() {
              engine's fast path would run it without the read-only ceiling."
         );
     }
+}
+
+/// Every command word the bundled skills tree contributes to the catalog.
+///
+/// Walks `crate::bundled::BUNDLED_SKILLS` for `SKILL.md` files and parses each
+/// with `skill::manifest::parse_skill_content` — the same function the loader
+/// uses — so the id this returns is the id the catalog will register.
+///
+/// Empty in a bare checkout (the tree is a git submodule); non-empty in CI.
+fn bundled_skill_command_words() -> Vec<String> {
+    fn walk(dir: &include_dir::Dir<'_>, out: &mut Vec<String>) {
+        for file in dir.files() {
+            let is_skill_md = file
+                .path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"));
+            if !is_skill_md {
+                continue;
+            }
+            let Some(text) = file.contents_utf8() else {
+                continue;
+            };
+            if let Ok(manifest) = crate::skill::manifest::parse_skill_content(
+                text,
+                crate::domain::skill::SkillSource::Bundled,
+            ) {
+                use crate::domain::Entity as _;
+                out.push(manifest.id().to_string());
+            }
+        }
+        for sub in dir.dirs() {
+            walk(sub, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(&crate::bundled::BUNDLED_SKILLS, &mut out);
+    out
 }

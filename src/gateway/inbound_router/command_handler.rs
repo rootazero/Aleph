@@ -49,6 +49,26 @@ pub(super) enum SpecialSlash {
     Stop,
 }
 
+/// The commands the router answers or claims itself, appended to the channel
+/// `/help` listing after the catalog renderer has had its say.
+///
+/// These have no `ToolCatalog` entry — deliberately, in `/btw`'s case: an entry
+/// would make it resolvable, and `CommandParser::parse_async` +
+/// `stamp_slash_mode` would then route it into the slash fast path, which
+/// dispatches on the raw tool registry and never builds the `ScopedToolService`
+/// the side question's read-only ceiling lives in. A catalog has one table with
+/// two faces; a string appended here has only the face.
+///
+/// Only `/btw` is listed. `/help`, `/stop` and `/abort` are conventions a chat
+/// user arrives already knowing; `/btw` is a verb this project invented, and a
+/// feature whose value is "ask without derailing the run" is worth nothing to
+/// someone who has never seen the word. That is the whole argument for the line
+/// — if a future router-owned command is equally unguessable, it belongs here
+/// too, and if it is not, it does not.
+const ROUTER_OWNED_HELP_LINES: &str =
+    "\n/btw <question> — ask a read-only side question without disturbing this \
+     conversation";
+
 /// Classify a raw inbound text as a `SpecialSlash` variant.
 ///
 /// Returns `None` for anything that is not `/help`, `/stop` or `/abort`
@@ -431,15 +451,25 @@ impl InboundMessageRouter {
     /// completion UI, so this is the channel-side counterpart. Intercepted
     /// before agent dispatch like `/stop` — a read-only listing must never be
     /// queued behind a running turn.
+    ///
+    /// The listing is assembled **here**, not by the catalog, which is what lets
+    /// a router-owned command appear in it. `/btw` uses that: it has no catalog
+    /// entry (one would make it resolvable, and a resolvable `/btw` is taken by
+    /// the slash fast path, which holds none of the loop's gates — see
+    /// `no_shipped_command_word_resolves_as_a_side_question`), so the only place
+    /// it can be advertised without becoming dispatchable is a string appended
+    /// after the renderer returns. Discoverable on channels, unresolvable
+    /// everywhere.
     pub(super) async fn handle_help(&self, msg: &InboundMessage) -> Result<(), RoutingError> {
         let Some(parser) = self.command_parser.as_ref() else {
             // No unified catalog wired (simulated mode) — nothing to list.
             return Ok(());
         };
 
-        let text =
+        let mut text =
             crate::gateway::handlers::commands::render_command_help(parser.tool_registry(), None)
                 .await;
+        text.push_str(ROUTER_OWNED_HELP_LINES);
 
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &text);
         if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
@@ -500,7 +530,9 @@ impl InboundMessageRouter {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_special_slash, parse_clarify_index, SpecialSlash};
+    use super::{
+        classify_special_slash, parse_clarify_index, SpecialSlash, ROUTER_OWNED_HELP_LINES,
+    };
 
     #[test]
     fn classify_help_lowercase() {
@@ -564,6 +596,73 @@ mod tests {
         assert_eq!(classify_special_slash("/HELLO"), None);
         assert_eq!(classify_special_slash("/"), None);
         assert_eq!(classify_special_slash(""), None);
+    }
+
+    /// The channel `/help` line is the whole of `/btw`'s discovery, so it has to
+    /// actually name the command and it has to stay unresolvable.
+    ///
+    /// Both halves matter and they pull in opposite directions. Advertising a
+    /// command word that the `CommandParser` can resolve is precisely the defect
+    /// this line exists to route around: a catalog entry would be listed *and*
+    /// dispatchable, and a dispatchable `/btw` is taken by the slash fast path
+    /// with no read-only ceiling. So the assertion is not "the line mentions
+    /// btw" but "the line mentions btw **and** asking the one resolver about it
+    /// still yields a side question, not a tool".
+    #[test]
+    fn the_router_owned_help_line_advertises_btw() {
+        assert!(
+            ROUTER_OWNED_HELP_LINES.contains("/btw"),
+            "the only place a channel user can learn `/btw` exists stopped \
+             naming it: {ROUTER_OWNED_HELP_LINES:?}"
+        );
+        assert!(
+            ROUTER_OWNED_HELP_LINES.starts_with('\n'),
+            "the line must start its own line — it is appended to a rendered \
+             listing, and without the break it lands on the end of the last \
+             catalog entry: {ROUTER_OWNED_HELP_LINES:?}"
+        );
+        assert!(
+            crate::gateway::btw::BtwTurn::resolve("/btw why is this slow?").is_some(),
+            "the help line advertises a command the one resolver no longer \
+             recognises — the listing would be pointing at nothing"
+        );
+    }
+
+    /// A router-owned help line may only advertise a word the router itself
+    /// claims or answers.
+    ///
+    /// The failure this blocks is advertising something the catalog owns:
+    /// `render_command_help` already lists every catalog command, so a word
+    /// added here that the catalog also knows is both duplicated in the listing
+    /// and — the expensive half — dispatchable, which for `/btw` means the fast
+    /// path and no ceiling. Derives the router-answered vocabulary from
+    /// `classify_special_slash` and `BtwTurn::resolve` rather than listing it,
+    /// so a fourth router-owned command joins the rule automatically.
+    #[test]
+    fn every_word_in_the_router_owned_help_line_is_router_owned() {
+        let advertised: Vec<&str> = ROUTER_OWNED_HELP_LINES
+            .split_whitespace()
+            .filter(|w| w.starts_with('/') && w.len() > 1)
+            .collect();
+        assert!(
+            !advertised.is_empty(),
+            "no command word found in {ROUTER_OWNED_HELP_LINES:?} — this guard \
+             would pass vacuously"
+        );
+
+        for word in advertised {
+            let router_answers = classify_special_slash(word).is_some();
+            let router_claims =
+                crate::gateway::btw::BtwTurn::resolve(&format!("{word} some question")).is_some();
+            assert!(
+                router_answers || router_claims,
+                "`{word}` is advertised in the router's own help line but the \
+                 router neither answers it (`classify_special_slash`) nor claims \
+                 it (`BtwTurn::resolve`). If it is a catalog command, \
+                 `render_command_help` already lists it and this line is both a \
+                 duplicate and a claim the router cannot keep."
+            );
+        }
     }
 
     #[test]
