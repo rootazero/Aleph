@@ -235,13 +235,20 @@ wasm:
     # "empty output" unusable as a success signal). What DOES work, and is
     # what's checked below: the target_features custom section is a
     # length-prefixed name field in the wasm binary's own custom-section
-    # format, so its literal ASCII bytes ("target_features") are still
-    # findable by grep if and only if the section is still there --
-    # confirmed byte-for-byte against a real build (the 15-byte LEB128
-    # length prefix immediately precedes the name, exactly as the format
-    # requires). If grep finds it in the pass-1 output, pass 1 didn't do
-    # its job and the build stops right there, loudly, before pass 2 gets a
-    # chance to validate against a section that should not exist any more.
+    # format, so its literal ASCII bytes ("target_features") are findable
+    # by grep whenever the section is still there -- confirmed byte-for-byte
+    # against a real build (the 15-byte LEB128 length prefix immediately
+    # precedes the name, exactly as the format requires). This is NOT a
+    # biconditional: a -g build's debug info could in principle carry that
+    # same literal string incidentally (e.g. inside some symbol name),
+    # tripping this check even though the real section is gone. That
+    # failure direction is safe -- the build stops and asks a human to
+    # look, instead of silently passing on a section that's actually still
+    # present -- so it's an acceptable false-positive risk, not a
+    # false-negative one. If grep finds it in the pass-1 output, pass 1
+    # didn't do its job (or this false positive fired) and the build stops
+    # right there, loudly, before pass 2 gets a chance to validate against
+    # a section that should not exist any more.
     #
     # wasm_features is the single declaration of the floor -- do not
     # duplicate it here or anywhere else. If you're adding an entry,
@@ -264,9 +271,11 @@ wasm:
     # -g (both passes) keeps the name section for crash diagnostics --
     # dropped by pass 1 if omitted there, and pass 2 can't recover what
     # pass 1 already discarded. The intermediate stripped file is written
-    # OUTSIDE dist/ (via mktemp): an aborted build (set -euo pipefail skips
-    # the cleanup line below on failure) must not leave a stray file for
-    # later dist/-scoped tasks to trip over.
+    # OUTSIDE dist/ (via mktemp): even if pass 1 itself crashes before any
+    # cleanup runs, the leftover sits outside dist/ and can't be committed
+    # by a later task that packages that directory -- dist/'s safety never
+    # depends on the temp file being cleaned up. The `trap ... EXIT` below
+    # closes the narrower, OS-temp-directory hygiene gap on top of that.
     if ! command -v wasm-opt >/dev/null 2>&1; then
         echo "✗ wasm-opt (binaryen) is required." >&2
         echo "  It is not a size optimisation any more: it fences the WASM feature set" >&2
@@ -277,11 +286,29 @@ wasm:
         echo "    winget install WebAssembly.binaryen   # Windows" >&2
         exit 1
     fi
+    # wasm_features entries are [flag, note] tuples (see webview-baseline.json).
+    # A bare string entry would still destructure -- JS iterates a string
+    # character-by-character, so `const [flag] = "--enable-simd"` silently
+    # gives flag = "-" instead of failing. Validate the shape explicitly
+    # rather than rely on wasm-opt rejecting a garbled flag downstream.
     wasm_enable_flags=$(node -e '
         const baseline = JSON.parse(require("fs").readFileSync("interfaces/webchat/webview-baseline.json", "utf8"));
+        if (!Array.isArray(baseline.wasm_features)) {
+            console.error("✗ interfaces/webchat/webview-baseline.json is missing a \"wasm_features\" array -- the wasm-opt fence has nothing to enforce against.");
+            process.exit(1);
+        }
+        const malformed = baseline.wasm_features.filter(
+            (entry) => !(Array.isArray(entry) && typeof entry[0] === "string" && /^--[a-z0-9-]+$/.test(entry[0]))
+        );
+        if (malformed.length > 0) {
+            console.error("✗ interfaces/webchat/webview-baseline.json wasm_features has malformed entries (expected [flag, note] tuples, not bare strings):");
+            for (const entry of malformed) console.error("    " + JSON.stringify(entry));
+            process.exit(1);
+        }
         process.stdout.write(baseline.wasm_features.map(([flag]) => flag).join(" "));
     ')
     wasm_opt_tmp=$(mktemp)
+    trap 'rm -f "$wasm_opt_tmp"' EXIT
     wasm-opt --strip-target-features -g \
         {{panel_dist}}/aleph_panel_bg.wasm -o "$wasm_opt_tmp"
     if grep -q "target_features" "$wasm_opt_tmp"; then
@@ -292,7 +319,6 @@ wasm:
         echo "  wasm_features. This usually means a Binaryen upgrade changed" >&2
         echo "  --strip-target-features's behaviour -- do not delete this check to" >&2
         echo "  work around it; find out why it's no longer stripping." >&2
-        rm -f "$wasm_opt_tmp"
         exit 1
     fi
     if ! wasm-opt -mvp -Oz -g $wasm_enable_flags \
@@ -302,10 +328,8 @@ wasm:
         echo "  Floor: interfaces/webchat/webview-baseline.json (wasm_features)" >&2
         echo "  Re-derive the module's real required feature set with:" >&2
         echo "    wasm-opt --print-features {{panel_dist}}/aleph_panel_bg.wasm" >&2
-        rm -f "$wasm_opt_tmp"
         exit 1
     fi
-    rm -f "$wasm_opt_tmp"
     echo "✓ wasm-opt applied (feature set fenced)"
     # 4. Runtime index.html. Written in three parts so baseline-probe.js is
     #    inlined VERBATIM: it must run synchronously before the module script
