@@ -18,10 +18,33 @@ pub fn create_control_plane_router() -> Router {
     Router::new()
         .route("/", get(serve_index))
         .route("/{*path}", get(serve_static_or_index))
-        // Gzip the large panel payloads on the wire (the WASM alone is ~15.5 MB
-        // uncompressed → ~3.7 MB gzipped). 304 revalidations carry no body, so
-        // compression only runs on an actual full transfer.
+        // Runtime gzip for a client that does not advertise `br` — not "no
+        // sibling": every embedded asset currently has one (precompressed at
+        // build time by scripts/precompress_dist.mjs). The large payloads —
+        // the ~22 MB WASM above all — are served from those committed `.br`
+        // files by `serve_static_or_index`, and this layer passes them
+        // through untouched because they already carry a `Content-Encoding`.
+        // Measured on this build: wasm 21,882,715 B identity → 3,363,082 B
+        // via `.br` → 5,089,368 B via this layer's runtime gzip fallback.
+        // 304 revalidations carry no body, so nothing runs on a cache hit.
         .layer(CompressionLayer::new())
+}
+
+/// Does this request advertise brotli?
+///
+/// A deliberately simple token scan rather than full q-value negotiation: the
+/// only decision here is "precompressed sibling or not", and a client that
+/// sends `br;q=0` while also sending it as a token is not a real client. If a
+/// weighted decision is ever needed, that is a different function, not a
+/// widening of this one.
+fn accepts_brotli(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .any(|t| t.split(';').next().unwrap_or_default().trim() == "br")
+        })
 }
 
 /// Serve the index.html file
@@ -50,10 +73,12 @@ async fn serve_static_or_index(headers: HeaderMap, AxumPath(path): AxumPath<Stri
     // Try to serve as static asset first
     match ControlPlaneAssets::get(&path) {
         Some(content) => {
-            // Content-hash ETag: changes exactly when the embedded asset changes
-            // (i.e. on a new build), so the client can cache the asset across
-            // opens and revalidate cheaply. Weak because the wire representation
-            // varies with Content-Encoding (gzip vs identity).
+            // Content-hash ETag over the IDENTITY representation — never over
+            // whichever encoding we happen to serve. An encoding-dependent
+            // validator lets a client that switched `Accept-Encoding` take a
+            // 304 and then decode brotli bytes as identity. Weak because the
+            // wire representation varies with Content-Encoding, which is
+            // exactly what `Vary` announces.
             let etag = format!("W/\"{}\"", hex::encode(content.metadata.sha256_hash()));
 
             // Revalidation hit: the client already holds this exact asset → 304
@@ -69,24 +94,52 @@ async fn serve_static_or_index(headers: HeaderMap, AxumPath(path): AxumPath<Stri
                     [
                         (header::ETAG, etag.as_str()),
                         (header::CACHE_CONTROL, "no-cache"),
+                        (header::VARY, "accept-encoding"),
                     ],
                 )
                     .into_response();
             }
 
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, mime.as_ref()),
-                    // Cacheable but must revalidate via ETag before reuse: always
-                    // fresh after a deploy, never re-transfers unchanged bytes.
-                    (header::CACHE_CONTROL, "no-cache"),
-                    (header::ETAG, etag.as_str()),
-                ],
-                content.data,
-            )
-                .into_response()
+
+            // Precompressed sibling, produced by `just wasm` and committed
+            // alongside dist/ (scripts/precompress_dist.mjs). Serving it sets
+            // `Content-Encoding`, which makes tower-http's CompressionLayer
+            // pass the response straight through — so the 22 MB WASM is neither
+            // gzipped at request time nor sent uncompressed. Assets without a
+            // sibling fall through to the layer's gzip exactly as before.
+            let brotli = accepts_brotli(&headers)
+                .then(|| ControlPlaneAssets::get(&format!("{path}.br")))
+                .flatten();
+
+            match brotli {
+                Some(compressed) => (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, mime.as_ref()),
+                        (header::CONTENT_ENCODING, "br"),
+                        (header::CACHE_CONTROL, "no-cache"),
+                        (header::ETAG, etag.as_str()),
+                        (header::VARY, "accept-encoding"),
+                    ],
+                    compressed.data,
+                )
+                    .into_response(),
+                None => (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, mime.as_ref()),
+                        // Cacheable but must revalidate via ETag before reuse:
+                        // always fresh after a deploy, never re-transfers
+                        // unchanged bytes.
+                        (header::CACHE_CONTROL, "no-cache"),
+                        (header::ETAG, etag.as_str()),
+                        (header::VARY, "accept-encoding"),
+                    ],
+                    content.data,
+                )
+                    .into_response(),
+            }
         }
         None => {
             // For SPA routing, return index.html for non-file paths
@@ -132,5 +185,79 @@ mod tests {
         let resp = serve_static_or_index(headers, AxumPath(path)).await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(resp.headers().get(header::ETAG).unwrap(), &etag);
+    }
+
+    /// The wire fact the whole precompression design rests on.
+    #[tokio::test]
+    async fn brotli_is_served_when_the_client_accepts_it() {
+        let Some(name) = ControlPlaneAssets::iter()
+            .find(|n| ControlPlaneAssets::get(&format!("{n}.br")).is_some())
+        else {
+            // No precompressed asset embedded in this build (dist not built);
+            // skip rather than fail — the guard for that is check_panel_dist.
+            return;
+        };
+        let path = name.to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, "br, gzip".parse().unwrap());
+        let resp = serve_static_or_index(headers, AxumPath(path.clone())).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_ENCODING).unwrap(),
+            "br",
+            "a client advertising br must receive the precompressed sibling"
+        );
+        assert_eq!(
+            resp.headers().get(header::VARY).unwrap(),
+            "accept-encoding",
+            "without Vary a shared cache would hand brotli bytes to an identity client"
+        );
+    }
+
+    /// A client that does not advertise brotli keeps the old behaviour.
+    #[tokio::test]
+    async fn identity_is_served_when_brotli_is_not_accepted() {
+        let Some(name) = ControlPlaneAssets::iter()
+            .find(|n| ControlPlaneAssets::get(&format!("{n}.br")).is_some())
+        else {
+            return;
+        };
+        let path = name.to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+        let resp = serve_static_or_index(headers, AxumPath(path)).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.headers().get(header::CONTENT_ENCODING).is_none(),
+            "a gzip-only client must get identity bytes and let CompressionLayer decide"
+        );
+    }
+
+    /// The trap: the validator must describe the RESOURCE, not the encoding.
+    #[tokio::test]
+    async fn the_etag_does_not_change_with_the_accepted_encoding() {
+        let Some(name) = ControlPlaneAssets::iter()
+            .find(|n| ControlPlaneAssets::get(&format!("{n}.br")).is_some())
+        else {
+            return;
+        };
+        let path = name.to_string();
+
+        let mut br = HeaderMap::new();
+        br.insert(header::ACCEPT_ENCODING, "br".parse().unwrap());
+        let with_br = serve_static_or_index(br, AxumPath(path.clone())).await;
+
+        let plain = serve_static_or_index(HeaderMap::new(), AxumPath(path)).await;
+
+        assert_eq!(
+            with_br.headers().get(header::ETAG),
+            plain.headers().get(header::ETAG),
+            "an encoding-dependent ETag lets a client that switched Accept-Encoding \
+             take a 304 and then decode brotli bytes as identity"
+        );
     }
 }
