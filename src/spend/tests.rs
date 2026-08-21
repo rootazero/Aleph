@@ -272,6 +272,33 @@ fn principals_in_is_empty_for_a_period_with_no_rows() {
 }
 
 // ============================================================================
+// update_policy_into (the injectable core of `update_policy`)
+// ============================================================================
+
+/// The live-apply honest-downgrade signal (G14, in `config::live_apply`)
+/// rests on `update_policy` returning `false` when no handle is installed.
+/// `GLOBAL_POLICY` is a process-wide `OnceLock` that this binary's other
+/// tests (`providers::metering`'s `install_test_spend_globals`) may install
+/// in any order relative to this one, so the `None` branch cannot be
+/// exercised through the real global — see `update_policy_into`'s doc.
+#[test]
+fn update_policy_into_reports_false_with_no_handle() {
+    assert!(!update_policy_into(None, SpendPolicy::default()));
+}
+
+#[test]
+fn update_policy_into_stores_into_a_provided_handle_and_reports_true() {
+    let handle = arc_swap::ArcSwap::from_pointee(SpendPolicy::default());
+    let new_policy = SpendPolicy {
+        per_user_usd: Some(42.0),
+        ..SpendPolicy::default()
+    };
+
+    assert!(update_policy_into(Some(&handle), new_policy.clone()));
+    assert_eq!(*handle.load_full(), new_policy);
+}
+
+// ============================================================================
 // check_with (the injectable core of `check`)
 // ============================================================================
 

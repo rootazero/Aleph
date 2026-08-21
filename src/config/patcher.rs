@@ -635,16 +635,19 @@ impl ConfigPatcher {
             }
         }
 
-        // 7b. Hot-apply. A snapshot can differ in ANY section, so every live
-        // section is pushed — not just the one the operator happens to be
-        // thinking about. Undoing a route change has to reach the running
-        // chain exactly like making it did, and `execution` was missing from
-        // the old hand-inlined rollback path entirely.
+        // 7b. Hot-apply. A snapshot can differ in ANY live target — section
+        // or subsection — so every one of them is pushed, not just the one
+        // the operator happens to be thinking about. Undoing a route change
+        // has to reach the running chain exactly like making it did;
+        // `execution` was missing from the old hand-inlined rollback path
+        // entirely, and passing only `LIVE_SECTIONS` here (instead of
+        // `live_targets()`, which also carries `LIVE_SUBSECTIONS`) would
+        // reintroduce the same gap for `policies.spend` today.
         let live_applied = {
             let cfg = self.config.read().await;
             crate::config::live_apply::apply_live_sections(
                 &cfg,
-                crate::config::reload_impact::LIVE_SECTIONS,
+                &crate::config::reload_impact::live_targets(),
             )
         };
 

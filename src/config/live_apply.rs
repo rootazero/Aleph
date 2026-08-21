@@ -31,7 +31,7 @@
 //! (every write surface re-implementing the poke) is the arrangement that
 //! produced the bug.
 
-use super::reload_impact::{ReloadImpact, LIVE_SECTIONS};
+use super::reload_impact::{dotted_prefix_matches, live_target_for, ReloadImpact, LIVE_SECTIONS, LIVE_SUBSECTIONS};
 use super::Config;
 
 /// Hot-apply the sections of `cfg` named by `top_sections` onto the running
@@ -49,11 +49,25 @@ use super::Config;
 pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static str> {
     let mut applied = Vec::new();
 
-    for section in LIVE_SECTIONS {
-        if !top_sections.contains(section) {
+    for target in LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()) {
+        // A target is requested by its own exact name — how the whole-config
+        // callers pass it, via `reload_impact::live_targets()` — or by a
+        // coarser ancestor: the single-patch caller (`patcher.rs`) only ever
+        // knows the *top-level* section of the path it patched, so a write
+        // to "policies.spend.per_user_usd" reaches this function as
+        // `top_sections = ["policies"]`. `dotted_prefix_matches` is the one
+        // prefix-matching primitive this module's sibling declares; see its
+        // doc for why this call uses the arguments in the opposite order
+        // from `live_target_for` below — this asks "does any requested name
+        // cover this declared target", not "which declared target covers
+        // this specific path".
+        let requested = top_sections
+            .iter()
+            .any(|&s| dotted_prefix_matches(s, target));
+        if !requested {
             continue;
         }
-        let landed = match *section {
+        let landed = match *target {
             // The failover chain reads its route state from an `ArcSwap`
             // installed at boot; storing here is what a "live" route change
             // means.
@@ -89,16 +103,38 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // handle — so it is live unconditionally, and saying otherwise
             // would be the mirror of the bug this module fixes.
             "behavior" => true,
+            // `[policies.spend]`'s handle is a hot-swappable `ArcSwap`
+            // seeded at boot by `spend::install_policy`; storing the newly
+            // patched policy into it is what makes a ceiling change live —
+            // `spend::check`'s very next call (floor arm or admission arm)
+            // reads it fresh via `spend::current_policy`. A missing handle
+            // (a CLI process, most tests, or any process before boot installs
+            // it) makes `spend::update_policy` return `false`, so the
+            // verdict downgrades to `Restart` honestly instead of claiming a
+            // store that did not happen — the same reasoning as `route`'s
+            // arm above.
+            //
+            // Note this arm can fire on a patch to a *sibling* of
+            // `policies.spend` (e.g. `policies.tool_permissions.foo`, which
+            // arrives here as `top_sections = ["policies"]` too): it then
+            // re-stores `cfg.policies.spend` unchanged, which is a harmless
+            // idempotent no-op — `cfg` already carries spend's current
+            // value either way. No false `Live` escapes from this: the
+            // verdict for that sibling path is decided by `classify`, which
+            // returns `Restart` before `classify_verified` ever consults
+            // this function's return value (see `reload_impact::classify`'s
+            // doc on the bare "policies" path).
+            "policies.spend" => crate::spend::update_policy(cfg.policies.spend.clone()),
             // Unreachable while the guard test below passes: a new entry in
-            // LIVE_SECTIONS without an arm here fails at compile-review time
-            // via that test, not silently at runtime.
+            // LIVE_SECTIONS/LIVE_SUBSECTIONS without an arm here fails at
+            // compile-review time via that test, not silently at runtime.
             _ => false,
         };
         if landed {
-            applied.push(*section);
+            applied.push(*target);
         } else {
             tracing::debug!(
-                section,
+                section = *target,
                 "config section is declared live but its runtime handle is not registered; \
                  the change is persisted and needs a restart"
             );
@@ -118,7 +154,8 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
 /// it, and reporting `Live` when it was not is precisely the silent failure
 /// the conservative default was chosen to avoid.
 ///
-/// The match is section-exact rather than "did anything apply at all". Today a
+/// The match is target-exact (section OR subsection, via
+/// [`live_target_for`]) rather than "did anything apply at all". Today a
 /// patch carries one section so the two agree, but a predicate that answers a
 /// question adjacent to the one asked is how the next multi-section caller
 /// gets a `Live` verdict for a section that never landed.
@@ -128,11 +165,9 @@ pub fn classify_verified(config_path: &str, live_applied: &[&'static str]) -> Re
     if impact != ReloadImpact::Live {
         return impact;
     }
-    let top = config_path.split('.').next().unwrap_or(config_path).trim();
-    if live_applied.contains(&top) {
-        ReloadImpact::Live
-    } else {
-        ReloadImpact::Restart
+    match live_target_for(config_path) {
+        Some(target) if live_applied.contains(&target) => ReloadImpact::Live,
+        _ => ReloadImpact::Restart,
     }
 }
 
@@ -142,23 +177,23 @@ mod tests {
 
     /// The guard that keeps the declaration and the action from drifting.
     ///
-    /// A section added to `LIVE_SECTIONS` without an arm here would advertise
-    /// "no restart needed" on every write surface and do nothing — the exact
-    /// failure this module was created to close, reintroduced one const entry
-    /// at a time.
+    /// A section (or subsection) added to `LIVE_SECTIONS`/`LIVE_SUBSECTIONS`
+    /// without an arm here would advertise "no restart needed" on every
+    /// write surface and do nothing — the exact failure this module was
+    /// created to close, reintroduced one const entry at a time.
     #[test]
     fn every_live_section_has_an_apply_arm() {
-        let known_arms = ["route", "execution", "behavior"];
-        for section in LIVE_SECTIONS {
+        let known_arms = ["route", "execution", "behavior", "policies.spend"];
+        for target in LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()) {
             assert!(
-                known_arms.contains(section),
-                "'{section}' is declared live in ReloadImpact but apply_live_sections has no \
+                known_arms.contains(target),
+                "'{target}' is declared live in ReloadImpact but apply_live_sections has no \
                  arm for it — the Live claim would be unbacked"
             );
         }
         for arm in known_arms {
             assert!(
-                LIVE_SECTIONS.contains(&arm),
+                LIVE_SECTIONS.contains(&arm) || LIVE_SUBSECTIONS.contains(&arm),
                 "apply_live_sections handles '{arm}' but ReloadImpact does not call it live — \
                  the runtime would be poked while the response says 'restart required'"
             );
@@ -241,6 +276,114 @@ mod tests {
         // Restart verdicts are untouched by what did or did not apply.
         assert_eq!(
             classify_verified("providers.openai", &["route"]),
+            ReloadImpact::Restart
+        );
+    }
+
+    /// The single-patch caller (`patcher.rs`) only ever knows the *top-level*
+    /// segment of the path it patched — a write to
+    /// `"policies.spend.per_user_usd"` reaches `apply_live_sections` as
+    /// `top_sections = ["policies"]`, never `["policies.spend"]`. Without
+    /// `dotted_prefix_matches`'s ancestor check this arm would never fire
+    /// from that path — exactly the mismatch the controller ruling called
+    /// out.
+    #[test]
+    fn policies_spend_arm_fires_from_the_coarse_top_level_name() {
+        crate::spend::install_policy(crate::config::types::policies::SpendPolicy::default());
+        let cfg = Config::default();
+        assert_eq!(
+            apply_live_sections(&cfg, &["policies"]),
+            vec!["policies.spend"]
+        );
+    }
+
+    /// A sibling subsection under the same top-level parent (e.g. a patch to
+    /// `policies.tool_permissions.foo`) also arrives as
+    /// `top_sections = ["policies"]` and therefore also runs this arm — a
+    /// harmless idempotent re-store of `cfg.policies.spend`'s current value.
+    /// No false `Live` escapes from that: `classify` (not `classify_verified`)
+    /// decides the sibling path's verdict, and returns `Restart` before
+    /// `classify_verified` ever looks at what this function applied.
+    #[test]
+    fn a_sibling_policies_subsection_does_not_earn_a_live_verdict() {
+        assert_eq!(
+            classify_verified("policies.tool_permissions.foo", &["policies.spend"]),
+            ReloadImpact::Restart
+        );
+    }
+
+    /// G14 — `[policies.spend]`'s honest live-apply.
+    ///
+    /// Positive: with the process-wide handle installed, applying a patched
+    /// `policies.spend.per_user_usd` reports `Live`, and `spend::check`'s
+    /// very next call — no restart, no new process — sees the new ceiling.
+    ///
+    /// Negative: when the section did not land, the verdict must downgrade
+    /// to `Restart` rather than lie. `GLOBAL_POLICY` is a `OnceLock`
+    /// (`spend::update_policy`'s handle) that this binary's other tests may
+    /// already have set by the time this test runs, in an order this crate
+    /// does not control, and a `OnceLock` cannot be uninstalled — see
+    /// `spend::update_policy_into`'s doc. So this exercises the downgrade
+    /// decision the same way `route_without_a_registered_chain_downgrades_to_restart`
+    /// does for `route`: directly, against a synthetic empty `live_applied`,
+    /// which is exactly what `apply_live_sections` produces when the arm's
+    /// `update_policy` call returns `false` — pinned in isolation,
+    /// independent of process-global ordering, by
+    /// `spend::tests::update_policy_into_reports_false_with_no_handle`.
+    #[test]
+    fn g14_spend_arm_applies_live_and_reaches_check_with_no_restart() {
+        // A handle merely needs to exist for `update_policy` (which the arm
+        // calls) to succeed — idempotent, so this is safe even if another
+        // test in this binary already installed one; `update_policy` always
+        // overwrites regardless of who installed it first.
+        crate::spend::install_policy(crate::config::types::policies::SpendPolicy::default());
+
+        let principal = crate::spend::Principal::User("u-g14-live-apply-spend-arm".to_string());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let period_start_ms = crate::spend::period::period_start_ms(
+            now_ms,
+            crate::config::types::policies::SpendPeriod::Month,
+        );
+        // A brand-new principal key starts at zero spend in the shared
+        // ledger, so recording exactly $5 gives a figure this test fully
+        // controls, unaffected by any other test sharing the same
+        // process-wide ledger.
+        crate::spend::global_ledger()
+            .record(&principal, period_start_ms, crate::spend::Delta::Usd(5.0))
+            .expect("record");
+
+        let mut cfg = Config::default();
+        cfg.policies.spend.per_user_usd = Some(10.0);
+
+        // The single-patch caller's exact shape: `top_sections` carries only
+        // the coarse top-level segment, never "policies.spend" itself.
+        let applied = apply_live_sections(&cfg, &["policies"]);
+        assert_eq!(applied, vec!["policies.spend"]);
+        assert_eq!(
+            classify_verified("policies.spend.per_user_usd", &applied),
+            ReloadImpact::Live
+        );
+        // $5 spent against a $10 ceiling: allowed.
+        assert!(matches!(
+            crate::spend::check(&principal, now_ms),
+            crate::spend::Verdict::Allowed(_)
+        ));
+
+        // Lower the ceiling below what is already spent — live, with no
+        // restart and no new process. `check`'s very next call must see it.
+        cfg.policies.spend.per_user_usd = Some(1.0);
+        let applied = apply_live_sections(&cfg, &["policies"]);
+        assert_eq!(applied, vec!["policies.spend"]);
+        assert!(matches!(
+            crate::spend::check(&principal, now_ms),
+            crate::spend::Verdict::Denied { .. }
+        ));
+
+        // Negative: a section that did not land must downgrade honestly.
+        // See this test's doc for why the process-wide handle cannot be
+        // forced absent here.
+        assert_eq!(
+            classify_verified("policies.spend.per_user_usd", &[]),
             ReloadImpact::Restart
         );
     }

@@ -92,14 +92,18 @@ pub async fn handle_reload_with_subsystems(
                 let mut config_guard = app_config.write().await;
                 *config_guard = new_app_config;
                 // A reload replaces the WHOLE config from disk, so every live
-                // section may have changed — push them all onto the running
-                // runtime. Swapping the shared `Config` alone reaches only the
-                // subsystems that re-read it per turn; `route` and `execution`
-                // captured handles at boot and would otherwise keep serving
-                // the pre-reload values while this response says "reloaded".
+                // target — section or subsection — may have changed; push
+                // them all onto the running runtime via `live_targets()`
+                // (sections AND subsections), not `LIVE_SECTIONS` alone, or
+                // a reload would silently skip `policies.spend`. Swapping
+                // the shared `Config` alone reaches only the subsystems that
+                // re-read it per turn; `route`, `execution`, and
+                // `policies.spend` captured handles at boot and would
+                // otherwise keep serving the pre-reload values while this
+                // response says "reloaded".
                 crate::config::live_apply::apply_live_sections(
                     &config_guard,
-                    crate::config::reload_impact::LIVE_SECTIONS,
+                    &crate::config::reload_impact::live_targets(),
                 )
             };
             reloaded.push("app_config".to_string());

@@ -66,6 +66,22 @@ pub enum ReloadImpact {
 /// entry here has no arm there, or vice versa.
 pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 
+/// Sub-sections applied live even though their *parent* top-level section is
+/// not — the parent has other fields with no live-apply wiring, so declaring
+/// the whole parent live (adding it to [`LIVE_SECTIONS`]) would advertise
+/// "no restart needed" for those too. Checked *before* [`LIVE_SECTIONS`] in
+/// [`dotted_prefix_matches`]-based lookups: most specific declaration wins.
+///
+/// Why each one qualifies:
+/// - `policies.spend` — the per-principal/machine USD ceiling is read fresh
+///   on every call from a boot-installed `ArcSwap`
+///   ([`crate::spend::current_policy`]); storing a patched policy into it
+///   (`crate::spend::update_policy`) is what makes a ceiling change live,
+///   exactly like `route`'s `ArcSwap`. `[policies]`'s other six fields
+///   (`tool_permissions` and friends) have no such handle, hence the parent
+///   section itself stays out of [`LIVE_SECTIONS`].
+pub(crate) const LIVE_SUBSECTIONS: &[&str] = &["policies.spend"];
+
 /// Legacy top-level sections that are parsed but inert (no runtime consumer).
 ///
 /// Mirrors the `⚠️ Legacy — parsed but inert` markers in the `/self` SKILL.md.
@@ -76,17 +92,79 @@ pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
 /// reports nonexistent sections at load time instead.
 const INERT_SECTIONS: &[&str] = &[];
 
+/// True when `prefix` is `path` itself, or a dot-segment ancestor of it
+/// (e.g. `"policies"` of `"policies.spend"`, or `"policies.spend"` of
+/// `"policies.spend.per_user_usd"`). A plain [`str::starts_with`] would
+/// also match `"policies_v2"` against `"policies"` — the trailing `.`
+/// requirement is what keeps this a *segment* boundary, not a substring
+/// one.
+///
+/// The one prefix-matching primitive in this module. It is deliberately
+/// argument-order-symmetric so both directions this module needs can reuse
+/// it instead of hand-rolling their own match:
+/// - [`live_target_for`] calls it as "is this *declared* target an ancestor
+///   of the *specific* path being classified" (most specific target wins —
+///   see that function's doc).
+/// - [`crate::config::live_apply::apply_live_sections`] calls it with the
+///   arguments swapped, as "is this *requested* (possibly coarser) section
+///   name an ancestor of this *declared* target" — the single-patch caller
+///   only ever knows the top-level section of the path it patched, so a
+///   write to `"policies.spend.per_user_usd"` reaches that function as
+///   `top_sections = ["policies"]`, and `"policies"` must still be
+///   recognised as covering the `"policies.spend"` target. These are
+///   opposite queries (one asks for the single best-matching *ancestor*, the
+///   other asks "does any requested name cover this target"), so neither
+///   can be phrased as a call to the other — but both reduce to this one
+///   boundary check, which is the point: one hand-written prefix match, not
+///   two that can drift apart.
+pub(crate) fn dotted_prefix_matches(prefix: &str, path: &str) -> bool {
+    prefix == path || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// Resolve `config_path` to the most specific declared live target: a
+/// subsection in [`LIVE_SUBSECTIONS`] if one covers it, else a top-level
+/// section in [`LIVE_SECTIONS`], else `None`. Subsections are checked first
+/// so a more specific declaration always outranks a coarser one — there is
+/// no live top-level/subsection conflict today (no top-level section that
+/// contains a live subsection is itself declared live), but the ordering is
+/// the invariant this function exists to fix in place, not a reaction to a
+/// conflict that currently exists.
+pub(crate) fn live_target_for(config_path: &str) -> Option<&'static str> {
+    LIVE_SUBSECTIONS
+        .iter()
+        .chain(LIVE_SECTIONS.iter())
+        .find(|&&target| dotted_prefix_matches(target, config_path))
+        .copied()
+}
+
+/// Every declared live target — [`LIVE_SECTIONS`] and [`LIVE_SUBSECTIONS`]
+/// together — for callers that hot-apply an entire reloaded/rolled-back
+/// config rather than one patched path (a whole-file operation can touch
+/// any live target, not just the top-level ones). Passing [`LIVE_SECTIONS`]
+/// alone to [`crate::config::live_apply::apply_live_sections`] from such a
+/// caller is exactly how a whole-file rollback would silently skip
+/// `policies.spend` — the same "one caller acts on the table, the others
+/// only assert it" shape `live_apply` exists to remove.
+pub(crate) fn live_targets() -> Vec<&'static str> {
+    LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()).copied().collect()
+}
+
 impl ReloadImpact {
     /// Classify a dot-path config target (e.g. `"providers.openai"`,
-    /// `"route.mode"`, `"generation"`) by its top-level section.
+    /// `"route.mode"`, `"generation"`, `"policies.spend.per_user_usd"`) by
+    /// the most specific declared live target that covers it — see
+    /// [`live_target_for`].
     ///
     /// Conservative by design: anything not known to be live or inert is
-    /// reported as [`ReloadImpact::Restart`].
+    /// reported as [`ReloadImpact::Restart`]. In particular, the bare
+    /// top-level `"policies"` path is `Restart`, not `Live` — only its
+    /// `spend` subsection has live-apply wiring; see [`LIVE_SUBSECTIONS`].
     pub fn classify(config_path: &str) -> Self {
+        if live_target_for(config_path).is_some() {
+            return Self::Live;
+        }
         let top = config_path.split('.').next().unwrap_or(config_path).trim();
-        if LIVE_SECTIONS.contains(&top) {
-            Self::Live
-        } else if INERT_SECTIONS.contains(&top) {
+        if INERT_SECTIONS.contains(&top) {
             Self::Inert
         } else {
             Self::Restart
@@ -171,6 +249,13 @@ mod tests {
             "gateway",
             "memory",
             "sandbox",
+            // The bare parent section: only its `spend` child has live-apply
+            // wiring (`policies.tool_permissions` and friends do not), so
+            // patching "policies" as a whole must NOT report Live — that
+            // would silently promise "no restart needed" for the other six
+            // fields too. See `LIVE_SUBSECTIONS`'s doc.
+            "policies",
+            "policies.tool_permissions",
         ] {
             assert_eq!(
                 ReloadImpact::classify(s),
@@ -178,6 +263,51 @@ mod tests {
                 "expected '{s}' to need restart"
             );
         }
+    }
+
+    #[test]
+    fn spend_subsection_is_live() {
+        // The subsection itself, and any leaf path under it, are Live — but
+        // the parent "policies" is not (covered by
+        // `runtime_built_sections_need_restart`).
+        assert_eq!(
+            ReloadImpact::classify("policies.spend"),
+            ReloadImpact::Live
+        );
+        assert_eq!(
+            ReloadImpact::classify("policies.spend.per_user_usd"),
+            ReloadImpact::Live
+        );
+        assert_eq!(
+            ReloadImpact::classify("policies.spend.total_usd"),
+            ReloadImpact::Live
+        );
+    }
+
+    #[test]
+    fn dotted_prefix_matches_is_a_segment_boundary_not_a_substring_match() {
+        // A name that merely starts with the same characters as a declared
+        // target must not match — only a `.`-bounded segment counts.
+        assert!(!dotted_prefix_matches("policies", "policies_v2.foo"));
+        assert!(!dotted_prefix_matches("route", "route_config.mode"));
+        // Exact equality and a real segment boundary both count.
+        assert!(dotted_prefix_matches("policies.spend", "policies.spend"));
+        assert!(dotted_prefix_matches(
+            "policies.spend",
+            "policies.spend.per_user_usd"
+        ));
+    }
+
+    #[test]
+    fn live_targets_returns_every_section_and_subsection() {
+        let targets = live_targets();
+        for s in LIVE_SECTIONS {
+            assert!(targets.contains(s), "missing top-level '{s}'");
+        }
+        for s in LIVE_SUBSECTIONS {
+            assert!(targets.contains(s), "missing subsection '{s}'");
+        }
+        assert_eq!(targets.len(), LIVE_SECTIONS.len() + LIVE_SUBSECTIONS.len());
     }
 
     #[test]

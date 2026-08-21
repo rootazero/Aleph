@@ -371,7 +371,26 @@ pub fn install_policy(policy: crate::config::types::policies::SpendPolicy) {
 /// did nothing — mirrors `providers::route_handle::try_global_route_handle`'s
 /// `None` arm.
 pub fn update_policy(policy: crate::config::types::policies::SpendPolicy) -> bool {
-    match GLOBAL_POLICY.get() {
+    update_policy_into(GLOBAL_POLICY.get(), policy)
+}
+
+/// Core of [`update_policy`], with the handle taken explicitly instead of
+/// read from the process-wide `OnceLock`.
+///
+/// `GLOBAL_POLICY` cannot be reset once set — `install_policy` is
+/// deliberately idempotent, like [`install_ledger`] — and `cargo test --lib`
+/// runs every unit test in this crate in one process, so any test elsewhere
+/// that calls `install_policy` makes `GLOBAL_POLICY.get()` return `Some` for
+/// the remaining life of the binary in an order this crate does not control.
+/// That makes the `None` branch above untestable through the real global:
+/// see `check_with`'s doc for the identical hazard with the ledger/policy
+/// singletons. Taking the handle as a parameter sidesteps it — a test can
+/// exercise both branches deterministically against a value it owns.
+fn update_policy_into(
+    handle: Option<&arc_swap::ArcSwap<crate::config::types::policies::SpendPolicy>>,
+    policy: crate::config::types::policies::SpendPolicy,
+) -> bool {
+    match handle {
         Some(cell) => {
             cell.store(Arc::new(policy));
             true
