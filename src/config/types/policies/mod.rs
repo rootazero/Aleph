@@ -37,7 +37,7 @@ pub use exec_tier::{
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
-pub use spend::{SpendPeriod, SpendPolicy};
+pub use spend::SpendPolicy;
 pub use tool_permissions::{PermissionMatch, ToolPermissionsConfig};
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 
