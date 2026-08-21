@@ -1270,19 +1270,7 @@ mod tests {
 
     // ── reconcile_once tests ──────────────────────────────────────────────────
 
-    /// Construct a handler wired to a real `NoteIndexer` + on-disk memory_dir,
-    /// so reconcile_once has both the event-log and filesystem sides to
-    /// compare. Returns the temp dir guard (must stay in scope) plus the
-    /// handler ready for use.
-    async fn make_handler_with_indexer()
-    -> (tempfile::TempDir, MemoryCommandHandler) {
-        let (_scratch, db_path) = crate::utils::scratch::scratch_root();
-        let memory_dir = tempfile::TempDir::new().unwrap();
-        let db = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
-        let indexer = Arc::new(NoteIndexer::new(memory_dir.path().to_path_buf(), db.clone()));
-        let state_db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
-        (memory_dir, MemoryCommandHandler::new(state_db).with_note_indexer(indexer))
-    }
+    use crate::memory::events::testing::inner::make_handler_with_indexer;
 
     #[tokio::test]
     async fn test_reconcile_without_indexer_returns_empty_report() {
