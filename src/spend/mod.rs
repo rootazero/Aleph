@@ -400,7 +400,19 @@ pub fn check(principal: &Principal, now_ms: i64) -> Verdict {
 /// two would silently get its ledger instead of their own. Taking `policy`
 /// and `ledger` as plain parameters sidesteps the whole hazard: every test
 /// builds its own, with no shared mutable process state to race on.
-fn check_with(principal: &Principal, now_ms: i64, policy: &SpendPolicy, ledger: &dyn SpendLedger) -> Verdict {
+///
+/// `pub(crate)` rather than private: `providers::metering`'s G4 test needs
+/// the exact same hazard-free construction — a freshly-built ledger, an
+/// enormous run of `Delta::Unpriced` writes, then one `Verdict` read — and
+/// this is the single predicate both the floor arm and the admission arm
+/// call, so a second copy of it in `providers::metering` for testing alone
+/// would be exactly the "two answers" bug this function exists to prevent.
+pub(crate) fn check_with(
+    principal: &Principal,
+    now_ms: i64,
+    policy: &SpendPolicy,
+    ledger: &dyn SpendLedger,
+) -> Verdict {
     let period_start_ms = period::period_start_ms(now_ms, policy.period);
     let period_end_ms = period::period_end_ms(now_ms, policy.period);
 
