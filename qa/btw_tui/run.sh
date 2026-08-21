@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # Real-machine QA for the wire the TUI's `/btw` overlay is built on.
 #
-#   ./qa/btw_tui/run.sh
+#   ./qa/btw_tui/run.sh [frames|promote]     (default: frames)
+#
+# Two scenarios, because they need opposite things from the mock provider and
+# a single run cannot have both:
+#
+#   frames  — the overlay's four claims about the wire. Needs a MAIN run that
+#             stays alive across the whole side question (`channel-burst`),
+#             since a side question exists to be asked WHILE one runs.
+#   promote — the one crossing back. Needs a side question that COMPLETES
+#             (`quick`), since there is nothing to promote until one has.
 #
 # What this proves, and what it deliberately does not:
 #
-#   PROVES — against a real gateway and a real engine — the four facts about
-#   the frames that `interfaces/tui/src/tui/btw_overlay.rs` cannot verify in
-#   process, because an in-process test supplies the very frames the code
-#   expects (see `drive_btw_frames.py`'s docstring for the list).
+#   PROVES — against a real gateway and a real engine — the facts neither
+#   scenario can verify in process, because an in-process test supplies the
+#   very frames the code expects and runs on an engine with no orchestrator
+#   (see each driver's docstring for its own list).
 #
 #   DOES NOT PROVE — anything about the terminal. No pty is allocated and
 #   `aleph-tui` is never launched: the overlay's rendering and its key table
@@ -21,6 +30,13 @@
 # qa/busy_input's mock provider, config patcher and WS helpers rather than
 # growing a second copy of any of them.
 set -uo pipefail
+
+SCENARIO="${1:-frames}"
+case "$SCENARIO" in
+  frames)  MOCK_PLAN="channel-burst" ;;
+  promote) MOCK_PLAN="quick" ;;
+  *) echo "unknown scenario: $SCENARIO (want: frames | promote)" >&2; exit 2 ;;
+esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -97,10 +113,13 @@ say "patch config"
 python3 "$SHARED/patch_config.py" "$CONFIG" \
   --gateway-port "$GATEWAY_PORT" --mock-port "$MOCK_PORT" || exit 1
 
-say "start mock provider"
+say "start mock provider ($MOCK_PLAN)"
 # `channel-burst` has a long flat tail of slow tool turns, which is what keeps
 # the MAIN run alive across the side question — the whole point of `/btw`.
-python3 "$SHARED/mock_anthropic.py" "$MOCK_PORT" /etc/hostname channel-burst \
+# `quick` does the opposite for the promote scenario: the turn counter is
+# global, so a plan that ends lets the side question finish, and only a
+# finished one is promotable.
+python3 "$SHARED/mock_anthropic.py" "$MOCK_PORT" /etc/hostname "$MOCK_PLAN" \
   >"$QA_ROOT/mock.log" 2>&1 &
 MOCK_PID=$!
 sleep 1
@@ -115,9 +134,14 @@ for _ in $(seq 1 90); do
 done
 echo "gateway up on $GATEWAY_PORT"
 
-say "drive"
+say "drive ($SCENARIO)"
 RC=0
-python3 "$HERE/drive_btw_frames.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" || RC=$?
+if [ "$SCENARIO" = "promote" ]; then
+  python3 "$HERE/drive_btw_promote.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" \
+    --db "$ALEPH_HOME/data/sessions.db" || RC=$?
+else
+  python3 "$HERE/drive_btw_frames.py" "ws://127.0.0.1:$GATEWAY_PORT/ws" || RC=$?
+fi
 
 say "mock provider log"
 tail -20 "$QA_ROOT/mock.log"
