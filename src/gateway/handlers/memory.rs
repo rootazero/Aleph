@@ -563,7 +563,34 @@ pub async fn handle_list_corrections(
 ///
 /// Read-only; R4-compliant (I/O only). Forwards to
 /// [`crate::builtin_tools::memory_trace::MemoryTraceTool::call_impl`].
-pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+///
+/// ## Why this composes the caller's partition
+///
+/// Both things this reads — the write-decision ledger and the evidence chain —
+/// are written under the COMPOSED partition (`remember` and
+/// `flag_user_correction` go through `caller_memory_partition`, notes and raws
+/// through `session_write_id`). The tool face has resolved the same way since
+/// the day that was found; this face never did, so on any scoped session — and
+/// a loopback Panel session is `Personal(u-owner)`, i.e. the stock
+/// single-machine install — it read the bare persona and answered "there are
+/// none" for a store with a full ledger. The Panel's write-attempt ledger,
+/// whose entire purpose is answering "why was that never remembered?", was
+/// therefore empty on every install that had anything to show.
+///
+/// `agent_id` on the wire stays the BASE id (that is what the agent picker
+/// holds), and the resolution is [`MemoryContextProvider::resolve_storage_id`]
+/// — the same call `get_or_load_curated_store` makes, so the ledger the Panel
+/// shows belongs to the store whose entries are above it. Resolving here rather
+/// than in the client keeps composition on the server, where it cannot be
+/// double-applied (`session_write_id` is not idempotent).
+///
+/// `mcp` is `None` only before boot phase 2 wires the provider; there is no
+/// scope to compose then either, so the bare id is the correct answer.
+pub async fn handle_trace(
+    request: JsonRpcRequest,
+    db: MemoryBackend,
+    mcp: Option<crate::sync_primitives::Arc<crate::thinker::MemoryContextProvider>>,
+) -> JsonRpcResponse {
     use crate::builtin_tools::memory_trace::{MemoryTraceArgs, MemoryTraceTool, TraceKind};
 
     #[derive(serde::Deserialize)]
@@ -613,7 +640,12 @@ pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         }
     };
 
-    let tool = MemoryTraceTool::new(db, agent, note_memory_dir);
+    // Composed AFTER the visibility gate, which judges the base id the caller
+    // named. Composing first would hand `partition_visible` a string the
+    // caller never sent.
+    let partition = mcp.map_or_else(|| agent.clone(), |m| m.resolve_storage_id(&agent));
+
+    let tool = MemoryTraceTool::new(db, partition, note_memory_dir);
     match tool
         .call_impl(MemoryTraceArgs {
             target: params.target,
@@ -1052,7 +1084,7 @@ mod trace_tests {
             Some(json!({ "agent_id": "main", "target": "habits/exercise", "kind": "note" })),
             json!(1),
         );
-        let resp = handle_trace(req, db).await;
+        let resp = handle_trace(req, db, None).await;
         assert!(resp.is_success(), "{:?}", resp.error);
         let result = resp.result.unwrap();
         assert!(
@@ -1105,6 +1137,7 @@ mod trace_tests {
                 json!(1),
             ),
             db,
+            None,
         )
         .await;
 
@@ -1119,6 +1152,64 @@ mod trace_tests {
         // remembered", which is the entire reason it exists.
         assert_eq!(rows[0]["action"], "remove");
         assert!(rows.iter().any(|r| r["reason"] == "over_budget"));
+    }
+
+    /// The ledger a scoped session reads is the one its own writes land in.
+    ///
+    /// `remember` records decisions under `caller_memory_partition`, so on any
+    /// scoped session the rows are keyed `main__u-alice` while the Panel's
+    /// agent picker still holds the base id `main`. Reading the base id there
+    /// answered "no write attempts recorded yet" for a store with a full
+    /// ledger — and since a loopback Panel session is `Personal(u-owner)`,
+    /// that was every stock single-machine install. Found by driving the real
+    /// Panel (`qa/memory_curated/`), not by any test in this file: both faces
+    /// were individually self-consistent.
+    #[tokio::test]
+    async fn a_scoped_session_reads_the_ledger_its_own_writes_landed_in() {
+        use crate::memory::store::sqlite::memory_write_decisions::MemoryWriteReason;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        // One row in each partition, so "it found something" cannot pass by
+        // reading the wrong one.
+        db.record_write_decision("main", "add", MemoryWriteReason::Written, "bare persona row")
+            .unwrap();
+        db.record_write_decision(
+            "main__u-alice",
+            "add",
+            MemoryWriteReason::Duplicate,
+            "alice's own row",
+        )
+        .unwrap();
+
+        let mcp = Arc::new(crate::thinker::MemoryContextProvider::new(db.clone(), None));
+        let req = JsonRpcRequest::with_id(
+            "memory.trace",
+            Some(json!({
+                "agent_id": "main",
+                "target": "",
+                "kind": "write_decision",
+                "max_results": 20,
+            })),
+            json!(1),
+        );
+
+        let resp = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            handle_trace(req, db, Some(mcp)),
+        )
+        .await;
+
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let rows = resp.result.unwrap()["write_decisions"]
+            .as_array()
+            .expect("write_decisions array")
+            .clone();
+        assert_eq!(rows.len(), 1, "exactly alice's partition, {rows:?}");
+        assert_eq!(rows[0]["subject"], "alice's own row");
     }
 
     /// P1 partition isolation: bob tracing alice's partition by name gets an
@@ -1156,7 +1247,7 @@ mod trace_tests {
         );
         let resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
-                handle_trace(req, db).await
+                handle_trace(req, db, None).await
             })
             .await;
         assert!(resp.is_success(), "success, not an error: {:?}", resp.error);

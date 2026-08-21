@@ -123,13 +123,20 @@ pub(in crate::commands::start) fn register_memory_handlers(
             });
     }
 
-    // Read-only evidence-chain walk: note / raw / profile-section → ground-truth raws.
-    register_handler!(
-        server,
-        "memory.trace",
-        memory_handlers::handle_trace,
-        memory_db
-    );
+    // Read-only evidence-chain walk: note / raw / profile-section → ground-truth
+    // raws, plus the curated write-decision ledger. Takes the provider because
+    // both of those live under the caller's COMPOSED partition — see
+    // `handle_trace`'s doc; without it the ledger is empty on every scoped
+    // session, which on a stock single-machine install means every session.
+    {
+        let db = memory_db.clone();
+        let mcp = memory_context_provider.clone();
+        server.handlers_mut().register("memory.trace", move |req| {
+            let db = db.clone();
+            let mcp = mcp.clone();
+            async move { memory_handlers::handle_trace(req, db, mcp).await }
+        });
+    }
     // Read-only per-tool usage introspection over ToolInvocation raw rows.
     register_handler!(
         server,

@@ -585,7 +585,7 @@ The desktop Panel's Memory Vault tab (`interfaces/webchat/src/platform/wide/view
 | `memory.search` | **只有**原始对话行（`query` 做 content LIKE 过滤）。一行一个 `content`，**没有** `ai_output`/`window_title`——那两个字段在这条 wire 上活了很久，每一行都是 `""` | Panel Raw 层、CLI `memory search` |
 | `graph.search` | **只有**笔记 FTS 命中（完整索引行，`SearchResultDto` 9 字段，含 `match_field`） | Panel SearchHits 层、星系高亮、抽屉 wikilink 解析 |
 | `memory.stats` | 单一 scope 的三项计数 + `scope` 字段（`validFacts` 已 CUT：它与 `totalFacts` 恒等） | Panel 统计卡、CLI `memory stats` |
-| `memory.trace` | 证据链（notes + evidence，含 `pruned`）；`kind: "write_decision"` 时改为写入台账，空 `target` = 不加主题过滤 | `memory_trace` 工具、Panel 抽屉溯源区（`provenance.rs`）、Panel 热区 ledger（`curated.rs`） |
+| `memory.trace` | 证据链（notes + evidence，含 `pruned`）；`kind: "write_decision"` 时改为写入台账，空 `target` = 不加主题过滤。**wire 上的 `agent_id` 是 base id，分区由服务端经 `resolve_storage_id` 组合**（与 `get_or_load_curated_store` 同一个推导）—— 台账行由 `caller_memory_partition` 写在合成分区，直查 base 会在**每一个**有内容的装机上答「没有记录」，2026-08-21 真机 QA 抓到 | `memory_trace` 工具、Panel 抽屉溯源区（`provenance.rs`）、Panel 热区 ledger（`curated.rs`） |
 | `memory.list_corrections` | 用户修正行 + 蒸馏状态（由 FeedbackDistill 水位线推导，不是行上的标志位） | Panel Feedback facet 顶部的修正队列（`corrections.rs`，2026-08-21 前零消费者） |
 | `memory.curated.list` | 热区条目 + 预算用量（chars，不是 bytes） | Panel Curated facet |
 | `memory.curated.replace` / `.remove` | 写后的**整份**快照（Panel 因此不需要第二次取数，也就没有「列表与刚写下的文件不一致」的窗口） | Panel Curated facet |
