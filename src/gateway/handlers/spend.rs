@@ -273,7 +273,14 @@ mod tests {
 
         let resp = handle_query_with(req(None), now_ms, &disabled_policy(), &ledger);
         let result: SpendQueryResult = serde_json::from_value(resp.result.unwrap()).unwrap();
-        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows.len(),
+            1,
+            "the `@unattributed` row must survive as an ordinary row. Filtering it \
+             out — or folding its dollars into somebody else's total — makes spend \
+             this surface cannot explain disappear from the report instead of \
+             standing out in it, which is the whole reason the sentinel exists"
+        );
         assert_eq!(result.rows[0].principal, "@unattributed");
         assert_eq!(result.rows[0].usd, 1.25);
     }
