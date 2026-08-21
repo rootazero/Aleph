@@ -42,60 +42,66 @@ impl StateDatabase {
 
     /// Insert a new agent task
     pub async fn insert_agent_task(&self, task: &AgentTask) -> Result<(), AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            r#"
-            INSERT INTO agent_tasks (
-                id, parent_session_id, agent_id, task_prompt, status,
-                risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
-                recursion_depth, parent_task_id, created_at, updated_at,
-                started_at, completed_at, metadata_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-            "#,
-            params![
-                task.id,
-                task.parent_session_id,
-                task.agent_id,
-                task.task_prompt,
-                task.status.to_string(),
-                task.risk_level.to_string(),
-                task.lane.to_string(),
-                task.checkpoint_snapshot_path,
-                task.last_tool_call_id,
-                task.recursion_depth,
-                task.parent_task_id,
-                task.created_at,
-                task.updated_at,
-                task.started_at,
-                task.completed_at,
-                task.metadata_json,
-            ],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to insert agent task: {e}")))?;
-        Ok(())
+        let task = task.clone();
+        self.with_conn(move |conn| {
+            conn.execute(
+                r#"
+                INSERT INTO agent_tasks (
+                    id, parent_session_id, agent_id, task_prompt, status,
+                    risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                    recursion_depth, parent_task_id, created_at, updated_at,
+                    started_at, completed_at, metadata_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                "#,
+                params![
+                    task.id,
+                    task.parent_session_id,
+                    task.agent_id,
+                    task.task_prompt,
+                    task.status.to_string(),
+                    task.risk_level.to_string(),
+                    task.lane.to_string(),
+                    task.checkpoint_snapshot_path,
+                    task.last_tool_call_id,
+                    task.recursion_depth,
+                    task.parent_task_id,
+                    task.created_at,
+                    task.updated_at,
+                    task.started_at,
+                    task.completed_at,
+                    task.metadata_json,
+                ],
+            )
+            .map_err(|e| AlephError::config(format!("Failed to insert agent task: {e}")))?;
+            Ok(())
+        })
+        .await
     }
 
     /// Get an agent task by ID
     pub async fn get_agent_task(&self, task_id: &str) -> Result<Option<AgentTask>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, parent_session_id, agent_id, task_prompt, status,
-                       risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
-                       recursion_depth, parent_task_id, created_at, updated_at,
-                       started_at, completed_at, metadata_json
-                FROM agent_tasks WHERE id = ?1
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        let task_id = task_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, parent_session_id, agent_id, task_prompt, status,
+                           risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                           recursion_depth, parent_task_id, created_at, updated_at,
+                           started_at, completed_at, metadata_json
+                    FROM agent_tasks WHERE id = ?1
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let result = stmt
-            .query_row(params![task_id], agent_task_from_row)
-            .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get agent task: {e}")))?;
+            let result = stmt
+                .query_row(params![task_id], agent_task_from_row)
+                .optional()
+                .map_err(|e| AlephError::config(format!("Failed to get agent task: {e}")))?;
 
-        Ok(result)
+            Ok(result)
+        })
+        .await
     }
 
     /// Update task status
@@ -104,59 +110,61 @@ impl StateDatabase {
         task_id: &str,
         status: TaskStatus,
     ) -> Result<(), AlephError> {
+        let task_id = task_id.to_string();
         let now = chrono::Utc::now().timestamp();
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        self.with_conn(move |conn| {
+            // Wrap all updates in a transaction so started_at / completed_at
+            // stay in sync with status even on crash.
+            let tx = conn
+                .transaction()
+                .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
 
-        // Wrap all updates in a transaction so started_at / completed_at
-        // stay in sync with status even on crash.
-        let tx = conn
-            .transaction()
-            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
-
-        let result = (|| -> rusqlite::Result<()> {
-            // Simple update - timestamps handled separately for clarity
-            tx.execute(
-                r#"
-                UPDATE agent_tasks
-                SET status = ?1, updated_at = ?2
-                WHERE id = ?3
-                "#,
-                params![status.to_string(), now, task_id],
-            )?;
-
-            // Update started_at for Running status
-            if status == TaskStatus::Running {
+            let result = (|| -> rusqlite::Result<()> {
+                // Simple update - timestamps handled separately for clarity
                 tx.execute(
-                    "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
-                    params![now, task_id],
+                    r#"
+                    UPDATE agent_tasks
+                    SET status = ?1, updated_at = ?2
+                    WHERE id = ?3
+                    "#,
+                    params![status.to_string(), now, task_id],
                 )?;
-            }
 
-            // Update completed_at for terminal states
-            if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
-                tx.execute(
-                    "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2",
-                    params![now, task_id],
-                )?;
-            }
+                // Update started_at for Running status
+                if status == TaskStatus::Running {
+                    tx.execute(
+                        "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
+                        params![now, task_id],
+                    )?;
+                }
 
-            Ok(())
-        })();
+                // Update completed_at for terminal states
+                if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
+                    tx.execute(
+                        "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2",
+                        params![now, task_id],
+                    )?;
+                }
 
-        match result {
-            Ok(()) => {
-                tx.commit().map_err(|e| {
-                    AlephError::config(format!("Failed to commit transaction: {e}"))
-                })?;
                 Ok(())
+            })();
+
+            match result {
+                Ok(()) => {
+                    tx.commit().map_err(|e| {
+                        AlephError::config(format!("Failed to commit transaction: {e}"))
+                    })?;
+                    Ok(())
+                }
+                Err(e) => {
+                    drop(tx); // implicit rollback on uncommitted transaction drop
+                    Err(AlephError::config(format!(
+                        "Failed to update task status: {e}"
+                    )))
+                }
             }
-            Err(e) => {
-                drop(tx); // implicit rollback on uncommitted transaction drop
-                Err(AlephError::config(format!(
-                    "Failed to update task status: {e}"
-                )))
-            }
-        }
+        })
+        .await
     }
 
     /// Get all tasks for a session
@@ -164,28 +172,31 @@ impl StateDatabase {
         &self,
         session_id: &str,
     ) -> Result<Vec<AgentTask>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, parent_session_id, agent_id, task_prompt, status,
-                       risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
-                       recursion_depth, parent_task_id, created_at, updated_at,
-                       started_at, completed_at, metadata_json
-                FROM agent_tasks
-                WHERE parent_session_id = ?1
-                ORDER BY created_at DESC
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        let session_id = session_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, parent_session_id, agent_id, task_prompt, status,
+                           risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                           recursion_depth, parent_task_id, created_at, updated_at,
+                           started_at, completed_at, metadata_json
+                    FROM agent_tasks
+                    WHERE parent_session_id = ?1
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let tasks = stmt
-            .query_map(params![session_id], agent_task_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query tasks: {e}")))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect tasks: {e}")))?;
+            let tasks = stmt
+                .query_map(params![session_id], agent_task_from_row)
+                .map_err(|e| AlephError::config(format!("Failed to query tasks: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("Failed to collect tasks: {e}")))?;
 
-        Ok(tasks)
+            Ok(tasks)
+        })
+        .await
     }
 
     /// Get orphaned tasks left behind by a crash, for startup reconciliation.
@@ -196,45 +207,49 @@ impl StateDatabase {
     /// (`interrupted`) are deliberately excluded so reconciliation is
     /// idempotent across restarts and never re-reports the same task.
     pub async fn get_recoverable_tasks(&self) -> Result<Vec<AgentTask>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, parent_session_id, agent_id, task_prompt, status,
-                       risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
-                       recursion_depth, parent_task_id, created_at, updated_at,
-                       started_at, completed_at, metadata_json
-                FROM agent_tasks
-                WHERE status = 'running'
-                ORDER BY CASE risk_level WHEN 'low' THEN 0 WHEN 'high' THEN 1 ELSE 2 END ASC, created_at ASC
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, parent_session_id, agent_id, task_prompt, status,
+                           risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                           recursion_depth, parent_task_id, created_at, updated_at,
+                           started_at, completed_at, metadata_json
+                    FROM agent_tasks
+                    WHERE status = 'running'
+                    ORDER BY CASE risk_level WHEN 'low' THEN 0 WHEN 'high' THEN 1 ELSE 2 END ASC, created_at ASC
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let tasks = stmt
-            .query_map([], agent_task_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query tasks: {e}")))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect tasks: {e}")))?;
+            let tasks = stmt
+                .query_map([], agent_task_from_row)
+                .map_err(|e| AlephError::config(format!("Failed to query tasks: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("Failed to collect tasks: {e}")))?;
 
-        Ok(tasks)
+            Ok(tasks)
+        })
+        .await
     }
 
     /// Mark all running tasks as interrupted (for graceful shutdown)
     pub async fn mark_running_as_interrupted(&self) -> Result<u64, AlephError> {
         let now = chrono::Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let count = conn
-            .execute(
-                r#"
-                UPDATE agent_tasks
-                SET status = 'interrupted', updated_at = ?1
-                WHERE status = 'running'
-                "#,
-                params![now],
-            )
-            .map_err(|e| AlephError::config(format!("Failed to mark tasks: {e}")))?;
-        Ok(count as u64)
+        self.with_conn(move |conn| {
+            let count = conn
+                .execute(
+                    r#"
+                    UPDATE agent_tasks
+                    SET status = 'interrupted', updated_at = ?1
+                    WHERE status = 'running'
+                    "#,
+                    params![now],
+                )
+                .map_err(|e| AlephError::config(format!("Failed to mark tasks: {e}")))?;
+            Ok(count as u64)
+        })
+        .await
     }
 
     /// Reconcile tasks orphaned by a crash or hard restart.

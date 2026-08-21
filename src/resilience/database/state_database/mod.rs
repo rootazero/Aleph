@@ -154,6 +154,52 @@ impl StateDatabase {
         })
     }
 
+    /// Run a synchronous SQLite closure off the tokio executor thread.
+    ///
+    /// Mirrors [`crate::memory::store::sqlite::SqliteMemoryBackend::with_conn`]
+    /// for the resilience layer. Acquires `self.conn` (an
+    /// `Arc<std::sync::Mutex<Connection>>`) and invokes `f` on the
+    /// blocking pool via `tokio::task::spawn_blocking`. Use this in
+    /// preference to `self.conn.lock()` inside any `async fn` whose
+    /// body holds the guard across I/O — otherwise the calling tokio
+    /// worker blocks until the SQLite query returns, and a queue of
+    /// slow queries collapses executor parallelism (Risk 4 of the
+    /// review backlog).
+    ///
+    /// Constraints (from `spawn_blocking`):
+    /// - `f` must be `Send + 'static` and own everything it touches
+    ///   (every borrowed parameter of the enclosing `async fn` must
+    ///   be cloned to an owned value at the function head before the
+    ///   closure starts).
+    /// - `R` must be `Send + 'static`.
+    /// - `f` runs synchronously on a blocking-pool thread; do not
+    ///   `.await` inside it.
+    ///
+    /// The 27 async-fnned lock sites across `memory_events.rs`,
+    /// `traces.rs`, `tasks.rs` are migrated in a follow-up commit;
+    /// sync methods (`sticker_descriptions`, `channel_offsets`,
+    /// `group_chat`) cannot await and remain on the direct `lock()`
+    /// path.
+    pub async fn with_conn<F, R>(&self, f: F) -> Result<R, AlephError>
+    where
+        F: FnOnce(&mut Connection) -> Result<R, AlephError> + Send + 'static,
+        R: Send + 'static,
+    {
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || {
+            let mut guard = conn.lock().unwrap_or_else(|e| {
+                tracing::warn!(
+                    "StateDatabase: SQLite mutex was poisoned by a prior panic; \
+                     recovering (this should be rare)"
+                );
+                e.into_inner()
+            });
+            f(&mut guard)
+        })
+        .await
+        .map_err(|e| AlephError::other(format!("StateDatabase with_conn join: {e}")))?
+    }
+
     /// Initialize vector database with schema
     ///
     /// Includes migration logic for embedding dimension changes.
