@@ -294,8 +294,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // A side question is read-only whatever the conversation's own tier
         // says. Composed through `most_restrictive` — the same rule the
-        // channel clamp and the non-operator ceiling already compose through —
-        // so it can only ever tighten: a session already at `Plan` is
+        // non-operator ceiling above composes through, and the same
+        // only-ever-tighten discipline `clamp_tier_for_channel` keeps by hand
+        // (it is a two-arm match, not a call to this) — so it can only ever
+        // tighten: a session already at `Plan` is
         // byte-identical, and no tier, no explicit `[policies.tool_permissions]`
         // entry and no request-carried pick can raise it, because `Plan`'s
         // refusal is a floor rather than a default (`effective_permission`

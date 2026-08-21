@@ -299,8 +299,9 @@ where
     ///   hand a spawned child a budget it does not have.
     ///
     /// A configured window too small to hold a fork IS a refusal: the operator
-    /// stated a window, and it cannot hold one. That is loud and it names the
-    /// key to change.
+    /// stated a window, and it cannot hold one. That is loud, and it names the
+    /// effective window and the `[context_budget]` section — deliberately not
+    /// one key inside it; the body below says why.
     async fn btw_fork_budget(
         &self,
         orchestrator: &crate::orchestrator::Orchestrator,

@@ -303,7 +303,7 @@ put this conversation into read-only planning and an autonomous continuation
 must not act for them — but it is a dead end whose only exit is a person moving
 the tier back.
 
-### A `/btw` side question composes `Plan`, then revokes two of its carve-outs
+### A `/btw` side question composes `Plan`, then revokes two of its named-tool carve-outs
 
 A `/btw` side question (see
 [FEATURE_LOCATOR §4.14](FEATURE_LOCATOR.md#414-btw-侧问派生的只读侧会话-side-questions--2026-08-20))
@@ -312,8 +312,10 @@ read-only whatever that conversation's own tier says. The ceiling is **composed,
 not assigned**: `resolve_turn_permissions` mints `side_question` from the request
 stamp (`execution_engine/turn_permissions.rs:291` — one minting site, never
 re-derived downstream from the key's shape) and folds it in with
-`ExecTier::most_restrictive(tier, ExecTier::Plan)` (`:303`), the same rule the
-channel clamp and the non-operator ceiling already compose through. So it can
+`ExecTier::most_restrictive(tier, ExecTier::Plan)` (`:303`) — the same rule the
+non-operator ceiling composes through (`:183`), and the same only-ever-tighten
+discipline the channel clamp keeps by hand (`clamp_tier_for_channel`,
+`gateway/channel_policy.rs:24`, is a two-arm match, not a `most_restrictive` call). So it can
 only tighten: a conversation already at `Plan` is byte-identical, and no tier, no
 explicit `[policies.tool_permissions]` entry and no request-carried pick can
 raise it, because `Plan`'s refusal is rung 0 rather than a default. It rides to
@@ -336,7 +338,7 @@ points at. The reasons differ and both are load-bearing:
 The revocation is read directly off the same `PLAN_REACHABLE_TOOLS` constant
 `ExecTier::rule_for` reads for the carve-out itself, not restated as a second
 list, so a third member added there is denied to side questions with no edit
-here. `Plan`'s **third** carve-out is untouched: `ask_user` lives in
+here. `Plan`'s **third named-tool** carve-out is untouched: `ask_user` lives in
 `HUMAN_CONTACT_TOOLS`, not in this constant, and asking the user a clarifying
 question is as circular to deny here as it is while planning.
 
@@ -372,8 +374,9 @@ Two further consequences:
   re-admission in `dispatch.rs:238` is keyed on **`PlanMode | SideQuestion`**,
   the property rather than the reporting rule. Keyed on the rule name alone, a
   side question missed that arm entirely and `file_ops list/search/stats`,
-  `doctor`, `note_schema read` and `inbox_read peek` — the exploration a side
-  question is mostly made of — were refused by a sentence promising the opposite.
+  `doctor`, `note_schema read`, `a2a_agents list` and `inbox_read peek` — the
+  exploration a side question is mostly made of — were refused by a sentence
+  promising the opposite.
   `denied_only_by_plan` still does the scoping, and it does **not** consult rung
   −1, so the two revoked carve-outs stay refused.
 
