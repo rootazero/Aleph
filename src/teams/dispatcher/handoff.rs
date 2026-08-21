@@ -410,6 +410,33 @@ pub async fn build_handoff_context(
         out.push('\n');
     }
 
+    // --- Output Contract (workflow step with a pinned schema) ---
+    // Stamped by `workflow::materialize` under `WORKFLOW_SCHEMA_KEY` from the
+    // manifest's per-step `schema`. The `.workflow.js` format's `opts.schema`
+    // makes a subagent return a validated object; Aleph has no structured-output
+    // channel on `RunRequest` (adding one is a harness change, R10's 12-file
+    // budget), so what it can honestly do is *tell the member the shape*. The
+    // wording below says "return exactly this" without claiming the runtime
+    // checks it — the reviewer or the downstream step is what checks it, and
+    // pretending otherwise would be the more expensive lie.
+    //
+    // Placed after the task and before dependency results, so the member reads
+    // its output obligation before the inputs it must fold together. Absent for
+    // steps with no schema (envelope byte-identical to the legacy one).
+    if let Some(schema) = task
+        .metadata
+        .get(crate::workflow::WORKFLOW_SCHEMA_KEY)
+        .filter(|v| !v.is_null())
+    {
+        let rendered = serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+        out.push_str(
+            "\n## Output Contract\nEnd your run with a final message whose body is a single \
+             JSON document matching this schema — no prose around it, no code fence. \
+             Downstream steps read that document as your output.\n```json\n",
+        );
+        out.push_str(&truncate_utf8(&rendered, MAX_SECTION_BYTES));
+        out.push_str("\n```\n");
+    }
     // --- Acceptance criteria (the task's definition of done) ---
     // Read straight from the metadata channel and rendered as a checklist so
     // the member knows the completion bar before starting. Empty for tasks that
@@ -1092,5 +1119,54 @@ mod tests {
         let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
         // Byte-identical to the legacy envelope: no global-strategy heading.
         assert!(!ctx.contains("## Global Strategy"));
+    }
+
+    #[tokio::test]
+    async fn handoff_renders_output_contract_for_schema_pinned_step() {
+        // A workflow step pinning a `schema` gets an `## Output Contract`
+        // section: the model is ASKED for the shape. The wording must not claim
+        // the runtime validates the reply — it does not, and a false promise
+        // here would be read by every member run of every schema'd step.
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let task = cs
+            .create_task(NewCoordTask {
+                team_id: None,
+                subject: "wf:gather".into(),
+                description: "scan the repo".into(),
+                owner: Some("scanner".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: serde_json::json!({
+                    crate::workflow::WORKFLOW_SCHEMA_KEY:
+                        {"type": "object", "required": ["verdict"]},
+                }),
+            })
+            .await
+            .unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, None, &task).await;
+        assert!(ctx.contains("## Output Contract"), "{ctx}");
+        assert!(ctx.contains("\"verdict\""), "schema body rendered: {ctx}");
+        assert!(
+            !ctx.to_lowercase().contains("will be validated"),
+            "asks, never promises enforcement: {ctx}"
+        );
+
+        // And a plain task renders no contract heading (byte-identical legacy).
+        let plain = cs
+            .create_task(NewCoordTask {
+                team_id: None,
+                subject: "plain".into(),
+                description: String::new(),
+                owner: Some("scanner".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let plain_ctx = build_handoff_context(&cs, &ts, None, None, &plain).await;
+        assert!(!plain_ctx.contains("## Output Contract"));
     }
 }

@@ -2176,7 +2176,25 @@ mod tests {
     /// wrong means either refusing a harmless registration or claiming an
     /// install it did not perform; (3) no other tool says any of it — the
     /// `hub_*` family speaks about the Hub, which is a different catalogue.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 105_056;
+    /// 2026-08-21, the workflow pin/phase/contract round: 105_056 -> 105_280 B,
+    /// pinned to the measured figure. The delta is `workflow`'s +224 B net,
+    /// after moving two sentences OUT of the description into the schema
+    /// (`List{}`'s doc now carries "what list returns", `Status.include_output`'s
+    /// doc carries "how you collect a fan-out") — those ride the parameter
+    /// schema, so the second ruler says they do not belong here. What stayed:
+    /// (a) `models` -> `pins` and what a pin is, (b) that `status` groups by
+    /// phase, (c) that a step's output contract is *asked for*, not validated.
+    /// Against the three questions: (1) runtime facts the schema cannot carry —
+    /// (a) and (b) describe the shape of a RESULT, and no argument field
+    /// describes a result; (c) is a cross-face fact about a manifest field the
+    /// tool's own args never mention (`WorkflowDef` has no `schema` key — the
+    /// contract arrives via `import`/`export`), so no single field owns it;
+    /// (2) a stronger model cannot guess (c) and guessing wrong is the
+    /// expensive direction — it would report a step's output as schema-checked
+    /// when nothing checked it, which is precisely the false promise the wire
+    /// was built to avoid making; (3) no other tool says any of it — `pins`,
+    /// phase grouping and output contracts exist only on `workflow`.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 105_280;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

@@ -33,7 +33,10 @@ use crate::workflow::{
 pub enum WorkflowArgs {
     /// Save (create or overwrite) a reusable workflow template to disk.
     Save { definition: WorkflowDef },
-    /// List the names of all saved workflow templates.
+    /// List every saved workflow template with its description, `whenToUse`
+    /// guidance and step count — enough to pick one without a `describe` per
+    /// candidate. Files that will not parse are named in `problems` and still
+    /// listed, so a corrupt template is never mistaken for a missing one.
     List {},
     /// Show the full definition of a saved workflow template.
     Describe { name: String },
@@ -63,6 +66,13 @@ pub enum WorkflowArgs {
         /// Specific run to inspect; omitted → the latest run.
         #[serde(default)]
         run_id: Option<String>,
+        /// Also return each completed step's (bounded) output. Off by default:
+        /// a poll should stay cheap. Turn it on when you are ready to read what
+        /// the run produced — this is the only face that hands back a workflow
+        /// run's actual results, so it is how you collect a fan-out before
+        /// synthesizing.
+        #[serde(default)]
+        include_output: bool,
     },
     /// Cancel the remaining steps of a workflow run: every not-yet-finished
     /// task (pending / blocked / paused / `waiting_review` / `in_progress`) is
@@ -165,41 +175,105 @@ pub struct WorkflowRunStep {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// Phase title this step sits under (`workflow_phase` metadata), so a
+    /// status report can be read the way the `.workflow.js` live view groups
+    /// work. Absent for templates that declare no phases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     /// Per-step model override the dispatcher resolves at launch (read from the
     /// `workflow_model` metadata the compiler stamped). Present only for steps
     /// that pin a model — so the inspecting LLM sees which model a step is (or
     /// was) running on without exporting the template to a `.mjs` file (R8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Per-step reasoning-effort override, the exact twin of
+    /// [`model`](Self::model): stamped by the compiler under `workflow_effort`,
+    /// turned into the member run's `think_level` by the dispatcher. It was
+    /// executable and reported by nothing for as long as it existed, because it
+    /// was a second parallel map beside `models` rather than a field on the
+    /// same carrier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// For failed steps: the (bounded) error text, so the LLM can decide
     /// retry / skip / cancel without an extra lookup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The step's recorded output, bounded, present only when the caller passed
+    /// `include_output: true` and the step actually produced one.
+    ///
+    /// Without this the `workflow` tool could start a fan-out, watch it finish,
+    /// and never read what it produced: `error` was populated for `Failed`
+    /// steps only, and the sole alternative route (`team_status`) dumps every
+    /// task of the whole team with unbounded results. Off by default because a
+    /// status poll is a poll — you pay for the outputs when you synthesize, not
+    /// on every tick.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
-/// A step's executable per-step model override, projected for `describe` /
-/// `run` so the inspecting LLM sees what model each step pins *before* (and
-/// just after) launching — the executable half of the manifest's per-step
-/// metadata that `to_def` otherwise drops (R8 model-perceivable surface).
+/// A step's per-step pins, projected for `describe` / `run` / `status` so the
+/// inspecting LLM sees what each step is pinned to *before* (and just after)
+/// launching — the executable half of the manifest's per-step metadata that
+/// `to_def` otherwise drops (R8 model-perceivable surface).
+///
+/// One row type for every pin: the previous shape was `WorkflowStepModel`,
+/// carrying `model` alone, and `effort` — stamped, executed, equally
+/// user-authored — had no row of its own and therefore no surface anywhere in
+/// the product.
 #[derive(Debug, Clone, Serialize)]
-pub struct WorkflowStepModel {
+pub struct WorkflowStepPin {
     /// Step-local id from the template.
     pub step: String,
     /// `"model"` or `"provider/model"` — resolved by the dispatcher into a
     /// `RunRequest.model_override` at member-run launch.
-    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// `low`..`max` — resolved into the member run's `think_level`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// Phase title, for grouped reporting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    /// `true` when the step pins an output contract (the schema itself is not
+    /// echoed — it can be large, and `export` is the place to read it).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub schema: bool,
+}
+
+/// One entry of a `list` result — enough to *choose* a workflow without a
+/// round-trip per candidate.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowListEntry {
+    /// Storage key: pass this verbatim to `describe` / `run` / `delete`.
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The template's `whenToUse` — the field the `.workflow.js` format exists
+    /// to put in front of this decision. It had no runtime reader at all before
+    /// this row: neither `list` nor `describe` surfaced it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub when_to_use: String,
+    pub steps: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowToolOutput {
     pub action: String,
     pub message: String,
-    /// Populated by `list`.
+    /// Populated by `list` — one row per saved template.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub names: Option<Vec<String>>,
+    pub workflows: Option<Vec<WorkflowListEntry>>,
     /// Populated by `describe`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition: Option<WorkflowDef>,
+    /// Populated by `describe` — the template's `whenToUse` selection guidance,
+    /// which the lean `WorkflowDef` cannot carry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when_to_use: Option<String>,
+    /// Populated by `describe` — the declared phase plan (title + optional
+    /// detail), in declaration order. Also `WorkflowDef`-inexpressible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phases: Option<Vec<String>>,
     /// Populated by `run` — the created coordination-task ids — and by
     /// `cancel` — the task ids actually cancelled.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -218,12 +292,17 @@ pub struct WorkflowToolOutput {
     /// Populated by `import` — imperative constructs that could not be mapped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dropped: Option<Vec<String>>,
-    /// Populated by `describe` (the template's pinned per-step models) and `run`
-    /// (the models actually applied to the launched steps) — the executable
-    /// per-step model overrides `definition` (a lean `WorkflowDef`) cannot carry.
-    /// Empty when no step pins a model; omitted from the wire then.
+    /// Populated by `describe` (the template's pins) and `run` (the pins
+    /// actually applied to the launched steps) — the per-step overrides
+    /// `definition` (a lean `WorkflowDef`) cannot carry.
+    /// Empty when no step pins anything; omitted from the wire then.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub models: Option<Vec<WorkflowStepModel>>,
+    pub pins: Option<Vec<WorkflowStepPin>>,
+    /// Populated by `list` — files in the workflow directory that could not be
+    /// read or parsed, named. A corrupt template is otherwise
+    /// indistinguishable from one that was never saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problems: Option<Vec<String>>,
 }
 
 impl WorkflowToolOutput {
@@ -231,34 +310,43 @@ impl WorkflowToolOutput {
         Self {
             action: action.into(),
             message: message.into(),
-            names: None,
+            workflows: None,
             definition: None,
+            when_to_use: None,
+            phases: None,
             task_ids: None,
             run_id: None,
             steps: None,
             rendered: None,
             dropped: None,
-            models: None,
+            pins: None,
+            problems: None,
         }
     }
 }
 
-/// Project a manifest's pinned per-step model overrides into `models` rows in
-/// step order. Returns `None` when no step pins a model so the field is omitted
-/// from the wire (byte-identical output for model-less templates).
-fn manifest_step_models(manifest: &WorkflowManifest) -> Option<Vec<WorkflowStepModel>> {
-    let rows: Vec<WorkflowStepModel> = manifest
+/// Project a manifest's per-step pins into `pins` rows in step order. Returns
+/// `None` when no step pins anything so the field is omitted from the wire
+/// (byte-identical output for plain templates).
+///
+/// Derived from [`WorkflowManifest::step_pins`] — the same call `run` feeds to
+/// `materialize` — so the reported pins and the stamped pins cannot disagree.
+/// The previous projection read `s.model` directly off the manifest, which is
+/// how it stayed a model-only projection while a second executable pin was
+/// added beside it.
+fn manifest_step_pins(manifest: &WorkflowManifest) -> Option<Vec<WorkflowStepPin>> {
+    let pins = manifest.step_pins();
+    let rows: Vec<WorkflowStepPin> = manifest
         .steps
         .iter()
         .filter_map(|s| {
-            s.model
-                .as_deref()
-                .map(str::trim)
-                .filter(|m| !m.is_empty())
-                .map(|m| WorkflowStepModel {
-                    step: s.id.clone(),
-                    model: m.to_string(),
-                })
+            pins.get(&s.id).map(|p| WorkflowStepPin {
+                step: s.id.clone(),
+                model: p.model.clone(),
+                effort: p.effort.clone(),
+                phase: p.phase.clone(),
+                schema: p.schema.is_some(),
+            })
         })
         .collect();
     (!rows.is_empty()).then_some(rows)
@@ -579,8 +667,29 @@ fn topological_ranks(
     ranks
 }
 
-/// Project one backing task into its `status` row (pure).
-fn step_row(task: &CoordTask) -> WorkflowRunStep {
+/// Bound applied to a step's echoed output in a `status` report. Enough for a
+/// synthesis step to read a real finding, small enough that a twenty-step run
+/// stays a readable tool result rather than a transcript.
+const MAX_STEP_OUTPUT_CHARS: usize = 1200;
+
+/// Project one materialised task into a `status` row.
+///
+/// `include_output` gates only the (bounded) `output` field — everything else is
+/// unconditional, so a plain poll is byte-identical to the legacy row plus the
+/// two pins that were previously stamped and reported by nothing.
+fn step_row(task: &CoordTask, include_output: bool) -> WorkflowRunStep {
+    // A pin the compiler stamped, read back as a trimmed non-empty string.
+    // One helper for all three so a fourth reported pin is one line, not a
+    // fourth hand-rolled `get().and_then().map().filter()` chain — that shape
+    // is exactly why `effort` was never given one.
+    let pin = |key: &str| {
+        task.metadata
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+    };
     WorkflowRunStep {
         step: task
             .metadata
@@ -591,16 +700,13 @@ fn step_row(task: &CoordTask) -> WorkflowRunStep {
         task_id: task.id.clone(),
         status: task.status.as_str().to_string(),
         owner: task.owner.clone(),
+        phase: pin(crate::workflow::WORKFLOW_PHASE_KEY),
         // The per-step model the dispatcher resolves at launch — read from the
         // same `workflow_model` metadata `workflow_model_override` consumes, so
         // status reports exactly the model the run uses. Absent → agent default.
-        model: task
-            .metadata
-            .get(WORKFLOW_MODEL_KEY)
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|m| !m.is_empty())
-            .map(str::to_string),
+        model: pin(WORKFLOW_MODEL_KEY),
+        // Its twin: `workflow_effort` → the member run's think_level.
+        effort: pin(crate::workflow::WORKFLOW_EFFORT_KEY),
         error: match task.status {
             CoordTaskStatus::Failed => task
                 .result
@@ -609,7 +715,85 @@ fn step_row(task: &CoordTask) -> WorkflowRunStep {
                 .map(|r| bound_chars(r, 400)),
             _ => None,
         },
+        // `task.result` is only written on Completed (a partial from a failed
+        // attempt lives on the run row, never here), so this cannot hand back a
+        // half-finished answer dressed as a deliverable.
+        output: include_output
+            .then(|| {
+                task.result
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|r| !r.is_empty())
+                    .map(|r| bound_chars(r, MAX_STEP_OUTPUT_CHARS))
+            })
+            .flatten(),
     }
+}
+
+/// Render a run's progress grouped by phase, the way the `.workflow.js` live
+/// view does: `Scan 1/1 ✓ · Analyze 1/2 ▶`.
+///
+/// Returns `None` when no step carries a phase — the overwhelming majority of
+/// hand-written templates — so a phase-less run's message is byte-identical to
+/// what it always was. Phases appear in first-seen order, which is creation
+/// (topological) order, i.e. the order the run actually walks them.
+///
+/// Pure aggregation. It says how many steps of each phase have settled, not
+/// whether the phase "went well" — judging that is the LLM's job (R7).
+fn summarize_phases(tasks: &[CoordTask]) -> Option<String> {
+    let mut order: Vec<String> = Vec::new();
+    // (done, failed, total) per phase.
+    let mut counts: std::collections::HashMap<String, (usize, usize, usize)> =
+        std::collections::HashMap::new();
+    for task in tasks {
+        let Some(phase) = task
+            .metadata
+            .get(crate::workflow::WORKFLOW_PHASE_KEY)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        else {
+            continue;
+        };
+        let entry = counts.entry(phase.to_string()).or_insert_with(|| {
+            order.push(phase.to_string());
+            (0, 0, 0)
+        });
+        entry.2 += 1;
+        match task.status {
+            CoordTaskStatus::Completed => entry.0 += 1,
+            // "Stopped" and "succeeded" are two predicates: a cancelled or
+            // unsatisfiable step has settled without producing anything, and
+            // folding it into `done` would let a phase report ✓ for work that
+            // never happened.
+            CoordTaskStatus::Failed
+            | CoordTaskStatus::Cancelled
+            | CoordTaskStatus::Unsatisfiable => {
+                entry.1 += 1;
+            }
+            _ => {}
+        }
+    }
+    if order.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = order
+        .iter()
+        .map(|phase| {
+            let (done, failed, total) = counts[phase];
+            // Most-alarming-wins: a phase with any failure is ✗ even if the
+            // rest completed, because the actionable fact is the failure.
+            let marker = if failed > 0 {
+                "✗"
+            } else if done == total {
+                "✓"
+            } else {
+                "▶"
+            };
+            format!("{phase} {done}/{total} {marker}")
+        })
+        .collect();
+    Some(parts.join(" · "))
 }
 
 /// Count tasks per status into a compact "2 completed, 1 failed, ..." summary
@@ -652,7 +836,9 @@ impl AlephTool for WorkflowTool {
          `run` returns a run_id plus the backing task_ids — to block until the \
          run settles, pass those task_ids (or the team_id) to the `task_wait` \
          tool. `status` reports the per-step task states of \
-         a run (latest by default) and `cancel` aborts its unfinished steps — \
+         a run (latest by default), grouped by phase when the template declares \
+         phases. \
+         `cancel` aborts a run's unfinished steps — \
          finished steps keep their results, and a step caught mid-execution \
          finishes its member run but stays cancelled. `pause` parks a run's \
          not-yet-started steps and `resume` releases them (a clarify step \
@@ -667,9 +853,11 @@ impl AlephTool for WorkflowTool {
          `accept_proposal` activates it or `reject_proposal` dismisses the \
          draft. For `run`, create a team first so \
          each step's agent resolves to a member. `describe` and `run` report \
-         each step's pinned model override in `models`, and `status` shows the \
-         model every step runs on — so you can see model assignments without \
-         exporting the template.";
+         each step's pins in `pins` (model, reasoning effort, phase, and \
+         whether it declares an output contract), and `status` shows the model \
+         and effort every step runs on — so you can see those assignments \
+         without exporting the template. A step's output contract is a shape \
+         the step's agent is asked to return; it is not validated for you.";
 
     type Args = WorkflowArgs;
     type Output = WorkflowToolOutput;
@@ -691,49 +879,87 @@ impl AlephTool for WorkflowTool {
                     None => WorkflowManifest::from_def(&definition),
                 };
                 let path = workflow::store::save(&manifest)?;
-                let kept = existing.is_some_and(|prev| {
-                    prev.steps
-                        .iter()
-                        .any(|s| s.model.is_some() || s.effort.is_some())
-                });
+                // Name what was preserved, derived from the manifest rather
+                // than from a remembered pair: the old message said
+                // "model/effort pins preserved" and stayed silent about the
+                // five other extras `with_core_from` also carries across.
+                let kept = existing
+                    .as_ref()
+                    .map(WorkflowManifest::def_inexpressible_extras)
+                    .unwrap_or_default();
                 Ok(WorkflowToolOutput::msg(
                     "save",
                     format!(
                         "saved workflow '{}' → {}{}",
                         definition.name,
                         path.display(),
-                        if kept {
-                            " (per-step model/effort pins preserved)"
+                        if kept.is_empty() {
+                            String::new()
                         } else {
-                            ""
+                            format!(" (preserved: {})", kept.join(", "))
                         }
                     ),
                 ))
             }
             WorkflowArgs::List {} => {
-                let names: Vec<String> = workflow::store::list()?
+                let listing = workflow::store::list()?;
+                let workflows: Vec<WorkflowListEntry> = listing
+                    .entries
                     .into_iter()
-                    .map(|m| m.name)
+                    .map(|m| WorkflowListEntry {
+                        name: m.name,
+                        description: m.description,
+                        when_to_use: m.when_to_use,
+                        steps: m.steps,
+                    })
                     .collect();
-                let message = format!("{} workflow(s)", names.len());
+                // Problems are named in the message too, not only in the field:
+                // a caller that reads the summary line and stops must not be
+                // told "3 workflow(s)" when one of them will not load.
+                let message = if listing.problems.is_empty() {
+                    format!("{} workflow(s)", workflows.len())
+                } else {
+                    format!(
+                        "{} workflow(s); {} unreadable — see `problems`",
+                        workflows.len(),
+                        listing.problems.len()
+                    )
+                };
                 Ok(WorkflowToolOutput {
-                    names: Some(names),
+                    workflows: Some(workflows),
+                    problems: (!listing.problems.is_empty()).then_some(listing.problems),
                     ..WorkflowToolOutput::msg("list", message)
                 })
             }
             WorkflowArgs::Describe { name } => {
                 let manifest = workflow::store::load(&name)?;
                 // Output the executable projection — the tool's `definition`
-                // field is a `WorkflowDef`. The one executable extra `to_def`
-                // drops is the per-step model override, so surface it separately
-                // in `models` (the rest of the interchange metadata stays
-                // `export`-only). Without this an LLM cannot see which model a
-                // step runs on without rendering the template to a `.mjs` file.
-                let models = manifest_step_models(&manifest);
+                // field is a `WorkflowDef` — plus everything `to_def` drops
+                // that a caller needs in order to decide anything: the per-step
+                // pins (model / effort / phase / output contract), the
+                // `whenToUse` guidance, and the declared phase plan. Before
+                // these fields, reading any of it meant rendering the template
+                // to a `.mjs` file, and `whenToUse` could not be read at all.
+                let pins = manifest_step_pins(&manifest);
+                let when_to_use =
+                    Some(manifest.when_to_use.clone()).filter(|s| !s.trim().is_empty());
+                let phases: Vec<String> = manifest
+                    .phases
+                    .iter()
+                    .map(|p| {
+                        if p.detail.trim().is_empty() {
+                            p.title.clone()
+                        } else {
+                            format!("{} — {}", p.title, p.detail)
+                        }
+                    })
+                    .collect();
                 let message = format!("workflow '{name}' has {} step(s)", manifest.steps.len());
                 Ok(WorkflowToolOutput {
                     definition: Some(manifest.to_def()),
-                    models,
+                    when_to_use,
+                    phases: (!phases.is_empty()).then_some(phases),
+                    pins,
                     ..WorkflowToolOutput::msg("describe", message)
                 })
             }
@@ -753,33 +979,19 @@ impl AlephTool for WorkflowTool {
             } => {
                 debug!(name = %name, team_id = %team_id, "workflow: run");
                 // Load the full manifest: the executable core (`to_def`) drives
-                // materialisation, while per-step `model` overrides — which the
-                // lean `WorkflowDef` does not carry — are threaded in separately
-                // and stamped onto task metadata for the dispatcher to resolve
-                // at launch (the executable wiring of the manifest's `model`
-                // field). Other interchange-only metadata
-                // (schema/isolation/agentType/phase) the executor still ignores
-                // (R10).
+                // materialisation, while the per-step pins the lean
+                // `WorkflowDef` cannot carry ride in beside it as ONE map — see
+                // `StepPins`. `label` / `agentType` / `phase.model` remain
+                // interchange-only (R10).
                 let manifest = workflow::store::load(&name)?;
                 let def = manifest.to_def();
-                // step-local id → model override; empty when no step pins a model.
-                let models: std::collections::HashMap<String, String> = manifest
-                    .steps
-                    .iter()
-                    .filter_map(|s| s.model.as_ref().map(|m| (s.id.clone(), m.clone())))
-                    .collect();
-                // step-local id → reasoning-effort override; same contract as
-                // `models` (validated against the think-level vocabulary at the
-                // manifest boundary, stamped per agent step at materialisation).
-                let efforts: std::collections::HashMap<String, String> = manifest
-                    .steps
-                    .iter()
-                    .filter_map(|s| s.effort.as_ref().map(|e| (s.id.clone(), e.clone())))
-                    .collect();
-                // Deterministic, step-ordered projection of the same overrides to
-                // echo back in the output — so the LLM sees which model each step
-                // launched on without a follow-up `describe`/`status`.
-                let model_rows = manifest_step_models(&manifest);
+                // step-local id → StepPins; empty when nothing is pinned.
+                let pins = manifest.step_pins();
+                // Deterministic, step-ordered projection of the SAME map to echo
+                // back in the output — so the LLM sees what each step launched
+                // with, without a follow-up `describe`/`status`, and so the
+                // reported pins cannot drift from the stamped ones.
+                let pin_rows = manifest_step_pins(&manifest);
                 // Pre-flight: reject a run the team cannot execute before any
                 // coord_task is created, so the LLM gets an immediate, actionable
                 // error instead of a "success" that the dispatcher then fails
@@ -846,8 +1058,7 @@ impl AlephTool for WorkflowTool {
                     &team_id,
                     self.coord_store.as_ref(),
                     clarify_ctx.as_ref(),
-                    (!models.is_empty()).then_some(&models),
-                    (!efforts.is_empty()).then_some(&efforts),
+                    (!pins.is_empty()).then_some(&pins),
                     strategy.as_ref(),
                     origin_session.as_deref(),
                 )
@@ -871,7 +1082,7 @@ impl AlephTool for WorkflowTool {
                 Ok(WorkflowToolOutput {
                     task_ids: Some(mat.task_ids),
                     run_id: Some(mat.run_id),
-                    models: model_rows,
+                    pins: pin_rows,
                     ..WorkflowToolOutput::msg("run", message)
                 })
             }
@@ -879,14 +1090,27 @@ impl AlephTool for WorkflowTool {
                 name,
                 team_id,
                 run_id,
+                include_output,
             } => {
                 debug!(name = %name, team_id = %team_id, "workflow: status");
                 let (run_id, tasks) = self.run_tasks(&name, &team_id, run_id.as_deref()).await?;
-                let steps: Vec<WorkflowRunStep> = tasks.iter().map(step_row).collect();
-                let message = format!(
-                    "workflow '{name}' run {run_id}: {}",
-                    summarize_statuses(&tasks)
-                );
+                let steps: Vec<WorkflowRunStep> =
+                    tasks.iter().map(|t| step_row(t, include_output)).collect();
+                // Phase grouping when the template declares phases — the shape
+                // the `.workflow.js` live view reports and the one Aleph's flat
+                // per-step list could not. Appended, not substituted: the
+                // per-status counts stay the authoritative summary, and a
+                // phase-less run's message is byte-identical to before.
+                let message = match summarize_phases(&tasks) {
+                    Some(phases) => format!(
+                        "workflow '{name}' run {run_id}: {} | phases: {phases}",
+                        summarize_statuses(&tasks)
+                    ),
+                    None => format!(
+                        "workflow '{name}' run {run_id}: {}",
+                        summarize_statuses(&tasks)
+                    ),
+                };
                 Ok(WorkflowToolOutput {
                     run_id: Some(run_id),
                     steps: Some(steps),
@@ -1301,11 +1525,30 @@ impl AlephTool for WorkflowTool {
                         path.display()
                     )
                 } else {
-                    format!(
-                        "parsed workflow '{}' ({} step(s); not saved)",
-                        def.name,
-                        def.steps.len()
-                    )
+                    // Name what only survives on disk. `import(save=false)`
+                    // hands back a lean `WorkflowDef`, and this tool's own
+                    // remediation advice is "retarget the agents (edit + save)"
+                    // — which, with nothing stored yet, routes every extra
+                    // through `from_def` and deletes it. `save`'s preservation
+                    // path only fires on OVERWRITE, so the flow the import
+                    // face advertises is exactly the one it cannot protect.
+                    let extras = outcome.manifest.def_inexpressible_extras();
+                    if extras.is_empty() {
+                        format!(
+                            "parsed workflow '{}' ({} step(s); not saved)",
+                            def.name,
+                            def.steps.len()
+                        )
+                    } else {
+                        format!(
+                            "parsed workflow '{}' ({} step(s); not saved). It carries {} that a \
+                             plain definition cannot hold — re-run with save=true FIRST, then \
+                             edit and save, or those are dropped on the first save.",
+                            def.name,
+                            def.steps.len(),
+                            extras.join(", ")
+                        )
+                    }
                 };
                 Ok(WorkflowToolOutput {
                     definition: Some(def),
@@ -1314,17 +1557,29 @@ impl AlephTool for WorkflowTool {
                 })
             }
             WorkflowArgs::Proposals {} => {
-                let names: Vec<String> = workflow::proposal::list_proposals()?
+                let listing = workflow::proposal::list_proposals()?;
+                // Same row shape as `list`: a draft's provenance (which skill
+                // chain, how many observations) lives in its `description`, so
+                // returning bare names forced a `describe_proposal` per draft
+                // just to see what any of them were about.
+                let workflows: Vec<WorkflowListEntry> = listing
+                    .entries
                     .into_iter()
-                    .map(|m| m.name)
+                    .map(|m| WorkflowListEntry {
+                        name: m.name,
+                        description: m.description,
+                        when_to_use: m.when_to_use,
+                        steps: m.steps,
+                    })
                     .collect();
                 let message = format!(
                     "{} gated MetaSkill proposal(s) — inspect one with \
                      action='describe_proposal', activate with action='accept_proposal'",
-                    names.len()
+                    workflows.len()
                 );
                 Ok(WorkflowToolOutput {
-                    names: Some(names),
+                    workflows: Some(workflows),
+                    problems: (!listing.problems.is_empty()).then_some(listing.problems),
                     ..WorkflowToolOutput::msg("proposals", message)
                 })
             }
@@ -1433,6 +1688,13 @@ mod tests {
         store
     }
 
+    /// The names of a `list` / `proposals` result, in listing order. `None`
+    /// when the output carries no listing at all (non-list actions).
+    fn listed_names(out: &WorkflowToolOutput) -> Option<Vec<String>> {
+        out.workflows
+            .as_ref()
+            .map(|rows| rows.iter().map(|r| r.name.clone()).collect())
+    }
     fn linear_def() -> WorkflowDef {
         WorkflowDef {
             name: "pipeline".into(),
@@ -1535,7 +1797,7 @@ mod tests {
     fn output_msg_helper_leaves_optionals_none() {
         let out = WorkflowToolOutput::msg("save", "ok");
         assert_eq!(out.action, "save");
-        assert!(out.names.is_none());
+        assert!(out.workflows.is_none());
         assert!(out.definition.is_none());
         assert!(out.task_ids.is_none());
     }
@@ -1581,7 +1843,7 @@ mod tests {
         let ids = run_out.task_ids.as_ref().expect("run populates task_ids");
         assert_eq!(ids.len(), 2, "one task per step");
         // run shapes only task_ids — never names/definition.
-        assert!(run_out.names.is_none());
+        assert!(run_out.workflows.is_none());
         assert!(run_out.definition.is_none());
 
         // The returned ids correspond to actually-created, correctly-wired
@@ -1717,7 +1979,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .await
         .expect("materialise");
@@ -1748,6 +2009,7 @@ mod tests {
                 name: "pipeline".into(),
                 team_id: "team-9".into(),
                 run_id: None,
+                include_output: false,
             })
             .await
             .expect("status");
@@ -1794,6 +2056,7 @@ mod tests {
                 name: "pipeline".into(),
                 team_id: "team-9".into(),
                 run_id: Some(first_run.clone()),
+                include_output: false,
             })
             .await
             .expect("status of explicit run");
@@ -1810,6 +2073,7 @@ mod tests {
                 name: "pipeline".into(),
                 team_id: "team-9".into(),
                 run_id: Some("no-such-run".into()),
+                include_output: false,
             })
             .await
             .expect_err("unknown run id");
@@ -1825,6 +2089,7 @@ mod tests {
                 name: "ghost".into(),
                 team_id: "team-9".into(),
                 run_id: None,
+                include_output: false,
             })
             .await
             .expect_err("no runs");
@@ -2680,7 +2945,10 @@ mod tests {
         };
 
         assert!(imported.message.contains("imported"));
-        assert_eq!(listed.names.as_deref(), Some(&["scanned".to_string()][..]));
+        assert_eq!(
+            listed_names(&listed).as_deref(),
+            Some(&["scanned".to_string()][..])
+        );
     }
 
     #[tokio::test]
@@ -2773,7 +3041,7 @@ mod tests {
         // empty list before any save.
         let empty = t.call(WorkflowArgs::List {}).await.expect("list");
         assert_eq!(empty.action, "list");
-        assert_eq!(empty.names.as_deref(), Some(&[][..]));
+        assert_eq!(listed_names(&empty).as_deref(), Some(&[][..]));
         assert!(empty.definition.is_none() && empty.task_ids.is_none());
 
         // save → only the message is shaped (no optionals).
@@ -2785,11 +3053,16 @@ mod tests {
             .expect("save");
         assert_eq!(saved.action, "save");
         assert!(saved.message.contains("pipeline"));
-        assert!(saved.names.is_none() && saved.definition.is_none() && saved.task_ids.is_none());
+        assert!(
+            saved.workflows.is_none() && saved.definition.is_none() && saved.task_ids.is_none()
+        );
 
         // list reflects the saved template — only names populated.
         let listed = t.call(WorkflowArgs::List {}).await.expect("list");
-        assert_eq!(listed.names.as_deref(), Some(&["pipeline".to_string()][..]));
+        assert_eq!(
+            listed_names(&listed).as_deref(),
+            Some(&["pipeline".to_string()][..])
+        );
         assert!(listed.definition.is_none() && listed.task_ids.is_none());
 
         // describe round-trips the definition — only definition populated.
@@ -2806,7 +3079,7 @@ mod tests {
             .expect("describe populates definition");
         assert_eq!(def, &linear_def());
         assert!(described.message.contains("2 step"));
-        assert!(described.names.is_none() && described.task_ids.is_none());
+        assert!(described.workflows.is_none() && described.task_ids.is_none());
 
         // serde wire shape: describe omits the None fields entirely.
         let wire = serde_json::to_value(&described).unwrap();
@@ -2838,7 +3111,7 @@ mod tests {
 
         // after delete the list is empty again.
         let after = t.call(WorkflowArgs::List {}).await.expect("list");
-        assert_eq!(after.names.as_deref(), Some(&[][..]));
+        assert_eq!(listed_names(&after).as_deref(), Some(&[][..]));
 
         // SAFETY: guarded single mutator; restore prior value.
         unsafe {
@@ -2965,7 +3238,7 @@ mod tests {
 
         assert_eq!(listed.action, "proposals");
         assert!(
-            listed.names.as_ref().is_some_and(|n| n.contains(&name)),
+            listed_names(&listed).is_some_and(|n| n.contains(&name)),
             "draft is listed before accept"
         );
         assert_eq!(accepted.action, "accept_proposal");
@@ -2975,12 +3248,12 @@ mod tests {
             accepted.message
         );
         assert_eq!(
-            after.names.as_deref(),
+            listed_names(&after).as_deref(),
             Some(&[][..]),
             "accepted draft is removed from the gated dir"
         );
         assert!(
-            active.names.as_ref().is_some_and(|n| n.contains(&name)),
+            listed_names(&active).is_some_and(|n| n.contains(&name)),
             "accepted workflow appears in the active store"
         );
         assert!(
@@ -3046,12 +3319,12 @@ mod tests {
             rejected.message
         );
         assert_eq!(
-            after.names.as_deref(),
+            listed_names(&after).as_deref(),
             Some(&[][..]),
             "rejected draft is removed from the gated dir"
         );
         assert_eq!(
-            active.names.as_deref(),
+            listed_names(&active).as_deref(),
             Some(&[][..]),
             "rejection never touches the active store"
         );
@@ -3164,27 +3437,60 @@ mod tests {
     }
 
     #[test]
-    fn manifest_step_models_projects_only_pinned_steps() {
-        let rows = manifest_step_models(&manifest_with_pinned_model())
-            .expect("at least one step pins a model");
+    fn manifest_step_pins_projects_only_pinned_steps() {
+        let rows = manifest_step_pins(&manifest_with_pinned_model())
+            .expect("at least one step pins something");
         assert_eq!(rows.len(), 1, "only the pinned step appears");
         assert_eq!(rows[0].step, "gather");
-        assert_eq!(rows[0].model, "opus");
-        // A wholly model-less template projects to None (field omitted on wire).
-        assert!(manifest_step_models(&WorkflowManifest::from_def(&linear_def())).is_none());
+        assert_eq!(rows[0].model.as_deref(), Some("opus"));
+        assert!(rows[0].effort.is_none() && rows[0].phase.is_none() && !rows[0].schema);
+        // A wholly pin-less template projects to None (field omitted on wire).
+        assert!(manifest_step_pins(&WorkflowManifest::from_def(&linear_def())).is_none());
+    }
+
+    /// Every pin `StepPins` can carry has a column on the projected row. This
+    /// is the census that was missing when `effort` shipped: the projection
+    /// read `s.model` directly, so a second executable pin could be stamped,
+    /// consumed by the dispatcher, and reported by no face at all — and no
+    /// test could red on it, because no test knew the field vocabulary.
+    /// `StepPins::all_fields()` is derived by exhaustive destructuring, so a
+    /// new pin lands here as a NAMED failure until the row (and this match)
+    /// learns it.
+    #[test]
+    fn every_step_pin_has_a_projection_column() {
+        let mut m = WorkflowManifest::from_def(&linear_def());
+        m.steps[0].model = Some("opus".into());
+        m.steps[0].effort = Some("max".into());
+        m.steps[0].phase = Some("Scan".into());
+        m.steps[0].schema = Some(serde_json::json!({"type": "object"}));
+        let rows = manifest_step_pins(&m).expect("pinned");
+        let row = &rows[0];
+        for field in crate::workflow::StepPins::all_fields() {
+            let projected = match field {
+                "model" => row.model.is_some(),
+                "effort" => row.effort.is_some(),
+                "phase" => row.phase.is_some(),
+                "schema" => row.schema,
+                other => panic!(
+                    "StepPins grew a pin `{other}` with no projection column — \
+                     add it to WorkflowStepPin (and step_row) so it has a face"
+                ),
+            };
+            assert!(
+                projected,
+                "pin `{field}` set on the manifest but not projected"
+            );
+        }
     }
 
     #[test]
-    fn manifest_step_models_skips_blank_model() {
+    fn manifest_step_pins_skips_blank_model() {
         // A whitespace-only model string is not a real override — it must not
         // surface as a pinned model (mirrors the run-time override parser, which
         // trims and treats empty as "no override").
         let mut m = WorkflowManifest::from_def(&linear_def());
         m.steps[0].model = Some("   ".into());
-        assert!(
-            manifest_step_models(&m).is_none(),
-            "blank model is no model"
-        );
+        assert!(manifest_step_pins(&m).is_none(), "blank model is no model");
     }
 
     #[tokio::test]
@@ -3220,13 +3526,13 @@ mod tests {
             described
         };
 
-        let models = described
-            .models
+        let pins = described
+            .pins
             .as_ref()
-            .expect("describe surfaces pinned models");
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].step, "gather");
-        assert_eq!(models[0].model, "opus");
+            .expect("describe surfaces pinned steps");
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].step, "gather");
+        assert_eq!(pins[0].model.as_deref(), Some("opus"));
         // The lean definition still comes back (executable core) alongside it.
         assert!(described.definition.is_some());
     }
@@ -3238,16 +3544,21 @@ mod tests {
         // which model a step runs on without re-reading the template.
         let store = setup_store().await;
         let t = tool(store, None);
-        let mut models = std::collections::HashMap::new();
-        models.insert("gather".to_string(), "opus".to_string());
+        let mut pins = std::collections::HashMap::new();
+        pins.insert(
+            "gather".to_string(),
+            crate::workflow::StepPins {
+                model: Some("opus".into()),
+                ..Default::default()
+            },
+        );
         let mat = workflow::materialize(
             &linear_def(),
             "x",
             "team-9",
             t.coord_store.as_ref(),
             None,
-            Some(&models),
-            None,
+            Some(&pins),
             None,
             None,
         )
@@ -3259,6 +3570,7 @@ mod tests {
                 name: "pipeline".into(),
                 team_id: "team-9".into(),
                 run_id: Some(mat.run_id),
+                include_output: false,
             })
             .await
             .expect("status");
@@ -3271,5 +3583,317 @@ mod tests {
         );
         assert_eq!(steps[1].step, "write");
         assert!(steps[1].model.is_none(), "unpinned step has no model");
+    }
+
+    #[tokio::test]
+    async fn status_include_output_returns_bounded_completed_results() {
+        // The collection face: a fan-out's results are unreadable without it —
+        // `error` only populates on Failed, and team_status dumps the whole
+        // team unbounded. Off by default (a poll is a poll).
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-out").await;
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    result: Some("the finding ".repeat(200)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let plain = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-out".into(),
+                run_id: Some(run_id.clone()),
+                include_output: false,
+            })
+            .await
+            .expect("status");
+        let rows = plain.steps.as_ref().unwrap();
+        assert!(
+            rows.iter().all(|r| r.output.is_none()),
+            "off by default — a poll stays cheap"
+        );
+
+        let with_out = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-out".into(),
+                run_id: Some(run_id),
+                include_output: true,
+            })
+            .await
+            .expect("status with output");
+        let rows = with_out.steps.as_ref().unwrap();
+        let done = rows.iter().find(|r| r.status == "completed").unwrap();
+        let out = done.output.as_ref().expect("completed step echoes output");
+        assert!(
+            out.chars().count() <= MAX_STEP_OUTPUT_CHARS + 1,
+            "bounded (ellipsis-terminated): {} chars",
+            out.chars().count()
+        );
+        // The still-pending step has no output even when asked.
+        assert!(rows
+            .iter()
+            .filter(|r| r.status != "completed")
+            .all(|r| r.output.is_none()));
+    }
+
+    #[tokio::test]
+    async fn status_groups_steps_by_phase_when_pinned() {
+        // A phased template reports `phases: Scan 1/1 ...` in the message and a
+        // `phase` column per row — the `.workflow.js` live-view shape. A
+        // phase-less run's message stays byte-identical (no suffix).
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let mut pins = std::collections::HashMap::new();
+        pins.insert(
+            "gather".to_string(),
+            crate::workflow::StepPins {
+                phase: Some("Scan".into()),
+                ..Default::default()
+            },
+        );
+        pins.insert(
+            "write".to_string(),
+            crate::workflow::StepPins {
+                phase: Some("Write".into()),
+                ..Default::default()
+            },
+        );
+        let mat = workflow::materialize(
+            &linear_def(),
+            "x",
+            "team-ph",
+            t.coord_store.as_ref(),
+            None,
+            Some(&pins),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        t.coord_store
+            .update_task(
+                &mat.task_ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    result: Some("done".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-ph".into(),
+                run_id: Some(mat.run_id),
+                include_output: false,
+            })
+            .await
+            .expect("status");
+        assert!(
+            out.message.contains("phases: Scan 1/1 ✓ · Write 0/1 ▶"),
+            "grouped phase summary: {}",
+            out.message
+        );
+        let rows = out.steps.as_ref().unwrap();
+        assert_eq!(rows[0].phase.as_deref(), Some("Scan"));
+        assert_eq!(rows[1].phase.as_deref(), Some("Write"));
+    }
+
+    #[test]
+    fn summarize_phases_marks_failures_most_alarming() {
+        // The failure marker wins over the done marker within a phase: a
+        // settled-but-failed step must not let the phase report success, and
+        // cancelled/unsatisfiable are "stopped", not "succeeded".
+        let mk = |phase: &str, status: CoordTaskStatus| CoordTask {
+            id: uuid::Uuid::new_v4().to_string(),
+            team_id: Some("t".into()),
+            subject: "s".into(),
+            description: String::new(),
+            status,
+            owner: None,
+            priority: crate::agents::swarm::tasks::Priority::Normal,
+            result: None,
+            metadata: serde_json::json!({
+                crate::workflow::WORKFLOW_PHASE_KEY: phase,
+            }),
+            dependencies: vec![],
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            locked_by: None,
+            locked_at: None,
+        };
+        let tasks = vec![
+            mk("Scan", CoordTaskStatus::Completed),
+            mk("Scan", CoordTaskStatus::Failed),
+            mk("Fix", CoordTaskStatus::Completed),
+        ];
+        let line = summarize_phases(&tasks).expect("phased");
+        assert!(line.contains("Scan 1/2 ✗"), "{line}");
+        assert!(line.contains("Fix 1/1 ✓"), "{line}");
+        // No phases → None (message byte-identical to the legacy one).
+        assert!(summarize_phases(&[mk("", CoordTaskStatus::Completed)]).is_none());
+    }
+
+    #[tokio::test]
+    async fn list_carries_selection_fields_and_names_problems() {
+        // `list` answers "which should I run?" in one call: description,
+        // whenToUse and step count per row, and a corrupt file is NAMED in
+        // `problems` + the message instead of silently vanishing.
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let out = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            let mut m = crate::workflow::WorkflowManifest::from_def(&linear_def());
+            m.when_to_use = "for research reports".into();
+            workflow::store::save(&m).expect("save");
+            std::fs::create_dir_all(tmp.path().join("workflows")).unwrap();
+            std::fs::write(tmp.path().join("workflows").join("bad.json"), "{ nope").unwrap();
+            let out = t.call(WorkflowArgs::List {}).await.expect("list");
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            out
+        };
+
+        let rows = out.workflows.as_ref().unwrap();
+        let good = rows.iter().find(|r| r.name == "pipeline").unwrap();
+        assert_eq!(good.when_to_use, "for research reports");
+        assert_eq!(good.steps, 2);
+        assert_eq!(good.description, "research then write");
+        assert!(
+            rows.iter().any(|r| r.name == "bad"),
+            "corrupt row still addressable"
+        );
+        let problems = out.problems.as_ref().expect("problems named");
+        assert!(problems[0].contains("bad.json"), "{problems:?}");
+        assert!(out.message.contains("unreadable"), "{}", out.message);
+    }
+
+    /// import → save → run → status, in one process.
+    ///
+    /// Each half of this chain had its own passing tests while the middle was
+    /// severed: the importer recovered `phase()` markers, `export` re-rendered
+    /// them, the store persisted them — and no runtime face read one, so a
+    /// phased `.workflow.js` reported a flat step list forever. A test that
+    /// stops at "the manifest has phases" cannot see that; only running the
+    /// whole chain in one process can.
+    #[tokio::test]
+    async fn a_phased_workflow_js_keeps_its_phases_all_the_way_to_status() {
+        let src = r#"
+export const meta = {
+  name: 'audit',
+  description: 'scan then fix',
+}
+
+phase('Scan')
+const found = await agent('scan the repo', { label: 'scan' })
+
+phase('Fix')
+await agent('fix what scan found', { label: 'fix' })
+"#;
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let tmp = TempDir::new().unwrap();
+
+        let run_out = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            // save=true FIRST, so the rich manifest is on disk; the retarget
+            // below then goes through `save`'s preservation path. Parse-only
+            // import + save would drop the phases — which is exactly what the
+            // import message now warns about.
+            let imported = t
+                .call(WorkflowArgs::Import {
+                    source: src.to_string(),
+                    save: true,
+                })
+                .await
+                .expect("import");
+            // The importer names an agent per step; retarget them onto one
+            // member so the run is materialisable, then save through the tool.
+            let mut def = imported.definition.expect("import yields a definition");
+            for step in &mut def.steps {
+                step.agent = "worker".into();
+            }
+            let saved = t
+                .call(WorkflowArgs::Save { definition: def })
+                .await
+                .expect("save");
+            for extra in ["phases", "phase", "label"] {
+                assert!(
+                    saved.message.contains(extra),
+                    "save names every extra it carried across (missing `{extra}`): {}",
+                    saved.message
+                );
+            }
+            let run_out = t
+                .call(WorkflowArgs::Run {
+                    name: "audit".into(),
+                    team_id: "team-e2e".into(),
+                    input: String::new(),
+                })
+                .await
+                .expect("run");
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            run_out
+        };
+
+        let pins = run_out
+            .pins
+            .as_ref()
+            .expect("run echoes the pins it applied");
+        assert!(
+            pins.iter().any(|p| p.phase.as_deref() == Some("Scan")),
+            "the imported phase survived to the launched run: {pins:?}"
+        );
+
+        let status = t
+            .call(WorkflowArgs::Status {
+                name: "audit".into(),
+                team_id: "team-e2e".into(),
+                run_id: run_out.run_id.clone(),
+                include_output: false,
+            })
+            .await
+            .expect("status");
+        assert!(
+            status.message.contains("phases: Scan 0/1 ▶"),
+            "status groups by the imported phases: {}",
+            status.message
+        );
+        let rows = status.steps.as_ref().unwrap();
+        assert!(rows.iter().any(|r| r.phase.as_deref() == Some("Fix")));
     }
 }
