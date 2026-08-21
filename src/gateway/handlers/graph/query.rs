@@ -47,6 +47,18 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         };
     }
 
+    // The galaxy is the one enumerating surface that cannot represent a union:
+    // `NoteNodeDto` carries no `agent_id`, so two partitions holding the same
+    // `category/filename` would collide into one node with no way to tell them
+    // apart, and the edge list is keyed by those same paths. So this reads the
+    // ONE partition this session writes to rather than the union its sibling
+    // readers use — the org tier being invisible here is a narrower, recorded
+    // gap (FEATURE_LOCATOR §6.7), not the defect `memory_scope` closes.
+    // `memory.stats` scopes its two graph counts the same way, so the stat card
+    // describes the picture actually drawn.
+    let graph_partition = crate::gateway::handlers::memory_scope::primary_read_partition(agent_id);
+    let agent_id = graph_partition.as_str();
+
     let (entries, links) = match db.get_graph_data(agent_id, params.limit).await {
         Ok(data) => data,
         Err(e) => {

@@ -62,15 +62,41 @@ pub struct SqliteMemoryBackend {
 ///
 /// `tool_invocation` rows are per-call telemetry consumed by the Dream cycle
 /// by source, never user-facing memories, so they are excluded unconditionally.
-fn raw_where(agent_id: Option<&str>, query: Option<&str>) -> (String, Vec<rusqlite::types::Value>) {
+///
+/// `agent_ids` is a SET, not one id, because every raw writer composes the
+/// session's scope (`project_scope::session_write_id`) while the RPC face is
+/// handed a base persona id: reading it needs the union
+/// `gateway::handlers::memory_scope::read_partitions` resolves. See the three
+/// arms below for what `None` and `Some(&[])` each mean — they are different
+/// answers and collapsing them is the fail-open direction.
+fn raw_where(
+    agent_ids: Option<&[String]>,
+    query: Option<&str>,
+) -> (String, Vec<rusqlite::types::Value>) {
     use rusqlite::types::Value;
 
     let mut sql = String::from(" WHERE source != 'tool_invocation'");
     let mut binds: Vec<Value> = Vec::new();
 
-    if let Some(agent) = agent_id {
-        sql.push_str(" AND agent_id = ?");
-        binds.push(Value::Text(agent.to_string()));
+    // `None` = no partition filter at all (the unrestricted whole-store
+    // rollup). `Some(&[])` is NOT the same thing and must match nothing: it is
+    // what an empty resolved partition set looks like, and rendering it as "no
+    // filter" would turn a fail-closed read into a whole-store read — the
+    // fail-open direction. `read_partitions` never returns empty, so this arm
+    // exists to keep that a property of this function rather than of its
+    // callers.
+    match agent_ids {
+        None => {}
+        Some([]) => sql.push_str(" AND 1=0"),
+        Some(agents) => {
+            let placeholders = std::iter::repeat_n("?", agents.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(" AND agent_id IN ({placeholders})"));
+            for agent in agents {
+                binds.push(Value::Text(agent.clone()));
+            }
+        }
     }
     // A blank search box browses; it does not match every row containing a space.
     if let Some(q) = query.map(str::trim).filter(|q| !q.is_empty()) {
@@ -208,7 +234,7 @@ impl SqliteMemoryBackend {
     /// [`Self::count_raw_memories`] so list and count cannot drift.
     pub fn get_raw_memories_dashboard(
         &self,
-        agent_id: Option<&str>,
+        agent_ids: Option<&[String]>,
         query: Option<&str>,
         limit: usize,
         offset: usize,
@@ -221,7 +247,7 @@ impl SqliteMemoryBackend {
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        let (where_sql, mut binds) = raw_where(agent_id, query);
+        let (where_sql, mut binds) = raw_where(agent_ids, query);
         let sql = format!(
             "SELECT id, content, source, source_detail, agent_id, session_id, path, \
              attachment_text, is_processed, created_at \
@@ -273,7 +299,7 @@ impl SqliteMemoryBackend {
     /// that list. Excludes `tool_invocation` telemetry.
     pub fn count_raw_memories(
         &self,
-        agent_id: Option<&str>,
+        agent_ids: Option<&[String]>,
         query: Option<&str>,
     ) -> Result<i64, AlephError> {
         let conn = self
@@ -281,7 +307,7 @@ impl SqliteMemoryBackend {
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        let (where_sql, binds) = raw_where(agent_id, query);
+        let (where_sql, binds) = raw_where(agent_ids, query);
         let sql = format!("SELECT COUNT(*) FROM raw_memories{where_sql}");
 
         conn.query_row(&sql, rusqlite::params_from_iter(binds), |row| row.get(0))
@@ -347,9 +373,52 @@ mod raw_where_tests {
 
     #[test]
     fn agent_scope_adds_one_bind() {
-        let (sql, binds) = raw_where(Some("main"), None);
-        assert_eq!(sql, " WHERE source != 'tool_invocation' AND agent_id = ?");
+        let one = ["main".to_string()];
+        let (sql, binds) = raw_where(Some(&one), None);
+        assert_eq!(
+            sql,
+            " WHERE source != 'tool_invocation' AND agent_id IN (?)"
+        );
         assert_eq!(binds, vec![Value::Text("main".to_string())]);
+    }
+
+    /// The union a scoped session resolves to: one placeholder per partition,
+    /// bound in order. `IN` rather than repeated `OR`s so the bind count and
+    /// the placeholder count cannot drift.
+    #[test]
+    fn a_partition_union_binds_every_member() {
+        let both = ["main".to_string(), "main__u-owner".to_string()];
+        let (sql, binds) = raw_where(Some(&both), None);
+        assert_eq!(
+            sql,
+            " WHERE source != 'tool_invocation' AND agent_id IN (?, ?)"
+        );
+        assert_eq!(
+            binds,
+            vec![
+                Value::Text("main".to_string()),
+                Value::Text("main__u-owner".to_string()),
+            ]
+        );
+    }
+
+    /// `None` and `Some(&[])` are DIFFERENT answers and the fail-open direction
+    /// is collapsing them: `None` is the unrestricted whole-store rollup, an
+    /// empty set is a resolved-to-nothing read and must match nothing. Nothing
+    /// produces an empty set today (`read_partitions` always contains the base
+    /// id) — this keeps that a property of the query builder rather than of
+    /// whichever caller happens to be first.
+    #[test]
+    fn an_empty_partition_set_matches_nothing_rather_than_everything() {
+        let (sql, binds) = raw_where(Some(&[]), None);
+        assert_eq!(sql, " WHERE source != 'tool_invocation' AND 1=0");
+        assert!(binds.is_empty());
+
+        let (unrestricted, _) = raw_where(None, None);
+        assert_ne!(
+            sql, unrestricted,
+            "an empty set must not render as 'no filter'"
+        );
     }
 
     #[test]
@@ -364,10 +433,11 @@ mod raw_where_tests {
 
     #[test]
     fn agent_and_query_bind_in_positional_order() {
-        let (sql, binds) = raw_where(Some("main"), Some("smoke"));
+        let one = ["main".to_string()];
+        let (sql, binds) = raw_where(Some(&one), Some("smoke"));
         assert_eq!(
             sql,
-            " WHERE source != 'tool_invocation' AND agent_id = ? AND content LIKE ? ESCAPE '\\'"
+            " WHERE source != 'tool_invocation' AND agent_id IN (?) AND content LIKE ? ESCAPE '\\'"
         );
         assert_eq!(
             binds,

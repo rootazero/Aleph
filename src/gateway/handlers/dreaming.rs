@@ -59,6 +59,25 @@ pub async fn handle_run_now(request: JsonRpcRequest) -> JsonRpcResponse {
 /// three lists empty, the same shape a partition the dream daemon has never
 /// run over produces) — a half-checked response is exactly the shape this
 /// review kept finding, so we never return one.
+///
+/// ## Deliberately NOT resolved through `memory_scope::read_partitions`
+///
+/// Its siblings (`memory.listFacts`, `memory.search`, `graph.search`,
+/// `insights.tools`, the retrieval x-ray) all compose the session's scope,
+/// because on those surfaces a base persona id means "my view of this agent"
+/// and there is no other way to reach the partition the writers wrote to.
+/// Here there is: `namespaces` **is** that index, and it is returned on both
+/// the success and the refusal path precisely so every corpus is addressable.
+/// `agent_id` on this method therefore names a CORPUS, not an agent, and
+/// `synthesis`/`runs` are each scoped to exactly the one the caller named —
+/// internally consistent, and navigable to the composed partition in one click.
+///
+/// Composing here would break that: the response echoes `agent_id`, so a caller
+/// who picked `main` from `namespaces` would be shown rows labelled `main` that
+/// came from `main__u-owner`, and picking a composed namespace would double-
+/// compose into a partition nothing writes. If this surface ever loses its
+/// namespace index, revisit — the defect would be live again the moment the
+/// only way in is the default.
 pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
     use crate::memory::store::DreamStore;

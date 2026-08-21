@@ -116,8 +116,14 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .map(str::trim)
         .filter(|q| !q.is_empty());
 
+    // Every raw writer composes the session's scope, so reading the base id
+    // verbatim read a partition nothing writes to. Resolved AFTER the
+    // visibility gate above, which judges the id the caller actually sent.
+    // See `memory_scope`'s module doc.
+    let partitions = super::memory_scope::read_partitions(agent_id);
+
     let memories = match db.get_raw_memories_dashboard(
-        Some(agent_id),
+        Some(&partitions),
         query,
         params.limit as usize,
         params.offset as usize,
@@ -136,7 +142,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     // that filtered set — not the whole store. A pager sized to the store
     // total would keep "next" enabled past the last match (B4 phantom-page,
     // resurrected for the filtered case).
-    let total = match db.count_raw_memories(Some(agent_id), query) {
+    let total = match db.count_raw_memories(Some(&partitions), query) {
         Ok(total) => total,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -289,10 +295,18 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
         return JsonRpcResponse::success(request.id, json!({ "facts": [], "total": 0 }));
     }
 
-    match db.list_notes(agent_id).await {
+    // The partitions this session's writers actually wrote to. Resolved AFTER
+    // the visibility gate, which judges the base id the caller sent. See
+    // `memory_scope`'s module doc for why the reader used to miss every note
+    // on a stock install.
+    let partitions = super::memory_scope::read_partitions(agent_id);
+
+    match db.list_notes_multi(&partitions).await {
         Ok(notes) => {
-            // `total` describes the whole agent store, so the pager can size
-            // itself instead of guessing from a full page.
+            // `total` describes the whole window the pager slices, so it must
+            // count the same union the list above enumerated — a total taken
+            // from one partition and a list taken from two is the phantom-page
+            // bug with the operands swapped.
             let total = notes.len() as i64;
             let entries: Vec<FactEntry> = notes
                 .into_iter()
@@ -392,16 +406,27 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         None => crate::gateway::visibility::visible_owner_filter()
             .map(|_| crate::routing::DEFAULT_AGENT_ID.to_string()),
     };
-    let agent = agent.as_deref();
     let scope = if agent.is_some() { "agent" } else { "global" };
+    // Resolved AFTER the visibility gate above. `None` here is the
+    // unrestricted whole-store rollup and stays unpartitioned.
+    let partitions: Option<Vec<String>> = agent
+        .as_deref()
+        .map(super::memory_scope::read_partitions);
+    let partitions = partitions.as_deref();
 
-    let raw_count = db.count_raw_memories(agent, None).unwrap_or(0);
-    let note_count = match agent {
-        Some(a) => db.count_notes(a).await.unwrap_or(0),
+    let raw_count = db.count_raw_memories(partitions, None).unwrap_or(0);
+    let note_count = match partitions {
+        Some(ids) => db.count_notes_multi(ids).await.unwrap_or(0),
         None => db.count_all_notes().await.unwrap_or(0),
     };
 
-    let (graph_nodes, graph_edges) = match agent {
+    // The galaxy is the one surface that cannot represent a union — its
+    // `NoteNodeDto` carries no `agent_id`, so two partitions holding the same
+    // `category/filename` would collide into one node. These two counts label
+    // THAT graph, so they must be scoped exactly as `graph.query` is, or the
+    // stat card would describe a picture the galaxy never draws.
+    let graph_partition = agent.as_deref().map(super::memory_scope::primary_read_partition);
+    let (graph_nodes, graph_edges) = match graph_partition.as_deref() {
         Some(a) => match db.get_graph_data(a, 10000).await {
             Ok((entries, links)) => (Some(entries.len() as i64), Some(links.len() as i64)),
             // A failed fetch is "we could not count", not "this agent has
@@ -498,6 +523,11 @@ pub async fn handle_list_corrections(
     let limit = params.limit.filter(|n| *n > 0).unwrap_or(50);
     let include_distilled = params.include_distilled.unwrap_or(true);
 
+    // `flag_user_correction` composes the session's scope like every other
+    // writer, so the fix queue read the wrong partition on a stock install.
+    // Resolved AFTER the visibility gate — see `memory_scope`'s module doc.
+    let partitions = super::memory_scope::read_partitions(agent_id);
+
     // Distillation status comes from the FeedbackDistill watermark, NOT from
     // `is_processed`: that flag belongs to CompressionService's drain, and
     // `flag_user_correction`'s sedimentation kick sets it within seconds of
@@ -507,52 +537,71 @@ pub async fn handle_list_corrections(
     // batch (consumer key "feedback_distill" — keep in sync with
     // `memory::dreaming::stages::feedback_distill::WATERMARK_CONSUMER`), so a
     // correction is distilled exactly when `created_at <= watermark`.
-    let watermark = db
-        .get_dream_watermark("feedback_distill", agent_id)
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                error = %e,
-                "memory.list_corrections: failed to read feedback_distill watermark; treating as 0"
-            );
-            None
-        })
-        .unwrap_or(0);
-
-    match db
-        .get_raw_by_path_prefix("aleph://correction/", agent_id, limit)
-        .await
-    {
-        Ok(rows) => {
-            let corrections: Vec<_> = rows
-                .into_iter()
-                .filter(|r| include_distilled || r.created_at > watermark)
-                .map(|r| {
-                    let (severity, suggested_rule) = match &r.source {
-                        RawMemorySource::Correction {
-                            severity,
-                            suggested_rule,
-                        } => (severity.clone(), suggested_rule.clone()),
-                        _ => ("low".to_string(), None),
-                    };
-                    let distilled = r.created_at <= watermark;
-                    json!({
-                        "id": r.id,
-                        "content": r.content,
-                        "severity": severity,
-                        "suggested_rule": suggested_rule,
-                        "status": if distilled { "distilled" } else { "pending" },
-                        "created_at": r.created_at,
-                    })
-                })
-                .collect();
-            JsonRpcResponse::success(request.id, json!({ "corrections": corrections }))
+    //
+    // The watermark is read PER PARTITION and each row judged against its own,
+    // rather than reading one watermark for the union: the dream cycle advances
+    // these independently per corpus, so borrowing the org tier's watermark to
+    // judge a personal-partition row would report rows as distilled that no
+    // dream stage has read — and "distilled" is what removes a row from the
+    // pending half of the queue.
+    let mut rows = Vec::new();
+    for partition in &partitions {
+        let watermark = db
+            .get_dream_watermark("feedback_distill", partition)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    partition = %partition,
+                    "memory.list_corrections: failed to read feedback_distill watermark; \
+                     treating as 0"
+                );
+                None
+            })
+            .unwrap_or(0);
+        match db
+            .get_raw_by_path_prefix("aleph://correction/", partition, limit)
+            .await
+        {
+            Ok(found) => rows.extend(found.into_iter().map(|r| (r, watermark))),
+            Err(err) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("memory.list_corrections failed: {err}"),
+                )
+            }
         }
-        Err(err) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("memory.list_corrections failed: {err}"),
-        ),
     }
+    // Merge into one newest-first ordering and cap once. Each partition was
+    // fetched to the full `limit` rather than a share of it, so a union whose
+    // corrections all live in one partition returns exactly what a
+    // single-partition read would.
+    rows.sort_by_key(|(r, _)| std::cmp::Reverse(r.created_at));
+    rows.truncate(limit);
+
+    let corrections: Vec<_> = rows
+        .into_iter()
+        .filter(|(r, watermark)| include_distilled || r.created_at > *watermark)
+        .map(|(r, watermark)| {
+            let (severity, suggested_rule) = match &r.source {
+                RawMemorySource::Correction {
+                    severity,
+                    suggested_rule,
+                } => (severity.clone(), suggested_rule.clone()),
+                _ => ("low".to_string(), None),
+            };
+            let distilled = r.created_at <= watermark;
+            json!({
+                "id": r.id,
+                "content": r.content,
+                "severity": severity,
+                "suggested_rule": suggested_rule,
+                "status": if distilled { "distilled" } else { "pending" },
+                "created_at": r.created_at,
+            })
+        })
+        .collect();
+    JsonRpcResponse::success(request.id, json!({ "corrections": corrections }))
 }
 
 // ============================================================================
@@ -1985,5 +2034,209 @@ mod list_facts_tests {
         let v = r.result.expect("success, not an error");
         assert!(v["facts"].as_array().unwrap().is_empty());
         assert_eq!(v["total"], 0);
+    }
+}
+
+/// The read half of the partition contract, exercised end to end through the
+/// handlers rather than through `memory_scope` alone.
+///
+/// Its own module because the property is cross-cutting — `listFacts`, `search`
+/// and `stats` have to agree with each other, and a test that lives inside any
+/// one of their modules reads as being about that one handler.
+#[cfg(test)]
+mod partition_union_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+    use serde_json::json;
+
+    /// D2, the behavioural half: on a stock loopback install every writer
+    /// composes `Personal(u-owner)`, so a reader handed the base persona the
+    /// agent picker holds must still find what those writers wrote.
+    ///
+    /// The runtime twin of `memory_scope`'s source-level census. Both are
+    /// needed and neither substitutes for the other: the census proves each
+    /// handler still *calls* the resolver, this proves calling it *works* —
+    /// the census would stay green if `read_partitions` itself started
+    /// returning the bare id.
+    ///
+    /// Seeded in BOTH partitions so "it found something" cannot pass by reading
+    /// only the org tier, which is what these handlers did before.
+    #[tokio::test]
+    async fn a_scoped_session_lists_the_notes_and_raws_its_own_writes_landed_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        for (partition, title) in [("main", "org-tier-note"), ("main__u-alice", "alices-note")] {
+            let note = KnowledgeNote {
+                title: title.into(),
+                category: "wiki".into(),
+                facts: vec!["a fact".into()],
+                ..Default::default()
+            };
+            db.index_note(&note, partition, "wiki").await.unwrap();
+
+            let mut raw = RawMemory::new(
+                format!("transcript in {partition}"),
+                RawMemorySource::Transcript,
+            );
+            raw.agent_id = partition.into();
+            db.insert_raw_memory(&raw).await.unwrap();
+        }
+
+        let scope = crate::scope::ScopeAttribution::personal("u-alice");
+
+        // --- memory.listFacts -------------------------------------------------
+        let req = JsonRpcRequest::with_id(
+            "memory.listFacts",
+            Some(json!({ "agent_id": "main", "limit": 50 })),
+            json!(1),
+        );
+        let resp =
+            crate::scope::with_scope(Some(scope.clone()), handle_list_facts(req, db.clone())).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        let titles: Vec<String> = body["facts"]
+            .as_array()
+            .expect("facts array")
+            .iter()
+            .map(|f| f["path"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            titles.iter().any(|p| p.contains("alices-note")),
+            "the note the writer actually wrote must be listed; got {titles:?}"
+        );
+        assert!(
+            titles.iter().any(|p| p.contains("org-tier-note")),
+            "the org tier stays readable - pre-P1 notes and every unscoped \
+             principal's writes live there; got {titles:?}"
+        );
+        assert_eq!(
+            body["total"], 2,
+            "`total` sizes the pager, so it must count the same union the list \
+             enumerated - a single-partition total paired with a union list is \
+             the phantom-page bug with the operands swapped"
+        );
+
+        // --- memory.search (raws) ---------------------------------------------
+        let req = JsonRpcRequest::with_id(
+            "memory.search",
+            Some(json!({ "agent_id": "main", "limit": 50 })),
+            json!(2),
+        );
+        let resp =
+            crate::scope::with_scope(Some(scope.clone()), handle_search(req, db.clone())).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(
+            body["total"], 2,
+            "raws are written through the same composed partition as notes"
+        );
+
+        // --- memory.stats ------------------------------------------------------
+        let req =
+            JsonRpcRequest::with_id("memory.stats", Some(json!({ "agent_id": "main" })), json!(3));
+        let resp =
+            crate::scope::with_scope(Some(scope.clone()), handle_stats(req, db.clone())).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(body["totalFacts"], 2, "stat card must agree with the list");
+        assert_eq!(
+            body["totalMemories"], 2,
+            "stat card must agree with the list"
+        );
+        // The galaxy cannot represent a union (`NoteNodeDto` has no agent_id),
+        // so `graph.query` reads the session's own partition alone - and these
+        // two counts label THAT picture, so they are scoped the same way. One
+        // note lives there; asserting it pins the asymmetry as deliberate.
+        assert_eq!(
+            body["totalGraphNodes"], 1,
+            "the graph counts describe the galaxy, which is single-partition by \
+             construction - see graph/query.rs"
+        );
+    }
+
+    /// With no ambient scope - internal, cron, A2A - every one of these
+    /// handlers is byte-for-byte what it was before D2: exactly the bare id,
+    /// nothing unioned in. The change is additive to scoped callers only.
+    #[tokio::test]
+    async fn an_unscoped_caller_still_sees_exactly_the_partition_it_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        for (partition, title) in [("main", "org-tier-note"), ("main__u-alice", "alices-note")] {
+            let note = KnowledgeNote {
+                title: title.into(),
+                category: "wiki".into(),
+                facts: vec!["a fact".into()],
+                ..Default::default()
+            };
+            db.index_note(&note, partition, "wiki").await.unwrap();
+        }
+
+        let req = JsonRpcRequest::with_id(
+            "memory.listFacts",
+            Some(json!({ "agent_id": "main", "limit": 50 })),
+            json!(1),
+        );
+        let resp = handle_list_facts(req, db.clone()).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(
+            body["total"], 1,
+            "no scope means no union: alice's partition must not appear"
+        );
+        assert!(body["facts"][0]["path"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("org-tier-note"));
+    }
+
+    /// P1 isolation survives the change: an explicit partition address is
+    /// honored verbatim, so naming somebody else's partition is still refused
+    /// rather than silently rewritten to the caller's own - which is what
+    /// composing a composed id would have done.
+    #[tokio::test]
+    async fn naming_a_foreign_partition_is_still_refused_not_rewritten() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        let note = KnowledgeNote {
+            title: "alices-note".into(),
+            category: "wiki".into(),
+            facts: vec!["a fact".into()],
+            ..Default::default()
+        };
+        db.index_note(&note, "main__u-alice", "wiki").await.unwrap();
+
+        let req = JsonRpcRequest::with_id(
+            "memory.listFacts",
+            Some(json!({ "agent_id": "main__u-alice", "limit": 50 })),
+            json!(1),
+        );
+        let resp = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                crate::scope::with_scope(
+                    Some(crate::scope::ScopeAttribution::personal("u-bob")),
+                    handle_list_facts(req, db.clone()),
+                ),
+            )
+            .await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(
+            body["total"], 0,
+            "bob must not read alice's partition, and must not have his request \
+             quietly rewritten into his own either"
+        );
     }
 }

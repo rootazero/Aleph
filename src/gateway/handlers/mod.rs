@@ -93,6 +93,7 @@ pub mod mcp_config;
 pub mod memory;
 pub mod memory_config;
 pub mod memory_curated;
+pub mod memory_scope;
 pub mod moa;
 pub mod oauth;
 pub mod pairing;
