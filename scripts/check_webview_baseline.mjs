@@ -69,6 +69,44 @@ if (baseline) {
   }
 }
 
+// ── Edge B: the probe list matches the declaration, BOTH directions ───────
+// Set equality, not containment: a one-directional check cannot tell a new
+// probe from a removed one, and both are drift.
+if (baseline) {
+  const PROBE = 'interfaces/webchat/baseline-probe.js';
+  let src;
+  try {
+    src = readFileSync(PROBE, 'utf8');
+  } catch (e) {
+    fail('B', `cannot read ${PROBE}: ${e.message}`);
+    src = null;
+  }
+  if (src) {
+    const declared = new Set([
+      ...baseline.css_probes.map(([prop, val]) => `${prop}|${val}`),
+      ...baseline.js_probes,
+    ]);
+    const found = new Set();
+    // CSS probes appear as the two-element array literals in the cssProbes table.
+    for (const m of src.matchAll(/\[\s*'([^']+)'\s*,\s*'([^']+)'\s*\]/g)) {
+      found.add(`${m[1]}|${m[2]}`);
+    }
+    // JS probes appear as bare identifier paths in the two typeof/property checks.
+    for (const name of baseline.js_probes) {
+      // Match the LAST segment as a property access or a bare global, so
+      // "CSS.registerProperty" matches `typeof CSS.registerProperty` and
+      // "WebAssembly" matches `typeof WebAssembly`.
+      if (new RegExp(`\\b${name.replace('.', '\\.')}\\b`).test(src)) found.add(name);
+    }
+    for (const d of declared) {
+      if (!found.has(d)) fail('B', `${PROBE} does not probe declared capability ${JSON.stringify(d)}`);
+    }
+    for (const f of found) {
+      if (!declared.has(f)) fail('B', `${PROBE} probes ${JSON.stringify(f)}, which is not declared in ${BASELINE} — add it to the declaration or drop the probe`);
+    }
+  }
+}
+
 if (problems.length) {
   console.error(problems.join('\n'));
   console.error(`\n${problems.length} baseline violation(s). The declaration is ${BASELINE}; fix the consumer, not the declaration, unless you are deliberately moving the floor.`);
