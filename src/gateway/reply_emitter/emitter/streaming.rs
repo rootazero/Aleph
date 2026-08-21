@@ -559,7 +559,11 @@ impl EventEmitter for ReplyEmitter {
                             // that does; the real agent-loop drain always emits
                             // `is_final: false`. Same answer arriving through a
                             // second door, so it latches the same flag rather
-                            // than getting a rule of its own.
+                            // than getting a rule of its own — and closes it,
+                            // for the same reason `RunComplete` does: an opener
+                            // whose closer is "some later caller will do it" is
+                            // an invariant about call order, not about this
+                            // block.
                             self.begin_answering();
                             let text = std::mem::take(&mut *buffer);
                             drop(buffer);
@@ -570,6 +574,7 @@ impl EventEmitter for ReplyEmitter {
                                 self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
                                     .await;
                             }
+                            self.end_answering();
                         }
                     }
                     // Typewriter mode: do nothing here, wait for RunComplete

@@ -316,14 +316,16 @@ impl ReplyEmitter {
         self.answering.store(true, Ordering::SeqCst);
     }
 
-    /// Close the latch.
+    /// Close the latch. **Every [`ReplyEmitter::begin_answering`] pairs with
+    /// one of these, in the same block.**
     ///
-    /// `RunComplete` is the terminal frame for this purpose — it is the only
-    /// event that carries a run's answer, so the latch is open for exactly its
-    /// duration and anything this emitter sends afterwards (a `RunError` that
-    /// somehow followed, a late media caption, whatever the next author adds)
-    /// is not badged. A latch left open would badge it, which is why this is a
-    /// pair rather than a one-way flag.
+    /// There are two answer deliveries, not one: `RunComplete`, and the
+    /// instant-mode flush on a final `ResponseChunk`. Each opens the latch,
+    /// delivers, and closes it — so anything this emitter sends outside those
+    /// two (a `RunError` that followed, a late media caption, whatever the next
+    /// author adds) is not badged. Pairing locally rather than relying on a
+    /// later caller to close is the point: an unpaired opener is an invariant
+    /// about call order, which holds until someone changes the order.
     pub(crate) fn end_answering(&self) {
         self.answering.store(false, Ordering::SeqCst);
     }

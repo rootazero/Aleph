@@ -1865,13 +1865,6 @@ async fn a_streamed_side_answer_is_badged_when_it_settles_with_nothing_left_to_w
     );
 }
 
-/// The control for the test above: the same edit-capable rig, the same stream,
-/// an ordinary message — and **no edit at all**.
-///
-/// The fix issues an edit that would otherwise not happen. Asserting only that
-/// an ordinary settle is unbadged would pass even if it had started making an
-/// extra API call on every streamed reply on every channel that can edit; this
-/// asserts the byte-identical no-op that claim rests on.
 /// The badge latch closes with the answer, so nothing sent afterwards inherits
 /// it.
 ///
@@ -1944,6 +1937,14 @@ async fn the_reasoning_preview_is_never_badged_though_it_follows_the_latch() {
     );
 }
 
+/// The control for `a_streamed_side_answer_is_badged_when_it_settles_with_nothing_left_to_write`:
+/// the same edit-capable rig, the same stream, an ordinary message — and **no
+/// edit at all**.
+///
+/// The fix issues an edit that would otherwise not happen. Asserting only that
+/// an ordinary settle is unbadged would pass even if it had started making an
+/// extra API call on every streamed reply on every channel that can edit; this
+/// asserts the byte-identical no-op that claim rests on.
 #[tokio::test]
 async fn an_ordinary_streamed_answer_settles_without_an_extra_edit() {
     let rig = ChannelRig::editing().await;
