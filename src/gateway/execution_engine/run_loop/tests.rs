@@ -445,3 +445,55 @@ fn scope_stamping_producers_are_all_accounted_for() {
          lists things that stopped existing stops being read:\n  {stale:?}"
     );
 }
+
+// ============================================================================
+// G13 — spend::ambient_principal / spend::principal_from_metadata agree
+// ============================================================================
+//
+// `crate::spend`'s two principal resolvers need this exact function's
+// seeding behavior to prove they agree. `with_request_scope` is `pub(super)`
+// here and unreachable from `src/spend/`; per-principal-spend-budget task 3
+// rejected widening that visibility for test convenience, so the guard
+// lives here instead, where `with_request_scope` is already in scope.
+
+#[tokio::test]
+async fn spend_principal_resolvers_agree_when_metadata_carries_an_author() {
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(
+        crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+        "u-alice".to_string(),
+    );
+    let request = minimal_request(metadata);
+
+    // Admission arm: resolved off the request's own metadata, before the
+    // task-local nest exists.
+    let admission = crate::spend::principal_from_metadata(&request.metadata);
+
+    // Floor arm: resolved from inside the nest `with_request_scope` seeds.
+    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+
+    assert_eq!(
+        admission, floor,
+        "with_request_scope seeds CURRENT_ROOM_AUTHOR from request.metadata[AUTHOR_USER_KEY] \
+         verbatim, so the admission and floor arms must resolve the same principal"
+    );
+    assert_eq!(admission, crate::spend::Principal::User("u-alice".to_string()));
+}
+
+#[tokio::test]
+async fn spend_principal_resolvers_agree_falling_back_to_the_scope_owner() {
+    let mut metadata = std::collections::HashMap::new();
+    // No AUTHOR_USER_KEY: both resolvers must fall back to the room/session
+    // owner carried in the scope attribution.
+    crate::scope::stamp_metadata(
+        &mut metadata,
+        &crate::scope::ScopeAttribution::personal("u-owner"),
+    );
+    let request = minimal_request(metadata);
+
+    let admission = crate::spend::principal_from_metadata(&request.metadata);
+    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+
+    assert_eq!(admission, floor);
+    assert_eq!(admission, crate::spend::Principal::User("u-owner".to_string()));
+}
