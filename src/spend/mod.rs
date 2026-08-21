@@ -126,6 +126,16 @@ pub enum Limit {
 
 /// The admission/floor verdict: allowed with the window's current spend, or
 /// denied naming which ceiling was hit and what had already been spent.
+///
+/// `spent` is always `principal`'s own figures — on `Allowed`, and on
+/// **both** `Denied` shapes, including `Denied { limit: Limit::Total, .. }`.
+/// It never carries the machine total, even when the machine total is the
+/// axis that fired. This is load-bearing, not a style choice: `Limit::Total`
+/// is deliberately fieldless *specifically* so the machine-wide figure has
+/// no surface to reach a caller who may not be authorized to see it (see
+/// its doc). If `spent` substituted the machine total in for the `Total`
+/// arm, that number would ride back in through this sibling field —
+/// defeating the entire reason `Limit::Total` carries none of its own.
 #[derive(Debug, Clone)]
 pub enum Verdict {
     Allowed(Spent),
@@ -490,6 +500,20 @@ fn zero_spent(period_start_ms: i64, period_end_ms: i64) -> Spent {
 /// as the failure lasts would turn a database hiccup into a full outage,
 /// which is a worse failure mode than a bounded, loudly-logged window of
 /// unmetered spend (P7: graceful degradation over a hard failure).
+///
+/// **This is a deliberate exception to "a gate keyed on state must treat
+/// `Err` as refusal, not passage"**, not an oversight of it. That criterion
+/// is for *authorization* gates, where an unreadable state is a security
+/// unknown and passing it is a hole. `spend::check` is a cost ceiling, not
+/// an authorization boundary — the plan already documents it as "a ceiling,
+/// not a hard cap" (the check-before/record-after ordering permits a
+/// bounded overshoot by design). Failing closed here would not preserve
+/// safety; it would convert a transient SQLite read error into every LLM
+/// call in the process being refused, which is exactly the "a door with no
+/// handle is not a gate, it is a wall" shape — and the realistic operator
+/// response to a wall is to disable the feature outright, the worst
+/// available outcome. Pinned by
+/// `tests::ledger_read_error_fails_open_and_is_logged_not_denied`.
 fn resolve_read(
     result: anyhow::Result<Spent>,
     period_start_ms: i64,

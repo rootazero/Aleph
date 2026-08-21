@@ -416,6 +416,158 @@ fn the_window_rides_both_allowed_and_denied_verdicts() {
     }
 }
 
+/// `Denied { limit: Limit::Total, spent }` must carry `alice`'s own spend in
+/// `spent`, never the machine total — see `Verdict`'s doc on why this is
+/// load-bearing (the machine total must not ride back in through the
+/// sibling field `Limit::Total` was made fieldless to keep it off). Alice's
+/// own figure ($5) and the machine total ($50) are made deliberately
+/// unequal so the assertion cannot pass by coincidence.
+#[test]
+fn denied_total_carries_the_principals_own_spend_not_the_machine_total() {
+    let policy = SpendPolicy {
+        total_usd: Some(50.0),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000i64;
+    let period_start_ms = period::period_start_ms(now_ms, policy.period);
+
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    let bob = Principal::User("u-bob".to_string());
+    ledger.record(&alice, period_start_ms, Delta::Usd(5.0)).unwrap();
+    ledger.record(&bob, period_start_ms, Delta::Usd(50.0)).unwrap();
+    // alice alone hasn't blown any per-user ceiling (none is configured);
+    // alice + bob together blow the $50 machine ceiling.
+    assert_eq!(
+        ledger.total_for(period_start_ms).unwrap().usd,
+        55.0,
+        "test setup: the machine total must differ from alice's own spend"
+    );
+
+    match check_with(&alice, now_ms, &policy, &ledger) {
+        Verdict::Denied {
+            limit: Limit::Total,
+            spent,
+        } => {
+            assert_eq!(
+                spent.usd, 5.0,
+                "spent must be alice's own $5, never the machine's $55 total"
+            );
+        }
+        other => panic!("expected Denied{{ limit: Limit::Total, .. }}, got {other:?}"),
+    }
+}
+
+// ============================================================================
+// Ledger read errors fail open (see `resolve_read`'s doc for the ruling and
+// why this differs from an authorization gate's "Err means refusal")
+// ============================================================================
+
+/// A `SpendLedger` whose every read fails. Pins the fail-open direction
+/// `resolve_read` documents: a read error must not be turned into a denial.
+struct ErroringLedger;
+
+impl SpendLedger for ErroringLedger {
+    fn record(&self, _principal: &Principal, _period_start_ms: i64, _delta: Delta) -> anyhow::Result<()> {
+        anyhow::bail!("ErroringLedger: record is unavailable")
+    }
+
+    fn spent_for(&self, _principal: &Principal, _period_start_ms: i64) -> anyhow::Result<Spent> {
+        anyhow::bail!("ErroringLedger: spent_for is unavailable")
+    }
+
+    fn total_for(&self, _period_start_ms: i64) -> anyhow::Result<Spent> {
+        anyhow::bail!("ErroringLedger: total_for is unavailable")
+    }
+
+    fn sweep_before(&self, _period_start_ms: i64) -> anyhow::Result<usize> {
+        anyhow::bail!("ErroringLedger: sweep_before is unavailable")
+    }
+}
+
+/// A `tracing_subscriber::Layer` that records every ERROR-level event's
+/// formatted `message` field, scoped to one closure via
+/// `tracing::subscriber::with_default` — no new dependency, just the
+/// `tracing`/`tracing-subscriber` machinery this crate already depends on
+/// everywhere else. Holds an `Arc<Mutex<..>>` (cheap to clone, so the layer
+/// itself can be moved by value into `.with()` while `with_captured_error_events`
+/// keeps its own handle to read the events back out afterward) rather than
+/// implementing `Layer` for `Arc<Self>` directly, which `tracing_subscriber`
+/// does not provide a blanket impl for.
+#[derive(Clone)]
+struct CapturedErrorEvents(Arc<Mutex<Vec<String>>>);
+
+struct MessageVisitor(String);
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0 = format!("{value:?}");
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedErrorEvents {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if *event.metadata().level() != tracing::Level::ERROR {
+            return;
+        }
+        let mut visitor = MessageVisitor(String::new());
+        event.record(&mut visitor);
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(visitor.0);
+    }
+}
+
+/// Runs `f` with a subscriber installed that captures every ERROR-level
+/// event fired during it, and returns `f`'s result alongside those events'
+/// messages.
+fn with_captured_error_events<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let captured = CapturedErrorEvents(Arc::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::registry().with(captured.clone());
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let events = captured.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    (result, events)
+}
+
+/// Fix for concern 1 in the task-5 report: a `SpendLedger` read error must
+/// fail open (`Allowed`, spend treated as zero for this check) rather than
+/// deny — and it must be logged, not silently swallowed. The per-user
+/// ceiling is set low enough ($0.01) that any real read succeeding with
+/// nonzero spend would deny; the `Allowed` verdict below can therefore only
+/// come from the fail-open path treating the failed read as zero, not from
+/// the ceiling being unreachably high.
+#[test]
+fn ledger_read_error_fails_open_and_is_logged_not_denied() {
+    let policy = SpendPolicy {
+        per_user_usd: Some(0.01),
+        ..SpendPolicy::default()
+    };
+    let now_ms = 1_700_000_000_000i64;
+    let alice = Principal::User("u-alice".to_string());
+
+    let (verdict, error_events) =
+        with_captured_error_events(|| check_with(&alice, now_ms, &policy, &ErroringLedger));
+
+    match verdict {
+        Verdict::Allowed(spent) => {
+            assert_eq!(spent.usd, 0.0, "a failed read must be treated as zero spend");
+        }
+        other => panic!("a ledger read error must fail open (Allowed), not deny: {other:?}"),
+    }
+    assert_eq!(
+        error_events.len(),
+        1,
+        "exactly one ERROR event must fire for the one failed spent_for read; got {error_events:?}"
+    );
+    assert!(
+        error_events[0].contains("spend::check") && error_events[0].contains("spent_for"),
+        "the logged error must name what failed, got: {:?}",
+        error_events[0]
+    );
+}
+
 // ============================================================================
 // G15 — src/spend/ never calls the agent-shaped actor resolvers
 // ============================================================================
