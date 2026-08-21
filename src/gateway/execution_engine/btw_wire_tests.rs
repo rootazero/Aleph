@@ -1661,8 +1661,8 @@ fn bundled_skill_command_words() -> Vec<String> {
 /// Both are collected here, through the loader's own calls rather than a second
 /// parser: `manifest::parse_manifest_from_dir_sync` (the exact call
 /// `tool_catalog_init` makes) for `tools_v2`, and `manifest::parsers::parse_commands_dir`
-/// + `SkillRegistration::qualified_name()` (the exact derivation boot registers)
-/// for commands.
+/// with `SkillRegistration::qualified_name()` (the exact derivation boot
+/// registers) for commands.
 ///
 /// ⚠️ **Reads the tree from disk, not from `crate::bundled::BUNDLED_PLUGINS`.**
 /// The parser takes a `&Path` and the plugin formats are four files in a
