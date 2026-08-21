@@ -735,4 +735,83 @@ mod tests {
             }
         }
     }
+
+    // -------------------------------------------------------------------
+    // `/btw` side questions: the withheld `PlanGate`.
+    // -------------------------------------------------------------------
+
+    /// The `&& !side_question` clause at the mint site, pinned by effect
+    /// rather than by prose.
+    ///
+    /// A side question always resolves to `Plan` — the read-only ceiling puts
+    /// it there — so it satisfies the gate's own condition and is still
+    /// denied the cell: a `PlanGate` is the one thing that can move a turn's
+    /// tier mid-run, and a side question's ceiling is a bound on one turn with
+    /// nothing to hand back to. Dropping the clause is
+    /// observable-consequence-free TODAY (`scratchpad`, the only thing that
+    /// flips a gate, is revoked for a side question by `PLAN_REACHABLE_TOOLS`),
+    /// which is exactly the shape a prose-only ruling loses to the next
+    /// sincere fixer.
+    ///
+    /// The control arm is what keeps the side arm from passing vacuously: a
+    /// turn that reached `Plan` the ordinary way, on the same engine and the
+    /// same agent, DOES mint one — so a green side arm reads "withheld", not
+    /// "nothing mints here". The tier assertion carries the same load in the
+    /// other direction: `plan_gate.is_none()` would also be true of a turn
+    /// that never reached `Plan` at all.
+    #[tokio::test]
+    async fn a_side_question_mints_no_plan_gate_but_an_ordinary_plan_turn_does() {
+        use super::super::slash_command::stamp_btw;
+        use super::super::tests::{gate_test_agent, gate_test_request, test_engine};
+        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+        use crate::routing::session_key::SessionKey;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let engine = test_engine();
+        let agent = gate_test_agent(&temp, "btw-plan-gate").await;
+        let key = SessionKey::main("btw-plan-gate");
+
+        // The metadata key comes from `execute()`'s own first statement, not
+        // from a hand-written insert — the flag under test is the one the
+        // production path produces.
+        let mut side = gate_test_request(&key, "run-btw-plan-gate-side");
+        side.input = "/btw what does this module do?".to_string();
+        stamp_btw(&side.input, &mut side.metadata);
+        let side = engine.resolve_turn_permissions(&side, &agent).await;
+
+        assert!(
+            side.side_question,
+            "`stamp_btw` must have marked this turn — with the flag off the \
+             rest of this test asserts nothing"
+        );
+        assert_eq!(
+            side.tier,
+            ExecTier::Plan,
+            "the read-only ceiling must have put this turn at `Plan`, so the \
+             withheld gate is withheld from a turn that qualifies for it"
+        );
+        assert!(
+            side.plan_gate.is_none(),
+            "a side question must mint no `PlanGate`: its ceiling is a bound \
+             on this one turn, with nothing to hand back to when it ends"
+        );
+
+        let mut plan = gate_test_request(&key, "run-btw-plan-gate-control");
+        plan.metadata.insert(
+            EXEC_TIER_SESSION_KEY.to_string(),
+            ExecTier::Plan.id().to_string(),
+        );
+        let plan = engine.resolve_turn_permissions(&plan, &agent).await;
+
+        assert!(
+            !plan.side_question,
+            "the control turn is not a side question"
+        );
+        assert_eq!(plan.tier, ExecTier::Plan);
+        assert!(
+            plan.plan_gate.is_some(),
+            "a conversation that asked to plan still gets its handoff cell — \
+             without this the side arm would pass on an engine that mints none"
+        );
+    }
 }

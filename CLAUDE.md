@@ -588,7 +588,7 @@
 | `src/tool_output/` | 判据清单 §2 · FEATURE_LOCATOR §2.7 §3.14 |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · §3.2–§3.14 |
 | `src/gateway/btw/` | §4.14（`/btw` 侧问）· [SECURITY.md](docs/reference/SECURITY.md) 的只读地板一节 · **改到达顺序或退休面前先读 §4.14 的机制图**，真机 `qa/btw_tui/run.sh {frames,promote}` |
-| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §4.14 §5.6 §5.18 §6.9 · **改 `interfaces/<channel>/` 或通道接线前跑 `qa/channels/run.sh`**（16 条断言：三个通道真被构造 · msteams 对照组 · feishu `start()` 对 mock Lark 真拨号 · webhook 事件→agent 回合→回复打回 `im/v1/messages`） |
+| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · `src/gateway/CLAUDE.md` · §4.8 §4.14 §5.6 §5.18 §6.9 · **改 `interfaces/<channel>/` 或通道接线前跑 `qa/channels/run.sh`**（24 条断言，两阶段：`reach` — 三个通道真被构造 · msteams 对照组 · qq 扁平拼法过了配置解析 · feishu `start()` 对 mock Lark 真拨号 · webhook 事件→agent 回合→回复打回 `im/v1/messages`；`errors` — 旧版 400+99991400 限频被重试且退避读 `x-ogw-ratelimit-reset` · 403 报状态码且不重试 · 无限频码的 400 是终态） |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · §2.5 §2.9 §2.16 |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · §3.6 §4.9 |
 | `src/browser/` `src/builtin_tools/browser_tools/` | §3.12 · 判据清单 §9（外部 CLI/MCP 适配器）· **真机 QA `qa/browser_managed/run.sh {open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——两个 driver 的每个动词都有效果断言，改这两个目录前跑一遍** |

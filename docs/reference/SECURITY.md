@@ -355,7 +355,7 @@ green. Narrow where the verdict is actually made.
 
 Two further consequences:
 
-- **No `PlanGate` is minted** (`turn_permissions.rs:337`). The gate is the one
+- **No `PlanGate` is minted** (`turn_permissions.rs:339`). The gate is the one
   thing that can move a turn's tier mid-run, and a side question's ceiling is not
   the conversation asking to plan — it is a bound on this single turn with
   nothing to hand back to when the turn ends. Withholding it makes the bound

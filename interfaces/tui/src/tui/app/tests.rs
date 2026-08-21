@@ -1565,7 +1565,7 @@ fn switching_session_retires_the_provider_picker() {
 }
 
 // ---------------------------------------------------------------------------
-// Cross-session frame routing (btw side-quest, task 1)
+// Cross-session frame routing: the `frame_belongs_here` guard
 // ---------------------------------------------------------------------------
 //
 // Background runs, cron runs and delegated subagents all publish frames
