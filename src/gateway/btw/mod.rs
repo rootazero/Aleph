@@ -310,4 +310,6 @@ pub(crate) fn format_side_answer(text: &str) -> String {
 }
 
 #[cfg(test)]
+mod guard_tests;
+#[cfg(test)]
 mod tests;
