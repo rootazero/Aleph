@@ -1796,3 +1796,172 @@ fn a_run_resumes_appearing_after_switching_back_to_its_own_session() {
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `/btw` side questions
+// ---------------------------------------------------------------------------
+
+/// Drive a whole side question through the frame path exactly as the gateway
+/// would, and prove **nothing about it** reaches the main conversation.
+///
+/// This is the assertion Step 5 of this task makes on a real machine, made
+/// here where it can be run on every commit. It is also the one that fails if
+/// the intercept is removed or moved after the cross-session guard: the answer
+/// would land in `messages` as an assistant bubble in a conversation the side
+/// question was deliberately kept out of.
+///
+/// The session key on every side frame is the DERIVED one — that is what the
+/// engine emits (`execute.rs` redirects before it emits `RunAccepted`), and it
+/// is why keying the overlay on the key was never an option from a client that
+/// cannot compute it.
+#[test]
+fn no_side_question_frame_reaches_the_main_transcript() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    let before = state.messages.len();
+
+    // A main run is in flight — a side question exists to be asked *while*
+    // one is.
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-main".into(),
+        session_key: "agent:main:main".into(),
+        accepted_at: "2026-08-20T00:00:00Z".into(),
+    });
+
+    // The user asks a side question; the send site claims the run it got back.
+    state.open_btw("what files are in src?".into());
+    state.btw.claim_pending_run("run-side".into());
+
+    for event in [
+        StreamEvent::RunAccepted {
+            run_id: "run-side".into(),
+            session_key: "agent:main:ephemeral:btw-abc123".into(),
+            accepted_at: "2026-08-20T00:00:01Z".into(),
+        },
+        StreamEvent::AgentTrace {
+            run_id: "run-side".into(),
+            seq: 1,
+            event: AgentTraceEvent::ToolCallStarted {
+                iteration: 1,
+                call: aleph_protocol::AgentTraceToolCallStart {
+                    tool_id: "t1".into(),
+                    tool_name: "file_read".into(),
+                    input: serde_json::json!({}),
+                },
+            },
+        },
+        StreamEvent::ResponseChunk {
+            run_id: "run-side".into(),
+            seq: 2,
+            content: "main.rs, lib.rs".into(),
+            chunk_index: 0,
+            is_final: false,
+            is_intermediate: false,
+        },
+        StreamEvent::RunComplete {
+            run_id: "run-side".into(),
+            seq: 3,
+            summary: RunSummary::default(),
+            total_duration_ms: 12,
+        },
+    ] {
+        state.handle_gateway_event(event);
+    }
+
+    // The overlay has the whole exchange…
+    let exchange = state.btw.current().expect("the side question settled");
+    assert_eq!(exchange.question, "what files are in src?");
+    assert_eq!(exchange.answer, "main.rs, lib.rs");
+
+    // …and the main conversation has none of it.
+    assert_eq!(
+        state.messages.len(),
+        before,
+        "a side question must add nothing to the main transcript, got: {:?}",
+        &state.messages[before..]
+    );
+    for message in &state.messages {
+        let text = match message {
+            ChatMessage::User { content, .. }
+            | ChatMessage::System { content }
+            | ChatMessage::Assistant { content, .. } => content,
+        };
+        assert!(
+            !text.contains("main.rs, lib.rs"),
+            "the side answer leaked into the transcript: {text}"
+        );
+    }
+
+    // The main run is untouched: the side question neither claimed the run
+    // slot nor cleared it on its own completion.
+    assert_eq!(
+        state.current_run,
+        Some("run-main".into()),
+        "a side question's RunComplete must not end the main run"
+    );
+}
+
+/// The intercept must be exactly as wide as the runs the overlay asked for.
+/// A frame from the main run has to reach the transcript even while a side
+/// question is streaming, or `/btw` would silently freeze the conversation it
+/// was supposed to run beside.
+#[test]
+fn a_side_question_in_flight_does_not_swallow_the_main_run() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-main".into(),
+        session_key: "agent:main:main".into(),
+        accepted_at: "2026-08-20T00:00:00Z".into(),
+    });
+    state.open_btw("side".into());
+    state.btw.claim_pending_run("run-side".into());
+
+    state.handle_gateway_event(StreamEvent::ResponseChunk {
+        run_id: "run-main".into(),
+        seq: 1,
+        content: "the main answer".into(),
+        chunk_index: 0,
+        is_final: false,
+        is_intermediate: false,
+    });
+
+    match state.messages.last().expect("a message") {
+        ChatMessage::Assistant { content, .. } => assert_eq!(content, "the main answer"),
+        other => panic!("expected the main run's assistant bubble, got: {other:?}"),
+    }
+    assert!(
+        state
+            .btw
+            .active
+            .as_ref()
+            .expect("still answering")
+            .answer
+            .is_empty(),
+        "the main run's text must not be routed into the side question"
+    );
+}
+
+/// An `AskUser` frame carries no run id, so it is exempt from the screen's
+/// cross-session guard by design. The overlay must not swallow it — a parked
+/// question hidden behind an overlay that cannot answer it is a 600-second
+/// stall with no visible cause.
+#[test]
+fn the_overlay_does_not_swallow_a_run_less_frame() {
+    let mut state = AppState::new("agent:main:main".into(), "m".into());
+    state.open_btw("side".into());
+    state.btw.claim_pending_run("run-side".into());
+
+    state.handle_gateway_event(StreamEvent::AskUser {
+        run_id: String::new(),
+        seq: 1,
+        session_key: "agent:main:main".into(),
+        question: "which one?".into(),
+        options: vec!["a".into(), "b".into()],
+        questions: Vec::new(),
+        answered: 0,
+    });
+
+    assert!(
+        state.dialog.is_some(),
+        "a session-keyed clarification must still reach its overlay"
+    );
+}
