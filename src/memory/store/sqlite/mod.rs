@@ -46,6 +46,28 @@ impl Default for RetrievalTuning {
 }
 
 /// SQLite-backed memory store using sqlite-vec for vector operations.
+///
+/// # Deferred risk: sync `Mutex<Connection>` blocking the tokio executor
+///
+/// `conn` is `std::sync::Mutex<Connection>` (via [`crate::sync_primitives`])
+/// and `lock_conn!` in `notes/store_impl.rs` holds the guard across a full
+/// SQLite query — which is fine for single-shot ops but, under high
+/// concurrency (many simultaneous note-store / dream-report / recall-signal
+/// calls), causes the holding tokio worker thread to block until the query
+/// returns. With several long queries queued, the executor's parallelism
+/// collapses to one-at-a-time.
+///
+/// **Planned fix (next sprint, out of scope here):** switch to
+/// `tokio::sync::Mutex` and wrap every `lock_conn!` call site in
+/// `tokio::task::spawn_blocking` so SQLite work runs on the blocking pool
+/// instead of the executor. The 1000+-line `impl NoteStore` block in
+/// `notes/store_impl.rs` and the 7 helper files
+/// (`dream_reports.rs`, `memory_write_decisions.rs`, `query_filed.rs`,
+/// `raw_memories.rs`, `recall_signals.rs`, `routing_experience.rs`) all
+/// participate. Until that lands, treat high-concurrency note-store usage
+/// as a known performance ceiling rather than a correctness bug.
+///
+/// See `review-results/` for the original risk write-up.
 pub struct SqliteMemoryBackend {
     conn: Mutex<Connection>,
     tuning: RetrievalTuning,
