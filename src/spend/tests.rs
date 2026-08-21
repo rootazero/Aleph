@@ -26,6 +26,19 @@ fn as_key_unattributed_returns_the_reserved_sentinel() {
     assert_eq!(Principal::Unattributed.as_key(), "@unattributed");
 }
 
+#[test]
+fn from_key_is_the_inverse_of_as_key_for_a_user() {
+    assert_eq!(
+        Principal::from_key("u-alice"),
+        Principal::User("u-alice".to_string())
+    );
+}
+
+#[test]
+fn from_key_recognises_the_unattributed_sentinel() {
+    assert_eq!(Principal::from_key("@unattributed"), Principal::Unattributed);
+}
+
 // ============================================================================
 // principal_from_metadata
 // ============================================================================
@@ -209,6 +222,55 @@ fn sweep_before_removes_only_rows_strictly_older_than_the_cutoff() {
     assert_eq!(ledger.spent_for(&alice, 3_000).unwrap().usd, 3.0);
 }
 
+#[test]
+fn principals_in_orders_by_usd_descending_then_key_ascending() {
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    let bob = Principal::User("u-bob".to_string());
+    let carol = Principal::User("u-carol".to_string());
+
+    // Two principals tie on `usd` — must break by key, not by insertion or
+    // hash order, or the CLI table would reshuffle between two calls on
+    // unchanged data.
+    ledger.record(&carol, 1_000, Delta::Usd(5.0)).unwrap();
+    ledger.record(&alice, 1_000, Delta::Usd(5.0)).unwrap();
+    ledger.record(&bob, 1_000, Delta::Usd(9.0)).unwrap();
+    // A different period must not appear in this window's rows.
+    ledger.record(&alice, 2_000, Delta::Usd(100.0)).unwrap();
+
+    let rows = ledger.principals_in(1_000).unwrap();
+    let keys: Vec<&str> = rows.iter().map(|(p, _)| p.as_key()).collect();
+    assert_eq!(
+        keys,
+        vec!["u-bob", "u-alice", "u-carol"],
+        "9.0 first, then the 5.0 tie broken by key ascending"
+    );
+    for (_, spent) in &rows {
+        assert_eq!(
+            spent.period_end_ms, None,
+            "the ledger does not know period length — see Spent::period_end_ms's doc"
+        );
+    }
+}
+
+#[test]
+fn principals_in_reconstructs_the_unattributed_sentinel() {
+    let ledger = InMemorySpendLedger::default();
+    ledger
+        .record(&Principal::Unattributed, 1_000, Delta::Usd(1.0))
+        .unwrap();
+
+    let rows = ledger.principals_in(1_000).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, Principal::Unattributed);
+}
+
+#[test]
+fn principals_in_is_empty_for_a_period_with_no_rows() {
+    let ledger = InMemorySpendLedger::default();
+    assert!(ledger.principals_in(1_000).unwrap().is_empty());
+}
+
 // ============================================================================
 // check_with (the injectable core of `check`)
 // ============================================================================
@@ -236,6 +298,10 @@ impl SpendLedger for PanicOnAnyCall {
 
     fn sweep_before(&self, _period_start_ms: i64) -> anyhow::Result<usize> {
         panic!("check_with must not call SpendLedger::sweep_before when the policy is disabled");
+    }
+
+    fn principals_in(&self, _period_start_ms: i64) -> anyhow::Result<Vec<(Principal, Spent)>> {
+        panic!("check_with must not call SpendLedger::principals_in when the policy is disabled");
     }
 }
 
@@ -482,6 +548,10 @@ impl SpendLedger for ErroringLedger {
 
     fn sweep_before(&self, _period_start_ms: i64) -> anyhow::Result<usize> {
         anyhow::bail!("ErroringLedger: sweep_before is unavailable")
+    }
+
+    fn principals_in(&self, _period_start_ms: i64) -> anyhow::Result<Vec<(Principal, Spent)>> {
+        anyhow::bail!("ErroringLedger: principals_in is unavailable")
     }
 }
 

@@ -30,6 +30,7 @@ pub mod plan;
 pub mod plugins;
 pub mod providers;
 pub mod session_thread;
+pub mod spend;
 pub mod subagent_tree;
 pub mod team_topic;
 pub mod thinking;

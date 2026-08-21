@@ -115,6 +115,7 @@ pub mod session;
 pub mod dreaming;
 pub mod extensions;
 pub mod skills;
+pub mod spend;
 pub mod subagent;
 pub mod system_info;
 pub mod task_error;

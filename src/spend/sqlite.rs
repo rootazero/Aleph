@@ -245,4 +245,45 @@ impl SpendLedger for SqliteSpendLedger {
 
         Ok(removed)
     }
+
+    fn principals_in(&self, period_start_ms: i64) -> anyhow::Result<Vec<(Principal, Spent)>> {
+        // Deliberately reads the table, not the cache — same reason as
+        // `total_for`: the write-through cache only holds rows this process
+        // has touched via `record`/`spent_for` since boot, so a cache-only
+        // enumeration would silently omit every row written before this
+        // process started or by another process. `ORDER BY` in SQL rather
+        // than sorting in Rust for the same reason `total_for` sums in SQL:
+        // one round trip, and the ordering the trait method's doc requires
+        // (`usd` descending, then key ascending) is exactly what the
+        // database is already good at.
+        let conn = self.store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT principal_id, usd, unpriced_calls, partial_calls FROM spend_ledger \
+             WHERE period_start = ?1 ORDER BY usd DESC, principal_id ASC",
+        )?;
+        let rows: Vec<(String, f64, i64, i64)> = stmt
+            .query_map(rusqlite::params![period_start_ms], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        drop(stmt);
+        drop(conn);
+
+        Ok(rows
+            .into_iter()
+            .map(|(principal_id, usd, unpriced_calls, partial_calls)| {
+                (
+                    Principal::from_key(&principal_id),
+                    Spent {
+                        usd,
+                        unpriced_calls: unpriced_calls as u64,
+                        partial_calls: partial_calls as u64,
+                        period_start_ms,
+                        // See `Spent::period_end_ms`'s doc.
+                        period_end_ms: None,
+                    },
+                )
+            })
+            .collect())
+    }
 }

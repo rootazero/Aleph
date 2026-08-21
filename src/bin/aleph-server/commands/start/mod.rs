@@ -685,6 +685,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     alephcore::gateway::handlers::security_audit::handle_query(req, s).await
                 }
             });
+        // The read face of the per-principal spend ledger (`SpendLedger`,
+        // written by the metering floor and the run-admission gate). No
+        // store handle to capture: everything it reads
+        // (`spend::current_policy`, `spend::global_ledger`) is a
+        // process-wide handle already — see `handlers::spend`'s module doc.
+        server
+            .handlers_mut()
+            .register("spend.query", alephcore::gateway::handlers::spend::handle_query);
     }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).

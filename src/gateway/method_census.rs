@@ -399,6 +399,7 @@ mod tests {
     ("skills.remove", Class::Admin),
     ("skills.status", Class::Admin),
     ("skills.update", Class::Admin),
+    ("spend.query", Class::Admin),
     ("subagent.tree", Class::Open),
     ("system.info", Class::Open),
     ("teams.acp_member.add", Class::Open),

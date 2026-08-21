@@ -120,6 +120,14 @@ const ADMIN_PREFIXES: &[&str] = &[
     // so a future `security.audit.export` / `security.posture.*` is gated the
     // day it is registered rather than the day somebody notices.
     "security.",
+    // The per-principal spend ledger (`spend.query`). Names every principal
+    // on the box and their dollar figures — org-level accountability, not
+    // caller's-own-data, same reasoning as `security.` above. Prefixed
+    // rather than method-gated so a future `spend.*` sibling (e.g. a
+    // policy-history read) is gated the day it is registered rather than
+    // the day somebody notices. Deliberately no `spend.reset` exists at
+    // all — see `aleph_protocol::spend`'s module doc.
+    "spend.",
     "services.", // background service lifecycle (start/stop/list/status) —
     // server process control, not caller's-own-data.
     // --- Agent persona management: server-global roster, not per-user ---

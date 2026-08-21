@@ -56,12 +56,31 @@ pub enum Principal {
 }
 
 impl Principal {
+    /// The reserved sentinel key — single-sourced so [`Self::as_key`] and
+    /// [`Self::from_key`] can never drift into two different spellings of
+    /// "unattributed".
+    const UNATTRIBUTED_KEY: &'static str = "@unattributed";
+
     /// The ledger's primary-key text. `"@unattributed"` cannot collide with a
     /// real id: `users.user_id` values are `u-`-prefixed.
     pub fn as_key(&self) -> &str {
         match self {
             Self::User(id) => id,
-            Self::Unattributed => "@unattributed",
+            Self::Unattributed => Self::UNATTRIBUTED_KEY,
+        }
+    }
+
+    /// The inverse of [`Self::as_key`] — reconstruct a principal from a
+    /// ledger row's primary-key text. Both [`SpendLedger::principals_in`]
+    /// implementations need this exact mapping to turn a stored key back
+    /// into a `Principal`; a second, slightly different copy of the
+    /// `"@unattributed"` check in the other backend is exactly the kind of
+    /// drift this method exists to rule out.
+    pub fn from_key(key: &str) -> Self {
+        if key == Self::UNATTRIBUTED_KEY {
+            Self::Unattributed
+        } else {
+            Self::User(key.to_string())
         }
     }
 }
@@ -169,6 +188,26 @@ pub trait SpendLedger: Send + Sync {
     fn spent_for(&self, principal: &Principal, period_start_ms: i64) -> anyhow::Result<Spent>;
     fn total_for(&self, period_start_ms: i64) -> anyhow::Result<Spent>;
     fn sweep_before(&self, period_start_ms: i64) -> anyhow::Result<usize>;
+
+    /// Every principal with a row in `period_start_ms`, `usd` descending
+    /// then key ascending — the read face `gateway::handlers::spend` needs
+    /// to answer "who has spent, in the window that is open now", which
+    /// none of the point-lookup methods above can answer (`spent_for`
+    /// requires already knowing the principal; `total_for` only sums).
+    ///
+    /// Deliberately unbounded (no `LIMIT`, no page size): bounded by
+    /// principals-with-spend in one window, and a silently truncated spend
+    /// report is worse than a large one. Deliberately ordered rather than
+    /// left to backend iteration order: an unordered enumeration would make
+    /// the CLI table reshuffle between two calls on unchanged data, which a
+    /// reader interprets as the data changing.
+    ///
+    /// Every returned [`Spent::period_end_ms`] is `None`, exactly as it is
+    /// out of [`Self::spent_for`] / [`Self::total_for`]: this trait has no
+    /// notion of period *length*, only period *start* — only a caller who
+    /// knows the configured [`crate::config::types::policies::SpendPeriod`]
+    /// (the handler) can resolve the end instant.
+    fn principals_in(&self, period_start_ms: i64) -> anyhow::Result<Vec<(Principal, Spent)>>;
 }
 
 /// One ledger row: a principal's accumulated spend within one period.
@@ -249,6 +288,38 @@ impl SpendLedger for InMemorySpendLedger {
         let before = rows.len();
         rows.retain(|key, _| key.1 >= period_start_ms);
         Ok(before - rows.len())
+    }
+
+    fn principals_in(&self, period_start_ms: i64) -> anyhow::Result<Vec<(Principal, Spent)>> {
+        let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        let mut out: Vec<(Principal, Spent)> = rows
+            .iter()
+            .filter(|((_, period), _)| *period == period_start_ms)
+            .map(|((key, _), row)| {
+                (
+                    Principal::from_key(key),
+                    Spent {
+                        usd: row.usd,
+                        unpriced_calls: row.unpriced_calls,
+                        partial_calls: row.partial_calls,
+                        period_start_ms,
+                        // See `Spent::period_end_ms`'s doc.
+                        period_end_ms: None,
+                    },
+                )
+            })
+            .collect();
+        // `HashMap` iteration order is not stable across calls — see the
+        // trait method's doc for why this must be sorted explicitly rather
+        // than relying on it.
+        out.sort_by(|(a_principal, a_spent), (b_principal, b_spent)| {
+            b_spent
+                .usd
+                .partial_cmp(&a_spent.usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a_principal.as_key().cmp(b_principal.as_key()))
+        });
+        Ok(out)
     }
 }
 
