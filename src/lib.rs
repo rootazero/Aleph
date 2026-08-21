@@ -105,6 +105,7 @@ pub mod scope;
 pub mod search;
 pub mod session;
 pub mod skill;
+pub mod spend;
 pub mod strategy;
 pub mod tool_metadata;
 
