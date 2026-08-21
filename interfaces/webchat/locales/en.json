@@ -557,6 +557,12 @@
     "updated": "updated",
     "view_in_graph": "View in graph",
     "view_in_list": "View in list",
+    "xray": "Retrieval x-ray",
+    "xray_hint": "Runs the recall pipeline for this agent and shows what each stage dropped — the answer to \"why did it not remember that?\" when the note is right there in the list.",
+    "xray_idle": "Not run yet.",
+    "xray_no_results": "The pipeline returned nothing for this query.",
+    "xray_no_stages": "The retriever short-circuited — no stages ran (no embedder, or an empty corpus).",
+    "xray_run": "Trace this query",
     "zoom_in": "Zoom in",
     "zoom_out": "Zoom out"
   },

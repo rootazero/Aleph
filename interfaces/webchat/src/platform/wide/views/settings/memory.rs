@@ -13,6 +13,11 @@ use crate::api::{MemoryConfig, MemoryConfigApi, RetrieveWithTraceResponse};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 
+/// How many results the Settings debug retrieval asks for. Kept explicit
+/// rather than relying on the RPC's own default: the request that produced a
+/// trace should say how wide it was.
+const DEBUG_TRACE_LIMIT: usize = 10;
+
 #[component]
 #[must_use]
 pub fn MemoryView() -> impl IntoView {
@@ -972,29 +977,18 @@ fn RetrievalDebugPanel() -> impl IntoView {
             searching.set(true);
             trace_error.set(None);
             trace_result.set(None);
-            let params = serde_json::json!({ "query": q });
-            match state.rpc_call("memory.retrieve_with_trace", params).await {
-                Ok(result) => match serde_json::from_value::<RetrieveWithTraceResponse>(result) {
-                    Ok(resp) => {
-                        trace_result.set(Some(resp));
-                    }
-                    Err(e) => {
-                        // `e` is a serde parse failure, not a gateway verdict —
-                        // wrapped anyway because the rule has no allowlist and
-                        // a non-refusal passes through byte-for-byte.
-                        trace_error.set(Some(
-                            crate::components::admin_refusal::settings_write_error(
-                                i18n,
-                                &e.to_string(),
-                                |e| format!("Parse error: {e}"),
-                            ),
-                        ));
-                    }
-                },
+            // `agent_id: None` — this panel has no agent picker, so the
+            // server's default is the honest answer here. The memory
+            // console's x-ray passes the agent it is showing.
+            match MemoryConfigApi::retrieve_with_trace(&state, None, &q, DEBUG_TRACE_LIMIT).await {
+                Ok(resp) => trace_result.set(Some(resp)),
+                // The wrapper folds transport and parse failures into one
+                // `String`; both are equally "we did not get an answer" here,
+                // and the classifier below decides how to say it.
                 Err(e) => {
                     trace_error.set(Some(
                         crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
-                            format!("RPC error: {e}")
+                            e.to_string()
                         }),
                     ));
                 }

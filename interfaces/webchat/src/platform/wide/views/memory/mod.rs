@@ -25,6 +25,7 @@ mod provenance;
 mod selection;
 mod stats;
 mod toast;
+mod xray;
 
 use batch_bar::BatchBar;
 use cards::{CardListShell, NoteCard, RawCard};
@@ -44,6 +45,7 @@ use pager::Pager;
 use selection::AgentSelection;
 use stats::{MemoryHeader, StatCards};
 use toast::{push_toast, ToastHost, ToastKind, ToastMsg};
+use xray::RetrievalXray;
 
 /// Debounce before the search box filters the loaded window. Long enough that a
 /// fast typist does not re-filter on every keystroke, short enough to feel live.
@@ -97,6 +99,7 @@ pub fn Memory() -> impl IntoView {
     // the list, and blanking the rows the user is reading in order to add to
     // them is worse than a busy button.
     let loading_more = RwSignal::new(false);
+    let xray_open = RwSignal::new(false);
 
     // ── Agent bootstrap (only if the canvas hasn't populated it yet) ─────────
     Effect::new(move || {
@@ -590,6 +593,22 @@ pub fn Memory() -> impl IntoView {
                         }
                     });
                 }
+            />
+
+            <div class="flex items-center gap-3">
+                <button
+                    class="text-xs text-text-tertiary hover:text-text-secondary"
+                    on:click=move |_| xray_open.update(|o| *o = !*o)
+                >
+                    <span class="font-mono mr-1">{move || if xray_open.get() { "▾" } else { "▸" }}</span>
+                    {t!(i18n, memory.xray)}
+                </button>
+            </div>
+            <RetrievalXray
+                state=state
+                agent=Signal::derive(move || mem.agent_id.get())
+                query=Signal::derive(move || mem.search_query.get())
+                open=xray_open
             />
 
             {move || if facet.get() == MemoryFacet::Curated {

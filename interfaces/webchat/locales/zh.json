@@ -557,6 +557,12 @@
     "updated": "更新于",
     "view_in_graph": "在图谱中查看",
     "view_in_list": "在列表中查看",
+    "xray": "检索透视",
+    "xray_hint": "对这个 agent 跑一遍召回流水线，显示每一级筛掉了什么——当笔记明明就在列表里，这是「它为什么没想起来」的答案。",
+    "xray_idle": "尚未运行。",
+    "xray_no_results": "这条查询没有任何结果通过流水线。",
+    "xray_no_stages": "检索器短路了——没有任何阶段运行（没有 embedder，或语料为空）。",
+    "xray_run": "追踪这条查询",
     "zoom_in": "放大",
     "zoom_out": "缩小"
   },

@@ -656,6 +656,32 @@ impl Default for RetrievalScoringConfig {
 pub struct MemoryConfigApi;
 
 impl MemoryConfigApi {
+    /// Run a retrieval and get the per-stage funnel alongside the results.
+    ///
+    /// One wrapper, two consumers: the Settings debug panel and the memory
+    /// console's retrieval x-ray. The Settings panel used to build this call
+    /// inline with a bare `rpc_call` — the only `memory.*` request in the
+    /// Panel that did — which is how it ended up unable to name an agent at
+    /// all (it always probed the default one, whatever the operator was
+    /// looking at).
+    ///
+    /// `agent_id: None` keeps that behaviour for the caller that wants it:
+    /// the server defaults, exactly as an omitted field always has.
+    pub async fn retrieve_with_trace(
+        state: &DashboardState,
+        agent_id: Option<&str>,
+        query: &str,
+        limit: usize,
+    ) -> Result<RetrieveWithTraceResponse, String> {
+        let mut params = serde_json::json!({ "query": query, "limit": limit });
+        if let Some(agent) = agent_id {
+            params["agent_id"] = serde_json::json!(agent);
+        }
+        let result = state.rpc_call("memory.retrieve_with_trace", params).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse memory.retrieve_with_trace: {e}"))
+    }
+
     /// Get current memory configuration
     pub async fn get(state: &DashboardState) -> Result<MemoryConfig, String> {
         let result = state

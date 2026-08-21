@@ -9,7 +9,7 @@ Spec: [2026-08-21-panel-memory-round2-design.md](../specs/2026-08-21-panel-memor
 |---|---|---|
 | C1 curated 双缺席 | ✅ CONNECT | `src/gateway/handlers/memory_curated.rs`（3 handler + 9 测试）· Panel `memory/curated.rs` · facet 首位 |
 | C2 write_decisions 收不到 | ✅ CONNECT | `TraceKind::WriteDecision` + `TraceResult.write_decisions` + `WriteDecisionRow`（客户端）· Curated ledger |
-| C3 检索透视 | ⛔ **未做**（见下） | — |
+| C3 检索透视 | ✅ CONNECT | `memory/xray.rs`（`funnel_scale` 3 测试）· `MemoryConfigApi::retrieve_with_trace` 收敛 Settings 的裸 `rpc_call` |
 | C4 修正队列零消费者 | ✅ CONNECT | `MemoryApi::list_corrections` + `memory/corrections.rs`，挂 Feedback facet |
 | C5 `match_field` 零渲染 | ✅ CONNECT | `CompressedFact.match_field` + NoteCard chip |
 | C6 笔记 offset 恒 0 | ✅ FIX | `loader::load_more_notes` + `merge_note_page`（4 测试）+ 载入/总数行 |
@@ -27,7 +27,8 @@ Spec: [2026-08-21-panel-memory-round2-design.md](../specs/2026-08-21-panel-memor
 
 ## 明确未做（本轮范围外，非遗忘）
 
-- **C3 检索透视面板**（`memory.retrieve_with_trace` 的 stage 漏斗）。零件全在（后端完整、Settings 有一处裸 `rpc_call`），做它不难，但它是一个**独立的可观测性特性**而不是本轮「三支柱补全 + 死字段清账」的一部分，且会再向 `mod.rs` 加一块编排。留作下一轮，连同 MemOS `RetrievalFunnel` 的逐级 pill 一起设计。
+- **漏斗不标注「为什么掉」**：`StageTrace` 只有 `{name, duration_ms, input_count, output_count}`，掉落数是 `input - output`。给每一级贴一个原因（「低于阈值」「去重」）会是 Panel 在**发明一套检索器并不具备的词汇**——MemOS 的 `RetrievalFunnel` 能那么做是因为它的后端逐项发了 `droppedByLlm` / `identifier rejected` 这些具名计数，Aleph 的没有。要做那种漏斗，先加服务端的具名计数，别在客户端猜。
+- **`ScoreSnapshot`（每级的逐条分数）仍零渲染**：DTO 有、服务端在 traced 模式下填得出，但一屏漏斗要的是「掉了多少」不是「每条多少分」。第二个真消费者出现再接。
 - **phone 端 Curated / ledger / 修正队列**：phone 记忆面保持轻量浏览定位（spec §4 已裁）。phone 的笔记窗口仍是单次 `NOTE_WINDOW`，累载只做在 wide 端。
 - **`PhoneShell::back_label` 的 i18n**：类型是 `&'static str`，21 个手机屏全传英文字面量 —— 这是 crate 级的类型改动，不是记忆 tab 的修复。已在代码注释里写明，不是漏做。
 - **真机 QA**：本轮**零真机验证**。所有断言来自单测 + 编译（含出厂 wasm 形态）。curated 三动词、累载按钮、修正队列、ledger 的真机行为**未经浏览器验证**。
@@ -37,7 +38,7 @@ Spec: [2026-08-21-panel-memory-round2-design.md](../specs/2026-08-21-panel-memor
 | 命令 | 结果 |
 |---|---|
 | `cargo test -p alephcore --lib` | 16577 passed / **12 failed** —— 与基线 `34b9fbacc` **逐条相同**（另建 baseline worktree 实测比对，见下） |
-| `cargo test -p aleph-panel --lib` | 1048 passed / 0 failed |
+| `cargo test -p aleph-panel --lib` | 1051 passed / 0 failed |
 | `cargo test -p aleph-cli` | 194 passed / 0 failed |
 | `cargo test -p alephcore --features test-helpers --test '*' --no-run` | 编译通过 |
 | `cargo check --bin aleph-server` | 通过 |
