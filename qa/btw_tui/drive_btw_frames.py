@@ -37,6 +37,13 @@ from lib import log, reply, rpc  # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("url")
 ap.add_argument("--budget", type=float, default=180.0)
+ap.add_argument(
+    "--observe",
+    type=float,
+    default=45.0,
+    help="how long to keep watching after the /btw is sent; must outlast one "
+    "mock provider turn or the last assertion measures nothing",
+)
 args = ap.parse_args()
 
 FAILURES = []
@@ -103,14 +110,19 @@ async def main():
         accepted_for_side = []
         other_side_frames = []
         main_frames_after = 0
-        deadline = time.monotonic() + args.budget
+        # Observe for a FIXED window rather than breaking as soon as the side
+        # frames arrive. The first version broke out 40 ms after sending the
+        # `/btw` and then asserted the main run "kept streaming" — measuring
+        # the probe's own impatience, not the server. The mock's turns take
+        # tens of seconds, so the window has to outlast one of them for that
+        # assertion to be about anything.
+        observe_until = time.monotonic() + args.observe
+        deadline = min(observe_until, time.monotonic() + args.budget)
 
         while time.monotonic() < deadline:
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=5)
             except asyncio.TimeoutError:
-                if accepted_for_side and other_side_frames:
-                    break
                 continue
             import json
 
@@ -124,12 +136,12 @@ async def main():
                     log(f"  run_accepted(side) session_key={key!r}")
                 else:
                     other_side_frames.append(method)
-                    if len(other_side_frames) <= 6:
+                    if len(other_side_frames) <= 8:
                         log(f"  side frame: {method}")
             elif rid == run_main:
                 main_frames_after += 1
-            if accepted_for_side and len(other_side_frames) >= 2:
-                break
+                if main_frames_after <= 4:
+                    log(f"  main frame: {method}")
 
         # (2) exactly one, and (3) it is the derived key.
         check(
@@ -163,7 +175,7 @@ async def main():
         check(
             main_frames_after > 0,
             "the main run kept streaming while the side question ran",
-            f"{main_frames_after} main frames observed after the /btw was sent",
+            f"{main_frames_after} main frames in the {args.observe:.0f}s after the /btw",
         )
 
     log(f"verdict: {len(FAILURES)} failure(s)" + (f": {FAILURES}" if FAILURES else ""))

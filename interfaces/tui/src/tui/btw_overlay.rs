@@ -61,6 +61,14 @@ pub struct BtwExchange {
 
 impl BtwExchange {
     /// A question that got an answer.
+    ///
+    /// Test-only: the three production paths (`finish_active` / `fail_active`
+    /// / `abort_active`) each build the whole struct, because each has to say
+    /// something different about `aborted` and `error`. A production shorthand
+    /// that fixed both to their happy values would be an abstraction with no
+    /// consumer, and the first caller to reach for it would be the one who
+    /// wanted one of the other two endings.
+    #[cfg(test)]
     #[must_use]
     pub fn answered(question: &str, answer: &str) -> Self {
         Self {
