@@ -16,7 +16,7 @@
 //! same posture that put `aleph audit` and `aleph users` here rather than
 //! in the Panel.
 
-use aleph_protocol::spend::{SpendQueryParams, SpendQueryResult};
+use aleph_protocol::spend::{SpendQueryParams, SpendQueryResult, SpendRow};
 use serde_json::Value;
 
 use crate::output;
@@ -39,6 +39,26 @@ const COLUMNS: &[(&str, &str)] = &[
     ("Unpriced Calls", "unpriced_calls"),
     ("Partial Calls", "partial_calls"),
 ];
+
+/// One table row's cells, in `COLUMNS` order.
+///
+/// Extracted from `query` for one reason: while this was an inline `vec![]`
+/// beside `COLUMNS`, nothing could observe that the two agreed. They are two
+/// hand-maintained lists that must match in length AND order, and
+/// `output::print_table` takes its column count from `headers` alone — so a
+/// cell added here without a header is dropped, and a header added without a
+/// cell shifts every value one column left. Both render a plausible table
+/// with the wrong numbers under the right titles, which is worse than a
+/// dash: a dash looks like missing data, a shifted table looks like data.
+/// `render_row_has_one_cell_per_column` is what now holds them together.
+fn render_row(row: &SpendRow) -> Vec<String> {
+    vec![
+        row.principal.clone(),
+        format!("{:.2}", row.usd),
+        row.unpriced_calls.to_string(),
+        row.partial_calls.to_string(),
+    ]
+}
 
 /// Query and render the ledger.
 pub async fn query(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
@@ -70,18 +90,7 @@ pub async fn query(server_url: &str, config: &CliConfig, json: bool) -> CliResul
     }
 
     let headers: Vec<&str> = COLUMNS.iter().map(|(header, _)| *header).collect();
-    let rows: Vec<Vec<String>> = result
-        .rows
-        .iter()
-        .map(|row| {
-            vec![
-                row.principal.clone(),
-                format!("{:.2}", row.usd),
-                row.unpriced_calls.to_string(),
-                row.partial_calls.to_string(),
-            ]
-        })
-        .collect();
+    let rows: Vec<Vec<String>> = result.rows.iter().map(render_row).collect();
 
     output::print_table(&headers, &rows, json, &raw);
 
@@ -121,8 +130,9 @@ fn format_ms(ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
-    use aleph_protocol::spend::SpendRow;
 
     fn sample() -> SpendQueryResult {
         SpendQueryResult {
@@ -162,6 +172,69 @@ mod tests {
                  aleph_protocol::spend::SpendRow"
             );
         }
+    }
+
+    /// `COLUMNS` and [`render_row`] are two hand-maintained lists that must
+    /// agree in length and order, and nothing in the type system says so.
+    ///
+    /// `output::print_table` takes its column count from `headers` alone, so
+    /// a mismatch does not error — it shifts. A row with one cell too few
+    /// puts every value one column left of its title; one too many drops the
+    /// last silently. Either way the table still looks like a table, which is
+    /// why this needs an assertion rather than a careful reader.
+    #[test]
+    fn render_row_has_one_cell_per_column() {
+        let row = SpendRow {
+            principal: "u-alice".to_string(),
+            usd: 1.0,
+            unpriced_calls: 2,
+            partial_calls: 3,
+        };
+        assert_eq!(
+            render_row(&row).len(),
+            COLUMNS.len(),
+            "render_row emits {} cells for {} columns — print_table counts columns from the \
+             headers alone, so the surplus is dropped or every value shifts one column off \
+             its title, and the table still renders",
+            render_row(&row).len(),
+            COLUMNS.len()
+        );
+    }
+
+    /// The other direction, and the one the forward test above is
+    /// structurally blind to: a field `SpendRow` sends that no column
+    /// renders.
+    ///
+    /// The forward test catches a column pointing at a key that does not
+    /// exist — a dash in every row, which at least looks wrong. This one
+    /// catches the server growing a field the CLI never learned to print,
+    /// whose symptom is that the table looks complete. "There is nothing
+    /// more to show" and "this client has not caught up" render identically,
+    /// which is why only an assertion can tell them apart.
+    ///
+    /// Scoped to `SpendRow` deliberately. The same assertion at
+    /// `SpendQueryResult` level would be a false positive against this
+    /// command's own correct design: `configured` / `period_start_ms` /
+    /// `period_end_ms` are rendered as prose above the table, on purpose,
+    /// and are not columns of anything.
+    #[test]
+    fn every_wire_field_of_a_row_is_rendered_by_some_column() {
+        let wire = serde_json::to_value(sample()).unwrap();
+        let row_wire = wire["rows"][0]
+            .as_object()
+            .expect("SpendRow serialises to a JSON object");
+
+        let rendered: BTreeSet<&str> = COLUMNS.iter().map(|(_, field)| *field).collect();
+        let sent: BTreeSet<&str> = row_wire.keys().map(String::as_str).collect();
+
+        assert_eq!(
+            sent, rendered,
+            "SpendRow's wire fields and the fields COLUMNS renders must be the same set. \
+             A field in `sent` but not `rendered` is data the server sends and this table \
+             silently drops — indistinguishable, on screen, from there being nothing to \
+             show. Add a column, or say in COLUMNS' doc why this field is deliberately \
+             not a column."
+        );
     }
 
     #[test]
