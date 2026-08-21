@@ -52,6 +52,108 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         Focus::SessionPicker => handle_session_picker_key(state, key),
         Focus::ProviderPicker => handle_provider_picker_key(state, key),
         Focus::Approval => handle_approval_key(state, key),
+        Focus::Btw => handle_btw_key(state, key),
+    }
+}
+
+/// Handle key events when the `/btw` side-question overlay is focused.
+///
+/// # Why there are two modes at all
+///
+/// The overlay owes the user two incompatible things at once: single-letter
+/// shortcuts (`c` copy, `p` promote) and a free-text follow-up. A flat key
+/// table cannot have both — bind `c` to copy and no follow-up can begin with
+/// the letter c. So `composing` decides, and Tab toggles it explicitly in both
+/// directions.
+///
+/// It is deliberately NOT derived from `composer.is_empty()`. That is the
+/// shape `DialogState::typing` documents as a defect: clearing the buffer
+/// would silently drop the user back into a mode where the next letter they
+/// type means something else entirely. Typing an ordinary character in browse
+/// mode does flip *into* composing (so "just start typing" works), but nothing
+/// ever flips back on its own.
+fn handle_btw_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        // Abort while it is answering, close when it is idle. The two are one
+        // key because they are one intent — "I am done with this" — and the
+        // overlay knows which of them applies.
+        KeyCode::Esc => Action::BtwAbortOrClose,
+
+        // Page history. Not text even in compose mode: the composer is a
+        // single line the user only ever appends to and backspaces, so
+        // horizontal cursor movement has nothing to do, and losing the pager
+        // in the mode where you are most likely to want to re-read the answer
+        // you are replying to would be the worse trade.
+        KeyCode::Left => {
+            state.btw.page_left();
+            Action::None
+        }
+        KeyCode::Right => {
+            state.btw.page_right();
+            Action::None
+        }
+        KeyCode::Up => {
+            state.btw.scroll_up(1);
+            Action::None
+        }
+        KeyCode::Down => {
+            state.btw.scroll_down(1);
+            Action::None
+        }
+        KeyCode::PageUp => {
+            state.btw.scroll_up(10);
+            Action::None
+        }
+        KeyCode::PageDown => {
+            state.btw.scroll_down(10);
+            Action::None
+        }
+
+        KeyCode::Tab => {
+            state.btw.composing = !state.btw.composing;
+            Action::None
+        }
+
+        KeyCode::Enter => {
+            let body = state.btw.composer.trim().to_string();
+            if body.is_empty() {
+                // Nothing to send. Put them where typing works rather than
+                // doing nothing silently.
+                state.btw.composing = true;
+                return Action::None;
+            }
+            state.btw.composer.clear();
+            // The composer holds a question body, not a command line — so the
+            // `/btw` is constructed here rather than tested for. Resolving
+            // whether the text "is already a btw" would be a second copy of a
+            // predicate this client answers in exactly one place
+            // (`commands::dispatch_gateway_text`).
+            Action::GatewayCommand(format!("/btw {body}"))
+        }
+
+        KeyCode::Backspace if state.btw.composing => {
+            state.btw.composer.pop();
+            Action::None
+        }
+
+        KeyCode::Char(c) if state.btw.composing => {
+            state.btw.composer.push(c);
+            Action::None
+        }
+        KeyCode::Char('c') => Action::BtwCopy,
+        // Promotion is a request to move this answer INTO the main
+        // conversation, which is a boundary crossing the user has to ask for
+        // out loud. The key does exactly what typing it would: it sends
+        // `/btw promote`. Nothing about what the server then does with it is
+        // decided here.
+        KeyCode::Char('p') => Action::GatewayCommand("/btw promote".to_string()),
+        KeyCode::Char(c) => {
+            state.btw.composing = true;
+            state.btw.composer.push(c);
+            Action::None
+        }
+
+        _ => Action::None,
     }
 }
 

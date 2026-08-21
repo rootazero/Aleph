@@ -51,6 +51,29 @@ fn resolve_recognises_the_promote_verb() {
     );
 }
 
+/// The core-side `BtwTurn` is the protocol crate's type, re-exported — not a
+/// second struct that happens to spell its fields the same way.
+///
+/// A type-identity check rather than a text scan, deliberately: the failure
+/// this guards against is someone re-adding `struct BtwTurn` to
+/// `gateway::btw` (shadowing the `pub use`) so that core resolves side
+/// questions through one function and thin clients through another. A local
+/// struct makes the two `let` bindings below stop compiling; a text scan
+/// would only prove the spelling changed.
+#[test]
+fn the_core_side_name_is_the_protocol_crate_s_type() {
+    let from_core: BtwTurn = BtwTurn::resolve("/btw why?").expect("resolves");
+    let as_protocol: aleph_protocol::btw::BtwTurn = from_core;
+    assert_eq!(as_protocol.question, "why?");
+
+    // And the other direction, so neither name can become an alias of a
+    // conversion rather than of the same type.
+    let from_protocol: aleph_protocol::btw::BtwTurn =
+        aleph_protocol::btw::BtwTurn::resolve("/btw promote").expect("resolves");
+    let as_core: BtwTurn = from_protocol;
+    assert!(as_core.promote);
+}
+
 #[test]
 fn a_side_answer_is_marked_so_it_reads_as_a_side_answer() {
     let out = super::format_side_answer("the file is config.toml");

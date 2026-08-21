@@ -154,6 +154,69 @@ impl AppState {
         }
     }
 
+    /// Apply one frame belonging to a side question to the `/btw` overlay.
+    ///
+    /// Every arm ends in the overlay or is deliberately ignored; none of them
+    /// touches `messages`, `current_run` or the run-scoped status fields. That
+    /// is the property Step 5 of this task asserts on a real machine and
+    /// `no_side_question_frame_reaches_the_main_transcript` asserts here: a
+    /// side question is answered on a session the user is not looking at, so
+    /// nothing about it may appear in the conversation they ARE looking at.
+    ///
+    /// Ignoring the rest is not laziness — a side question runs read-only on a
+    /// derived session, so its context gauge, model-fallback notice and retry
+    /// ladder describe that session, not this screen's. Applying them would be
+    /// the same defect the cross-session guard exists to prevent, arriving by
+    /// a route that bypasses it.
+    fn apply_btw_frame(&mut self, event: StreamEvent) -> Action {
+        use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
+
+        match event {
+            StreamEvent::RunAccepted {
+                run_id,
+                session_key,
+                ..
+            } => {
+                // Recorded even though this frame is being intercepted: if the
+                // overlay's claim is ever evicted, `frame_belongs_here` is the
+                // fallback, and it can only answer for a run it has learned
+                // about. The side key is not this screen's key, so it answers
+                // "drop" — which is the safe direction for a stray side frame.
+                self.mark_run_session(run_id, session_key);
+                Action::None
+            }
+            StreamEvent::ResponseChunk { content, .. } => {
+                self.btw.push_delta(&content);
+                Action::None
+            }
+            StreamEvent::AgentTrace { event, .. } => {
+                match event {
+                    // The turn's full text; the deltas above are its prefix.
+                    AgentTraceEvent::TextEmitted {
+                        stream: AgentTraceTextKind::Final,
+                        text,
+                        ..
+                    } => self.btw.push_final(&text),
+                    AgentTraceEvent::ToolCallStarted { call, .. } => {
+                        self.btw.note_tool(Some(call.tool_name));
+                    }
+                    AgentTraceEvent::ToolCallCompleted { .. } => self.btw.note_tool(None),
+                    _ => {}
+                }
+                Action::None
+            }
+            StreamEvent::RunComplete { summary, .. } => {
+                self.btw.finish_active(summary.final_response.as_deref());
+                Action::None
+            }
+            StreamEvent::RunError { error, .. } => {
+                self.btw.fail_active(error);
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
     // -- Gateway event handling -----------------------------------------
 
     /// Handle a `StreamEvent` from the gateway. Returns an Action if the event
@@ -167,6 +230,23 @@ impl AppState {
         // "another run's state silently applied to this screen," the same
         // defect either way, so both kinds are dropped here before a single
         // arm below runs.
+        // Side-question intercept, and it MUST run before the guard below.
+        //
+        // A `/btw` run executes on a *derived* session, so its frames are
+        // cross-session by construction and `frame_belongs_here` correctly
+        // drops every one of them — correct for the transcript, useless for
+        // the person who asked. Claiming them here routes them to the overlay
+        // instead, and returning is the other half of the same requirement:
+        // falling through to the arms below is exactly how a side question
+        // would end up IN the main transcript.
+        //
+        // This does not weaken the guard. The guard protects against every
+        // other foreign run; this is one narrow branch for run ids the
+        // overlay itself asked for.
+        if self.btw.accepts_frame(run_scoped_id(&event)) {
+            return self.apply_btw_frame(event);
+        }
+
         if let Some(run_id) = run_scoped_id(&event) {
             if !self.frame_belongs_here(run_id) {
                 return Action::None;

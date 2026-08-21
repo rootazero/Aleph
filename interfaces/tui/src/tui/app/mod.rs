@@ -17,6 +17,7 @@ use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
+use super::btw_overlay::BtwOverlay;
 use super::command_tree::{CommandEntry, DisplayEntry};
 use super::slash::{LocalCommand, ToolProgressMode};
 
@@ -84,6 +85,15 @@ pub enum Action {
     /// `APPROVAL_DECISIONS` (0 = allow once, 1 = allow session, 2 = deny).
     ResolveApproval { index: usize },
 
+    // -- Side question (`/btw`) --
+    /// Esc in the side-question overlay: abort the side run when one is still
+    /// answering, close the overlay when none is. Aborting names the
+    /// **overlay's own** run id — the screen's `current_run` is the main run,
+    /// or nothing, so `/stop`'s helper would stop the wrong thing (or refuse).
+    BtwAbortOrClose,
+    /// Copy the shown side answer as raw markdown.
+    BtwCopy,
+
     // -- Session picker --
     /// Move session-picker selection up
     SessionPickerUp,
@@ -118,6 +128,8 @@ pub enum Focus {
     SessionPicker,
     ProviderPicker,
     Approval,
+    /// The `/btw` side-question overlay.
+    Btw,
 }
 
 // ---------------------------------------------------------------------------
@@ -702,6 +714,14 @@ pub struct AppState {
     /// Surfaced by the `exec.approvals.pending` poll, resolved via
     /// `exec.approval.resolve`.
     pub approval: Option<ApprovalState>,
+    /// The `/btw` side-question overlay.
+    ///
+    /// Not an `Option` like its siblings: its history outlives any one
+    /// showing (closing it hides it, the next `/btw` reopens onto what was
+    /// already asked), and its run claims have to answer `accepts_frame` for
+    /// frames that arrive after the user closed it. `BtwOverlay::open` says
+    /// whether it is on screen.
+    pub btw: BtwOverlay,
 
     // -- Control --
     pub ctrl_c_count: u8,
@@ -760,6 +780,7 @@ impl AppState {
             session_picker: None,
             provider_picker: None,
             approval: None,
+            btw: BtwOverlay::default(),
 
             ctrl_c_count: 0,
             spinner_frame: 0,
@@ -1190,6 +1211,30 @@ impl AppState {
             decisions,
         });
         self.focus = Focus::Approval;
+    }
+
+    /// Show the side-question overlay for a `/btw` just sent, and give it
+    /// focus.
+    ///
+    /// The purely local overlays are dismissed first — nothing on the server
+    /// is parked on any of them. The two that ARE parked on something
+    /// (`AskUser`, tool approval) are deliberately not touched, and cannot be
+    /// showing anyway: both hold focus, so no `/btw` can have been typed
+    /// while one was up.
+    pub fn open_btw(&mut self, question: String) {
+        self.palette = None;
+        self.session_picker = None;
+        self.provider_picker = None;
+        self.btw.begin(question);
+        self.focus = Focus::Btw;
+    }
+
+    /// Hide the side-question overlay and return focus to input. The history
+    /// and the run claims survive — see [`BtwOverlay`]'s docs for why the
+    /// claims must.
+    pub fn close_btw(&mut self) {
+        self.btw.close();
+        self.focus = Focus::Input;
     }
 
     /// Retract the approval overlay (resolved here, resolved elsewhere, or the

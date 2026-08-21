@@ -9,6 +9,7 @@
 use serde_json::{json, Value};
 use tui_textarea::TextArea;
 
+use aleph_protocol::btw::BtwTurn;
 use aleph_protocol::providers::{
     CatalogEntry, CatalogParams, CatalogResult, CatalogView, ModelsRefreshParams,
     ModelsRefreshResult, ModelsRefreshRow, RefreshOutcome,
@@ -62,9 +63,92 @@ pub(super) async fn send_to_agent(
         .call::<_, AgentRunAccepted>("agent.run", Some(request))
         .await
     {
-        Ok(accepted) => state.adopt_canonical_session_key(&accepted.session_key),
+        Ok(accepted) => {
+            // The key in this reply is the one the gateway ROUTED to, resolved
+            // before the engine runs — so for a `/btw` it is the main
+            // conversation's key, not the derived side key the run will
+            // actually execute on (the redirect happens inside `execute()`,
+            // long after the reply is built). Adopting it is therefore correct
+            // on both paths: a side question cannot repoint this screen.
+            state.adopt_canonical_session_key(&accepted.session_key);
+            // A side question opened moments ago is waiting for the id of the
+            // run that answers it, and this is the only place that id exists.
+            // No frame can have arrived in between: gateway events are drained
+            // only at the top of the main loop, never while an action's RPC is
+            // awaited.
+            state.btw.claim_pending_run(accepted.run_id);
+        }
         Err(e) => state.add_system_message(format!("{err_label}: {e}")),
     }
+}
+
+/// Send `text` to the agent, routing a side question to the `/btw` overlay and
+/// everything else to the transcript.
+///
+/// **The one place this client asks whether an input is a side question.**
+/// The predicate is [`BtwTurn::resolve`], the resolver core and every channel
+/// share (moved into `aleph-protocol` so this crate can reach it without
+/// depending on `alephcore`, which its manifest forbids). A prefix test
+/// written here would be a second answer to a question that already has one,
+/// and would drift from the server's on the first spelling the server learns —
+/// `/BTW`, `/btw@bot`, the empty body that is deliberately *not* a side
+/// question.
+///
+/// The routing decision has to happen **before** the transcript is touched,
+/// not after: a side question runs on a session the user is not looking at,
+/// and echoing it into the conversation they ARE looking at is precisely the
+/// leak this feature exists to prevent.
+///
+/// `/btw promote` is deliberately NOT routed here. It is a request to move a
+/// side answer *into* the main conversation — a crossing of that boundary the
+/// user asked for out loud — so it belongs in the transcript like any other
+/// message, and its effect lands wherever the server decides to put it.
+pub(super) async fn dispatch_gateway_text(
+    state: &mut AppState,
+    client: &AlephClient,
+    text: &str,
+    err_label: &str,
+) {
+    match BtwTurn::resolve(text) {
+        Some(turn) if !turn.promote => {
+            state.open_btw(turn.question);
+            send_to_agent(state, client, text, "Side question error").await;
+            if state.btw.active_run_id().is_none() {
+                // The call failed; `send_to_agent` already said why. Settle the
+                // question rather than leaving the overlay spinning on a run
+                // that was never accepted.
+                state
+                    .btw
+                    .fail_active("the side question was not accepted".to_string());
+            }
+        }
+        _ => {
+            state.add_user_message(text.to_string());
+            send_to_agent(state, client, text, err_label).await;
+        }
+    }
+}
+
+/// Stop the side question the overlay is showing.
+///
+/// `session_key` is deliberately omitted, unlike `/stop`'s abort. The server
+/// uses that field to purge the addressed session's busy-queue backlog, and
+/// the only key this client holds is the MAIN conversation's — passing it
+/// would drop the messages queued behind the main run, which is the opposite
+/// of "stop the side question". The side session's own key is not derivable
+/// here by design (see `aleph_protocol::btw`), and the run id alone is enough:
+/// the server gates it on its own (`caller_may_address_run`).
+pub(super) async fn abort_side_question(state: &mut AppState, client: &AlephClient) {
+    let Some(run_id) = state.btw.active_run_id().map(ToOwned::to_owned) else {
+        return;
+    };
+    let params = json!({ "run_id": run_id });
+    if let Err(e) = client.call::<_, Value>("chat.abort", Some(params)).await {
+        state.add_system_message(format!("Side question abort error: {e}"));
+    }
+    // Settle either way: the abort was sent, and a run that refuses to die is
+    // still not something this overlay can go on claiming to be answering.
+    state.btw.abort_active();
 }
 
 /// Execute a local slash command (TUI-only, no Gateway RPC needed).
