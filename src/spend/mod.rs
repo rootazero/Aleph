@@ -71,14 +71,24 @@ pub struct Spent {
     pub period_end_ms: i64,
 }
 
-/// One increment. Exactly one of the three fields moves per call, which is
-/// what makes "an unpriced call never becomes zero dollars" a property of the
-/// type rather than a rule someone has to remember.
-#[derive(Debug, Clone, Default)]
-pub struct Delta {
-    pub usd: f64,
-    pub unpriced: u64,
-    pub partial: u64,
+/// One increment, keyed to the `CostStatus` that produced it. A caller can
+/// only ever move one of the three ledger dimensions per call — there is no
+/// constructor that sets a dollar figure *and* leaves the call uncounted, or
+/// that counts a call as both partial and unpriced — so "an unpriced call
+/// never becomes zero dollars" is a property of the type, not a rule every
+/// call site has to remember to uphold. There is deliberately no `Default`:
+/// an unpriced call recorded as "nothing happened" is exactly the failure
+/// this type exists to make unrepresentable.
+#[derive(Debug, Clone, Copy)]
+pub enum Delta {
+    /// A priced call: `CostStatus::Complete`.
+    Usd(f64),
+    /// `CostStatus::PartialMissingPrice` — the figure is a lower bound, so
+    /// the dollars accumulate AND the call is counted as partial.
+    Partial(f64),
+    /// `CostStatus::Unknown` — real spend carrying no price. Counts, moves
+    /// no dollars, and therefore can never contribute to a denial.
+    Unpriced,
 }
 
 /// Which ceiling was hit. Shape, not role predicate — see spec §4.8.
@@ -143,9 +153,14 @@ impl SpendLedger for InMemorySpendLedger {
         let row = rows
             .entry((principal.as_key().to_string(), period_start_ms))
             .or_default();
-        row.usd += delta.usd;
-        row.unpriced_calls += delta.unpriced;
-        row.partial_calls += delta.partial;
+        match delta {
+            Delta::Usd(usd) => row.usd += usd,
+            Delta::Partial(usd) => {
+                row.usd += usd;
+                row.partial_calls += 1;
+            }
+            Delta::Unpriced => row.unpriced_calls += 1,
+        }
         Ok(())
     }
 
@@ -281,7 +296,7 @@ pub fn current_policy() -> crate::config::types::policies::SpendPolicy {
 /// that is the room transcript byline, not a general actor accessor, and
 /// using it here would charge nearly every install's spend to
 /// `@unattributed` with no test going red. See [`principal_from_metadata`]
-/// for why the two are provably equivalent.
+/// for why the two are unconditionally equivalent.
 #[must_use]
 pub fn ambient_principal() -> Principal {
     crate::scope::current_room_author()
@@ -294,14 +309,22 @@ pub fn ambient_principal() -> Principal {
 /// request's own metadata map.
 ///
 /// Reads the same two facts [`ambient_principal`] does, in the same order:
-/// `AUTHOR_USER_KEY` (this turn's speaker), then
-/// [`crate::scope::OWNER_META_KEY`] (the room/session owner). The two
-/// resolvers are provably equivalent because
-/// `gateway::execution_engine::run_loop::with_request_scope` seeds the
-/// floor arm's `CURRENT_ROOM_AUTHOR` task-local from
-/// `request.metadata[AUTHOR_USER_KEY]` verbatim, with **no**
-/// `ScopeId::Project` filter — see `run_loop::tests::run_loop_seeds_scope_from_request_metadata`
-/// and this module's own equivalence guard next to it.
+/// `AUTHOR_USER_KEY` (this turn's speaker), then the scope owner — resolved
+/// through [`crate::scope::scope_from_metadata`], **not** a bare
+/// `meta.get(OWNER_META_KEY)`. That routing is what makes the two resolvers
+/// equivalent unconditionally rather than by convention: `ambient_principal`'s
+/// own fallback, [`crate::scope::ambient_owner`], derives the owner from
+/// `current_scope()`, and `with_request_scope` seeds `current_scope()` with
+/// `scope_from_metadata(&request.metadata)` — the same function, with the
+/// same all-or-nothing requirement on `OWNER_META_KEY` **and**
+/// `SCOPE_META_KEY` both being present and parseable. A bare
+/// `meta.get(OWNER_META_KEY)` would resolve `Principal::User` on metadata
+/// carrying an owner key but no (or an unparseable) scope key, while the
+/// floor arm resolves `Unattributed` on that exact input — see
+/// `run_loop::tests::spend_principal_resolvers_agree_on_an_owner_key_with_no_scope_key`
+/// for that case pinned, alongside
+/// `run_loop::tests::run_loop_seeds_scope_from_request_metadata` and this
+/// module's own equivalence guards.
 ///
 /// Neither resolver may call `visibility::ambient_actor()` or
 /// `turn_context::current_agent_id()`: `ambient_actor`'s third fallback arm
@@ -309,8 +332,8 @@ pub fn ambient_principal() -> Principal {
 #[must_use]
 pub fn principal_from_metadata(meta: &HashMap<String, String>) -> Principal {
     meta.get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
-        .or_else(|| meta.get(crate::scope::OWNER_META_KEY))
         .cloned()
+        .or_else(|| crate::scope::scope_from_metadata(meta).map(|attr| attr.owner_user_id))
         .map(Principal::User)
         .unwrap_or(Principal::Unattributed)
 }

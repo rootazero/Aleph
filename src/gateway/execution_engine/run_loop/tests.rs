@@ -497,3 +497,31 @@ async fn spend_principal_resolvers_agree_falling_back_to_the_scope_owner() {
     assert_eq!(admission, floor);
     assert_eq!(admission, crate::spend::Principal::User("u-owner".to_string()));
 }
+
+#[tokio::test]
+async fn spend_principal_resolvers_agree_on_an_owner_key_with_no_scope_key() {
+    // This is the asymmetric case `stamp_metadata` never produces (it always
+    // writes OWNER_META_KEY and SCOPE_META_KEY together) but nothing in the
+    // type system rules out: an owner key present with no scope key, and no
+    // author. `scope_from_metadata` fails closed on this shape (it requires
+    // both keys), so `current_scope()` reads `None` inside the nest and
+    // `principal_from_metadata`'s owner fallback — which now also routes
+    // through `scope_from_metadata` — must fail closed the same way, not
+    // resolve the bare owner key. Built by hand rather than via
+    // `stamp_metadata`: that helper writes both keys in one call, which is
+    // exactly why the two tests above cannot see this case.
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(crate::scope::OWNER_META_KEY.to_string(), "u-owner".to_string());
+    let request = minimal_request(metadata);
+
+    let admission = crate::spend::principal_from_metadata(&request.metadata);
+    let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
+
+    assert_eq!(
+        admission, floor,
+        "an OWNER_META_KEY with no SCOPE_META_KEY must resolve the same way on both arms; \
+         a bare meta.get(OWNER_META_KEY) on the admission arm would resolve \
+         Principal::User while the floor arm resolves Unattributed"
+    );
+    assert_eq!(admission, crate::spend::Principal::Unattributed);
+}
