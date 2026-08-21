@@ -76,9 +76,10 @@ where
 /// see this module's doc and the plan this task belongs to for why "a floor
 /// only one engine honours is not a floor".
 ///
-/// One helper rather than each engine open-coding `spend::principal_from_metadata`
-/// + `spend::check`: a second, hand-written copy of that pairing is exactly
-/// the kind of drift [`crate::spend::check`]'s own doc warns against.
+/// One helper rather than each engine open-coding the
+/// `spend::principal_from_metadata` / `spend::check` pairing itself: a
+/// second, hand-written copy of that pairing is exactly the kind of drift
+/// [`crate::spend::check`]'s own doc warns against.
 pub(super) fn deny_if_over_spend(request: &RunRequest) -> Result<(), ExecutionError> {
     let principal = crate::spend::principal_from_metadata(&request.metadata);
     let now_ms = chrono::Utc::now().timestamp_millis();
