@@ -1076,84 +1076,115 @@ html[data-material="aurora"].dark {
 }
 
 /* ============================================================
-   Accessibility: macOS "Reduce transparency" (and the CSS media query it
-   maps to) → drop all glass to opaque solids. No backdrop-filter, no
-   see-through. !important on the token overrides wins the cascade
-   regardless of where the semi-opaque defaults sit in source order.
+   Flat mode. Two inputs, one attribute:
+     - macOS/GNOME "Reduce transparency" (prefers-reduced-transparency), and
+     - Linux, where WebKitGTK pays a large and sometimes catastrophic cost
+       for backdrop-filter on machines without hardware acceleration.
+   `data-flat` is computed by interfaces/webchat/baseline-probe.js, which
+   runs synchronously before the WASM boots and re-evaluates on a
+   matchMedia change. It is deliberately NOT an @media query any more: CSS
+   cannot OR a media condition with a selector, and duplicating this block
+   for Linux would be a second source of truth.
+
+   Every selector below is prefixed with `[data-flat="1"]` directly rather
+   than wrapped in a `html[data-flat="1"] { ... }` block. Nesting looks like
+   the smaller diff, but two of these rules — `:root` and `.dark` — target
+   the SAME element `data-flat` is set on (`<html>` IS `:root`; `.dark` is
+   always a class on `<html>` in this codebase, never on a descendant). CSS
+   Nesting gives an un-prefixed nested selector an implicit DESCENDANT
+   combinator, so `html[data-flat="1"] { :root { ... } }` would compile to
+   `html[data-flat="1"] :root`, which requires `:root` to be a descendant of
+   itself — impossible, so the rule would silently stop matching. Verified
+   against the real build (`@tailwindcss/cli --minify`, the flag `build:css`
+   uses). The break would be invisible in the obvious check — `.glass` keeps
+   its own direct `!important` override and still reports
+   `backdrop-filter: none`, because `.glass` IS a genuine descendant — only
+   the token-zeroing rule below would silently go dark. Separately: native
+   CSS nesting needs Safari 16.5 (17.2 for this relaxed unprefixed form);
+   our declared floor is 16.4 (webview-baseline.json). Explicit prefixing
+   depends on neither the nesting spec nor the build tool continuing to
+   flatten it away. Don't "simplify" this back into a nested block — that
+   re-introduces the `:root`/`.dark` bug, silently.
+
+   Accessibility note: degradation now depends on JS, but the risk is
+   bounded — the probe is a synchronous inline script ahead of the module
+   script, so if it did not run the Panel did not load either. There is no
+   state where the page renders and the degradation is missing.
    ============================================================ */
-@media (prefers-reduced-transparency: reduce) {
-  .glass, .aleph-sidebar, .aleph-sidebar::before {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-  .glass::before, .glass::after, .aleph-sidebar::before,
-  .aleph-shell::after { display: none !important; }
-  .aleph-scrim, .aleph-blur-subtle {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-  .aleph-sidebar { background-color: var(--color-sidebar) !important; }
-  /* Kill the primitives at the source: every material collapses to solid.
-     !important here beats any non-!important material or theme block
-     regardless of specificity or position. `:root[data-material]` also
-     covers the data-material attribute blocks so they can't re-supply
-     values via the normal cascade. */
-  :root, :root[data-material] {
-    --aleph-canvas-base: var(--aleph-solid-ground) !important;
-    --mat-raised: oklch(1.00 0 0) !important;
-    --mat-grain: 0 !important;
-    --scrim-blur: 0px !important;
-    --glass-blur: 0px !important;
-    --glass-blur-subtle: 0px !important;
-    --glass-blur-chrome: 0px !important;
-    --glass-saturate: 1 !important;
-  }
-  .dark, .dark[data-material] { --mat-raised: oklch(0.20 0.018 310) !important; }
-  /* Message-flow faux glass → opaque solids. */
-  .msg-glass {
-    background-color: var(--color-surface-raised) !important;
-    background-image: none !important;
-    box-shadow: none !important;
-  }
-  .msg-glass-user {
-    background-color: var(--color-primary) !important;
-    background-image: none !important;
-    box-shadow: none !important;
-  }
-  .msg-glass-danger {
-    background-color: var(--color-danger-subtle) !important;
-    background-image: none !important;
-  }
-  .glass-inset { background-color: var(--color-surface-sunken) !important; }
-  .nav-tile-active {
-    background-color: var(--color-sidebar-active) !important;
-    box-shadow: none !important;
-  }
-  .aleph-composer, .aleph-session-tabs {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-  .aleph-session-tabs { background-color: var(--color-surface) !important; }
-  .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
-  /* `.aleph-scroll-more` is NOT simply nulled here. The chat fade is
-     decorative — content dissolving under a chrome band — so dropping it costs
-     nothing. This one carries a fact (the list continues), and a reduced-
-     transparency reader needs that fact more than most, because the mask is
-     exactly the kind of effect they asked us to stop drawing. Keep the signal,
-     change the rendering: an opaque bottom rule instead of a gradient. */
-  .aleph-scroll-more {
-    mask-image: none !important;
-    -webkit-mask-image: none !important;
-    box-shadow: inset 0 -3px 0 -1px var(--color-border);
-  }
-  /* Voice orb — drop blend trickery, stage becomes opaque surface. */
-  .voice-orb-flow, .voice-orb-sheen { mix-blend-mode: normal; }
-  .voice-stage { background: var(--color-surface); }
-  /* Wave sheen — drop screen blend when transparency is reduced. */
-  .voice-lock .voice-committed::after { mix-blend-mode: normal; }
+html[data-flat="1"] .glass, html[data-flat="1"] .aleph-sidebar, html[data-flat="1"] .aleph-sidebar::before {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
-@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
-  :root:not(.light), :root:not(.light)[data-material] {
+html[data-flat="1"] .glass::before, html[data-flat="1"] .glass::after,
+html[data-flat="1"] .aleph-sidebar::before,
+html[data-flat="1"] .aleph-shell::after { display: none !important; }
+html[data-flat="1"] .aleph-scrim, html[data-flat="1"] .aleph-blur-subtle {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-flat="1"] .aleph-sidebar { background-color: var(--color-sidebar) !important; }
+/* Kill the primitives at the source: every material collapses to solid.
+   !important here beats any non-!important material or theme block
+   regardless of specificity or position. `:root[data-material]` also
+   covers the data-material attribute blocks so they can't re-supply
+   values via the normal cascade. Compound attribute selector, not nested —
+   see the block comment above: `:root` is `<html>` itself, so nesting this
+   under a `html[data-flat="1"] { }` wrapper would silently kill it. */
+:root[data-flat="1"], :root[data-flat="1"][data-material] {
+  --aleph-canvas-base: var(--aleph-solid-ground) !important;
+  --mat-raised: oklch(1.00 0 0) !important;
+  --mat-grain: 0 !important;
+  --scrim-blur: 0px !important;
+  --glass-blur: 0px !important;
+  --glass-blur-subtle: 0px !important;
+  --glass-blur-chrome: 0px !important;
+  --glass-saturate: 1 !important;
+}
+.dark[data-flat="1"], .dark[data-flat="1"][data-material] { --mat-raised: oklch(0.20 0.018 310) !important; }
+/* Message-flow faux glass → opaque solids. */
+html[data-flat="1"] .msg-glass {
+  background-color: var(--color-surface-raised) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+html[data-flat="1"] .msg-glass-user {
+  background-color: var(--color-primary) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+html[data-flat="1"] .msg-glass-danger {
+  background-color: var(--color-danger-subtle) !important;
+  background-image: none !important;
+}
+html[data-flat="1"] .glass-inset { background-color: var(--color-surface-sunken) !important; }
+html[data-flat="1"] .nav-tile-active {
+  background-color: var(--color-sidebar-active) !important;
+  box-shadow: none !important;
+}
+html[data-flat="1"] .aleph-composer, html[data-flat="1"] .aleph-session-tabs {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-flat="1"] .aleph-session-tabs { background-color: var(--color-surface) !important; }
+html[data-flat="1"] .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
+/* `.aleph-scroll-more` is NOT simply nulled here. The chat fade is
+   decorative — content dissolving under a chrome band — so dropping it costs
+   nothing. This one carries a fact (the list continues), and a reduced-
+   transparency reader needs that fact more than most, because the mask is
+   exactly the kind of effect they asked us to stop drawing. Keep the signal,
+   change the rendering: an opaque bottom rule instead of a gradient. */
+html[data-flat="1"] .aleph-scroll-more {
+  mask-image: none !important;
+  -webkit-mask-image: none !important;
+  box-shadow: inset 0 -3px 0 -1px var(--color-border);
+}
+/* Voice orb — drop blend trickery, stage becomes opaque surface. */
+html[data-flat="1"] .voice-orb-flow, html[data-flat="1"] .voice-orb-sheen { mix-blend-mode: normal; }
+html[data-flat="1"] .voice-stage { background: var(--color-surface); }
+/* Wave sheen — drop screen blend when transparency is reduced. */
+html[data-flat="1"] .voice-lock .voice-committed::after { mix-blend-mode: normal; }
+@media (prefers-color-scheme: dark) {
+  :root[data-flat="1"]:not(.light), :root[data-flat="1"]:not(.light)[data-material] {
     --mat-raised: oklch(0.20 0.018 310) !important;
   }
 }
