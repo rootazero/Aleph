@@ -5,36 +5,171 @@ All notable changes to the Aleph project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [26.8.6]
+## [26.8.23]
 
-§2.3 Context Mode round 2 — codex-aligned XML envelope, sub-agent binding,
-sandbox posture surface. **Pure §2.3 wiring**: not a feature rollout, an
-harness cleanup. Three pieces:
+The largest release to date — 1,461 commits over 23 days, 2,513 files,
++378k/−85k (of which +286k/−83k is source). Four threads. First, **three new
+subsystems**: a collaborative whiteboard canvas, a per-principal spend ledger,
+and an explicit scope layer that finally gives every memory read and session
+listing an answer to "who is asking". Second, **the Panel grows up** — a shared
+searchable picker replacing 56 always-visible provider cards, the canvas gallery
+moved into the left column, and every Chinese string literal a phone screen can
+reach collapsed into a locale table under a crate-wide census. Third,
+**multi-user reaches round 7**: an agent-axis admission gate, revocation that
+takes effect without a restart, roster-mediated room visibility, and a durable
+per-principal budget. Fourth, and the reason most of the fixes below exist at
+all, a **real-machine QA discipline** — fourteen new fixtures under `qa/` that
+drive a live server or a real browser and assert effects rather than calls.
+Nearly every defect in the Fixed list was green across 16k in-process tests and
+only visible once something real was on the other end of the wire.
 
-- `<environment_context>` XML block replaces the markdown pipe-separated
-  line in `RuntimeContextLayer` (priority 1720, Dynamic). Same facts the
-  model always saw (cwd / repo / git branch / model / time), now inside a
-  tag-delimited region downstream prompt-splitters can match on (same
-  role `markdown_excerpt::split_wikilinks` plays for note excerpts).
-  Pure swap, prompt cache-keyed identically.
-- `TurnEnvelope` carries a sub-agent binding (`parent: Option<EnvelopeParent>` +
-  `run_id: Option<String>`); sub-agent / team dispatches can now tag the
-  block with `<parent kind="…">…</parent>` and the dynamic tail with `- Run id: …`.
-  Primary dispatch defaults to `None` and stays byte-identical.
-- `OperatingEnvelopeLayer` echoes the sandbox posture's network line and a
-  new "Permission profile" line into `## Operating Envelope`. `SandboxSummary`
-  adds an `Option<String>` profile-id field (`#[serde(default, skip)]`,
-  backward-compatible) and a `with_permission_profile_id` builder helper.
+### Added
 
-Helpers side: `xml_util` adds `open_block_with_attrs` / `push_text_element` /
-`close_block` (three primitives, ~30 LOC) so the new XML block can be rendered
-without hand-balancing tags and so attribute values route through `escape_xml_attr`
-(text content stays through `escape_xml`). `RuntimeContext::resolve_working_dir`
-emits a structured `cwd_downgrade_total = 1` field for any `doctor` probe to
-count project-root churn. Ratchets: `SCAFFOLD_CEILING_BYTES` 7 495 → 7 600 and
-`DYNAMIC_TAIL_CEILING_BYTES` 1 017 → 1 100 (the +105 / +83 bytes are the XML
-tag overhead; content is unchanged).
+- **Whiteboard canvas.** A collaborative drawing surface with a four-layer
+  architecture, an optimistic-lock concurrency protocol (revision-keyed batches
+  that rebase rather than clobber), a capability-URL asset face served through a
+  shared byte-range parser, and an iframe sandbox boundary. The gallery lives in
+  the Panel's left column as a titled list, and titles are the one stored string
+  a human reads — so they pass a validation gate whose refusals are a closed enum
+  rather than prose, and can therefore be localized. See
+  [CANVAS.md](docs/reference/CANVAS.md).
+- **Per-principal spend budget.** A new `[policies.spend]` section, a durable
+  per-period ledger on the security store, and a single admission predicate
+  metered at the one funnel every LLM call already passes through. Period
+  boundaries follow the local calendar, and the policy and ledger handles are
+  installed unconditionally at boot — a process-global handle whose "never
+  installed" fallback happens to be a legal configuration value (no ceiling) can
+  otherwise report `configured: false` truthfully while describing a machine that
+  is in fact configured.
+- **A `plan` execution tier, and the plan → build handoff.** A read-only planning
+  tier: mutating tools are refused, and when a human approves the plan through
+  `scratchpad(request_approval)` the gate flips to the restore tier within the
+  same turn — no restart, no second parse. The refusal is a floor at the bottom
+  of `effective_permission`, so a months-old `"bash" = "allow"` entry cannot
+  hollow it out; the other three tiers keep explicit-entry precedence byte for
+  byte.
+- **`/btw` side questions.** Ask something mid-run without derailing the run. The
+  gateway serves the promote crossing itself instead of asking the model what the
+  word meant, promoted answers travel as a classifiable carrier, and both the TUI
+  overlay and the channel face read the same derivation (`BtwTurn`).
+- **Marketplace browse, and Claude Code plugin compatibility.** Install-by-name no
+  longer requires already knowing the name. Upstream manifests parse in every
+  shape their authors actually ship — inline `mcpServers` objects and the
+  six-member `source` union included — because serde does not degrade field by
+  field: one field typed too narrowly makes the whole document unreadable, and a
+  single `{source:"github"}` row used to make an entire marketplace invisible.
+- **`workspace_manage` and a drift-proof workspace CLI.** A tool face for
+  workspaces plus `workspace get|update|list --include-archived|unarchive`, with
+  the request and response shapes owned by `aleph_protocol::workspace` so a
+  renamed wire key is a compile error rather than a column of dashes.
+- **Provider preset pickers in the Panel.** The 56 preset cards collapse into a
+  searchable disclosure that opens in place; the left column keeps only what you
+  have actually configured. Keyboard walk, filtering, and highlight movement are
+  one shared implementation across four surfaces.
+- **Browser parity round.** `browser_batch`, `TextGone` and `Time` wait
+  conditions, and two drivers — a managed `playwright-cli` profile and the
+  chrome-devtools MCP server — held to the same contract: each verb returns a
+  value, not a transcript of the call.
+- **Per-origin extension usage tracking.** Usage badges in the Panel, an
+  `idle-extensions` doctor check, and a cleanup report that distinguishes
+  never-used from idle and marks the rows it cannot actually remove — a cleanup
+  list that invites an action must only list rows that action can succeed on.
+- **Persistent approval grants with a list-and-revoke surface.** The negative half
+  of the approval system had a circuit breaker; the positive half had no list at
+  all, so "allow for this session" could neither be seen nor taken back. Grants
+  now record the sentence the human was shown, because a list of fingerprints is
+  not a list.
+- **An `<environment_context>` XML envelope.** The runtime facts the model always
+  saw (cwd, repo, branch, model, time) now sit in a tag-delimited region that
+  downstream prompt splitters can match on; `TurnEnvelope` carries a sub-agent
+  binding, and the operating envelope echoes the sandbox network line and
+  permission profile. Primary dispatch stays byte-identical and cache-keyed the
+  same.
+- **A retrieval x-ray for memory, and fourteen real-machine QA fixtures.**
+  `memory.retrieve_with_trace` explains why a recall returned what it did;
+  `qa/{canvas,browser_managed,channels,spend_budget,btw_tui,busy_input,
+  plan_handoff,picker_nav,plugins,multiuser_audit,memory_curated,announce,
+  webview_compat,leftovers}/run.sh` each stand up a live server or a real browser
+  and assert effects.
 
+### Fixed
+
+- **Every `bash` call that omitted `working_dir` was denied on a factory
+  install.** The run loop injected the run's effective workspace through the
+  model-writable `working_dir` field, and the sandbox — which pins cwd to
+  `workspaces/<sha256(session)[..16]>` — could not tell that authorized value
+  from one the model invented, so it refused the authorized one. The value now
+  travels on a channel the gateway owns and the model cannot write, which also
+  stops relative paths from being replaced instead of resolved.
+- **The managed browser driver never launched a browser.** It issued 28
+  subcommands and never `open`, while `playwright-cli` requires it first; the
+  matching `NoSession` error was constructed and had zero consumers. Diagnostics
+  the CLI writes to stdout with exit 0 are now classified alongside stderr, so a
+  PDF write refused by a path gate stops reporting "Saved PDF to <path>".
+- **Slash commands never carried their arguments.** The TUI palette executed each
+  entry's bare `full_command`, so four session knobs, `/tools` and
+  `/compress` were only ever invoked with no argument — and their no-argument
+  behaviour (print the current value) reads like a feature. `/model <id>` was
+  worse: it had no arm in the payload builder at all and failed validation on
+  every slash surface, while the guard that checked shorthand targets kept
+  passing because the target had always existed.
+- **Ten tools were advertised but not dispatchable.** `plugin_manage` was
+  registered on three faces — each enough to put it on the tool table and bill
+  for its description on every request — and the dispatcher's hand-written match
+  had no arm for it, so every call answered `Unknown tool`.
+- **Telegram and Feishu policy configuration was dead on any install that had
+  ever saved a channel.** Secret migration moves required fields into the vault
+  and out of `config.toml`; the gating path parsed the original block, failed,
+  warned, and silently fell back to defaults — which was the entire reason the
+  bridge existed. Feishu's streaming emitter was unreachable by the same route
+  and said nothing at all.
+- **Feishu rate limiting was classified as permanent failure.** Lark reports it on
+  two channels — a modern `429` and a documented legacy `400`, both carrying
+  `code: 99991400` — and only the status code was read, so replies were dropped
+  silently. The backoff now reads the header the server actually sends.
+- **Memory reads answered from the wrong partition on eight gateway faces.**
+  Writers compose a partition id; readers used the bare persona, so "list my
+  notes" answered "none" about a note written a minute earlier. This is not
+  multi-user-only — a loopback Panel session is already a personal partition.
+- **A frame that carried its own attribution was rendered into whatever
+  conversation you happened to be looking at.** A second tab, a room teammate, a
+  CLI turn or any cron tick could paint a full turn into the active thread and
+  overwrite its session key. Frames now carry attribution end to end, and only
+  provably-elsewhere frames are dropped.
+- **`metadata.json` corruption from non-atomic read-modify-write.** `fs::write` is
+  create + truncate + write, and sixteen unlocked call sites could interleave, so
+  a torn file made a session simultaneously absent from the list, not-found in
+  history, and unpatchable — with the transcript intact beside it, and a restart
+  no help. Writes are atomic and the read-modify-write is a critical section by
+  construction, not by discipline.
+- **The dream daemon's activity sensor had no producer.** `record_activity()` was
+  cut as unused on the same day another merge restored every consumer, so
+  `idle_seconds()` measured process uptime: yielding to the user was vacuously
+  false after fifteen minutes and vacuously true before, spending the single
+  nightly budget on a cycle that aborted in its first stage.
+- **Test suites that were never compiled, and one that never ran.** A 325-line RPC
+  test file no `mod` statement referenced; a `--lib` suite that had not compiled
+  since a missing parenthesis, during which a ratchet number was raised by
+  arithmetic rather than measurement; and a `-c` short flag claimed twice, which
+  clap validates with a debug assertion that killed the TUI binary before `main`.
+- **A temp-directory leak of 7,623 stray trees and 4.0 GB.** Guards dropped before
+  the tree was used, `Drop` impls hung on `static`s that never drop, and stray
+  `aleph-server` processes still holding ports. Cleanup is an `atexit` hook now —
+  and the first measurement was wrong because `ls -1` does not list dotfiles,
+  which is what `tempfile` creates.
+- **macOS packaging broke on the install floor.** `minimumSystemVersion` doubles
+  as `MACOSX_DEPLOYMENT_TARGET`; at ≥ 12.0 chained fixups left proc-macro dylib
+  symbol tables misaligned and dyld refused to load them, surfacing as
+  `E0463 can't find crate`. It looked intermittent only because cargo does not
+  fingerprint that variable, so a warm cache hid it.
+- **Panel refusals were rendered as absence.** An admin `Err` read as "nothing
+  configured" — confidently telling a user with a working provider to go
+  configure one — and the write path still answered with a raw protocol string
+  after the read path had been fixed. Classification is one crate-wide chokepoint
+  with no per-page allowlist. Phone screens also rendered Chinese copy through
+  shared modules a directory-scoped guard could not see, and every iOS-style
+  switch displayed as off because `attr:aria-pressed` on a native element sets
+  nothing — so the first tap on a healthy provider turned it off.
 ## [26.7.31] 
 
 Bigger again — 400 commits over ten days, 1,506 files, +115k/−56k. Three
