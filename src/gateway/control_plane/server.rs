@@ -55,7 +55,7 @@ pub fn create_control_plane_router() -> Router {
 /// are correctly still acceptance rather than being caught by a textual
 /// match on "q=0".
 ///
-/// Three malformed shapes stay explicitly decided rather than falling out
+/// Four malformed shapes stay explicitly decided rather than falling out
 /// of how the parse happens to be written. No conformant client emits any
 /// of them, but each one's accidental reading was *acceptance* — brotli
 /// sent to a client that refused it — so each resolves toward identity,
@@ -72,6 +72,11 @@ pub fn create_control_plane_router() -> Router {
 ///   acceptance.
 /// * **Whitespace around the parameter `=` is tolerated**, so `br;q = 0`
 ///   refuses rather than being read as a `br` with no weight at all.
+/// * **A negative weight is not a positive preference**, so the test is
+///   `<= 0.0` rather than `== 0.0` and `br;q=-1` refuses. Unlike the three
+///   above this one was not a reported gap; it is here because the same
+///   question — "is this a client asking for brotli?" — has only one
+///   defensible answer for a weight below zero.
 ///
 /// This still answers exactly one question — "precompressed sibling or
 /// not" for the `br` token specifically — not full content negotiation:

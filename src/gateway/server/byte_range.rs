@@ -22,11 +22,20 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RangeVerdict {
     /// No usable range — send 200 with the entire body. Covers "no header",
-    /// "malformed", and "multi-range".
+    /// "not the bytes unit", "multi-range", and every *invalid* spec: one
+    /// that fails to parse, and one whose last-byte-pos is below its
+    /// first-byte-pos.
     Whole,
     /// Send 206 with `[start, end]`, both inclusive.
     Satisfiable { start: u64, end: u64 },
     /// Send 416 with `Content-Range: bytes */<total>`.
+    ///
+    /// Reserved for a spec that is syntactically VALID and simply does not
+    /// overlap the resource: a start at or past the end, a zero-length
+    /// suffix, or any range against an empty resource. Invalid input is
+    /// [`Self::Whole`], not this — RFC 9110 §14.1.1 draws that line, and
+    /// conflating the two is the easiest way to answer 416 to a request we
+    /// could have served in full.
     Unsatisfiable,
 }
 
@@ -100,7 +109,15 @@ pub fn parse_range(header: Option<&str>, total: u64) -> RangeVerdict {
         return RangeVerdict::Whole;
     };
     if end < start {
-        return RangeVerdict::Unsatisfiable;
+        // An inverted range is INVALID, not unsatisfiable (RFC 9110
+        // §14.1.1), so it joins the other invalid spellings at `Whole`.
+        // §14.2 permits either ignoring or rejecting an invalid spec, so
+        // 416 would also conform; ignoring is chosen because it is what
+        // this function already does with every other invalid spelling,
+        // and singling this one out would buy nothing — a client after the
+        // whole body via a bad header can get it from `bytes=abc-def`
+        // regardless.
+        return RangeVerdict::Whole;
     }
     RangeVerdict::Satisfiable {
         start,
@@ -187,11 +204,29 @@ mod tests {
         );
     }
 
+    /// Inverted is INVALID, not unsatisfiable — so it is ignored and the
+    /// whole resource is sent, not refused with a 416. RFC 9110 §14.1.1
+    /// defines the distinction; §14.2 would permit 416 too, and the reason
+    /// this file does not take that option is written at the branch.
     #[test]
-    fn an_inverted_range_is_unsatisfiable() {
+    fn an_inverted_range_falls_back_to_the_whole_resource() {
         assert_eq!(
             parse_range(Some("bytes=200-100"), TOTAL),
-            RangeVerdict::Unsatisfiable
+            RangeVerdict::Whole
+        );
+    }
+
+    /// Whitespace inside the spec is outside the ABNF, but the two `.trim()`
+    /// calls after the split absorb it. Untested until now: dropping both
+    /// trims left all thirteen other tests green.
+    #[test]
+    fn whitespace_inside_the_spec_is_absorbed() {
+        assert_eq!(
+            parse_range(Some("bytes= 100 - 199 "), TOTAL),
+            RangeVerdict::Satisfiable {
+                start: 100,
+                end: 199
+            }
         );
     }
 
