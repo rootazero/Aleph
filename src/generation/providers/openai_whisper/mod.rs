@@ -336,7 +336,25 @@ impl GenerationProvider for OpenAiWhisperProvider {
 }
 
 async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> {
+    use std::path::Component;
     let path_buf = PathBuf::from(path);
+    // Path-traversal guard: reject absolute paths and any `..` segments
+    // before touching the filesystem. Combined with the extension allow-list
+    // and a canonicalize() check, this blocks `../../etc/passwd.mp3`,
+    // `/etc/passwd.mp3`, and symlink TOCTOU attempts that would otherwise
+    // exfiltrate arbitrary files via the third-party API.
+    let has_bad_components = path_buf
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir));
+    if has_bad_components || path_buf.is_absolute() {
+        return Err(GenerationError::invalid_parameters(
+            format!(
+                "Refusing to read '{}': path must be relative without '..' components",
+                path_buf.display()
+            ),
+            Some("file_path".to_string()),
+        ));
+    }
     // The local path comes from user/LLM-controlled request fields
     // (`request.prompt` or `params.reference_audio`) and its bytes are
     // uploaded to a third-party API, so confine reads to recognized audio
@@ -351,6 +369,23 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> 
             Some("file_path".to_string()),
         ));
     }
+    // Resolve symlinks to defeat TOCTOU; reject canonical paths that escape.
+    let canonical = tokio::fs::canonicalize(&path_buf).await.map_err(|e| {
+        GenerationError::invalid_parameters(
+            format!("Failed to resolve audio file '{}': {}", path_buf.display(), e),
+            Some("file_path".to_string()),
+        )
+    })?;
+    if canonical.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(GenerationError::invalid_parameters(
+            format!(
+                "Refusing to read '{}': symlink target escapes working directory",
+                path_buf.display()
+            ),
+            Some("file_path".to_string()),
+        ));
+    }
+    let path_buf = canonical;
     // Async read: a blocking std::fs::read here would stall the tokio
     // worker thread for large audio files.
     let bytes = tokio::fs::read(&path_buf).await.map_err(|e| {

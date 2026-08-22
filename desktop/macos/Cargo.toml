@@ -11,6 +11,10 @@ keywords = ["aleph", "desktop", "macos", "automation"]
 readme = "README.md"
 
 [dependencies]
+# Cross-platform deps — safe on any host. The crate root (`lib.rs`) is gated by
+# `#![cfg(target_os = "macos")]` so on non-Apple hosts this lib is compiled as
+# an empty crate (cargo emits no warnings, just a zero-target lib), and these
+# deps never pull Apple-only crates.
 aleph-desktop = { path = "../shared" }
 # JSON-RPC method / params / result types shared with the Swift helper.
 aleph-protocol = { path = "../../shared/protocol" }
@@ -23,6 +27,15 @@ dirs = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 chrono = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Every dep below compiles only on Apple platforms. Listing them under
+# [target.'cfg(target_os = "macos")'.dependencies] (instead of plain
+# [dependencies]) means cargo's resolver never tries to build them on Windows /
+# Linux, where the objc2 / core-foundation crates hard-fail with a
+# `compile_error!`. Without this gate `cargo check --workspace` on Windows fails
+# even though nothing in the workspace actually uses `aleph-desktop-macos`
+# there.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSDictionary", "NSProcessInfo", "NSURL",

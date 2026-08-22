@@ -594,6 +594,19 @@ impl AgentHarness {
                     let split = split_child.is_some();
                     if let Some(child) = split_child {
                         current_session = child;
+                        // Reset the prompt watermark when switching sessions:
+                        // `last_prompt_seq` was captured from the PARENT's
+                        // event log, but the child's seqs are independent.
+                        // Using a parent watermark on the child's log makes
+                        // `has_unanswered_user_message` fetch the wrong tail
+                        // (or an empty one when the parent's seq exceeds the
+                        // child's), silently suppressing follow-up detection
+                        // on the child until a second user message arrives
+                        // (H3 in review/harness-statics). Resetting to 0 is
+                        // the safe default — the next Think on the child
+                        // re-captures a proper watermark, and the follow-up
+                        // check returns false until then.
+                        self.last_prompt_seq.store(0, Ordering::Relaxed);
                     }
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;

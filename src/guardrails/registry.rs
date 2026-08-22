@@ -47,13 +47,30 @@ impl GuardrailRegistry {
 
     /// Runtime kill-switch — flips `enabled` to false. All three `evaluate_*`
     /// methods short-circuit to `Allow` until `enable_all()` is called.
-    pub fn disable_all(&self) {
-        self.enabled.store(false, Ordering::Release);
-    }
+///
+/// Emits an audit-level log entry on every state change. Anyone with a
+/// handle to `GuardrailRegistry` (sub-modules, callbacks, plugins) can
+/// call this — the log is what makes it possible to tell an operator
+/// action from a hostile one after the fact.
+pub fn disable_all(&self) {
+    self.enabled.store(false, Ordering::Release);
+    tracing::warn!(
+        actor = crate::scope::current_scope()
+            .map(|s| s.owner_user_id)
+            .unwrap_or_else(|| "unknown".into()),
+        "guardrails disabled (runtime kill-switch) — all evaluations now Allow"
+    );
+}
 
-    pub fn enable_all(&self) {
-        self.enabled.store(true, Ordering::Release);
-    }
+pub fn enable_all(&self) {
+    self.enabled.store(true, Ordering::Release);
+    tracing::warn!(
+        actor = crate::scope::current_scope()
+            .map(|s| s.owner_user_id)
+            .unwrap_or_else(|| "unknown".into()),
+        "guardrails re-enabled"
+    );
+}
 
     pub fn input_count(&self) -> usize {
         self.input.len()
@@ -69,18 +86,27 @@ impl GuardrailRegistry {
         if !self.is_enabled() || self.input.is_empty() {
             return GuardrailDecision::Allow;
         }
-        let mut last_warn = None;
+        // Aggregate Warn reasons from ALL guardrails instead of keeping only
+        // the last one. The previous `last_warn: Option<Warn>` silently
+        // dropped every earlier warning, so operators saw at most one reason
+        // even when three guardrails each fired (H2 in
+        // review/guardrails-statics). Block / Sanitize still short-circuit.
+        let mut warns: Vec<String> = Vec::new();
         for g in &self.input {
             let d = g.evaluate_input(text).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => {
-                    last_warn = Some(GuardrailDecision::Warn { reason });
-                }
+                GuardrailDecision::Warn { reason } => warns.push(reason),
                 _ => return d,
             }
         }
-        last_warn.unwrap_or(GuardrailDecision::Allow)
+        if warns.is_empty() {
+            GuardrailDecision::Allow
+        } else {
+            GuardrailDecision::Warn {
+                reason: warns.join("; "),
+            }
+        }
     }
 
     /// Screen the user input the harness is about to replay into a prompt.
@@ -161,7 +187,18 @@ impl GuardrailRegistry {
                         reason = %reason,
                         "input guardrail blocked a replayed user message; redacting it",
                     );
-                    set_screened_text(&mut record.event, REDACTED_USER_MESSAGE.to_string());
+                    // Tag the redaction with the event's `seq` so the audit
+                    // trail can tell two redacted messages apart. The previous
+                    // single constant (`REDACTED_USER_MESSAGE`) made every
+                    // redaction indistinguishable, so if user A pasted user
+                    // B's secret and user C later pasted their own, both
+                    // looked identical in the log — there was no way to
+                    // correlate a redaction with the session seq that held
+                    // the original.
+                    set_screened_text(
+                        &mut record.event,
+                        format!("{REDACTED_USER_MESSAGE} [redacted:seq={}]", record.seq),
+                    );
                 }
             }
         }
@@ -172,36 +209,44 @@ impl GuardrailRegistry {
         if !self.is_enabled() || self.output.is_empty() {
             return GuardrailDecision::Allow;
         }
-        let mut last_warn = None;
+        let mut warns: Vec<String> = Vec::new();
         for g in &self.output {
             let d = g.evaluate_output(text).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => {
-                    last_warn = Some(GuardrailDecision::Warn { reason });
-                }
+                GuardrailDecision::Warn { reason } => warns.push(reason),
                 _ => return d,
             }
         }
-        last_warn.unwrap_or(GuardrailDecision::Allow)
+        if warns.is_empty() {
+            GuardrailDecision::Allow
+        } else {
+            GuardrailDecision::Warn {
+                reason: warns.join("; "),
+            }
+        }
     }
 
     pub async fn evaluate_tool_call(&self, tool_name: &str, args: &Value) -> GuardrailDecision {
         if !self.is_enabled() || self.tool_call.is_empty() {
             return GuardrailDecision::Allow;
         }
-        let mut last_warn = None;
+        let mut warns: Vec<String> = Vec::new();
         for g in &self.tool_call {
             let d = g.evaluate_tool_call(tool_name, args).await;
             match d {
                 GuardrailDecision::Allow => continue,
-                GuardrailDecision::Warn { reason } => {
-                    last_warn = Some(GuardrailDecision::Warn { reason });
-                }
+                GuardrailDecision::Warn { reason } => warns.push(reason),
                 _ => return d,
             }
         }
-        last_warn.unwrap_or(GuardrailDecision::Allow)
+        if warns.is_empty() {
+            GuardrailDecision::Allow
+        } else {
+            GuardrailDecision::Warn {
+                reason: warns.join("; "),
+            }
+        }
     }
 }
 

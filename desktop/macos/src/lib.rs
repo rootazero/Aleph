@@ -1,4 +1,13 @@
 //! macOS platform implementation for Aleph desktop capabilities.
+//!
+//! The whole crate is macOS-only — every native dependency (`objc2`,
+//! `core-foundation`, …) gates a `compile_error!` off Apple targets, and the
+//! rest of `Cargo.toml` defers them under `[target.'cfg(target_os = "macos")']`
+//! so they aren't even resolved on a non-Apple host. This `#![cfg]` matches:
+//! without it the crate would emit an empty lib on, say, Windows and confuse
+//! any `cargo check --workspace` that doesn't know the dep list. On macOS this
+//! gate is a no-op.
+#![cfg(target_os = "macos")]
 
 mod automation;
 mod ax;

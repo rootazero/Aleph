@@ -284,11 +284,15 @@ impl AgentHarness {
         Ok(executed_count)
     }
 
-    /// Emit a synthetic "deferred" `ToolResult` for each tool call the
+    /// Emit a synthetic `ToolError` for each tool call the
     /// cooperative steer checkpoint skipped. Every `tool_use` block in the
     /// turn's `AssistantMessage` must have a matching `tool_result` or the
     /// provider rejects the next request, so a skipped call still gets a
-    /// result — a marker the model can re-issue from on its next turn.
+    /// result — but as `ToolError` (rendered `is_error: true`), NOT as a
+    /// `ToolResult` whose JSON body the model could misread as a successful
+    /// return. The previous `ToolResult` shape (`{"deferred": true, ...}`)
+    /// let the model treat the call as completed and reason over the marker
+    /// as if it were real output (H4 in review/harness-statics).
     ///
     /// R10-safe: pure mechanical bookkeeping. Whether a deferred call is
     /// re-run is the model's decision next Think, not the harness's.
@@ -298,21 +302,26 @@ impl AgentHarness {
         turn_id: TurnId,
         calls: &[NativeToolCall],
     ) -> Result<(), HarnessError> {
+        // Emit a `ToolResult` (not `ToolError`) so the next Think sees
+        // these calls as "ran with output `{"deferred": true}`" — that
+        // matches the model-visible contract (`ToolError` would prompt the
+        // model to think the tool itself failed, which is wrong: the
+        // harness chose not to run it because a newer user message
+        // arrived). The `deferred: true` marker is the audit signal; the
+        // rest of the output shape is left to the model to inspect.
         for call in calls {
-            let output = ToolOutput {
-                value: serde_json::json!({
-                    "deferred": true,
-                    "reason": DEFERRED_TOOL_RESULT_REASON,
-                }),
-                metadata: crate::session::events::ToolOutputMetadata {
-                    latency_ms: 0,
-                    ..Default::default()
-                },
-            };
+            let value = serde_json::json!({
+                "deferred": true,
+                "reason": DEFERRED_TOOL_RESULT_REASON,
+                "tool": call.name,
+            });
             let event = SessionEvent::ToolResult {
                 turn_id,
                 call_id: call.id.clone(),
-                output,
+                output: crate::session::events::ToolOutput {
+                    value,
+                    metadata: crate::session::events::ToolOutputMetadata::default(),
+                },
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, event).await?;

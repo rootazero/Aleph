@@ -275,10 +275,16 @@ fn parse_sha256sums_line(manifest: &str, filename: &str) -> Option<String> {
         }
         // sha256sums format: `<hex>  <filename>` (two spaces) or
         // `<hex> *<filename>` (binary mode marker). The filename may
-        // appear with a leading `./`.
+        // appear with a leading `./`. Treat any mix of whitespace and the
+        // binary-mode `*` as one separator class so the filename lands
+        // cleanly on its own (and does not keep a stray leading `*`).
         let mut parts = line.splitn(2, |c: char| c.is_whitespace() || c == '*');
         let hex = parts.next()?.trim();
-        let name = parts.next()?.trim().trim_start_matches("./");
+        let name = parts
+            .next()?
+            .trim()
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '*')
+            .trim_start_matches("./");
         if name == filename && hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return Some(hex.to_ascii_lowercase());
         }

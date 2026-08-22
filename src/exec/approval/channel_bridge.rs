@@ -260,14 +260,30 @@ impl ChannelApprovalBridge {
                 "⚠️ 工具 `{tool_name}` 需要你的授权。\n```\n{summary}\n```\n{reason}\n\n{}",
                 plain_text_menu(&action.allowed_decisions)
             );
-            let ch = channel.read().await;
-            return match ch
-                .send(OutboundMessage::text(conversation_id.as_str(), text))
-                .await
+            // Through `ChannelRegistry::send`, not the channel handle: the
+            // registry owns rate-limit retry, the durable queue and
+            // per-conversation ordering (see `send_timeout_notice`). The same
+            // delivery timeout the capability path uses bounds it — a hung
+            // adapter send must not hold the channel read lock forever, or
+            // writers (reconnect/stop) block behind it and this approval
+            // waits without end.
+            return match timeout(
+                Duration::from_secs(DELIVERY_TIMEOUT_SECS),
+                self.registry
+                    .send(channel_id, OutboundMessage::text(conversation_id.as_str(), text)),
+            )
+            .await
             {
-                Ok(_) => Some(true),
-                Err(e) => {
+                Ok(Ok(_)) => Some(true),
+                Ok(Err(e)) => {
                     tracing::warn!(error = %e, "plain-text approval fallback send failed");
+                    Some(false)
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "plain-text approval fallback send timed out after {}s",
+                        DELIVERY_TIMEOUT_SECS
+                    );
                     Some(false)
                 }
             };

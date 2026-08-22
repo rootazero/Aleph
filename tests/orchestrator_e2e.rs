@@ -59,11 +59,62 @@ async fn default_agent_roundtrip() {
     );
 }
 
+/// An agent with no flow of its own must still run *in the caller's session*.
+///
+/// Replaces an `#[ignore]`d `unimplemented!()` shell that had waited on "Phase 6:
+/// Child session strategy wiring" since 2026-04. The premise was wrong twice
+/// over: the `researcher` preset it named is gone, and `Child` was never the
+/// right strategy for a gateway-addressed agent in the first place — with the
+/// only production producer passing `parent_session: None`, `resolve_session`
+/// took Child's no-parent fallback, minted a UUID, and never looked at
+/// `session_hint`. Every turn addressed to one of those six agents started from
+/// an empty log.
+///
+/// What is actually worth pinning end to end is the fallback path: `researcher`
+/// has no preset, so routing resolves a flow id the registry does not hold,
+/// `resolve_spec` substitutes `default-agent` with the requested agent stamped
+/// on, and the caller's session key survives. That path serves every
+/// filesystem-, plugin-, and team-created agent too.
 #[tokio::test]
-#[ignore = "Phase 6: requires Child session strategy wiring + per-session sandbox"]
-async fn researcher_child_dispatch() {
-    // TODO(Phase 6): FlowSpec `researcher` uses `session_strategy: child`,
-    // which requires per-session ToolService + Sandbox plumbing that Phase 5
-    // Task 9 intentionally deferred.
-    unimplemented!();
+async fn an_agent_without_its_own_flow_runs_in_the_callers_session() {
+    let fx = common::OrchestratorFixture::new_with_scripted_response("researched.").await;
+
+    let handle = fx
+        .orchestrator
+        .dispatch(FlowRequest {
+            flow_id: None,
+            agent_id: "researcher".into(),
+            input: FlowInput::Prompt("go look it up".into()),
+            channel: None,
+            session_hint: Some("e2e-session-fallback".into()),
+            owner_user_id: None,
+            scope_id: None,
+            parent_session: None,
+            depth: 0,
+            tool_service: None,
+            trace_sink: None,
+            interaction_manifest: None,
+            sandbox_override: None,
+            workspace_override: None,
+            max_iterations_override: None,
+            transient_context: None,
+            think_level: None,
+            envelope: alephcore::thinker::TurnEnvelope::none(),
+            model_directive: None,
+        })
+        .await
+        .expect("dispatch");
+
+    assert_eq!(
+        handle.session_key, "e2e-session-fallback",
+        "the fallback flow minted a new session instead of reusing the caller's — \
+         every turn for this agent would start from an empty transcript"
+    );
+
+    let outcome = handle
+        .completion
+        .await
+        .expect("completion recv")
+        .expect("flow ok");
+    assert!(outcome.final_text.contains("researched"));
 }

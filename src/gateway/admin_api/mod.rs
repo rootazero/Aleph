@@ -8,6 +8,7 @@
 //! Spec C scope covers secrets (memory writes go through the existing
 //! `remember` tool).
 
+pub mod reconciler;
 pub mod resume;
 pub mod secrets;
 
@@ -31,12 +32,20 @@ pub struct AdminApiState {
     /// same store the JSON-RPC surface uses, so both faces of `agent.resume`
     /// resolve a session key identically.
     pub session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    /// Memory command handler whose `last_reconcile_report` is exposed
+    /// through `/v1/admin/reconciler/latest`. `None` is permitted for
+    /// the `bin-aleph` CLI subcommands that don't need the reconciler
+    /// surface (they only touch secrets / resume), but the production
+    /// `bin/aleph-server/commands/start` wires a real handler so the
+    /// endpoint reports the most recent scan.
+    pub memory_handler: Option<Arc<crate::memory::MemoryCommandHandler>>,
 }
 
 pub fn router(state: AdminApiState) -> Router {
     Router::new()
         .nest("/secrets", secrets::router())
         .nest("/resume", resume::router())
+        .nest("/reconciler", reconciler::router())
         .with_state(state.clone())
         .layer(from_fn_with_state(state, admin_auth_middleware))
 }
@@ -127,6 +136,7 @@ mod tests {
             shared_token,
             agent_manager,
             session_store: test_session_store(dir.path()),
+            memory_handler: None,
         });
         (app, token, dir)
     }

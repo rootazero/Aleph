@@ -400,8 +400,40 @@ impl GatewayEventBus {
             })
         };
         let json = serde_json::to_string(&wire_json)?;
-        let typed_count = self.typed_sender.send(frame.clone()).unwrap_or(0);
-        let str_count = self.sender.send(json).unwrap_or(0);
+        let typed_count = self.typed_sender.send(frame.clone()).unwrap_or_else(|e| {
+            // A `SendError` here means there are zero subscribers OR every
+            // subscriber lagged behind the broadcast ring (capacity 1024 by
+            // default). The old code flattened both into `0`, leaving
+            // operators with no signal that frames were being silently lost.
+            // Log at warn so the lag-behind case is observable; the no-
+            // subscriber case is benign and stays at trace.
+            let _lag = e.0;
+            if self.typed_sender.receiver_count() == 0 {
+                tracing::trace!("typed event has no subscribers; dropping");
+            } else {
+                tracing::warn!(
+                    subscribers = self.typed_sender.receiver_count(),
+                    "typed event dropped: subscribers fell behind broadcast ring; \
+                     consider raising broadcast capacity or slowing publish rate"
+                );
+            }
+            // Best-effort: still try to deliver via the string channel.
+            0
+        });
+        let str_count = self.sender.send(json).unwrap_or_else(|e| {
+            let lag = e.0;
+            if self.sender.receiver_count() == 0 {
+                tracing::trace!("string event has no subscribers; dropping");
+            } else {
+                tracing::warn!(
+                    subscribers = self.sender.receiver_count(),
+                    "string event dropped: subscribers fell behind broadcast ring"
+                );
+            }
+            // Suppress unused warning on lag.
+            let _ = lag;
+            0
+        });
         Ok(typed_count.max(str_count))
     }
 
@@ -417,7 +449,18 @@ impl GatewayEventBus {
             event_str.to_string()
         };
         debug!("Publishing event: {}", preview);
-        self.sender.send(event_str.to_string()).unwrap_or(0)
+        self.sender.send(event_str.to_string()).unwrap_or_else(|e| {
+            if self.sender.receiver_count() == 0 {
+                tracing::trace!("event has no subscribers; dropping");
+            } else {
+                tracing::warn!(
+                    subscribers = self.sender.receiver_count(),
+                    "event dropped: subscribers fell behind broadcast ring"
+                );
+            }
+            let _ = e;
+            0
+        })
     }
 
     /// Publish a typed event by serializing it to JSON.

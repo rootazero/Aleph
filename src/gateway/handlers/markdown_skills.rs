@@ -315,7 +315,7 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("skill.md");
-        match std::fs::read(&load_path) {
+        match tokio::fs::read(&load_path).await {
             Ok(bytes) => scan_content(file_name, &bytes),
             Err(e) => {
                 return JsonRpcResponse::error(

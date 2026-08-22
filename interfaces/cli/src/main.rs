@@ -789,6 +789,13 @@ async fn dispatch_marketplace(
         ),
     };
     let result: serde_json::Value = client.call(method, Some(params)).await?;
+    // Read before the render arms below consume `result`. The name comes from
+    // the add response because the server derives it from the source; deriving
+    // it here would be a second answer to what the row is called.
+    let added_name = result
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     if json {
         crate::output::print_json(&result);
     } else if matches!(method, "plugin.marketplace.browse") {
@@ -846,6 +853,26 @@ async fn dispatch_marketplace(
     } else {
         println!("{result}");
     }
+
+    // `add` registers; it does not fetch. The Panel, the model-facing
+    // `plugin_manage(marketplace_add)` and the shipped
+    // `aleph-server plugin marketplace add` all follow it with an update, and
+    // a fourth face that does not would leave the operator with a catalogue
+    // that is registered and empty, with nothing on screen saying a second
+    if matches!(method, "plugin.marketplace.add") && !json {
+        let params = serde_json::to_value(MarketplaceUpdateParams { name: added_name })?;
+        let synced: CliResult<serde_json::Value> = client
+            .call("plugin.marketplace.update", Some(params))
+            .await
+            .map_err(Into::into);
+        match synced {
+            Ok(_) => println!("Fetched its contents."),
+            // Registered but not fetched is a real state, and saying so beats
+            // an empty catalogue with no reason.
+            Err(e) => eprintln!("! registered, but fetching its contents failed: {e}"),
+        }
+    }
+
     client.close().await?;
     Ok(())
 }

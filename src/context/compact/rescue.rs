@@ -52,7 +52,15 @@ use crate::tool_metadata::ToolDefinition;
 /// The cap is the *policy*; the slot itself is per-run state owned by the host
 /// (see [`RescueHost::reserve_rescue_slot`], whose `compare_exchange` is what
 /// keeps two concurrent paths from both rescuing).
-pub const MAX_REACTIVE_COMPACT_ATTEMPTS: u32 = 1;
+///
+/// History: this was 1 (single-shot rescue) for claude-code parity, but in
+/// practice the compactor itself can fail transiently (5xx from the
+/// summarisation LLM) on a workload whose primary call succeeds only after a
+/// retry. A cap of 1 meant a single transient failure bricked the session.
+/// Cap is 2: one transient failure can be retried, a second falls through to
+/// deterministic truncation floor, and the user gets a graceful error rather
+/// than a /reset-required session.
+pub const MAX_REACTIVE_COMPACT_ATTEMPTS: u32 = 2;
 
 /// Everything the rescue needs that is plain data — the in-flight turn's prompt
 /// surroundings plus the two context-layer collaborators. All borrowed: the

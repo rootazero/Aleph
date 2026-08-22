@@ -198,7 +198,8 @@ impl AiProvider for RecoverableOverflowProvider {
 }
 
 /// Provider that ALWAYS returns `prompt_too_long`. Used to verify the
-/// rescue cap holds at `MAX_REACTIVE_COMPACT_ATTEMPTS = 1`.
+/// rescue cap holds at the value defined in
+/// `MAX_REACTIVE_COMPACT_ATTEMPTS` (currently 2).
 struct PersistentOverflowProvider {
     calls: AtomicUsize,
 }

@@ -81,7 +81,7 @@ pub use events::{
         ConsolidateCommand, CreateNoteCommand, DeleteNoteCommand, InvalidateNoteCommand,
         RecordNoteAccessCommand, RestoreNoteCommand, UpdateContentCommand,
     },
-    handler::MemoryCommandHandler,
+    handler::{DivergentFact, MemoryCommandHandler, ReconcileReport},
     migration::{EventSourcingMigration, MigrationReport},
     projector::EventProjector,
     traveler::MemoryTimeTraveler,

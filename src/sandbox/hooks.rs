@@ -19,18 +19,26 @@ pub enum SandboxHookResult {
 }
 
 /// Context passed to sandbox hooks.
+///
+/// Deliberately carries *only* the command. This type used to have a
+/// `tool_name: &'a str` of its own, and both production call sites filled it
+/// with `command.program` — so every hook that logged or bucketed on it was
+/// reading the OS binary under a name that promised the tool. The lie was
+/// invisible to the suite because every fixture passed a literal (`"bash_exec"`,
+/// `"test_tool"`) that no producer ever sends. The identity now lives on
+/// [`SandboxCommand::tool_name`], where the producer is forced to supply it,
+/// and there is nowhere left for a second answer to sit.
 #[derive(Debug)]
 pub struct SandboxHookContext<'a> {
-    /// The tool being executed.
-    pub tool_name: &'a str,
-    /// The sandbox command that would be executed.
+    /// The sandbox command that would be executed. Hooks that need the calling
+    /// tool read `command.tool_name`; `command.program` is the OS binary.
     pub command: &'a SandboxCommand,
 }
 
 impl<'a> SandboxHookContext<'a> {
     #[must_use]
-    pub const fn new(tool_name: &'a str, command: &'a SandboxCommand) -> Self {
-        Self { tool_name, command }
+    pub const fn new(command: &'a SandboxCommand) -> Self {
+        Self { command }
     }
 }
 
@@ -63,9 +71,7 @@ impl SandboxHooks {
     /// Run all before hooks. Returns `SandboxHookResult::Deny` on first denial.
     pub async fn run_before(&self, ctx: &SandboxHookContext<'_>) -> SandboxHookResult {
         for hook in &self.before {
-            let result = hook
-                .before(SandboxHookContext::new(ctx.tool_name, ctx.command))
-                .await;
+            let result = hook.before(SandboxHookContext::new(ctx.command)).await;
             if !matches!(result, SandboxHookResult::Allow) {
                 return result;
             }
@@ -100,6 +106,7 @@ mod tests {
         let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook(true)));
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
+            tool_name: "bash".into(),
             program: "echo".into(),
             args: vec!["hello".into()],
             env: std::collections::HashMap::new(),
@@ -108,7 +115,7 @@ mod tests {
             capabilities: SandboxCapabilities::default(),
             timeout: None,
         };
-        let ctx = SandboxHookContext::new("test_tool", &cmd);
+        let ctx = SandboxHookContext::new(&cmd);
         assert!(matches!(
             hooks.run_before(&ctx).await,
             SandboxHookResult::Allow
@@ -121,6 +128,7 @@ mod tests {
         let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook(false)));
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
+            tool_name: "bash".into(),
             program: "echo".into(),
             args: vec!["hello".into()],
             env: std::collections::HashMap::new(),
@@ -129,7 +137,7 @@ mod tests {
             capabilities: SandboxCapabilities::default(),
             timeout: None,
         };
-        let ctx = SandboxHookContext::new("test_tool", &cmd);
+        let ctx = SandboxHookContext::new(&cmd);
         let result = hooks.run_before(&ctx).await;
         assert!(matches!(result, SandboxHookResult::Deny { .. }));
     }
@@ -161,6 +169,7 @@ mod tests {
 
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
+            tool_name: "bash".into(),
             program: "echo".into(),
             args: vec!["hello".into()],
             env: std::collections::HashMap::new(),
@@ -169,7 +178,7 @@ mod tests {
             capabilities: SandboxCapabilities::default(),
             timeout: None,
         };
-        let ctx = SandboxHookContext::new("test_tool", &cmd);
+        let ctx = SandboxHookContext::new(&cmd);
         let result = hooks.run_before(&ctx).await;
         assert!(matches!(result, SandboxHookResult::Deny { .. }));
         assert!(

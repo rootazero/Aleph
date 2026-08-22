@@ -63,7 +63,7 @@ impl GroupChatOrchestrator {
     /// - [`GroupChatError::PersonaNotFound`] if a `Preset` source references
     ///   a persona ID that is not in the registry.
     /// - [`GroupChatError::InvalidPersona`] if an inline persona fails validation.
-    pub fn create_session(
+    pub async fn create_session(
         &mut self,
         sources: Vec<PersonaSource>,
         topic: Option<String>,
@@ -144,7 +144,7 @@ impl GroupChatOrchestrator {
                 &source_channel,
                 &source_session_key,
                 owner_user_id.as_deref(),
-            ) {
+            ).await {
                 tracing::warn!(
                     subsystem = "group_chat",
                     error = %e,
@@ -181,7 +181,7 @@ impl GroupChatOrchestrator {
     /// Returns the [`SharedSession`] handle if the session existed, so the
     /// caller can still read its final state. Returns `None` if the session
     /// was not found.
-    pub fn end_session(&mut self, session_id: &str) -> Option<SharedSession> {
+    pub async fn end_session(&mut self, session_id: &str) -> Option<SharedSession> {
         let handle = self
             .sessions
             .lock()
@@ -191,11 +191,19 @@ impl GroupChatOrchestrator {
         match handle.try_lock() {
             Ok(mut session) => session.end(),
             Err(_) => {
-                tracing::debug!(
+                // The session is removed from the map but NOT marked ended —
+                // a ghost session if the caller also forgets `session.end()`.
+                // Warn-level (was debug) so the orphaned-active state is
+                // observable in production logs rather than silent (M5 in
+                // review/group_chat-statics). `blocking_lock` is not an
+                // option here: `end_session` is sync and may run inside a
+                // tokio runtime, where `blocking_lock` panics.
+                tracing::warn!(
                     subsystem = "group_chat",
                     session_id = %session_id,
-                    "session lock contended during end_session; caller is expected to \
-                     lock and call session.end() to mark the session ended"
+                    "session lock contended during end_session; caller MUST lock and call \
+                     session.end() to mark the session ended, or the session stays Active \
+                     while detached from the orchestrator"
                 );
             }
         }
@@ -204,6 +212,7 @@ impl GroupChatOrchestrator {
         if let Some(db) = &self.db {
             if let Err(e) =
                 db.update_group_chat_session_status(session_id, GroupChatStatus::Ended.as_str())
+                    .await
             {
                 tracing::warn!(
                     subsystem = "group_chat",
@@ -302,7 +311,7 @@ mod tests {
             Some("Design review".into()),
             "telegram".into(),
             "tg:12345".into(),
-        );
+        ).await;
 
         assert!(result.is_ok());
         let (session_id, handle) = result.unwrap();
@@ -324,7 +333,7 @@ mod tests {
             PersonaSource::Preset("arch".into()),
             PersonaSource::Preset("nonexistent".into()),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -347,7 +356,7 @@ mod tests {
             PersonaSource::Preset("arch".into()),
             PersonaSource::Preset("pm".into()),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -372,7 +381,7 @@ mod tests {
                 thinking_level: None,
             },
         )];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
         assert!(matches!(
             result.unwrap_err(),
             GroupChatError::InvalidPersona(_)
@@ -386,12 +395,16 @@ mod tests {
         let sources = vec![PersonaSource::Preset("arch".into())];
         let (session_id, _) = orch
             .create_session(sources, None, "cli".into(), "cli:1".into())
+            .await
             .unwrap();
 
         assert_eq!(orch.all_sessions().len(), 1);
 
         // End session via orchestrator — removes from map
-        let handle = orch.end_session(&session_id).expect("session should exist");
+        let handle = orch
+            .end_session(&session_id)
+            .await
+            .expect("session should exists");
         assert_eq!(
             orch.all_sessions().len(),
             0,
@@ -407,7 +420,7 @@ mod tests {
     async fn test_end_session_not_found() {
         let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
-        assert!(orch.end_session("nonexistent-session").is_none());
+        assert!(orch.end_session("nonexistent-session").await.is_none());
     }
 
     #[tokio::test]
@@ -423,6 +436,7 @@ mod tests {
                 "cli".into(),
                 "cli:a".into(),
             )
+            .await
             .unwrap();
 
         let sources_b = vec![PersonaSource::Preset("pm".into())];
@@ -433,12 +447,13 @@ mod tests {
                 "cli".into(),
                 "cli:b".into(),
             )
+            .await
             .unwrap();
 
         assert_eq!(orch.all_sessions().len(), 2);
 
         // End session A — removes from map
-        orch.end_session(&id_a);
+        orch.end_session(&id_a).await;
         assert_eq!(orch.all_sessions().len(), 1);
 
         // Remaining session should be Session B
@@ -468,7 +483,7 @@ mod tests {
             }),
             PersonaSource::Preset("nonexistent".into()),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
         assert!(matches!(
             result.unwrap_err(),
             GroupChatError::InvalidPersona(_)
@@ -493,7 +508,7 @@ mod tests {
                 thinking_level: None,
             }),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
         match result.unwrap_err() {
             GroupChatError::InvalidPersona(msg) => {
                 assert!(

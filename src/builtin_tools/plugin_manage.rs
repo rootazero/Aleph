@@ -23,6 +23,20 @@
 //! the Hub's consent-gated `hub_install_run`. This tool operates on plugins
 //! that are already on disk. The precedent is `hooks_manage`, which reports
 //! consent state and structurally cannot grant it.
+//!
+//! # Marketplaces are a different verb
+//!
+//! Registering a marketplace is not installing a plugin: it records where a
+//! catalogue lives and, on sync, `git clone`s a directory of manifests.
+//! Nothing from it executes until a human installs something. That is why the
+//! five `marketplace_*` actions live here while `install` does not, and why
+//! the description says both things rather than leaving the model to infer
+//! which side of the boundary it is on.
+//!
+//! Before these existed, `plugin.marketplace.{list,add,remove}` had exactly
+//! two clients: the Panel, and `interfaces/cli` — a binary the release
+//! workflow does not build. A conversation could ask which plugins were
+//! available and get nothing back.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -58,6 +72,18 @@ pub enum PluginAction {
     Untrust,
     /// Turn owner-trust enforcement on or off (`enforce`).
     TrustEnforce,
+    /// List registered marketplaces, with the type and source of each and
+    /// whether it can be removed.
+    MarketplaceList,
+    /// List the plugins a marketplace offers. Reads the local cache; it does
+    /// not fetch.
+    MarketplaceBrowse,
+    /// Register a marketplace from `source`, then fetch its contents.
+    MarketplaceAdd,
+    /// Drop a marketplace registration and its cache.
+    MarketplaceRemove,
+    /// Re-fetch one marketplace (`name`) or all of them.
+    MarketplaceUpdate,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -65,9 +91,21 @@ pub struct PluginManageArgs {
     /// What to do.
     pub action: PluginAction,
 
-    /// Plugin id. Required for everything except `list`.
+    /// Plugin id — or, for the `marketplace_*` actions, the marketplace name.
+    /// Required for everything except `list`, `marketplace_list`,
+    /// `marketplace_browse`, `marketplace_add` and `marketplace_update`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    /// For `marketplace_add`: an `owner/repo` slug, a GitHub URL, or a local
+    /// directory path. The name and type are derived from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    /// For `marketplace_browse`: substring filter over plugin ids and
+    /// descriptions. Omit to list everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 
     /// For `config_set`: the complete configuration object. This REPLACES the
     /// stored configuration — read it with `config_get` first and send the
@@ -128,7 +166,16 @@ impl AlephTool for PluginManageTool {
          do not stop a plugin that is already running — action='disable' does. \
          This tool cannot install or uninstall plugins: installing runs third-party code, so it \
          stays with the operator (or the consent-gated hub_install_run). Do not claim you \
-         installed or removed a plugin.";
+         installed or removed a plugin. \
+         The marketplace_* actions manage plugin CATALOGUES, which is a different thing from \
+         installing: marketplace_list shows what is registered and whether each can be removed, \
+         marketplace_browse reports what a marketplace offers so you can tell the operator (a \
+         local cache read; run marketplace_update first if it says the cache is missing, and note \
+         that installing from it is still the operator's to do -- the rows say whether an \
+         entry is one Aleph can install at all), marketplace_add \
+         takes an owner/repo slug, a GitHub URL or a local directory in `source` and both \
+         registers and fetches it, and marketplace_remove drops a registration and its cache. \
+         Registering a catalogue never runs anything from it.";
 
     type Args = PluginManageArgs;
     type Output = PluginManageOutput;
@@ -333,6 +380,184 @@ impl AlephTool for PluginManageTool {
                     }),
                 })
             }
+            PluginAction::MarketplaceList
+            | PluginAction::MarketplaceBrowse
+            | PluginAction::MarketplaceAdd
+            | PluginAction::MarketplaceRemove
+            | PluginAction::MarketplaceUpdate => {
+                // `git clone`, config file reads and directory deletion are all
+                // blocking, and this runs on the agent loop's executor.
+                tokio::task::spawn_blocking(move || Self::marketplace(args))
+                    .await
+                    .map_err(|e| {
+                        AlephError::config(format!("Marketplace task failed to run: {e}"))
+                    })?
+            }
+        }
+    }
+}
+
+impl PluginManageTool {
+    /// The marketplace half. Split out because it touches no plugin registry:
+    /// it reads and writes `[plugin_marketplaces]` and the marketplace cache,
+    /// and folding it into the match above would put a second subsystem
+    /// inside one 200-line function.
+    fn marketplace(args: PluginManageArgs) -> Result<PluginManageOutput> {
+        use crate::extension::marketplace::{classify, MarketplaceConfig, MarketplaceManager};
+        // The two row builders the Panel and the CLI already render, so
+        // "what a marketplace row looks like" has one answer across all three.
+        use crate::gateway::handlers::plugins::types::{
+            marketplace_registration_row, marketplace_row,
+        };
+
+        let mut manager =
+            MarketplaceManager::from_config().map_err(|e| AlephError::config(e.to_string()))?;
+
+        match args.action {
+            PluginAction::MarketplaceList => {
+                // Same row builder as `plugin.marketplace.list`, so the
+                // `removable` bit the model reads is the server's own refusal
+                // and not a second reading of it.
+                let mut rows: Vec<aleph_protocol::plugins::MarketplaceRow> = manager
+                    .list()
+                    .iter()
+                    .map(|(name, config)| marketplace_registration_row(name, config))
+                    .collect();
+                // `list()` hands back a HashMap; an unordered answer would
+                // reshuffle on every call for no reason.
+                rows.sort_by(|a, b| a.name.cmp(&b.name));
+                Ok(PluginManageOutput {
+                    summary: format!("{} marketplace(s) registered", rows.len()),
+                    data: serde_json::json!({ "marketplaces": rows }),
+                })
+            }
+
+            PluginAction::MarketplaceBrowse => {
+                let listing = manager.browse(args.name.as_deref(), args.query.as_deref());
+                // Projected rather than passed straight through. The wire row
+                // carries `installable`, whose subject is the Panel's Install
+                // button — and this tool has no install verb, so a bit by that
+                // name on this surface reads as an invitation it cannot honour
+                // ("a list that comes with an action invitation must have every
+                // row be actionable by it"). Renaming it for its real subject
+                // keeps the one derivation (`marketplace_row`) and drops the
+                // false invitation; the reason a row is not fetchable stays,
+                // because that IS what the operator needs to hear.
+                let plugins: Vec<serde_json::Value> = listing
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        let row = marketplace_row(entry);
+                        serde_json::json!({
+                            "name": row.name,
+                            "marketplace": row.marketplace,
+                            "description": row.description,
+                            "version": row.version,
+                            "operator_can_install": row.installable,
+                            "unavailable_reason": row.unavailable_reason,
+                        })
+                    })
+                    .collect();
+                let problems: Vec<serde_json::Value> = listing
+                    .problems
+                    .iter()
+                    .map(|p| serde_json::json!({ "marketplace": p.marketplace, "reason": p.reason }))
+                    .collect();
+                Ok(PluginManageOutput {
+                    summary: format!(
+                        "{} plugin(s) offered; {} marketplace(s) unreadable",
+                        plugins.len(),
+                        problems.len()
+                    ),
+                    data: serde_json::json!({
+                        "plugins": plugins,
+                        "problems": problems,
+                    }),
+                })
+            }
+
+            PluginAction::MarketplaceAdd => {
+                let source = args.source.as_deref().filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+                    AlephError::config(
+                        "'source' is required for marketplace_add — an owner/repo slug, a GitHub \
+                         URL, or a local directory path",
+                    )
+                })?;
+                // One classifier for every face; see `marketplace::source_spec`
+                // for the two heuristics this replaced.
+                let spec = classify(source, args.name.as_deref())
+                    .map_err(|e| AlephError::config(e.to_string()))?;
+
+                let entry = MarketplaceConfig {
+                    source: spec.source.clone(),
+                    source_type: spec.source_type,
+                };
+                manager.add(spec.name.clone(), entry.clone());
+
+                let mut config = crate::config::Config::load()?;
+                config
+                    .plugin_marketplaces
+                    .insert(spec.name.clone(), (&entry).into());
+                config.save_incremental(&["plugin_marketplaces"])?;
+
+                // Registering does not fetch. Composed here for the same
+                // reason the Panel and the shipped subcommand compose it: a
+                // catalogue that is registered but empty looks broken, and
+                // nothing on this surface hints that a second call fills it.
+                let fetch_error = manager.update(&spec.name).err();
+                Ok(PluginManageOutput {
+                    summary: match &fetch_error {
+                        None => format!("Registered '{}' and fetched its contents", spec.name),
+                        Some(e) => format!(
+                            "Registered '{}', but fetching its contents failed: {e}",
+                            spec.name
+                        ),
+                    },
+                    data: serde_json::json!({
+                        "name": spec.name,
+                        "source": spec.source,
+                        "type": spec.source_type.as_config_str(),
+                        "fetched": fetch_error.is_none(),
+                        "fetch_error": fetch_error,
+                    }),
+                })
+            }
+
+            PluginAction::MarketplaceRemove => {
+                let name = Self::require_name(&args)?.to_string();
+                manager
+                    .remove(&name)
+                    .map_err(|e| AlephError::config(e.to_string()))?;
+
+                let mut config = crate::config::Config::load()?;
+                config.plugin_marketplaces.remove(&name);
+                config.save_incremental(&["plugin_marketplaces"])?;
+
+                Ok(PluginManageOutput {
+                    summary: format!("Marketplace '{name}' removed"),
+                    data: serde_json::json!({ "name": name }),
+                })
+            }
+
+            PluginAction::MarketplaceUpdate => {
+                let result = match args.name.as_deref().filter(|n| !n.is_empty()) {
+                    Some(name) => manager.update(name).map(|_| ()),
+                    None => manager.update_all(),
+                };
+                result.map_err(|e| AlephError::config(e.to_string()))?;
+                Ok(PluginManageOutput {
+                    summary: match args.name.as_deref() {
+                        Some(n) => format!("Marketplace '{n}' updated"),
+                        None => "All marketplaces updated".to_string(),
+                    },
+                    data: serde_json::json!({ "name": args.name }),
+                })
+            }
+
+            // The caller above only routes the five arms handled here.
+            other => Err(AlephError::config(format!(
+                "{other:?} is not a marketplace action"
+            ))),
         }
     }
 }
@@ -360,6 +585,8 @@ mod tests {
                 name: None,
                 config: None,
                 enforce: None,
+                source: None,
+                query: None,
             };
             assert!(
                 PluginManageTool::require_name(&args).is_err(),
@@ -377,6 +604,8 @@ mod tests {
             name: Some(String::new()),
             config: None,
             enforce: None,
+            source: None,
+            query: None,
         };
         assert!(PluginManageTool::require_name(&args).is_err());
     }
@@ -389,5 +618,107 @@ mod tests {
         let d = PluginManageTool::DESCRIPTION;
         assert!(d.contains("cannot install"));
         assert!(d.contains("hub_install_run"));
+    }
+
+    /// `marketplace_remove` addresses one registration by name, so a missing
+    /// one must refuse rather than call `remove("")` — which `removal_refusal`
+    /// would reject anyway, but with a message about path separators rather
+    /// than about the argument the caller left out.
+    #[test]
+    fn marketplace_remove_needs_a_name() {
+        let args = PluginManageArgs {
+            action: PluginAction::MarketplaceRemove,
+            name: None,
+            config: None,
+            enforce: None,
+            source: None,
+            query: None,
+        };
+        assert!(PluginManageTool::require_name(&args).is_err());
+    }
+
+    /// `marketplace_add` is the one action keyed on `source`, and omitting it
+    /// has to say which argument is missing.
+    #[test]
+    fn marketplace_add_without_a_source_says_which_argument_is_missing() {
+        let err = PluginManageTool::marketplace(PluginManageArgs {
+            action: PluginAction::MarketplaceAdd,
+            name: None,
+            config: None,
+            enforce: None,
+            source: None,
+            query: None,
+        })
+        .expect_err("a source-less add must refuse");
+        assert!(
+            err.to_string().contains("'source' is required"),
+            "got {err}"
+        );
+    }
+
+    /// `marketplace_browse` was recorded as deliberately-not-done on
+    /// 2026-08-19 (FEATURE_LOCATOR §5.24), on the grounds that handing the
+    /// model a catalogue it is forbidden to act on inverts "a list that comes
+    /// with an action invitation must have every row be actionable by it".
+    /// The action shipped anyway, by explicit operator decision — so the
+    /// objection has to be discharged rather than outvoted, and this is where
+    /// it is: no field on a browse row may name an action *this* tool offers.
+    /// The wire row's `installable` describes the Panel's Install button, and
+    /// under that name on this surface it is exactly the false invitation the
+    /// record warned about.
+    #[test]
+    fn a_browse_row_names_the_actor_who_can_install() {
+        let src = include_str!("plugin_manage.rs");
+        let body = src
+            .replace('\r', "")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap()
+            .to_string();
+        assert!(
+            body.contains("\"operator_can_install\""),
+            "the browse projection must say whose install it is talking about"
+        );
+        assert!(
+            !body.contains("\"installable\""),
+            "a bare `installable` on this surface reads as something this tool can do"
+        );
+    }
+
+    /// Adding a catalogue and installing from it are different acts, and the
+    /// model reads only the description. If it ever collapses them, the
+    /// disclaimer above becomes a contradiction rather than a boundary.
+    #[test]
+    fn the_description_separates_registering_a_catalogue_from_installing() {
+        let d = PluginManageTool::DESCRIPTION;
+        assert!(
+            d.contains("marketplace_add") && d.contains("marketplace_browse"),
+            "the marketplace actions must be reachable from the description"
+        );
+        assert!(
+            d.contains("never runs anything from it"),
+            "the description must say that registering does not execute anything, or the \
+             `cannot install` line reads as a contradiction"
+        );
+    }
+
+    /// Every action this enum declares must be routed. A new arm that falls
+    /// through to the marketplace helper's catch-all would answer "not a
+    /// marketplace action" to a question about plugins.
+    #[test]
+    fn every_marketplace_action_routes_into_the_marketplace_half() {
+        for action in [
+            PluginAction::MarketplaceList,
+            PluginAction::MarketplaceBrowse,
+            PluginAction::MarketplaceAdd,
+            PluginAction::MarketplaceRemove,
+            PluginAction::MarketplaceUpdate,
+        ] {
+            let name = serde_json::to_value(action).unwrap();
+            assert!(
+                name.as_str().is_some_and(|n| n.starts_with("marketplace_")),
+                "{action:?} serialises as {name} — the wire name must say which half it is in"
+            );
+        }
     }
 }

@@ -39,6 +39,7 @@ pub struct InvalidateNoteCommand {
 /// Restore a previously invalidated note.
 pub struct RestoreNoteCommand {
     pub note_path: String,
+    pub actor: EventActor,
     pub correlation_id: Option<String>,
 }
 

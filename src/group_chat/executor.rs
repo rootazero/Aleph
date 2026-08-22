@@ -124,16 +124,15 @@ impl GroupChatExecutor {
     ) {
         let Some(db) = self.db.clone() else { return };
         let session_id = session_id.to_string();
-        let speaker = speaker.clone();
         let content = content.to_string();
 
-        let result = tokio::task::spawn_blocking(move || {
-            let (speaker_type, speaker_id, speaker_name) = match &speaker {
-                Speaker::Coordinator => ("coordinator", None, "Coordinator"),
-                Speaker::System => ("system", None, "System"),
-                Speaker::Persona { id, name } => ("persona", Some(id.as_str()), name.as_str()),
-            };
-            db.insert_group_chat_turn(
+        let (speaker_type, speaker_id, speaker_name) = match &speaker {
+            Speaker::Coordinator => ("coordinator", None, "Coordinator"),
+            Speaker::System => ("system", None, "System"),
+            Speaker::Persona { id, name } => ("persona", Some(id.as_str()), name.as_str()),
+        };
+        if let Err(e) = db
+            .insert_group_chat_turn(
                 &session_id,
                 round,
                 sequence,
@@ -142,25 +141,13 @@ impl GroupChatExecutor {
                 speaker_name,
                 &content,
             )
-        })
-        .await;
-
-        match result {
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    subsystem = "group_chat",
-                    error = %e,
-                    "failed to persist group chat turn to database"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    subsystem = "group_chat",
-                    error = %e,
-                    "group chat turn persistence task failed to join"
-                );
-            }
-            Ok(Ok(())) => {}
+            .await
+        {
+            tracing::warn!(
+                subsystem = "group_chat",
+                error = %e,
+                "failed to persist group chat turn to database"
+            );
         }
     }
 
@@ -398,11 +385,21 @@ impl GroupChatExecutor {
             persist_seq = persist_seq.saturating_add(1);
         }
 
-        // Advance current_round after a successful commit. The rollback path
-        // below restores both `history` and `current_round`.
+        // Advance current_round after a successful commit. Note: this is NOT
+        // transactional with the DB persistence below — `session.history` and
+        // `session.current_round` are mutated before `persist_turn` runs, so a
+        // cancel that lands between this assignment and the persistence loop
+        // leaves the in-memory session one round ahead of the
+        // `group_chat_turns` table. There is no rollback path here (none was
+        // ever needed before the staging refactor); the asymmetry is
+        // recoverable on next round by re-staging the user turn. If we ever
+        // add a transactional guarantee, this is the point to attach it.
         session.current_round = round;
 
-        // Persist every staged turn to the DB.
+        // Persist every staged turn to the DB. Best-effort: a DB error here
+        // is logged via `persist_turn` itself and does not propagate — the
+        // round is considered successful from the caller's perspective once
+        // the in-memory state is committed above.
         for (round_v, seq, speaker, content) in &staged_turns {
             self.persist_turn(&session.id, *round_v, *seq, speaker, content)
                 .await;

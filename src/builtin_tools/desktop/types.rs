@@ -22,13 +22,65 @@ pub enum MouseButton {
     Middle,
 }
 
+/// What a [`StatePredicate`] asserts about the accessibility tree.
+///
+/// Every assertion is a statement of **presence** — that an element exists,
+/// holds focus, or carries a value. There is deliberately no "absent" / "not
+/// focused" assertion: an AX walk is bounded (see
+/// `aleph_protocol::desktop_bridge::methods::ax::DEFAULT_MAX_NODES`) and never
+/// exhaustive, so "no element matches" can only ever be *unknown*, not *false*.
+/// Refusing the negative at the type level is what stops `verify_state` from
+/// manufacturing a `satisfied` verdict out of a tree it never finished reading.
+/// (Ported from cua-driver's `verify_state`, whose `ElementPredicate.exists` is
+/// typed `enum: [true]` for exactly this reason.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StateAssertion {
+    /// An element matching the selector is present in the tree.
+    Exists,
+    /// The target app's focused element matches the selector. Reads the app's
+    /// own focus (`ax.query_focused` with the pid), not the system's.
+    Focused,
+    /// A single matched element's value equals `value` exactly.
+    ValueEquals,
+    /// A single matched element's value contains `value` (case-sensitive substring).
+    ValueContains,
+}
+
+/// One postcondition checked over the accessibility tree of the target app by
+/// the `verify_state` action.
+///
+/// Predicates are ANDed. The selector fields (`role` / `title` /
+/// `title_contains`) narrow which element the assertion is about; `value` is
+/// only read for `value_equals` / `value_contains`. See [`StateAssertion`] for
+/// why only presence can be asserted.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct StatePredicate {
+    /// The assertion to make about the matched element(s).
+    pub assert: StateAssertion,
+    /// Match elements whose AX role equals this, e.g. `"AXButton"`. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Match elements whose title/label equals this (case-insensitive). Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Match elements whose title/label contains this substring (case-insensitive).
+    /// Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_contains: Option<String>,
+    /// The value compared against for `value_equals` / `value_contains`. Required
+    /// for those two assertions, ignored by the others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
 /// Arguments for the desktop tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct DesktopArgs {
     /// The desktop operation to perform. See the tool DESCRIPTION for the full
     /// per-action reference; the complete verb set is:
     ///
-    /// Perception: "screenshot", "ocr", "screen_record", "wait_visual",
+    /// Perception: "screenshot", "ocr", "screen_record", "wait_visual", "verify_state",
     /// "`display_list`". Pointer: "click", "`double_click`", "drag", "hover",
     /// "`cursor_position`", "`mouse_button`", "scroll". Keyboard/clipboard:
     /// "`type_text`", "`key_combo`", "`key_button`", "paste", "`clipboard_read`",
@@ -257,6 +309,18 @@ pub struct DesktopArgs {
     /// type into a secure/password field. Ignored by every other action.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
+
+    /// Postconditions for the `verify_state` action — AX-tree predicates that
+    /// are ANDed and polled until they hold (stably) or the window elapses.
+    /// See [`StatePredicate`]. Ignored by every other action.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expect: Vec<StatePredicate>,
+
+    /// `verify_state` only: how many consecutive satisfied samples are required
+    /// before the state is called *stable* (default 2, max 5). One filters a
+    /// value that was momentarily right mid-transition. Ignored elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_samples: Option<u64>,
 }
 
 /// A single sub-action inside a `batch` operation.
@@ -273,7 +337,7 @@ pub struct DesktopBatchAction {
     /// The desktop operation to perform. See the tool DESCRIPTION for the full
     /// per-action reference; the complete verb set is:
     ///
-    /// Perception: "screenshot", "ocr", "screen_record", "wait_visual",
+    /// Perception: "screenshot", "ocr", "screen_record", "wait_visual", "verify_state",
     /// "`display_list`". Pointer: "click", "`double_click`", "drag", "hover",
     /// "`cursor_position`", "`mouse_button`", "scroll". Keyboard/clipboard:
     /// "`type_text`", "`key_combo`", "`key_button`", "paste", "`clipboard_read`",
@@ -467,6 +531,15 @@ pub struct DesktopBatchAction {
     /// [`DesktopArgs::force`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
+
+    /// Postconditions for a `verify_state` sub-action. See [`DesktopArgs::expect`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expect: Vec<StatePredicate>,
+
+    /// Stable-sample count for a `verify_state` sub-action. See
+    /// [`DesktopArgs::stable_samples`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_samples: Option<u64>,
 }
 
 impl DesktopBatchAction {
@@ -513,6 +586,8 @@ impl DesktopBatchAction {
             pid: None,
             observe: None,
             force: None,
+            expect: Vec::new(),
+            stable_samples: None,
         }
     }
 }
@@ -561,6 +636,8 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             pid: b.pid,
             observe: b.observe.clone(),
             force: b.force,
+            expect: b.expect.clone(),
+            stable_samples: b.stable_samples,
         }
     }
 }

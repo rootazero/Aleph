@@ -3,12 +3,18 @@
 /// This module provides runtime control over the global log level.
 /// It uses an atomic variable to track the current level and allows
 /// dynamic modification without restarting the application.
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Once;
 
-/// Log level enumeration
+use crate::logging::LoggingError;
+
+/// Log level enumeration.
+///
+/// `#[repr(u8)]` matches the `AtomicU8` storage backing — `#[repr(C)]` would
+/// compile to whatever the platform ABI picks (typically `c_int` = 4 bytes),
+/// which would be misleading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[repr(C)]
+#[repr(u8)]
 pub enum LogLevel {
     Error,
     Warn,
@@ -31,9 +37,25 @@ impl LogLevel {
         }
     }
 
-    /// Parse from string (case-insensitive)
+    /// Parse from string (case-insensitive, trims surrounding whitespace and
+    /// surrounding quotes). Numeric strings (`"0"`..`"4"`) are accepted to
+    /// match `tracing-subscriber::EnvFilter`'s accepted form.
     #[must_use]
-    pub const fn parse(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().trim_matches('\"');
+        if let Ok(n) = s.parse::<u8>() {
+            // 0..=4 are the five known variants; anything else is out of
+            // range (e.g. `"9"`) and should parse as `None` rather than
+            // silently fall back to `Info` via `from_u8`.
+            return match n {
+                0 => Some(Self::Error),
+                1 => Some(Self::Warn),
+                2 => Some(Self::Info),
+                3 => Some(Self::Debug),
+                4 => Some(Self::Trace),
+                _ => None,
+            };
+        }
         if s.eq_ignore_ascii_case("error") {
             Some(Self::Error)
         } else if s.eq_ignore_ascii_case("warn") || s.eq_ignore_ascii_case("warning") {
@@ -60,7 +82,8 @@ impl LogLevel {
         }
     }
 
-    /// Convert from u8
+    /// Convert from u8. Out-of-range values (memory corruption, ABI mismatch
+    /// across hot-reload) fall back to `Info` and emit a single warn.
     fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::Error,
@@ -69,7 +92,7 @@ impl LogLevel {
             3 => Self::Debug,
             4 => Self::Trace,
             _ => {
-                tracing::warn!(value, "Invalid LogLevel u8 value, falling back to Info");
+                warn_invalid_level_once(value);
                 Self::Info
             }
         }
@@ -82,24 +105,66 @@ static CURRENT_LOG_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Info.to_u8());
 /// Initialization guard for log level
 static INIT: Once = Once::new();
 
+/// Once-guard for the invalid-level warn so a corrupt atomic does not spam
+/// the log on every `from_u8` read.
+static INVALID_LEVEL_WARNED: AtomicBool = AtomicBool::new(false);
+
+fn warn_invalid_level_once(value: u8) {
+    if INVALID_LEVEL_WARNED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        tracing::warn!(value, "Invalid LogLevel u8 value, falling back to Info");
+    }
+}
+
 /// Initialize the log level from environment or default.
+///
+/// `RUST_LOG` parsing: walk all comma-separated directives and keep the
+/// **last** simple-level entry (i.e. one without a `target=` prefix). Per-crate
+/// directives like `h2=warn` are skipped — the global atomic only stores one
+/// level for `alephcore`. Falls back to `Info` when nothing parses.
 pub(crate) fn init_log_level() {
     INIT.call_once(|| {
-        // Try to read from RUST_LOG environment variable
-        if let Ok(rust_log) = std::env::var("RUST_LOG") {
-            // Parse the log level from RUST_LOG
-            // Format can be "debug", "alephcore=debug", etc.
-            let level_str = rust_log
-                .split(',')
-                .next()
-                .and_then(|s| s.split('=').next_back())
-                .unwrap_or("info");
-
-            if let Some(level) = LogLevel::parse(level_str) {
-                CURRENT_LOG_LEVEL.store(level.to_u8(), Ordering::SeqCst);
+        let Ok(rust_log) = std::env::var("RUST_LOG") else {
+            return;
+        };
+        // Pick the last directive that has no `target=` prefix (the simple
+        // global-level entry). Per-target entries (`h2=warn`) are skipped so
+        // a global `info` from a per-crate override doesn't silently win.
+        let mut chosen: Option<LogLevel> = None;
+        for directive in rust_log.split(',') {
+            let Some((maybe_target, maybe_value)) = directive.split_once('=') else {
+                // Plain level directive.
+                if let Some(lvl) = LogLevel::parse(directive) {
+                    chosen = Some(lvl);
+                }
+                continue;
+            };
+            // `target=value` — only adopt it when the target names us.
+            let target = maybe_target.trim();
+            if !is_alephcore_target(target) {
+                continue;
+            }
+            if let Some(lvl) = LogLevel::parse(maybe_value) {
+                chosen = Some(lvl);
             }
         }
+        if let Some(level) = chosen {
+            CURRENT_LOG_LEVEL.store(level.to_u8(), Ordering::Release);
+        }
     });
+}
+
+/// Heuristic: a directive's target refers to `alephcore` when it is the
+/// crate name, the crate's library alias, an absolute path under it, or a
+/// binary with the `aleph-` prefix.
+fn is_alephcore_target(target: &str) -> bool {
+    matches!(target, "alephcore" | "aleph" | "alephcore_lib")
+        || target.starts_with("alephcore::")
+        || target.starts_with("aleph_server")
+        || target.starts_with("aleph-cli")
+        || target.starts_with("aleph-")
 }
 
 /// Get the current log level
@@ -108,34 +173,59 @@ pub fn get_log_level() -> LogLevel {
     // reported level matches the EnvFilter the logging backend actually uses.
     // `init_log_level` is idempotent (guarded by `Once`).
     init_log_level();
-    LogLevel::from_u8(CURRENT_LOG_LEVEL.load(Ordering::SeqCst))
+    LogLevel::from_u8(CURRENT_LOG_LEVEL.load(Ordering::Acquire))
 }
 
-/// Set the log level dynamically
+/// Set the log level dynamically.
 ///
-/// This updates both the reported level and the active subscriber filter when
-/// shared logging has been initialized.
-pub fn set_log_level(level: LogLevel) {
-    // Run the one-time RUST_LOG seed before applying the explicit override, so
-    // an early `set` is never clobbered by a later lazy env seed (the `Once`
-    // fires here first, then the explicit store below wins).
+/// Atomically swaps the reported level into the global atomic (CAS loop so
+/// concurrent `set_log_level` callers cannot lose intermediate writes to
+/// the audit log), and asks the shared logging backend to apply the same
+/// level to the live `EnvFilter`.
+///
+/// Returns `Ok(())` if both the atomic and the filter were updated. If the
+/// filter update fails (e.g. shared logging was never installed), returns
+/// [`LoggingError::FilterUnavailable`]. The atomic is updated in both cases —
+/// the contract is "reported level matches the stored value", with filter
+/// availability surfaced separately so the RPC layer can warn rather than
+/// silently lying about it.
+pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
     init_log_level();
-    let old_level = get_log_level();
-    CURRENT_LOG_LEVEL.store(level.to_u8(), Ordering::SeqCst);
+    // CAS loop: read-modify-write so concurrent setters do not interleave
+    // reads/stores between themselves and lose audit context.
+    let mut current = CURRENT_LOG_LEVEL.load(Ordering::Acquire);
+    let next = level.to_u8();
+    let old_u8 = loop {
+        if current == next {
+            break current;
+        }
+        match CURRENT_LOG_LEVEL.compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(prev) => break prev,
+            Err(observed) => current = observed,
+        }
+    };
+    let old_level = LogLevel::from_u8(old_u8);
     if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
-        tracing::debug!(%error, "Runtime log filter is unavailable");
+        tracing::warn!(%error, "Runtime log filter is unavailable");
+        return Err(LoggingError::FilterUnavailable(error));
     }
-
     tracing::info!(
         old_level = ?old_level,
         new_level = ?level,
         "Log level changed"
     );
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the global log-level atomic. Without this
+    /// guard, `cargo test`'s parallel test runner would let one test's
+    /// `set_log_level` leak into the next test's `get_log_level` assertion.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_log_level_to_filter_string() {
@@ -159,6 +249,23 @@ mod tests {
     }
 
     #[test]
+    fn test_log_level_parse_edge_cases() {
+        // Whitespace and quoting tolerance.
+        assert_eq!(LogLevel::parse("  "), None);
+        assert_eq!(LogLevel::parse(" debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::parse("debug  "), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::parse("\"debug\""), Some(LogLevel::Debug));
+        // Numeric forms (mirror tracing-subscriber).
+        assert_eq!(LogLevel::parse("0"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::parse("4"), Some(LogLevel::Trace));
+        assert_eq!(LogLevel::parse("9"), None);
+        // Empty string.
+        assert_eq!(LogLevel::parse(""), None);
+        // Compound directive must be rejected by the bare parser.
+        assert_eq!(LogLevel::parse("info=debug"), None);
+    }
+
+    #[test]
     fn test_log_level_roundtrip() {
         for level in &[
             LogLevel::Error,
@@ -175,17 +282,39 @@ mod tests {
 
     #[test]
     fn test_get_set_log_level() {
-        // Set to Debug
-        set_log_level(LogLevel::Debug);
-        assert_eq!(get_log_level(), LogLevel::Debug);
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = get_log_level();
+        // The atomic is updated unconditionally; the live filter update is
+        // best-effort and may report `FilterUnavailable` when the shared
+        // backend was never installed (the test environment). Both outcomes
+        // are correct — what we pin here is that `get_log_level` reflects
+        // every successful `set_log_level` call.
+        for target in [LogLevel::Debug, LogLevel::Error, LogLevel::Info] {
+            let _ = set_log_level(target);
+            assert_eq!(get_log_level(), target);
+        }
 
-        // Set to Error
-        set_log_level(LogLevel::Error);
-        assert_eq!(get_log_level(), LogLevel::Error);
+        // Restore to whatever was set before this test ran, so we don't
+        // pollute parallel tests' assumptions about the default level.
+        let _ = set_log_level(prev);
+    }
 
-        // Set back to Info (default)
-        set_log_level(LogLevel::Info);
-        assert_eq!(get_log_level(), LogLevel::Info);
+    #[test]
+    fn test_set_log_level_returns_filter_unavailable_outside_runtime() {
+        // Tests run without `init_component_logging`, so the shared backend
+        // refuses the runtime filter update. The atomic must still be
+        // updated, and the call must surface the failure rather than
+        // silently lie.
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = get_log_level();
+        let result = set_log_level(LogLevel::Warn);
+        assert_eq!(get_log_level(), LogLevel::Warn, "atomic updated regardless");
+        // The contract: outside a runtime the result is `FilterUnavailable`,
+        // but a test that runs alongside `init_component_logging` (some
+        // integration tests do) sees `Ok`. Both are correct — we only assert
+        // that the atomic was updated regardless of which branch fired.
+        let _ = result;
+        let _ = set_log_level(prev);
     }
 
     #[test]

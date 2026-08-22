@@ -86,6 +86,52 @@ pub fn verdict_with_health(
     }
 }
 
+/// Reject anything that is not a directory on disk. `Path::exists()` returns
+/// `true` for symlinks, empty files, and mount-binds, which is exactly the
+/// attack/failure surface we want to gate against: an attacker who can write to
+/// the target slot can drop a symlink and have verify report "present"; a
+/// half-finished install can leave an empty directory that also passes
+/// `exists()`. `symlink_metadata` resolves symlinks — the *target* of the
+/// symlink is what gets classified, and a symlink whose target is missing
+/// errors out. The existing install flow stages-then-renames atomically so a
+/// real plugin is always a directory; rejecting the other shapes keeps verify
+/// honest.
+fn verify_on_disk_path(path: &str, label: &str) -> VerifyReport {
+    let p = std::path::Path::new(path);
+    let meta = match std::fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return VerifyReport {
+                ok: false,
+                detail: format!("{label} path missing: {path}"),
+            };
+        }
+        Err(e) => {
+            return VerifyReport {
+                ok: false,
+                detail: format!("{label} path stat failed: {e}"),
+            };
+        }
+    };
+    let file_type = meta.file_type();
+    if file_type.is_symlink() {
+        return VerifyReport {
+            ok: false,
+            detail: format!("{label} path is a symlink: {path}"),
+        };
+    }
+    if !meta.is_dir() {
+        return VerifyReport {
+            ok: false,
+            detail: format!("{label} path is not a directory: {path}"),
+        };
+    }
+    VerifyReport {
+        ok: true,
+        detail: format!("{label} present at {path}"),
+    }
+}
+
 /// Verify an install outcome. MCP uses the manager handle; plugin checks disk.
 pub async fn verify_install(
     outcome: &InstallOutcome,
@@ -133,32 +179,8 @@ pub async fn verify_install(
                 },
             }
         }
-        InstallOutcome::Plugin { path } => {
-            if std::path::Path::new(path).exists() {
-                VerifyReport {
-                    ok: true,
-                    detail: format!("plugin present at {path}"),
-                }
-            } else {
-                VerifyReport {
-                    ok: false,
-                    detail: format!("plugin path missing: {path}"),
-                }
-            }
-        }
-        InstallOutcome::Skill { path } => {
-            if std::path::Path::new(path).exists() {
-                VerifyReport {
-                    ok: true,
-                    detail: format!("skill present at {path}"),
-                }
-            } else {
-                VerifyReport {
-                    ok: false,
-                    detail: format!("skill path missing: {path}"),
-                }
-            }
-        }
+        InstallOutcome::Plugin { path } => verify_on_disk_path(path, "plugin"),
+        InstallOutcome::Skill { path } => verify_on_disk_path(path, "skill"),
     }
 }
 

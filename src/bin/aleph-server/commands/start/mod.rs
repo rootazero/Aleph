@@ -1106,7 +1106,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the extensions.* gateway handlers below — both share the same SQLite
     // file via separate connections (rusqlite file-level locking).
     let (early_catalog_cache, early_marketplace_configs) = {
-        use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+        use alephcore::extension::marketplace::types::MarketplaceConfig;
         let catalog_path = alephcore::discovery::aleph_home_dir()
             .map(|d| d.join("hub_catalog.db"))
             .unwrap_or_else(|_| std::path::PathBuf::from("hub_catalog.db"));
@@ -1114,22 +1114,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             Ok(cache) => {
                 let configs: std::collections::HashMap<String, MarketplaceConfig> = {
                     let cfg = app_config.read().await;
-                    cfg.plugin_marketplaces
-                        .iter()
-                        .map(|(name, entry)| {
-                            let source_type = match entry.source_type.as_str() {
-                                "local" => MarketplaceSourceType::Local,
-                                _ => MarketplaceSourceType::Github,
-                            };
-                            (
-                                name.clone(),
-                                MarketplaceConfig {
-                                    source: entry.source.clone(),
-                                    source_type,
-                                },
-                            )
-                        })
-                        .collect()
+                    alephcore::extension::marketplace::configs_from_entries(
+                        &cfg.plugin_marketplaces,
+                    )
                 };
                 // Cold-start: seed official catalog (MCP + skills) into the aleph-hub slot if empty.
                 alephcore::hub::primer::prime_official_catalog_if_empty(&cache).await;
@@ -1639,10 +1626,50 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // LockOrIpc when this server holds the singleton lock. Bearer auth is
     // enforced by the existing OpenAI-compat handler upstream.
     {
+        // The reconciler endpoint surfaces the most recent `ReconcileReport`
+        // from the daemon operator opt-in starts via
+        // `MemoryCommandHandler::spawn_reconciler_daemon`. Construct one
+        // here so the admin API can query it; the reconciler daemon itself
+        // is started by config ([memory.reconciler] enabled = true).
+        let memory_handler = agent_result
+            .state_db
+            .as_ref()
+            .map(|state_db| {
+                std::sync::Arc::new(
+                    alephcore::memory::events::handler::MemoryCommandHandler::new(
+                        std::sync::Arc::clone(state_db),
+                    ),
+                )
+            });
+
+        // Start the background reconciler daemon if config opts in.
+        // The JoinHandle is stored on the server so a graceful shutdown
+        // can `.abort()` the task before dropping the StateDatabase
+        // the daemon reads from.
+        let reconciler_handle = if let Some(handler) = memory_handler.as_ref() {
+            let cfg = app_config.read().await.memory.reconciler.clone();
+            if cfg.enabled {
+                let interval = std::time::Duration::from_secs(cfg.interval_secs);
+                tracing::info!(
+                    interval_secs = cfg.interval_secs,
+                    "Starting background reconciler daemon"
+                );
+                Some(handler.spawn_reconciler_daemon(interval))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(handle) = reconciler_handle {
+            server.set_reconciler_handle(handle);
+        }
+
         let admin_state = alephcore::gateway::admin_api::AdminApiState {
             shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
             agent_manager: agent_manager.clone(),
             session_store: session_store.clone(),
+            memory_handler,
         };
         server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
     }
@@ -1907,27 +1934,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // (SHA256 verification + atomic copy). Separate from the catalog
                 // sync — the catalog comes from the Hub; installs still route
                 // through the marketplace for local plugin installs.
-                use alephcore::extension::marketplace::types::{
-                    MarketplaceConfig, MarketplaceSourceType,
-                };
+                use alephcore::extension::marketplace::types::MarketplaceConfig;
                 let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = {
                     let cfg = app_config.read().await;
-                    cfg.plugin_marketplaces
-                        .iter()
-                        .map(|(name, entry)| {
-                            let source_type = match entry.source_type.as_str() {
-                                "local" => MarketplaceSourceType::Local,
-                                _ => MarketplaceSourceType::Github,
-                            };
-                            (
-                                name.clone(),
-                                MarketplaceConfig {
-                                    source: entry.source.clone(),
-                                    source_type,
-                                },
-                            )
-                        })
-                        .collect()
+                    alephcore::extension::marketplace::configs_from_entries(
+                        &cfg.plugin_marketplaces,
+                    )
                 };
 
                 // Trust-gated install façade: extensions.disclosure/.configure/.install.

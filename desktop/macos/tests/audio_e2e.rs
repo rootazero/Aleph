@@ -5,6 +5,12 @@
 //! real compiled `AlephBridge` helper. Both tests are `#[ignore]` by default;
 //! run with `just test-audio-e2e` (which builds the helper first).
 
+// Whole file is macOS-only: it drives the real `AlephBridge` helper via the
+// macOS-only `aleph-desktop-macos` crate. On any other host the integration
+// test compiles to an empty binary, which `cargo check --workspace` treats as
+// "0 tests" — no failure.
+#![cfg(target_os = "macos")]
+
 use std::path::PathBuf;
 
 use aleph_desktop::bridge::client::SwiftBridge;

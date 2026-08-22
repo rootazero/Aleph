@@ -101,7 +101,16 @@ impl NoteKey {
 /// atomic-write staging files (`.aleph_atomic_*.tmp`, filtered earlier by
 /// extension).
 fn classify(root: &Path, path: &Path) -> Option<NoteKey> {
-    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+    // Case-insensitive `.md` match: Obsidian and many editors preserve the
+    // casing the user typed, so files like `Note.MD` or `README.Md` are
+    // legitimate. Case-sensitive ext4 / default Docker layers would otherwise
+    // silently drop them, which means the index never sees the content and
+    // FTS / vector search return nothing — with no error log.
+    if !path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    {
         return None;
     }
     let rel = path.strip_prefix(root).ok()?;
@@ -180,7 +189,11 @@ where
                 let md_count = events
                     .iter()
                     .flat_map(|e| e.paths.iter())
-                    .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+                    .filter(|p| {
+                        p.extension()
+                            .and_then(|x| x.to_str())
+                            .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+                    })
                     .count();
                 if md_count == 0 {
                     return;
@@ -205,7 +218,11 @@ where
                 let mut paths: Vec<PathBuf> = events
                     .iter()
                     .flat_map(|e| e.paths.iter().cloned())
-                    .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+                    .filter(|p| {
+                        p.extension()
+                            .and_then(|x| x.to_str())
+                            .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+                    })
                     .collect();
                 paths.sort();
                 paths.dedup();

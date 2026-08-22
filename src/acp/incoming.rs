@@ -469,6 +469,7 @@ fn pick_option(options: &[Value], wanted: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)] // only callers are `#[cfg(unix)]` symlink tests
     fn unique_suffix() -> String {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

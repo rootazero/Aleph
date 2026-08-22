@@ -1210,11 +1210,21 @@ mod tests {
     async fn insert_image_rejects_paths_outside_data_and_temp_roots() {
         let (t, _dir) = tool();
         let id = create_as(&t, "u-alice").await;
-        // /etc/hosts exists on every unix box and sits under neither root.
+        // A path that exists on every host and sits under neither root: the
+        // canonical hosts file (unix: /etc/hosts, Windows: the same file under
+        // System32\drivers\etc). Using a host-conditional keeps the
+        // canonicalize() step succeeding, so we reach the path-roots guard
+        // and exercise its message — instead of a "cannot read" fallback on
+        // Windows where /etc/hosts does not exist.
+        let outside_path = if cfg!(windows) {
+            r"C:\Windows\System32\drivers\etc\hosts"
+        } else {
+            "/etc/hosts"
+        };
         let err = call_as(
             &t,
             "u-alice",
-            json!({"action":"insert_image","canvas_id":id,"location":"/etc/hosts"}),
+            json!({"action":"insert_image","canvas_id":id,"location":outside_path}),
         )
         .await
         .expect_err("a path outside the two roots must refuse")

@@ -25,7 +25,7 @@ use crate::json_canvas_io::sanitise_name;
 use crate::routing::DEFAULT_AGENT_ID;
 use crate::workflow::def::{WorkflowDef, WorkflowStepDef};
 use crate::workflow::interop::manifest::WorkflowManifest;
-use crate::workflow::store::{self, WorkflowMeta};
+use crate::workflow::store;
 
 /// Name prefix for every auto-drafted `MetaSkill` proposal. Lets a human (and
 /// the dedup check) tell auto-generated drafts from user-authored workflows.
@@ -138,8 +138,11 @@ pub fn save_proposal(def: &WorkflowDef) -> Result<PathBuf> {
     store::save_at(&proposals_dir(), &manifest)
 }
 
-/// List pending proposals (gated drafts), sorted by name.
-pub fn list_proposals() -> Result<Vec<WorkflowMeta>> {
+/// List pending proposals (gated drafts), sorted by name. Carries the same
+/// entry shape as the active store, so a draft can be judged from the listing
+/// (its provenance rides in `description`) instead of one `describe_proposal`
+/// per candidate.
+pub fn list_proposals() -> Result<store::WorkflowListing> {
     store::list_at(&proposals_dir())
 }
 
@@ -179,11 +182,11 @@ pub fn accept(name: &str) -> Result<PathBuf> {
 #[must_use]
 pub fn already_covered(chain: &[String]) -> bool {
     let name = canonical_name(chain);
-    let in_active = store::list().is_ok_and(|v| v.iter().any(|m| m.name == name));
+    let in_active = store::list().is_ok_and(|l| l.entries.iter().any(|m| m.name == name));
     if in_active {
         return true;
     }
-    list_proposals().is_ok_and(|v| v.iter().any(|m| m.name == name))
+    list_proposals().is_ok_and(|l| l.entries.iter().any(|m| m.name == name))
 }
 
 /// True when the active store already contains a user-authored workflow whose
@@ -199,10 +202,10 @@ pub fn covered_by_step_set(chain: &[String]) -> bool {
     want.sort_unstable();
     want.dedup();
     let want_sanitised: Vec<String> = want.iter().map(|s| sanitise_name(s)).collect();
-    let Ok(metas) = store::list() else {
+    let Ok(listing) = store::list() else {
         return false;
     };
-    for meta in metas {
+    for meta in listing.entries {
         let Ok(manifest) = store::load(&meta.name) else {
             continue;
         };

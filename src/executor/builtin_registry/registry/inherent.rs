@@ -29,7 +29,12 @@ impl BuiltinToolRegistry {
 
     /// Register an additional tool (e.g., plugin tools discovered at runtime)
     pub fn register_tool(&mut self, tool: UnifiedTool) {
-        self.tools.insert(tool.name.clone(), tool);
+        let name = tool.name.clone();
+        if self.tools.insert(name.clone(), tool).is_some() {
+            // Overwrites stay allowed (plugin reload paths depend on it), but a
+            // silent swap of a same-named tool is invisible in every log.
+            tracing::warn!(tool = %name, "register_tool: replacing an already-registered tool");
+        }
     }
 
     /// Late-bind a `ConfigPatcher` into `self_config` and `moa_manage` tools.
@@ -77,11 +82,12 @@ impl BuiltinToolRegistry {
     /// The handle stays as the fallback for any call site outside a turn scope;
     /// `fallback` is the last resort when neither source is present or parseable.
     ///
-    /// **Falling through to `fallback` is logged at `warn!`**: a tool that
-    /// cannot resolve its identity would otherwise silently operate on the
-    /// fallback's memory partition, ACL, and session routing. The warning
-    /// surfaces misconfigured dispatchers and the per-call fallbacks that
-    /// the boot path is still authorising.
+    /// **Falling through to `fallback` is logged at `error!`** — this is a
+    /// SECURITY fail-open: with every identity source exhausted, the tool
+    /// keeps running under the fallback identity (`"main"`, the
+    /// highest-privilege persona, at most call sites), operating on its memory
+    /// partition, ACL, and session routing. The error log measures the
+    /// production hit rate before the planned switch to fail-closed.
     ///
     /// [`ScopedToolService::execute`]: crate::tools::scoped::ScopedToolService
     pub(super) fn caller_agent_id(&self, fallback: &str) -> String {
@@ -95,12 +101,18 @@ impl BuiltinToolRegistry {
         {
             return parse_caller_agent_id(&ctx.session_key_str, fallback);
         }
-        tracing::warn!(
+        // SECURITY fail-open: with every identity source exhausted we continue
+        // under `fallback` ("main" — the highest-privilege persona — at most
+        // call sites). `error!` to size the production hit rate before the
+        // planned fail-closed switch; semantics unchanged for now.
+        tracing::error!(
             fallback = %fallback,
-            "BuiltinToolRegistry::caller_agent_id: no per-turn context and no session_context_handle; \
-             falling through to fallback (the tool will run under the wrong agent's identity). \
-             The call site is either outside a scoped turn or the session_context_handle is \
-             missing — both are dispatcher misconfigurations."
+            "SECURITY fail-open: BuiltinToolRegistry::caller_agent_id found no per-turn context \
+             and no readable session_context_handle (missing handle or contended lock); \
+             continuing under the fallback identity — \"main\", the highest-privilege persona, \
+             at most call sites. Configure a turn scope at the call site (dispatcher \
+             misconfiguration otherwise); this fallback is planned to become fail-closed once \
+             the hit rate is observed."
         );
         fallback.to_string()
     }
@@ -143,7 +155,18 @@ impl BuiltinToolRegistry {
             None => self
                 .session_context_handle
                 .as_ref()
-                .and_then(|h| h.try_read().ok())
+                .and_then(|h| match h.try_read() {
+                    Ok(ctx) => Some(ctx),
+                    Err(_) => {
+                        tracing::warn!(
+                            "inject_delivery_route: session context lock contended; the created \
+                             task will be stamped with no delivery route \
+                             (__channel/__conversation_id missing) and its result may be silently \
+                             dropped"
+                        );
+                        None
+                    }
+                })
                 .map(|ctx| (Some(ctx.channel.clone()), Some(ctx.conversation_id.clone())))
                 .unwrap_or((None, None)),
         };

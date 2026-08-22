@@ -174,11 +174,26 @@ impl<'a> LoopGraphInspector<'a> {
     /// [`SnapshotStore::list_events`]; `Err` (not an empty vec) when no
     /// snapshot store is attached, so "subsystem absent" is never confused
     /// with "nothing happened".
+    ///
+    /// For paged reads (audit log past the first page), use
+    /// [`Self::recent_events_before`].
     pub fn recent_events(&self, limit: usize) -> Result<Vec<EventRecord>> {
+        self.recent_events_before(limit, None)
+    }
+
+    /// Paged variant of [`Self::recent_events`]. `before_id = Some(id)` returns
+    /// rows with `id < before_id` (exclusive), letting a UI walk the audit log
+    /// past the first page. `before_id = None` is equivalent to
+    /// `recent_events`.
+    pub fn recent_events_before(
+        &self,
+        limit: usize,
+        before_id: Option<i64>,
+    ) -> Result<Vec<EventRecord>> {
         let snapshots = self
             .snapshots
             .ok_or_else(|| AlephError::other("loop_graph inspector: no snapshot store attached"))?;
-        snapshots.list_events(limit, None)
+        snapshots.list_events(limit, before_id)
     }
 
     /// Compute a [`NodeSubgraph`] for `node_id`. `Ok(None)` is "not a
@@ -215,7 +230,6 @@ impl<'a> LoopGraphInspector<'a> {
 
         // ancestors / descendants walk OwnsReference both directions, bounded.
         let ancestor_chain = walk_chain(
-            &nodes,
             &edges,
             &by_id,
             node_id,
@@ -223,7 +237,6 @@ impl<'a> LoopGraphInspector<'a> {
             Direction::Up,
         )?;
         let descendant_chain = walk_chain(
-            &nodes,
             &edges,
             &by_id,
             node_id,
@@ -422,7 +435,12 @@ impl<'a> LoopGraphInspector<'a> {
             .filter(|f| f.contains("治理链未锚定"))
             .count();
 
-        let governance_chain_anchored = unanchored_chain_count == 0 && !nodes.is_empty();
+        // Empty graph = vacuously anchored ("nothing declared, nothing
+        // broken"). Without this, a brand-new deployment reads
+        // `governance_chain_anchored: false` and prompts an operator to run
+        // `enable_audit` for no reason.
+        let governance_chain_anchored =
+            unanchored_chain_count == 0 || nodes.is_empty();
 
         Ok(TopologySummary {
             node_counts_by_kind,
@@ -441,7 +459,6 @@ enum Direction {
 }
 
 fn walk_chain(
-    _nodes: &[GraphNode],
     edges: &[GraphEdge],
     by_id: &HashMap<&str, &GraphNode>,
     start: &str,

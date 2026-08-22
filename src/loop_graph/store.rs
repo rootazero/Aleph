@@ -122,13 +122,33 @@ impl LoopGraphStore {
                  the root reference is supplied by a person from outside the graph",
             ));
         }
-        self.lock()
-            .execute(
+        // Kind is write-once (matches the existing `origin` discipline). A
+        // re-registration that flips `Daemon → Frozen` would silently retire
+        // the node from `lint_naked_loops` and `coverage_source_rejection`;
+        // the caller must delete + recreate to change kind.
+        let conn = self.lock();
+        if let Some(existing_kind) = conn
+            .query_row(
+                "SELECT kind FROM graph_nodes WHERE agent_id = ?1 AND id = ?2",
+                rusqlite::params![node.agent_id, node.id],
+                |r| r.get::<_, String>(0),
+                )
+                .ok()
+        {
+            if existing_kind != node.kind.as_str() {
+                return Err(AlephError::other(format!(
+                    "loop_graph invariant: cannot change node kind after registration \
+                     (existing='{}', requested='{}') — delete and recreate",
+                    existing_kind,
+                    node.kind.as_str()
+                )));
+            }
+        }
+        conn.execute(
                 "INSERT INTO graph_nodes
                      (agent_id, id, kind, label, body, cadence, origin, created_at_ms, updated_at_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(agent_id, id) DO UPDATE SET
-                     kind = excluded.kind,
                      label = excluded.label,
                      body = COALESCE(excluded.body, body),
                      cadence = COALESCE(excluded.cadence, cadence),
@@ -331,6 +351,118 @@ impl LoopGraphStore {
         self.edge_sources(agent_id, to_id, EdgeKind::OwnsReference, "owns_reference")
     }
 
+    /// Edges incident to `node_id` (either side) of the kinds the render layer
+    /// cares about, read from raw columns so an unknown `EdgeKind` enum
+    /// variant from a newer build still surfaces in this older build.
+    ///
+    /// `list_edges` fail-softs unparseable rows to `None`, which here reads
+    /// as "no watcher" / "no auditor" / "no reference" for the session whose
+    /// very governance this function exists to render. Same defense as
+    /// [`Self::owns_reference_sources`], scoped to the render seam.
+    pub fn edges_for_render(
+        &self,
+        agent_id: &str,
+        node_id: &str,
+    ) -> Result<Vec<GraphEdge>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT agent_id, from_id, to_id, kind, note, origin, created_at_ms
+                 FROM graph_edges
+                 WHERE agent_id = ?1
+                   AND (from_id = ?2 OR to_id = ?2)
+                   AND kind IN ('watches','owns_reference','audits','anchored_by')
+                 ORDER BY kind, from_id, to_id",
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph render edges prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id, node_id], row_to_edge)
+            .map_err(|e| AlephError::other(format!("loop_graph render edges query: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            // Fail-loud here: a row this build cannot decode is exactly the
+            // case the raw-column discipline is supposed to surface, so let
+            // the error propagate rather than silently dropping it.
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph render edges row: {e}")))?;
+            if let Some(e) = row {
+                out.push(e);
+            }
+        }
+        Ok(out)
+    }
+
+    /// All root nodes for the agent, read from raw columns (id, label, body).
+    /// `body` is the human-authored reference text and is the only field the
+    /// render seam needs; skipping the rest keeps the read cheap on a
+    /// populated graph.
+    ///
+    /// Like [`Self::edges_for_render`], this is fail-loud on decode errors
+    /// rather than `list_nodes`-style fail-soft, because "root text vanished
+    /// from the governed-session prompt" is a silent-data-loss class.
+    pub fn root_nodes_for_render(&self, agent_id: &str) -> Result<Vec<GraphNode>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT agent_id, id, kind, label, body, cadence, origin,
+                        created_at_ms, updated_at_ms
+                 FROM graph_nodes
+                 WHERE agent_id = ?1 AND kind = 'root'
+                 ORDER BY id",
+            )
+            .map_err(|e| AlephError::other(format!("loop_graph render roots prepare: {e}")))?;
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id], row_to_node)
+            .map_err(|e| AlephError::other(format!("loop_graph render roots query: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let row = r.map_err(|e| AlephError::other(format!("loop_graph render roots row: {e}")))?;
+            if let Some(n) = row {
+                out.push(n);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Look up labels for a set of node ids, read from raw columns.
+    /// Used by the render seam to resolve `from_id` / `to_id` labels without
+    /// paying the full `list_nodes` cost (and without the fail-soft skip).
+    pub fn labels_for_ids(
+        &self,
+        agent_id: &str,
+        ids: &[&str],
+    ) -> Result<Vec<(String, String)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.lock();
+        // Build placeholders for the IN clause.
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, label FROM graph_nodes
+             WHERE agent_id = ?1 AND id IN ({placeholders})"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&agent_id];
+        for id in ids {
+            params.push(id);
+        }
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AlephError::other(format!("loop_graph labels prepare: {e}")))?;
+        let rows = stmt
+            .query_map(&*params, |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| AlephError::other(format!("loop_graph labels query: {e}")))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| AlephError::other(format!("loop_graph labels row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     /// Ids of the loops watching `to_id`, read from raw columns.
     ///
     /// Same discipline as [`Self::owns_reference_sources`], and for a cost that
@@ -415,19 +547,38 @@ impl LoopGraphStore {
     /// calls neither of which names a protected id, into the second door out of
     /// §6.2 write protection, right next to the `unlink` door the Auto-tier card
     /// now covers. The one way out stays the carded `unlink`.
-    pub fn gc(&self, agent_id: &str) -> Result<GcReport> {
+    /// Run a garbage-collection pass on dangling edges.
+    ///
+    /// Returns the populated [`GcReport`] even on failure so callers can tell
+    /// "0 dangling edges" from "100 dangling edges, transaction aborted". On
+    /// success the report matches the actual store state; on failure the
+    /// store is unchanged (the transaction was rolled back) but the report
+    /// describes the deletes that *would have* run.
+    pub fn gc(
+        &self,
+        agent_id: &str,
+    ) -> std::result::Result<GcReport, (GcReport, AlephError)> {
         let mut conn = self.lock();
-        let ids = node_ids_present(&conn, agent_id, "gc")?;
+        let ids = match node_ids_present(&conn, agent_id, "gc") {
+            Ok(ids) => ids,
+            Err(e) => return Err((GcReport::default(), e)),
+        };
 
-        let mut stmt = conn
-            .prepare(
+        let mut stmt = match conn.prepare(
                 "SELECT agent_id, from_id, to_id, kind, note, origin, created_at_ms
                  FROM graph_edges WHERE agent_id = ?1",
-            )
-            .map_err(|e| AlephError::other(format!("loop_graph gc edges prepare: {e}")))?;
-        let rows = stmt
-            .query_map(rusqlite::params![agent_id], row_to_edge)
-            .map_err(|e| AlephError::other(format!("loop_graph gc edges query: {e}")))?;
+            ) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err((GcReport::default(), AlephError::other(format!("loop_graph gc edges prepare: {e}"))));
+            }
+        };
+        let rows = match stmt.query_map(rusqlite::params![agent_id], row_to_edge) {
+            Ok(r) => r,
+            Err(e) => {
+                return Err((GcReport::default(), AlephError::other(format!("loop_graph gc edges query: {e}"))));
+            }
+        };
         let mut edges = Vec::new();
         for r in rows {
             // Mid-iteration decode errors must propagate here (not be
@@ -436,7 +587,12 @@ impl LoopGraphStore {
             // `node_ids_present` picture — the exact reverse of the "do not
             // delete edges into a node I merely failed to parse" rule the
             // rest of this function enforces.
-            let row = r.map_err(|e| AlephError::other(format!("loop_graph gc row: {e}")))?;
+            let row = match r {
+                Ok(row) => row,
+                Err(e) => {
+                    return Err((GcReport::default(), AlephError::other(format!("loop_graph gc row: {e}"))));
+                }
+            };
             if let Some(e) = row {
                 edges.push(e);
             }
@@ -467,19 +623,24 @@ impl LoopGraphStore {
         // transaction: either every deletable edge is gone and the report
         // matches, or nothing was deleted and the caller still has the
         // pre-gc graph.
-        let tx = conn
-            .transaction()
-            .map_err(|e| AlephError::other(format!("loop_graph gc begin: {e}")))?;
+        let tx = match conn.transaction() {
+            Ok(tx) => tx,
+            Err(e) => {
+                return Err((report, AlephError::other(format!("loop_graph gc begin: {e}"))));
+            }
+        };
         for e in &to_delete {
-            tx.execute(
+            if let Err(err) = tx.execute(
                 "DELETE FROM graph_edges
                      WHERE agent_id = ?1 AND from_id = ?2 AND to_id = ?3 AND kind = ?4",
                 rusqlite::params![agent_id, e.from_id, e.to_id, e.kind.as_str()],
-            )
-            .map_err(|err| AlephError::other(format!("loop_graph gc: {err}")))?;
+            ) {
+                return Err((report, AlephError::other(format!("loop_graph gc: {err}"))));
+            }
         }
-        tx.commit()
-            .map_err(|e| AlephError::other(format!("loop_graph gc commit: {e}")))?;
+        if let Err(e) = tx.commit() {
+            return Err((report, AlephError::other(format!("loop_graph gc commit: {e}"))));
+        }
         Ok(report)
     }
 
@@ -1492,6 +1653,36 @@ mod tests {
             Some("re-registered"),
             "body still updates"
         );
+    }
+
+    /// `kind` drives `is_optimization_loop()`, which drives both
+    /// `lint_naked_loops` and `coverage_source_rejection`. A silent flip on
+    /// re-registration would retire a node from the audit ring without
+    /// anyone noticing — same shape of bug as the `provenance_is_write_once`
+    /// regression, caught here the same way: refuse the flip, force the
+    /// caller to delete + recreate.
+    #[test]
+    fn kind_is_immutable_upon_reregistration() {
+        let (_d, s) = store();
+        s.upsert_node(&node("daemon:dreaming", NodeKind::Daemon, Origin::Llm))
+            .unwrap();
+        let err = s
+            .upsert_node(
+                &node("daemon:dreaming", NodeKind::Frozen, Origin::Llm)
+                    .with_body("would-have-flip-kind"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cannot change node kind"),
+            "kind change must surface as an invariant violation, not silently flip: {err}"
+        );
+        // The original kind survives.
+        let got = s.get_node("main", "daemon:dreaming").unwrap().unwrap();
+        assert_eq!(got.kind, NodeKind::Daemon);
+        // The omitted body did NOT erase anything because the upsert refused
+        // before touching the row.
+        assert_eq!(got.body, None);
     }
 
     /// A re-registration that omits `body` must not erase it.

@@ -617,11 +617,16 @@ call sees the real command, not just the word `bash`) — it is a rendering aid,
 not an enforcement gate. The catastrophic floor that actually refuses commands
 is `sandbox::command_policy`, whose real hardline rules
 (`command_policy/rules.rs::hardline_rules`) cover the never-legitimate shapes:
-fork bomb, bare-root `rm -rf /`, `dd`/`mkfs`/redirect to a raw block device,
-and on Windows a drive/hive-root recursive delete, `format`, and the
-destruction chain (shadow copies, backup catalog, boot recovery, raw disk).
-A `powershell -EncodedCommand` payload is decoded before matching, so encoding
-a script does not remove it from the floor's view — see
+fork bomb, bare-root `rm -rf /` (in any operand position and in every spelling
+POSIX resolves to the root — `//`, `/.`, `/..`, `/./`), `dd`/`mkfs`-family/
+redirect-or-`tee` to a raw block device,
+on macOS the `diskutil`/`asr` disk-destruction verbs, and on Windows a
+drive/hive-root recursive delete, `format`, and the destruction chain (shadow
+copies, backup catalog, boot recovery, raw disk).
+A `powershell -EncodedCommand` payload is decoded before matching **and put
+through the same normalisation pipeline as the text that carried it**, so
+neither encoding a script nor obfuscating it inside the encoding removes it
+from the floor's view — see
 [SANDBOX.md](SANDBOX.md) § "command-policy hard-filter" for the normalisation
 contract.
 

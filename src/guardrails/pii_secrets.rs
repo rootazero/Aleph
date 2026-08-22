@@ -77,10 +77,35 @@ impl PiiSecretsGuardrail {
                 reason,
                 class: ErrorClass::Fixable,
             },
-            Err(SecurityGuardError::SecretResolutionFailed(e)) => GuardrailDecision::Block {
-                reason: format!("Secret resolution failed: {e}"),
-                class: ErrorClass::Unexpected,
-            },
+            Err(SecurityGuardError::SecretResolutionFailed(e)) => {
+                // Strip the requested secret name from `reason` before it
+                // reaches the model / log / UI: `SecretError::NotFound` and
+                // `SecretError::InvalidPlaceholder` echo the user-supplied
+                // name verbatim in their `Display` impls, and that echo was
+                // exposed via `Block.reason` (see review/guardrails-statics
+                // C1) — an attacker who guessed vault keys could iterate
+                // `{{secret:NAME}}` and use the differential between "name
+                // echoed back" (vault hit) and "name NOT echoed" (vault miss)
+                // to enumerate the vault namespace. Logging the name into a
+                // dedicated audit field instead keeps triage intact.
+                let variant = match &e {
+                    crate::secrets::types::SecretError::NotFound(_) => "not_found",
+                    crate::secrets::types::SecretError::InvalidPlaceholder(_) => {
+                        "invalid_placeholder"
+                    }
+                    _ => "resolution_failed",
+                };
+                tracing::warn!(
+                    error = %e,
+                    secret_kind = "vault",
+                    variant = variant,
+                    "secret resolution failed during guardrail evaluation"
+                );
+                GuardrailDecision::Block {
+                    reason: "secret resolution failed".to_string(),
+                    class: ErrorClass::Unexpected,
+                }
+            }
         }
     }
 
@@ -156,6 +181,29 @@ impl PiiSecretsGuardrail {
                         out.insert(new_key, new_val);
                     }
                     Ok(Value::Object(out))
+                }
+                // Numbers are NOT a safe bypass: an 11-digit phone number or
+                // a 16-digit bank-card number can be expressed as a JSON
+                // number, and the PII rules operate on strings. Convert
+                // number leaves to their string form for scanning; on a hit
+                // we redact the string form and re-parse it back to a number
+                // when possible (preserving the wire shape for well-formed
+                // values), or fall back to a redacted string when the
+                // guardrail mangled it beyond numeric recognition (e.g.
+                // `13812345678` -> `[REDACTED]` can't be re-parsed as a
+                // number, so we return a string rather than guessing).
+                Value::Number(n) => {
+                    let text = n.to_string();
+                    let scanned = self
+                        .scan_tool_arg_leaf(&text, resolver_ref, warnings, sources)
+                        .await?;
+                    if scanned == text {
+                        Ok(value.clone())
+                    } else if let Ok(num) = scanned.parse::<serde_json::Number>() {
+                        Ok(Value::Number(num))
+                    } else {
+                        Ok(Value::String(scanned))
+                    }
                 }
                 _ => Ok(value.clone()),
             }
@@ -407,14 +455,26 @@ mod delegation_tests {
 
     #[tokio::test]
     async fn tool_call_unknown_secret_blocks() {
+        // The Block reason deliberately does NOT echo the requested
+        // secret name (see the SecretResolutionFailed branch above —
+        // stripping the name closes a vault-namespace enumeration side
+        // channel exposed via the model-visible reason string). The
+        // invariant this test pins is "missing secret -> Block", not
+        // "missing secret -> reason contains name".
         let g = guard(true);
         let args = serde_json::json!({ "command": "echo {{secret:ghost}}" });
         let dec = g.evaluate_tool_call("bash_exec", &args).await;
         match dec {
             GuardrailDecision::Block { reason, .. } => {
                 assert!(
-                    reason.contains("ghost"),
-                    "reason must name the missing secret"
+                    !reason.is_empty(),
+                    "Block reason must carry enough info to triage; \
+                     got empty string"
+                );
+                assert!(
+                    reason.to_lowercase().contains("secret"),
+                    "Block reason must mention the secret pipeline so \
+                     the operator can route to vault config; got {reason:?}"
                 );
             }
             other => panic!("expected Block, got {:?}", other),

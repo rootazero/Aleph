@@ -89,11 +89,40 @@ impl OAuthProvider {
             client: Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
-                .unwrap_or_else(|_| Client::new()),
+                .expect("reqwest client with 30s timeout must build"),
             storage,
             server_name: server_name.into(),
             server_url: server_url.into(),
             callback_url: callback_url.into(),
+        }
+    }
+
+    /// Pre-flight SSRF check for any URL an OAuth request is about to be
+    /// sent to.
+    ///
+    /// `server_url` (and therefore the .well-known discovery URL, the token
+    /// endpoint, the registration endpoint, etc.) is operator-supplied config,
+    /// but a malicious MCP server entry can name `http://169.254.169.254`
+    /// or `http://localhost:…` and use this client as a credential-bearing
+    /// proxy. The HTTP transport (`src/mcp/transport/http.rs`) already
+    /// routes through `safe_fetch`; OAuth did not, and any code/client_secret
+    /// posted to a bad endpoint would leak. Reuse the shared SSRF policy.
+    async fn ensure_ssrf_safe(&self, url: &str, purpose: &str) -> Result<()> {
+        let policy = crate::security::ssrf::SsrfPolicy::default();
+        match crate::security::ssrf::validate_url_async(url, &policy).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    server = %self.server_name,
+                    purpose,
+                    url,
+                    error = %e,
+                    "refusing OAuth request to URL that fails SSRF policy"
+                );
+                Err(AlephError::config(format!(
+                    "OAuth {purpose} endpoint {url:?} fails SSRF policy: {e}"
+                )))
+            }
         }
     }
 
@@ -105,6 +134,8 @@ impl OAuthProvider {
             "{}/.well-known/oauth-authorization-server",
             self.server_url.trim_end_matches('/')
         );
+
+        self.ensure_ssrf_safe(&url, "metadata discovery").await?;
 
         let response = self
             .client
@@ -143,6 +174,8 @@ impl OAuthProvider {
         let registration_endpoint = metadata.registration_endpoint.as_ref().ok_or_else(|| {
             AlephError::IoError("Server does not support dynamic client registration".to_string())
         })?;
+
+        self.ensure_ssrf_safe(registration_endpoint, "client registration").await?;
 
         let request_body = registration_request_body(
             &format!("Aleph MCP Client ({})", self.server_name),
@@ -343,6 +376,9 @@ impl OAuthProvider {
             ("code_verifier", &code_verifier),
         ];
 
+        self.ensure_ssrf_safe(&metadata.token_endpoint, "token exchange")
+            .await?;
+
         let response = self
             .client
             .post(&metadata.token_endpoint)
@@ -394,6 +430,9 @@ impl OAuthProvider {
             ("client_id", client_id),
             ("refresh_token", refresh_token),
         ];
+
+        self.ensure_ssrf_safe(&metadata.token_endpoint, "token refresh")
+            .await?;
 
         let response = self
             .client

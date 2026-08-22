@@ -45,6 +45,14 @@ impl MemoryProducerScheduler {
         let this = self.clone();
         tokio::spawn(async move {
             let mut tick_interval = interval(this.tick_duration);
+            // Default MissedTickBehavior::Burst fires every missed tick back-
+            // to-back the instant the task returns — a single slow `run_once`
+            // (e.g. a hung embedder) would queue a burst that compounds on
+            // itself. Skip drops missed ticks entirely, matching the
+            // convention used elsewhere in the repo (gateway/server, agent
+            // init). This is a producer scheduler, not a deadline-driven
+            // controller, so skipping is safe.
+            tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             tick_interval.tick().await; // burn the immediate first tick
             loop {
                 tick_interval.tick().await;

@@ -40,7 +40,16 @@ fn is_transient_harness_message(msg: &str) -> bool {
         "dns",
         "timed out",
     ];
-    const AUTH_MARKERS: &[&str] = &["401", "403", "Unauthorized"];
+    // Auth is deliberately NOT a bare-substring list. It used to be
+    // `["401", "403", "Unauthorized"]` matched with `str::contains`, which
+    // fires on any message that merely *embeds* those digits — a token count
+    // ("401234 tokens > 200000 maximum"), a request id, a 13-digit epoch. A
+    // fatal, deterministic error classified Transient here is re-dispatched by
+    // the gateway's outer loop up to `MAX_FALLBACK_ATTEMPTS` times, burning
+    // budget and finally surfacing a provider error instead of the real cause.
+    // `has_status_code` is the same digit-boundary check the rest of the repo
+    // uses; CLAUDE.md §9 names `contains("401")` matching `40123` by hand.
+    const AUTH_PHRASE_MARKERS: &[&str] = &["Unauthorized"];
     const RATE_LIMIT_MARKERS: &[&str] = &[
         "rate limit",
         "Rate limit",
@@ -56,12 +65,18 @@ fn is_transient_harness_message(msg: &str) -> bool {
     // take another spaced attempt instead of surfacing a fatal error to the
     // user. The earlier "rate limits are not retryable" stance assumed an empty
     // chain; with chain self-heal a 429 here is a load signal, not a dead end.
+    // Status codes all go through the one digit-boundary matcher. This file
+    // used to carry `contains_http_status`, a byte-for-byte reimplementation
+    // of `llm_retry::has_status_code` (same `find` loop, same left/right digit
+    // guards) — two answers to "is this number an HTTP status", one of which
+    // the auth arm above was not even using.
+    const TRANSIENT_STATUSES: &[u16] = &[500, 502, 503, 429];
+    const AUTH_STATUSES: &[u16] = &[401, 403];
+
     has_any_marker(msg, NETWORK_MARKERS)
-        || has_any_marker(msg, AUTH_MARKERS)
-        || contains_http_status(msg, 500)
-        || contains_http_status(msg, 502)
-        || contains_http_status(msg, 503)
-        || contains_http_status(msg, 429)
+        || has_any_marker(msg, AUTH_PHRASE_MARKERS)
+        || has_any_status(msg, AUTH_STATUSES)
+        || has_any_status(msg, TRANSIENT_STATUSES)
         || has_any_marker(msg, RATE_LIMIT_MARKERS)
 }
 
@@ -69,20 +84,10 @@ fn has_any_marker(msg: &str, markers: &[&str]) -> bool {
     markers.iter().any(|m| msg.contains(m))
 }
 
-fn contains_http_status(msg: &str, code: u16) -> bool {
-    let code_str = code.to_string();
-    let mut search_from = 0;
-    while let Some(pos) = msg[search_from..].find(&code_str) {
-        let abs_pos = search_from + pos;
-        let before_ok = abs_pos == 0 || !msg.as_bytes()[abs_pos - 1].is_ascii_digit();
-        let after_pos = abs_pos + code_str.len();
-        let after_ok = after_pos >= msg.len() || !msg.as_bytes()[after_pos].is_ascii_digit();
-        if before_ok && after_ok {
-            return true;
-        }
-        search_from = abs_pos + code_str.len();
-    }
-    false
+fn has_any_status(msg: &str, codes: &[u16]) -> bool {
+    codes
+        .iter()
+        .any(|c| crate::providers::llm_retry::has_status_code(msg, *c))
 }
 
 #[cfg(test)]
@@ -105,6 +110,39 @@ mod tests {
         // spin the outer loop on a genuine bug.
         assert!(!is_transient_harness_message(
             "tool registry misconfigured: unknown tool"
+        ));
+    }
+
+    /// A number that merely *contains* an auth status is not an auth status.
+    ///
+    /// Written against the bug: `AUTH_MARKERS` matched with `str::contains`,
+    /// so this message — a deterministic, fatal, retry-proof failure — was
+    /// classified `Transient` and re-dispatched three times. Break
+    /// `has_any_status` back into `msg.contains("401")` and this goes red at
+    /// this line; that is the only reason it exists.
+    #[test]
+    fn a_number_embedding_an_auth_status_is_not_an_auth_failure() {
+        assert!(!is_transient_harness_message(
+            "llm error: prompt is too long: 401234 tokens > 200000 maximum"
+        ));
+        assert!(!is_transient_harness_message(
+            "llm error: invalid request id 9940312 rejected by upstream"
+        ));
+    }
+
+    /// The other half: narrowing the match must not stop recognising real
+    /// auth failures. Without this, "fix the false positive" and "delete the
+    /// classification" look identical in the suite.
+    #[test]
+    fn a_real_auth_status_is_still_transient() {
+        assert!(is_transient_harness_message(
+            "llm error: request failed with status 401: invalid api key"
+        ));
+        assert!(is_transient_harness_message(
+            "llm error: HTTP 403 (forbidden) from provider"
+        ));
+        assert!(is_transient_harness_message(
+            "llm error: Unauthorized — token expired"
         ));
     }
 }

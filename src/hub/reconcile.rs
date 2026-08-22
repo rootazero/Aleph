@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::extension::{PluginRecord, PluginStatus};
 use crate::hub::install::mcp_server_id;
-use crate::hub::origin::InstallOrigin;
+use crate::hub::origin::{local_ref_addresses, InstallOrigin};
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, TrustTier};
 use crate::mcp::manager::{HealthStatus, McpManagerHandle, McpServerInfo};
 use crate::skill::status::SkillStatusEntry;
@@ -97,8 +97,12 @@ pub async fn collect_installed(mcp: Option<McpManagerHandle>) -> Vec<ExtensionEn
 ///
 /// `installed` / `enabled` come from the **live** backends: MCP matches exactly
 /// by its deterministic derived id (`local:mcp:{mcp_server_id(entry.id)}`);
-/// Plugin / Skill match by case-insensitive `name` within the same `kind`
-/// (name collision remains a known limit — see FEATURE_LOCATOR §5.21).
+/// Plugin / Skill match by case-insensitive `name` within the same `kind`,
+/// BUT only when the name is unambiguous within the installed set — when two
+/// distinct installed entries share a name we can no longer tell which
+/// catalog entry owns it, so we leave BOTH catalog entries unmarked and emit
+/// a warning (see H6 in review/hub-statics). The previously-silent collision
+/// made the UI claim two catalog entries were installed when only one was.
 ///
 /// `update_available` comes from the install provenance ledger and is only ever
 /// claimed for an entry the live set already reports installed: the ledger says
@@ -109,16 +113,17 @@ pub fn mark_installed_state(
     installed: &[ExtensionEntry],
     origins: &[InstallOrigin],
 ) {
-    // (kind.as_str(), lowercased name) -> enabled, for Plugin/Skill matching.
-    let by_name: HashMap<(String, String), bool> = installed
-        .iter()
-        .map(|e| {
-            (
-                (e.kind.as_str().to_string(), e.name.trim().to_lowercase()),
-                e.enabled,
-            )
-        })
-        .collect();
+    // (kind, lowercased name) -> set of installed entries with that name.
+    // Using a Vec per key lets us detect collisions: `by_name[k].len() > 1`
+    // means we can't safely attribute the installed state to any single
+    // catalog entry.
+    let mut by_name: HashMap<(String, String), Vec<&ExtensionEntry>> = HashMap::new();
+    for e in installed {
+        by_name
+            .entry((e.kind.as_str().to_string(), e.name.trim().to_lowercase()))
+            .or_default()
+            .push(e);
+    }
 
     for e in catalog.iter_mut() {
         let enabled = if e.kind == ExtensionKind::Mcp {
@@ -128,9 +133,33 @@ pub fn mark_installed_state(
                 .find(|ie| ie.id == expected)
                 .map(|ie| ie.enabled)
         } else {
-            by_name
-                .get(&(e.kind.as_str().to_string(), e.name.trim().to_lowercase()))
-                .copied()
+            let key = (e.kind.as_str().to_string(), e.name.trim().to_lowercase());
+            match by_name.get(&key) {
+                Some(candidates) if candidates.len() == 1 => Some(candidates[0].enabled),
+                Some(candidates) => {
+                    // Ambiguous: two installed entries share this name. Prefer
+                    // the ledger to disambiguate — the install_origin row ties
+                    // an entry_id to a backend, so if exactly one candidate has
+                    // a ledger row matching our catalog id we can claim it.
+                    let ours = candidates.iter().find(|c| {
+                        origins.iter().any(|o| o.entry_id == e.id)
+                            && local_ref_addresses(&ledger_local_ref(origins, &e.id), &c.id)
+                    });
+                    match ours {
+                        Some(c) => Some(c.enabled),
+                        None => {
+                            tracing::warn!(
+                                kind = e.kind.as_str(),
+                                name = %e.name,
+                                candidates = candidates.len(),
+                                "reconcile: name collision in installed set; skipping stamp"
+                            );
+                            None
+                        }
+                    }
+                }
+                None => None,
+            }
         };
         if let Some(en) = enabled {
             e.installed = true;
@@ -140,6 +169,18 @@ pub fn mark_installed_state(
             }
         }
     }
+}
+
+/// Look up the ledger `local_ref` for an entry id (used to disambiguate
+/// installed-set collisions). Returns `""` when the entry has no ledger row,
+/// which makes `local_ref_addresses("", _)` false and lets the caller fall
+/// through to the warning path.
+fn ledger_local_ref(origins: &[InstallOrigin], entry_id: &str) -> String {
+    origins
+        .iter()
+        .find(|o| o.entry_id == entry_id)
+        .map(|o| o.local_ref.clone())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

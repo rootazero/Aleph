@@ -6,6 +6,11 @@
 //! To run manually:
 //!   cargo test -p aleph-desktop-macos --test sleep_inhibitor -- --ignored --nocapture
 
+// Whole file is macOS-only: it uses the macOS-only `aleph-desktop-macos`
+// crate. On any other host the integration test compiles to an empty binary,
+// which `cargo check --workspace` treats as "0 tests" — no failure.
+#![cfg(target_os = "macos")]
+
 use aleph_desktop::traits::PowerCapability;
 use aleph_desktop_macos::MacosPower;
 

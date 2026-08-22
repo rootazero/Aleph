@@ -402,6 +402,13 @@ pub struct GatewayServer {
     /// 404 from the server side — the CLI is expected to take the local
     /// lock instead.
     admin_router: Option<Router>,
+
+    /// Join handle for the background reconciler daemon (event-log \u2194
+    /// notes filesystem divergence scanner). Stored here so a graceful
+    /// shutdown can `.abort()` the task before the StateDatabase it
+    /// reads from is dropped. `None` when `[memory.reconciler]` is
+    /// disabled or no memory handler was wired into AdminApiState.
+    reconciler_handle: Option<tokio::task::JoinHandle<()>>,
     /// Live channel webhook mount table, shared with `ChannelRegistry`.
     ///
     /// `build_router()` always registers the one wildcard route over this
@@ -489,6 +496,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
             shared_token_mgr: None,
             device_token_mgr: None,
@@ -547,6 +555,7 @@ impl GatewayServer {
             orchestrator: None,
             openai_api_token: None,
             admin_router: None,
+            reconciler_handle: None,
             webhook_mounts: Arc::new(crate::gateway::webhook_receiver::WebhookMountTable::new()),
             shared_token_mgr: None,
             device_token_mgr: None,
@@ -599,6 +608,30 @@ impl GatewayServer {
     /// Idempotent — replaces any previously set admin router.
     pub fn set_admin_router(&mut self, router: Router) {
         self.admin_router = Some(router);
+    }
+
+    /// Store the `JoinHandle` of the background reconciler daemon so
+    /// graceful shutdown can `.abort()` the task before the
+    /// `StateDatabase` it reads from is dropped. Idempotent — replacing
+    /// the handle aborts the previous one (defensive: in practice the
+    /// daemon is started once at boot).
+    pub fn set_reconciler_handle(&mut self, handle: tokio::task::JoinHandle<()>) {
+        if let Some(prior) = self.reconciler_handle.take() {
+            prior.abort();
+        }
+        self.reconciler_handle = Some(handle);
+    }
+
+    /// Abort the background reconciler daemon if one is running. Called
+    /// from the server's shutdown path before the database is dropped.
+    /// Returns the prior handle (caller may await its completion if it
+    /// cares about draining in-flight scans).
+    #[must_use]
+    pub fn abort_reconciler_daemon(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.reconciler_handle.take().map(|h| {
+            h.abort();
+            h
+        })
     }
 
     /// Serve channel webhook ingestion from `table`.

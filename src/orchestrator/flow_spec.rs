@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::ContextMode;
 use crate::session::events::MessageContent;
 
 pub type FlowId = String;
@@ -71,16 +70,9 @@ pub struct FlowSpec {
     pub description: String,
     pub agent: AgentId,
     pub brain: BrainRef,
-    pub sandbox_kind: SandboxKind,
     pub session_strategy: SessionStrategy,
-    #[serde(default = "default_flow_priority")]
-    pub priority: u8,
     #[serde(default)]
     pub overrides: FlowOverrides,
-}
-
-const fn default_flow_priority() -> u8 {
-    128
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,14 +88,6 @@ pub enum BrainRef {
         #[serde(default)]
         model: Option<String>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum SandboxKind {
-    None,
-    Workspace,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,10 +113,16 @@ pub enum SessionStrategy {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlowOverrides {
+    /// Per-flow iteration ceiling. Read by
+    /// `harness_bridge::runner_impl::resolve_max_iterations` and handed to
+    /// both `HarnessDeps::max_iterations` and the `SessionBudgetLayer` prompt
+    /// block, so the number the model is told is the number the loop enforces.
+    ///
+    /// This is deliberately the *only* override: `context_mode` and
+    /// `extra_system_prompt` used to live here with zero readers on either
+    /// side (declared 2026-04, never threaded). A knob nobody reads and a knob
+    /// nobody sets look identical from the outside, so they were cut rather
+    /// than shipped to users by `~/.aleph/flows/*.toml`.
     #[serde(default)]
     pub max_iterations: Option<u32>,
-    #[serde(default)]
-    pub context_mode: Option<ContextMode>,
-    #[serde(default)]
-    pub extra_system_prompt: Option<String>,
 }

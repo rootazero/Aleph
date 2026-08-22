@@ -154,6 +154,52 @@ impl StateDatabase {
         })
     }
 
+    /// Run a synchronous SQLite closure off the tokio executor thread.
+    ///
+    /// Mirrors [`crate::memory::store::sqlite::SqliteMemoryBackend::with_conn`]
+    /// for the resilience layer. Acquires `self.conn` (an
+    /// `Arc<std::sync::Mutex<Connection>>`) and invokes `f` on the
+    /// blocking pool via `tokio::task::spawn_blocking`. Use this in
+    /// preference to `self.conn.lock()` inside any `async fn` whose
+    /// body holds the guard across I/O — otherwise the calling tokio
+    /// worker blocks until the SQLite query returns, and a queue of
+    /// slow queries collapses executor parallelism (Risk 4 of the
+    /// review backlog).
+    ///
+    /// Constraints (from `spawn_blocking`):
+    /// - `f` must be `Send + 'static` and own everything it touches
+    ///   (every borrowed parameter of the enclosing `async fn` must
+    ///   be cloned to an owned value at the function head before the
+    ///   closure starts).
+    /// - `R` must be `Send + 'static`.
+    /// - `f` runs synchronously on a blocking-pool thread; do not
+    ///   `.await` inside it.
+    ///
+    /// The 27 async-fnned lock sites across `memory_events.rs`,
+    /// `traces.rs`, `tasks.rs` are migrated in a follow-up commit;
+    /// sync methods (`sticker_descriptions`, `channel_offsets`,
+    /// `group_chat`) cannot await and remain on the direct `lock()`
+    /// path.
+    pub async fn with_conn<F, R>(&self, f: F) -> Result<R, AlephError>
+    where
+        F: FnOnce(&mut Connection) -> Result<R, AlephError> + Send + 'static,
+        R: Send + 'static,
+    {
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || {
+            let mut guard = conn.lock().unwrap_or_else(|e| {
+                tracing::warn!(
+                    "StateDatabase: SQLite mutex was poisoned by a prior panic; \
+                     recovering (this should be rare)"
+                );
+                e.into_inner()
+            });
+            f(&mut guard)
+        })
+        .await
+        .map_err(|e| AlephError::other(format!("StateDatabase with_conn join: {e}")))?
+    }
+
     /// Initialize vector database with schema
     ///
     /// Includes migration logic for embedding dimension changes.
@@ -404,45 +450,52 @@ impl StateDatabase {
     }
 
     /// Store or update a sticker description in the cache.
-    pub fn store_sticker_description(
+    pub async fn store_sticker_description(
         &self,
         file_unique_id: &str,
         description: &str,
     ) -> Result<(), AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
-            [file_unique_id, description],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to store sticker description: {e}")))?;
-        Ok(())
+        let file_unique_id = file_unique_id.to_string();
+        let description = description.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
+            params![file_unique_id, description],
+            )
+            .map_err(|e| AlephError::config(format!("Failed to store sticker description: {e}")))?;
+            Ok(())
+        })
+        .await
     }
 
     /// Load a cached sticker description by its unique file id.
-    pub fn load_sticker_description(
+    pub async fn load_sticker_description(
         &self,
         file_unique_id: &str,
     ) -> Result<Option<String>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {e}")))?;
-        let mut rows = stmt
-            .query([file_unique_id])
-            .map_err(|e| AlephError::config(format!("Failed to query sticker description: {e}")))?;
-        if let Some(row) = rows
-            .next()
-            .map_err(|e| AlephError::config(format!("Failed to read sticker row: {e}")))?
-        {
-            row.get(0)
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to deserialize sticker description: {e}"))
-                })
-                .map(Some)
-        } else {
-            Ok(None)
-        }
+        let file_unique_id = file_unique_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare sticker query: {e}")))?;
+            let mut rows = stmt
+                .query(params![file_unique_id])
+                .map_err(|e| AlephError::config(format!("Failed to query sticker description: {e}")))?;
+            if let Some(row) = rows
+                .next()
+                .map_err(|e| AlephError::config(format!("Failed to read sticker row: {e}")))?
+            {
+                row.get(0)
+                    .map_err(|e| {
+                        AlephError::config(format!("Failed to deserialize sticker description: {e}"))
+                    })
+                    .map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .await
     }
 }

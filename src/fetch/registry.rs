@@ -36,6 +36,7 @@ impl FetchRegistry {
                     base_url: None,
                     timeout_seconds: None,
                     verified: false,
+                    enabled: true,
                 };
                 if let Ok(Some(p)) = factory.build(&synthetic, ctx) {
                     providers.insert("firecrawl".to_string(), p);
@@ -101,6 +102,7 @@ mod tests {
                 base_url: Some("http://x:11235".into()),
                 timeout_seconds: Some(60),
                 verified: false,
+                enabled: true,
             },
         );
         let cfg = FetchConfigInternal {
@@ -126,6 +128,7 @@ mod tests {
                 base_url: None,
                 timeout_seconds: None,
                 verified: false,
+                enabled: true,
             },
         );
         let cfg = FetchConfigInternal {
@@ -193,6 +196,7 @@ mod tests {
                 base_url: Some("http://x:11235".into()),
                 timeout_seconds: Some(60),
                 verified: false,
+                enabled: true,
             },
         );
         let cfg = FetchConfigInternal {
@@ -225,6 +229,7 @@ mod tests {
                 base_url: Some("http://x:11235".into()),
                 timeout_seconds: Some(60),
                 verified: false,
+                enabled: true,
             },
         );
         let cfg = FetchConfigInternal {

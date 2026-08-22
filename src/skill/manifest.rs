@@ -20,6 +20,9 @@ pub enum SkillParseError {
     NoFrontmatter,
     /// The YAML frontmatter could not be parsed.
     Yaml(serde_yaml::Error),
+    /// The frontmatter `name` is empty or whitespace-only, so it cannot
+    /// produce a usable skill id.
+    EmptyName,
 }
 
 impl std::fmt::Display for SkillParseError {
@@ -28,6 +31,7 @@ impl std::fmt::Display for SkillParseError {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::NoFrontmatter => write!(f, "no YAML frontmatter found"),
             Self::Yaml(e) => write!(f, "YAML parse error: {e}"),
+            Self::EmptyName => write!(f, "frontmatter `name` resolves to an empty skill id"),
         }
     }
 }
@@ -37,7 +41,7 @@ impl std::error::Error for SkillParseError {
         match self {
             Self::Io(e) => Some(e),
             Self::Yaml(e) => Some(e),
-            Self::NoFrontmatter => None,
+            Self::NoFrontmatter | Self::EmptyName => None,
         }
     }
 }
@@ -166,6 +170,11 @@ pub fn parse_skill_content(
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");
+    // A whitespace-only `name:` frontmatter field would silently become an
+    // empty registry key — reject it at this trust boundary instead.
+    if id_str.is_empty() {
+        return Err(SkillParseError::EmptyName);
+    }
     let id = SkillId::new(id_str);
 
     let content = SkillContent::new(body_str.trim());

@@ -272,6 +272,7 @@ pub async fn handle_update(
                         base_url: None,
                         timeout_seconds: None,
                         verified: false,
+                        enabled: true,
                     });
 
                 entry.provider_type = backend_dto.provider_type.clone();
@@ -405,6 +406,7 @@ pub async fn handle_test(
                         base_url,
                         timeout_seconds: params.timeout_seconds,
                         verified: false,
+                        enabled: true,
                     };
 
                     match Crawl4aiFetchProvider::from_backend(&backend_cfg) {

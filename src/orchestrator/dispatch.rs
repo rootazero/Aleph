@@ -436,8 +436,8 @@ pub struct FlowRequest {
     /// channel.
     pub interaction_manifest: Option<crate::thinker::interaction::InteractionManifest>,
     /// G2 — per-request sandbox override. `None` falls back to
-    /// `Orchestrator::sandbox_factory(spec.sandbox_kind, &session_key)` — the
-    /// pre-G2 default. `Some(sandbox)` short-circuits the factory; used by the
+    /// `Orchestrator::sandbox_factory(&session_key)` — the pre-G2 default.
+    /// `Some(sandbox)` short-circuits the factory; used by the
     /// team dispatcher to inject a `WorktreeSandbox` so concurrent team
     /// members write to isolated git worktrees and cannot corrupt each
     /// other's index.
@@ -457,9 +457,16 @@ pub struct FlowRequest {
     /// flows can cap themselves tightly without lowering the global default.
     pub max_iterations_override: Option<u32>,
     /// Ephemeral per-turn prompt context assembled by the gateway run_loop:
-    /// the effective working-directory reminder, project `CLAUDE.md`/`AGENTS.md`
-    /// blocks, and any `UserPromptSubmit` hook additions — each fenced in
-    /// `<system-reminder>`. Forwarded by `Orchestrator::dispatch` into
+    /// the effective working-directory reminder, the project's own skill list,
+    /// and any `UserPromptSubmit` hook additions — each fenced in
+    /// `<system-reminder>`.
+    ///
+    /// Explicitly NOT the project's `CLAUDE.md` / `AGENTS.md` / rules. Those
+    /// travel one path only — `prompt_build.rs` → `load_project_instructions`
+    /// → `ExtraFilesLayer`, where they are sanitized and charged to the prompt
+    /// budget. Pushing them here too is what the 2026-07-26 fix removed
+    /// (`run_loop/inner.rs` says so at the producer); this doc kept advertising
+    /// the removed copy. Forwarded by `Orchestrator::dispatch` into
     /// `HarnessRunner::run`, which merges it into the transient trailing recall
     /// message (`HarnessDeps::recall_context`). It is delivered to the model
     /// each Think but NEVER persisted, so the stored user message — and the
@@ -592,8 +599,10 @@ pub trait HarnessRunner: Send + Sync {
         // and falls through to the legacy resolution chain.
         max_iterations_override: Option<u32>,
         // Ephemeral per-turn prompt context (working-directory reminder,
-        // project files, hook additions) merged into the transient trailing
-        // recall message and never persisted. `None` = no reminder this turn.
+        // project skill list, hook additions) merged into the transient
+        // trailing recall message and never persisted. Project instruction
+        // files are NOT in here — see `FlowRequest::transient_context`.
+        // `None` = no reminder this turn.
         transient_context: Option<String>,
         // Declared reasoning depth for this run. `None` = omit the thinking
         // directive entirely and leave the provider on its own default.
@@ -784,25 +793,33 @@ impl Orchestrator {
         self
     }
 
-    /// Seven-step dispatch. See design §6.
-    pub async fn dispatch(&self, req: FlowRequest) -> Result<FlowHandle, FlowError> {
-        // Step 1: resolve flow_id → FlowSpec. An explicit flow_id wins; otherwise
-        // route by agent_id. An agent absent from the routing table is NOT an
-        // error: the gateway already resolved its AgentInstance before dispatch,
-        // so the orchestrator trusts that and routes the run through the canonical
-        // default-agent flow — overriding `spec.agent` with the requested id so the
-        // harness loads *that* agent's identity from `~/.aleph/agents/<id>/` (the
-        // default-agent preset hardcodes `agent = "main"`). This is what lets every
-        // registered agent execute — config `[[agents.list]]` and team-created ones
-        // live only in the gateway registry, not the orchestrator's builtins.
+    /// Step 1 of dispatch, extracted so it can be exercised without spawning a
+    /// harness: resolve `(flow_id | agent_id, channel)` to the `FlowSpec` that
+    /// will actually serve the request, fallback included.
+    ///
+    /// The fallback is the load-bearing half. Callers assert things like "every
+    /// registered agent reaches a flow that honours `session_hint`", and a test
+    /// that re-derived the fallback itself would be asserting against its own
+    /// copy — the failure mode CLAUDE.md files under "the second answer is the
+    /// defect". This is the one derivation; `dispatch` and the guards share it.
+    pub fn resolve_spec(&self, req: &FlowRequest) -> Result<Arc<FlowSpec>, FlowError> {
+        // An explicit flow_id wins; otherwise route by agent_id. An agent absent
+        // from the routing table is NOT an error: the gateway already resolved its
+        // AgentInstance before dispatch, so the orchestrator trusts that and routes
+        // the run through the canonical default-agent flow — overriding `spec.agent`
+        // with the requested id so the harness loads *that* agent's identity from
+        // `~/.aleph/agents/<id>/` (the default-agent preset hardcodes `agent = "main"`).
+        // This is what lets every registered agent execute — config `[[agents.list]]`
+        // and team-created ones live only in the gateway registry, not the
+        // orchestrator's builtins.
         // The same fallback applies when routing *succeeds* but the resolved flow
         // id is unknown (a routing table entry whose flow was never registered):
         // prefer serving the request through the default agent over a hard error.
-        let spec = match &req.flow_id {
+        match &req.flow_id {
             Some(id) => self
                 .flow_registry
                 .resolve(id)
-                .ok_or_else(|| FlowError::UnknownFlow(id.clone()))?,
+                .ok_or_else(|| FlowError::UnknownFlow(id.clone())),
             None => match resolve_flow_id(
                 &req.agent_id,
                 req.channel.as_deref(),
@@ -810,7 +827,7 @@ impl Orchestrator {
                 &self.default_routing,
             ) {
                 Ok(flow_id) => match self.flow_registry.resolve(&flow_id) {
-                    Some(spec) => spec,
+                    Some(spec) => Ok(spec),
                     None => {
                         // Routing succeeded but the resolved flow id is unknown
                         // (a routing-table entry whose flow was never
@@ -821,19 +838,23 @@ impl Orchestrator {
                         self.flow_registry
                             .resolve(DEFAULT_AGENT_FLOW_ID)
                             .map(|base| fallback_spec_with_agent(base, &req.agent_id))
-                            .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))?
+                            .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))
                     }
                 },
-                Err(FlowError::UnknownAgent(_)) => {
-                    let base = self
-                        .flow_registry
-                        .resolve(DEFAULT_AGENT_FLOW_ID)
-                        .ok_or_else(|| FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string()))?;
-                    fallback_spec_with_agent(base, &req.agent_id)
-                }
-                Err(e) => return Err(e),
+                Err(FlowError::UnknownAgent(_)) => self
+                    .flow_registry
+                    .resolve(DEFAULT_AGENT_FLOW_ID)
+                    .map(|base| fallback_spec_with_agent(base, &req.agent_id))
+                    .ok_or_else(|| FlowError::UnknownFlow(DEFAULT_AGENT_FLOW_ID.to_string())),
+                Err(e) => Err(e),
             },
-        };
+        }
+    }
+
+    /// Seven-step dispatch. See design §6.
+    pub async fn dispatch(&self, req: FlowRequest) -> Result<FlowHandle, FlowError> {
+        // Step 1: resolve flow_id → FlowSpec (see `resolve_spec`).
+        let spec = self.resolve_spec(&req)?;
 
         // Step 2: depth guard.
         depth_guard(req.depth)?;
@@ -883,7 +904,7 @@ impl Orchestrator {
         // rust-doctor-disable-next-line excessive-clone
         let sandbox = match req.sandbox_override.clone() {
             Some(sb) => sb,
-            None => match (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key) {
+            None => match (self.sandbox_factory)(&session_res.session_key) {
                 Ok(sb) => sb,
                 Err(e) => {
                     let mut guard = self

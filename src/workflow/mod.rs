@@ -29,9 +29,10 @@ pub mod store;
 pub use clarify::{ClarifyContext, CLARIFY_DELIVERY_PENDING_KEY};
 pub use compile::{
     materialize, workflow_effort_think_level, workflow_model_override, workflow_origin,
-    MaterializedWorkflow, NOTIFIED_BY_CANCEL, NOTIFIED_BY_SETTLE, WORKFLOW_EFFORT_KEY,
+    MaterializedWorkflow, StepPins, NOTIFIED_BY_CANCEL, NOTIFIED_BY_SETTLE, WORKFLOW_EFFORT_KEY,
     WORKFLOW_MODEL_KEY, WORKFLOW_NAME_KEY, WORKFLOW_NOTIFIED_BY_KEY, WORKFLOW_NOTIFIED_KEY,
-    WORKFLOW_ORIGIN_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
+    WORKFLOW_ORIGIN_KEY, WORKFLOW_PHASE_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_SCHEMA_KEY,
+    WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
 };
 pub use def::{render_prompt, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};

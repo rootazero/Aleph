@@ -366,7 +366,15 @@ impl LoopState {
             }
         }
         if let Some(budget) = self.token_budget {
-            parts.push(format!("token budget: {budget}"));
+            if self.baseline_captured {
+                parts.push(format!("token budget: {budget}"));
+            } else {
+                // A budget was declared but the session token counter never
+                // produced a number — `try_claim_tick` therefore never enforced
+                // the budget. Surface that explicitly so the operator does not
+                // see "token budget: 50000" and conclude enforcement is on.
+                parts.push(format!("token budget: {budget} (declared, unenforced: counter unavailable)"));
+            }
         }
         if matches!(self.cadence, Cadence::ModelPaced { .. }) {
             match self.next_wake_ms {
@@ -421,7 +429,13 @@ impl LoopState {
             parts.push("deadline: set".to_string());
         }
         if let Some(budget) = self.token_budget {
-            parts.push(format!("token budget: {budget}"));
+            if self.baseline_captured {
+                parts.push(format!("token budget: {budget}"));
+            } else {
+                parts.push(format!(
+                    "token budget: {budget} (declared, unenforced: counter unavailable)"
+                ));
+            }
         }
         parts.join(", ")
     }
@@ -674,6 +688,35 @@ mod tests {
     fn human_summary_still_renders_the_live_countdown_for_the_tool_reply() {
         let l = sample().with_deadline_ms(Some(10_000));
         assert!(l.human_summary(4_000).contains("time left: 6s"));
+    }
+
+    /// A budget declared but never enforced (the session token counter never
+    /// produced a number) must read in BOTH renderers as "declared,
+    /// unenforced". The previous wording printed "token budget: 50000" and
+    /// let the operator assume enforcement was on — exactly the lie the type
+    /// invariant `baseline_captured ⇒ enforced` exists to forbid.
+    #[test]
+    fn token_budget_unenforced_is_visible_in_both_renderers() {
+        let l = sample().with_token_budget(Some(50_000));
+        // baseline_captured stays false (the constructor never captures it;
+        // only the first claim that sees a budget + a total does).
+        let human = l.human_summary(1_000);
+        assert!(
+            human.contains("declared, unenforced"),
+            "human_summary must surface unenforced: {human}"
+        );
+        let stable = l.stable_summary();
+        assert!(
+            stable.contains("declared, unenforced"),
+            "stable_summary must surface unenforced (it is the only renderer \
+             allowed into the system prompt): {stable}"
+        );
+
+        // Once the baseline is captured, the unenforced hint disappears.
+        let captured = l.with_baseline(1_000);
+        assert!(captured.human_summary(1_000).contains("token budget: 50000"));
+        assert!(captured.human_summary(1_000).contains("token budget: 50000"));
+        assert!(!captured.stable_summary().contains("unenforced"));
     }
 
     #[test]

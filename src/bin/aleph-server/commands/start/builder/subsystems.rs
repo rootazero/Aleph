@@ -315,7 +315,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                                             let tracker = OffsetTracker::new(
                                                 db.clone(),
                                                 format!("{}-bb", inst.id),
-                                            );
+                                            ).await;
                                             bb_channel.set_offset_tracker(Arc::new(tracker));
                                         }
                                         let cid = channel_registry
@@ -343,7 +343,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                             {
                                 let mut imessage_channel = IMessageChannel::new(imessage_config);
                                 if let Some(ref db) = state_db {
-                                    let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
+                                    let tracker = OffsetTracker::new(db.clone(), inst.id.clone()).await;
                                     imessage_channel.set_offset_tracker(Arc::new(tracker));
                                 }
                                 let cid =
@@ -391,7 +391,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                         }
                         if let Some(ref db) = state_db {
                             // Wire offset tracker for persistent polling resume
-                            let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
+                            let tracker = OffsetTracker::new(db.clone(), inst.id.clone()).await;
                             tg_channel.set_offset_tracker(Arc::new(tracker));
                             // Wire state database for pairing persistence
                             tg_channel.set_state_database(db.clone());

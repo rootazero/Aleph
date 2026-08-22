@@ -11,6 +11,7 @@ pub(crate) mod panic_payload;
 pub mod path_within;
 pub mod paths;
 pub mod process_alive;
+pub mod reqwest_limit;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod scratch;
 pub mod sqlite_open;

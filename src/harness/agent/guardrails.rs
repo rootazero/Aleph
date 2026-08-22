@@ -40,16 +40,30 @@ impl AgentHarness {
                 Ok(ToolCallGuardOutcome::Pass)
             }
             crate::guardrails::GuardrailDecision::Sanitize(rep) => {
-                // On reparse failure, keep the model's original structured args
-                // rather than clobbering them into an opaque `Value::String` —
-                // a shape change (object → one string arg) is worse than an
-                // un-applied sanitize. (Deeper fix: guardrail carries a `Value`,
-                // not a `String`, so no reparse is needed.)
+                // On reparse failure, fail CLOSED: block the tool call rather than
+                // silently fall back to the model's original args. The previous
+                // behavior (`call.arguments.clone()` on parse error) was
+                // fail-open — a guardrail that identified a leak/secret could
+                // return a sanitized string the harness then refused to apply,
+                // and the un-sanitized original reached the tool. The deeper fix
+                // is to have guardrail carry a `Value` not a `String`; until
+                // then, a JSON parse error must not be allowed to bypass
+                // sanitization.
                 let new_args = match serde_json::from_str::<Value>(&rep.text) {
                     Ok(v) => v,
                     Err(e) => {
-                        tracing::warn!(?session_id, tool = %call.name, source = %rep.source, error = %e, "sanitized tool-call args did not reparse as JSON; keeping original args");
-                        call.arguments.clone()
+                        tracing::error!(
+                            ?session_id,
+                            tool = %call.name,
+                            source = %rep.source,
+                            error = %e,
+                            "sanitized tool-call args did not reparse as JSON; blocking call (fail-closed)"
+                        );
+                        let reason = format!(
+                            "guardrail sanitization produced invalid JSON: {e}"
+                        );
+                        callback.on_safety_block(&reason);
+                        return Ok(ToolCallGuardOutcome::Block);
                     }
                 };
                 tracing::info!(?session_id, tool = %call.name, source = %rep.source, "tool-call args sanitized");
