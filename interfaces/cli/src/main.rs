@@ -669,6 +669,7 @@ async fn dispatch_memory(
             memory_cmd::clear(server_url, config, facts_only, json).await
         }
         MemoryAction::Compress => memory_cmd::compress(server_url, config, json).await,
+        MemoryAction::Dreaming => memory_cmd::dreaming(server_url, config, json).await,
         MemoryAction::Delete { id } => memory_cmd::delete(server_url, config, &id, json).await,
     }
 }
