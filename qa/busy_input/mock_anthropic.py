@@ -21,6 +21,17 @@ Turn plans are named so scenarios can pick their own pacing:
   long-run       3,90,end         — one turn alive for a minute and a half
   quick          1,1,end          — barely-alive run, for arrival-ordering checks
   channel-burst  2, then 20 x15   — several runs in flight at once (interrupt/queue)
+  single-shot    end, end, end…   — every turn answers immediately with no tool
+                                    call, so each `chat.send` is exactly ONE
+                                    priced LLM call. Round-7 (per-principal spend
+                                    budget): a `quick`-style plan's second "tool"
+                                    turn lets the metering floor's mid-run check
+                                    fire on turn 2 once turn 1's cost crosses a
+                                    tiny ceiling — a DIFFERENT denial path
+                                    (`ExecutionError::Failed`, generic) than the
+                                    run-admission arm's `SpendExhausted` this
+                                    plan exists to isolate. One call in, one
+                                    priced call out, nothing else moves.
 
 Two optional trailing arguments let a scenario say WHAT the turn calls and
 capture WHAT THE MODEL SAW coming back:
@@ -65,6 +76,11 @@ PLANS = {
     # the third message with nothing to interrupt. A long flat tail keeps every
     # run in the scenario alive; teardown, not the plan, ends them.
     "channel-burst": [(2, "tool")] + [(20, "tool")] * 15 + [(0, "end")],
+    # See the module doc's "single-shot" entry. 200 turns is far more than any
+    # scenario needs; the global turn counter (see PLAN[turn - 1] below) means
+    # every one of them must answer "end" for the guarantee to hold across a
+    # whole fixture run, not just the first call.
+    "single-shot": [(0, "end")] * 200,
 }
 PLAN = PLANS.get(PLAN_NAME, PLANS["burst-drain"])
 
