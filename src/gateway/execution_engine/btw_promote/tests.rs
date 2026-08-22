@@ -307,3 +307,67 @@ fn the_promote_branch_sits_between_the_redirect_and_the_admission() {
          one. Found promote at byte {promote}, admit_run at byte {admit}."
     );
 }
+
+/// An over-ceiling principal keeps the crossing: the promote branch runs
+/// BEFORE the spend arm, and the spend arm runs before `admit_run`.
+///
+/// This is a decision the merge of the spend feature and the `/btw` feature
+/// had to make, and it is pinned here so it stays made deliberately:
+///
+/// * **Promote before the spend arm.** The spend ceiling exists to stop USD
+///   from being spent; a promote spends none — no model is asked anything
+///   (`serve_btw_promote`'s own receipt reports `total_tokens: 0`, "nothing
+///   to bill"), and the side answer being carried was already paid for when
+///   the side question ran and passed this same admission. Refusing the
+///   crossing refunds nothing and strands value already purchased. Promote
+///   also claims none of the resources the arm's doc says it protects — no
+///   run slot, no concurrency permit, no `ActiveRun`.
+/// * **The spend arm before `admit_run`.** That is the spend feature's own
+///   invariant (`run_loop::deny_if_over_spend`'s doc): the refusal must come
+///   ahead of anything that hands an over-ceiling principal a resource it
+///   would be denied anyway.
+///
+/// Source-level for the same reason the placement test above is: a runtime
+/// fixture cannot see this ordering. Installing a low ceiling means writing
+/// the process-wide policy/ledger `OnceLock`s the rest of this binary's tests
+/// share and race (`report_admission_denial`'s own split exists because of
+/// exactly that hazard), and a fixture that never installs one greens either
+/// order.
+#[test]
+fn an_over_budget_principal_keeps_the_read_only_crossing() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/gateway/execution_engine/execute.rs");
+    let text = std::fs::read_to_string(&path).expect("execute.rs");
+    let production = text
+        .replace('\r', "")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap_or_default()
+        .to_string();
+
+    let promote = production
+        .find("btw::is_promote(&request.metadata)")
+        .expect("execute() still serves promote; the scan stopped matching, so its green means nothing");
+    let spend_arm = production
+        .find("deny_if_over_spend_and_report(&request, emitter.as_ref())")
+        .expect("execute() still denies over-ceiling principals; the scan stopped matching");
+    let admit = production
+        .find("self.admit_run(")
+        .expect("execute() still admits; the scan stopped matching, so its green means nothing");
+
+    assert!(
+        promote < spend_arm,
+        "the promote branch must run BEFORE the spend arm: a promote spends nothing \
+         (no model, `total_tokens: 0`) and the answer it carries was already paid for \
+         when the side question ran. Move the arm above it and an over-ceiling \
+         principal loses a read-only crossing that refusing could never refund. \
+         Found promote at byte {promote}, spend arm at byte {spend_arm}."
+    );
+    assert!(
+        spend_arm < admit,
+        "the spend arm must run BEFORE `admit_run`: a principal already over its \
+         ceiling should never be handed a run slot, a concurrency permit, or an \
+         `ActiveRun` it is about to be denied anyway. Found spend arm at byte \
+         {spend_arm}, admit_run at byte {admit}."
+    );
+}
