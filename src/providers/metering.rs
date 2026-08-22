@@ -789,20 +789,53 @@ mod tests {
     /// against was streaming skipping `record_usage` entirely, not a bad
     /// `Delta` computation, which G3/G4 above already pin in isolation).
     ///
-    /// Safe to share across every test in this file: the ceiling
-    /// (`per_user_usd: $1,000,000`) is far above anything any test here
-    /// accumulates through `Delta::Usd`/`Delta::Partial`, and every
-    /// provider the tests in this file use ("fake"/"empty"/deliberately
-    /// unknown ids) prices to `CostStatus::Unknown`, which never moves
-    /// `usd` (G3) — so no test here can accidentally deny another. Each
-    /// test still uses its own `Principal` (via `scope::with_scope`) so
-    /// their ledger rows never collide even though the ledger is shared.
+    /// The ceiling (`per_user_usd: $1,000,000`) is far above anything any
+    /// test here accumulates through `Delta::Usd`/`Delta::Partial`, and
+    /// every provider the tests in this file use ("fake"/"empty"/
+    /// deliberately unknown ids) prices to `CostStatus::Unknown`, which
+    /// never moves `usd` (G3). Each test also uses its own `Principal` (via
+    /// `scope::with_scope`) so their ledger rows never collide even though
+    /// the ledger is shared.
+    ///
+    /// ⚠️ That argument used to end "so no test **in this file** can deny
+    /// another", and the two words in bold were the whole defect. It is an
+    /// argument about `install_policy`, which is a `OnceLock` set — first
+    /// writer wins, everyone else's identical value is a no-op, so sharing
+    /// is safe as long as every writer writes the same thing. `config::
+    /// live_apply` then grew tests that call `spend::update_policy`, which
+    /// **overwrites** the same cell (that is the point of the live-apply
+    /// round), from a different file — leaving this comment true as written
+    /// and false as relied upon. `cargo test --lib` runs one process, so
+    /// `--lib providers::metering::` passed 10/10 while
+    /// `--lib providers::metering:: config::live_apply::` failed both
+    /// wiring tests: a disabled policy makes `record_spend` early-return
+    /// and the ledger stays empty.
+    ///
+    /// The fix is not a bigger ceiling — it is that every test which
+    /// *reads* the process-wide policy through the real global belongs to
+    /// one serial group with every test that *writes* it. Counting only the
+    /// writers is what let this through: the writers were serialised
+    /// against each other, and these two readers were not in the group.
     fn install_test_spend_globals() {
-        crate::spend::install_policy(crate::config::types::policies::SpendPolicy {
+        let policy = crate::config::types::policies::SpendPolicy {
             per_user_usd: Some(1_000_000.0),
             total_usd: None,
             period: crate::config::types::policies::SpendPeriod::Month,
-        });
+        };
+        // Two calls, and the second is the one that matters. `install_policy`
+        // creates the cell if nobody has yet; it is a `OnceLock` set, so on
+        // every run after the first it is a silent no-op — which is exactly
+        // how a value another test left behind survives into this one.
+        // `update_policy` then *forces* the value this test needs. Ensure,
+        // don't install: the serial group above stops two tests overlapping,
+        // it does not undo what the previous one stored.
+        crate::spend::install_policy(policy.clone());
+        assert!(
+            crate::spend::update_policy(policy),
+            "install_policy must have created the handle, so update_policy cannot report false \
+             here — if it does, the global was never installed and every assertion below would \
+             be measuring the default-disabled policy instead of this one"
+        );
         crate::spend::install_ledger(Arc::new(crate::spend::InMemorySpendLedger::default()));
     }
 
@@ -811,6 +844,7 @@ mod tests {
     /// one unpriced call — the streaming metering gap is a bug this file
     /// already shipped once (see `execute_streaming_dyn`'s doc comment).
     #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
     async fn g5_streaming_and_non_streaming_arms_record_the_same_spend_delta() {
         install_test_spend_globals();
         let principal = crate::spend::Principal::User("u-metering-g5".to_string());
@@ -879,6 +913,7 @@ mod tests {
     /// the returned error names the ceiling — "denies before any request
     /// leaves the box" is the load-bearing property Task 6 exists for.
     #[tokio::test]
+    #[serial_test::serial(spend_global_policy)]
     async fn denied_verdict_returns_a_provider_error_before_the_inner_call_runs() {
         install_test_spend_globals();
         let principal = crate::spend::Principal::User("u-metering-deny".to_string());
