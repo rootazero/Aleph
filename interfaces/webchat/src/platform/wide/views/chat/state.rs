@@ -529,6 +529,12 @@ pub struct ChatState {
     /// with `error_message`. Populated by `fail_run`, `set_send_error`,
     /// and cleared together with `error_message` on `clear*`.
     pub send_error: RwSignal<Option<ChatSendError>>,
+    /// A non-fatal notice from the spoken layer — currently only "this system
+    /// cannot decode the audio the core sent". Separate from [`Self::send_error`]
+    /// on purpose: that one carries a `ChatSendErrorCode` and describes a failed
+    /// send, and a decoder problem has a different remedy. Cleared by the user
+    /// or by the next successful playback.
+    pub voice_notice: RwSignal<Option<String>>,
     /// Files staged for the next outbound message. Composer paperclip and
     /// chat-surface drop zone both push into this list.
     pub pending_attachments: RwSignal<Vec<PendingAttachment>>,
@@ -745,6 +751,7 @@ impl ChatState {
             reasoning_text: RwSignal::new(String::new()),
             error_message: RwSignal::new(None),
             send_error: RwSignal::new(None),
+            voice_notice: RwSignal::new(None),
             pending_attachments: RwSignal::new(Vec::new()),
             is_dragging_files: RwSignal::new(false),
             draft: RwSignal::new(String::new()),

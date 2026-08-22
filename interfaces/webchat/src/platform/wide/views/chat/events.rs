@@ -1094,7 +1094,7 @@ pub fn subscribe_run_events(
                 if chat.take_speak_run(run_id) {
                     let text = chat.assistant_text_for_run(run_id);
                     if !text.trim().is_empty() {
-                        super::voice_playback::speak(&dash, text);
+                        super::voice_playback::speak(&dash, &chat, text);
                     }
                 }
             }

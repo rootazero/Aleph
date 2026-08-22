@@ -60,8 +60,12 @@ web-sys = { version = "0.3", features = [
     # composer voice button — mic capture via MediaRecorder → base64 → STT RPC
     "MediaDevices", "MediaStream", "MediaStreamTrack", "MediaStreamConstraints",
     "MediaRecorder", "MediaRecorderOptions", "BlobEvent", "BlobPropertyBag",
-    # voice-loop playback — speak the agent's TTS reply via a detached <audio>
-    "HtmlMediaElement", "HtmlAudioElement",
+    # voice-loop playback — speak the agent's TTS reply via a detached <audio>.
+    # MediaError backs the decoder-missing receipt: `HtmlMediaElement::error()`
+    # returns `Option<MediaError>`, and `.code()` on it is the only signal that
+    # distinguishes "this system cannot decode these bytes" from a rejected
+    # play() promise for any other reason (usually the autoplay policy).
+    "HtmlMediaElement", "HtmlAudioElement", "MediaError",
     # immersive voice mode — mic level metering via Web Audio analyser
     "AudioContext", "AnalyserNode", "MediaStreamAudioSourceNode",
     # immersive capture — continuous PCM tap (pre-roll buffer, kills leading-syllable clip)

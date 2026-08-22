@@ -1199,6 +1199,12 @@ pub(crate) fn InputArea() -> impl IntoView {
                 // refusal landed ~700px off-screen).
                 <SendErrorBanner />
 
+                // Voice-notice banner — a non-fatal notice from the spoken
+                // layer (currently only "this system cannot decode the audio").
+                // Same reasoning as SendErrorBanner above for living here
+                // rather than in the transcript.
+                <VoiceNoticeBanner />
+
                 // Live prompt-injection guard banner (G1). Server-side
                 // remains the final authority; this is just a hint so
                 // the user can rephrase before wasting a model call.
@@ -1479,6 +1485,45 @@ pub(crate) fn InputArea() -> impl IntoView {
                 </div>  // /relative floating-overlay anchor
             </div>
         </div>
+    }
+}
+
+/// Non-fatal notice from the spoken layer. Deliberately separate from
+/// [`SendErrorBanner`]: that one reports a failed send with a
+/// `ChatSendErrorCode`, this one reports that playback could not decode. Same
+/// shape, different condition, different remedy — including the dismiss
+/// button, since the next successful playback that would otherwise clear it
+/// never happens on a machine that cannot decode.
+#[component]
+fn VoiceNoticeBanner() -> impl IntoView {
+    let i18n = use_i18n();
+    let chat = expect_context::<ChatState>();
+    view! {
+        <Show when=move || chat.voice_notice.get().is_some()>
+            {move || {
+                chat.voice_notice
+                    .get()
+                    .map(|msg| {
+                        view! {
+                            <div
+                                class="mx-1 mb-1 px-3 py-2 rounded-lg border text-sm bg-warning-subtle border-warning/30 text-warning"
+                                role="status"
+                            >
+                                <div class="flex items-start gap-2">
+                                    <span class="flex-1">{msg}</span>
+                                    <button
+                                        class="opacity-60 hover:opacity-100 shrink-0"
+                                        title=move || t_string!(i18n, chat.dismiss).to_string()
+                                        on:click=move |_| chat.voice_notice.set(None)
+                                    >
+                                        "\u{2715}"
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    })
+            }}
+        </Show>
     }
 }
 
