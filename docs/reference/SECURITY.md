@@ -1172,6 +1172,121 @@ Full model, threat analysis and the buzz gap-analysis table:
 
 ---
 
+## Spend Ceilings (per-principal USD budget · 2026-08-22)
+
+**Location**: `src/spend/` (`Principal`/`Spent`/`Delta`/`Limit`/`Verdict`, the
+`SpendLedger` trait, the two process-global handles, the two principal
+resolvers, `check`/`check_with` — the single admission predicate),
+`src/spend/sqlite.rs` (durable backend on the `SecurityStore`),
+`src/spend/period.rs` (local-calendar period boundaries + retention),
+`src/config/types/policies/spend.rs` (`[policies.spend]`),
+`src/providers/metering.rs` (the floor arm),
+`src/gateway/execution_engine/run_loop/` (the admission arm, `deny_if_over_spend`),
+`src/gateway/handlers/spend.rs` (`spend.query`), `interfaces/cli` (`aleph spend`).
+Boot wiring — `src/bin/aleph-server/commands/start/mod.rs`, right after
+`initialize_vault`.
+
+`[policies.spend]` sets a per-principal ceiling (`per_user_usd`) and/or a
+machine-total ceiling (`total_usd`) over a rolling `Day` or `Month`
+local-calendar period. Two arms read the same predicate:
+
+- **The floor arm** — `MeteringProvider::enforce_spend_ceiling`, the first
+  statement inside every provider call's boxed future, before it is
+  awaited. A principal already over the ceiling gets no further LLM calls.
+- **The admission arm** — `run_loop::deny_if_over_spend`, checked when a run
+  is first admitted, so an over-budget principal cannot even start a new
+  run.
+
+### It is a ceiling, not a hard cap
+
+The floor arm checks *before* the call and records spend *after* it
+completes — by design. Reserving an estimate up front would need a refund
+on every error path, and a single missed refund would silently shrink
+someone's ceiling forever; a bounded overshoot is the cheaper failure to
+accept. The bound is exact: a principal can exceed the ceiling by at most
+the cost of whatever calls were already in flight the instant they crossed
+it. What this control promises is "no *new* call is admitted once you are
+over budget, and the ledger reflects reality within one in-flight call's
+worth of drift" — not "spend will never cross the configured number".
+
+### A missing price is never a gate
+
+`pricing::estimate` can answer `CostStatus::Unknown` for a provider/model
+pair the static price table does not carry. That maps to
+`spend::Delta::Unpriced`, a deliberately fieldless variant with no `usd`
+field to attach a figure to — an unpriced call is *counted* (so an operator
+can see how much traffic the ledger cannot price) but never denies anything
+and never contributes to either ceiling. A source-level guard beside the
+one production site that performs this mapping
+(`providers::metering::MeteringProvider::record_spend_with`) pins that
+`CostStatus::Unknown` can never reach `Delta::Usd`/`Delta::Partial`, so this
+stays true even if `pricing::estimate` someday grows a heuristic guess for
+unknown models. See `pricing.rs`'s module doc.
+
+### Two coverage boundaries, stated rather than left for a reader to infer
+
+- **Provider health probes are unmetered.** `providers::probe::probe_provider`
+  calls `.process()` directly on the raw provider, bypassing the
+  `MeteringProvider` wrapper entirely — a probe accumulates no spend and is
+  denied by no ceiling. This is correct (a health check is not the user's
+  spend), but it means "every model call is metered" is the wrong claim;
+  the accurate one is "every call made on a principal's behalf is metered".
+- **Unattributable spend has a name, and it is not a person.** Spend
+  produced where no principal can be resolved
+  (`principal_from_metadata`/`ambient_principal`'s fallback arm) lands on
+  `Principal::Unattributed`, the `"@unattributed"` row `spend.query` reports
+  alongside every real principal's row. It is the ledger's honest account
+  of spend nobody could be billed to — not a user who is somehow both
+  anonymous and over budget, and it is never itself subject to
+  `per_user_usd` (there is no per-principal ceiling to check it against).
+
+### What it does not buy
+
+Exceeding a ceiling denies further calls; it does not retroactively undo
+anything already billed. There is deliberately no `spend.reset`: zeroing a
+ledger row is, after the fact, indistinguishable from a write that never
+happened, so raising the ceiling in `[policies.spend]` (live-appliable, see
+below) is the reversible way to say the same thing. `spend.query`/
+`aleph spend` — admin-gated, same `spend.`-prefix reasoning
+`security.audit.query` documents for its own prefix, since a spend report
+names every principal on the machine and their dollar figures — are the
+only read faces today; there is no Panel surface, matching the CLI-only
+pattern `users.*`/`aleph audit` already established for admin-gated
+controls.
+
+### Retention
+
+The ledger is swept once at boot, right after the durable ledger is
+installed, down to `spend::period::RETENTION_PERIODS` (3 — current + 2
+prior periods). This is a period *count*, not the 30-day *duration*
+[`security::audit::DEFAULT_RETENTION_SECS`](#audit-logging) uses for the
+audit trail — the two are not the same policy in a different unit, and the
+ledger's own doc says so explicitly. The reason is structural: the ledger
+is keyed by a calendar boundary (`period_start_ms`), not by an elapsed-time
+cutoff, so a seconds-based horizon would still have to be converted into
+"which period boundary does that land on" before it could sweep anything —
+and that conversion is exactly where a fixed-duration off-by-one deletes
+the *current* period instead of an old one. `retention_cutoff_ms` walks
+calendar boundaries backward in period-sized steps instead.
+
+### `[policies.spend]` is live-appliable, boot installation is not optional
+
+`spend::install_policy`/`spend::install_ledger` install the two
+process-global handles this whole control reads; both must run at boot
+(`start/mod.rs`), unconditionally — including when no ceiling is
+configured. `spend::update_policy` (the live-apply path for
+`[policies.spend]`) returns `false`, and the live-apply verdict honestly
+downgrades to `Restart`, when no handle has been installed yet; skipping
+installation on an unconfigured box would mean an operator could turn a
+ceiling *off* live but never turn one *on* live — the direction that
+matters less. A source-level census in `start/mod.rs`'s own test module
+(`boot_installs_the_spend_policy_and_the_spend_ledger`) pins that both calls
+exist in production, because nothing else can see their absence: it is not
+a compile error, no other test goes red, and a server missing either call
+runs indistinguishably from a correctly-configured one with no ceiling set.
+
+---
+
 ## IPC Security
 
 **Location**: `src/exec/bridge.rs` + `src/exec/socket.rs`

@@ -610,6 +610,66 @@ mod tests {
         assert_eq!(spent.partial_calls, 0);
     }
 
+    /// G3's structural twin. G3 above proves the *behaviour* for today's
+    /// price table: an unpriced call currently happens to carry
+    /// `estimate.usd == 0.0`, so `spent.usd == 0.0` after recording it
+    /// proves nothing about the *mapping* — a future change to
+    /// `pricing::estimate` that starts returning a nonzero "best guess" `usd`
+    /// alongside `CostStatus::Unknown` would sail straight past G3 as long
+    /// as `record_spend_with` still fed that guess into `Delta::Usd`.
+    ///
+    /// This pins the *source shape* instead: `CostStatus::Unknown` must map
+    /// to the fieldless `Delta::Unpriced` variant at the one production
+    /// site that performs this mapping — never `Delta::Usd`/`Delta::Partial`,
+    /// which both carry a `usd` figure. Once that arm reads
+    /// `Delta::Unpriced`, "an Unknown estimate never moves a dollar" stops
+    /// being a fact about today's price table and becomes a fact the type
+    /// checker enforces (`Delta::Unpriced` has no field to carry `usd` in —
+    /// see its doc). That is the property `pricing.rs`'s module doc
+    /// promises and the reason it is written the way it is.
+    #[test]
+    fn cost_status_unknown_has_no_source_path_to_a_priced_delta() {
+        let src = include_str!("metering.rs").replace('\r', "");
+        // CRLF-safe (this repo's Windows checkout uses \r\n) and unanchored
+        // on purpose: an anchored "\n#[cfg(test)]" needle matches nothing
+        // once \r is stripped from a line that had it, silently turning
+        // "production" into the whole file — see CLAUDE.md §10 for the
+        // documented failure this avoids.
+        let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing — this test would be \
+             reading its own source, and the assertions below would be \
+             checking their own doc comments instead of production code"
+        );
+        // Strip `//` line comments before scanning: this file's own doc
+        // comments spell out `CostStatus::Unknown => crate::spend::Delta::Unpriced`
+        // in prose (see `record_spend_with`'s doc), and a naive `contains`
+        // would be satisfied by that sentence even if the match arm below
+        // it read something else — the bug's own explanation becoming its
+        // only search hit.
+        let production: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            production.contains("CostStatus::Unknown => crate::spend::Delta::Unpriced"),
+            "CostStatus::Unknown must map to the fieldless Delta::Unpriced \
+             variant at record_spend_with's match — anything else gives an \
+             unpriced call a `usd` figure to carry into the ledger, which \
+             is exactly what pricing.rs's module doc says pricing must \
+             never do once it feeds a spend ceiling"
+        );
+        assert!(
+            !production.contains("CostStatus::Unknown => crate::spend::Delta::Usd")
+                && !production.contains("CostStatus::Unknown => crate::spend::Delta::Partial"),
+            "found a production mapping from CostStatus::Unknown to a \
+             priced Delta variant (Usd/Partial) — an unpriced call must \
+             never carry a usd figure into the spend ledger"
+        );
+    }
+
     /// The other two arms of the `CostStatus` → `Delta` mapping, pinned
     /// alongside G3 so the three-way match in `record_spend_with` cannot
     /// quietly collapse two arms into one: `Complete` moves `usd` and

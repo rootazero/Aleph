@@ -476,6 +476,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         auth_bundle.security_store.clone(),
     )));
 
+    // Bound the ledger's growth now that a real ledger exists to bound:
+    // drop spend rows older than `spend::period::RETENTION_PERIODS` past
+    // periods, computed by walking calendar boundaries backward rather than
+    // `now - N * <fixed duration>` — see `spend::period`'s module doc for
+    // why a month or a DST day breaks fixed-duration arithmetic.
+    {
+        let spend_now_ms = chrono::Utc::now().timestamp_millis();
+        let spend_cutoff_ms = alephcore::spend::period::retention_cutoff_ms(
+            spend_now_ms,
+            loaded_app_config.policies.spend.period,
+            alephcore::spend::period::RETENTION_PERIODS,
+        );
+        match alephcore::spend::global_ledger().sweep_before(spend_cutoff_ms) {
+            Ok(swept) => {
+                tracing::info!(
+                    swept,
+                    cutoff_ms = spend_cutoff_ms,
+                    "spend ledger: retention sweep complete"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, "spend ledger: retention sweep failed");
+            }
+        }
+    }
+
     register_core_handlers(
         &mut server,
         &auth_bundle.auth_ctx,

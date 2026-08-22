@@ -52,7 +52,72 @@ use crate::config::types::policies::SpendPeriod;
 /// Ledger growth is bounded at `3 ×` the row count of the busiest single
 /// period, indefinitely, regardless of how long the process has been
 /// running.
+///
+/// # This does not mirror `security::audit::DEFAULT_RETENTION_SECS`
+///
+/// [`crate::security::audit::DEFAULT_RETENTION_SECS`] is a fixed 30-day
+/// window — seconds, converted to a wall-clock cutoff by subtraction.
+/// `RETENTION_PERIODS` is a period *count*, not a duration: under
+/// `SpendPeriod::Month` it retains roughly 90 days, under
+/// `SpendPeriod::Day` roughly 3. Neither is a rounding of the other, and
+/// the two must never be described as if they were the same policy in a
+/// different unit. The reason the spend ledger counts periods instead of
+/// seconds is structural, not stylistic: it is keyed by
+/// [`period_start_ms`], a *calendar boundary*, not by an elapsed-time
+/// cutoff, so a seconds-based horizon would still have to be converted
+/// into "which period boundary does that land on" before it could be used
+/// to sweep — and that conversion is exactly where a fixed-duration
+/// off-by-one deletes the *current* period instead of an old one (a month
+/// is not 30 days; a DST day is not 24 hours — see the module doc).
+/// [`retention_cutoff_ms`] does that walk in period-sized steps so the
+/// question never comes up.
 pub const RETENTION_PERIODS: u32 = 3;
+
+/// The oldest period-start still worth keeping in the ledger, in the
+/// system's local timezone: retains the period containing `now_ms` plus
+/// the `retain_periods - 1` periods immediately before it
+/// (`retain_periods` periods total — "current + 2 prior" when
+/// `retain_periods == RETENTION_PERIODS == 3`).
+///
+/// Delegates to [`retention_cutoff_ms_in`] with `chrono::Local` — see the
+/// module doc for why production code should call this name and tests
+/// should pass an explicit [`chrono_tz::Tz`].
+///
+/// The result is itself a valid period start, suitable directly as
+/// [`crate::spend::SpendLedger::sweep_before`]'s cutoff: rows with
+/// `period_start_ms` strictly before it are removed, and the cutoff
+/// period itself — along with every period after it — survives.
+#[must_use]
+pub fn retention_cutoff_ms(now_ms: i64, period: SpendPeriod, retain_periods: u32) -> i64 {
+    retention_cutoff_ms_in(now_ms, period, retain_periods, &chrono::Local)
+}
+
+/// [`retention_cutoff_ms`] with the timezone taken as a parameter — see
+/// that function's doc for the boot-time contract this computes, and the
+/// module doc for why `tz` is a parameter rather than read from process
+/// state.
+///
+/// Walks backward one calendar boundary at a time via [`period_start_ms_in`]
+/// — never `now_ms - retain_periods * <a fixed duration>`, which is exactly
+/// the bug this module exists to prevent (a month is not a fixed number of
+/// days; a local day is not always 24h under DST).
+#[must_use]
+pub fn retention_cutoff_ms_in<Tz: TimeZone>(
+    now_ms: i64,
+    period: SpendPeriod,
+    retain_periods: u32,
+    tz: &Tz,
+) -> i64 {
+    let mut boundary = period_start_ms_in(now_ms, period, tz);
+    for _ in 0..retain_periods.saturating_sub(1) {
+        // Step to an instant strictly inside the previous period before
+        // asking for *its* start — `period_start_ms_in` of a boundary that
+        // is already a period start would be a no-op and the walk would
+        // never move.
+        boundary = period_start_ms_in(boundary - 1, period, tz);
+    }
+    boundary
+}
 
 /// Start of the spend period containing `now_ms`, in the system's local
 /// timezone.
@@ -386,5 +451,107 @@ mod tests {
                 "{period:?}: period_end should already be the next period's start"
             );
         }
+    }
+
+    /// `retain_periods == 1` walks back zero times: the cutoff is just the
+    /// start of the period containing `now_ms`, i.e. nothing before the
+    /// current period survives.
+    #[test]
+    fn retention_of_one_period_is_just_the_current_periods_start() {
+        let tz = chrono_tz::UTC;
+        let now_ms = tz
+            .with_ymd_and_hms(2024, 6, 15, 9, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected = period_start_ms_in(now_ms, SpendPeriod::Day, &tz);
+        assert_eq!(
+            retention_cutoff_ms_in(now_ms, SpendPeriod::Day, 1, &tz),
+            expected
+        );
+    }
+
+    /// `RETENTION_PERIODS == 3` on `Day` periods: the cutoff is the start
+    /// of the day two days before `now`, i.e. "current + 2 prior" survive
+    /// and anything older is swept — the exact claim in
+    /// `RETENTION_PERIODS`'s doc, pinned against an off-by-one in either
+    /// direction.
+    #[test]
+    fn retention_of_three_day_periods_keeps_current_and_two_prior() {
+        let tz = chrono_tz::UTC;
+        let now_ms = tz
+            .with_ymd_and_hms(2024, 6, 15, 9, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected_cutoff = tz
+            .with_ymd_and_hms(2024, 6, 13, 0, 0, 0) // two days back, local midnight
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(
+            retention_cutoff_ms_in(now_ms, SpendPeriod::Day, RETENTION_PERIODS, &tz),
+            expected_cutoff
+        );
+        // One day further back must NOT survive: `sweep_before` deletes
+        // strictly-less-than the cutoff, so the day before `expected_cutoff`
+        // has to compare less than it.
+        let one_day_too_old = tz
+            .with_ymd_and_hms(2024, 6, 12, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert!(one_day_too_old < expected_cutoff);
+    }
+
+    /// The backward walk crosses a month boundary via the calendar, not via
+    /// "now - N * 30 days": `now` in March, walking back two `Month`
+    /// periods from the current one must land on January 1st, not on some
+    /// fixed-duration approximation that would land in a different month
+    /// depending on how many days February and January actually have.
+    #[test]
+    fn retention_walk_crosses_a_month_boundary_by_calendar_not_by_fixed_duration() {
+        let tz = chrono_tz::UTC;
+        let now_ms = tz
+            .with_ymd_and_hms(2024, 3, 15, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected_cutoff = tz
+            .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(
+            retention_cutoff_ms_in(now_ms, SpendPeriod::Month, RETENTION_PERIODS, &tz),
+            expected_cutoff
+        );
+    }
+
+    /// The backward walk survives a DST transition without collapsing or
+    /// skipping a day: anchored the same way as
+    /// `dst_transition_day_end_always_after_start` above, walking back one
+    /// `Day` period from the 23-hour spring-forward day must land exactly
+    /// on the calendar day before it — "subtract 24h" would land inside
+    /// the transition day itself instead of before it.
+    #[test]
+    fn retention_walk_crosses_a_dst_transition_by_calendar_not_by_fixed_duration() {
+        let tz = chrono_tz::America::New_York;
+        // 2024-03-10 is the US spring-forward day (23h local day).
+        let transition_day_ms = tz
+            .with_ymd_and_hms(2024, 3, 10, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected_cutoff = tz
+            .with_ymd_and_hms(2024, 3, 9, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        // retain_periods = 2: current (Mar 10) + 1 prior (Mar 9).
+        assert_eq!(
+            retention_cutoff_ms_in(transition_day_ms, SpendPeriod::Day, 2, &tz),
+            expected_cutoff
+        );
     }
 }
