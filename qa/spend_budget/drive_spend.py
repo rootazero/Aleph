@@ -83,6 +83,8 @@ async def do_run(url, args):
         params = {"message": args.message, "channel": args.channel, "exec_tier": "full"}
         if args.language:
             params["language"] = args.language
+        if args.agent:
+            params["agent_id"] = args.agent
         sent = await rpc(ws, "chat.send", params, 2)
         if "error" in sent:
             return {"ok": False, "code": "SEND_REFUSED", "message": str(sent["error"])}
@@ -135,6 +137,7 @@ def main():
     r.add_argument("channel")
     r.add_argument("--message", default="Say hello.")
     r.add_argument("--language", default="")
+    r.add_argument("--agent", default="")
     r.add_argument("--budget", type=float, default=180.0)
 
     q = sub.add_parser("query")

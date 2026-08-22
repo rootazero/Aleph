@@ -233,3 +233,209 @@ else
   bad "no attributed row with non-zero usd after a priced run"
   printf '%s\n' "$ROWS" | sed 's/^/      | /'
 fi
+
+# --------------------------------------------------------------------------
+say "3. a member's spend lands on the MEMBER's row"
+# The failure this whole round is about. A loopback peer is authorised before
+# `resolve_connect_auth` reads `bootstrap_ticket`, so a second principal only
+# exists over a non-loopback URL — the ticket must be redeemed there.
+MEMBER=""
+TICKET=""
+if [ -z "$REMOTE_URL" ]; then
+  skip "member identity: no non-loopback address on this host"
+else
+  OUT="$(al users create "QA Bob" --role member)"
+  MEMBER="$(printf '%s' "$OUT" | sed -n 's/.*as \(u-[0-9a-f-]*\).*/\1/p' | head -1)"
+  if [ -z "$MEMBER" ]; then
+    bad "could not create a member principal"
+    printf '%s\n' "$OUT" | sed 's/^/      | /'
+  else
+    TICKET="$(python3 - "$URL" "$MEMBER" <<'PY'
+import asyncio, json, sys, websockets
+async def main(url, uid):
+    async with websockets.connect(url) as ws:
+        await ws.send(json.dumps({"jsonrpc":"2.0","id":1,"method":"connect","params":{"client_type":"cli"}}))
+        while True:
+            if json.loads(await ws.recv()).get("id") == 1: break
+        await ws.send(json.dumps({"jsonrpc":"2.0","id":2,"method":"gateway.ticket.create","params":{"user_id":uid}}))
+        while True:
+            m = json.loads(await ws.recv())
+            if m.get("id") == 2:
+                print((m.get("result") or {}).get("ticket",""))
+                return
+asyncio.get_event_loop().run_until_complete(main(sys.argv[1], sys.argv[2]))
+PY
+)"
+    if [ -z "$TICKET" ]; then
+      bad "could not mint a bootstrap ticket for $MEMBER"
+    else
+      BEFORE="$(ledger_rows | grep "^$MEMBER|" | awk -F'|' '{print $2}' | head -1)"
+      BEFORE="${BEFORE:-0}"
+      OUT="$(python3 "$DRIVE" "$REMOTE_URL" run gui:qa-spend-3 --ticket "$TICKET" --device qa-spend-bob)"
+      expect "the member's run succeeds" '"ok": true' "$OUT"
+      ROWS="$(ledger_rows)"
+      AFTER="$(printf '%s\n' "$ROWS" | grep "^$MEMBER|" | awk -F'|' '{print $2}' | head -1)"
+      AFTER="${AFTER:-0}"
+      if python3 -c "import sys;sys.exit(0 if float('$AFTER')>float('$BEFORE') else 1)" 2>/dev/null; then
+        ok "the member's own row grew ($BEFORE -> $AFTER) — spend is attributed to the person who spent it"
+      else
+        bad "the member's spend did not land on the member's row (this is the defect the round exists to fix)"
+        printf '%s\n' "$ROWS" | sed 's/^/      | /'
+      fi
+      # An `@unattributed` row here would mean the run's principal could not be
+      # resolved — a pass on the row above plus this row would be two different
+      # runs, not one working one.
+      refute "the member's run did not fall through to @unattributed" "@unattributed" "$(printf '%s\n' "$ROWS" | grep -c '^@unattributed|' | grep -v '^0$' && echo '@unattributed')"
+    fi
+  fi
+fi
+
+# --------------------------------------------------------------------------
+say "4. past the per-user ceiling, the run is refused and the receipt names the reset"
+stop_server
+set_ceiling per_user 0.0000001
+start_server || exit 1
+OUT="$(python3 "$DRIVE" "$URL" run gui:qa-spend-4)"
+expect "the run is refused"                       '"code": "SPEND_EXHAUSTED"' "$OUT"
+expect "the refusal names when it resets"         "重置" "$OUT"
+expect "the refusal names the caller's own spend" '上限' "$OUT"
+
+# --------------------------------------------------------------------------
+say "5. the same refusal in English goes through i18n, not a hardcoded string"
+OUT="$(python3 "$DRIVE" "$URL" run gui:qa-spend-5 --language en)"
+expect "still refused"          '"code": "SPEND_EXHAUSTED"' "$OUT"
+expect "and refused in English" "Resets at" "$OUT"
+refute "with no Chinese left over" "重置" "$OUT"
+
+# --------------------------------------------------------------------------
+say "6. the machine-total refusal names no numbers"
+# `Limit::Total` is fieldless on purpose: `user_receipt` takes no actor, so
+# there is no point at which "may this person see the machine total?" could be
+# answered. G12, proven here on the wire rather than in a unit test.
+stop_server
+set_ceiling total 0.0000001
+start_server || exit 1
+OUT="$(python3 "$DRIVE" "$URL" run gui:qa-spend-6)"
+expect "the run is refused on the machine total" '"code": "SPEND_EXHAUSTED"' "$OUT"
+expect "and says so"                             "共享支出额度" "$OUT"
+MSG="$(printf '%s' "$OUT" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("message",""))')"
+if printf '%s' "$MSG" | grep -qE '\$[0-9]'; then
+  bad "the machine-total refusal leaked a dollar figure: $MSG"
+else
+  ok "the machine-total refusal carries no dollar figure"
+fi
+
+# --------------------------------------------------------------------------
+say "7. raising the ceiling applies live — no restart"
+# The escape hatch. A person locked out by his own ceiling cannot raise it if
+# raising it needs a restart, and "restart the server to unblock yourself" is
+# how a budget becomes an outage. G14, end to end, against a server that is
+# currently refusing this exact caller.
+stop_server
+set_ceiling per_user 0.0000001
+start_server || exit 1
+OUT="$(python3 "$DRIVE" "$URL" run gui:qa-spend-7a)"
+expect "precondition: the caller is locked out" '"code": "SPEND_EXHAUSTED"' "$OUT"
+PATCHED="$(python3 "$DRIVE" "$URL" patch policies.spend.per_user_usd 1000.0)"
+expect "config.patch reports the write landed"  '"ok": true' "$PATCHED"
+expect "and reports it applied live"            "Live" "$PATCHED"
+OUT="$(python3 "$DRIVE" "$URL" run gui:qa-spend-7b)"
+expect "the very next run succeeds, same process" '"ok": true' "$OUT"
+
+# --------------------------------------------------------------------------
+say "8. spend.query is admin-gated, and refused as NOT PERMITTED"
+# "Refused" and "not found" are different failures and only one of them is the
+# admin gate working — a no-oracle refusal here would be indistinguishable from
+# the method not existing.
+if [ -z "$TICKET" ]; then
+  skip "member spend.query: no member identity on this host"
+else
+  Q="$(python3 "$DRIVE" "$REMOTE_URL" query --ticket "$TICKET" --device qa-spend-bob)"
+  expect "the member is refused" '"error"' "$Q"
+  if printf '%s' "$Q" | grep -qiE 'permission|permitted|admin|forbidden|denied'; then
+    ok "refused as not permitted, not as not found"
+  else
+    bad "the refusal does not say it is a permission problem"
+    printf '%s\n' "$Q" | sed 's/^/      | /'
+  fi
+  refute "and not as a missing method" "not found" "$Q"
+fi
+
+# --------------------------------------------------------------------------
+say "9. aleph spend prints a row per principal with no dashes"
+# `providers list` printed `type`/`default` while the server sent
+# `provider_type`/`is_default`, so every row rendered a dash from the day it was
+# written — and a dash reads as "no value yet", never as a bug.
+OUT="$(al spend)"
+expect "the command runs at all" "Principal" "$OUT"
+BODY="$(printf '%s\n' "$OUT" | grep -E '^(u-|@unattributed)' || true)"
+if [ -z "$BODY" ]; then
+  bad "aleph spend printed no principal rows"
+  printf '%s\n' "$OUT" | sed 's/^/      | /'
+else
+  if printf '%s\n' "$BODY" | grep -qE '(^|[[:space:]])-([[:space:]]|$)'; then
+    bad "a rendered column is a dash — the column name does not match a wire field"
+    printf '%s\n' "$BODY" | sed 's/^/      | /'
+  else
+    ok "every column on every row carries a real value"
+  fi
+fi
+
+# --------------------------------------------------------------------------
+say "10. spend survives a restart"
+# The whole point of a durable ledger. An in-memory fallback passes every other
+# assertion in this file and fails only this one.
+BEFORE="$(ledger_rows | sort)"
+Q_BEFORE="$(python3 "$DRIVE" "$URL" query)"
+stop_server
+start_server || exit 1
+AFTER="$(ledger_rows | sort)"
+Q_AFTER="$(python3 "$DRIVE" "$URL" query)"
+if [ "$BEFORE" = "$AFTER" ] && [ -n "$BEFORE" ]; then
+  ok "the ledger table is byte-identical across a real stop/start"
+else
+  bad "the ledger changed across a restart (or was empty to begin with)"
+  printf 'before:\n%s\nafter:\n%s\n' "$BEFORE" "$AFTER" | sed 's/^/      | /'
+fi
+B_USD="$(printf '%s' "$Q_BEFORE" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(sum(r["usd"] for r in d.get("rows",[])))' 2>/dev/null)"
+A_USD="$(printf '%s' "$Q_AFTER" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(sum(r["usd"] for r in d.get("rows",[])))' 2>/dev/null)"
+if [ -n "$B_USD" ] && [ "$B_USD" = "$A_USD" ]; then
+  ok "spend.query reports the same total after the restart ($A_USD)"
+else
+  bad "spend.query disagrees across the restart: $B_USD -> $A_USD"
+fi
+
+# --------------------------------------------------------------------------
+say "11. an unpriced model counts, moves no dollars, and never denies"
+# G3/G4 on a live box: a missing price is never a gate. The ceiling here is
+# deliberately tiny — if an unpriced call moved any dollars at all it would
+# cross it, so "no denial" and "usd unchanged" are the same assertion seen from
+# two sides.
+stop_server
+set_ceiling per_user 0.01
+start_server || exit 1
+BEFORE_ROWS="$(ledger_rows)"
+B_UNPRICED="$(printf '%s\n' "$BEFORE_ROWS" | grep -v '^@unattributed|' | awk -F'|' '{print $3}' | head -1)"
+B_USD="$(printf '%s\n' "$BEFORE_ROWS" | grep -v '^@unattributed|' | awk -F'|' '{print $2}' | head -1)"
+B_UNPRICED="${B_UNPRICED:-0}"; B_USD="${B_USD:-0}"
+OUT="$(python3 "$DRIVE" "$URL" run gui:qa-spend-11 --agent unpriced)"
+expect "the unpriced run is not denied" '"ok": true' "$OUT"
+AFTER_ROWS="$(ledger_rows)"
+A_UNPRICED="$(printf '%s\n' "$AFTER_ROWS" | grep -v '^@unattributed|' | awk -F'|' '{print $3}' | head -1)"
+A_USD="$(printf '%s\n' "$AFTER_ROWS" | grep -v '^@unattributed|' | awk -F'|' '{print $2}' | head -1)"
+A_UNPRICED="${A_UNPRICED:-0}"; A_USD="${A_USD:-0}"
+if [ "$A_UNPRICED" -gt "$B_UNPRICED" ] 2>/dev/null; then
+  ok "unpriced_calls incremented ($B_UNPRICED -> $A_UNPRICED)"
+else
+  bad "unpriced_calls did not increment ($B_UNPRICED -> $A_UNPRICED)"
+  printf '%s\n' "$AFTER_ROWS" | sed 's/^/      | /'
+fi
+if python3 -c "import sys;sys.exit(0 if abs(float('$A_USD')-float('$B_USD'))<1e-12 else 1)" 2>/dev/null; then
+  ok "usd is untouched by an unpriced call ($A_USD)"
+else
+  bad "an unpriced call moved dollars: $B_USD -> $A_USD"
+fi
+
+# --------------------------------------------------------------------------
+printf '\n=== %d passed, %d failed, %d skipped ===\n' "$PASS" "$FAIL" "$SKIPPED"
+[ "$FAIL" -eq 0 ]
