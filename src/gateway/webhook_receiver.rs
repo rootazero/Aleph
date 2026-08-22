@@ -276,13 +276,12 @@ impl WebhookReceiver {
         // (Telegram 64 KiB, Slack 1 MiB, Discord 25 MiB max but we cap
         // tighter since we only relay metadata, not media).
         const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
-        Router::new()
-            .route(
-                &format!("{WEBHOOK_ROUTE_PREFIX}/{{*rest}}"),
-                post(webhook_endpoint)
-                    .with_state(table)
-                    .layer(axum::extract::DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES)),
-            )
+        Router::new().route(
+            &format!("{WEBHOOK_ROUTE_PREFIX}/{{*rest}}"),
+            post(webhook_endpoint)
+                .with_state(table)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_WEBHOOK_BODY_BYTES)),
+        )
     }
 
     /// Compute HMAC-SHA256 signature of data with the given secret.

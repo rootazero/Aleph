@@ -218,8 +218,7 @@ fn next_month(date: NaiveDate) -> NaiveDate {
     } else {
         (date.year(), date.month() + 1)
     };
-    NaiveDate::from_ymd_opt(year, month, 1)
-        .expect("month 1..=12 with day 1 is always a valid date")
+    NaiveDate::from_ymd_opt(year, month, 1).expect("month 1..=12 with day 1 is always a valid date")
 }
 
 /// Local midnight of `date` in `tz`, resolved through the DST-aware path

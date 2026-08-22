@@ -132,9 +132,7 @@ pub fn set_active(session_key: &str, project_id: &str) {
     // retry; set_active is already infallible at the call site so we
     // choose fail-closed over panicking.
     {
-        let purges = IN_PROGRESS_PURGES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let purges = IN_PROGRESS_PURGES.lock().unwrap_or_else(|e| e.into_inner());
         if purges.contains(project_id) {
             tracing::warn!(
                 session_key,
@@ -209,9 +207,7 @@ pub async fn purge_session_scratchpad(session_key: &str) {
             return;
         }
         persist_locked(&map);
-        let mut purges = IN_PROGRESS_PURGES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut purges = IN_PROGRESS_PURGES.lock().unwrap_or_else(|e| e.into_inner());
         purges.insert(project_id.clone());
         project_id
     };
@@ -223,9 +219,7 @@ pub async fn purge_session_scratchpad(session_key: &str) {
     // must be free to retry; a stuck slot would block the project
     // forever.
     {
-        let mut purges = IN_PROGRESS_PURGES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut purges = IN_PROGRESS_PURGES.lock().unwrap_or_else(|e| e.into_inner());
         purges.remove(&project_id);
     }
     if let Err(e) = purge_result {

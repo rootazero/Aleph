@@ -421,7 +421,10 @@ impl DreamPipeline {
         // The table grew without bound because `cleanup_old_signals` was
         // defined but never wired into any background task. Dream is the
         // natural cadence: once per cycle, regardless of which stages ran.
-        if let Err(e) = ctx.database.cleanup_old_signals(RECALL_SIGNAL_RETENTION_DAYS) {
+        if let Err(e) = ctx
+            .database
+            .cleanup_old_signals(RECALL_SIGNAL_RETENTION_DAYS)
+        {
             tracing::warn!(
                 error = %e,
                 "recall_signals retention cleanup failed; continuing dream cycle"

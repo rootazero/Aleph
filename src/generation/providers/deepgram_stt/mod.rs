@@ -339,11 +339,18 @@ async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String)> {
     // check above. A canonical path that re-introduces `..` is also rejected.
     let canonical = tokio::fs::canonicalize(&path_buf).await.map_err(|e| {
         GenerationError::invalid_parameters(
-            format!("Failed to resolve audio file '{}': {}", path_buf.display(), e),
+            format!(
+                "Failed to resolve audio file '{}': {}",
+                path_buf.display(),
+                e
+            ),
             Some("file_path".to_string()),
         )
     })?;
-    if canonical.components().any(|c| matches!(c, Component::ParentDir)) {
+    if canonical
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
         return Err(GenerationError::invalid_parameters(
             format!(
                 "Refusing to read '{}': symlink target escapes working directory",

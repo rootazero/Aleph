@@ -504,7 +504,11 @@ impl AlephTool for TeamCreateTool {
         {
             Ok(t) => t,
             Err(e) => {
-                Self::cleanup_orphans(self.agent_manager.as_ref().map(|a| a.as_ref()), &created_inline).await;
+                Self::cleanup_orphans(
+                    self.agent_manager.as_ref().map(|a| a.as_ref()),
+                    &created_inline,
+                )
+                .await;
                 return Err(e);
             }
         };
@@ -572,7 +576,11 @@ impl AlephTool for TeamCreateTool {
             // record is best-effort too; the leader auto-enroll above is
             // also subject to the same cleanup when a later member fails.
             if let Err(e) = self.store.add_member(new_member).await {
-                Self::cleanup_orphans(self.agent_manager.as_ref().map(|a| a.as_ref()), &created_inline).await;
+                Self::cleanup_orphans(
+                    self.agent_manager.as_ref().map(|a| a.as_ref()),
+                    &created_inline,
+                )
+                .await;
                 if let Err(rm_err) = self.store.delete_team(&team.id).await {
                     tracing::warn!(
                         team_id = %team.id,

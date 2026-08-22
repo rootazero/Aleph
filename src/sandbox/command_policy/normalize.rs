@@ -326,7 +326,10 @@ fn needs_word_view(s: &str) -> bool {
 /// *lose* matches like `del /s /q'C:\'`. Additive views can only add signal.
 fn shell_word_fold(s: &str) -> String {
     let expanded = IFS_REFERENCE_RE.replace_all(s, " ");
-    expanded.chars().filter(|c| !matches!(c, '\'' | '"')).collect()
+    expanded
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"'))
+        .collect()
 }
 
 /// Cheap pre-filter for [`ENCODED_COMMAND_RE`]: an encoded payload always

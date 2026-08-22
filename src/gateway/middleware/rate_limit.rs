@@ -279,13 +279,17 @@ mod tests {
     /// bucket instead of the loopback exemption.
     #[tokio::test]
     async fn loopback_wins_over_the_owner_principal_it_also_carries() {
-        as_caller(true, Some(crate::gateway::security::store::OWNER_USER_ID), async {
-            assert_eq!(
-                rate_limit_identity(),
-                "127.0.0.1",
-                "loopback must be answered before the principal it also carries"
-            );
-        })
+        as_caller(
+            true,
+            Some(crate::gateway::security::store::OWNER_USER_ID),
+            async {
+                assert_eq!(
+                    rate_limit_identity(),
+                    "127.0.0.1",
+                    "loopback must be answered before the principal it also carries"
+                );
+            },
+        )
         .await;
     }
 

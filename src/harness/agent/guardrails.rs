@@ -59,9 +59,7 @@ impl AgentHarness {
                             error = %e,
                             "sanitized tool-call args did not reparse as JSON; blocking call (fail-closed)"
                         );
-                        let reason = format!(
-                            "guardrail sanitization produced invalid JSON: {e}"
-                        );
+                        let reason = format!("guardrail sanitization produced invalid JSON: {e}");
                         callback.on_safety_block(&reason);
                         return Ok(ToolCallGuardOutcome::Block);
                     }

@@ -138,13 +138,16 @@ impl GroupChatOrchestrator {
 
         // 6. Persist to database if available
         if let Some(db) = &self.db {
-            if let Err(e) = db.insert_group_chat_session(
-                &session_id,
-                topic.as_deref(),
-                &source_channel,
-                &source_session_key,
-                owner_user_id.as_deref(),
-            ).await {
+            if let Err(e) = db
+                .insert_group_chat_session(
+                    &session_id,
+                    topic.as_deref(),
+                    &source_channel,
+                    &source_session_key,
+                    owner_user_id.as_deref(),
+                )
+                .await
+            {
                 tracing::warn!(
                     subsystem = "group_chat",
                     error = %e,
@@ -210,9 +213,9 @@ impl GroupChatOrchestrator {
 
         // Persist status change to database
         if let Some(db) = &self.db {
-            if let Err(e) =
-                db.update_group_chat_session_status(session_id, GroupChatStatus::Ended.as_str())
-                    .await
+            if let Err(e) = db
+                .update_group_chat_session_status(session_id, GroupChatStatus::Ended.as_str())
+                .await
             {
                 tracing::warn!(
                     subsystem = "group_chat",
@@ -306,12 +309,14 @@ mod tests {
             PersonaSource::Preset("arch".into()),
             PersonaSource::Preset("pm".into()),
         ];
-        let result = orch.create_session(
-            sources,
-            Some("Design review".into()),
-            "telegram".into(),
-            "tg:12345".into(),
-        ).await;
+        let result = orch
+            .create_session(
+                sources,
+                Some("Design review".into()),
+                "telegram".into(),
+                "tg:12345".into(),
+            )
+            .await;
 
         assert!(result.is_ok());
         let (session_id, handle) = result.unwrap();
@@ -333,7 +338,9 @@ mod tests {
             PersonaSource::Preset("arch".into()),
             PersonaSource::Preset("nonexistent".into()),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
+        let result = orch
+            .create_session(sources, None, "cli".into(), "cli:1".into())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -356,7 +363,9 @@ mod tests {
             PersonaSource::Preset("arch".into()),
             PersonaSource::Preset("pm".into()),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
+        let result = orch
+            .create_session(sources, None, "cli".into(), "cli:1".into())
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -381,7 +390,9 @@ mod tests {
                 thinking_level: None,
             },
         )];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
+        let result = orch
+            .create_session(sources, None, "cli".into(), "cli:1".into())
+            .await;
         assert!(matches!(
             result.unwrap_err(),
             GroupChatError::InvalidPersona(_)
@@ -483,7 +494,9 @@ mod tests {
             }),
             PersonaSource::Preset("nonexistent".into()),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
+        let result = orch
+            .create_session(sources, None, "cli".into(), "cli:1".into())
+            .await;
         assert!(matches!(
             result.unwrap_err(),
             GroupChatError::InvalidPersona(_)
@@ -508,7 +521,9 @@ mod tests {
                 thinking_level: None,
             }),
         ];
-        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into()).await;
+        let result = orch
+            .create_session(sources, None, "cli".into(), "cli:1".into())
+            .await;
         match result.unwrap_err() {
             GroupChatError::InvalidPersona(msg) => {
                 assert!(

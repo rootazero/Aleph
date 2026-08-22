@@ -280,10 +280,10 @@ impl EmulateOptions {
                 if name.is_empty() {
                     return Err("extra_http_headers contains an empty name".into());
                 }
-                if !name.bytes().all(|b| {
-                    b.is_ascii_alphanumeric()
-                        || matches!(b, b'-' | b'_' | b'.')
-                }) {
+                if !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+                {
                     return Err(format!(
                         "extra_http_headers name '{name}' contains an invalid character; \
                          RFC 7230 token chars are letters / digits / '-' / '_' / '.'"

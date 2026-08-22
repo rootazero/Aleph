@@ -666,10 +666,8 @@ fn is_auth_word(s: &str) -> bool {
     while let Some(pos) = s[idx..].find("auth") {
         let start = idx + pos;
         let end = start + "auth".len();
-        let left_ok = start == 0
-            || !s.as_bytes()[start - 1].is_ascii_alphanumeric();
-        let right_ok =
-            end == s.len() || !s.as_bytes()[end].is_ascii_alphanumeric();
+        let left_ok = start == 0 || !s.as_bytes()[start - 1].is_ascii_alphanumeric();
+        let right_ok = end == s.len() || !s.as_bytes()[end].is_ascii_alphanumeric();
         if left_ok && right_ok {
             // Whole-word match — disambiguate from `author`/`authority`.
             // `auth` as a token is short enough that the only false-positive

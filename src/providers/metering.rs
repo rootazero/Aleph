@@ -161,9 +161,9 @@ impl MeteringProvider {
         let now_ms = chrono::Utc::now().timestamp_millis();
         match crate::spend::check(&principal, now_ms) {
             crate::spend::Verdict::Allowed(_) => Ok(()),
-            crate::spend::Verdict::Denied { limit, spent } => Err(crate::error::AlephError::provider(
-                spend_denied_message(&limit, &spent),
-            )),
+            crate::spend::Verdict::Denied { limit, spent } => Err(
+                crate::error::AlephError::provider(spend_denied_message(&limit, &spent)),
+            ),
         }
     }
 
@@ -183,7 +183,11 @@ impl MeteringProvider {
     /// ledger rows on the write side, exactly as `spend::check_with`
     /// already guarantees on the read side (see that function's
     /// `!policy.enabled()` arm).
-    fn record_spend(usage: &crate::providers::adapter::TokenUsage, pricing_provider: &str, pricing_model: &str) {
+    fn record_spend(
+        usage: &crate::providers::adapter::TokenUsage,
+        pricing_provider: &str,
+        pricing_model: &str,
+    ) {
         let policy = crate::spend::current_policy();
         if !policy.enabled() {
             return;
@@ -234,7 +238,9 @@ impl MeteringProvider {
         // can tell "priced" from "guessed" apart from "priced in full".
         let delta = match estimate.status {
             crate::pricing::CostStatus::Complete => crate::spend::Delta::Usd(estimate.usd),
-            crate::pricing::CostStatus::PartialMissingPrice => crate::spend::Delta::Partial(estimate.usd),
+            crate::pricing::CostStatus::PartialMissingPrice => {
+                crate::spend::Delta::Partial(estimate.usd)
+            }
             crate::pricing::CostStatus::Unknown => crate::spend::Delta::Unpriced,
         };
         ledger.record(principal, period_start_ms, delta)
@@ -286,7 +292,10 @@ impl AiProvider for MeteringProvider {
             .inner
             .serving_provider_hint()
             .map_or_else(|| provider_name.clone(), Cow::into_owned);
-        let pricing_model = self.inner.serving_model_hint().map_or_else(String::new, Cow::into_owned);
+        let pricing_model = self
+            .inner
+            .serving_model_hint()
+            .map_or_else(String::new, Cow::into_owned);
         Box::pin(async move {
             Self::enforce_spend_ceiling()?;
             let resp = fut.await?;
@@ -324,7 +333,10 @@ impl AiProvider for MeteringProvider {
             .inner
             .serving_provider_hint()
             .map_or_else(|| provider_name.clone(), Cow::into_owned);
-        let pricing_model = self.inner.serving_model_hint().map_or_else(String::new, Cow::into_owned);
+        let pricing_model = self
+            .inner
+            .serving_model_hint()
+            .map_or_else(String::new, Cow::into_owned);
         Box::pin(async move {
             Self::enforce_spend_ceiling()?;
             let resp = fut.await?;
@@ -684,15 +696,26 @@ mod tests {
         // `pricing::tests::anthropic_sonnet_complete_estimate`.
         let usage = spend_test_usage(1_000_000, 1_000_000);
 
-        MeteringProvider::record_spend_with(&usage, "anthropic", "claude-sonnet-4-5", &principal, &policy, &ledger)
-            .expect("record");
+        MeteringProvider::record_spend_with(
+            &usage,
+            "anthropic",
+            "claude-sonnet-4-5",
+            &principal,
+            &policy,
+            &ledger,
+        )
+        .expect("record");
 
         let period_start_ms = crate::spend::period::period_start_ms(
             chrono::Utc::now().timestamp_millis(),
             policy.period,
         );
         let spent = ledger.spent_for(&principal, period_start_ms).unwrap();
-        assert!(spent.usd > 0.0, "a Complete estimate must move usd, got {}", spent.usd);
+        assert!(
+            spent.usd > 0.0,
+            "a Complete estimate must move usd, got {}",
+            spent.usd
+        );
         assert_eq!(spent.unpriced_calls, 0);
         assert_eq!(spent.partial_calls, 0);
     }
@@ -723,7 +746,10 @@ mod tests {
             policy.period,
         );
         let spent = ledger.spent_for(&principal, period_start_ms).unwrap();
-        assert!(spent.usd > 0.0, "a partial estimate is still measured money");
+        assert!(
+            spent.usd > 0.0,
+            "a partial estimate is still measured money"
+        );
         assert_eq!(spent.unpriced_calls, 0);
         assert_eq!(spent.partial_calls, 1);
     }
@@ -930,7 +956,11 @@ mod tests {
             policy.period,
         );
         crate::spend::global_ledger()
-            .record(&principal, period_start_ms, crate::spend::Delta::Usd(2_000_000.0))
+            .record(
+                &principal,
+                period_start_ms,
+                crate::spend::Delta::Usd(2_000_000.0),
+            )
             .unwrap();
 
         struct CountingProvider {
@@ -978,7 +1008,10 @@ mod tests {
         })
         .await;
 
-        assert!(result.is_err(), "a principal already over ceiling must be denied");
+        assert!(
+            result.is_err(),
+            "a principal already over ceiling must be denied"
+        );
         assert!(
             !called.load(std::sync::atomic::Ordering::SeqCst),
             "the inner provider must never be invoked once denied — the request must never \

@@ -70,10 +70,9 @@ impl MemoryTimelineTool {
                 fact_id.len()
             )));
         }
-        if fact_id
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == '/' || c == '\\' || c == '`' || c == '$')
-        {
+        if fact_id.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || c == '/' || c == '\\' || c == '`' || c == '$'
+        }) {
             return Err(ToolError::InvalidArgs(
                 "fact_id contains an invalid character (whitespace, control, /, \\, `, or $)"
                     .to_string(),
@@ -85,7 +84,10 @@ impl MemoryTimelineTool {
 
         let explanation = self
             .traveler
-            .explain_fact(fact_id, &crate::builtin_tools::acting_agent::acting_agent_id(""))
+            .explain_fact(
+                fact_id,
+                &crate::builtin_tools::acting_agent::acting_agent_id(""),
+            )
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to explain fact: {e}")))?;
 

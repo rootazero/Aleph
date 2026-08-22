@@ -311,7 +311,9 @@ mod tests {
             assert!(out.contains("spill write failed"));
             return;
         };
-        let restored = tokio::fs::read_to_string(&path).await.expect("spill file readable");
+        let restored = tokio::fs::read_to_string(&path)
+            .await
+            .expect("spill file readable");
         assert!(restored.starts_with("UNIQUE-SPILL-BODY"));
         assert_eq!(
             restored.trim_end_matches('\n').chars().count(),
@@ -337,11 +339,9 @@ mod tests {
         prune_spill_dir(dir.path()).await;
 
         // `tokio::fs::ReadDir` exposes `next_entry().await`, not `Iterator`;
-// the remote review commit used the std-style `.flatten()` chain which
-// only compiles against `std::fs::ReadDir`. Drain it the tokio way.
-        let mut entries = tokio::fs::read_dir(dir.path())
-            .await
-            .expect("read_dir");
+        // the remote review commit used the std-style `.flatten()` chain which
+        // only compiles against `std::fs::ReadDir`. Drain it the tokio way.
+        let mut entries = tokio::fs::read_dir(dir.path()).await.expect("read_dir");
         let mut remaining = Vec::new();
         while let Some(entry) = entries.next_entry().await.expect("next_entry") {
             remaining.push(entry.file_name().to_string_lossy().to_string());
@@ -356,7 +356,9 @@ mod tests {
     #[tokio::test]
     async fn prune_is_a_noop_under_the_cap_and_on_a_missing_dir() {
         let dir = tempfile::tempdir().expect("tempdir");
-        tokio::fs::write(dir.path().join("only.txt"), "x").await.expect("write");
+        tokio::fs::write(dir.path().join("only.txt"), "x")
+            .await
+            .expect("write");
         prune_spill_dir(dir.path()).await;
         assert!(dir.path().join("only.txt").exists());
         // Must not panic on a directory that was never created.

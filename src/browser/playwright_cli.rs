@@ -404,7 +404,11 @@ fn contains_timeout_phrase(s: &str) -> bool {
     // end-of-string — the rough "word boundary" check that handles
     // "timeout" without anchoring to the regex crate.
     for needle in [
-        " timeout ", " timeout.", " timeout:", "timeout exceeded", "timed out",
+        " timeout ",
+        " timeout.",
+        " timeout:",
+        "timeout exceeded",
+        "timed out",
     ] {
         if s.contains(needle) {
             return true;

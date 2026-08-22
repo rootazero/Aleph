@@ -461,7 +461,9 @@ impl PluginManageTool {
                 let problems: Vec<serde_json::Value> = listing
                     .problems
                     .iter()
-                    .map(|p| serde_json::json!({ "marketplace": p.marketplace, "reason": p.reason }))
+                    .map(
+                        |p| serde_json::json!({ "marketplace": p.marketplace, "reason": p.reason }),
+                    )
                     .collect();
                 Ok(PluginManageOutput {
                     summary: format!(
@@ -477,12 +479,16 @@ impl PluginManageTool {
             }
 
             PluginAction::MarketplaceAdd => {
-                let source = args.source.as_deref().filter(|s| !s.trim().is_empty()).ok_or_else(|| {
-                    AlephError::config(
+                let source = args
+                    .source
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| {
+                        AlephError::config(
                         "'source' is required for marketplace_add — an owner/repo slug, a GitHub \
                          URL, or a local directory path",
                     )
-                })?;
+                    })?;
                 // One classifier for every face; see `marketplace::source_spec`
                 // for the two heuristics this replaced.
                 let spec = classify(source, args.name.as_deref())

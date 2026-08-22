@@ -81,8 +81,7 @@ fn verify_exported_file(
     // of records, each ~256 B signed + a few metadata fields; 256 MiB
     // is far above any plausible export and well below OOM territory).
     const MAX_EXPORT_BYTES: u64 = 256 * 1024 * 1024;
-    let meta = std::fs::metadata(path)
-        .map_err(|e| format!("cannot stat {path}: {e}"))?;
+    let meta = std::fs::metadata(path).map_err(|e| format!("cannot stat {path}: {e}"))?;
     if meta.len() > MAX_EXPORT_BYTES {
         return Err(format!(
             "{path} is {} bytes; export cap is {MAX_EXPORT_BYTES} bytes (256 MiB). \

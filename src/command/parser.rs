@@ -133,7 +133,9 @@ fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
         ToolSource::Builtin | ToolSource::Native => CommandContext::Builtin {
             tool_name: tool.name,
         },
-        ToolSource::Mcp { server } => CommandContext::Mcp { server_name: server },
+        ToolSource::Mcp { server } => CommandContext::Mcp {
+            server_name: server,
+        },
         ToolSource::Skill { id } => CommandContext::Skill {
             skill_id: id,
             instructions: tool.routing_system_prompt.unwrap_or_default(),

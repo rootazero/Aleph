@@ -80,30 +80,28 @@ fn resolve_value<'a>(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = serde_json::Value> + Send + 'a>> {
     Box::pin(async move {
         match value {
-            serde_json::Value::String(s) if s.contains(MARKER) => {
-                match resolver {
-                    Some(r) => match crate::secrets::render_with_secrets(s, r).await {
-                        Ok((rendered, _injected)) => serde_json::Value::String(rendered),
-                        Err(e) => {
-                            tracing::warn!(
-                                plugin_id, error = %e,
-                                "plugin setting references a secret that could not be \
-                                 resolved; the key is omitted rather than passed through \
-                                 as a literal placeholder"
-                            );
-                            serde_json::Value::Null
-                        }
-                    },
-                    None => {
+            serde_json::Value::String(s) if s.contains(MARKER) => match resolver {
+                Some(r) => match crate::secrets::render_with_secrets(s, r).await {
+                    Ok((rendered, _injected)) => serde_json::Value::String(rendered),
+                    Err(e) => {
                         tracing::warn!(
-                            plugin_id,
-                            "plugin setting references a secret but no vault is available; \
-                             the key is omitted"
+                            plugin_id, error = %e,
+                            "plugin setting references a secret that could not be \
+                             resolved; the key is omitted rather than passed through \
+                             as a literal placeholder"
                         );
                         serde_json::Value::Null
                     }
+                },
+                None => {
+                    tracing::warn!(
+                        plugin_id,
+                        "plugin setting references a secret but no vault is available; \
+                             the key is omitted"
+                    );
+                    serde_json::Value::Null
                 }
-            }
+            },
             serde_json::Value::Array(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
@@ -155,7 +153,11 @@ mod tests {
         let settings = json!({"api_key": "{{secret:SLACK_TOKEN}}", "endpoint": "https://x"});
         let out = resolve_settings(&settings, Some(&Fake), "p").await;
         assert_eq!(out["api_key"], json!("xoxb-real"));
-        assert_eq!(out["endpoint"], json!("https://x"), "plain values pass through");
+        assert_eq!(
+            out["endpoint"],
+            json!("https://x"),
+            "plain values pass through"
+        );
     }
 
     #[tokio::test]

@@ -362,7 +362,9 @@ impl ExtensionManager {
             .map(crate::secrets::VaultSecretResolver::new);
         crate::extension::plugin_secrets::resolve_settings(
             &stored,
-            resolver.as_ref().map(|r| r as &dyn crate::secrets::AsyncSecretResolver),
+            resolver
+                .as_ref()
+                .map(|r| r as &dyn crate::secrets::AsyncSecretResolver),
             plugin_id,
         )
         .await

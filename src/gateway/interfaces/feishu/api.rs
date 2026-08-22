@@ -60,8 +60,7 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Bot info request failed: {e}"))?;
 
-        let info: BotInfoResponse =
-            read_checked(resp, "Bot info").await?;
+        let info: BotInfoResponse = read_checked(resp, "Bot info").await?;
 
         let bot = info
             .bot
@@ -90,8 +89,7 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("WS endpoint request failed: {e}"))?;
 
-        let ws_resp: WsEndpointResponse =
-            read_checked(resp, "WS endpoint").await?;
+        let ws_resp: WsEndpointResponse = read_checked(resp, "WS endpoint").await?;
 
         let data = ws_resp
             .data
@@ -293,8 +291,7 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Upload image failed: {e}"))?;
 
-        let upload_resp: UploadImageResponse =
-            read_checked(resp, "Upload image").await?;
+        let upload_resp: UploadImageResponse = read_checked(resp, "Upload image").await?;
 
         upload_resp
             .data
@@ -341,8 +338,7 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Create streaming card failed: {e}"))?;
 
-        let card_resp: CardCreateResponse =
-            read_checked(resp, "Card create").await?;
+        let card_resp: CardCreateResponse = read_checked(resp, "Card create").await?;
 
         card_resp
             .data
@@ -544,8 +540,7 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Add reaction failed: {e}"))?;
 
-        let reaction_resp: ReactionResponse =
-            read_checked(resp, "Add reaction").await?;
+        let reaction_resp: ReactionResponse = read_checked(resp, "Add reaction").await?;
 
         reaction_resp
             .data

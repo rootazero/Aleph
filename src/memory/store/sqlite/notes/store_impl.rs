@@ -1144,7 +1144,9 @@ impl NoteStore for SqliteMemoryBackend {
 
             let mut paths = Vec::new();
             for row in rows {
-                paths.push(row.map_err(|e| AlephError::config(format!("find_by_filename row: {e}")))?);
+                paths.push(
+                    row.map_err(|e| AlephError::config(format!("find_by_filename row: {e}")))?,
+                );
             }
             Ok(paths)
         })

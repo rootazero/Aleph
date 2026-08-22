@@ -18,9 +18,10 @@ use manifest::parse_marketplace_manifest;
 pub use names::reject_unsafe_segment;
 pub use source_spec::{classify, MarketplaceSpec};
 pub use types::{
-    configs_from_entries, default_install_dir, marketplace_cache_dir, MarketplaceConfig, MarketplaceListing,
-    MarketplaceManifest, MarketplacePluginEntry, MarketplaceProblem, MarketplaceSourceType,
-    PluginSearchResult, BUILTIN_MARKETPLACE_NAME, BUILTIN_MARKETPLACE_SOURCE,
+    configs_from_entries, default_install_dir, marketplace_cache_dir, MarketplaceConfig,
+    MarketplaceListing, MarketplaceManifest, MarketplacePluginEntry, MarketplaceProblem,
+    MarketplaceSourceType, PluginSearchResult, BUILTIN_MARKETPLACE_NAME,
+    BUILTIN_MARKETPLACE_SOURCE,
 };
 
 // =============================================================================
@@ -641,7 +642,6 @@ fn resolve_plugin_path(
     Some(marketplace_dir.join(safe))
 }
 
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -913,7 +913,10 @@ mod tests {
         assert_eq!(by_desc.entries.len(), 1);
         assert_eq!(by_desc.entries[0].plugin.name, "alpha");
 
-        assert!(mgr.browse(None, Some("nothing-matches-this")).entries.is_empty());
+        assert!(mgr
+            .browse(None, Some("nothing-matches-this"))
+            .entries
+            .is_empty());
         // A blank query is "everything", not "match the empty string".
         assert_eq!(mgr.browse(None, Some("   ")).entries.len(), 3);
     }
@@ -1029,7 +1032,10 @@ mod tests {
         let refusal = gamma
             .installable_path()
             .expect_err("an npm source is not servable from a marketplace directory");
-        assert!(refusal.contains("npm"), "the refusal names the form: {refusal}");
+        assert!(
+            refusal.contains("npm"),
+            "the refusal names the form: {refusal}"
+        );
     }
 
     #[test]

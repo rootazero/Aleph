@@ -397,7 +397,8 @@ impl SecurityStore {
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(&sql)?;
-        let refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(std::convert::AsRef::as_ref).collect();
+        let refs: Vec<&dyn rusqlite::ToSql> =
+            binds.iter().map(std::convert::AsRef::as_ref).collect();
         let rows = stmt.query_map(refs.as_slice(), |r| {
             Ok(aleph_protocol::audit::AuditEntryRow {
                 timestamp: r.get(0)?,

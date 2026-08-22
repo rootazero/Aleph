@@ -45,8 +45,8 @@ mod spec3_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::super::*;
     use super::super::defaults::default_reconciler_interval_secs;
+    use super::super::*;
 
     #[test]
     fn reconciler_config_default_is_disabled() {

@@ -576,12 +576,8 @@ mod with_conn_tests {
 
         let read_back: String = backend
             .with_conn(|conn| {
-                conn.query_row(
-                    "SELECT v FROM t WHERE k = 1",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|e| AlephError::config(format!("select: {e}")))
+                conn.query_row("SELECT v FROM t WHERE k = 1", [], |row| row.get(0))
+                    .map_err(|e| AlephError::config(format!("select: {e}")))
             })
             .await
             .expect("with_conn read path must succeed");
@@ -621,11 +617,8 @@ mod with_conn_tests {
 
         backend
             .with_conn(|conn| {
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS counter (n INTEGER)",
-                    [],
-                )
-                .map_err(|e| AlephError::config(format!("create: {e}")))?;
+                conn.execute("CREATE TABLE IF NOT EXISTS counter (n INTEGER)", [])
+                    .map_err(|e| AlephError::config(format!("create: {e}")))?;
                 conn.execute("INSERT INTO counter (n) VALUES (0)", [])
                     .map_err(|e| AlephError::config(format!("seed: {e}")))?;
                 Ok(())
@@ -649,7 +642,9 @@ mod with_conn_tests {
         }
 
         for h in handles {
-            h.await.expect("task must not panic").expect("with_conn must succeed");
+            h.await
+                .expect("task must not panic")
+                .expect("with_conn must succeed");
         }
 
         let final_count: i64 = backend
@@ -659,6 +654,9 @@ mod with_conn_tests {
             })
             .await
             .unwrap();
-        assert_eq!(final_count, N as i64, "every concurrent increment must persist");
+        assert_eq!(
+            final_count, N as i64,
+            "every concurrent increment must persist"
+        );
     }
 }

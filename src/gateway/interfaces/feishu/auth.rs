@@ -62,8 +62,7 @@ impl TokenManager {
             .await
             .map_err(|e| format!("Token request failed: {e}"))?;
 
-        let token_resp: TokenResponse =
-            read_checked(resp, "Token").await?;
+        let token_resp: TokenResponse = read_checked(resp, "Token").await?;
 
         let access_token = token_resp
             .app_access_token

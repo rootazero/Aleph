@@ -367,10 +367,7 @@ async fn a_block_on_the_summary_redacts_it_instead_of_ending_the_turn() {
         crate::thinker::nudges::REDACTED_USER_MESSAGE,
         1
     );
-    assert_eq!(
-        texts(&out),
-        vec![expected_redacted],
-    );
+    assert_eq!(texts(&out), vec![expected_redacted],);
 }
 
 #[tokio::test]

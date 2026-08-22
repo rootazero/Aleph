@@ -101,18 +101,18 @@ pub(crate) fn gate(snapshot: &LiveSnapshot) -> PartialView {
 /// withheld so the model's context window never sees a half-key.
 fn ends_with_secret_prefix(bytes: &[u8]) -> bool {
     const PREFIXES: &[&[u8]] = &[
-        b"sk-ant-",      // Anthropic admin / project
-        b"sk-ant-api",  // Anthropic API key
-        b"sk-proj-",    // OpenAI project key
-        b"sk-",         // OpenAI classic (less specific; used as fallback)
-        b"AKIA",        // AWS access key id
-        b"ASIA",        // AWS session token
-        b"ghp_",        // GitHub personal access token
-        b"gho_",        // GitHub OAuth token
-        b"ghs_",        // GitHub server token
-        b"glpat-",      // GitLab personal access token
-        b"xoxb-",       // Slack bot token
-        b"xoxp-",       // Slack user token
+        b"sk-ant-",    // Anthropic admin / project
+        b"sk-ant-api", // Anthropic API key
+        b"sk-proj-",   // OpenAI project key
+        b"sk-",        // OpenAI classic (less specific; used as fallback)
+        b"AKIA",       // AWS access key id
+        b"ASIA",       // AWS session token
+        b"ghp_",       // GitHub personal access token
+        b"gho_",       // GitHub OAuth token
+        b"ghs_",       // GitHub server token
+        b"glpat-",     // GitLab personal access token
+        b"xoxb-",      // Slack bot token
+        b"xoxp-",      // Slack user token
     ];
     // Search the trailing 80 bytes only — secrets are written out
     // sequentially, so the prefix is always near the tail. Bounding
@@ -123,7 +123,9 @@ fn ends_with_secret_prefix(bytes: &[u8]) -> bool {
     } else {
         bytes
     };
-    PREFIXES.iter().any(|p| tail.windows(p.len()).any(|w| w == *p))
+    PREFIXES
+        .iter()
+        .any(|p| tail.windows(p.len()).any(|w| w == *p))
 }
 
 /// The gated snapshot as one block of durable text, or `None` when there is

@@ -113,17 +113,17 @@ impl HubCatalogArtifact {
             // instead of bytes.
             if let Some(schema) = &e.config_schema {
                 if let Err(reason) = validate_config_schema(schema) {
-                    return Err(format!("entry '{}' has invalid config_schema: {reason}", e.id));
+                    return Err(format!(
+                        "entry '{}' has invalid config_schema: {reason}",
+                        e.id
+                    ));
                 }
             }
             // Cap the other wire-controlled user-visible fields. A hostile
             // publisher can ship a 10 MiB description that the Panel then
             // has to render; a 4 KiB cap is generous for a catalog blurb.
             if e.description.len() > 4096 {
-                return Err(format!(
-                    "entry '{}' description exceeds 4096 bytes",
-                    e.id
-                ));
+                return Err(format!("entry '{}' description exceeds 4096 bytes", e.id));
             }
             if e.tags.len() > 32 {
                 return Err(format!("entry '{}' has >32 tags", e.id));

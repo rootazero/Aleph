@@ -199,7 +199,8 @@ pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
         if current == next {
             break current;
         }
-        match CURRENT_LOG_LEVEL.compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire) {
+        match CURRENT_LOG_LEVEL.compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
+        {
             Ok(prev) => break prev,
             Err(observed) => current = observed,
         }

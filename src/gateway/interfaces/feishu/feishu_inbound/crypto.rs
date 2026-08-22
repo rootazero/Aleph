@@ -148,6 +148,12 @@ mod tests {
             r#"{"a":1}"#,
             SWAPPED,
         ));
-        assert!(!verify_signature("enc", "1700000000", "n123", r#"{"a":1}"#, "deadbeef"));
+        assert!(!verify_signature(
+            "enc",
+            "1700000000",
+            "n123",
+            r#"{"a":1}"#,
+            "deadbeef"
+        ));
     }
 }

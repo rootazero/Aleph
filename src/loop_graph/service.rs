@@ -631,14 +631,10 @@ fn render_session_topology_inner(
     let edges = store
         .edges_for_render(DEFAULT_AGENT, &node_id)
         .map_err(|e| {
-            crate::error::AlephError::other(format!(
-                "loop_graph topology read edges: {e}"
-            ))
+            crate::error::AlephError::other(format!("loop_graph topology read edges: {e}"))
         })?;
     let roots = store.root_nodes_for_render(DEFAULT_AGENT).map_err(|e| {
-        crate::error::AlephError::other(format!(
-            "loop_graph topology read roots: {e}"
-        ))
+        crate::error::AlephError::other(format!("loop_graph topology read roots: {e}"))
     })?;
     // Resolve labels for every node id we will mention. Skipping the full
     // `list_nodes` read saves O(N) on a populated graph; the IN-clause stays
@@ -654,9 +650,7 @@ fn render_session_topology_inner(
     let labels: std::collections::HashMap<String, String> = store
         .labels_for_ids(DEFAULT_AGENT, &ids)
         .map_err(|e| {
-            crate::error::AlephError::other(format!(
-                "loop_graph topology read labels: {e}"
-            ))
+            crate::error::AlephError::other(format!("loop_graph topology read labels: {e}"))
         })?
         .into_iter()
         .collect();

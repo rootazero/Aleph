@@ -1190,7 +1190,11 @@ mod tests {
         reg.put(st("a").with_max_iterations(Some(3)));
         // Pre-seed an in-flight marker as if a previous claim had been made
         // and the wake is in the future.
-        let pre = reg.get("a").unwrap().clone().with_pending_tick(Some(1_000_000));
+        let pre = reg
+            .get("a")
+            .unwrap()
+            .clone()
+            .with_pending_tick(Some(1_000_000));
         reg.put(pre);
         // now_ms == 0 means the clock is unavailable. The in-flight gate must
         // fall through, the claim must proceed, and the loop must Fire.

@@ -209,10 +209,8 @@ impl Sandbox for WorkspaceSandbox {
         // DNS step from acquiring `&mut cmd.capabilities`. Per-call ctx
         // construction is zero-cost (two pointer copies) and matches NLL
         // semantics.
-        if let SandboxHookResult::Deny { reason } = self
-            .hooks
-            .run_before(&SandboxHookContext::new(&cmd))
-            .await
+        if let SandboxHookResult::Deny { reason } =
+            self.hooks.run_before(&SandboxHookContext::new(&cmd)).await
         {
             return Err(SandboxError::Other(format!("hook denied: {reason}")));
         }

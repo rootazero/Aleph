@@ -175,7 +175,8 @@ impl OAuthProvider {
             AlephError::IoError("Server does not support dynamic client registration".to_string())
         })?;
 
-        self.ensure_ssrf_safe(registration_endpoint, "client registration").await?;
+        self.ensure_ssrf_safe(registration_endpoint, "client registration")
+            .await?;
 
         let request_body = registration_request_body(
             &format!("Aleph MCP Client ({})", self.server_name),

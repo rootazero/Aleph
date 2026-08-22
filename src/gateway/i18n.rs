@@ -383,26 +383,50 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         // asking: `PerUser` renders both numbers because they are the
         // caller's own; `Total` renders none — see `Limit::Total`'s doc.
         // G12 pins the `Total` arms carrying no dollar figure.
-        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::PerUser { spent, limit }, reset_ms }), Locale::Zh) => {
+        (
+            Msg::ErrReceipt(ReceiptKind::SpendExhausted {
+                limit: Limit::PerUser { spent, limit },
+                reset_ms,
+            }),
+            Locale::Zh,
+        ) => {
             format!(
                 "本周期个人支出已达上限：已花费 ${spent:.2}，上限 ${limit:.2}。将于 {} 重置。",
                 format_reset_instant(reset_ms)
             )
         }
-        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::PerUser { spent, limit }, reset_ms }), Locale::En) => {
+        (
+            Msg::ErrReceipt(ReceiptKind::SpendExhausted {
+                limit: Limit::PerUser { spent, limit },
+                reset_ms,
+            }),
+            Locale::En,
+        ) => {
             format!(
                 "Spend ceiling reached: ${spent:.2} spent against a ${limit:.2} per-user limit \
                  for this period. Resets at {}.",
                 format_reset_instant(reset_ms)
             )
         }
-        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::Total, reset_ms }), Locale::Zh) => {
+        (
+            Msg::ErrReceipt(ReceiptKind::SpendExhausted {
+                limit: Limit::Total,
+                reset_ms,
+            }),
+            Locale::Zh,
+        ) => {
             format!(
                 "本机共享支出额度已用尽，本周期暂时无法继续。将于 {} 重置。",
                 format_reset_instant(reset_ms)
             )
         }
-        (Msg::ErrReceipt(ReceiptKind::SpendExhausted { limit: Limit::Total, reset_ms }), Locale::En) => {
+        (
+            Msg::ErrReceipt(ReceiptKind::SpendExhausted {
+                limit: Limit::Total,
+                reset_ms,
+            }),
+            Locale::En,
+        ) => {
             format!(
                 "This machine's shared spend limit for the period has been reached. Resets at {}.",
                 format_reset_instant(reset_ms)
@@ -1011,7 +1035,10 @@ mod tests {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!src.trim().is_empty(), "scan read nothing; the split point moved");
+        assert!(
+            !src.trim().is_empty(),
+            "scan read nothing; the split point moved"
+        );
 
         let mut checked = 0;
         for (locale_tag, needle) in [
@@ -1036,7 +1063,10 @@ mod tests {
             );
             checked += 1;
         }
-        assert_eq!(checked, 2, "expected exactly two Limit::Total arms (Zh + En)");
+        assert_eq!(
+            checked, 2,
+            "expected exactly two Limit::Total arms (Zh + En)"
+        );
     }
 
     /// An English-locale deployment must not receive Chinese error text — the

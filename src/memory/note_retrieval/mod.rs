@@ -1798,7 +1798,11 @@ mod tests {
         let key = |v: &[ScoredFact]| -> Vec<(String, f32)> {
             v.iter().map(|f| (f.fact.id.clone(), f.score)).collect()
         };
-        assert_eq!(key(&untraced), key(&traced), "tracing must not change results");
+        assert_eq!(
+            key(&untraced),
+            key(&traced),
+            "tracing must not change results"
+        );
         assert!(!stages.is_empty(), "the traced call must record something");
     }
 }

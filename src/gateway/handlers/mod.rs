@@ -116,6 +116,7 @@ pub mod session;
 
 pub mod dreaming;
 pub mod extensions;
+pub mod security_audit;
 pub mod skills;
 pub mod spend;
 pub mod subagent;
@@ -126,7 +127,6 @@ pub mod tools_cancel;
 pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
-pub mod security_audit;
 pub mod users;
 pub mod version;
 pub mod voice;
@@ -328,7 +328,10 @@ impl HandlerRegistry {
         // `list` returns the registrations; `browse` returns what is inside
         // them. Without the second one, installing by name required already
         // knowing the name.
-        registry.register("plugin.marketplace.browse", plugins::handle_marketplace_browse);
+        registry.register(
+            "plugin.marketplace.browse",
+            plugins::handle_marketplace_browse,
+        );
         registry.register("plugin.marketplace.add", plugins::handle_marketplace_add);
         registry.register(
             "plugin.marketplace.update",

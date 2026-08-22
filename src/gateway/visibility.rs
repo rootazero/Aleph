@@ -153,9 +153,7 @@ pub fn ambient_actor() -> Option<String> {
     // do not yet plumb an actor continue to fall through.
     crate::scope::ambient_room_author()
         .or_else(crate::scope::ambient_owner)
-        .or_else(|| {
-            crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty())
-        })
+        .or_else(|| crate::tools::turn_context::current_agent_id().filter(|id| !id.is_empty()))
 }
 
 /// Whether the current gateway caller may see records scoped to `project_id`

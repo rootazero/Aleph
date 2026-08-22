@@ -742,7 +742,10 @@ async fn spend_principal_resolvers_agree_when_metadata_carries_an_author() {
         "with_request_scope seeds CURRENT_ROOM_AUTHOR from request.metadata[AUTHOR_USER_KEY] \
          verbatim, so the admission and floor arms must resolve the same principal"
     );
-    assert_eq!(admission, crate::spend::Principal::User("u-alice".to_string()));
+    assert_eq!(
+        admission,
+        crate::spend::Principal::User("u-alice".to_string())
+    );
 }
 
 #[tokio::test]
@@ -760,7 +763,10 @@ async fn spend_principal_resolvers_agree_falling_back_to_the_scope_owner() {
     let floor = with_request_scope(&request, async { crate::spend::ambient_principal() }).await;
 
     assert_eq!(admission, floor);
-    assert_eq!(admission, crate::spend::Principal::User("u-owner".to_string()));
+    assert_eq!(
+        admission,
+        crate::spend::Principal::User("u-owner".to_string())
+    );
 }
 
 #[tokio::test]
@@ -776,7 +782,10 @@ async fn spend_principal_resolvers_agree_on_an_owner_key_with_no_scope_key() {
     // `stamp_metadata`: that helper writes both keys in one call, which is
     // exactly why the two tests above cannot see this case.
     let mut metadata = std::collections::HashMap::new();
-    metadata.insert(crate::scope::OWNER_META_KEY.to_string(), "u-owner".to_string());
+    metadata.insert(
+        crate::scope::OWNER_META_KEY.to_string(),
+        "u-owner".to_string(),
+    );
     let request = minimal_request(metadata);
 
     let admission = crate::spend::principal_from_metadata(&request.metadata);
@@ -844,7 +853,9 @@ fn admission_result_for_denies_carrying_the_verdicts_own_limit() {
             // recomputed — see `ExecutionError::SpendExhausted`'s doc.
             assert_eq!(reset_ms, 1_000);
         }
-        other => panic!("expected Err(SpendExhausted {{ limit: PerUser {{ .. }} }}), got {other:?}"),
+        other => {
+            panic!("expected Err(SpendExhausted {{ limit: PerUser {{ .. }} }}), got {other:?}")
+        }
     }
 
     // A different `period_end_ms` than the `PerUser` verdict above, so a
@@ -912,13 +923,20 @@ struct RecordingEmitter {
 
 #[async_trait::async_trait]
 impl EventEmitter for RecordingEmitter {
-    async fn emit(&self, event: StreamEvent) -> Result<(), crate::gateway::event_emitter::EventEmitError> {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).push(event);
+    async fn emit(
+        &self,
+        event: StreamEvent,
+    ) -> Result<(), crate::gateway::event_emitter::EventEmitError> {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(event);
         Ok(())
     }
 
     fn next_seq(&self) -> u64 {
-        self.next_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        self.next_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -961,9 +979,16 @@ async fn report_admission_denial_emits_a_run_error_naming_the_run_and_session_wh
 
     let result = report_admission_denial(denial, &request, &emitter).await;
 
-    assert!(result.is_err(), "the error must still propagate to the caller");
+    assert!(
+        result.is_err(),
+        "the error must still propagate to the caller"
+    );
     let events = emitter.events.lock().unwrap();
-    assert_eq!(events.len(), 1, "exactly one RunError, not zero and not a duplicate");
+    assert_eq!(
+        events.len(),
+        1,
+        "exactly one RunError, not zero and not a duplicate"
+    );
     match &events[0] {
         StreamEvent::RunError {
             run_id,

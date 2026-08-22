@@ -439,8 +439,7 @@ impl<'a> LoopGraphInspector<'a> {
         // broken"). Without this, a brand-new deployment reads
         // `governance_chain_anchored: false` and prompts an operator to run
         // `enable_audit` for no reason.
-        let governance_chain_anchored =
-            unanchored_chain_count == 0 || nodes.is_empty();
+        let governance_chain_anchored = unanchored_chain_count == 0 || nodes.is_empty();
 
         Ok(TopologySummary {
             node_counts_by_kind,

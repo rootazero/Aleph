@@ -116,7 +116,14 @@ mod tests {
             default_input_modes: vec!["text".to_string()],
             default_output_modes: vec!["text".to_string()],
         };
-        RegisteredAgent::new(card, TrustLevel::Local, url.to_string(), Utc::now(), AgentHealth::Healthy, None)
+        RegisteredAgent::new(
+            card,
+            TrustLevel::Local,
+            url.to_string(),
+            Utc::now(),
+            AgentHealth::Healthy,
+            None,
+        )
     }
 
     // NOTE: `len`/`is_empty` were cut as unused accessors (`dafc57bc6`). Pool

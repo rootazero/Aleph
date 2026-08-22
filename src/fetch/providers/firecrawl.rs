@@ -104,8 +104,9 @@ impl FetchProvider for FirecrawlFetchProvider {
                     "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes"
                 ))
             })?;
-        let parsed: FirecrawlScrapeResponse = serde_json::from_slice(&body_bytes)
-            .map_err(|e| AlephError::provider(format!("Failed to parse firecrawl response: {e}")))?;
+        let parsed: FirecrawlScrapeResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
+            AlephError::provider(format!("Failed to parse firecrawl response: {e}"))
+        })?;
         map_scrape(parsed)
             .ok_or_else(|| AlephError::provider("firecrawl scrape returned no markdown"))
     }

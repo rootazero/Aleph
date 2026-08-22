@@ -631,7 +631,11 @@ mod tests {
         // hash-function change here only needs to update one place.
         let expected_ref = format!(
             "{{{{secret:{}}}}}",
-            crate::hub::secrets::field_key(crate::hub::types::ExtensionKind::Mcp, "srv", "GITHUB_TOKEN")
+            crate::hub::secrets::field_key(
+                crate::hub::types::ExtensionKind::Mcp,
+                "srv",
+                "GITHUB_TOKEN"
+            )
         );
         assert_eq!(stored.get("GITHUB_TOKEN"), Some(&expected_ref));
         assert_eq!(stored.get("REGION"), Some(&"us".to_string()));

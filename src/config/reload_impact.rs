@@ -118,7 +118,10 @@ const INERT_SECTIONS: &[&str] = &[];
 ///   boundary check, which is the point: one hand-written prefix match, not
 ///   two that can drift apart.
 pub(crate) fn dotted_prefix_matches(prefix: &str, path: &str) -> bool {
-    prefix == path || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('.'))
+    prefix == path
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('.'))
 }
 
 /// Resolve `config_path` to the most specific declared live target: a
@@ -146,7 +149,11 @@ pub(crate) fn live_target_for(config_path: &str) -> Option<&'static str> {
 /// `policies.spend` — the same "one caller acts on the table, the others
 /// only assert it" shape `live_apply` exists to remove.
 pub(crate) fn live_targets() -> Vec<&'static str> {
-    LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()).copied().collect()
+    LIVE_SECTIONS
+        .iter()
+        .chain(LIVE_SUBSECTIONS.iter())
+        .copied()
+        .collect()
 }
 
 impl ReloadImpact {
@@ -270,10 +277,7 @@ mod tests {
         // The subsection itself, and any leaf path under it, are Live — but
         // the parent "policies" is not (covered by
         // `runtime_built_sections_need_restart`).
-        assert_eq!(
-            ReloadImpact::classify("policies.spend"),
-            ReloadImpact::Live
-        );
+        assert_eq!(ReloadImpact::classify("policies.spend"), ReloadImpact::Live);
         assert_eq!(
             ReloadImpact::classify("policies.spend.per_user_usd"),
             ReloadImpact::Live

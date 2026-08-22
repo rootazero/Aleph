@@ -366,17 +366,16 @@ impl StateDatabase {
         &self,
         event_type_filter: Option<&str>,
     ) -> Result<usize, AlephError> {
-        let event_type_filter: Option<String> =
-            event_type_filter.map(str::to_string);
+        let event_type_filter: Option<String> = event_type_filter.map(str::to_string);
         self.with_conn(move |conn| {
             let count: i64 = match event_type_filter.as_deref() {
                 Some(et) => conn
                     .query_row(
                         "SELECT COUNT(*) FROM memory_events WHERE event_type = ?1",
-                    params![et],
-                    |row| row.get(0),
-                )
-                .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
+                        params![et],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
                 None => conn
                     .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
                     .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
@@ -845,7 +844,10 @@ mod tests {
             "concurrent appends must not fail: {errors:?}"
         );
 
-        let events = db.get_memory_events_for_fact("fact-race", "").await.unwrap();
+        let events = db
+            .get_memory_events_for_fact("fact-race", "")
+            .await
+            .unwrap();
         assert_eq!(
             events.len(),
             N,

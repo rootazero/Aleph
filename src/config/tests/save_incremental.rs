@@ -95,7 +95,6 @@ similarity_threshold = 0.5
     );
 }
 
-
 /// Removing the *last* entry of a collection must reach the file.
 ///
 /// `plugin_marketplaces` is `skip_serializing_if = "HashMap::is_empty"`, so an
@@ -155,7 +154,6 @@ fn removing_the_last_plugin_marketplace_reaches_the_file() {
     );
 }
 
-
 /// The same defect on the channels section, which has a shipped delete button.
 ///
 /// `channel.rs`'s delete handler drops the key and persists `["channels"]`.
@@ -175,7 +173,9 @@ fn removing_the_last_channel_reaches_the_file() {
     );
     config.save_to_file(&config_path).expect("initial save");
     assert!(
-        fs::read_to_string(&config_path).unwrap().contains("telegram"),
+        fs::read_to_string(&config_path)
+            .unwrap()
+            .contains("telegram"),
         "the fixture must register one, or the removal proves nothing"
     );
 
@@ -209,7 +209,9 @@ fn removing_the_last_routing_rule_reaches_the_file() {
     };
     config.save_to_file(&config_path).expect("initial save");
     assert!(
-        fs::read_to_string(&config_path).unwrap().contains("^/custom"),
+        fs::read_to_string(&config_path)
+            .unwrap()
+            .contains("^/custom"),
         "the fixture must register one, or the removal proves nothing"
     );
 
@@ -259,7 +261,10 @@ fn production_sources() -> Vec<(String, String)> {
         }
     }
     let mut out = Vec::new();
-    walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut out);
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut out,
+    );
     out
 }
 
@@ -410,7 +415,10 @@ fn every_section_a_handler_persists_is_one_the_merge_can_write() {
     let mut unwritable = Vec::new();
     for name in &names {
         let parts: Vec<&str> = name.split('.').collect();
-        let resolves = parts.iter().try_fold(&serialised, |n, p| n.get(p)).is_some();
+        let resolves = parts
+            .iter()
+            .try_fold(&serialised, |n, p| n.get(p))
+            .is_some();
         if !resolves && !optional.contains(parts[0]) && !guarded.contains(parts[0]) {
             unwritable.push(name.clone());
         }

@@ -894,10 +894,9 @@ mod tests {
         let attr = crate::scope::ScopeAttribution::personal("u-bob");
         let m = crate::scope::with_scope(
             Some(attr),
-            crate::scope::with_room_author(
-                Some("u-bob".to_string()),
-                async { task_run_metadata("t1", "task-9", None, None) },
-            ),
+            crate::scope::with_room_author(Some("u-bob".to_string()), async {
+                task_run_metadata("t1", "task-9", None, None)
+            }),
         )
         .await;
         let expected = crate::scope::scope_from_metadata(&m)

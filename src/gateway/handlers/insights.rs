@@ -93,16 +93,7 @@ pub async fn handle_tools(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     // AFTER the visibility gate above; see `memory_scope`'s module doc.
     let partitions = crate::gateway::handlers::memory_scope::read_partitions(agent_id);
 
-    match aggregate_tool_usage(
-        db.as_ref(),
-        &partitions,
-        since,
-        window,
-        top_n,
-        FETCH_LIMIT,
-    )
-    .await
-    {
+    match aggregate_tool_usage(db.as_ref(), &partitions, since, window, top_n, FETCH_LIMIT).await {
         Ok(report) => JsonRpcResponse::success(
             request.id,
             json!({

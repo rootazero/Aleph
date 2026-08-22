@@ -249,8 +249,7 @@ pub struct SecurityAuditLog {
 /// installed once at boot instead, exactly like `identity::ledger::install`
 /// and the `goal::global()` / `looping::global()` / `cron::global()` trio
 /// `freeze_owned_background_work` already reads.
-static GLOBAL_AUDIT: std::sync::RwLock<Option<SecurityAuditLog>> =
-    std::sync::RwLock::new(None);
+static GLOBAL_AUDIT: std::sync::RwLock<Option<SecurityAuditLog>> = std::sync::RwLock::new(None);
 
 /// Install the process-wide handle. Called once at boot, immediately after
 /// `GatewayServer::set_audit_log`, with a clone of the same log. Returns
@@ -380,15 +379,30 @@ mod tests {
     /// its list of covered writes, and no producer existed. Prose naming a
     /// behaviour is not the behaviour, and a doc comment has no test.
     const AUTHORITY_PRODUCERS: &[(&str, &str)] = &[
-        ("src/gateway/handlers/users.rs", "principal created / role / status"),
-        ("src/gateway/handlers/projects.rs", "room roster add / remove"),
-        ("src/gateway/handlers/pairing.rs", "channel sender approve / revoke"),
-        ("src/gateway/handlers/gateway_ticket.rs", "bootstrap ticket minted"),
+        (
+            "src/gateway/handlers/users.rs",
+            "principal created / role / status",
+        ),
+        (
+            "src/gateway/handlers/projects.rs",
+            "room roster add / remove",
+        ),
+        (
+            "src/gateway/handlers/pairing.rs",
+            "channel sender approve / revoke",
+        ),
+        (
+            "src/gateway/handlers/gateway_ticket.rs",
+            "bootstrap ticket minted",
+        ),
         (
             "src/gateway/handlers/gateway_devices.rs",
             "device credential revoked",
         ),
-        ("src/gateway/handlers/agents.rs", "allowed_users rewritten (RPC)"),
+        (
+            "src/gateway/handlers/agents.rs",
+            "allowed_users rewritten (RPC)",
+        ),
         (
             "src/builtin_tools/agent_manage/update.rs",
             "allowed_users rewritten (tool)",
@@ -472,7 +486,12 @@ mod tests {
                 continue;
             };
             if code_only(&src).contains("authority_change(") {
-                undeclared.push(file.strip_prefix(&root).unwrap_or(&file).display().to_string());
+                undeclared.push(
+                    file.strip_prefix(&root)
+                        .unwrap_or(&file)
+                        .display()
+                        .to_string(),
+                );
             }
         }
         assert!(
@@ -482,7 +501,6 @@ mod tests {
              writes are supposed to leave a trail."
         );
     }
-
 
     #[tokio::test]
     async fn test_audit_log_send_receive() {

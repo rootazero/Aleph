@@ -223,10 +223,7 @@ pub async fn handle_replace(
     if !addressable(&agent) {
         // Same no-oracle contract as the read: a denied write reports the
         // "no such entry" the caller would get for a genuinely absent one.
-        return error_response(
-            request.id,
-            &CuratedError::NoMatch(params.old_text.clone()),
-        );
+        return error_response(request.id, &CuratedError::NoMatch(params.old_text.clone()));
     }
 
     let store = match resolve_store(&request.id, mcp.as_ref(), &agent).await {
@@ -253,10 +250,7 @@ pub async fn handle_remove(
     };
     let agent = base_agent(params.agent_id);
     if !addressable(&agent) {
-        return error_response(
-            request.id,
-            &CuratedError::NoMatch(params.old_text.clone()),
-        );
+        return error_response(request.id, &CuratedError::NoMatch(params.old_text.clone()));
     }
 
     let store = match resolve_store(&request.id, mcp.as_ref(), &agent).await {
@@ -498,7 +492,12 @@ mod tests {
     #[tokio::test]
     async fn ambiguous_and_missing_substrings_are_caller_errors() {
         let dir = tempfile::tempdir().unwrap();
-        seed(dir.path(), "main", "ships on fridays\n§\nships on mondays\n§\n").await;
+        seed(
+            dir.path(),
+            "main",
+            "ships on fridays\n§\nships on mondays\n§\n",
+        )
+        .await;
         let mcp = provider(dir.path());
 
         let ambiguous = handle_remove(

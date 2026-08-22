@@ -201,7 +201,9 @@ impl StdioTransport {
         // `Ld_Preload`) since `is_unsafe_env_key` is case-insensitive.
         for (var_name, _) in std::env::vars() {
             if is_unsafe_env_key(&var_name)
-                && !stripped_unsafe.iter().any(|k| k.eq_ignore_ascii_case(&var_name))
+                && !stripped_unsafe
+                    .iter()
+                    .any(|k| k.eq_ignore_ascii_case(&var_name))
             {
                 cmd.env_remove(&var_name);
             }
@@ -517,8 +519,14 @@ async fn reader_loop(
     pending: Arc<PendingMap>,
     notification_handler: Arc<StdMutex<Option<NotificationCallback>>>,
 ) {
-    reader_loop_with_cap(stdout, server_name, pending, notification_handler, MAX_MCP_FRAME_BYTES)
-        .await
+    reader_loop_with_cap(
+        stdout,
+        server_name,
+        pending,
+        notification_handler,
+        MAX_MCP_FRAME_BYTES,
+    )
+    .await
 }
 
 /// Inner reader loop with a configurable per-frame byte cap.

@@ -463,7 +463,10 @@ pub enum ExecutionError {
     /// same policy" is not a premise a fresh read can rely on. Carrying the
     /// value sidesteps both.
     #[error("spend ceiling reached")]
-    SpendExhausted { limit: crate::spend::Limit, reset_ms: i64 },
+    SpendExhausted {
+        limit: crate::spend::Limit,
+        reset_ms: i64,
+    },
 }
 
 impl ExecutionError {
@@ -518,9 +521,10 @@ impl ExecutionError {
             // `reset_ms` is carried on the error (see `Self::SpendExhausted`'s
             // doc) rather than recomputed here — this arm must not read
             // `Utc::now()` or `spend::current_policy()`.
-            Self::SpendExhausted { limit, reset_ms } => {
-                ReceiptKind::SpendExhausted { limit: *limit, reset_ms: *reset_ms }
-            }
+            Self::SpendExhausted { limit, reset_ms } => ReceiptKind::SpendExhausted {
+                limit: *limit,
+                reset_ms: *reset_ms,
+            },
         }
     }
 }
@@ -716,7 +720,10 @@ mod user_receipt_tests {
         };
         let (code, message) = e.user_receipt(Locale::En);
         assert_eq!(code, "SPEND_EXHAUSTED");
-        assert!(message.contains("42.0") && message.contains("40.0"), "{message}");
+        assert!(
+            message.contains("42.0") && message.contains("40.0"),
+            "{message}"
+        );
     }
 
     /// `Limit::Total` never renders a dollar figure — there is no actor at
@@ -818,8 +825,7 @@ mod user_receipt_tests {
             assert!(
                 !hint.retryable,
                 "spend denial '{}' must not be retryable by string classifier, got: {:?}",
-                err_text,
-                hint
+                err_text, hint
             );
 
             // Typed path must also say "not transient".

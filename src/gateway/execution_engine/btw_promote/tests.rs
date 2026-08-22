@@ -347,7 +347,9 @@ fn an_over_budget_principal_keeps_the_read_only_crossing() {
 
     let promote = production
         .find("btw::is_promote(&request.metadata)")
-        .expect("execute() still serves promote; the scan stopped matching, so its green means nothing");
+        .expect(
+            "execute() still serves promote; the scan stopped matching, so its green means nothing",
+        );
     let spend_arm = production
         .find("deny_if_over_spend_and_report(&request, emitter.as_ref())")
         .expect("execute() still denies over-ceiling principals; the scan stopped matching");

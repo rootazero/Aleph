@@ -143,9 +143,10 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
     // soft-fail flag so existing releases keep working; a mismatch on
     // a present SHA256SUMS is a hard failure.
     let checksums = match client.get(SHA256SUMS_URL).send() {
-        Ok(r) if r.status().is_success() => Some(r.text().map_err(|e| {
-            format!("failed to read SHA256SUMS body: {e}")
-        })?),
+        Ok(r) if r.status().is_success() => Some(
+            r.text()
+                .map_err(|e| format!("failed to read SHA256SUMS body: {e}"))?,
+        ),
         Ok(r) if r.status().as_u16() == 404 => None,
         Ok(r) => {
             return Err(format!(
@@ -218,14 +219,21 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
         installer_name,
         std::process::id()
     ));
-    std::fs::write(&temp_path, &installer_bytes)
-        .map_err(|e| format!("failed to write temp installer {}: {e}", temp_path.display()))?;
+    std::fs::write(&temp_path, &installer_bytes).map_err(|e| {
+        format!(
+            "failed to write temp installer {}: {e}",
+            temp_path.display()
+        )
+    })?;
 
     let status = {
         use std::process::Command;
         #[cfg(windows)]
         {
-            println!("Running the Windows installer:\n  powershell -File {}", temp_path.display());
+            println!(
+                "Running the Windows installer:\n  powershell -File {}",
+                temp_path.display()
+            );
             let mut c = Command::new("powershell");
             c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
             c.arg(&temp_path);
@@ -340,7 +348,8 @@ mod tests {
 
     #[test]
     fn parses_leading_dot_slash_filename() {
-        let manifest = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  ./install.sh\n";
+        let manifest =
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  ./install.sh\n";
         assert!(parse_sha256sums_line(manifest, "install.sh").is_some());
     }
 
@@ -353,7 +362,8 @@ mod tests {
 
     #[test]
     fn returns_none_for_missing_file() {
-        let manifest = "1111111111111111111111111111111111111111111111111111111111111111  install.sh\n";
+        let manifest =
+            "1111111111111111111111111111111111111111111111111111111111111111  install.sh\n";
         assert!(parse_sha256sums_line(manifest, "install.ps1").is_none());
     }
 
@@ -365,7 +375,8 @@ mod tests {
 
     #[test]
     fn returns_none_for_non_hex_hash() {
-        let manifest = "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ  install.sh\n";
+        let manifest =
+            "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ  install.sh\n";
         assert!(parse_sha256sums_line(manifest, "install.sh").is_none());
     }
 }

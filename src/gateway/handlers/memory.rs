@@ -409,9 +409,8 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     let scope = if agent.is_some() { "agent" } else { "global" };
     // Resolved AFTER the visibility gate above. `None` here is the
     // unrestricted whole-store rollup and stays unpartitioned.
-    let partitions: Option<Vec<String>> = agent
-        .as_deref()
-        .map(super::memory_scope::read_partitions);
+    let partitions: Option<Vec<String>> =
+        agent.as_deref().map(super::memory_scope::read_partitions);
     let partitions = partitions.as_deref();
 
     let raw_count = db.count_raw_memories(partitions, None).unwrap_or(0);
@@ -425,7 +424,9 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     // `category/filename` would collide into one node. These two counts label
     // THAT graph, so they must be scoped exactly as `graph.query` is, or the
     // stat card would describe a picture the galaxy never draws.
-    let graph_partition = agent.as_deref().map(super::memory_scope::primary_read_partition);
+    let graph_partition = agent
+        .as_deref()
+        .map(super::memory_scope::primary_read_partition);
     let (graph_nodes, graph_edges) = match graph_partition.as_deref() {
         Some(a) => match db.get_graph_data(a, 10000).await {
             Ok((entries, links)) => (Some(entries.len() as i64), Some(links.len() as i64)),
@@ -1171,8 +1172,13 @@ mod trace_tests {
 
         db.record_write_decision("main", "add", MemoryWriteReason::OverBudget, "likes tea")
             .unwrap();
-        db.record_write_decision("main", "remove", MemoryWriteReason::Written, "ships fridays")
-            .unwrap();
+        db.record_write_decision(
+            "main",
+            "remove",
+            MemoryWriteReason::Written,
+            "ships fridays",
+        )
+        .unwrap();
 
         let resp = handle_trace(
             JsonRpcRequest::with_id(
@@ -1195,7 +1201,11 @@ mod trace_tests {
             .as_array()
             .expect("write_decisions array")
             .clone();
-        assert_eq!(rows.len(), 2, "an empty target must not filter anything out");
+        assert_eq!(
+            rows.len(),
+            2,
+            "an empty target must not filter anything out"
+        );
         // Newest first, and the refusal is present — a ledger that only kept
         // the writes that landed could not answer "why was that not
         // remembered", which is the entire reason it exists.
@@ -1224,8 +1234,13 @@ mod trace_tests {
 
         // One row in each partition, so "it found something" cannot pass by
         // reading the wrong one.
-        db.record_write_decision("main", "add", MemoryWriteReason::Written, "bare persona row")
-            .unwrap();
+        db.record_write_decision(
+            "main",
+            "add",
+            MemoryWriteReason::Written,
+            "bare persona row",
+        )
+        .unwrap();
         db.record_write_decision(
             "main__u-alice",
             "add",
@@ -2138,8 +2153,11 @@ mod partition_union_tests {
         );
 
         // --- memory.stats ------------------------------------------------------
-        let req =
-            JsonRpcRequest::with_id("memory.stats", Some(json!({ "agent_id": "main" })), json!(3));
+        let req = JsonRpcRequest::with_id(
+            "memory.stats",
+            Some(json!({ "agent_id": "main" })),
+            json!(3),
+        );
         let resp =
             crate::scope::with_scope(Some(scope.clone()), handle_stats(req, db.clone())).await;
         assert!(resp.is_success(), "{:?}", resp.error);

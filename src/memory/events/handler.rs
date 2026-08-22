@@ -148,9 +148,7 @@ impl MemoryCommandHandler {
                             .map(|e| e.file_name().to_string_lossy().into_owned())
                             .collect()
                     })
-                    .unwrap_or_else(|| {
-                        vec![DEFAULT_AGENT_ID.to_string(), "owner".to_string()]
-                    });
+                    .unwrap_or_else(|| vec![DEFAULT_AGENT_ID.to_string(), "owner".to_string()]);
                 let mut found = false;
                 for agent_id in &agent_dirs {
                     match indexer.store().find_by_filename(&title, agent_id).await {
@@ -264,7 +262,10 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Rebuild from events to get the current content.
-        let events = self.db.get_memory_events_for_fact(&cmd.note_path, "").await?;
+        let events = self
+            .db
+            .get_memory_events_for_fact(&cmd.note_path, "")
+            .await?;
         let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?
             .ok_or_else(|| {
                 AlephError::other(format!("Fact {} not found or deleted", cmd.note_path))
@@ -349,13 +350,8 @@ impl MemoryCommandHandler {
 
         // rust-doctor-disable-next-line excessive-clone
         let fact_id_ref = cmd.note_path.clone();
-        let envelope = MemoryEventEnvelope::new(
-            cmd.note_path,
-            seq,
-            event,
-            cmd.actor,
-            cmd.correlation_id,
-        );
+        let envelope =
+            MemoryEventEnvelope::new(cmd.note_path, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         // Best-effort projection: the event log is the source of truth and is already
@@ -381,7 +377,10 @@ impl MemoryCommandHandler {
         let seq = self.db.get_memory_event_latest_seq(&cmd.note_path).await? + 1;
 
         // Get current access count from event history
-        let events = self.db.get_memory_events_for_fact(&cmd.note_path, "").await?;
+        let events = self
+            .db
+            .get_memory_events_for_fact(&cmd.note_path, "")
+            .await?;
         let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?;
         let current_access_count = current_fact.map_or(0, |f| f.access_count);
 
@@ -608,10 +607,7 @@ impl MemoryCommandHandler {
                 continue;
             };
 
-            let events = self
-                .db
-                .get_memory_events_for_fact(fact_id, "")
-                .await?;
+            let events = self.db.get_memory_events_for_fact(fact_id, "").await?;
             let projected = super::projector::EventProjector::fold_events_to_note(&events)?;
 
             match projected {
@@ -659,9 +655,7 @@ impl MemoryCommandHandler {
                             continue;
                         }
                         for cat in crate::memory::notes::CATEGORY_DIRS {
-                            let candidate = agent_path
-                                .join(cat)
-                                .join(format!("{title}.md"));
+                            let candidate = agent_path.join(cat).join(format!("{title}.md"));
                             if candidate.exists() {
                                 stale_files.push(DivergentFact {
                                     fact_id: fact_id.clone(),
@@ -1571,9 +1565,9 @@ mod tests {
             .unwrap();
 
         let report = handler.reconcile_once().await.unwrap();
-        let snapshot = handler.last_reconcile_report().expect(
-            "last_reconcile_report must be populated after a reconcile_once call",
-        );
+        let snapshot = handler
+            .last_reconcile_report()
+            .expect("last_reconcile_report must be populated after a reconcile_once call");
         assert_eq!(snapshot.scanned_facts, report.scanned_facts);
         assert_eq!(snapshot.missing_files.len(), report.missing_files.len());
         assert_eq!(snapshot.stale_files.len(), report.stale_files.len());

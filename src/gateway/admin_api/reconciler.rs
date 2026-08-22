@@ -110,7 +110,9 @@ mod tests {
         Arc::new(MemoryCommandHandler::new(db))
     }
 
-    async fn test_state(memory_handler: Option<Arc<MemoryCommandHandler>>) -> (AdminApiState, String) {
+    async fn test_state(
+        memory_handler: Option<Arc<MemoryCommandHandler>>,
+    ) -> (AdminApiState, String) {
         // We only need the reconciler-relevant field for these tests;
         // the rest can be defaults from any caller that wires them up.
         let tmp = tempfile::TempDir::new().unwrap();

@@ -87,7 +87,10 @@ mod tests {
         // shape so the test does not break if the hash algorithm is tuned.
         assert!(k.starts_with("ext.mcp.mcp-official_io.github.a_b."));
         assert!(k.ends_with(".GITHUB_TOKEN"));
-        assert_eq!(k.len(), "ext.mcp.mcp-official_io.github.a_b.".len() + 16 + ".GITHUB_TOKEN".len());
+        assert_eq!(
+            k.len(),
+            "ext.mcp.mcp-official_io.github.a_b.".len() + 16 + ".GITHUB_TOKEN".len()
+        );
         assert!(secret_ref(&k).starts_with("{{secret:ext.mcp.mcp-official_io.github.a_b."));
         assert!(secret_ref(&k).ends_with(".GITHUB_TOKEN}}"));
     }

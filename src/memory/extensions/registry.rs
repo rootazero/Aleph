@@ -159,18 +159,18 @@ impl MemoryExtensionRegistry {
 
     /// `on_capture`: chained pipeline. Each extension's modification of `raw`
     /// is visible to the next.
-///
-/// Decision policy (fail-safe without being a single point of failure):
-/// - A explicit `Block` from any extension short-circuits — the most
-///   restrictive verdict wins.
-/// - A single extension erroring or timing out does NOT block the whole
-///   chain. Previously this returned Block immediately, so one buggy or
-///   misbehaving extension silently broke memory writes for every
-///   `insert_with_capture_filter` call site — with only a `tracing::warn!`
-///   to indicate the culprit.
-/// - Errors/timeouts are recorded; if the chain finishes without any
-///   explicit Allow or Block, and at least one extension errored, the
-///   combined failure becomes a single Block so we still fail closed.
+    ///
+    /// Decision policy (fail-safe without being a single point of failure):
+    /// - A explicit `Block` from any extension short-circuits — the most
+    ///   restrictive verdict wins.
+    /// - A single extension erroring or timing out does NOT block the whole
+    ///   chain. Previously this returned Block immediately, so one buggy or
+    ///   misbehaving extension silently broke memory writes for every
+    ///   `insert_with_capture_filter` call site — with only a `tracing::warn!`
+    ///   to indicate the culprit.
+    /// - Errors/timeouts are recorded; if the chain finishes without any
+    ///   explicit Allow or Block, and at least one extension errored, the
+    ///   combined failure becomes a single Block so we still fail closed.
     pub async fn dispatch_on_capture(
         &self,
         ctx: &CaptureCtx,

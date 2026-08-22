@@ -31,7 +31,9 @@
 //! (every write surface re-implementing the poke) is the arrangement that
 //! produced the bug.
 
-use super::reload_impact::{dotted_prefix_matches, live_target_for, ReloadImpact, LIVE_SECTIONS, LIVE_SUBSECTIONS};
+use super::reload_impact::{
+    dotted_prefix_matches, live_target_for, ReloadImpact, LIVE_SECTIONS, LIVE_SUBSECTIONS,
+};
 use super::Config;
 
 /// Hot-apply the sections of `cfg` named by `top_sections` onto the running

@@ -162,9 +162,7 @@ pub fn install_git_skill(
     // so the fixture-driven harness (which clones from a tempdir) keeps working
     // without making `file://` a production-grade escape hatch.
     if !acceptable_git_url(git_url) {
-        return Err(format!(
-            "git_url must be https:// (got '{git_url}')"
-        ));
+        return Err(format!("git_url must be https:// (got '{git_url}')"));
     }
     // Clone into an isolated per-source checkout (never the live skills dir),
     // at the pinned revision when the catalog declares one.

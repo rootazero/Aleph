@@ -356,11 +356,7 @@ impl LoopGraphStore {
     /// as "no watcher" / "no auditor" / "no reference" for the session whose
     /// very governance this function exists to render. Same defense as
     /// [`Self::owns_reference_sources`], scoped to the render seam.
-    pub fn edges_for_render(
-        &self,
-        agent_id: &str,
-        node_id: &str,
-    ) -> Result<Vec<GraphEdge>> {
+    pub fn edges_for_render(&self, agent_id: &str, node_id: &str) -> Result<Vec<GraphEdge>> {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
@@ -380,7 +376,8 @@ impl LoopGraphStore {
             // Fail-loud here: a row this build cannot decode is exactly the
             // case the raw-column discipline is supposed to surface, so let
             // the error propagate rather than silently dropping it.
-            let row = r.map_err(|e| AlephError::other(format!("loop_graph render edges row: {e}")))?;
+            let row =
+                r.map_err(|e| AlephError::other(format!("loop_graph render edges row: {e}")))?;
             if let Some(e) = row {
                 out.push(e);
             }
@@ -412,7 +409,8 @@ impl LoopGraphStore {
             .map_err(|e| AlephError::other(format!("loop_graph render roots query: {e}")))?;
         let mut out = Vec::new();
         for r in rows {
-            let row = r.map_err(|e| AlephError::other(format!("loop_graph render roots row: {e}")))?;
+            let row =
+                r.map_err(|e| AlephError::other(format!("loop_graph render roots row: {e}")))?;
             if let Some(n) = row {
                 out.push(n);
             }
@@ -423,11 +421,7 @@ impl LoopGraphStore {
     /// Look up labels for a set of node ids, read from raw columns.
     /// Used by the render seam to resolve `from_id` / `to_id` labels without
     /// paying the full `list_nodes` cost (and without the fail-soft skip).
-    pub fn labels_for_ids(
-        &self,
-        agent_id: &str,
-        ids: &[&str],
-    ) -> Result<Vec<(String, String)>> {
+    pub fn labels_for_ids(&self, agent_id: &str, ids: &[&str]) -> Result<Vec<(String, String)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -555,10 +549,7 @@ impl LoopGraphStore {
     // "transaction aborted", and boxing it would hide that contract behind
     // an indirection every caller must then unwrap.
     #[allow(clippy::result_large_err)]
-    pub fn gc(
-        &self,
-        agent_id: &str,
-    ) -> std::result::Result<GcReport, (GcReport, AlephError)> {
+    pub fn gc(&self, agent_id: &str) -> std::result::Result<GcReport, (GcReport, AlephError)> {
         let mut conn = self.lock();
         let ids = match node_ids_present(&conn, agent_id, "gc") {
             Ok(ids) => ids,
@@ -566,18 +557,24 @@ impl LoopGraphStore {
         };
 
         let mut stmt = match conn.prepare(
-                "SELECT agent_id, from_id, to_id, kind, note, origin, created_at_ms
+            "SELECT agent_id, from_id, to_id, kind, note, origin, created_at_ms
                  FROM graph_edges WHERE agent_id = ?1",
-            ) {
+        ) {
             Ok(s) => s,
             Err(e) => {
-                return Err((GcReport::default(), AlephError::other(format!("loop_graph gc edges prepare: {e}"))));
+                return Err((
+                    GcReport::default(),
+                    AlephError::other(format!("loop_graph gc edges prepare: {e}")),
+                ));
             }
         };
         let rows = match stmt.query_map(rusqlite::params![agent_id], row_to_edge) {
             Ok(r) => r,
             Err(e) => {
-                return Err((GcReport::default(), AlephError::other(format!("loop_graph gc edges query: {e}"))));
+                return Err((
+                    GcReport::default(),
+                    AlephError::other(format!("loop_graph gc edges query: {e}")),
+                ));
             }
         };
         let mut edges = Vec::new();
@@ -591,7 +588,10 @@ impl LoopGraphStore {
             let row = match r {
                 Ok(row) => row,
                 Err(e) => {
-                    return Err((GcReport::default(), AlephError::other(format!("loop_graph gc row: {e}"))));
+                    return Err((
+                        GcReport::default(),
+                        AlephError::other(format!("loop_graph gc row: {e}")),
+                    ));
                 }
             };
             if let Some(e) = row {
@@ -627,7 +627,10 @@ impl LoopGraphStore {
         let tx = match conn.transaction() {
             Ok(tx) => tx,
             Err(e) => {
-                return Err((report, AlephError::other(format!("loop_graph gc begin: {e}"))));
+                return Err((
+                    report,
+                    AlephError::other(format!("loop_graph gc begin: {e}")),
+                ));
             }
         };
         for e in &to_delete {
@@ -640,7 +643,10 @@ impl LoopGraphStore {
             }
         }
         if let Err(e) = tx.commit() {
-            return Err((report, AlephError::other(format!("loop_graph gc commit: {e}"))));
+            return Err((
+                report,
+                AlephError::other(format!("loop_graph gc commit: {e}")),
+            ));
         }
         Ok(report)
     }

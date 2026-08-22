@@ -132,8 +132,9 @@ async fn report_admission_denial<E: EventEmitter + Send + Sync>(
     emitter: &E,
 ) -> Result<(), ExecutionError> {
     if let Err(e) = result {
-        let (error_code, error_message) =
-            e.user_receipt(crate::gateway::i18n::Locale::from_run_metadata(&request.metadata));
+        let (error_code, error_message) = e.user_receipt(
+            crate::gateway::i18n::Locale::from_run_metadata(&request.metadata),
+        );
         let seq = emitter.next_seq();
         if let Err(emit_err) = emitter
             .emit(crate::gateway::event_emitter::StreamEvent::RunError {
@@ -179,9 +180,9 @@ fn admission_result_for(verdict: crate::spend::Verdict) -> Result<(), ExecutionE
             // broke that guarantee; recomputing a plausible-looking instant
             // would hide exactly the drift this field exists to prevent, so
             // this is `expect`, not a fallback.
-            let reset_ms = spent.period_end_ms.expect(
-                "spend::check always fills period_end_ms before returning Verdict::Denied",
-            );
+            let reset_ms = spent
+                .period_end_ms
+                .expect("spend::check always fills period_end_ms before returning Verdict::Denied");
             Err(ExecutionError::SpendExhausted { limit, reset_ms })
         }
     }

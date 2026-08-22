@@ -38,7 +38,7 @@ use std::collections::HashMap;
 
 use rusqlite::OptionalExtension;
 
-use super::{Delta, Principal, Spent, SpendLedger};
+use super::{Delta, Principal, SpendLedger, Spent};
 use crate::gateway::security::SecurityStore;
 use crate::sync_primitives::{Arc, Mutex};
 
@@ -98,7 +98,12 @@ impl SqliteSpendLedger {
 }
 
 impl SpendLedger for SqliteSpendLedger {
-    fn record(&self, principal: &Principal, period_start_ms: i64, delta: Delta) -> anyhow::Result<()> {
+    fn record(
+        &self,
+        principal: &Principal,
+        period_start_ms: i64,
+        delta: Delta,
+    ) -> anyhow::Result<()> {
         // `Delta` is exhaustively matched, no wildcard arm — see the type's
         // doc: a call site adding a fourth variant must decide how it moves
         // these three columns, not silently fall through as a no-op.
@@ -120,7 +125,14 @@ impl SpendLedger for SqliteSpendLedger {
                  unpriced_calls = unpriced_calls + excluded.unpriced_calls, \
                  partial_calls = partial_calls + excluded.partial_calls, \
                  updated_at = excluded.updated_at",
-            rusqlite::params![key, period_start_ms, delta_usd, delta_unpriced, delta_partial, updated_at],
+            rusqlite::params![
+                key,
+                period_start_ms,
+                delta_usd,
+                delta_unpriced,
+                delta_partial,
+                updated_at
+            ],
         )?;
         let (usd, unpriced_calls, partial_calls): (f64, i64, i64) = conn.query_row(
             "SELECT usd, unpriced_calls, partial_calls FROM spend_ledger \
@@ -211,12 +223,13 @@ impl SpendLedger for SqliteSpendLedger {
         // other. `SUM()` over zero matching rows is `NULL`, hence the
         // `Option` columns.
         let conn = self.store.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let (usd, unpriced_calls, partial_calls): (Option<f64>, Option<i64>, Option<i64>) = conn.query_row(
-            "SELECT SUM(usd), SUM(unpriced_calls), SUM(partial_calls) \
+        let (usd, unpriced_calls, partial_calls): (Option<f64>, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT SUM(usd), SUM(unpriced_calls), SUM(partial_calls) \
              FROM spend_ledger WHERE period_start = ?1",
-            rusqlite::params![period_start_ms],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+                rusqlite::params![period_start_ms],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
 
         Ok(Spent {
             usd: usd.unwrap_or(0.0),

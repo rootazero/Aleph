@@ -36,7 +36,10 @@ fn from_key_is_the_inverse_of_as_key_for_a_user() {
 
 #[test]
 fn from_key_recognises_the_unattributed_sentinel() {
-    assert_eq!(Principal::from_key("@unattributed"), Principal::Unattributed);
+    assert_eq!(
+        Principal::from_key("@unattributed"),
+        Principal::Unattributed
+    );
 }
 
 // ============================================================================
@@ -102,7 +105,10 @@ fn principal_from_metadata_is_unattributed_when_the_owner_key_has_no_scope_key()
 
 #[test]
 fn principal_from_metadata_is_unattributed_when_neither_key_is_present() {
-    assert_eq!(principal_from_metadata(&HashMap::new()), Principal::Unattributed);
+    assert_eq!(
+        principal_from_metadata(&HashMap::new()),
+        Principal::Unattributed
+    );
 }
 
 // ============================================================================
@@ -214,7 +220,10 @@ fn sweep_before_removes_only_rows_strictly_older_than_the_cutoff() {
     ledger.record(&alice, 3_000, Delta::Usd(3.0)).unwrap();
 
     let removed = ledger.sweep_before(2_000).unwrap();
-    assert_eq!(removed, 1, "only the 1_000 row is strictly before the cutoff");
+    assert_eq!(
+        removed, 1,
+        "only the 1_000 row is strictly before the cutoff"
+    );
 
     // The cutoff period itself and everything after it survive.
     assert_eq!(ledger.spent_for(&alice, 1_000).unwrap().usd, 0.0);
@@ -311,7 +320,12 @@ fn update_policy_into_stores_into_a_provided_handle_and_reports_true() {
 struct PanicOnAnyCall;
 
 impl SpendLedger for PanicOnAnyCall {
-    fn record(&self, _principal: &Principal, _period_start_ms: i64, _delta: Delta) -> anyhow::Result<()> {
+    fn record(
+        &self,
+        _principal: &Principal,
+        _period_start_ms: i64,
+        _delta: Delta,
+    ) -> anyhow::Result<()> {
         panic!("check_with must not call SpendLedger::record when the policy is disabled");
     }
 
@@ -339,7 +353,10 @@ impl SpendLedger for PanicOnAnyCall {
 #[test]
 fn g8_disabled_policy_never_touches_the_ledger() {
     let policy = SpendPolicy::default();
-    assert!(!policy.enabled(), "test setup: this policy must be disabled");
+    assert!(
+        !policy.enabled(),
+        "test setup: this policy must be disabled"
+    );
     let alice = Principal::User("u-alice".to_string());
 
     let verdict = check_with(&alice, 1_700_000_000_000, &policy, &PanicOnAnyCall);
@@ -349,7 +366,10 @@ fn g8_disabled_policy_never_touches_the_ledger() {
             assert_eq!(spent.usd, 0.0);
             assert_eq!(spent.unpriced_calls, 0);
             assert_eq!(spent.partial_calls, 0);
-            assert!(spent.period_end_ms.is_some(), "the window still rides a disabled verdict");
+            assert!(
+                spent.period_end_ms.is_some(),
+                "the window still rides a disabled verdict"
+            );
         }
         Verdict::Denied { .. } => panic!("a disabled policy must never deny: {verdict:?}"),
     }
@@ -374,14 +394,19 @@ fn g9_both_ceilings_blown_reports_total_not_per_user() {
     let bob = Principal::User("u-bob".to_string());
     // Alice alone blows her own $5 ceiling; alice + bob together blow the
     // $50 machine ceiling.
-    ledger.record(&alice, period_start_ms, Delta::Usd(5.0)).unwrap();
-    ledger.record(&bob, period_start_ms, Delta::Usd(45.0)).unwrap();
+    ledger
+        .record(&alice, period_start_ms, Delta::Usd(5.0))
+        .unwrap();
+    ledger
+        .record(&bob, period_start_ms, Delta::Usd(45.0))
+        .unwrap();
 
     let verdict = check_with(&alice, now_ms, &policy, &ledger);
 
     match verdict {
         Verdict::Denied {
-            limit: Limit::Total, ..
+            limit: Limit::Total,
+            ..
         } => {}
         other => panic!("expected Denied{{ limit: Limit::Total, .. }}, got {other:?}"),
     }
@@ -401,7 +426,9 @@ fn per_user_ceiling_alone_reports_per_user_with_both_numbers() {
 
     let ledger = InMemorySpendLedger::default();
     let alice = Principal::User("u-alice".to_string());
-    ledger.record(&alice, period_start_ms, Delta::Usd(7.0)).unwrap();
+    ledger
+        .record(&alice, period_start_ms, Delta::Usd(7.0))
+        .unwrap();
 
     let verdict = check_with(&alice, now_ms, &policy, &ledger);
 
@@ -412,7 +439,10 @@ fn per_user_ceiling_alone_reports_per_user_with_both_numbers() {
         } => {
             assert_eq!(spent, 7.0);
             assert_eq!(limit, 5.0);
-            assert_eq!(outer_spent.usd, 7.0, "the outer Spent must agree with Limit::PerUser's own number");
+            assert_eq!(
+                outer_spent.usd, 7.0,
+                "the outer Spent must agree with Limit::PerUser's own number"
+            );
         }
         other => panic!("expected Denied{{ limit: Limit::PerUser {{ .. }}, .. }}, got {other:?}"),
     }
@@ -431,7 +461,9 @@ fn g10_exactly_at_ceiling_denies_one_cent_under_allows() {
     let alice = Principal::User("u-alice".to_string());
 
     let at_ceiling = InMemorySpendLedger::default();
-    at_ceiling.record(&alice, period_start_ms, Delta::Usd(10.0)).unwrap();
+    at_ceiling
+        .record(&alice, period_start_ms, Delta::Usd(10.0))
+        .unwrap();
     assert!(
         matches!(
             check_with(&alice, now_ms, &policy, &at_ceiling),
@@ -444,9 +476,14 @@ fn g10_exactly_at_ceiling_denies_one_cent_under_allows() {
     );
 
     let under_ceiling = InMemorySpendLedger::default();
-    under_ceiling.record(&alice, period_start_ms, Delta::Usd(9.99)).unwrap();
+    under_ceiling
+        .record(&alice, period_start_ms, Delta::Usd(9.99))
+        .unwrap();
     assert!(
-        matches!(check_with(&alice, now_ms, &policy, &under_ceiling), Verdict::Allowed(_)),
+        matches!(
+            check_with(&alice, now_ms, &policy, &under_ceiling),
+            Verdict::Allowed(_)
+        ),
         "one cent under the ceiling must be allowed"
     );
 }
@@ -465,7 +502,9 @@ fn neither_ceiling_blown_allows_with_the_principals_own_spend() {
     let alice = Principal::User("u-alice".to_string());
 
     let ledger = InMemorySpendLedger::default();
-    ledger.record(&alice, period_start_ms, Delta::Usd(3.0)).unwrap();
+    ledger
+        .record(&alice, period_start_ms, Delta::Usd(3.0))
+        .unwrap();
 
     match check_with(&alice, now_ms, &policy, &ledger) {
         Verdict::Allowed(spent) => assert_eq!(spent.usd, 3.0),
@@ -486,7 +525,10 @@ fn the_window_rides_both_allowed_and_denied_verdicts() {
     let now_ms = 1_700_000_000_000i64;
     let expected_start = period::period_start_ms(now_ms, policy.period);
     let expected_end = period::period_end_ms(now_ms, policy.period);
-    assert_ne!(expected_start, expected_end, "test setup: a real period is never zero-length");
+    assert_ne!(
+        expected_start, expected_end,
+        "test setup: a real period is never zero-length"
+    );
     let alice = Principal::User("u-alice".to_string());
 
     let allowed_ledger = InMemorySpendLedger::default();
@@ -499,7 +541,9 @@ fn the_window_rides_both_allowed_and_denied_verdicts() {
     }
 
     let denied_ledger = InMemorySpendLedger::default();
-    denied_ledger.record(&alice, expected_start, Delta::Usd(5.0)).unwrap();
+    denied_ledger
+        .record(&alice, expected_start, Delta::Usd(5.0))
+        .unwrap();
     match check_with(&alice, now_ms, &policy, &denied_ledger) {
         Verdict::Denied { spent, .. } => {
             assert_eq!(spent.period_start_ms, expected_start);
@@ -527,8 +571,12 @@ fn denied_total_carries_the_principals_own_spend_not_the_machine_total() {
     let ledger = InMemorySpendLedger::default();
     let alice = Principal::User("u-alice".to_string());
     let bob = Principal::User("u-bob".to_string());
-    ledger.record(&alice, period_start_ms, Delta::Usd(5.0)).unwrap();
-    ledger.record(&bob, period_start_ms, Delta::Usd(50.0)).unwrap();
+    ledger
+        .record(&alice, period_start_ms, Delta::Usd(5.0))
+        .unwrap();
+    ledger
+        .record(&bob, period_start_ms, Delta::Usd(50.0))
+        .unwrap();
     // alice alone hasn't blown any per-user ceiling (none is configured);
     // alice + bob together blow the $50 machine ceiling.
     assert_eq!(
@@ -561,7 +609,12 @@ fn denied_total_carries_the_principals_own_spend_not_the_machine_total() {
 struct ErroringLedger;
 
 impl SpendLedger for ErroringLedger {
-    fn record(&self, _principal: &Principal, _period_start_ms: i64, _delta: Delta) -> anyhow::Result<()> {
+    fn record(
+        &self,
+        _principal: &Principal,
+        _period_start_ms: i64,
+        _delta: Delta,
+    ) -> anyhow::Result<()> {
         anyhow::bail!("ErroringLedger: record is unavailable")
     }
 
@@ -605,13 +658,20 @@ impl tracing::field::Visit for MessageVisitor {
 }
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedErrorEvents {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         if *event.metadata().level() != tracing::Level::ERROR {
             return;
         }
         let mut visitor = MessageVisitor(String::new());
         event.record(&mut visitor);
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(visitor.0);
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(visitor.0);
     }
 }
 
@@ -649,7 +709,10 @@ fn ledger_read_error_fails_open_and_is_logged_not_denied() {
 
     match verdict {
         Verdict::Allowed(spent) => {
-            assert_eq!(spent.usd, 0.0, "a failed read must be treated as zero spend");
+            assert_eq!(
+                spent.usd, 0.0,
+                "a failed read must be treated as zero spend"
+            );
         }
         other => panic!("a ledger read error must fail open (Allowed), not deny: {other:?}"),
     }

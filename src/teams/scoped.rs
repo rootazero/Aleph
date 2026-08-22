@@ -62,11 +62,9 @@ use super::types::{NewTeam, NewTeamMember, Team, TeamMember, TeamSummary};
 pub fn team_visible(owner_user_id: Option<&str>, scope_id: Option<&str>) -> bool {
     match crate::gateway::visibility::ambient_actor() {
         None => true,
-        Some(actor) => crate::gateway::visibility::owner_and_scope_visible_to(
-            owner_user_id,
-            scope_id,
-            &actor,
-        ),
+        Some(actor) => {
+            crate::gateway::visibility::owner_and_scope_visible_to(owner_user_id, scope_id, &actor)
+        }
     }
 }
 
@@ -314,9 +312,8 @@ mod tests {
         let _guard = crate::projects::roster::TEST_GUARD
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let projects = crate::projects::ProjectStore::new(
-            rusqlite::Connection::open_in_memory().unwrap(),
-        );
+        let projects =
+            crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
         projects.create_schema().unwrap();
         let room = projects.create("room", Some("u-alice"), None).unwrap();
         projects.add_member(&room.id, "u-bob").unwrap();

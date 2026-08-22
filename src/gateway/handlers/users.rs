@@ -746,8 +746,8 @@ async fn freeze_owned_background_work(user_id: &str) -> FreezeReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::gateway::security::store::DeviceUpsertData;
+    use serde_json::json;
 
     /// `SecurityStore::in_memory()` runs migrations, including owner
     /// bootstrap, so a fresh store already contains the owner user (mirrors

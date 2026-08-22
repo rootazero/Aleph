@@ -125,10 +125,7 @@ impl AlephTool for RecallEventsTool {
         // hear a confident "no match" when the truth was "the database
         // failed to answer". Return a tool error so the caller can
         // retry or surface a real failure.
-        let raw_hits = match store
-            .search_events(&session_id, &args.query, limit)
-            .await
-        {
+        let raw_hits = match store.search_events(&session_id, &args.query, limit).await {
             Ok(h) => h,
             Err(e) => {
                 let note = format!(

@@ -244,7 +244,10 @@ mod tests {
         );
         assert!(!stripped.contains("ghost_tool"), "comment line survived");
         assert!(!stripped.contains("test_tool"), "test module survived");
-        assert!(stripped.contains("real_tool"), "production line was dropped");
+        assert!(
+            stripped.contains("real_tool"),
+            "production line was dropped"
+        );
     }
 
     /// CRLF checkouts must strip the same way.

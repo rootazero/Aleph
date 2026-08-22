@@ -640,7 +640,9 @@ impl AgentEnvStore {
         for column in KNOWN_COLUMNS {
             // Defence in depth: re-check the literal matches [A-Za-z0-9_]+.
             debug_assert!(
-                column.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                column
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
                 "KNOWN_COLUMNS contains a non-identifier: {column}"
             );
             let _ = conn.execute(&format!("ALTER TABLE agent_envs DROP COLUMN {column}"), []);

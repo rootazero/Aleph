@@ -519,7 +519,10 @@ mod tests {
         let kernel = kernel_with_secrets().with_secret_resolver(super::super::shared_resolver(
             super::super::InMemorySecretResolver::new(vec![
                 ("slack_bot_token".to_string(), "xoxb-ok".to_string()),
-                ("aws_key".to_string(), "AKIA-should-never-escape".to_string()),
+                (
+                    "aws_key".to_string(),
+                    "AKIA-should-never-escape".to_string(),
+                ),
             ]),
         ));
 

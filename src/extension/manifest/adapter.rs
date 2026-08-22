@@ -371,10 +371,7 @@ mod tests {
         // back-slash path that the body can never contain. Match the
         // exact spelling by composing the assertion string the same way.
         assert!(
-            body.contains(&format!(
-                "{}/scripts/x.py",
-                dir.path().to_string_lossy()
-            )),
+            body.contains(&format!("{}/scripts/x.py", dir.path().to_string_lossy())),
             "expected the plugin root to be substituted: {body}"
         );
     }

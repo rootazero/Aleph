@@ -357,10 +357,7 @@ impl McpManagerHandle {
     ///
     /// This callback will be invoked when any MCP server sends a
     /// sampling/createMessage request to use the host's LLM.
-    pub async fn set_sampling_callback<F, Fut>(
-        &self,
-        callback: F,
-    ) -> Result<()>
+    pub async fn set_sampling_callback<F, Fut>(&self, callback: F) -> Result<()>
     where
         F: Fn(crate::mcp::jsonrpc::mcp::SamplingRequest) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<

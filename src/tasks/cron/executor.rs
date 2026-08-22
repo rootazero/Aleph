@@ -188,7 +188,12 @@ async fn execute_cron_job(
     if let Some(reason) = walled_owner_reason(users_store.as_deref(), &snapshot) {
         warn!(job_id = %snapshot.id, "cron: walled owner at fire time, disabling job");
         if let Some(svc) = crate::tasks::cron::global() {
-            if let Err(e) = svc.lock().await.disable_walled_owner_job(&snapshot.id).await {
+            if let Err(e) = svc
+                .lock()
+                .await
+                .disable_walled_owner_job(&snapshot.id)
+                .await
+            {
                 warn!(job_id = %snapshot.id, error = %e, "cron: failed to disable walled-owner job");
             }
         }

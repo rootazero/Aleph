@@ -133,18 +133,15 @@ impl GenerationProvider for OpenAiCompatProvider {
                 info!(provider = %self.name, task_id = %submit.task_id, "Async task submitted, starting poll");
 
                 // Validate task_id to prevent URL injection from untrusted API responses.
-// Use an allow-list of safe characters plus a length cap: blocking `..` etc.
-// misses CR/LF/NUL/control chars, unicode whitespace, double-quote, and
-// over-long inputs that can split header lines or DoS the URL builder.
+                // Use an allow-list of safe characters plus a length cap: blocking `..` etc.
+                // misses CR/LF/NUL/control chars, unicode whitespace, double-quote, and
+                // over-long inputs that can split header lines or DoS the URL builder.
                 const MAX_TASK_ID_LEN: usize = 256;
                 let task_id = &submit.task_id;
                 let bad_char = task_id
                     .chars()
                     .find(|c| !c.is_ascii_alphanumeric() && *c != '-' && *c != '_' && *c != '.');
-                if task_id.is_empty()
-                    || task_id.len() > MAX_TASK_ID_LEN
-                    || bad_char.is_some()
-                {
+                if task_id.is_empty() || task_id.len() > MAX_TASK_ID_LEN || bad_char.is_some() {
                     return Err(GenerationError::serialization(format!(
                         "Invalid task_id format: {task_id}"
                     )));

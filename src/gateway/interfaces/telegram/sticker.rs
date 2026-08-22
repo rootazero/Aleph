@@ -26,7 +26,9 @@ impl StickerPipeline {
 
     pub async fn cache_description(&self, file_unique_id: &str, description: &str) {
         if let Some(ref db) = self.db {
-            let _ = db.store_sticker_description(file_unique_id, description).await;
+            let _ = db
+                .store_sticker_description(file_unique_id, description)
+                .await;
         }
     }
 }
@@ -43,7 +45,9 @@ mod tests {
         let file_id = "unique_sticker_123";
         assert!(pipeline.resolve_description(file_id, "").await.is_none());
 
-        pipeline.cache_description(file_id, "A smiling cat sticker").await;
+        pipeline
+            .cache_description(file_id, "A smiling cat sticker")
+            .await;
         let desc = pipeline.resolve_description(file_id, "").await;
         assert_eq!(desc, Some("A smiling cat sticker".to_string()));
     }

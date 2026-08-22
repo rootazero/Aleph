@@ -6,11 +6,11 @@ pub mod error;
 pub mod manager;
 pub mod network_policy;
 pub mod playwright_cli;
-pub mod playwright_launch;
-mod secret_guard;
 pub(crate) mod playwright_cli_backend;
+pub mod playwright_launch;
 pub(crate) mod post_nav;
 pub mod profile;
+mod secret_guard;
 pub mod tab_registry;
 #[cfg(test)]
 pub(crate) mod testkit;

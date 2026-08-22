@@ -41,7 +41,10 @@ impl std::fmt::Debug for RegisteredAgent {
             .field("base_url", &self.base_url)
             .field("last_seen", &self.last_seen)
             .field("health", &self.health)
-            .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -56,7 +59,14 @@ impl RegisteredAgent {
         health: AgentHealth,
         auth_token: Option<String>,
     ) -> Self {
-        Self { card, trust_level, base_url, last_seen, health, auth_token }
+        Self {
+            card,
+            trust_level,
+            base_url,
+            last_seen,
+            health,
+            auth_token,
+        }
     }
 
     /// Read-only accessor for the auth token. Only callers that actually

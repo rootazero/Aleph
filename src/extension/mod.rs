@@ -122,7 +122,6 @@ pub struct ExtensionConfig {
     /// undocumented production knob with no consumers (R10).
     #[cfg(test)]
     pub extra_plugin_parents: Vec<PathBuf>,
-
     // NOTE: there is deliberately no `owner_trust` field here.
     //
     // One existed, alongside an `OwnerTrustPolicyConfig` DTO, and had zero

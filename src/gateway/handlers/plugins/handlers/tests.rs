@@ -1,7 +1,7 @@
 use crate::extension::ExtensionManager;
 use crate::gateway::handlers::plugins::handlers::{
-    handle_call_tool, handle_execute_command, handle_load, handle_unload,
-    init_extension_manager, is_extension_manager_initialized,
+    handle_call_tool, handle_execute_command, handle_load, handle_unload, init_extension_manager,
+    is_extension_manager_initialized,
 };
 use crate::gateway::handlers::plugins::types::*;
 use crate::gateway::protocol::{JsonRpcRequest, INTERNAL_ERROR, INVALID_PARAMS};
@@ -372,12 +372,14 @@ fn a_marketplace_row_reasons_exactly_when_it_is_not_installable() {
     let reason = row
         .unavailable_reason
         .expect("a row the install call refuses must carry the refusal");
-    assert!(reason.contains("npm"), "the reason names the form: {reason}");
+    assert!(
+        reason.contains("npm"),
+        "the reason names the form: {reason}"
+    );
     // Absent optional fields render as empty strings, not as the word "None".
     assert_eq!(row.description, "");
     assert_eq!(row.version, "");
 }
-
 
 // ============================================================================
 // Marketplace registration rows

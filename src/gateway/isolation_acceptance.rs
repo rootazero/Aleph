@@ -800,10 +800,8 @@ async fn two_members_share_one_room_memory_and_nobody_elses() {
         .expect("memories array")
         .clone();
     assert!(
-        rows.iter().any(|m| m["content"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("friday")),
+        rows.iter()
+            .any(|m| m["content"].as_str().unwrap_or_default().contains("friday")),
         "bob must recall what alice taught the agent in their shared room: {rows:?}"
     );
 

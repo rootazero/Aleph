@@ -42,8 +42,7 @@ pub mod inner {
     /// Returns `(memory_dir_guard, handler)` where `memory_dir_guard`
     /// must outlive every operation issued on `handler` (the indexer
     /// points at it via `memory_dir`).
-    pub async fn make_handler_with_indexer()
-    -> (tempfile::TempDir, MemoryCommandHandler) {
+    pub async fn make_handler_with_indexer() -> (tempfile::TempDir, MemoryCommandHandler) {
         let (_scratch, db_path) = crate::utils::scratch::scratch_root();
         let memory_dir = tempfile::TempDir::new().expect("tempdir");
         let db = Arc::new(SqliteMemoryBackend::new(&db_path).expect("memory backend"));
@@ -52,8 +51,7 @@ pub mod inner {
             Arc::clone(&db),
         ));
         let state_db = Arc::new(
-            crate::resilience::database::StateDatabase::in_memory()
-                .expect("in-memory state db"),
+            crate::resilience::database::StateDatabase::in_memory().expect("in-memory state db"),
         );
         (
             memory_dir,

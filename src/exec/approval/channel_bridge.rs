@@ -269,8 +269,10 @@ impl ChannelApprovalBridge {
             // waits without end.
             return match timeout(
                 Duration::from_secs(DELIVERY_TIMEOUT_SECS),
-                self.registry
-                    .send(channel_id, OutboundMessage::text(conversation_id.as_str(), text)),
+                self.registry.send(
+                    channel_id,
+                    OutboundMessage::text(conversation_id.as_str(), text),
+                ),
             )
             .await
             {

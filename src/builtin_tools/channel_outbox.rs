@@ -407,8 +407,7 @@ mod tests {
     /// `redriven.is_none()` assertion, and the executor path itself would
     /// have no test.
     #[tokio::test]
-    async fn confirmed_redrive_against_empty_registry_runs_the_executor_and_reports_no_store(
-    ) {
+    async fn confirmed_redrive_against_empty_registry_runs_the_executor_and_reports_no_store() {
         let tool = ChannelOutboxTool::new(Arc::new(ChannelRegistry::new()));
         let out = tool
             .call(ChannelOutboxArgs {

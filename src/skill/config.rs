@@ -207,9 +207,17 @@ mod tests {
 
         let emitted: Vec<&str> = text
             .lines()
-            .filter_map(|l| l.trim().strip_prefix("[entries.").and_then(|r| r.strip_suffix(']')))
+            .filter_map(|l| {
+                l.trim()
+                    .strip_prefix("[entries.")
+                    .and_then(|r| r.strip_suffix(']'))
+            })
             .collect();
-        assert_eq!(emitted.len(), 10, "expected ten entry tables, got {emitted:?}");
+        assert_eq!(
+            emitted.len(),
+            10,
+            "expected ten entry tables, got {emitted:?}"
+        );
 
         let mut sorted = emitted.clone();
         sorted.sort_unstable();

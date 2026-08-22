@@ -52,7 +52,10 @@ fn record_upsert_accumulates_rather_than_replaces() {
     ledger.record(&alice, 1_000, Delta::Unpriced).unwrap();
 
     let spent = ledger.spent_for(&alice, 1_000).unwrap();
-    assert_eq!(spent.usd, 3.5, "usd accumulates, it is not replaced by the last write");
+    assert_eq!(
+        spent.usd, 3.5,
+        "usd accumulates, it is not replaced by the last write"
+    );
     assert_eq!(spent.unpriced_calls, 1);
     assert_eq!(spent.partial_calls, 1);
 }
@@ -78,7 +81,10 @@ fn unpriced_delta_increments_the_counter_and_leaves_usd_at_exactly_zero() {
     ledger.record(&alice, 1_000, Delta::Unpriced).unwrap();
 
     let spent = ledger.spent_for(&alice, 1_000).unwrap();
-    assert_eq!(spent.usd, 0.0, "an unpriced call must never move a dollar figure");
+    assert_eq!(
+        spent.usd, 0.0,
+        "an unpriced call must never move a dollar figure"
+    );
     assert_eq!(spent.unpriced_calls, 2);
     assert_eq!(spent.partial_calls, 0);
 }
@@ -126,7 +132,10 @@ fn sweep_before_leaves_the_current_period_alone() {
     ledger.record(&alice, 3_000, Delta::Usd(3.0)).unwrap();
 
     let removed = ledger.sweep_before(2_000).unwrap();
-    assert_eq!(removed, 1, "only the 1_000 row is strictly before the cutoff");
+    assert_eq!(
+        removed, 1,
+        "only the 1_000 row is strictly before the cutoff"
+    );
 
     assert_eq!(ledger.spent_for(&alice, 1_000).unwrap().usd, 0.0);
     assert_eq!(

@@ -184,7 +184,12 @@ pub enum Verdict {
 /// backend (`spend::sqlite`, wired at boot) stand in for the in-process
 /// default without threading a handle through every construction site.
 pub trait SpendLedger: Send + Sync {
-    fn record(&self, principal: &Principal, period_start_ms: i64, delta: Delta) -> anyhow::Result<()>;
+    fn record(
+        &self,
+        principal: &Principal,
+        period_start_ms: i64,
+        delta: Delta,
+    ) -> anyhow::Result<()>;
     fn spent_for(&self, principal: &Principal, period_start_ms: i64) -> anyhow::Result<Spent>;
     fn total_for(&self, period_start_ms: i64) -> anyhow::Result<Spent>;
     fn sweep_before(&self, period_start_ms: i64) -> anyhow::Result<usize>;
@@ -230,7 +235,12 @@ pub struct InMemorySpendLedger {
 }
 
 impl SpendLedger for InMemorySpendLedger {
-    fn record(&self, principal: &Principal, period_start_ms: i64, delta: Delta) -> anyhow::Result<()> {
+    fn record(
+        &self,
+        principal: &Principal,
+        period_start_ms: i64,
+        delta: Delta,
+    ) -> anyhow::Result<()> {
         let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
         let row = rows
             .entry((principal.as_key().to_string(), period_start_ms))
@@ -354,8 +364,9 @@ pub fn global_ledger() -> Arc<dyn SpendLedger> {
         .clone()
 }
 
-static GLOBAL_POLICY: std::sync::OnceLock<arc_swap::ArcSwap<crate::config::types::policies::SpendPolicy>> =
-    std::sync::OnceLock::new();
+static GLOBAL_POLICY: std::sync::OnceLock<
+    arc_swap::ArcSwap<crate::config::types::policies::SpendPolicy>,
+> = std::sync::OnceLock::new();
 
 /// Install the process-wide policy handle at boot, seeded from
 /// `[policies.spend]`. Idempotent, like [`install_ledger`]: a second call is
@@ -406,11 +417,10 @@ fn update_policy_into(
 /// which is the correct behavior for unit tests, pre-boot code, and embedded
 /// uses that never touch `[policies.spend]`.
 pub fn current_policy() -> crate::config::types::policies::SpendPolicy {
-    GLOBAL_POLICY
-        .get()
-        .map_or_else(crate::config::types::policies::SpendPolicy::default, |cell| {
-            (*cell.load_full()).clone()
-        })
+    GLOBAL_POLICY.get().map_or_else(
+        crate::config::types::policies::SpendPolicy::default,
+        |cell| (*cell.load_full()).clone(),
+    )
 }
 
 // ============================================================================
@@ -534,16 +544,21 @@ pub(crate) fn check_with(
     // enabled. Never the machine total: see `Limit::Total`'s doc on why the
     // machine total must never ride alongside it, in this field or any
     // other the caller can reach.
-    let spent = resolve_read(ledger.spent_for(principal, period_start_ms), period_start_ms, period_end_ms, |error| {
-        tracing::error!(
-            %error,
-            principal = principal.as_key(),
-            period_start_ms,
-            "spend::check: SpendLedger::spent_for failed; treating this principal's spend as \
-             zero for this check rather than turning a ledger read failure into a denial for \
-             every request",
-        );
-    });
+    let spent = resolve_read(
+        ledger.spent_for(principal, period_start_ms),
+        period_start_ms,
+        period_end_ms,
+        |error| {
+            tracing::error!(
+                %error,
+                principal = principal.as_key(),
+                period_start_ms,
+                "spend::check: SpendLedger::spent_for failed; treating this principal's spend as \
+                 zero for this check rather than turning a ledger read failure into a denial for \
+                 every request",
+            );
+        },
+    );
 
     // Total first: it is the ceiling `principal` cannot move by asking
     // someone else to raise their own line, so it is the one named when
@@ -551,15 +566,20 @@ pub(crate) fn check_with(
     // an install with `total_usd` unset must not pay for a query whose
     // answer can never matter.
     if let Some(total_limit) = policy.total_usd {
-        let total = resolve_read(ledger.total_for(period_start_ms), period_start_ms, period_end_ms, |error| {
-            tracing::error!(
-                %error,
-                period_start_ms,
-                "spend::check: SpendLedger::total_for failed; treating the machine total as \
-                 zero for this check rather than turning a ledger read failure into a denial \
-                 for every request",
-            );
-        });
+        let total = resolve_read(
+            ledger.total_for(period_start_ms),
+            period_start_ms,
+            period_end_ms,
+            |error| {
+                tracing::error!(
+                    %error,
+                    period_start_ms,
+                    "spend::check: SpendLedger::total_for failed; treating the machine total as \
+                     zero for this check rather than turning a ledger read failure into a denial \
+                     for every request",
+                );
+            },
+        );
         if ceiling_blown(total.usd, total_limit) {
             return Verdict::Denied {
                 limit: Limit::Total,

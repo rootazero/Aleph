@@ -205,7 +205,7 @@ impl ProfileManager {
     /// manager whose reaper runs" is precisely "the manager the daemon serves
     /// from", and a `ProfileManager` built ad hoc (tests, CLI) never calls this
     /// and so never claims the handle.
-pub fn spawn_idle_reaper(self: &Arc<Self>, interval_secs: u64) {
+    pub fn spawn_idle_reaper(self: &Arc<Self>, interval_secs: u64) {
         if self.idle_reaper_started.swap(true, Ordering::AcqRel) {
             return;
         }

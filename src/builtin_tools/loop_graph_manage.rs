@@ -749,11 +749,13 @@ impl AlephTool for LoopGraphTool {
                         // but the report describes the deletes that were
                         // attempted so the next pass can retry.
                         if !report.removed.is_empty() || !report.retained_acl.is_empty() {
-                            crate::loop_graph::publish(crate::loop_graph::TopologyEvent::GcCompleted {
-                                agent_id: agent_id.clone(),
-                                removed: 0, // failed: nothing was committed
-                                retained_acl: report.retained_acl.len(),
-                            });
+                            crate::loop_graph::publish(
+                                crate::loop_graph::TopologyEvent::GcCompleted {
+                                    agent_id: agent_id.clone(),
+                                    removed: 0, // failed: nothing was committed
+                                    retained_acl: report.retained_acl.len(),
+                                },
+                            );
                         }
                         return Err(err);
                     }

@@ -739,9 +739,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // store handle to capture: everything it reads
         // (`spend::current_policy`, `spend::global_ledger`) is a
         // process-wide handle already — see `handlers::spend`'s module doc.
-        server
-            .handlers_mut()
-            .register("spend.query", alephcore::gateway::handlers::spend::handle_query);
+        server.handlers_mut().register(
+            "spend.query",
+            alephcore::gateway::handlers::spend::handle_query,
+        );
     }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
@@ -1700,16 +1701,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // `MemoryCommandHandler::spawn_reconciler_daemon`. Construct one
         // here so the admin API can query it; the reconciler daemon itself
         // is started by config ([memory.reconciler] enabled = true).
-        let memory_handler = agent_result
-            .state_db
-            .as_ref()
-            .map(|state_db| {
-                std::sync::Arc::new(
-                    alephcore::memory::events::handler::MemoryCommandHandler::new(
-                        std::sync::Arc::clone(state_db),
-                    ),
-                )
-            });
+        let memory_handler = agent_result.state_db.as_ref().map(|state_db| {
+            std::sync::Arc::new(
+                alephcore::memory::events::handler::MemoryCommandHandler::new(
+                    std::sync::Arc::clone(state_db),
+                ),
+            )
+        });
 
         // Start the background reconciler daemon if config opts in.
         // The JoinHandle is stored on the server so a graceful shutdown

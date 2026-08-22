@@ -88,7 +88,11 @@ fn handle_query_with(
         Some(v) => match serde_json::from_value(v) {
             Ok(p) => p,
             Err(e) => {
-                return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("invalid params: {e}"))
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("invalid params: {e}"),
+                )
             }
         },
     };
@@ -239,20 +243,31 @@ mod tests {
         let alice = Principal::User("u-alice".to_string());
         let now_ms = 1_700_000_000_000;
         let period_start_ms = crate::spend::period::period_start_ms(now_ms, SpendPeriod::Month);
-        ledger.record(&alice, period_start_ms, Delta::Usd(4.5)).unwrap();
+        ledger
+            .record(&alice, period_start_ms, Delta::Usd(4.5))
+            .unwrap();
 
         let resp = handle_query_with(req(None), now_ms, &disabled_policy(), &ledger);
         assert!(resp.is_success(), "{resp:?}");
         let result: SpendQueryResult = serde_json::from_value(resp.result.unwrap()).unwrap();
         assert!(!result.configured, "no ceiling is set on either axis");
-        assert_eq!(result.rows.len(), 1, "a disabled ceiling must not hide recorded spend");
+        assert_eq!(
+            result.rows.len(),
+            1,
+            "a disabled ceiling must not hide recorded spend"
+        );
         assert_eq!(result.rows[0].usd, 4.5);
     }
 
     #[test]
     fn a_configured_box_answers_configured_true() {
         let ledger = InMemorySpendLedger::default();
-        let resp = handle_query_with(req(None), 1_700_000_000_000, &enabled_policy(SpendPeriod::Month), &ledger);
+        let resp = handle_query_with(
+            req(None),
+            1_700_000_000_000,
+            &enabled_policy(SpendPeriod::Month),
+            &ledger,
+        );
         assert!(resp.is_success(), "{resp:?}");
         let result: SpendQueryResult = serde_json::from_value(resp.result.unwrap()).unwrap();
         assert!(result.configured);
@@ -291,9 +306,15 @@ mod tests {
         let alice = Principal::User("u-alice".to_string());
         let now_ms = 1_700_000_000_000;
         let period_start_ms = crate::spend::period::period_start_ms(now_ms, SpendPeriod::Month);
-        ledger.record(&alice, period_start_ms, Delta::Partial(2.0)).unwrap();
-        ledger.record(&alice, period_start_ms, Delta::Unpriced).unwrap();
-        ledger.record(&alice, period_start_ms, Delta::Unpriced).unwrap();
+        ledger
+            .record(&alice, period_start_ms, Delta::Partial(2.0))
+            .unwrap();
+        ledger
+            .record(&alice, period_start_ms, Delta::Unpriced)
+            .unwrap();
+        ledger
+            .record(&alice, period_start_ms, Delta::Unpriced)
+            .unwrap();
 
         let resp = handle_query_with(req(None), now_ms, &disabled_policy(), &ledger);
         let result: SpendQueryResult = serde_json::from_value(resp.result.unwrap()).unwrap();
@@ -317,9 +338,15 @@ mod tests {
         let alice = Principal::User("u-alice".to_string());
         let bob = Principal::User("u-bob".to_string());
         let carol = Principal::User("u-carol".to_string());
-        ledger.record(&carol, period_start_ms, Delta::Usd(5.0)).unwrap();
-        ledger.record(&alice, period_start_ms, Delta::Usd(5.0)).unwrap();
-        ledger.record(&bob, period_start_ms, Delta::Usd(9.0)).unwrap();
+        ledger
+            .record(&carol, period_start_ms, Delta::Usd(5.0))
+            .unwrap();
+        ledger
+            .record(&alice, period_start_ms, Delta::Usd(5.0))
+            .unwrap();
+        ledger
+            .record(&bob, period_start_ms, Delta::Usd(9.0))
+            .unwrap();
 
         let resp = handle_query_with(req(None), now_ms, &disabled_policy(), &ledger);
         let result: SpendQueryResult = serde_json::from_value(resp.result.unwrap()).unwrap();
@@ -347,8 +374,14 @@ mod tests {
         for period in [SpendPeriod::Day, SpendPeriod::Month] {
             let resp = handle_query_with(req(None), now_ms, &enabled_policy(period), &ledger);
             let result: SpendQueryResult = serde_json::from_value(resp.result.unwrap()).unwrap();
-            assert!(result.period_start_ms <= now_ms, "{period:?}: start must not be after now");
-            assert!(result.period_end_ms > now_ms, "{period:?}: end must be after now");
+            assert!(
+                result.period_start_ms <= now_ms,
+                "{period:?}: start must not be after now"
+            );
+            assert!(
+                result.period_end_ms > now_ms,
+                "{period:?}: end must be after now"
+            );
         }
     }
 
@@ -361,10 +394,22 @@ mod tests {
         let ledger = InMemorySpendLedger::default();
         let now_ms = 1_700_000_000_000;
 
-        let day_resp = handle_query_with(req(None), now_ms, &enabled_policy(SpendPeriod::Day), &ledger);
-        let day_result: SpendQueryResult = serde_json::from_value(day_resp.result.unwrap()).unwrap();
-        let month_resp = handle_query_with(req(None), now_ms, &enabled_policy(SpendPeriod::Month), &ledger);
-        let month_result: SpendQueryResult = serde_json::from_value(month_resp.result.unwrap()).unwrap();
+        let day_resp = handle_query_with(
+            req(None),
+            now_ms,
+            &enabled_policy(SpendPeriod::Day),
+            &ledger,
+        );
+        let day_result: SpendQueryResult =
+            serde_json::from_value(day_resp.result.unwrap()).unwrap();
+        let month_resp = handle_query_with(
+            req(None),
+            now_ms,
+            &enabled_policy(SpendPeriod::Month),
+            &ledger,
+        );
+        let month_result: SpendQueryResult =
+            serde_json::from_value(month_resp.result.unwrap()).unwrap();
 
         assert_eq!(
             day_result.period_start_ms,
@@ -410,8 +455,16 @@ mod tests {
     /// report.
     #[test]
     fn a_ledger_read_failure_is_an_internal_error_not_an_empty_report() {
-        let resp = handle_query_with(req(None), 1_700_000_000_000, &disabled_policy(), &ErroringLedger);
-        assert!(resp.error.is_some(), "a broken ledger read must not report success");
+        let resp = handle_query_with(
+            req(None),
+            1_700_000_000_000,
+            &disabled_policy(),
+            &ErroringLedger,
+        );
+        assert!(
+            resp.error.is_some(),
+            "a broken ledger read must not report success"
+        );
         assert!(
             resp.result.is_none(),
             "an errored response must not also carry a result — that would read as \
@@ -438,9 +491,16 @@ mod tests {
         let period_start_ms = crate::spend::period::period_start_ms(now_ms, SpendPeriod::Month);
         // At least one row, so the `SpendRow` shape is exercised in the same
         // pass rather than needing a second round trip.
-        ledger.record(&alice, period_start_ms, Delta::Usd(1.0)).unwrap();
+        ledger
+            .record(&alice, period_start_ms, Delta::Usd(1.0))
+            .unwrap();
 
-        let resp = handle_query_with(req(None), now_ms, &enabled_policy(SpendPeriod::Month), &ledger);
+        let resp = handle_query_with(
+            req(None),
+            now_ms,
+            &enabled_policy(SpendPeriod::Month),
+            &ledger,
+        );
         assert!(resp.is_success(), "{resp:?}");
         let value = resp.result.unwrap();
 
@@ -456,8 +516,15 @@ mod tests {
             "the real response must declare exactly the contract's keys — no fewer, no more"
         );
 
-        let rows = value.get("rows").and_then(|r| r.as_array()).expect("rows array");
-        assert_eq!(rows.len(), 1, "the row this test just recorded must come back");
+        let rows = value
+            .get("rows")
+            .and_then(|r| r.as_array())
+            .expect("rows array");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the row this test just recorded must come back"
+        );
         let expected_row_keys = keys_of(&SpendRow {
             principal: String::new(),
             usd: 0.0,

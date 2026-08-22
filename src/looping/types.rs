@@ -373,7 +373,9 @@ impl LoopState {
                 // produced a number — `try_claim_tick` therefore never enforced
                 // the budget. Surface that explicitly so the operator does not
                 // see "token budget: 50000" and conclude enforcement is on.
-                parts.push(format!("token budget: {budget} (declared, unenforced: counter unavailable)"));
+                parts.push(format!(
+                    "token budget: {budget} (declared, unenforced: counter unavailable)"
+                ));
             }
         }
         if matches!(self.cadence, Cadence::ModelPaced { .. }) {
@@ -714,8 +716,12 @@ mod tests {
 
         // Once the baseline is captured, the unenforced hint disappears.
         let captured = l.with_baseline(1_000);
-        assert!(captured.human_summary(1_000).contains("token budget: 50000"));
-        assert!(captured.human_summary(1_000).contains("token budget: 50000"));
+        assert!(captured
+            .human_summary(1_000)
+            .contains("token budget: 50000"));
+        assert!(captured
+            .human_summary(1_000)
+            .contains("token budget: 50000"));
         assert!(!captured.stable_summary().contains("unenforced"));
     }
 

@@ -177,7 +177,10 @@ impl StateDatabase {
     }
 
     /// Get all turns for a group chat session, ordered by round and sequence.
-    pub async fn get_group_chat_turns(&self, session_id: &str) -> Result<Vec<GroupChatTurn>, AlephError> {
+    pub async fn get_group_chat_turns(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<GroupChatTurn>, AlephError> {
         let session_id = session_id.to_string();
         self.with_conn(move |conn| {
             let mut stmt = conn
@@ -208,7 +211,9 @@ impl StateDatabase {
                 })
                 .map_err(|e| AlephError::config(format!("Failed to query group chat turns: {e}")))?
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AlephError::config(format!("Failed to collect group chat turns: {e}")))?;
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to collect group chat turns: {e}"))
+                })?;
 
             Ok(turns)
         })
@@ -216,7 +221,9 @@ impl StateDatabase {
     }
 
     /// List all active group chat sessions.
-    pub async fn list_active_group_chats(&self) -> Result<Vec<GroupChatSessionSummary>, AlephError> {
+    pub async fn list_active_group_chats(
+        &self,
+    ) -> Result<Vec<GroupChatSessionSummary>, AlephError> {
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
@@ -240,7 +247,9 @@ impl StateDatabase {
                         created_at: row.get::<_, i64>(3)?,
                     })
                 })
-                .map_err(|e| AlephError::config(format!("Failed to query active group chats: {e}")))?
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to query active group chats: {e}"))
+                })?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| {
                     AlephError::config(format!("Failed to collect active group chats: {e}"))

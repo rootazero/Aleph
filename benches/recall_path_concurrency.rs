@@ -104,18 +104,15 @@ async fn main() {
     let seq_find = bench_find_by_filename_seq(Arc::clone(&store), 100).await;
     println!(
         "  search_notes_fts     : {} ms total ({} us/query)",
-        seq_search.0,
-        seq_search.1
+        seq_search.0, seq_search.1
     );
     println!(
         "  list_notes           : {} ms total ({} us/query)",
-        seq_list.0,
-        seq_list.1
+        seq_list.0, seq_list.1
     );
     println!(
         "  find_by_filename     : {} ms total ({} us/query)",
-        seq_find.0,
-        seq_find.1
+        seq_find.0, seq_find.1
     );
     println!();
 
@@ -191,10 +188,7 @@ async fn main() {
     println!("=== done ===");
 }
 
-async fn bench_search_fts_seq(
-    store: Arc<SqliteMemoryBackend>,
-    queries: usize,
-) -> (u128, u128) {
+async fn bench_search_fts_seq(store: Arc<SqliteMemoryBackend>, queries: usize) -> (u128, u128) {
     let start = Instant::now();
     for i in 0..queries {
         let q = topic_for(i);
@@ -209,16 +203,10 @@ async fn bench_search_fts_seq(
     (total, per_query_us)
 }
 
-async fn bench_list_notes_seq(
-    store: Arc<SqliteMemoryBackend>,
-    queries: usize,
-) -> (u128, u128) {
+async fn bench_list_notes_seq(store: Arc<SqliteMemoryBackend>, queries: usize) -> (u128, u128) {
     let start = Instant::now();
     for _ in 0..queries {
-        let entries = store
-            .list_notes("default")
-            .await
-            .expect("list_notes");
+        let entries = store.list_notes("default").await.expect("list_notes");
         assert!(!entries.is_empty(), "seq list_notes returned no rows");
     }
     let total = start.elapsed().as_millis();
@@ -237,7 +225,10 @@ async fn bench_find_by_filename_seq(
             .find_by_filename(&q, "default")
             .await
             .expect("find_by_filename");
-        assert!(!paths.is_empty(), "seq find_by_filename {q:?} returned no rows");
+        assert!(
+            !paths.is_empty(),
+            "seq find_by_filename {q:?} returned no rows"
+        );
     }
     let total = start.elapsed().as_millis();
     let per_query_us = start.elapsed().as_micros() / queries as u128;
@@ -313,10 +304,7 @@ async fn bench_find_by_filename_concurrent(
         handles.push(tokio::spawn(async move {
             for i in 0..queries_per_task {
                 let q = topic_for(i);
-                let paths = store
-                    .find_by_filename(&q, "default")
-                    .await
-                    .expect("find");
+                let paths = store.find_by_filename(&q, "default").await.expect("find");
                 assert!(!paths.is_empty());
             }
         }));
