@@ -124,16 +124,15 @@ impl GroupChatExecutor {
     ) {
         let Some(db) = self.db.clone() else { return };
         let session_id = session_id.to_string();
-        let speaker = speaker.clone();
         let content = content.to_string();
 
-        let result = tokio::task::spawn_blocking(move || {
-            let (speaker_type, speaker_id, speaker_name) = match &speaker {
-                Speaker::Coordinator => ("coordinator", None, "Coordinator"),
-                Speaker::System => ("system", None, "System"),
-                Speaker::Persona { id, name } => ("persona", Some(id.as_str()), name.as_str()),
-            };
-            db.insert_group_chat_turn(
+        let (speaker_type, speaker_id, speaker_name) = match &speaker {
+            Speaker::Coordinator => ("coordinator", None, "Coordinator"),
+            Speaker::System => ("system", None, "System"),
+            Speaker::Persona { id, name } => ("persona", Some(id.as_str()), name.as_str()),
+        };
+        if let Err(e) = db
+            .insert_group_chat_turn(
                 &session_id,
                 round,
                 sequence,
@@ -142,25 +141,13 @@ impl GroupChatExecutor {
                 speaker_name,
                 &content,
             )
-        })
-        .await;
-
-        match result {
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    subsystem = "group_chat",
-                    error = %e,
-                    "failed to persist group chat turn to database"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    subsystem = "group_chat",
-                    error = %e,
-                    "group chat turn persistence task failed to join"
-                );
-            }
-            Ok(Ok(())) => {}
+            .await
+        {
+            tracing::warn!(
+                subsystem = "group_chat",
+                error = %e,
+                "failed to persist group chat turn to database"
+            );
         }
     }
 

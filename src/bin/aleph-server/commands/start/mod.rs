@@ -1695,10 +1695,50 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // LockOrIpc when this server holds the singleton lock. Bearer auth is
     // enforced by the existing OpenAI-compat handler upstream.
     {
+        // The reconciler endpoint surfaces the most recent `ReconcileReport`
+        // from the daemon operator opt-in starts via
+        // `MemoryCommandHandler::spawn_reconciler_daemon`. Construct one
+        // here so the admin API can query it; the reconciler daemon itself
+        // is started by config ([memory.reconciler] enabled = true).
+        let memory_handler = agent_result
+            .state_db
+            .as_ref()
+            .map(|state_db| {
+                std::sync::Arc::new(
+                    alephcore::memory::events::handler::MemoryCommandHandler::new(
+                        std::sync::Arc::clone(state_db),
+                    ),
+                )
+            });
+
+        // Start the background reconciler daemon if config opts in.
+        // The JoinHandle is stored on the server so a graceful shutdown
+        // can `.abort()` the task before dropping the StateDatabase
+        // the daemon reads from.
+        let reconciler_handle = if let Some(handler) = memory_handler.as_ref() {
+            let cfg = app_config.read().await.memory.reconciler.clone();
+            if cfg.enabled {
+                let interval = std::time::Duration::from_secs(cfg.interval_secs);
+                tracing::info!(
+                    interval_secs = cfg.interval_secs,
+                    "Starting background reconciler daemon"
+                );
+                Some(handler.spawn_reconciler_daemon(interval))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(handle) = reconciler_handle {
+            server.set_reconciler_handle(handle);
+        }
+
         let admin_state = alephcore::gateway::admin_api::AdminApiState {
             shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
             agent_manager: agent_manager.clone(),
             session_store: session_store.clone(),
+            memory_handler,
         };
         server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
     }

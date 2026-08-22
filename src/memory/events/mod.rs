@@ -24,6 +24,7 @@ pub mod commands;
 pub mod handler;
 pub mod migration;
 pub mod projector;
+pub mod testing;
 pub mod traveler;
 
 use serde::{Deserialize, Serialize};

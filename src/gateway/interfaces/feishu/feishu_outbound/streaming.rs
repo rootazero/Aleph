@@ -146,6 +146,27 @@ impl FeishuEventEmitter {
         }
     }
 
+    /// Mark the card's settled text when this run answers a `/btw` side
+    /// question.
+    ///
+    /// The card owns the text, so it never reaches `inner`'s own `RunComplete`
+    /// arm and cannot inherit the marker from the outbound chokepoint there —
+    /// this face has to apply it itself. It asks `inner` rather than carrying
+    /// its own copy of the fact: one `ReplyEmitterConfig` per run, one answer.
+    ///
+    /// Applied only where the card **closes**, so the badge arrives atomically
+    /// at settle; the throttled `update` frames that preceded it stay unmarked,
+    /// which is the same shape as the base emitter's edit-based final. Not
+    /// applied on `RunError`'s close: a partial answer plus an error is not an
+    /// answer.
+    fn mark_side_answer<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        if self.inner.is_side_answer() {
+            std::borrow::Cow::Owned(crate::gateway::btw::format_side_answer(text))
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        }
+    }
+
     async fn start_typing(&self) {
         if !self.typing_enabled {
             return;
@@ -254,7 +275,8 @@ impl EventEmitter for FeishuEventEmitter {
                     let card_guard = self.card.lock().await;
                     if let Some(card) = card_guard.as_ref() {
                         let final_text = card.accumulated_text.lock().await.clone();
-                        card.close(&self.api, &final_text).await;
+                        card.close(&self.api, &self.mark_side_answer(&final_text))
+                            .await;
                     }
                     drop(card_guard);
                     self.stop_typing().await;
@@ -268,7 +290,8 @@ impl EventEmitter for FeishuEventEmitter {
                 if let Some(card) = card_guard.as_ref() {
                     if !card.is_closed() {
                         let final_text = card.accumulated_text.lock().await.clone();
-                        card.close(&self.api, &final_text).await;
+                        card.close(&self.api, &self.mark_side_answer(&final_text))
+                            .await;
                     }
                     drop(card_guard);
                     self.stop_typing().await;

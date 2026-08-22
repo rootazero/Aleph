@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_protocol::dreaming::{DreamGateBlock, DreamSchedulingStatus};
 
 /// Truncate a string to a maximum character length, appending "..." if truncated.
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -147,6 +148,114 @@ pub async fn compress(server_url: &str, config: &CliConfig, json: bool) -> CliRe
     Ok(())
 }
 
+/// Render the dream daemon's scheduling gates as display pairs.
+///
+/// Reads `aleph_protocol::dreaming::DreamSchedulingStatus` — the same type the
+/// server builds the response from and the Panel deserialises — so the keys
+/// cannot drift the way `providers list`'s did. Three "I don't know" cases
+/// must each stay distinguishable from a real answer, because collapsing any
+/// of them invents a reply the server never gave:
+///
+/// * no daemon in the server process (memory disabled, or a build with no
+///   dreaming) is **not** `enabled = false`;
+/// * a store that has never completed a cycle is **not** a failed one;
+/// * a `duration_ms` the row does not carry is **not** zero.
+fn dreaming_pairs(status: &DreamSchedulingStatus) -> Vec<(&'static str, String)> {
+    let Some(d) = status.daemon.as_ref() else {
+        return vec![(
+            "State",
+            "no dream daemon in this server process (memory disabled)".to_string(),
+        )];
+    };
+
+    // Wording lives here; *which* gate is shut is `blocking_gate`, shared with
+    // the Panel. A second ladder written from the raw fields would be a second
+    // answer to one question, and the two would part company on the first
+    // change to either.
+    let state = match d.blocking_gate() {
+        Some(DreamGateBlock::Disabled) => "disabled".to_string(),
+        Some(DreamGateBlock::OutsideWindow) => format!(
+            "waiting — outside the window ({}–{} local)",
+            d.window_start_local, d.window_end_local
+        ),
+        Some(DreamGateBlock::UserActive) => format!(
+            "waiting — user active ({}s idle, needs {}s)",
+            d.idle_seconds, d.idle_threshold_seconds
+        ),
+        None if d.is_running => "running now".to_string(),
+        None => "ready — every gate open".to_string(),
+    };
+
+    vec![
+        ("State", state),
+        (
+            "Window",
+            format!("{}–{} local", d.window_start_local, d.window_end_local),
+        ),
+        (
+            "Idle",
+            format!(
+                "{}s (threshold {}s)",
+                d.idle_seconds, d.idle_threshold_seconds
+            ),
+        ),
+        ("Cycle cap", format!("{}s", d.max_duration_seconds)),
+        (
+            "Last run",
+            status.last_run.as_ref().map_or_else(
+                || "never".to_string(),
+                |r| {
+                    let when = chrono::DateTime::from_timestamp(r.run_at, 0).map_or_else(
+                        || r.run_at.to_string(),
+                        |t| {
+                            t.with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string()
+                        },
+                    );
+                    // `stale_running` is the server's crash tombstone, spelled
+                    // out because "stale_running" tells an operator nothing
+                    // and it is the one status that means a night was lost.
+                    let what = if r.status == "stale_running" {
+                        "crashed mid-cycle".to_string()
+                    } else {
+                        r.status.clone()
+                    };
+                    match r.duration_ms {
+                        Some(ms) => format!("{when} · {what} ({ms} ms)"),
+                        None => format!("{when} · {what}"),
+                    }
+                },
+            ),
+        ),
+    ]
+}
+
+/// Explain why the dream daemon did or did not run.
+///
+/// The run history structurally cannot answer that — a cycle that never
+/// started leaves no row — so this reads the daemon's live entry gates
+/// instead. It exists because the Panel's memory pane was the only face that
+/// could answer it, and the box most likely to be asked is the headless one
+/// with no browser pointed at it.
+pub async fn dreaming(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
+
+    // `dreaming.list_insights` carries the scheduling section in both its
+    // branches (a refused partition answers with the same key set as an empty
+    // success), so this needs no admin gate and no second RPC.
+    let result: Value = client
+        .call("dreaming.list_insights", Some(serde_json::json!({})))
+        .await?;
+
+    let status: DreamSchedulingStatus = serde_json::from_value(result.clone()).unwrap_or_default();
+    let pairs = dreaming_pairs(&status);
+    output::print_detail(&pairs, json, &result);
+
+    client.close().await?;
+    Ok(())
+}
+
 /// Delete a specific memory entry
 pub async fn delete(server_url: &str, config: &CliConfig, id: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
@@ -167,6 +276,7 @@ pub async fn delete(server_url: &str, config: &CliConfig, id: &str, json: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_protocol::dreaming::{DaemonStatus, DreamLastRun};
 
     /// Shaped exactly like `handle_search` in `src/gateway/handlers/memory.rs`:
     /// `{"memories": [MemoryEntry], "total": i64}`, not a bare array.
@@ -265,6 +375,170 @@ mod tests {
     /// so the handler sends JSON `null` for both graph fields. That must
     /// render as an explicit "-", never as "0" — a `0` would misreport an
     /// unknown count as a known empty one.
+    // -- dreaming ----------------------------------------------------------
+
+    /// Round-trip a status through the wire the way the server sends it.
+    ///
+    /// Deliberately not a hand-written JSON literal: an assertion that reads
+    /// back keys the test itself just typed is testing `serde_json`, not this
+    /// command. The server builds its response by serialising this same type,
+    /// so serialising and parsing here exercises the contract rather than a
+    /// remembered copy of it.
+    fn over_the_wire(status: &DreamSchedulingStatus) -> DreamSchedulingStatus {
+        let wire = serde_json::to_value(status).expect("serialise");
+        serde_json::from_value(wire).expect("parse")
+    }
+
+    fn daemon(enabled: bool, within_window: bool, user_active: bool) -> DaemonStatus {
+        DaemonStatus {
+            enabled,
+            within_window,
+            user_active,
+            idle_seconds: 42,
+            idle_threshold_seconds: 900,
+            window_start_local: "02:00".to_string(),
+            window_end_local: "06:00".to_string(),
+            is_running: false,
+            max_duration_seconds: 1800,
+        }
+    }
+
+    fn state_of(status: &DreamSchedulingStatus) -> String {
+        dreaming_pairs(status)
+            .into_iter()
+            .find(|(k, _)| *k == "State")
+            .expect("State row")
+            .1
+    }
+
+    /// "No daemon in this process" and "the daemon is switched off" are
+    /// different answers, and only one of them means the operator has
+    /// something to change. Collapsing them would put words in the server's
+    /// mouth — it said nothing about `enabled`, because there was nobody to
+    /// ask.
+    #[test]
+    fn an_absent_daemon_does_not_render_as_a_disabled_one() {
+        let pairs = dreaming_pairs(&over_the_wire(&DreamSchedulingStatus::default()));
+        assert_eq!(pairs.len(), 1, "no gates to report: {pairs:?}");
+        assert!(
+            pairs[0].1.contains("no dream daemon"),
+            "must say the daemon is absent, not that it is disabled: {pairs:?}"
+        );
+        assert_ne!(state_of(&DreamSchedulingStatus::default()), "disabled");
+    }
+
+    /// Each gate gets its own sentence, and the ladder stops at the first shut
+    /// one — naming a later gate would send the operator to change a setting
+    /// that would not have mattered.
+    #[test]
+    fn each_shut_gate_renders_its_own_reason() {
+        let off = DreamSchedulingStatus {
+            daemon: Some(daemon(false, true, false)),
+            last_run: None,
+        };
+        assert_eq!(state_of(&over_the_wire(&off)), "disabled");
+
+        let outside = DreamSchedulingStatus {
+            daemon: Some(daemon(true, false, false)),
+            last_run: None,
+        };
+        let s = state_of(&over_the_wire(&outside));
+        assert!(
+            s.contains("outside the window") && s.contains("02:00–06:00"),
+            "{s}"
+        );
+
+        let busy = DreamSchedulingStatus {
+            daemon: Some(daemon(true, true, true)),
+            last_run: None,
+        };
+        let s = state_of(&over_the_wire(&busy));
+        assert!(
+            s.contains("user active") && s.contains("42s") && s.contains("900s"),
+            "{s}"
+        );
+
+        let ready = DreamSchedulingStatus {
+            daemon: Some(daemon(true, true, false)),
+            last_run: None,
+        };
+        assert!(state_of(&over_the_wire(&ready)).contains("ready"));
+
+        let mut running_daemon = daemon(true, true, true);
+        running_daemon.is_running = true;
+        let running = DreamSchedulingStatus {
+            daemon: Some(running_daemon),
+            last_run: None,
+        };
+        // A running cycle is not blocked by the user being active — it yields
+        // at the next stage boundary instead, which is not the same news.
+        assert!(state_of(&over_the_wire(&running)).contains("running"));
+    }
+
+    /// `max_duration_seconds` is on the wire and was missing from the Panel's
+    /// hand-written DTO, so it parsed clean and vanished for four rounds. It
+    /// is the bound that decides when a stranded `running` row becomes a crash
+    /// tombstone, which makes it part of the answer, not decoration.
+    #[test]
+    fn the_cycle_cap_reaches_the_output() {
+        let status = DreamSchedulingStatus {
+            daemon: Some(daemon(true, true, false)),
+            last_run: None,
+        };
+        let pairs = dreaming_pairs(&over_the_wire(&status));
+        let cap = pairs
+            .iter()
+            .find(|(k, _)| *k == "Cycle cap")
+            .expect("Cycle cap row");
+        assert_eq!(cap.1, "1800s");
+    }
+
+    /// Three distinct things a run row can mean, none of which may be read as
+    /// another: never ran, ran and failed, died mid-cycle.
+    #[test]
+    fn last_run_distinguishes_never_from_failed_from_crashed() {
+        let never = DreamSchedulingStatus {
+            daemon: Some(daemon(true, true, false)),
+            last_run: None,
+        };
+        let last = |s: &DreamSchedulingStatus| {
+            dreaming_pairs(s)
+                .into_iter()
+                .find(|(k, _)| *k == "Last run")
+                .expect("Last run row")
+                .1
+        };
+        assert_eq!(last(&over_the_wire(&never)), "never");
+
+        let failed = DreamSchedulingStatus {
+            daemon: Some(daemon(true, true, false)),
+            last_run: Some(DreamLastRun {
+                run_at: 1_700_000_000,
+                status: "error".to_string(),
+                duration_ms: Some(1234),
+            }),
+        };
+        let line = last(&over_the_wire(&failed));
+        assert!(line.contains("error") && line.contains("1234 ms"), "{line}");
+
+        let crashed = DreamSchedulingStatus {
+            daemon: Some(daemon(true, true, false)),
+            last_run: Some(DreamLastRun {
+                run_at: 1_700_000_000,
+                status: "stale_running".to_string(),
+                duration_ms: None,
+            }),
+        };
+        let line = last(&over_the_wire(&crashed));
+        assert!(
+            line.contains("crashed mid-cycle"),
+            "the server's tombstone must be spelled out, not echoed as \
+             `stale_running`: {line}"
+        );
+        // No duration recorded is not a zero-length run.
+        assert!(!line.contains("0 ms"), "{line}");
+    }
+
     #[test]
     fn stats_pairs_renders_null_graph_counts_as_dash_not_zero() {
         let response = serde_json::json!({

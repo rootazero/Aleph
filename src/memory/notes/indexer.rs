@@ -438,7 +438,11 @@ impl<S: NoteStore> NoteIndexer<S> {
                     .map_err(|e| AlephError::config(format!("full_rebuild read_dir: {e}")))?
                 {
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    if !path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+                    {
                         continue;
                     }
                     // rust-doctor-disable-next-line excessive-clone
@@ -1013,7 +1017,11 @@ impl<S: NoteStore> NoteIndexer<S> {
 
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                if !path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+                {
                     continue;
                 }
                 // Skip the renamed file itself — we'll index it separately below.

@@ -125,6 +125,17 @@ pub enum Msg<'a> {
         count: usize,
     },
 
+    // --- `/btw promote` ---
+    /// The side answer crossed. Names the question rather than echoing the
+    /// answer: the answer itself has just been appended to the transcript the
+    /// user is looking at, and repeating it here would print it twice.
+    BtwPromoted {
+        question: &'a str,
+    },
+    /// There was no completed side exchange to carry over. A true answer, not
+    /// a failure — which is why it is here and not in [`ReceiptKind`].
+    BtwNothingToPromote,
+
     // --- topic generation prompt (sent to LLM, not shown to user) ---
     TopicGenerationPrompt {
         conversation: &'a str,
@@ -403,6 +414,24 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         }
         (Msg::QueuedMessagesDropped { count }, Locale::En) => {
             format!("Also dropped {count} queued message(s) waiting on this session.")
+        }
+
+        // ============================================================
+        // `/btw promote`
+        // ============================================================
+        (Msg::BtwPromoted { question }, Locale::Zh) => {
+            format!("已把这个旁问的回答带进本对话：{question}")
+        }
+        (Msg::BtwPromoted { question }, Locale::En) => {
+            format!("Promoted the side answer into this conversation: {question}")
+        }
+        (Msg::BtwNothingToPromote, Locale::Zh) => {
+            "这个对话里还没有已经答完的旁问，暂时没有可以带过来的内容。".into()
+        }
+        (Msg::BtwNothingToPromote, Locale::En) => {
+            "There is no completed side question in this conversation yet, so there is \
+             nothing to promote."
+                .into()
         }
 
         // ============================================================

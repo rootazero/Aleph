@@ -102,25 +102,28 @@ impl StateDatabase {
 
     /// Insert a single trace entry
     pub async fn insert_trace(&self, trace: &TaskTrace) -> Result<i64, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let event_json = serde_json::to_string(&trace.event)
-            .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
-        conn.execute(
-            r#"
-            INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
-            VALUES (?1, ?2, ?3, ?4, ?5)
-            "#,
-            params![
-                trace.task_id,
-                trace.step_index,
-                trace.event_kind(),
-                event_json,
-                trace.timestamp,
-            ],
-        )
-        .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
+        let trace = trace.clone();
+        self.with_conn(move |conn| {
+            let event_json = serde_json::to_string(&trace.event)
+                .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {e}")))?;
+            conn.execute(
+                r#"
+                INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                "#,
+                params![
+                    trace.task_id,
+                    trace.step_index,
+                    trace.event_kind(),
+                    event_json,
+                    trace.timestamp,
+                ],
+            )
+            .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
 
-        Ok(conn.last_insert_rowid())
+            Ok(conn.last_insert_rowid())
+        })
+        .await
     }
 
     /// Bulk insert traces (for efficient batch writes)
@@ -129,86 +132,95 @@ impl StateDatabase {
             return Ok(());
         }
 
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let tx = conn
-            .transaction()
-            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
+        let traces: Vec<TaskTrace> = traces.to_vec();
+        self.with_conn(move |conn| {
+            let tx = conn
+                .transaction()
+                .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
 
-        {
-            let mut stmt = tx
-                .prepare(
-                    r#"
-                    INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
-                    VALUES (?1, ?2, ?3, ?4, ?5)
-                    "#,
-                )
-                .map_err(|e| AlephError::config(format!("Failed to prepare statement: {e}")))?;
+            {
+                let mut stmt = tx
+                    .prepare(
+                        r#"
+                        INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
+                        VALUES (?1, ?2, ?3, ?4, ?5)
+                        "#,
+                    )
+                    .map_err(|e| AlephError::config(format!("Failed to prepare statement: {e}")))?;
 
-            for trace in traces {
-                let event_json = serde_json::to_string(&trace.event).map_err(|e| {
-                    AlephError::config(format!("Failed to serialize trace event: {e}"))
-                })?;
-                stmt.execute(params![
-                    trace.task_id,
-                    trace.step_index,
-                    trace.event_kind(),
-                    event_json,
-                    trace.timestamp,
-                ])
-                .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
+                for trace in &traces {
+                    let event_json = serde_json::to_string(&trace.event).map_err(|e| {
+                        AlephError::config(format!("Failed to serialize trace event: {e}"))
+                    })?;
+                    stmt.execute(params![
+                        trace.task_id,
+                        trace.step_index,
+                        trace.event_kind(),
+                        event_json,
+                        trace.timestamp,
+                    ])
+                    .map_err(|e| AlephError::config(format!("Failed to insert trace: {e}")))?;
+                }
             }
-        }
 
-        tx.commit()
-            .map_err(|e| AlephError::config(format!("Failed to commit transaction: {e}")))?;
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("Failed to commit transaction: {e}")))?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Get all traces for a task (ordered by `step_index`)
     pub async fn get_traces_by_task(&self, task_id: &str) -> Result<Vec<TaskTrace>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, task_id, step_index, event_kind, event_json, timestamp
-                FROM task_traces
-                WHERE task_id = ?1
-                ORDER BY step_index ASC
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        let task_id = task_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, task_id, step_index, event_kind, event_json, timestamp
+                    FROM task_traces
+                    WHERE task_id = ?1
+                    ORDER BY step_index ASC
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let traces = stmt
-            .query_map(params![task_id], task_trace_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
+            let traces = stmt
+                .query_map(params![task_id], task_trace_from_row)
+                .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
 
-        Ok(traces)
+            Ok(traces)
+        })
+        .await
     }
 
     /// Get the last trace entry for a task (for recovery checkpoint)
     pub async fn get_last_trace(&self, task_id: &str) -> Result<Option<TaskTrace>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, task_id, step_index, event_kind, event_json, timestamp
-                FROM task_traces
-                WHERE task_id = ?1
-                ORDER BY step_index DESC
-                LIMIT 1
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        let task_id = task_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, task_id, step_index, event_kind, event_json, timestamp
+                    FROM task_traces
+                    WHERE task_id = ?1
+                    ORDER BY step_index DESC
+                    LIMIT 1
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let result = stmt
-            .query_row(params![task_id], task_trace_from_row)
-            .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get last trace: {e}")))?;
+            let result = stmt
+                .query_row(params![task_id], task_trace_from_row)
+                .optional()
+                .map_err(|e| AlephError::config(format!("Failed to get last trace: {e}")))?;
 
-        Ok(result)
+            Ok(result)
+        })
+        .await
     }
 
     /// Get traces from a specific step index (for resuming from checkpoint)
@@ -217,79 +229,90 @@ impl StateDatabase {
         task_id: &str,
         from_step: u32,
     ) -> Result<Vec<TaskTrace>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, task_id, step_index, event_kind, event_json, timestamp
-                FROM task_traces
-                WHERE task_id = ?1 AND step_index >= ?2
-                ORDER BY step_index ASC
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        let task_id = task_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, task_id, step_index, event_kind, event_json, timestamp
+                    FROM task_traces
+                    WHERE task_id = ?1 AND step_index >= ?2
+                    ORDER BY step_index ASC
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let traces = stmt
-            .query_map(params![task_id, from_step], task_trace_from_row)
-            .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
+            let traces = stmt
+                .query_map(params![task_id, from_step], task_trace_from_row)
+                .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
 
-        Ok(traces)
+            Ok(traces)
+        })
+        .await
     }
 
     /// Delete all traces for a task (cleanup)
     pub async fn delete_traces_for_task(&self, task_id: &str) -> Result<u64, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let count = conn
-            .execute(
-                "DELETE FROM task_traces WHERE task_id = ?1",
-                params![task_id],
-            )
-            .map_err(|e| AlephError::config(format!("Failed to delete traces: {e}")))?;
-        Ok(count as u64)
+        let task_id = task_id.to_string();
+        self.with_conn(move |conn| {
+            let count = conn
+                .execute(
+                    "DELETE FROM task_traces WHERE task_id = ?1",
+                    params![task_id],
+                )
+                .map_err(|e| AlephError::config(format!("Failed to delete traces: {e}")))?;
+            Ok(count as u64)
+        })
+        .await
     }
 
     /// Get trace count for a task
     pub async fn get_trace_count(&self, task_id: &str) -> Result<u64, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM task_traces WHERE task_id = ?1",
-                params![task_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| AlephError::config(format!("Failed to count traces: {e}")))?;
-        Ok(count as u64)
+        let task_id = task_id.to_string();
+        self.with_conn(move |conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM task_traces WHERE task_id = ?1",
+                    params![task_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AlephError::config(format!("Failed to count traces: {e}")))?;
+            Ok(count as u64)
+        })
+        .await
     }
 
     /// List all distinct task IDs that have traces
     pub async fn list_trace_tasks(&self) -> Result<Vec<TaskTraceInfo>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                FROM task_traces
-                GROUP BY task_id
-                ORDER BY last_timestamp DESC
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
+                    FROM task_traces
+                    GROUP BY task_id
+                    ORDER BY last_timestamp DESC
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let tasks = stmt
-            .query_map([], |row| {
-                Ok(TaskTraceInfo {
-                    task_id: row.get(0)?,
-                    event_count: row.get(1)?,
-                    last_timestamp: row.get(2)?,
+            let tasks = stmt
+                .query_map([], |row| {
+                    Ok(TaskTraceInfo {
+                        task_id: row.get(0)?,
+                        event_count: row.get(1)?,
+                        last_timestamp: row.get(2)?,
+                    })
                 })
-            })
-            .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
+                .map_err(|e| AlephError::config(format!("Failed to query traces: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AlephError::config(format!("Failed to collect traces: {e}")))?;
 
-        Ok(tasks)
+            Ok(tasks)
+        })
+        .await
     }
 
     /// Paginated sibling of `list_trace_tasks`. Returns at most `limit`
@@ -305,88 +328,91 @@ impl StateDatabase {
         limit: usize,
         before_timestamp: Option<i64>,
     ) -> Result<Vec<TaskTraceInfo>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let clamped_limit = limit.clamp(1, 200) as i64;
+        self.with_conn(move |conn| {
+            let row_map = |row: &rusqlite::Row<'_>| {
+                Ok(TaskTraceInfo {
+                    task_id: row.get(0)?,
+                    event_count: row.get(1)?,
+                    last_timestamp: row.get(2)?,
+                })
+            };
 
-        let row_map = |row: &rusqlite::Row<'_>| {
-            Ok(TaskTraceInfo {
-                task_id: row.get(0)?,
-                event_count: row.get(1)?,
-                last_timestamp: row.get(2)?,
-            })
-        };
+            let collect_err =
+                |e: rusqlite::Error| AlephError::config(format!("Failed to collect paged traces: {e}"));
 
-        let collect_err =
-            |e: rusqlite::Error| AlephError::config(format!("Failed to collect paged traces: {e}"));
-
-        match before_timestamp {
-            Some(ts) => {
-                let mut stmt = conn
-                    .prepare(
-                        r#"
-                        SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                        FROM task_traces
-                        GROUP BY task_id
-                        HAVING MAX(timestamp) < ?1
-                        ORDER BY last_timestamp DESC
-                        LIMIT ?2
-                        "#,
-                    )
-                    .map_err(|e| {
-                        AlephError::config(format!("Failed to prepare paged query: {e}"))
-                    })?;
-                let rows = stmt
-                    .query_map(params![ts, clamped_limit], row_map)
-                    .map_err(|e| {
-                        AlephError::config(format!("Failed to query paged traces: {e}"))
-                    })?;
-                let collected: Result<Vec<_>, _> = rows.collect();
-                collected.map_err(collect_err)
+            match before_timestamp {
+                Some(ts) => {
+                    let mut stmt = conn
+                        .prepare(
+                            r#"
+                            SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
+                            FROM task_traces
+                            GROUP BY task_id
+                            HAVING MAX(timestamp) < ?1
+                            ORDER BY last_timestamp DESC
+                            LIMIT ?2
+                            "#,
+                        )
+                        .map_err(|e| {
+                            AlephError::config(format!("Failed to prepare paged query: {e}"))
+                        })?;
+                    let rows = stmt
+                        .query_map(params![ts, clamped_limit], row_map)
+                        .map_err(|e| {
+                            AlephError::config(format!("Failed to query paged traces: {e}"))
+                        })?;
+                    let collected: Result<Vec<_>, _> = rows.collect();
+                    collected.map_err(collect_err)
+                }
+                None => {
+                    let mut stmt = conn
+                        .prepare(
+                            r#"
+                            SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
+                            FROM task_traces
+                            GROUP BY task_id
+                            ORDER BY last_timestamp DESC
+                            LIMIT ?1
+                            "#,
+                        )
+                        .map_err(|e| {
+                            AlephError::config(format!("Failed to prepare paged query: {e}"))
+                        })?;
+                    let rows = stmt
+                        .query_map(params![clamped_limit], row_map)
+                        .map_err(|e| {
+                            AlephError::config(format!("Failed to query paged traces: {e}"))
+                        })?;
+                    let collected: Result<Vec<_>, _> = rows.collect();
+                    collected.map_err(collect_err)
+                }
             }
-            None => {
-                let mut stmt = conn
-                    .prepare(
-                        r#"
-                        SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
-                        FROM task_traces
-                        GROUP BY task_id
-                        ORDER BY last_timestamp DESC
-                        LIMIT ?1
-                        "#,
-                    )
-                    .map_err(|e| {
-                        AlephError::config(format!("Failed to prepare paged query: {e}"))
-                    })?;
-                let rows = stmt
-                    .query_map(params![clamped_limit], row_map)
-                    .map_err(|e| {
-                        AlephError::config(format!("Failed to query paged traces: {e}"))
-                    })?;
-                let collected: Result<Vec<_>, _> = rows.collect();
-                collected.map_err(collect_err)
-            }
-        }
+        })
+        .await
     }
 
     /// Get a trace by its ID
     pub async fn get_trace_by_id(&self, trace_id: i64) -> Result<Option<TaskTrace>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, task_id, step_index, event_kind, event_json, timestamp
-                FROM task_traces
-                WHERE id = ?1
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, task_id, step_index, event_kind, event_json, timestamp
+                    FROM task_traces
+                    WHERE id = ?1
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare query: {e}")))?;
 
-        let result = stmt
-            .query_row(params![trace_id], task_trace_from_row)
-            .optional()
-            .map_err(|e| AlephError::config(format!("Failed to get trace: {e}")))?;
+            let result = stmt
+                .query_row(params![trace_id], task_trace_from_row)
+                .optional()
+                .map_err(|e| AlephError::config(format!("Failed to get trace: {e}")))?;
 
-        Ok(result)
+            Ok(result)
+        })
+        .await
     }
 
     // =========================================================================
@@ -412,85 +438,85 @@ impl StateDatabase {
         if agent_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let agent_ids: Vec<String> = agent_ids.to_vec();
+        self.with_conn(move |conn| {
+            // Build positional placeholders ?1..?N for the IN clause, then ?N+1
+            // and ?N+2 for the optional time bounds (omitted when absent).
+            let placeholders: Vec<String> = (1..=agent_ids.len()).map(|i| format!("?{i}")).collect();
+            let in_list = placeholders.join(", ");
+            let mut next_pos = agent_ids.len() + 1;
+            let mut where_extras: Vec<String> = Vec::new();
+            let mut bind_extras: Vec<i64> = Vec::new();
+            if let Some(ts) = since {
+                where_extras.push(format!("timestamp >= ?{next_pos}"));
+                bind_extras.push(ts);
+                next_pos += 1;
+            }
+            if let Some(ts) = until {
+                where_extras.push(format!("timestamp <= ?{next_pos}"));
+                bind_extras.push(ts);
+            }
+            let extra_sql = if where_extras.is_empty() {
+                String::new()
+            } else {
+                format!(" AND {}", where_extras.join(" AND "))
+            };
 
-        // Build positional placeholders ?1..?N for the IN clause, then ?N+1
-        // and ?N+2 for the optional time bounds (omitted when absent).
-        let placeholders: Vec<String> = (1..=agent_ids.len()).map(|i| format!("?{i}")).collect();
-        let in_list = placeholders.join(", ");
-        let mut next_pos = agent_ids.len() + 1;
-        let mut where_extras: Vec<String> = Vec::new();
-        let mut bind_extras: Vec<i64> = Vec::new();
-        if let Some(ts) = since {
-            where_extras.push(format!("timestamp >= ?{next_pos}"));
-            bind_extras.push(ts);
-            next_pos += 1;
-        }
-        if let Some(ts) = until {
-            where_extras.push(format!("timestamp <= ?{next_pos}"));
-            bind_extras.push(ts);
-        }
-        let extra_sql = if where_extras.is_empty() {
-            String::new()
-        } else {
-            format!(" AND {}", where_extras.join(" AND "))
-        };
+            let sql = format!(
+                r#"
+                SELECT
+                    json_extract(event_json, '$.agent_id') AS agent_id,
+                    COUNT(*) AS call_count,
+                    SUM(COALESCE(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER), 0)) AS input,
+                    SUM(COALESCE(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER), 0)) AS output,
+                    SUM(COALESCE(CAST(json_extract(event_json, '$.cache_read_tokens') AS INTEGER), 0)) AS cache_read,
+                    SUM(COALESCE(CAST(json_extract(event_json, '$.cache_creation_tokens') AS INTEGER), 0)) AS cache_creation,
+                    SUM(COALESCE(CAST(json_extract(event_json, '$.thinking_tokens') AS INTEGER), 0)) AS reasoning
+                FROM task_traces
+                WHERE event_kind = 'provider_usage'
+                  AND json_extract(event_json, '$.agent_id') IN ({in_list}){extra_sql}
+                GROUP BY agent_id
+                ORDER BY agent_id ASC
+                "#
+            );
 
-        let sql = format!(
-            r#"
-            SELECT
-                json_extract(event_json, '$.agent_id') AS agent_id,
-                COUNT(*) AS call_count,
-                SUM(COALESCE(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER), 0)) AS input,
-                SUM(COALESCE(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER), 0)) AS output,
-                SUM(COALESCE(CAST(json_extract(event_json, '$.cache_read_tokens') AS INTEGER), 0)) AS cache_read,
-                SUM(COALESCE(CAST(json_extract(event_json, '$.cache_creation_tokens') AS INTEGER), 0)) AS cache_creation,
-                SUM(COALESCE(CAST(json_extract(event_json, '$.thinking_tokens') AS INTEGER), 0)) AS reasoning
-            FROM task_traces
-            WHERE event_kind = 'provider_usage'
-              AND json_extract(event_json, '$.agent_id') IN ({in_list}){extra_sql}
-            GROUP BY agent_id
-            ORDER BY agent_id ASC
-            "#
-        );
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("Failed to prepare usage query: {e}")))?;
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| AlephError::config(format!("Failed to prepare usage query: {e}")))?;
+            // Combine agent_id text params + optional timestamp ints into a single
+            // params_from_iter sequence in positional order.
+            let id_values: Vec<rusqlite::types::Value> = agent_ids
+                .iter()
+                .map(|s| rusqlite::types::Value::Text(s.clone()))
+                .collect();
+            let ts_values: Vec<rusqlite::types::Value> = bind_extras
+                .into_iter()
+                .map(rusqlite::types::Value::Integer)
+                .collect();
+            let all_values: Vec<rusqlite::types::Value> =
+                id_values.into_iter().chain(ts_values).collect();
 
-        // Combine agent_id text params + optional timestamp ints into a single
-        // params_from_iter sequence in positional order.
-        let id_values: Vec<rusqlite::types::Value> = agent_ids
-            .iter()
-            .map(|s| rusqlite::types::Value::Text(s.clone()))
-            .collect();
-        let ts_values: Vec<rusqlite::types::Value> = bind_extras
-            .into_iter()
-            .map(rusqlite::types::Value::Integer)
-            .collect();
-        let all_values: Vec<rusqlite::types::Value> =
-            id_values.into_iter().chain(ts_values).collect();
-
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(all_values), |row| {
-                let to_u64 = |v: i64, col: &str| -> Result<u64, rusqlite::Error> {
-                    if v < 0 {
-                        Err(rusqlite::Error::FromSqlConversionFailure(
-                            0,
-                            rusqlite::types::Type::Integer,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("{col} must be non-negative, got {v}"),
-                            )),
-                        ))
-                    } else {
-                        Ok(v as u64)
-                    }
-                };
-                Ok(AgentUsageTotal {
-                    agent_id: row.get::<_, String>(0)?,
-                    call_count: to_u64(row.get::<_, i64>(1)?, "call_count")?,
-                    input_tokens: to_u64(row.get::<_, i64>(2)?, "input_tokens")?,
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(all_values), |row| {
+                    let to_u64 = |v: i64, col: &str| -> Result<u64, rusqlite::Error> {
+                        if v < 0 {
+                            Err(rusqlite::Error::FromSqlConversionFailure(
+                                0,
+                                rusqlite::types::Type::Integer,
+                                Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!("{col} must be non-negative, got {v}"),
+                                )),
+                            ))
+                        } else {
+                            Ok(v as u64)
+                        }
+                    };
+                    Ok(AgentUsageTotal {
+                        agent_id: row.get::<_, String>(0)?,
+                        call_count: to_u64(row.get::<_, i64>(1)?, "call_count")?,
+                        input_tokens: to_u64(row.get::<_, i64>(2)?, "input_tokens")?,
                     output_tokens: to_u64(row.get::<_, i64>(3)?, "output_tokens")?,
                     cache_read_tokens: to_u64(row.get::<_, i64>(4)?, "cache_read_tokens")?,
                     cache_creation_tokens: to_u64(row.get::<_, i64>(5)?, "cache_creation_tokens")?,
@@ -501,7 +527,9 @@ impl StateDatabase {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect usage: {e}")))?;
 
-        Ok(rows)
+            Ok(rows)
+        })
+        .await
     }
 
     /// Roll every per-advisor MoA `ProviderUsage` row (synthetic agent_id
@@ -514,71 +542,73 @@ impl StateDatabase {
         since: Option<i64>,
         until: Option<i64>,
     ) -> Result<Option<AgentUsageTotal>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut where_extras = String::new();
-        let mut binds: Vec<rusqlite::types::Value> = Vec::new();
-        if let Some(ts) = since {
-            where_extras.push_str(" AND timestamp >= ?1");
-            binds.push(rusqlite::types::Value::Integer(ts));
-        }
-        if let Some(ts) = until {
-            where_extras.push_str(&format!(" AND timestamp <= ?{}", binds.len() + 1));
-            binds.push(rusqlite::types::Value::Integer(ts));
-        }
-        // Every SUM is double-COALESCE'd: the inner one substitutes 0 for a
-        // row whose field is absent from event_json, the outer one substitutes
-        // 0 for the whole aggregate when zero rows match the WHERE clause (a
-        // no-GROUP-BY SUM over an empty set is SQL NULL, not 0).
-        let sql = format!(
-            r#"
-            SELECT
-                COUNT(*),
-                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER), 0)), 0),
-                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER), 0)), 0),
-                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.cache_read_tokens') AS INTEGER), 0)), 0),
-                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.cache_creation_tokens') AS INTEGER), 0)), 0),
-                COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.thinking_tokens') AS INTEGER), 0)), 0)
-            FROM task_traces
-            WHERE event_kind = 'provider_usage'
-              AND json_extract(event_json, '$.agent_id') LIKE 'moa:%'{where_extras}
-            "#
-        );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| AlephError::config(format!("Failed to prepare moa usage query: {e}")))?;
-        let row = stmt
-            .query_row(rusqlite::params_from_iter(binds), |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            })
-            .map_err(|e| AlephError::config(format!("Failed to query moa usage: {e}")))?;
-        if row.0 == 0 {
-            return Ok(None);
-        }
-        let to_u64 = |v: i64, col: &str| -> Result<u64, AlephError> {
-            if v < 0 {
-                Err(AlephError::config(format!(
-                    "{col} must be non-negative, got {v}"
-                )))
-            } else {
-                Ok(v as u64)
+        self.with_conn(move |conn| {
+            let mut where_extras = String::new();
+            let mut binds: Vec<rusqlite::types::Value> = Vec::new();
+            if let Some(ts) = since {
+                where_extras.push_str(" AND timestamp >= ?1");
+                binds.push(rusqlite::types::Value::Integer(ts));
             }
-        };
-        Ok(Some(AgentUsageTotal {
-            agent_id: "moa-advisors".to_string(),
-            call_count: to_u64(row.0, "call_count")?,
-            input_tokens: to_u64(row.1, "input_tokens")?,
-            output_tokens: to_u64(row.2, "output_tokens")?,
-            cache_read_tokens: to_u64(row.3, "cache_read_tokens")?,
-            cache_creation_tokens: to_u64(row.4, "cache_creation_tokens")?,
-            reasoning_tokens: to_u64(row.5, "reasoning_tokens")?,
-        }))
+            if let Some(ts) = until {
+                where_extras.push_str(&format!(" AND timestamp <= ?{}", binds.len() + 1));
+                binds.push(rusqlite::types::Value::Integer(ts));
+            }
+            // Every SUM is double-COALESCE'd: the inner one substitutes 0 for a
+            // row whose field is absent from event_json, the outer one substitutes
+            // 0 for the whole aggregate when zero rows match the WHERE clause (a
+            // no-GROUP-BY SUM over an empty set is SQL NULL, not 0).
+            let sql = format!(
+                r#"
+                SELECT
+                    COUNT(*),
+                    COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.input_tokens') AS INTEGER), 0)), 0),
+                    COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.output_tokens') AS INTEGER), 0)), 0),
+                    COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.cache_read_tokens') AS INTEGER), 0)), 0),
+                    COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.cache_creation_tokens') AS INTEGER), 0)), 0),
+                    COALESCE(SUM(COALESCE(CAST(json_extract(event_json, '$.thinking_tokens') AS INTEGER), 0)), 0)
+                FROM task_traces
+                WHERE event_kind = 'provider_usage'
+                  AND json_extract(event_json, '$.agent_id') LIKE 'moa:%'{where_extras}
+                "#
+            );
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("Failed to prepare moa usage query: {e}")))?;
+            let row = stmt
+                .query_row(rusqlite::params_from_iter(binds), |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                })
+                .map_err(|e| AlephError::config(format!("Failed to query moa usage: {e}")))?;
+            if row.0 == 0 {
+                return Ok(None);
+            }
+            let to_u64 = |v: i64, col: &str| -> Result<u64, AlephError> {
+                if v < 0 {
+                    Err(AlephError::config(format!(
+                        "{col} must be non-negative, got {v}"
+                    )))
+                } else {
+                    Ok(v as u64)
+                }
+            };
+            Ok(Some(AgentUsageTotal {
+                agent_id: "moa-advisors".to_string(),
+                call_count: to_u64(row.0, "call_count")?,
+                input_tokens: to_u64(row.1, "input_tokens")?,
+                output_tokens: to_u64(row.2, "output_tokens")?,
+                cache_read_tokens: to_u64(row.3, "cache_read_tokens")?,
+                cache_creation_tokens: to_u64(row.4, "cache_creation_tokens")?,
+                reasoning_tokens: to_u64(row.5, "reasoning_tokens")?,
+            }))
+        })
+        .await
     }
 }
 

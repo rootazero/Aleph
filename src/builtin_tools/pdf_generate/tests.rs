@@ -37,8 +37,29 @@ fn test_page_size_dimensions_inches() {
     assert!((h - 11.0).abs() < 0.01);
 }
 
+/// Every test in this file that actually renders a PDF holds an
+/// [`IsolatedAlephHome`], and that is not tidiness — it is the fix for a flake.
+///
+/// `resolve_output_path` rewrites the absolute path these tests pass onto the
+/// run's workspace directory (the BT-C-R4-01 anchor), so the scratch tempdir
+/// below never receives the file: `~/.aleph/workspaces/main/output/documents/`
+/// does. Four tests, one fixed directory, run in parallel, ~23 MB apiece.
+///
+/// The race is the second-order one. `IsolatedAlephHome` sets a *process*-wide
+/// `ALEPH_HOME`; libtest runs these concurrently, so one test isolating itself
+/// silently relocates every sibling that has not. The sibling then writes into
+/// a tempdir owned by a guard it knows nothing about — and when that guard
+/// drops, the tree goes with it, mid-write. Single-run green, occasionally red
+/// in a full `--lib` pass, and the file timestamps in the real home show it
+/// happening: after one run `test_auto_fallback.pdf` was freshly written there
+/// while `test_simple.pdf` still carried a date two days old.
+///
+/// Isolating all of them makes the guard's mutex serialise the group, which is
+/// the point: `ALEPH_HOME` is process state, so "some tests isolate" is not a
+/// weaker version of "all tests isolate", it is a different and worse thing.
 #[tokio::test]
 async fn test_simple_pdf_generation() {
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
     let tool = PdfGenerateTool::new();
     let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
     std::fs::create_dir_all(&temp_dir).unwrap();
@@ -68,6 +89,8 @@ async fn test_simple_pdf_generation() {
 
 #[tokio::test]
 async fn test_markdown_pdf_generation() {
+    // See `test_simple_pdf_generation` for why every renderer here isolates.
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
     let tool = PdfGenerateTool::new();
     let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
     std::fs::create_dir_all(&temp_dir).unwrap();
@@ -284,6 +307,8 @@ async fn test_browser_engine_markdown_pdf() {
         return;
     }
 
+    // See `test_simple_pdf_generation` for why every renderer here isolates.
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
     let tool = PdfGenerateTool::new();
     let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
     std::fs::create_dir_all(&temp_dir).unwrap();
@@ -358,6 +383,8 @@ fn main() {
 /// Test: Auto engine falls back to native when Chrome is unavailable.
 #[tokio::test]
 async fn test_auto_engine_fallback() {
+    // See `test_simple_pdf_generation` for why every renderer here isolates.
+    let _home = crate::utils::paths::IsolatedAlephHome::new();
     let tool = PdfGenerateTool::new();
     let (_scratch, temp_dir) = crate::utils::scratch::scratch_root();
     std::fs::create_dir_all(&temp_dir).unwrap();

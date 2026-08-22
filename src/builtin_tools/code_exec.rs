@@ -377,18 +377,22 @@ codes, escalation approvals — is exactly as `bash` documents it.
             "ALEPH_SESSION_ID".to_string(),
             serde_json::to_string(&session_id).unwrap_or_else(|_| format!("{session_id:?}")),
         );
-        env.insert(
-            "ALEPH_TOOL_NAME".to_string(),
-            match args.language {
-                Language::Shell => "bash",
-                Language::Python => "code_exec:python",
-                Language::JavaScript => "code_exec:javascript",
-            }
-            .to_string(),
-        );
+        // One derivation, two readers. The child script reads it out of its
+        // environment to self-identify; the sandbox admission hooks read it off
+        // `SandboxCommand::tool_name` to bucket and audit. Computing it twice
+        // would be two answers to "which tool is this", and the pair is already
+        // pinned by `bash_child_env_carries_aleph_session_and_tool_name`.
+        let tool_name = match args.language {
+            Language::Shell => "bash",
+            Language::Python => "code_exec:python",
+            Language::JavaScript => "code_exec:javascript",
+        }
+        .to_string();
+        env.insert("ALEPH_TOOL_NAME".to_string(), tool_name.clone());
 
         let cmd = SandboxCommand {
             session_id,
+            tool_name,
             program: invocation.program,
             args: invocation.args,
             env,

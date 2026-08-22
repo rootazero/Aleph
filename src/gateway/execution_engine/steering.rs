@@ -209,6 +209,11 @@ fn carries_more_than_text(request: &RunRequest) -> bool {
         || request
             .metadata
             .contains_key(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY)
+        // A side question is a turn of its own on its own session. Folding it
+        // into a running sibling would put it in the main context window.
+        || request
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY)
         || request.sandbox_override.is_some()
         || request.max_iterations_override.is_some()
         || request.timeout_secs.is_some()
@@ -839,6 +844,19 @@ mod tests {
             data: None,
         }];
         assert!(carries_more_than_text(&with_file));
+    }
+
+    #[test]
+    fn a_btw_request_is_never_folded_into_a_running_sibling() {
+        let mut request = run_request("s1", "/btw why?");
+        request.metadata.insert(
+            crate::gateway::btw::BTW_METADATA_KEY.to_string(),
+            "why?".to_string(),
+        );
+        assert!(
+            carries_more_than_text(&request),
+            "a btw turn folded as steering text lands in the main context window"
+        );
     }
 
     use crate::gateway::channel::Attachment;

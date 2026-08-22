@@ -12,14 +12,17 @@
 //! - [`thinking`] - Reasoning and confidence types
 //! - [`auth`] - Authentication and authorization types
 //! - [`session_thread`] - Thread-continuity contract (`agent.run` request, attach snapshot)
+//! - [`btw`] - The one `/btw` side-question resolver, shared by core and thin clients
 
 pub mod artifact;
 pub mod audit;
 pub mod auth;
+pub mod btw;
 pub mod canvas;
 pub mod channel_pairing;
 pub mod channels;
 pub mod desktop_bridge;
+pub mod dreaming;
 pub mod events;
 pub mod extension_usage;
 mod ids;

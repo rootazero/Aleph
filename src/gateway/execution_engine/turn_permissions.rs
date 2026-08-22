@@ -31,11 +31,78 @@ pub(super) struct TurnPermissions {
     /// The merged EXPLICIT policy, or `None` when everything is all-default
     /// (so the `ScopedToolService` hot path stays a no-op).
     pub(super) explicit: Option<ToolPermissionsConfig>,
-    /// The plan → build handoff cell — `Some` exactly when `tier` is
-    /// [`ExecTier::Plan`]. Rides the turn context into both tool services the
-    /// run builds, so one human approval lifts the gate for the run and for
-    /// anything it spawns.
+    /// The plan → build handoff cell — `Some` when `tier` is
+    /// [`ExecTier::Plan`] **and this is not a `/btw` side question**. Rides the
+    /// turn context into both tool services the run builds, so one human
+    /// approval lifts the gate for the run and for anything it spawns.
+    ///
+    /// Not a biconditional, and the exception is the point: a side question
+    /// always resolves to `Plan`, and it gets `None` because its ceiling is a
+    /// bound on one turn with nothing to hand back to. See the mint site in
+    /// [`ExecutionEngine::resolve_turn_permissions`] for why that is withheld
+    /// rather than merely unreachable.
     pub(super) plan_gate: Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>>,
+    /// This turn is a `/btw` side question — see
+    /// `crate::gateway::btw::BTW_METADATA_KEY` and `TurnContext::side_question`.
+    pub(super) side_question: bool,
+}
+
+impl TurnPermissions {
+    /// This turn's routing and permission facts, in the shape the run's tool
+    /// services are built from.
+    ///
+    /// The crossing from resolution into enforcement, as a named function
+    /// rather than a struct literal inside the agent loop. Two reasons, and
+    /// the second is the load-bearing one:
+    ///
+    /// 1. `plan_gate` and `side_question` are resolved here and consumed
+    ///    there, and a literal at the far end is where a newly resolved fact
+    ///    gets left out — the resolution keeps passing its own tests while the
+    ///    enforcement never hears about it.
+    /// 2. It makes the crossing *exercisable*. A test that resolves
+    ///    permissions from a real request and then calls this is running the
+    ///    same hand-off production runs; a test that fills in `side_question`
+    ///    itself is asserting about its own input.
+    ///
+    /// Every field comes from `self`, `request`, `run_id` or `unattended` —
+    /// there is no fifth source, which is what makes this a faithful move of
+    /// the literal rather than a second, thinner construction.
+    pub(super) fn turn_context(
+        &self,
+        request: &RunRequest,
+        run_id: &str,
+        unattended: bool,
+    ) -> crate::tools::turn_context::TurnContext {
+        crate::tools::turn_context::TurnContext {
+            session_key: request.session_key.clone(),
+            run_id: run_id.to_string(),
+            // Channel id / conversation id come from the inbound router's
+            // metadata; empty for non-channel turns (cron, webhook) — the HITL
+            // tools that read them degrade rather than fail.
+            channel_id: request
+                .metadata
+                .get("channel_id")
+                .cloned()
+                .unwrap_or_default(),
+            conversation_id: request
+                .metadata
+                .get("conversation_id")
+                .cloned()
+                .unwrap_or_default(),
+            caller_role: request.metadata.get("caller_role").cloned(),
+            channel_tool_permissions: request
+                .metadata
+                .get(super::CHANNEL_TOOL_PERMISSIONS_KEY)
+                .cloned(),
+            unattended,
+            // Cloned into BOTH tool services the run builds (its own and the
+            // parent view handed to spawned children), so the one human
+            // approval that lifts the gate lifts it everywhere this run can
+            // reach. `None` on every non-planning turn.
+            plan_gate: self.plan_gate.clone(),
+            side_question: self.side_question,
+        }
+    }
 }
 
 /// Resolve this turn's execution tier.
@@ -217,6 +284,30 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let is_all_default = merged.default == crate::extension::PermissionAction::Allow
             && merged.overrides.is_empty();
 
+        // This turn is a `/btw` side question. Minted here — the one place
+        // that already resolves per-turn permission facts — rather than
+        // re-derived downstream from the session key's shape (see
+        // `TurnContext::side_question`).
+        let side_question = request
+            .metadata
+            .contains_key(crate::gateway::btw::BTW_METADATA_KEY);
+
+        // A side question is read-only whatever the conversation's own tier
+        // says. Composed through `most_restrictive` — the same rule the
+        // non-operator ceiling above composes through, and the same
+        // only-ever-tighten discipline `clamp_tier_for_channel` keeps by hand
+        // (it is a two-arm match, not a call to this) — so it can only ever
+        // tighten: a session already at `Plan` is
+        // byte-identical, and no tier, no explicit `[policies.tool_permissions]`
+        // entry and no request-carried pick can raise it, because `Plan`'s
+        // refusal is a floor rather than a default (`effective_permission`
+        // rung 0).
+        let tier = if side_question {
+            ExecTier::most_restrictive(tier, ExecTier::Plan)
+        } else {
+            tier
+        };
+
         // The plan → build handoff cell, minted only for a turn that actually
         // resolved to `Plan`.
         //
@@ -234,7 +325,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // conversation that was explicitly at `ask` returns to the install's
         // posture, not to `ask`. That is the trade — one write, one writer,
         // no key that can go stale — and the tier is one pill click away.
-        let plan_gate = (tier == ExecTier::Plan).then(|| {
+        //
+        // NOT minted for a side question, even though one always resolves to
+        // `Plan`. The gate is the one thing that may move a turn's tier
+        // mid-run, and a side question's ceiling is not the conversation's
+        // request to plan — it is a bound on this single turn, with nothing to
+        // hand back to when the turn ends. Withholding it makes that bound
+        // immovable by construction. It is *also* unreachable today by another
+        // route (`scratchpad`, the only thing that flips a gate, is revoked
+        // for a side question by `PLAN_REACHABLE_TOOLS`) — but a ceiling that
+        // holds only because a list in another module happens to name the
+        // right tool is a ceiling resting on someone else's invariant.
+        let plan_gate = (tier == ExecTier::Plan && !side_question).then(|| {
             std::sync::Arc::new(crate::tools::plan_gate::PlanGate::new(plan_restore_tier(
                 global_tier,
                 requested,
@@ -249,12 +351,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             default = ?merged.default,
             overrides = merged.overrides.len(),
             plan_restores_to = plan_gate.as_ref().map(|g| g.restore_to().id()),
+            side_question,
             "Execution permissions resolved for this turn"
         );
         TurnPermissions {
             tier,
             explicit: (!is_all_default).then_some(merged),
             plan_gate,
+            side_question,
         }
     }
 
@@ -630,5 +734,84 @@ mod tests {
                 assert_eq!(resolve_exec_tier(global, None, None, role), global);
             }
         }
+    }
+
+    // -------------------------------------------------------------------
+    // `/btw` side questions: the withheld `PlanGate`.
+    // -------------------------------------------------------------------
+
+    /// The `&& !side_question` clause at the mint site, pinned by effect
+    /// rather than by prose.
+    ///
+    /// A side question always resolves to `Plan` — the read-only ceiling puts
+    /// it there — so it satisfies the gate's own condition and is still
+    /// denied the cell: a `PlanGate` is the one thing that can move a turn's
+    /// tier mid-run, and a side question's ceiling is a bound on one turn with
+    /// nothing to hand back to. Dropping the clause is
+    /// observable-consequence-free TODAY (`scratchpad`, the only thing that
+    /// flips a gate, is revoked for a side question by `PLAN_REACHABLE_TOOLS`),
+    /// which is exactly the shape a prose-only ruling loses to the next
+    /// sincere fixer.
+    ///
+    /// The control arm is what keeps the side arm from passing vacuously: a
+    /// turn that reached `Plan` the ordinary way, on the same engine and the
+    /// same agent, DOES mint one — so a green side arm reads "withheld", not
+    /// "nothing mints here". The tier assertion carries the same load in the
+    /// other direction: `plan_gate.is_none()` would also be true of a turn
+    /// that never reached `Plan` at all.
+    #[tokio::test]
+    async fn a_side_question_mints_no_plan_gate_but_an_ordinary_plan_turn_does() {
+        use super::super::slash_command::stamp_btw;
+        use super::super::tests::{gate_test_agent, gate_test_request, test_engine};
+        use crate::config::types::policies::EXEC_TIER_SESSION_KEY;
+        use crate::routing::session_key::SessionKey;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let engine = test_engine();
+        let agent = gate_test_agent(&temp, "btw-plan-gate").await;
+        let key = SessionKey::main("btw-plan-gate");
+
+        // The metadata key comes from `execute()`'s own first statement, not
+        // from a hand-written insert — the flag under test is the one the
+        // production path produces.
+        let mut side = gate_test_request(&key, "run-btw-plan-gate-side");
+        side.input = "/btw what does this module do?".to_string();
+        stamp_btw(&side.input, &mut side.metadata);
+        let side = engine.resolve_turn_permissions(&side, &agent).await;
+
+        assert!(
+            side.side_question,
+            "`stamp_btw` must have marked this turn — with the flag off the \
+             rest of this test asserts nothing"
+        );
+        assert_eq!(
+            side.tier,
+            ExecTier::Plan,
+            "the read-only ceiling must have put this turn at `Plan`, so the \
+             withheld gate is withheld from a turn that qualifies for it"
+        );
+        assert!(
+            side.plan_gate.is_none(),
+            "a side question must mint no `PlanGate`: its ceiling is a bound \
+             on this one turn, with nothing to hand back to when it ends"
+        );
+
+        let mut plan = gate_test_request(&key, "run-btw-plan-gate-control");
+        plan.metadata.insert(
+            EXEC_TIER_SESSION_KEY.to_string(),
+            ExecTier::Plan.id().to_string(),
+        );
+        let plan = engine.resolve_turn_permissions(&plan, &agent).await;
+
+        assert!(
+            !plan.side_question,
+            "the control turn is not a side question"
+        );
+        assert_eq!(plan.tier, ExecTier::Plan);
+        assert!(
+            plan.plan_gate.is_some(),
+            "a conversation that asked to plan still gets its handoff cell — \
+             without this the side arm would pass on an engine that mints none"
+        );
     }
 }

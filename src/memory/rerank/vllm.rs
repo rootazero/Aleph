@@ -31,10 +31,19 @@ impl VllmRerankProvider {
     }
 
     fn api_url(&self) -> String {
-        if self.config.api_base.is_empty() {
-            return DEFAULT_API_BASE.to_string();
-        }
-        let base = self.config.api_base.trim_end_matches('/');
+        let raw = if self.config.api_base.is_empty() {
+            DEFAULT_API_BASE
+        } else {
+            &self.config.api_base
+        };
+        // Reject plain HTTP for non-loopback hosts: rerank request bodies
+        // contain the user's query and every recalled candidate's text,
+        // so sending them over an unencrypted channel to a remote host
+        // would leak both query and document content. Loopback is exempt
+        // (the path cannot be intercepted off-host) and the default URL
+        // already points there.
+        Self::assert_safe_endpoint(raw);
+        let base = raw.trim_end_matches('/');
         if base.ends_with("/rerank") {
             return base.to_string();
         }
@@ -44,6 +53,44 @@ impl VllmRerankProvider {
             format!("{base}/v1")
         };
         format!("{base}/rerank")
+    }
+
+    /// Reject `endpoint` values that would leak query/document text in cleartext.
+    fn assert_safe_endpoint(endpoint: &str) {
+        let parsed = match reqwest::Url::parse(endpoint) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(
+                    endpoint,
+                    error = %e,
+                    "vLLM rerank api_base is not a valid URL; requests will fail at send()"
+                );
+                return;
+            }
+        };
+        match parsed.scheme() {
+            "https" => {}
+            "http" => {
+                let host_ok = parsed
+                    .host_str()
+                    .map(|h| {
+                        h.eq_ignore_ascii_case("localhost")
+                            || h == "127.0.0.1"
+                            || h == "::1"
+                            || h == "[::1]"
+                    })
+                    .unwrap_or(false);
+                if !host_ok {
+                    tracing::warn!(
+                        endpoint,
+                        "vLLM rerank endpoint uses plain HTTP for a non-loopback host; \
+                         query and document bodies will be sent in cleartext. \
+                         Configure api_base with https:// or an http://localhost address."
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 }
 

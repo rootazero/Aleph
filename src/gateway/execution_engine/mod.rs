@@ -10,6 +10,7 @@
 
 mod adapter;
 mod agent_trace_emit_sink;
+mod btw_promote;
 mod callback;
 mod concurrency;
 pub(crate) mod concurrency_handle;
@@ -43,6 +44,8 @@ mod turn_thinking;
 mod unattended_redacting_sink;
 
 #[cfg(test)]
+mod btw_wire_tests;
+#[cfg(test)]
 mod tests;
 
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
@@ -52,7 +55,7 @@ pub use engine::{ContinuationDeps, ExecutionEngine};
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 pub use simple::SimpleExecutionEngine;
-pub(crate) use slash_command::{is_continuation_driven_slash, is_shorthand_alias};
+pub(crate) use slash_command::{is_continuation_driven_slash, is_shorthand_alias, stamp_btw};
 pub(crate) use steering::wake_lane_if_burst_drained;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use tool_service_builder::build_request_tool_service;

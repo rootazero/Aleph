@@ -159,6 +159,7 @@ mod event_sourcing {
         handler
             .restore_fact(RestoreNoteCommand {
                 note_path: fact_id.clone(),
+                actor: EventActor::User,
                 correlation_id: None,
             })
             .await

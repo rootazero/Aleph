@@ -5,18 +5,34 @@
 //! full `.workflow.js`-compatible metadata (`whenToUse`, `phases` with optional
 //! per-phase `model`, per-step `label`/`model`/`phase`/`schema`/`isolation`/
 //! `agentType`); only the executable core round-trips into `WorkflowDef`, the
-//! rest is preserved for lossless export. Per-step `model` and `effort` are the
-//! two extras that are *also executable*: the `workflow` tool's `run` threads
-//! them past `to_def` into the materialised task metadata, where the dispatcher
-//! turns them into a per-member model override / think-level. The remaining
-//! agent-opt fields (`isolation`, `agentType`) and `phase.model` stay
-//! interchange-only — the Aleph executor never consumes them (R10), exactly
-//! like the opaque `schema` pass-through.
+//! rest is preserved for lossless export.
+//!
+//! **Four of the extras leave interchange** via [`WorkflowManifest::step_pins`]
+//! → [`StepPins`] → task metadata:
+//!
+//! | field | what it reaches |
+//! |---|---|
+//! | `model` | `RunRequest.model_override` (dispatcher, at launch) |
+//! | `effort` | the member run's `think_level` |
+//! | `phase` | grouped `workflow(action='status')` reporting |
+//! | `schema` | an `## Output Contract` section in the member's handoff — the model is **asked**, never validated |
+//!
+//! `phase` and `schema` used to be inert: they round-tripped through
+//! `import`/`export` and had zero runtime consumers, so a phased `.workflow.js`
+//! imported its phase plan and then reported a flat step list, and a step's
+//! JSON Schema was carried the whole way to disk and told to nobody.
+//!
+//! Genuinely interchange-only: `label`, `agentType`, and `phase.model` — the
+//! Aleph executor resolves execution via the team member named in `agent`, and
+//! the run's model is decided per step, not per phase. `isolation` is a third
+//! kind: it is *validated* (see [`ISOLATION_VOCABULARY`]) but not applied,
+//! because every in-process agent member run is already worktree-isolated.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Result;
+use crate::workflow::compile::StepPins;
 use crate::workflow::def::{WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 
 // NOTE: no `JsonSchema` derive — these types never appear in a tool arg schema
@@ -65,13 +81,30 @@ pub struct WorkflowManifestStep {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The phase title this step sits under (the `.workflow.js` `phase("…")`
+    /// marker preceding its `agent()` call). Carried into task metadata by
+    /// [`step_pins`](WorkflowManifest::step_pins) so `workflow(action='status')`
+    /// can group a run's steps by phase the way the `.workflow.js` live view
+    /// does. Not a scheduling input — the DAG decides order (R10).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
-    /// Opaque JSON Schema, passed through verbatim. Aleph never interprets it.
+    /// Requested output contract, a JSON Schema, passed through verbatim.
+    ///
+    /// Carried into task metadata by
+    /// [`step_pins`](WorkflowManifest::step_pins) and rendered as an
+    /// `## Output Contract` section in the member's handoff, so the step's
+    /// agent is *told* what shape to return. Aleph does **not** validate the
+    /// reply against it — see `WORKFLOW_SCHEMA_KEY` for why enforcement is a
+    /// harness change rather than a wire. Say "requested", not "guaranteed".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<Value>,
     /// `.workflow.js` `agent(..., { isolation })` hint (e.g. `"worktree"`).
-    /// Interchange-only — preserved for faithful export, never executed.
+    ///
+    /// Validated against [`ISOLATION_VOCABULARY`] and preserved for faithful
+    /// export, but never *applied*: the dispatcher already gives every
+    /// in-process agent member run its own git worktree, so `"worktree"` is a
+    /// declaration that already holds. This field previously read
+    /// "never executed", which says the opposite of what happens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<String>,
     /// `.workflow.js` `agent(..., { agentType })` — a custom subagent type.
@@ -135,6 +168,20 @@ pub struct WorkflowManifestStep {
 }
 
 /// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
+
+/// The `isolation` values a manifest step may declare.
+///
+/// Aleph does not *apply* this hint — it does not need to: the dispatcher gives
+/// **every** in-process agent member run its own git worktree unconditionally
+/// (`schedule/mod.rs` sets `isolate = matches!(target, MemberDispatchTarget::Agent{..})`,
+/// and `runner.rs` takes a `WorktreeHandle` from it). So `isolation: "worktree"`
+/// is a declaration that already holds, and `"none"` is a declaration Aleph
+/// cannot honour for an agent step. The module used to describe this field as
+/// "never executed", which reads as *your isolation request is ignored* — the
+/// alarming direction, and false. What is worth doing here is refusing a value
+/// nobody can interpret, so a typo (`"worktee"`) fails at the boundary instead
+/// of riding through import → save → export as data that looks meaningful.
+pub const ISOLATION_VOCABULARY: &[&str] = &["worktree", "none"];
 const fn is_false(v: &bool) -> bool {
     !*v
 }
@@ -235,10 +282,109 @@ impl WorkflowManifest {
                     )));
                 }
             }
+            if let Some(iso) = step
+                .isolation
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                if !ISOLATION_VOCABULARY.contains(&iso) {
+                    return Err(crate::error::AlephError::invalid_input(format!(
+                        "step '{}': unknown isolation '{iso}' — use one of {}",
+                        step.id,
+                        ISOLATION_VOCABULARY.join("/")
+                    )));
+                }
+            }
         }
         self.to_def().validate()
     }
 
+    /// Per-step [`StepPins`] keyed by step-local id, for every **agent** step
+    /// that pins at least one override. Clarify steps run no agent, so they are
+    /// skipped — stamping them would put keys on a row nothing reads.
+    ///
+    /// This is the single place the manifest's four executable-or-reportable
+    /// extras become a materialisation input. `run` used to build two parallel
+    /// `HashMap<String, String>`s inline (one for `model`, one for `effort`),
+    /// which is why `effort` reached task metadata and no reporting surface:
+    /// the maps were separate, so growing a face for one grew nothing for the
+    /// other.
+    #[must_use]
+    pub fn step_pins(&self) -> std::collections::HashMap<String, StepPins> {
+        let mut out = std::collections::HashMap::new();
+        for step in &self.steps {
+            if step.kind == WorkflowStepKind::Clarify {
+                continue;
+            }
+            let non_blank = |v: &Option<String>| {
+                v.as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
+            let pins = StepPins {
+                model: non_blank(&step.model),
+                effort: non_blank(&step.effort),
+                phase: non_blank(&step.phase),
+                schema: step.schema.clone().filter(|s| !s.is_null()),
+            };
+            if !pins.is_empty() {
+                out.insert(step.id.clone(), pins);
+            }
+        }
+        out
+    }
+
+    /// Name every kind of metadata this manifest carries that a
+    /// [`WorkflowDef`] cannot express, in a stable order.
+    ///
+    /// Two faces need this same answer and had two different partial versions
+    /// of it: `save` reported "per-step model/effort pins preserved" (a
+    /// hand-written pair that never learned about `phase` / `schema` /
+    /// `whenToUse` / the phase plan), and `import` reported nothing at all —
+    /// while its own remediation advice ("retarget the agents: edit + save")
+    /// routes a freshly-parsed rich `.workflow.js` through a lean `WorkflowDef`
+    /// with **nothing stored yet**, so `save`'s preservation path
+    /// ([`with_core_from`](Self::with_core_from)) cannot fire and every extra
+    /// is dropped on the first save.
+    ///
+    /// Derived by exhaustive check rather than by a remembered list, so a new
+    /// manifest-only field is a compile-visible edit here instead of a silent
+    /// omission on both faces at once.
+    #[must_use]
+    pub fn def_inexpressible_extras(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if !self.when_to_use.trim().is_empty() {
+            out.push("whenToUse");
+        }
+        if !self.phases.is_empty() {
+            out.push("phases");
+        }
+        let any = |f: fn(&WorkflowManifestStep) -> bool| self.steps.iter().any(f);
+        if any(|s| s.label.is_some()) {
+            out.push("label");
+        }
+        if any(|s| s.model.is_some()) {
+            out.push("model");
+        }
+        if any(|s| s.effort.is_some()) {
+            out.push("effort");
+        }
+        if any(|s| s.phase.is_some()) {
+            out.push("phase");
+        }
+        if any(|s| s.schema.is_some()) {
+            out.push("schema");
+        }
+        if any(|s| s.isolation.is_some()) {
+            out.push("isolation");
+        }
+        if any(|s| s.agent_type.is_some()) {
+            out.push("agentType");
+        }
+        out
+    }
     /// Project to the executable core, dropping extra metadata. Callers
     /// typically `validate()` the result before persisting or running.
     #[must_use]
@@ -546,5 +692,48 @@ mod tests {
         let s = serde_json::to_string(&manifest).unwrap();
         let back: WorkflowManifest = serde_json::from_str(&s).unwrap();
         assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn step_pins_collects_only_agent_steps_with_pins() {
+        let mut m = WorkflowManifest::from_def(&core_def());
+        m.steps[0].model = Some("opus".into());
+        m.steps[0].effort = Some("max".into());
+        m.steps[0].phase = Some("Scan".into());
+        m.steps[0].schema = Some(serde_json::json!({"type": "object"}));
+        // Blank strings are "unset spelled differently".
+        m.steps[1].model = Some("   ".into());
+
+        let pins = m.step_pins();
+        assert_eq!(pins.len(), 1, "only the really-pinned step appears");
+        let p = pins.get("a").expect("step a pinned");
+        assert_eq!(p.model.as_deref(), Some("opus"));
+        assert_eq!(p.effort.as_deref(), Some("max"));
+        assert_eq!(p.phase.as_deref(), Some("Scan"));
+        assert!(p.schema.is_some());
+        assert_eq!(p.census(), StepPins::all_fields());
+    }
+
+    #[test]
+    fn step_pins_skips_clarify_steps() {
+        // A clarify step runs no agent — stamping it would put keys on a row
+        // nothing reads.
+        let mut m = WorkflowManifest::from_def(&core_def());
+        m.steps[0].kind = WorkflowStepKind::Clarify;
+        m.steps[0].agent = String::new();
+        m.steps[0].model = Some("opus".into());
+        assert!(m.step_pins().is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_isolation() {
+        // `isolation` is validated so a typo fails at the boundary instead of
+        // riding through import → save → export as meaningful-looking data.
+        let mut m = WorkflowManifest::from_def(&core_def());
+        m.steps[0].isolation = Some("worktee".into());
+        let err = m.validate().unwrap_err().to_string();
+        assert!(err.contains("unknown isolation"), "{err}");
+        m.steps[0].isolation = Some("worktree".into());
+        assert!(m.validate().is_ok(), "{:?}", m.validate());
     }
 }

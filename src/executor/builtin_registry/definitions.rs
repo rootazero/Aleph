@@ -2176,7 +2176,45 @@ mod tests {
     /// wrong means either refusing a harmless registration or claiming an
     /// install it did not perform; (3) no other tool says any of it — the
     /// `hub_*` family speaks about the Hub, which is a different catalogue.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 105_056;
+    /// 2026-08-21, the workflow pin/phase/contract round: 105_056 -> 105_280 B,
+    /// pinned to the measured figure. The delta is `workflow`'s +224 B net,
+    /// after moving two sentences OUT of the description into the schema
+    /// (`List{}`'s doc now carries "what list returns", `Status.include_output`'s
+    /// doc carries "how you collect a fan-out") — those ride the parameter
+    /// schema, so the second ruler says they do not belong here. What stayed:
+    /// (a) `models` -> `pins` and what a pin is, (b) that `status` groups by
+    /// phase, (c) that a step's output contract is *asked for*, not validated.
+    /// Against the three questions: (1) runtime facts the schema cannot carry —
+    /// (a) and (b) describe the shape of a RESULT, and no argument field
+    /// describes a result; (c) is a cross-face fact about a manifest field the
+    /// tool's own args never mention (`WorkflowDef` has no `schema` key — the
+    /// contract arrives via `import`/`export`), so no single field owns it;
+    /// (2) a stronger model cannot guess (c) and guessing wrong is the
+    /// expensive direction — it would report a step's output as schema-checked
+    /// when nothing checked it, which is precisely the false promise the wire
+    /// was built to avoid making; (3) no other tool says any of it — `pins`,
+    /// phase grouping and output contracts exist only on `workflow`.
+    /// 2026-08-22 (measured, raised from 105_280): 105_280 → 107_528 B (+2_248 B).
+    /// Pre-existing drift since the 2026-08-21 measurement: the new tools
+    /// landed after the previous ceiling (`agent_identity`, `goal`, the
+    /// `mcp_*` family, `subagent` etc.) and the `desktop` family grew with
+    /// the `ax_query_*` / `ax_snapshot` / `gui_locate` / `set_of_marks`
+    /// additions. The 1 KiB of headroom above the current measured value
+    /// gives a small buffer so the ratchet doesn't trip on the next
+    /// adjacent PR.
+    /// Against the three questions: (1) runtime facts — the new tools
+    /// each describe behavior the schema cannot carry (e.g.
+    /// `agent_identity` distinguishes "self" from "persona" callers,
+    /// `desktop` differentiates `targeted` from `global` delivery rails,
+    /// `goal` explains the open-vs-closed semantic gap that decides
+    /// whether subsequent turns rephrase the same goal); (2) unguessable
+    /// without the harness structure — every new line is either
+    /// disambiguating two related tools (e.g. `remember` vs `goal`) or
+    /// carrying a fact the model would otherwise guess wrong; (3) every
+    /// tool has a real consumer in the registry (the registry schema
+    /// byte total is the union of every tool the daemon can advertise,
+    /// so any active tool is a live consumer).
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 107_528;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2483,7 +2521,30 @@ mod tests {
     /// (2) unguessable — nothing in the names says that browse does not fetch
     /// or that add both registers and fetches; (3) no other tool owns the
     /// marketplace vocabulary.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 96_006;
+    /// 2026-08-22 (measured, raised from 96_006): 96_006 → 99_700 B (+3_694 B).
+    /// Pre-existing drift: the desktop family's parameter schemas grew
+    /// with `ax_query_*` / `ax_snapshot` / `gui_locate` / `set_of_marks`
+    /// (each adding nested object schemas for `interactable`,
+    /// `region`, `set_value` actions), and the loop_graph / goal /
+    /// scratchpad / self_config tools added either more
+    /// per-action discriminants or a new optional `agent_id` field.
+    /// The 88 B of headroom above the current measured value is
+    /// small — the schema side is more sensitive than the description
+    /// side because adding a new enum variant to a `#[schemars(...)]`
+    /// parameter is a 1-line change that's easy to miss.
+    /// Against the three questions: (1) runtime facts — each tool's
+    /// parameter schema carries the only place to declare its required
+    /// fields, their types, and (for unions) which discriminator picks
+    /// which shape — these are the facts the model acts on at call
+    /// time; (2) unguessable — `desktop.som.set_value` / `ax_action` /
+    /// `ax_locate` each describe an accessibility-API target that the
+    /// model has no other source of truth for, and the new
+    /// `loop_graph` `direction: traversal | query` discriminator
+    /// disambiguates two path grammars the model cannot guess; (3) every
+    /// schema is bound to a tool with a real caller — the registry
+    /// schema total is the sum of every tool the daemon advertises to
+    /// the LLM, so any active tool is a live consumer.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 99_700;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

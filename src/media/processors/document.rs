@@ -63,9 +63,12 @@ impl MediaProvider for TextDocumentProvider {
         _media_type: &MediaType,
         _prompt: Option<&str>,
     ) -> Result<MediaOutput, MediaError> {
+        // Shared size cap across all input variants so a hostile caller
+        // cannot route around the FilePath branch's check by sending the
+        // same payload as Base64.
+        const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
         match input {
             MediaInput::FilePath { path } => {
-                const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
                 let meta =
                     tokio::fs::metadata(path)
                         .await
@@ -98,6 +101,23 @@ impl MediaProvider for TextDocumentProvider {
             }
             MediaInput::Base64 { data, .. } => {
                 use base64::Engine;
+                // Pre-decode OOM guard: the existing MAX_TEXT_FILE_BYTES cap
+                // only protects the FilePath branch. A multi-MB base64 string
+                // here would peak at ~0.75× its size after decode before any
+                // size check could refuse it. Apply the same 4/3 worst-case
+                // expansion used in media/cache.rs::decode_data_url.
+                let approx = data.len().saturating_mul(3) / 4;
+                if approx as u64 > MAX_TEXT_FILE_BYTES {
+                    return Err(MediaError::ProviderError {
+                        provider: "text-document".into(),
+                        message: format!(
+                            "Base64 payload exceeds size cap before decode \
+                             (encoded={}, approx decoded > {})",
+                            data.len(),
+                            MAX_TEXT_FILE_BYTES
+                        ),
+                    });
+                }
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(data)
                     .map_err(|e| MediaError::ProviderError {

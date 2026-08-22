@@ -100,6 +100,17 @@ pub async fn perform_session_split(
         .await
         .map_err(SplitError::Failed)?;
 
+    // 3b. …and retire what belonged to the epoch that was just superseded.
+    // Routing now resolves this conversation to `child`, so anything keyed to
+    // the parent's exact epoch — the `/btw` side session, whose key is derived
+    // from it — stops being derivable by any surface. Unlike `/new` or a
+    // delete, nobody asked for this: the split happens on its own, so without
+    // this call the orphan is created by the system and reported to no one.
+    // After the registration, deliberately: registration is what makes the
+    // parent superseded, and a retirement before a failed registration would
+    // have thrown away a side session that is still live.
+    epoch_registrar.retire_superseded(parent_session_id).await;
+
     // 4. Seed the child: SessionForked -> SystemMessage(summary) -> fresh tail.
     let parent_str = parent_session_id.to_key_string();
     session

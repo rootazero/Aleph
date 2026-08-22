@@ -50,7 +50,7 @@
 
 use std::collections::HashSet;
 
-use crate::session::events::{SessionEvent, SessionEventRecord, TurnId};
+use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord, TurnId};
 
 /// How much of the parent's transcript one fork may carry.
 ///
@@ -123,6 +123,9 @@ struct TurnGroup {
     events: Vec<SessionEvent>,
     /// `call_id`s requested in this turn with no result yet.
     open_calls: HashSet<String>,
+    /// Source seq of the newest event in this group. Groups drop the record
+    /// wrapper, so this is the only place the source ordinal survives.
+    last_seq: EventSeq,
 }
 
 /// What a fork will actually copy, plus what it had to leave behind.
@@ -136,6 +139,21 @@ pub(crate) struct ForkPlan {
     pub(crate) turns_available: usize,
     /// Serialized size of [`Self::events`].
     pub(crate) chars: usize,
+    /// Source seq of the newest event this plan consumed, or `None` when it
+    /// carried nothing.
+    ///
+    /// This is **how far into the source the plan read**, which is not the same
+    /// question as what it kept, and the difference cuts both ways:
+    ///
+    /// * turns dropped off the *front* for budget are older than this, so a
+    ///   caller resuming from here will not re-read them — which is what makes
+    ///   an incremental caller append-only rather than doubling;
+    /// * the trailing *open* turn is deliberately left behind and sits above
+    ///   this, so it is re-read once it closes and its answer is not lost.
+    ///
+    /// Only a caller that resumes from the same log needs it; the sub-agent
+    /// spawner forks once and ignores it.
+    pub(crate) read_through: Option<EventSeq>,
 }
 
 impl ForkPlan {
@@ -298,11 +316,20 @@ pub(crate) fn plan(records: &[SessionEventRecord], budget: &ForkBudget) -> ForkP
         .unwrap_or(events.len());
     events.drain(..head);
 
+    // Taken newest-first then reversed, so the last group is the newest turn
+    // consumed. Gated on `events`: after the head snap a non-empty `taken` can
+    // still carry nothing, and a plan that carried nothing has not read
+    // anything either.
+    let read_through = (!events.is_empty())
+        .then(|| taken.last().map(|g| g.last_seq))
+        .flatten();
+
     ForkPlan {
         turns_copied: taken.len(),
         turns_available,
         chars,
         events,
+        read_through,
     }
 }
 
@@ -366,6 +393,36 @@ pub(crate) async fn seed(
         return Ok(None);
     }
 
+    mark_forked(session, parent, child)
+        .await
+        .map_err(|e| format!("sub-agent failed: {e}"))?;
+
+    // The prefix belongs to this function, not to the copy loop: `seed_events`
+    // is also the btw side-thread's warm path, where "sub-agent failed" names a
+    // subsystem the user was not using. Re-applied here so `seed`'s own output
+    // stays byte-identical for the spawner.
+    seed_events(session, child, &plan.events)
+        .await
+        .map_err(|e| format!("sub-agent failed: {e}"))?;
+
+    Ok(Some(plan))
+}
+
+/// Stamp `child` as forked from `parent`.
+///
+/// The single place the `SessionForked` marker is written. Split out from
+/// [`seed`] so an incremental caller can decide *whether* a fork is beginning
+/// without owning the decision of *what the marker looks like* — a side thread
+/// topped up on every question is one fork that grew, and a cold seed whose
+/// bookkeeping was lost and is being retried is still that same one fork.
+/// Claiming N would be a lie to the provenance classification that reads it.
+///
+/// Errors are unprefixed; see [`seed_events`].
+pub(crate) async fn mark_forked(
+    session: &dyn crate::session::service::SessionService,
+    parent: &crate::session::service::SessionId,
+    child: &crate::session::service::SessionId,
+) -> Result<(), String> {
     session
         .emit_event(
             child,
@@ -375,16 +432,39 @@ pub(crate) async fn seed(
             },
         )
         .await
-        .map_err(|e| format!("sub-agent failed: fork: emit SessionForked: {e}"))?;
+        .map_err(|e| format!("fork: emit SessionForked: {e}"))
+        .map(|_seq| ())
+}
 
-    for event in &plan.events {
+/// Copy planned events into `child` verbatim, without provenance marking.
+///
+/// The copy half of [`seed`], split out for callers that top a child up
+/// *incrementally* — a second fork of the same pair is one fork that grew, not
+/// two forks, so `SessionForked` must not be re-emitted for it. Marking stays
+/// in [`seed`], which is the only place a fork *begins*.
+///
+/// Verbatim `emit_event` rather than re-rendering is the whole point: prefix
+/// warmth requires the copied bytes to be byte-identical replays, so anything
+/// that reshapes an event here would silently delete the saving the fork modes
+/// exist for.
+///
+/// Errors are **unprefixed**. Attributing them to a sub-agent here would be
+/// wrong for every caller that is not one, and the error string is the only
+/// classification a consumer gets — pointing an operator at the wrong
+/// subsystem's logs is the same defect as returning the wrong error code.
+/// [`seed`] re-applies its own prefix.
+pub(crate) async fn seed_events(
+    session: &dyn crate::session::service::SessionService,
+    child: &crate::session::service::SessionId,
+    events: &[SessionEvent],
+) -> Result<(), String> {
+    for event in events {
         session
             .emit_event(child, event.clone())
             .await
-            .map_err(|e| format!("sub-agent failed: fork: copy event: {e}"))?;
+            .map_err(|e| format!("fork: copy event: {e}"))?;
     }
-
-    Ok(Some(plan))
+    Ok(())
 }
 
 /// Bucket prompt-bearing events into consecutive same-`turn_id` runs.
@@ -407,6 +487,7 @@ fn group_into_turns(records: &[SessionEventRecord]) -> Vec<TurnGroup> {
                 turn,
                 events: Vec::new(),
                 open_calls: HashSet::new(),
+                last_seq: record.seq,
             });
         }
         let group = groups
@@ -421,6 +502,7 @@ fn group_into_turns(records: &[SessionEventRecord]) -> Vec<TurnGroup> {
             }
             _ => {}
         }
+        group.last_seq = record.seq;
         group.events.push(record.event.clone());
     }
     groups

@@ -211,7 +211,7 @@ impl Sandbox for WorkspaceSandbox {
         // semantics.
         if let SandboxHookResult::Deny { reason } = self
             .hooks
-            .run_before(&SandboxHookContext::new(&cmd.program, &cmd))
+            .run_before(&SandboxHookContext::new(&cmd))
             .await
         {
             return Err(SandboxError::Other(format!("hook denied: {reason}")));
@@ -1032,6 +1032,7 @@ mod tests {
 
         let cmd = SandboxCommand {
             session_id: session.clone(),
+            tool_name: "bash".into(),
             program: "echo".into(),
             args: vec!["hi".into()],
             env: HashMap::new(),
@@ -1067,6 +1068,7 @@ mod tests {
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: sid(),
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -1092,6 +1094,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: session,
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -1122,6 +1125,7 @@ mod tests {
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: session,
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -1179,6 +1183,7 @@ mod tests {
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: session,
+                tool_name: "bash".into(),
                 program: "curl".into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -1235,6 +1240,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: session,
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -1273,6 +1279,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: session.clone(),
+                tool_name: "bash".into(),
                 program: "curl".into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -1290,6 +1297,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: session,
+                tool_name: "bash".into(),
                 program: "curl".into(),
                 args: vec![],
                 env: HashMap::new(),
@@ -1481,6 +1489,7 @@ mod tests {
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: sid(),
+                tool_name: "bash".into(),
                 program: "curl".into(),
                 args: vec!["https://example.com".into()],
                 env: HashMap::new(),
@@ -1525,6 +1534,7 @@ mod tests {
         let session = sid();
         let mk = || SandboxCommand {
             session_id: session.clone(),
+            tool_name: "bash".into(),
             program: "curl".into(),
             args: vec!["https://example.com".into()],
             env: HashMap::new(),
@@ -1590,6 +1600,7 @@ mod tests {
         let denied = sandbox
             .execute(SandboxCommand {
                 session_id: session.clone(),
+                tool_name: "bash".into(),
                 program: "curl".into(),
                 args: vec!["https://example.com".into()],
                 env: HashMap::new(),
@@ -1645,6 +1656,7 @@ mod tests {
             let _ = sandbox
                 .execute(SandboxCommand {
                     session_id: session.clone(),
+                    tool_name: "bash".into(),
                     program: program.into(),
                     args: vec!["https://example.com".into()],
                     env: HashMap::new(),
@@ -1689,6 +1701,7 @@ mod tests {
         let session = sid();
         let mk = || SandboxCommand {
             session_id: session.clone(),
+            tool_name: "bash".into(),
             program: "curl".into(),
             args: vec!["https://example.com".into()],
             env: HashMap::new(),
@@ -1799,6 +1812,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: sid(),
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec!["hi".into()],
                 env: HashMap::new(),
@@ -1837,6 +1851,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: sid(),
+                tool_name: "bash".into(),
                 program: "curl".into(),
                 args: vec!["https://example.com".into()],
                 env: HashMap::new(),
@@ -1877,6 +1892,7 @@ mod tests {
         sandbox
             .execute(SandboxCommand {
                 session_id: sid(),
+                tool_name: "bash".into(),
                 program: "echo".into(),
                 args: vec!["hi".into()],
                 env,
@@ -1930,6 +1946,7 @@ mod tests {
         let (sandbox, driver) = build_macos_capturing(&tmp);
         let cmd = SandboxCommand {
             session_id: sid(),
+            tool_name: "bash".into(),
             program: "curl".into(),
             args: vec!["https://api.example.com/".into()],
             env: HashMap::new(),
@@ -1968,6 +1985,7 @@ mod tests {
         let (sandbox, driver) = build_macos_capturing(&tmp);
         let cmd = SandboxCommand {
             session_id: sid(),
+            tool_name: "bash".into(),
             program: "echo".into(),
             args: vec!["hi".into()],
             env: HashMap::new(),
@@ -2003,6 +2021,7 @@ mod tests {
         );
         let cmd = SandboxCommand {
             session_id: sid(),
+            tool_name: "bash".into(),
             program: "curl".into(),
             args: vec!["https://api.example.com/".into()],
             env: HashMap::new(),
@@ -2060,6 +2079,7 @@ mod tests {
         env_pre.insert("HTTP_PROXY".into(), "http://corporate-proxy:8080".into());
         let cmd = SandboxCommand {
             session_id: sid(),
+            tool_name: "bash".into(),
             program: "curl".into(),
             args: vec!["https://api.example.com/".into()],
             env: env_pre,
@@ -2156,6 +2176,7 @@ mod scrub_integration_tests {
     fn mk_cmd() -> SandboxCommand {
         SandboxCommand {
             session_id: crate::routing::session_key::SessionKey::ephemeral("scrub-test"),
+            tool_name: "bash".into(),
             program: "echo".into(),
             args: vec![],
             env: HashMap::new(),
@@ -2383,6 +2404,7 @@ mod denial_dialect_tests {
     fn mk_cmd(label: &str) -> SandboxCommand {
         SandboxCommand {
             session_id: crate::routing::session_key::SessionKey::ephemeral(label),
+            tool_name: "bash".into(),
             program: "echo".into(),
             args: vec![],
             env: HashMap::new(),

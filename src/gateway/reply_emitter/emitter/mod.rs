@@ -33,6 +33,23 @@ pub struct ReplyEmitter {
     pub(crate) has_sent: AtomicBool,
     /// Guard against duplicate `RunComplete` events (orchestrator drain + engine.rs both emit).
     pub(crate) run_complete_handled: AtomicBool,
+
+    /// The run has started delivering its **answer** — as opposed to the
+    /// progress messages (approval prompts, scratchpad ticks) that may have
+    /// gone out before it.
+    ///
+    /// Exists so the side-answer marker lands on the answer only. `RunComplete`
+    /// is where a channel run's final text is decided, but it is decided in
+    /// several arms (buffer flush, streaming settle, native stream finalize,
+    /// the `summary.final_response` fallback) that draw their text from
+    /// different places, so there is no one string to mark. A latch set once at
+    /// the terminal event lets the marker be applied where each arm actually
+    /// hands text to the channel, without each arm having to remember.
+    ///
+    /// Deliberately NOT set on `RunError`: a partial flush followed by an error
+    /// receipt is not the run's answer, and marking it would put a "here is
+    /// your side answer" badge on a run that produced none.
+    pub(crate) answering: AtomicBool,
     pub(crate) run_id: String,
 
     /// Cancellation token to stop the persistent typing indicator task
@@ -100,6 +117,7 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_complete_handled: AtomicBool::new(false),
+            answering: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
             generation_registry: None,
@@ -139,6 +157,7 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_complete_handled: AtomicBool::new(false),
+            answering: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
             generation_registry: None,

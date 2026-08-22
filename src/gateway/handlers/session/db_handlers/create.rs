@@ -61,8 +61,6 @@ pub async fn handle_new_session_db(
     request: JsonRpcRequest,
     manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
-    use crate::routing::session_key::SessionKey as RoutingKey;
-
     let session_key_str = match request
         .params
         .as_ref()
@@ -80,7 +78,16 @@ pub async fn handle_new_session_db(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Parse with legacy key for close_session compatibility
+    // ONE parse of the caller's string, reused by every step below.
+    //
+    // This used to be parsed twice — `from_key_string` here and
+    // `SessionKey::parse` again before the epoch bump. They are the same type
+    // and agree whenever `parse` succeeds, but `from_key_string` is
+    // `parse().or_else(from_legacy)`, so a legacy-only key (e.g.
+    // `agent:x:peer:a:b`) passed the first gate and failed the second — after
+    // the close and the side-session retirement had already run. Two parses of
+    // one string is two answers to "which key is this", and the retirement
+    // derives its target from that answer.
     let legacy_key = match SessionKey::from_key_string(&session_key_str) {
         Some(k) => k,
         None => {
@@ -107,10 +114,13 @@ pub async fn handle_new_session_db(
     // Terminate the closing session's autonomous continuations BEFORE the
     // epoch bump — a loop/goal keyed under the old epoch would otherwise keep
     // its self-sustaining chain alive with no session left that can stop it
-    // (same seam as the channel `/new` command).
+    // (same seam as the channel `/new` command). The same call retires the
+    // `/btw` side session derived from this key, which the epoch bump is about
+    // to make unreachable.
     crate::gateway::continuation_lifecycle::terminate_session_continuations(
-        &legacy_key.to_key_string(),
+        &legacy_key,
         "sessions.new",
+        Some(manager.clone()),
     );
 
     // Close old session
@@ -122,20 +132,8 @@ pub async fn handle_new_session_db(
         );
     }
 
-    // Parse with routing key for epoch support
-    let routing_key = match RoutingKey::parse(&session_key_str) {
-        Some(k) => k,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Cannot parse session key for epoch",
-            );
-        }
-    };
-
-    // Create new epoch key
-    let new_routing_key = routing_key.with_next_epoch();
+    // Create new epoch key from the single parse above.
+    let new_routing_key = legacy_key.with_next_epoch();
     let new_key_str = new_routing_key.to_key_string();
 
     // Create the new session UNDER the closing session's attribution.

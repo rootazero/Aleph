@@ -13,42 +13,72 @@ impl StateDatabase {
     // Memory Events CRUD
     // =========================================================================
 
-    /// Append a single memory event. Returns the assigned global ID.
+    /// Append a single memory event. Returns the assigned global row ID.
+    ///
+    /// `seq` is **atomically allocated by SQLite inside the INSERT**, not by the
+    /// caller. The caller-supplied `envelope.seq` is ignored — supplying a
+    /// pre-computed value would re-introduce a TOCTOU race (two writers
+    /// reading `MAX(seq)` back-to-back would both compute the same `seq+1`
+    /// and the second `INSERT` would fail with `UNIQUE constraint failed`).
+    /// The atomic form (`SELECT COALESCE(MAX(seq),0)+1 ... FROM memory_events
+    /// WHERE fact_id = ?1`) evaluates the sub-query and writes the new row in
+    /// a single SQLite statement, so concurrent writers serialize through
+    /// SQLite's statement-level lock and never collide.
+    ///
+    /// Callers that need the post-insert `seq` must re-read via
+    /// [`get_memory_events_for_fact`] (or [`get_memory_event_latest_seq`]);
+    /// the append path itself does not surface it.
     pub async fn append_memory_event(
         &self,
         envelope: &MemoryEventEnvelope,
     ) -> Result<i64, AlephError> {
-        let event_json = serde_json::to_string(&envelope.event)
-            .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-        let tier = if envelope.event.is_skeleton() {
-            "skeleton"
-        } else {
-            "pulse"
-        };
+        let envelope = envelope.clone();
+        self.with_conn(move |conn| {
+            let event_json = serde_json::to_string(&envelope.event)
+                .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
+            let tier = if envelope.event.is_skeleton() {
+                "skeleton"
+            } else {
+                "pulse"
+            };
 
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.execute(
-            r#"
-            INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            "#,
-            params![
-                envelope.fact_id,
-                envelope.seq,
-                envelope.event.event_type_tag(),
-                event_json,
-                envelope.actor.to_string(),
-                tier,
-                envelope.timestamp,
-                envelope.correlation_id,
-            ],
-        )
-        .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
+            // Single statement: compute next seq for this fact_id and INSERT in
+            // one go. SQLite serializes this through its per-connection write
+            // lock, so two concurrent appends on the same fact_id cannot both
+            // observe the same MAX(seq) and then collide on UNIQUE(fact_id, seq).
+            conn.execute(
+                r#"
+                INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
+                SELECT ?1,
+                       COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
+                       ?3, ?4, ?5, ?6, ?7, ?8
+                "#,
+                params![
+                    envelope.fact_id,
+                    envelope.fact_id, // fact_id appears twice: once for the row, once for the sub-query scope
+                    envelope.event.event_type_tag(),
+                    event_json,
+                    envelope.actor.to_string(),
+                    tier,
+                    envelope.timestamp,
+                    envelope.correlation_id,
+                ],
+            )
+            .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
 
-        Ok(conn.last_insert_rowid())
+            Ok(conn.last_insert_rowid())
+        })
+        .await
     }
 
     /// Batch-append memory events.
+    ///
+    /// Each envelope's `seq` is atomically allocated inside its own INSERT,
+    /// mirroring [`append_memory_event`]. A single SQLite transaction wraps
+    /// the batch so the whole batch either commits or rolls back, but the
+    /// per-row `seq` allocation is independent (concurrent writers on the
+    /// same fact_id serialize through SQLite's per-connection write lock,
+    /// not through the batch transaction).
     pub async fn append_memory_events(
         &self,
         envelopes: &[MemoryEventEnvelope],
@@ -57,48 +87,53 @@ impl StateDatabase {
             return Ok(());
         }
 
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let tx = conn
-            .transaction()
-            .map_err(|e| AlephError::other(format!("Failed to begin transaction: {e}")))?;
+        let envelopes: Vec<MemoryEventEnvelope> = envelopes.to_vec();
+        self.with_conn(move |conn| {
+            let tx = conn
+                .transaction()
+                .map_err(|e| AlephError::other(format!("Failed to begin transaction: {e}")))?;
 
-        {
-            let mut stmt = tx
-                .prepare(
-                    r#"
-                    INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                    "#,
-                )
-                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+            {
+                let mut stmt = tx
+                    .prepare(
+                        r#"
+                        INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
+                        SELECT ?1,
+                               COALESCE((SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1), 0) + 1,
+                               ?3, ?4, ?5, ?6, ?7, ?8
+                        "#,
+                    )
+                    .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
-            for envelope in envelopes {
-                let event_json = serde_json::to_string(&envelope.event)
-                    .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-                let tier = if envelope.event.is_skeleton() {
-                    "skeleton"
-                } else {
-                    "pulse"
-                };
+                for envelope in &envelopes {
+                    let event_json = serde_json::to_string(&envelope.event)
+                        .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
+                    let tier = if envelope.event.is_skeleton() {
+                        "skeleton"
+                    } else {
+                        "pulse"
+                    };
 
-                stmt.execute(params![
-                    envelope.fact_id,
-                    envelope.seq,
-                    envelope.event.event_type_tag(),
-                    event_json,
-                    envelope.actor.to_string(),
-                    tier,
-                    envelope.timestamp,
-                    envelope.correlation_id,
-                ])
-                .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
+                    stmt.execute(params![
+                        envelope.fact_id,
+                        envelope.fact_id,
+                        envelope.event.event_type_tag(),
+                        event_json,
+                        envelope.actor.to_string(),
+                        tier,
+                        envelope.timestamp,
+                        envelope.correlation_id,
+                    ])
+                    .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
+                }
             }
-        }
 
-        tx.commit()
-            .map_err(|e| AlephError::other(format!("Failed to commit transaction: {e}")))?;
+            tx.commit()
+                .map_err(|e| AlephError::other(format!("Failed to commit transaction: {e}")))?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Get all events for a fact, ordered by seq.
@@ -116,30 +151,34 @@ impl StateDatabase {
         fact_id: &str,
         agent_id: &str,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                FROM memory_events
-                WHERE fact_id = ?1 AND (?2 = '' OR actor = ?2)
-                ORDER BY seq ASC
-                "#,
-            )
-            .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+        let fact_id = fact_id.to_string();
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
+                    FROM memory_events
+                    WHERE fact_id = ?1 AND (?2 = '' OR actor = ?2)
+                    ORDER BY seq ASC
+                    "#,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![fact_id, agent_id], MemoryEventRow::from_row)
-            .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
+            let rows = stmt
+                .query_map(params![fact_id, agent_id], MemoryEventRow::from_row)
+                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
-        let mut envelopes = Vec::new();
-        for row in rows {
-            let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            if let Some(envelope) = row.into_envelope()? {
-                envelopes.push(envelope);
+            let mut envelopes = Vec::new();
+            for row in rows {
+                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
+                if let Some(envelope) = row.into_envelope()? {
+                    envelopes.push(envelope);
+                }
             }
-        }
-        Ok(envelopes)
+            Ok(envelopes)
+        })
+        .await
     }
 
     /// Get events for a fact since a given sequence number.
@@ -148,35 +187,39 @@ impl StateDatabase {
         fact_id: &str,
         since_seq: u64,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                FROM memory_events
-                WHERE fact_id = ?1 AND seq > ?2
-                ORDER BY seq ASC
-                "#,
-            )
-            .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+        let fact_id = fact_id.to_string();
+        let since_seq = since_seq;
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
+                    FROM memory_events
+                    WHERE fact_id = ?1 AND seq > ?2
+                    ORDER BY seq ASC
+                    "#,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
-        let since_seq_i64 = i64::try_from(since_seq).map_err(|_| {
-            AlephError::other(format!(
-                "Sequence number {since_seq} exceeds i64::MAX and cannot be used in SQLite query"
-            ))
-        })?;
-        let rows = stmt
-            .query_map(params![fact_id, since_seq_i64], MemoryEventRow::from_row)
-            .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
+            let since_seq_i64 = i64::try_from(since_seq).map_err(|_| {
+                AlephError::other(format!(
+                    "Sequence number {since_seq} exceeds i64::MAX and cannot be used in SQLite query"
+                ))
+            })?;
+            let rows = stmt
+                .query_map(params![fact_id, since_seq_i64], MemoryEventRow::from_row)
+                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
-        let mut envelopes = Vec::new();
-        for row in rows {
-            let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            if let Some(envelope) = row.into_envelope()? {
-                envelopes.push(envelope);
+            let mut envelopes = Vec::new();
+            for row in rows {
+                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
+                if let Some(envelope) = row.into_envelope()? {
+                    envelopes.push(envelope);
+                }
             }
-        }
-        Ok(envelopes)
+            Ok(envelopes)
+        })
+        .await
     }
 
     /// Get events for a fact up to a given timestamp (for time travel).
@@ -185,30 +228,33 @@ impl StateDatabase {
         fact_id: &str,
         until_timestamp: i64,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                FROM memory_events
-                WHERE fact_id = ?1 AND timestamp <= ?2
-                ORDER BY seq ASC
-                "#,
-            )
-            .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+        let fact_id = fact_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
+                    FROM memory_events
+                    WHERE fact_id = ?1 AND timestamp <= ?2
+                    ORDER BY seq ASC
+                    "#,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![fact_id, until_timestamp], MemoryEventRow::from_row)
-            .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
+            let rows = stmt
+                .query_map(params![fact_id, until_timestamp], MemoryEventRow::from_row)
+                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
-        let mut envelopes = Vec::new();
-        for row in rows {
-            let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            if let Some(envelope) = row.into_envelope()? {
-                envelopes.push(envelope);
+            let mut envelopes = Vec::new();
+            for row in rows {
+                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
+                if let Some(envelope) = row.into_envelope()? {
+                    envelopes.push(envelope);
+                }
             }
-        }
-        Ok(envelopes)
+            Ok(envelopes)
+        })
+        .await
     }
 
     /// Get events across all facts within a time range.
@@ -218,54 +264,92 @@ impl StateDatabase {
         to_timestamp: i64,
         limit: usize,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
-                FROM memory_events
-                WHERE timestamp >= ?1 AND timestamp <= ?2
-                ORDER BY id ASC
-                LIMIT ?3
-                "#,
-            )
-            .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
+                    FROM memory_events
+                    WHERE timestamp >= ?1 AND timestamp <= ?2
+                    ORDER BY id ASC
+                    LIMIT ?3
+                    "#,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
-        let limit_i64 = i64::try_from(limit).map_err(|_| {
-            AlephError::other(format!(
-                "Limit {limit} exceeds maximum supported SQLite value ({})",
-                i64::MAX
-            ))
-        })?;
-        let rows = stmt
-            .query_map(
-                params![from_timestamp, to_timestamp, limit_i64],
-                MemoryEventRow::from_row,
-            )
-            .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
+            let limit_i64 = i64::try_from(limit).map_err(|_| {
+                AlephError::other(format!(
+                    "Limit {limit} exceeds maximum supported SQLite value ({})",
+                    i64::MAX
+                ))
+            })?;
+            let rows = stmt
+                .query_map(
+                    params![from_timestamp, to_timestamp, limit_i64],
+                    MemoryEventRow::from_row,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
-        let mut envelopes = Vec::new();
-        for row in rows {
-            let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            if let Some(envelope) = row.into_envelope()? {
-                envelopes.push(envelope);
+            let mut envelopes = Vec::new();
+            for row in rows {
+                let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
+                if let Some(envelope) = row.into_envelope()? {
+                    envelopes.push(envelope);
+                }
             }
-        }
-        Ok(envelopes)
+            Ok(envelopes)
+        })
+        .await
     }
 
     /// Get the latest sequence number for a fact.
     pub async fn get_memory_event_latest_seq(&self, fact_id: &str) -> Result<u64, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let result: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1",
-                params![fact_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| AlephError::other(format!("Failed to get latest seq: {e}")))?;
+        let fact_id = fact_id.to_string();
+        self.with_conn(move |conn| {
+            let result: Option<i64> = conn
+                .query_row(
+                    "SELECT MAX(seq) FROM memory_events WHERE fact_id = ?1",
+                    params![fact_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AlephError::other(format!("Failed to get latest seq: {e}")))?;
 
-        Ok(u64::try_from(result.unwrap_or(0)).unwrap_or(0))
+            Ok(u64::try_from(result.unwrap_or(0)).unwrap_or(0))
+        })
+        .await
+    }
+
+    /// List every distinct `fact_id` along with its latest seq.
+    ///
+    /// Used by `MemoryCommandHandler::reconcile_once` to scan the event log
+    /// for divergence against the filesystem projection. Returns pairs in
+    /// ascending `fact_id` order so the caller can take a deterministic
+    /// prefix of the result and reproduce a partial report across runs.
+    ///
+    /// No filtering by actor: the reconciler operates across all agents
+    /// because divergence is a system-wide invariant (one agent's
+    /// filesystem vs the global event log).
+    pub async fn list_memory_fact_ids(&self) -> Result<Vec<(String, u64)>, AlephError> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT fact_id, MAX(seq) FROM memory_events GROUP BY fact_id ORDER BY fact_id",
+                )
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let fact_id: String = row.get(0)?;
+                    let seq: i64 = row.get(1)?;
+                    Ok((fact_id, u64::try_from(seq).unwrap_or(0)))
+                })
+                .map_err(|e| AlephError::other(format!("Failed to list fact_ids: {e}")))?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(|e| AlephError::other(format!("Row error: {e}")))?);
+            }
+            Ok(out)
+        })
+        .await
     }
 
     /// Check if any migration events exist (indicates migration has been run).
@@ -283,20 +367,24 @@ impl StateDatabase {
         &self,
         event_type_filter: Option<&str>,
     ) -> Result<usize, AlephError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let count: i64 = match event_type_filter {
-            Some(et) => conn
-                .query_row(
-                    "SELECT COUNT(*) FROM memory_events WHERE event_type = ?1",
+        let event_type_filter: Option<String> =
+            event_type_filter.map(str::to_string);
+        self.with_conn(move |conn| {
+            let count: i64 = match event_type_filter.as_deref() {
+                Some(et) => conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_events WHERE event_type = ?1",
                     params![et],
                     |row| row.get(0),
                 )
                 .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
-            None => conn
-                .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
-                .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
-        };
-        Ok(count.try_into().unwrap_or(0))
+                None => conn
+                    .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
+                    .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
+            };
+            Ok(count.try_into().unwrap_or(0))
+        })
+        .await
     }
 }
 
@@ -649,7 +737,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unique_constraint() {
+    async fn test_atomic_seq_allocation_is_monotonic() {
+        // Two sequential appends on the same `fact_id` must produce strictly
+        // increasing seq values (1, 2) — even though both envelopes supply
+        // the same caller-side seq=1. The DB's atomic
+        // `SELECT COALESCE(MAX(seq),0)+1` overrides the caller-supplied value,
+        // so `UNIQUE(fact_id, seq)` cannot fire through the public append
+        // path (the original race window that motivated the constraint).
         let db = make_test_db();
         let e1 = MemoryEventEnvelope::new(
             "fact-dup".into(),
@@ -660,7 +754,9 @@ mod tests {
         );
         db.append_memory_event(&e1).await.unwrap();
 
-        // Same fact_id + seq should fail
+        // Same fact_id + caller-supplied seq=1 should NOT cause failure:
+        // the atomic allocation ignores envelope.seq and assigns the next
+        // monotonic value.
         let e2 = MemoryEventEnvelope::new(
             "fact-dup".into(),
             1,
@@ -668,6 +764,98 @@ mod tests {
             EventActor::Agent,
             None,
         );
-        assert!(db.append_memory_event(&e2).await.is_err());
+        db.append_memory_event(&e2).await.unwrap();
+
+        let events = db.get_memory_events_for_fact("fact-dup", "").await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].seq, 1);
+        assert_eq!(events[1].seq, 2);
+        assert!(
+            events[1].seq > events[0].seq,
+            "atomic allocation must produce strictly monotonic seq"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unique_constraint_remains_for_direct_sql_bypass() {
+        // The `UNIQUE(fact_id, seq)` schema constraint must still trigger when
+        // a raw `INSERT` bypasses `append_memory_event` (e.g. a future bug,
+        // ad-hoc migration script, or out-of-band writer). Defense-in-depth:
+        // even if the application-level atomic allocation regresses, the
+        // schema itself rejects duplicate (fact_id, seq) pairs.
+        let db = make_test_db();
+        let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        conn.execute(
+            "INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id) \
+             VALUES ('fact-x', 1, 'Test', '{}', 'Agent', 'pulse', 0, NULL)",
+            [],
+        )
+        .expect("first direct INSERT must succeed");
+
+        let result = conn.execute(
+            "INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id) \
+             VALUES ('fact-x', 1, 'Test', '{}', 'Agent', 'pulse', 0, NULL)",
+            [],
+        );
+        assert!(
+            result.is_err(),
+            "UNIQUE(fact_id, seq) must fire on direct SQL bypass; got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_append_assigns_unique_seqs() {
+        // Spawn N concurrent tasks appending to the SAME fact_id. Each task
+        // submits an envelope with caller-side seq=1 (the worst case for the
+        // old TOCTOU race). The atomic allocation must produce N distinct
+        // monotonic seqs, with no UNIQUE-constraint failures and no lost
+        // writes.
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let db = Arc::new(make_test_db());
+        const N: usize = 32;
+
+        let mut set = JoinSet::new();
+        for i in 0..N {
+            let db = Arc::clone(&db);
+            set.spawn(async move {
+                let event = make_created_event("fact-race");
+                let envelope = MemoryEventEnvelope::new(
+                    "fact-race".into(),
+                    1, // all callers race on the same value
+                    event,
+                    EventActor::Agent,
+                    None,
+                );
+                db.append_memory_event(&envelope)
+                    .await
+                    .map_err(|e| (i, e.to_string()))
+            });
+        }
+
+        let mut errors = Vec::new();
+        while let Some(res) = set.join_next().await {
+            if let Err((i, msg)) = res.unwrap() {
+                errors.push(format!("task {i}: {msg}"));
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "concurrent appends must not fail: {errors:?}"
+        );
+
+        let events = db.get_memory_events_for_fact("fact-race", "").await.unwrap();
+        assert_eq!(
+            events.len(),
+            N,
+            "all {N} concurrent appends must persist; got {} events",
+            events.len()
+        );
+        // Strictly monotonic, 1..=N
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e.seq as usize, i + 1, "event {i} must have seq {}", i + 1);
+        }
     }
 }

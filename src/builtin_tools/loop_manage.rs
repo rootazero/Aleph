@@ -1613,6 +1613,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let bound = TURN_CONTEXT.scope(turn, tool.session()).await;
         assert_eq!(bound, run_key.to_key_string());
@@ -1930,6 +1931,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
 
         let out = TURN_CONTEXT
@@ -1969,6 +1971,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
 
         let remote_stop = LoopArgs {

@@ -119,6 +119,10 @@ pub async fn handle_sandbox_debug(
     };
     let cmd = SandboxCommand {
         session_id,
+        // No tool asked — an operator typed this at a terminal. Naming the
+        // subcommand keeps the audit trail honest about that (and keeps it out
+        // of whichever rate-limit bucket `program` would have fallen into).
+        tool_name: "sandbox_debug".to_string(),
         program: program.to_string(),
         args: args.to_vec(),
         env: HashMap::new(),

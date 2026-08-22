@@ -143,7 +143,10 @@ pub async fn handle_start(
     // Brief orch lock: create session and get handle
     let (session_id, session_handle) = {
         let mut orch_guard = orch.lock().await;
-        match orch_guard.create_session(personas, topic, source_channel, source_session_key) {
+        match orch_guard
+            .create_session(personas, topic, source_channel, source_session_key)
+            .await
+        {
             Ok(pair) => pair,
             Err(e) => {
                 return JsonRpcResponse::error(
@@ -341,7 +344,7 @@ pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> Js
     // Lock orchestrator: end session and remove from map
     let session_handle = {
         let mut orch_guard = orch.lock().await;
-        match orch_guard.end_session(&session_id) {
+        match orch_guard.end_session(&session_id).await {
             Some(h) => h,
             None => return not_found(request.id),
         }
@@ -562,6 +565,7 @@ mod tests {
                     "rpc".into(),
                     "rpc:direct".into(),
                 )
+                .await
                 .map(|(id, _)| id)
                 .unwrap()
             },

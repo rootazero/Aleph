@@ -353,6 +353,8 @@ mod tests {
             pid: None,
             observe: None,
             force: None,
+            expect: Vec::new(),
+            stable_samples: None,
         }
     }
 

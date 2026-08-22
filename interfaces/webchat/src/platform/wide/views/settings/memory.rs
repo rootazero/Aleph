@@ -12,6 +12,7 @@ use leptos::task::spawn_local;
 use crate::api::{MemoryConfig, MemoryConfigApi, RetrieveWithTraceResponse};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
+use aleph_protocol::dreaming::DreamGateBlock;
 
 /// How many results the Settings debug retrieval asks for. Kept explicit
 /// rather than relying on the RPC's own default: the request that produced a
@@ -1192,7 +1193,77 @@ fn DreamInsightsPanel() -> impl IntoView {
                             // project scoping off there is exactly one corpus and
                             // this table would be a row that says "you are here".
                             let show_corpora = corpora.len() > 1;
+                            // "Why didn't it run last night?" — the run history
+                            // cannot answer that, because a cycle that never
+                            // started leaves no row. These two lines are the
+                            // gates the daemon actually consults, read without
+                            // moving any of them.
+                            let daemon = resp.daemon.clone();
+                            let last_run = resp.last_run.clone();
                             view! {
+                                {daemon.map(|d| {
+                                    // Which gate is shut is decided by
+                                    // `DaemonStatus::blocking_gate` — shared
+                                    // with `aleph memory dreaming`, because
+                                    // the wording differs between the two
+                                    // faces (this one has a translation
+                                    // catalogue, the CLI does not) and two
+                                    // surfaces re-deriving one predicate from
+                                    // raw fields is how they drift. Only the
+                                    // first shut gate is shown: they are
+                                    // sequential, so naming a later one would
+                                    // send the operator to change something
+                                    // that would not have mattered.
+                                    //
+                                    // Wording only lives here. "Running" is
+                                    // not a blocked state — the gates already
+                                    // said yes — so it is read off the field
+                                    // rather than added as a gate variant.
+                                    let (state, blocking) = match d.blocking_gate() {
+                                        Some(DreamGateBlock::Disabled) => {
+                                            (t_string!(i18n, settings.memory.dream_daemon_disabled).to_string(), true)
+                                        }
+                                        Some(DreamGateBlock::OutsideWindow) => (format!(
+                                            "{} ({}–{})",
+                                            t_string!(i18n, settings.memory.dream_daemon_outside_window),
+                                            d.window_start_local, d.window_end_local,
+                                        ), true),
+                                        Some(DreamGateBlock::UserActive) => (format!(
+                                            "{} ({}s / {}s)",
+                                            t_string!(i18n, settings.memory.dream_daemon_user_active),
+                                            d.idle_seconds, d.idle_threshold_seconds,
+                                        ), true),
+                                        None if d.is_running => {
+                                            (t_string!(i18n, settings.memory.dream_daemon_running).to_string(), false)
+                                        }
+                                        None => (t_string!(i18n, settings.memory.dream_daemon_ready).to_string(), false),
+                                    };
+                                    // A crashed cycle is the one status worth an
+                                    // alarm colour: it means a night was lost and
+                                    // nothing else will say so.
+                                    let crashed = last_run.as_ref().is_some_and(|r| r.status == "stale_running");
+                                    let last_line = last_run.as_ref().map(|r| format!(
+                                        "{}: {} · {}",
+                                        t_string!(i18n, settings.memory.dream_daemon_last_run),
+                                        if crashed {
+                                            t_string!(i18n, settings.memory.dream_daemon_crashed).to_string()
+                                        } else {
+                                            r.status.clone()
+                                        },
+                                        format_ts(r.run_at),
+                                    ));
+                                    view! {
+                                        <div class="p-2 bg-surface-sunken rounded border border-border text-sm space-y-1">
+                                            <div class=move || if blocking { "text-warning" } else { "text-text-secondary" }>
+                                                {t_string!(i18n, settings.memory.dream_daemon_state)}": "{state}
+                                            </div>
+                                            {last_line.map(|l| view! {
+                                                <div class=move || if crashed { "text-xs text-danger" } else { "text-xs text-text-tertiary" }>{l}</div>
+                                            })}
+                                        </div>
+                                    }
+                                })}
+
                                 {if is_empty {
                                     view! { <div class="text-text-tertiary text-sm">{t!(i18n, settings.memory.dream_no_insights)}</div> }.into_any()
                                 } else { view! { <div></div> }.into_any() }}
@@ -1297,9 +1368,15 @@ fn DreamInsightsPanel() -> impl IntoView {
                                                     <div class="flex justify-between">
                                                         <span>{r.pipeline_type}</span>
                                                         <span class="text-text-tertiary">
-                                                            {format!("{}ms · {} synth · {} merged · {} archived",
+                                                            // `woven` and `rules` were on the wire from the
+                                                            // day the notes-era counters landed and had no
+                                                            // DTO field, so serde dropped them: a night whose
+                                                            // whole yield was link repair or a distilled
+                                                            // correction rule rendered as all-zeros.
+                                                            {format!("{}ms · {} synth · {} merged · {} woven · {} archived · {} rules",
                                                                 r.duration_ms, r.synthesis_count,
-                                                                r.notes_consolidated, r.notes_archived)}
+                                                                r.notes_consolidated, r.notes_woven,
+                                                                r.notes_archived, r.feedback_distilled)}
                                                         </span>
                                                     </div>
                                                     {health.map(|(text, accepted, merges_rejected)| view! {

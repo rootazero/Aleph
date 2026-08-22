@@ -21,7 +21,10 @@ pub enum SessionKind {
     Task,
     /// Subagent session
     Subagent,
-    /// Ephemeral session (no persistence)
+    /// Ephemeral session — persisted like every other session, despite the
+    /// name. See [`crate::routing::session_key::SessionKey::Ephemeral`] for
+    /// what lives here and who owns retiring it; an ephemeral row in a
+    /// listing is real state, not a display artefact.
     Ephemeral,
 }
 

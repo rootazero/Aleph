@@ -39,8 +39,12 @@ pub fn truncate_description(description: &str) -> String {
     if description.len() <= MAX_DESCRIPTION_BYTES {
         return description.to_string();
     }
-    let mut s = String::with_capacity(MAX_DESCRIPTION_BYTES + 64);
-    s.push_str(&description[..MAX_DESCRIPTION_BYTES]);
+    // `description.len()` counts bytes; the byte index must land on a char
+    // boundary or `&str` slicing panics on multi-byte UTF-8 (CJK, emoji).
+    // `floor_char_boundary` walks back to the nearest valid boundary.
+    let cut = description.floor_char_boundary(MAX_DESCRIPTION_BYTES);
+    let mut s = String::with_capacity(cut + 64);
+    s.push_str(&description[..cut]);
     s.push_str("… [truncated]");
     s
 }

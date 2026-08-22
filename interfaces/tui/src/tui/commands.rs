@@ -9,6 +9,7 @@
 use serde_json::{json, Value};
 use tui_textarea::TextArea;
 
+use aleph_protocol::btw::BtwTurn;
 use aleph_protocol::providers::{
     CatalogEntry, CatalogParams, CatalogResult, CatalogView, ModelsRefreshParams,
     ModelsRefreshResult, ModelsRefreshRow, RefreshOutcome,
@@ -62,9 +63,132 @@ pub(super) async fn send_to_agent(
         .call::<_, AgentRunAccepted>("agent.run", Some(request))
         .await
     {
-        Ok(accepted) => state.adopt_canonical_session_key(&accepted.session_key),
+        Ok(accepted) => {
+            // The key in this reply is the one the gateway ROUTED to, resolved
+            // before the engine runs — so for a `/btw` it is the main
+            // conversation's key, not the derived side key the run will
+            // actually execute on (the redirect happens inside `execute()`,
+            // long after the reply is built). Adopting it is therefore correct
+            // on both paths: a side question cannot repoint this screen.
+            state.adopt_canonical_session_key(&accepted.session_key);
+            // A side question opened moments ago is waiting for the id of the
+            // run that answers it, and this is the only place that id exists.
+            // No frame can have arrived in between: gateway events are drained
+            // only at the top of the main loop, never while an action's RPC is
+            // awaited.
+            state.btw.claim_pending_run(accepted.run_id);
+        }
         Err(e) => state.add_system_message(format!("{err_label}: {e}")),
     }
+}
+
+/// Send `text` to the agent, routing a side question to the `/btw` overlay and
+/// everything else to the transcript.
+///
+/// **The one place this client asks whether an input is a side question.**
+/// The predicate is [`BtwTurn::resolve`], the resolver core and every channel
+/// share (moved into `aleph-protocol` so this crate can reach it without
+/// depending on `alephcore`, which its manifest forbids). A prefix test
+/// written here would be a second answer to a question that already has one,
+/// and would drift from the server's on the first spelling the server learns —
+/// `/BTW`, `/btw@bot`, the empty body that is deliberately *not* a side
+/// question.
+///
+/// The routing decision has to happen **before** the transcript is touched,
+/// not after: a side question runs on a session the user is not looking at,
+/// and echoing it into the conversation they ARE looking at is precisely the
+/// leak this feature exists to prevent.
+///
+/// `/btw promote` is deliberately NOT routed here. It is a request to move a
+/// side answer *into* the main conversation — a crossing of that boundary the
+/// user asked for out loud — so it belongs in the transcript like any other
+/// message, and its effect lands wherever the server decides to put it.
+pub(super) async fn dispatch_gateway_text(
+    state: &mut AppState,
+    client: &AlephClient,
+    text: &str,
+    err_label: &str,
+) {
+    match BtwTurn::resolve(text) {
+        Some(turn) if !turn.promote => {
+            state.open_btw(turn.question);
+            send_to_agent(state, client, text, "Side question error").await;
+            if state.btw.active_run_id().is_none() {
+                // The call failed; `send_to_agent` already said why. Settle the
+                // question rather than leaving the overlay spinning on a run
+                // that was never accepted.
+                state
+                    .btw
+                    .fail_unclaimed("the side question was not accepted".to_string());
+            }
+        }
+        _ => {
+            state.add_user_message(text.to_string());
+            send_to_agent(state, client, text, err_label).await;
+        }
+    }
+}
+
+/// The `chat.abort` params that stop the side question the overlay is
+/// showing, or `None` when nothing is being answered.
+///
+/// Two things this gets right that the obvious version does not, which is why
+/// it is a function with a test rather than two lines inline:
+///
+/// 1. **The run id is the overlay's, not the screen's.** `/stop`'s helper
+///    aborts `state.current_run`, which during a side question is the *main*
+///    run (or nothing at all). Reusing it would stop the wrong work, or
+///    silently refuse — and this overlay is the only surface from which a
+///    running side question can be aimed at.
+/// 2. **`session_key` is deliberately omitted.** The server uses that field to
+///    purge the addressed session's busy-queue backlog. The only key this
+///    client holds is the main conversation's, so passing it would drop the
+///    messages queued behind the main run — the opposite of "stop the side
+///    question". The side session's key is not derivable here by design (see
+///    `aleph_protocol::btw`), and the run id alone suffices: the server gates
+///    it on its own (`caller_may_address_run`).
+fn side_abort_params(state: &AppState) -> Option<Value> {
+    let run_id = state.btw.active_run_id()?;
+    Some(json!({ "run_id": run_id }))
+}
+
+/// Esc in the side-question overlay: stop the side run when one is answering,
+/// close the overlay when none is.
+///
+/// One function, one decision. Splitting "is it answering?" from "abort it"
+/// would let a caller reach one without the other, and the two answers have to
+/// come from the same read of the same state.
+pub(super) async fn btw_abort_or_close(state: &mut AppState, client: &AlephClient) {
+    let Some(params) = side_abort_params(state) else {
+        // Nothing on screen is waiting on a decision, so closing is safe for
+        // the user. It is not the same as "nothing is running".
+        //
+        // A **superseded** question — one the user replaced by asking another
+        // before the first finished — is filed with whatever text it had
+        // while its run keeps going server-side. `side_abort_params` names
+        // only `active_run_id()`, so from this client that run can no longer
+        // be shown, aborted, or reached at all; it runs to completion and its
+        // answer goes nowhere. That is a real cost, stated rather than
+        // hidden. It is also strictly better than what it replaced, which
+        // orphaned the run AND mixed its output into the next question's
+        // answer.
+        //
+        // Not fixed here on purpose: aborting it would mean `begin` — a
+        // synchronous method on the overlay, with no client and no async —
+        // reaching the network, which is a different shape of change from a
+        // key handler. A side question is read-only and short, so the leak is
+        // bounded; the alternative worth considering is keeping the
+        // superseded run addressable rather than firing an abort nobody asked
+        // for.
+        state.close_btw();
+        return;
+    };
+    if let Err(e) = client.call::<_, Value>("chat.abort", Some(params)).await {
+        state.add_system_message(format!("Side question abort error: {e}"));
+    }
+    // Settle either way: the abort was sent, and a run that refuses to die is
+    // still not something this overlay can go on claiming to be answering.
+    state.btw.abort_active();
 }
 
 /// Execute a local slash command (TUI-only, no Gateway RPC needed).
@@ -944,5 +1068,116 @@ mod tests {
             "Cost estimate (claude-sonnet-4-6): $1.2345"
         );
         assert!(cost_line("mystery-model", None).contains("n/a"));
+    }
+
+    /// Esc while a side question is answering must stop the SIDE run.
+    ///
+    /// The screen's `current_run` is the main run — reusing `/stop`'s abort
+    /// would stop the wrong work — and `session_key` must not travel at all,
+    /// because the only key this client holds is the main conversation's and
+    /// the server would use it to purge that conversation's queue.
+    #[test]
+    fn the_side_abort_names_the_side_run_and_no_session() {
+        let mut state = AppState::new("agent:main:main".into(), "m".into());
+        state.current_run = Some("run-main".into());
+        state.open_btw("why?".into());
+        state.btw.claim_pending_run("run-side".into());
+
+        let params = side_abort_params(&state).expect("a side question is answering");
+        assert_eq!(params["run_id"], "run-side");
+        assert_ne!(
+            params["run_id"], "run-main",
+            "aborting a side question must not stop the main run"
+        );
+        assert!(
+            params.get("session_key").is_none(),
+            "a session key here would purge the MAIN conversation's queue: {params}"
+        );
+    }
+
+    /// Esc with nothing answering is a close, not an abort — and the way that
+    /// is expressed is `None`, so the caller cannot send an abort naming
+    /// nothing.
+    #[test]
+    fn there_is_nothing_to_abort_once_the_answer_has_settled() {
+        let mut state = AppState::new("agent:main:main".into(), "m".into());
+        assert!(side_abort_params(&state).is_none(), "nothing asked yet");
+
+        state.open_btw("why?".into());
+        assert!(
+            side_abort_params(&state).is_none(),
+            "no run id yet: agent.run has not replied, so there is nothing to abort"
+        );
+
+        state.btw.claim_pending_run("run-side".into());
+        assert!(side_abort_params(&state).is_some());
+
+        state.btw.finish_active("run-side", Some("because"));
+        assert!(
+            side_abort_params(&state).is_none(),
+            "a settled answer is closed, not aborted"
+        );
+    }
+
+    /// This client asks "is this a side question?" in exactly one place.
+    ///
+    /// A source-level census, because the failure it guards against is not a
+    /// wrong answer but a *second* answer: a prefix test written somewhere
+    /// else would agree with the shared resolver today and drift from it the
+    /// first time the server learns a spelling (`/BTW`, `/btw@bot`, the empty
+    /// body that is deliberately NOT a side question). Runtime cannot tell the
+    /// two apart — both say yes to `/btw x` — so only the source can.
+    ///
+    /// Comment lines are stripped first: the doc above this very test names
+    /// the resolver, and a scanner that counted prose would be satisfied by a
+    /// sentence rather than by a call. The `#[cfg(test)]` split is not
+    /// anchored to line ends, because this repo's Windows checkout is CRLF and
+    /// `"\n#[cfg(test)]\n"` matches nothing there — which would silently turn
+    /// the whole file into "production" and let a test's own literals satisfy
+    /// the census.
+    #[test]
+    fn this_client_resolves_a_side_question_in_exactly_one_place() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut hits: Vec<String> = Vec::new();
+        let mut files_scanned = 0usize;
+
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's own src is readable") {
+                let path = entry.expect("a readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("a readable .rs file");
+                files_scanned += 1;
+                // Production code only: a test may name the resolver freely.
+                let source = source.replace('\r', "");
+                let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+                for line in production.lines() {
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    if line.contains("BtwTurn::resolve(") {
+                        hits.push(format!("{}: {}", path.display(), line.trim()));
+                    }
+                }
+            }
+        }
+
+        assert!(files_scanned > 5, "the scan found nothing to scan");
+        assert_eq!(
+            hits.len(),
+            1,
+            "exactly one production call site, found: {hits:#?}"
+        );
+        assert!(
+            hits[0].contains("commands.rs"),
+            "the one resolver call belongs at the send chokepoint, found: {}",
+            hits[0]
+        );
     }
 }

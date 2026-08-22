@@ -417,6 +417,17 @@ impl DreamPipeline {
             executed.push(stage.name().to_string());
         }
 
+        // Cap the unbounded growth of `recall_signals` (P1 from review).
+        // The table grew without bound because `cleanup_old_signals` was
+        // defined but never wired into any background task. Dream is the
+        // natural cadence: once per cycle, regardless of which stages ran.
+        if let Err(e) = ctx.database.cleanup_old_signals(RECALL_SIGNAL_RETENTION_DAYS) {
+            tracing::warn!(
+                error = %e,
+                "recall_signals retention cleanup failed; continuing dream cycle"
+            );
+        }
+
         let mut report = ctx.report;
         report.status = DreamReportStatus::Completed;
         report.stages_executed = executed;
@@ -436,6 +447,12 @@ impl Default for DreamPipeline {
 
 const DEFAULT_CHECK_INTERVAL_SECONDS: u64 = 60;
 
+/// Retention window for `recall_signals` rows. The table grows by one row
+/// per recall; without a cap the dedup index and downstream aggregation
+/// queries slow over time. 90 days matches the typical "this note was
+/// recently useful" horizon used by `note_decay` and similar stages.
+const RECALL_SIGNAL_RETENTION_DAYS: u32 = 90;
+
 static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
 
 static DREAM_DAEMON: OnceCell<Arc<DreamDaemon>> = OnceCell::new();
@@ -448,8 +465,48 @@ pub(crate) fn now_timestamp() -> i64 {
 }
 
 /// Record user activity for `DreamDaemon` idle tracking.
+///
+/// This is the sensor half of the daemon's "yield to the user" machinery — the
+/// consumer half ([`DreamDaemon::check_and_run`]'s idle precondition and the
+/// per-stage activity check in [`DreamPipeline::run`]) is inert without it.
+/// It was exactly that for a while: the 2026-08-08 severed-wire audit cut the
+/// whole apparatus because this function had zero callers, the same-day
+/// autonomy merge restored the consumers it builds on, and nobody re-attached
+/// the producer — leaving `idle_seconds()` measuring process uptime.
+///
+/// Producers are the two chokepoints every **human** message passes through
+/// (machine traffic — cron, heartbeat, teams, A2A, model-driven
+/// `session_send` — deliberately does not stamp, or overnight automation
+/// would starve dreaming forever):
+///
+/// * `gateway::handlers::agent::build_run_request` — the one shared builder
+///   behind every Panel / TUI / CLI run entrance (`chat.send` / `agent.run`);
+/// * `gateway::inbound_router::handle_message` — a channel message, after its
+///   permission check passes (a stranger refused by policy is not "the user").
+///
+/// Pinned by `run_loop::tests::every_run_producer_declares_whether_a_human_is_
+/// at_the_other_end` — a producer quietly dropped in a refactor is this bug's
+/// third occurrence, not a new one. The guard lives beside
+/// `RUN_REQUEST_PRODUCERS` rather than here because that census is the thing
+/// that knows who starts runs: asking the ingress question there means a
+/// *third* human entrance has to answer it the moment it appears, and — the
+/// half a list of names cannot have — that no machine producer may stamp.
 pub fn record_activity() {
     LAST_ACTIVITY_TS.store(now_timestamp(), Ordering::Release);
+}
+
+/// Test-only clock control: back-date the activity stamp so a test can prove
+/// a producer really advances it. Writing through the same atomic keeps the
+/// production read path untouched.
+#[cfg(test)]
+pub(crate) fn set_last_activity_for_test(ts: i64) {
+    LAST_ACTIVITY_TS.store(ts, Ordering::Release);
+}
+
+/// Test-only read of the activity stamp, for asserting a producer advanced it.
+#[cfg(test)]
+pub(crate) fn last_activity_for_test() -> i64 {
+    last_activity_timestamp()
 }
 
 fn last_activity_timestamp() -> i64 {
@@ -474,6 +531,61 @@ pub async fn try_run_now() -> Result<DreamReport, AlephError> {
         .cloned()
         .ok_or_else(|| AlephError::other("DreamDaemon not initialized"))?;
     daemon.run_now().await
+}
+
+/// Read-only snapshot of the daemon's scheduling preconditions — the
+/// zero-side-effect answer to the operator question the run history cannot
+/// answer: *"why didn't dreaming run tonight?"* Every field mirrors one of
+/// `check_and_run`'s entry gates, so the surface that renders this describes
+/// the same decision the daemon actually makes (EverOS's `inspect_dispatch`
+/// shape: explain the gates without moving any of them).
+///
+/// The shape is [`aleph_protocol::dreaming::DaemonStatus`], not a struct local
+/// to this module, because it has two client faces — the Panel's memory pane
+/// and `aleph memory dreaming` — and a wire contract whose halves live in
+/// different crates drifts unless one type spans them. It began life local and
+/// single-face; the Panel's hand-written DTO had already quietly dropped
+/// `max_duration_seconds` on the way in, which is the benign end of the same
+/// spectrum whose expensive end is a column of dashes.
+pub type DaemonStatusSnapshot = aleph_protocol::dreaming::DaemonStatus;
+
+/// Snapshot the registered daemon's gates, or `None` when no daemon exists in
+/// this process (memory disabled, or a unit-test binary — `ensure_dream_daemon`
+/// no-ops under `cfg!(test)`). Callers must render `None` as "not running",
+/// never as an error: an install with dreaming off is healthy, not broken.
+#[must_use]
+pub fn daemon_status() -> Option<DaemonStatusSnapshot> {
+    let daemon = DREAM_DAEMON.get()?;
+    Some(DaemonStatusSnapshot {
+        enabled: daemon.config.enabled,
+        within_window: daemon.is_within_window(),
+        user_active: (daemon.activity_probe)(),
+        idle_seconds: idle_seconds(),
+        idle_threshold_seconds: daemon.config.idle_threshold_seconds,
+        // rust-doctor-disable-next-line excessive-clone
+        window_start_local: daemon.config.window_start_local.clone(),
+        // rust-doctor-disable-next-line excessive-clone
+        window_end_local: daemon.config.window_end_local.clone(),
+        is_running: daemon.is_running.load(Ordering::SeqCst),
+        max_duration_seconds: daemon.config.max_duration_seconds,
+    })
+}
+
+/// Grace beyond `max_duration_seconds` before a persisted `running` status row
+/// is reported as a crash tombstone rather than a live cycle. Generous on
+/// purpose: a false "crashed" label sends the operator hunting a bug that
+/// does not exist, while a true `running` label never outlives this bound by
+/// construction (`tokio::time::timeout` caps the cycle).
+const STALE_RUNNING_SLACK_SECS: i64 = 600;
+
+/// Read-side tombstone: a `dream_status` row can say `running` forever when
+/// the process died mid-cycle, because nothing that could correct it is alive
+/// to do so. A `running` older than the hard cycle timeout plus slack cannot
+/// be live — report it as crashed without needing any writer's cooperation
+/// (the same shape as evolver's observer-side `maybeAbandon`).
+#[must_use]
+pub fn running_status_is_stale(last_run_at: i64, max_duration_seconds: u32, now: i64) -> bool {
+    now - last_run_at > i64::from(max_duration_seconds) + STALE_RUNNING_SLACK_SECS
 }
 
 /// Ensure `DreamDaemon` is running (once) when memory is enabled.
@@ -611,6 +723,25 @@ impl DreamRunStatus {
             Self::Cancelled => "cancelled",
         }
     }
+
+    /// The one mapping from a finished report to a run status, shared by the
+    /// base cycle and every namespace sub-cycle so the twins cannot answer
+    /// "what did an interrupted night cost" differently.
+    ///
+    /// * A **vacuous** interruption (yielded before a single stage) maps to
+    ///   [`Self::Cancelled`] — the status [`should_skip_scheduled_run`] retries,
+    ///   because nothing was spent. This is the retry arm's only producer; it
+    ///   had none while the base path hard-coded `Success`.
+    /// * A **partial** interruption maps to [`Self::Success`]: real stages ran,
+    ///   real edits landed, the night is spent. Retrying would re-pay LLM
+    ///   stages for work that already happened.
+    fn for_report(report: &DreamReport) -> Self {
+        if report.is_vacuous_interruption() {
+            Self::Cancelled
+        } else {
+            Self::Success
+        }
+    }
 }
 
 /// Whether a scheduled cycle must be skipped because one already ran today.
@@ -697,6 +828,14 @@ pub struct DreamDaemon {
     /// absolute best survives a restart instead of resetting to 0 (which would
     /// let a worse-than-historical cycle masquerade as a new best).
     best_health: crate::sync_primitives::Mutex<f64>,
+    /// "Is the user active right now?" — one probe, three consumers: the
+    /// `check_and_run` entry precondition, the per-stage yield check inside
+    /// the base pipeline, and (via `ProjectCycleDeps`) every namespace
+    /// sub-cycle. Defaults to `idle_seconds() < idle_threshold_seconds`
+    /// against the process-global stamp `record_activity` maintains;
+    /// injectable in tests because the global stamp is process-wide and
+    /// parallel tests would otherwise race each other through it.
+    activity_probe: Arc<dyn Fn() -> bool + Send + Sync>,
     // `project_scoped` was mirrored here until 2026-08-08 to gate the
     // per-namespace fan-out. It gated the wrong axis (see the fan-out site),
     // and once the gate was removed the field had zero readers — withdrawn
@@ -717,6 +856,7 @@ impl DreamDaemon {
             .unwrap_or(None)
             .unwrap_or(0.0);
 
+        let idle_threshold = i64::from(config.dreaming.idle_threshold_seconds);
         Ok(Self {
             database,
             // rust-doctor-disable-next-line excessive-clone
@@ -732,7 +872,21 @@ impl DreamDaemon {
             note_memory_dir: None,
             orientation: None,
             best_health: crate::sync_primitives::Mutex::new(best_health),
+            activity_probe: Arc::new(move || idle_seconds() < idle_threshold),
         })
+    }
+
+    /// Replace the activity probe. Test-only: production always derives it from
+    /// the process-global activity stamp in `from_config`, and tests cannot use
+    /// that stamp — it is one static shared by every parallel test in the
+    /// process, so a probe seeded through it would race its siblings.
+    #[cfg(test)]
+    pub(crate) fn with_activity_probe(
+        mut self,
+        probe: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        self.activity_probe = probe;
+        self
     }
 
     /// Test-only view of the in-memory best-health checkpoint, for asserting
@@ -913,6 +1067,16 @@ impl DreamDaemon {
         duration_ms: u64,
     ) {
         let report = &outcome.report;
+        // A cycle that yielded before running a single stage leaves no audit
+        // row — the governance probe reads run counts as a reality signal and
+        // no-op rows inflate it (see `DreamReport::is_vacuous_interruption`).
+        // The gate lives in the single writer, not at its call sites: the
+        // fan-out used to check this itself while the scheduled and forced
+        // base paths checked nothing, which is exactly how the base cycle's
+        // vacuous nights ended up in the table.
+        if report.is_vacuous_interruption() {
+            return;
+        }
         let persisted = crate::memory::store::sqlite::dream_reports::PersistedDreamReport {
             id: format!("dream_{run_start}_{namespace}"),
             // rust-doctor-disable-next-line excessive-clone
@@ -970,6 +1134,23 @@ impl DreamDaemon {
                 reason = "outside_window",
                 window_start = %self.config.window_start_local,
                 window_end = %self.config.window_end_local,
+                "DreamDaemon tick: skipped"
+            );
+            return Ok(());
+        }
+
+        // Idle precondition — the documented gate DREAM_DAEMON.md always
+        // described, restored here after the idle-sensor reconnect. Without it
+        // a user active at window-open starts a cycle whose first stage check
+        // immediately yields: a vacuous interruption that used to be recorded
+        // as `success`, spending the whole night's once-per-day budget on
+        // nothing. Checked before the latch so an active user does not even
+        // claim it; the 60 s ticker simply asks again.
+        if (self.activity_probe)() {
+            info!(
+                reason = "user_active",
+                idle_seconds = idle_seconds(),
+                idle_threshold_seconds = self.config.idle_threshold_seconds,
                 "DreamDaemon tick: skipped"
             );
             return Ok(());
@@ -1185,12 +1366,15 @@ impl DreamDaemon {
                 let notes: Vec<NoteEntry> =
                     note_index.iter().map(NoteEntry::from_index_entry).collect();
                 // Scheduled cycles yield to fresh user activity; forced cycles
-                // (run_now / E2E harness) run to completion.
+                // (run_now / E2E harness) run to completion. The scheduled arm
+                // is the same probe `check_and_run`'s entry precondition
+                // consulted — one probe, so entry gate and per-stage yield
+                // cannot disagree about what "active" means.
                 let activity_checker: Arc<dyn Fn() -> bool + Send + Sync> = if force {
                     Arc::new(|| false)
                 } else {
-                    let threshold = i64::from(self.config.idle_threshold_seconds);
-                    Arc::new(move || idle_seconds() < threshold)
+                    // rust-doctor-disable-next-line excessive-clone
+                    self.activity_probe.clone()
                 };
                 let ctx = DreamContext {
                     notes,
@@ -1243,7 +1427,18 @@ impl DreamDaemon {
                 // See `project_cycle` for why joining them would be worse than
                 // the drop it replaces. Per-corpus failures are logged, never
                 // aborting the base cycle.
-                let corpora = maintenance_corpora(&memory_dir, DEFAULT_AGENT_ID);
+                //
+                // A base cycle the user interrupted skips the fan-out
+                // entirely: the same probe would stop every corpus at its
+                // first stage anyway, so walking them buys nothing but a log
+                // read, an index read and a budget slot per corpus — stopping
+                // is what yielding means (the fan-out's own `break` on the
+                // first interrupted namespace makes the identical call).
+                let corpora = if report.status == DreamReportStatus::Interrupted {
+                    Vec::new()
+                } else {
+                    maintenance_corpora(&memory_dir, DEFAULT_AGENT_ID)
+                };
                 let deps = project_cycle::ProjectCycleDeps {
                     memory_dir: &memory_dir,
                     database: &self.database,
@@ -1294,9 +1489,9 @@ impl DreamDaemon {
                             // own event log — and to no one else. Same writer as
                             // the base cycle, so the two can't drift; the
                             // sub-cycle's own clock, because it is its own run.
-                            if !r.is_vacuous_interruption() {
-                                self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
-                            }
+                            // (The vacuous-night skip lives inside the writer
+                            // itself — every caller inherits it.)
+                            self.persist_run_row(&outcome, ns, r.started_at, r.duration_ms);
                             // The activity checker fired: the user is back.
                             // Walking the remaining corpora would only produce a
                             // burst of cycles that interrupt at their first
@@ -1316,7 +1511,14 @@ impl DreamDaemon {
 
                 report.finished_at = now_timestamp();
                 report.duration_ms = ((report.finished_at - run_start).max(0) as u64) * 1000;
-                (report, DreamRunStatus::Success)
+                // Derived, not hard-coded `Success`: a cycle that yielded
+                // before its first stage maps to `Cancelled`, which is what
+                // re-arms `should_skip_scheduled_run`'s retry once the user
+                // goes idle again. Hard-coding `Success` here left that retry
+                // arm with zero producers while spending the day's budget on
+                // a night that did nothing.
+                let status = DreamRunStatus::for_report(&report);
+                (report, status)
             }
             _ => {
                 // Consolidation needs both an AI provider and an embedder
@@ -1352,14 +1554,16 @@ impl DreamDaemon {
                 Vec::new()
             });
 
-        // --- Phase 5: Validation (L2 consistency, deterministic) ---
+        // --- Phase 5: Validation (L1 format + L2 consistency, deterministic) ---
         // L2 (duplicate content-hash) runs cheaply from the index — no file
-        // reads. L1 (format) needs full note markdown; re-reading the whole
-        // corpus every cycle is too costly, so it stays a vacuous pass and
-        // `overall_ok()` gates on L2 alone. Wiring a real L2 revives the strategy
-        // selector's personality loop (validation pass-rate over the window):
-        // duplicate-hash rot now tightens the synthesize threshold instead of
-        // every cycle rubber-stamping `passed` with zero checks run.
+        // reads. L1 (format) reads real markdown, bounded: `l1_over_corpus`
+        // samples up to 200 notes newest-first, because a malformed note is
+        // almost always one this cycle just wrote. (An earlier version of this
+        // comment claimed L1 "stays a vacuous pass" — it did once, and a
+        // vacuous L1 rubber-stamps `passed` forever and freezes the selector's
+        // personality, which is exactly why the real sample was wired in.)
+        // Both tiers feed `overall_ok()`, i.e. the validation pass-rate the
+        // strategy selector's personality window folds over.
         let l2_pairs: Vec<(String, String)> = post_index
             .iter()
             // rust-doctor-disable-next-line excessive-clone
@@ -1473,7 +1677,15 @@ impl DreamDaemon {
             created_at: now_timestamp(),
         };
 
-        if let Err(e) = event_log.append(&event).await {
+        // A vacuous interruption appends nothing, mirroring the namespace
+        // sub-cycle: the churn gate's window is only a few cycles deep, and an
+        // empty event pushes real churn history out of range exactly when the
+        // corpus is being touched most (`DreamReport::is_vacuous_interruption`
+        // documents both halves). This skip and `persist_run_row`'s read the
+        // same predicate, so the two durable records cannot disagree.
+        if report.is_vacuous_interruption() {
+            tracing::debug!("dream cycle yielded before its first stage; nothing to record");
+        } else if let Err(e) = event_log.append(&event).await {
             tracing::error!(
                 error = %e,
                 "Failed to write dream event log — the next cycle's churn gate \
@@ -2415,6 +2627,119 @@ mod tests {
 
         assert_eq!(outcome.status, DreamRunStatus::Success);
         assert!(outcome.report.stages_executed.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Vacuous nights and the idle sensor
+    // -----------------------------------------------------------------------
+
+    /// A scheduled cycle that yields before its first stage must leave NO
+    /// durable record: no event-log line (an empty event pushes real churn
+    /// history out of the gate's few-cycle window), no audit row (the
+    /// governance probe reads run counts as a reality signal), and a
+    /// `Cancelled` status (the one `should_skip_scheduled_run` retries once
+    /// the user goes idle again).
+    ///
+    /// Before the idle-sensor reconnect all three were wrong at once on the
+    /// base path — event appended, row written, status hard-coded `success` —
+    /// while `is_vacuous_interruption`'s own doc promised the opposite and the
+    /// namespace sub-cycle already kept that promise.
+    #[tokio::test]
+    async fn a_vacuous_base_cycle_leaves_no_durable_record() {
+        let (_temp_guard, temp) = scratch_root();
+        std::fs::create_dir_all(&temp).unwrap();
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        // The user is active for the whole cycle: the pipeline yields before
+        // its first stage.
+        let daemon =
+            test_daemon(store.clone(), temp.clone()).with_activity_probe(Arc::new(|| true));
+
+        let run_start = now_timestamp();
+        let outcome = daemon
+            .run_dream(run_start, "2026-08-21".to_string(), false)
+            .await
+            .expect("run_dream succeeds");
+
+        assert!(outcome.report.is_vacuous_interruption());
+        assert_eq!(
+            outcome.status,
+            DreamRunStatus::Cancelled,
+            "a vacuous night must map to the status the daily guard retries"
+        );
+        assert!(
+            !temp
+                .join(DEFAULT_AGENT_ID)
+                .join("dream_events.jsonl")
+                .exists(),
+            "a vacuous night must not append to the event log"
+        );
+
+        // The single writer refuses the row itself, whoever calls it.
+        daemon.persist_run_row(&outcome, DEFAULT_AGENT_ID, run_start, 0);
+        let rows = store
+            .recent_dream_reports(Some(DEFAULT_AGENT_ID), 10)
+            .expect("query audit table");
+        assert!(
+            rows.is_empty(),
+            "a vacuous night must not file an audit row"
+        );
+    }
+
+    /// The status mapping is one function shared by the base cycle and the
+    /// namespace sub-cycle: only a vacuous yield earns a retry; a partially
+    /// executed night did real work and is spent.
+    #[test]
+    fn run_status_mapping_distinguishes_vacuous_from_partial() {
+        let vacuous = DreamReport {
+            status: DreamReportStatus::Interrupted,
+            ..Default::default()
+        };
+        assert_eq!(
+            DreamRunStatus::for_report(&vacuous),
+            DreamRunStatus::Cancelled
+        );
+
+        let partial = DreamReport {
+            status: DreamReportStatus::Interrupted,
+            stages_executed: vec!["note_lint".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            DreamRunStatus::for_report(&partial),
+            DreamRunStatus::Success
+        );
+
+        let completed = DreamReport::default();
+        assert_eq!(
+            DreamRunStatus::for_report(&completed),
+            DreamRunStatus::Success
+        );
+    }
+
+    // The guard that the idle sensor has producers at all — and that only
+    // human entrances have them — is
+    // `gateway::execution_engine::run_loop::tests::
+    // every_run_producer_declares_whether_a_human_is_at_the_other_end`.
+    //
+    // It used to live here and name two files. Naming them was the weaker
+    // half: it could say "these two still stamp" but never "a third entrance
+    // appeared and nobody asked it to", and never "cron started stamping".
+    // Both of those are silent, and the second one turns dreaming off
+    // permanently. Deriving the set from `RUN_REQUEST_PRODUCERS` answers all
+    // three, so the roster is deliberately gone rather than kept alongside —
+    // two lists of the same two files is the drift this repo keeps paying for.
+
+    /// A `running` status row older than the cycle's hard timeout (plus slack)
+    /// is a crash tombstone — nothing alive can still be running it.
+    #[test]
+    fn stale_running_detection_respects_the_cycle_timeout() {
+        let started = 1_000_000;
+        let max = 600u32; // 10-minute cycle cap
+                          // Still inside cap + slack: could be a live cycle.
+        assert!(!running_status_is_stale(started, max, started + 600));
+        assert!(!running_status_is_stale(started, max, started + 1_100));
+        // Beyond cap + slack: the process died mid-cycle.
+        assert!(running_status_is_stale(started, max, started + 1_300));
     }
 
     // -----------------------------------------------------------------------

@@ -63,7 +63,7 @@ impl SandboxBeforeHook for SecurityKernelHook {
             Some(RiskLevel::Danger) => {
                 tracing::warn!(
                     target: "shell_security",
-                    tool = ctx.tool_name,
+                    tool = %ctx.command.tool_name,
                     program = %ctx.command.program,
                     "command matched a custom danger pattern (advisory; allowed)"
                 );
@@ -91,6 +91,7 @@ mod tests {
     fn cmd(program: &str, args: &[&str]) -> SandboxCommand {
         SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
+            tool_name: "bash".into(),
             program: program.into(),
             args: args.iter().map(|s| s.to_string()).collect(),
             env: HashMap::new(),
@@ -127,7 +128,7 @@ mod tests {
     async fn denies_custom_blocked_pattern() {
         let hook = hook_with(&[r"^secret_tool\b"], &[]);
         let command = cmd("secret_tool", &["--leak"]);
-        let ctx = SandboxHookContext::new("bash", &command);
+        let ctx = SandboxHookContext::new(&command);
         assert!(matches!(
             hook.before(ctx).await,
             SandboxHookResult::Deny { .. }
@@ -138,7 +139,7 @@ mod tests {
     async fn allows_unmatched_command() {
         let hook = hook_with(&[r"^secret_tool\b"], &[]);
         let command = cmd("ls", &["-la"]);
-        let ctx = SandboxHookContext::new("bash", &command);
+        let ctx = SandboxHookContext::new(&command);
         assert!(matches!(hook.before(ctx).await, SandboxHookResult::Allow));
     }
 
@@ -146,7 +147,7 @@ mod tests {
     async fn danger_pattern_is_advisory_only() {
         let hook = hook_with(&[], &[r"^deploy\b"]);
         let command = cmd("deploy", &["prod"]);
-        let ctx = SandboxHookContext::new("bash", &command);
+        let ctx = SandboxHookContext::new(&command);
         assert!(matches!(hook.before(ctx).await, SandboxHookResult::Allow));
     }
 
@@ -164,7 +165,7 @@ mod tests {
             vec!["-c", "secret_tool${IFS}--leak"],
         ] {
             let command = cmd("bash", &args);
-            let ctx = SandboxHookContext::new("bash", &command);
+            let ctx = SandboxHookContext::new(&command);
             assert!(
                 matches!(hook.before(ctx).await, SandboxHookResult::Deny { .. }),
                 "must deny: {args:?}"
@@ -180,7 +181,7 @@ mod tests {
         let hook = hook_with(&[r"secret_tool\b"], &[]);
         let mut command = cmd("bash", &["-s"]);
         command.stdin = Some(b"set -e\nsecret_tool --leak\n".to_vec());
-        let ctx = SandboxHookContext::new("bash", &command);
+        let ctx = SandboxHookContext::new(&command);
         assert!(matches!(
             hook.before(ctx).await,
             SandboxHookResult::Deny { .. }
@@ -194,7 +195,7 @@ mod tests {
         // Even a built-in "blocked"-looking command is allowed: this hook only
         // consults custom patterns, so default configs see no behavior change.
         let command = cmd("rm", &["-rf", "/"]);
-        let ctx = SandboxHookContext::new("bash", &command);
+        let ctx = SandboxHookContext::new(&command);
         assert!(matches!(hook.before(ctx).await, SandboxHookResult::Allow));
     }
 }

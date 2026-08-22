@@ -572,27 +572,29 @@ impl NoteStore for SqliteMemoryBackend {
     }
 
     async fn list_notes(&self, agent_id: &str) -> Result<Vec<NoteIndexEntry>, AlephError> {
-        let conn = lock_conn!(self)?;
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT n.*, \
+                     (SELECT COUNT(*) FROM notes_links WHERE from_note = n.path AND agent_id = n.agent_id) AS link_count \
+                     FROM notes_index n \
+                     WHERE n.agent_id = ?1 \
+                     ORDER BY n.updated_at DESC",
+                )
+                .map_err(|e| AlephError::config(format!("list_notes prepare: {e}")))?;
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT n.*, \
-                 (SELECT COUNT(*) FROM notes_links WHERE from_note = n.path AND agent_id = n.agent_id) AS link_count \
-                 FROM notes_index n \
-                 WHERE n.agent_id = ?1 \
-                 ORDER BY n.updated_at DESC",
-            )
-            .map_err(|e| AlephError::config(format!("list_notes prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![agent_id], row_to_entry)
+                .map_err(|e| AlephError::config(format!("list_notes query: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![agent_id], row_to_entry)
-            .map_err(|e| AlephError::config(format!("list_notes query: {e}")))?;
-
-        let mut entries = Vec::new();
-        for row in rows {
-            entries.push(row.map_err(|e| AlephError::config(format!("list_notes row: {e}")))?);
-        }
-        Ok(entries)
+            let mut entries = Vec::new();
+            for row in rows {
+                entries.push(row.map_err(|e| AlephError::config(format!("list_notes row: {e}")))?);
+            }
+            Ok(entries)
+        })
+        .await
     }
 
     async fn count_all_notes(&self) -> Result<i64, AlephError> {
@@ -765,88 +767,91 @@ impl NoteStore for SqliteMemoryBackend {
             return Ok(Vec::new());
         }
 
-        let conn = lock_conn!(self)?;
+        let query = query.to_string();
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            // FTS5 reserves `[`, `]`, `^`, `*`, `:`, `(`, `)`, `"` and operator
+            // keywords (`AND`, `OR`, `NOT`, `NEAR`). Raw user/transcript queries
+            // routinely contain brackets (`[user]`, code snippets, JSON), which
+            // makes the unquoted MATCH binding raise `fts5: syntax error near "["`.
+            // Each whitespace-separated term becomes its own FTS5 phrase (embedded
+            // quotes doubled per FTS5 escaping) joined with OR — binding the WHOLE
+            // query as one phrase required the exact token sequence, so multi-word
+            // natural-language queries matched nothing. `ORDER BY rank` (bm25)
+            // then puts notes matching more/rarer terms first.
+            let phrase = |t: &str| format!("\"{}\"", t.replace('"', "\"\""));
+            let terms: Vec<String> = query.split_whitespace().map(phrase).collect();
+            let match_expr = if terms.len() <= 1 {
+                phrase(query.trim())
+            } else {
+                terms.join(" OR ")
+            };
 
-        // FTS5 reserves `[`, `]`, `^`, `*`, `:`, `(`, `)`, `"` and operator
-        // keywords (`AND`, `OR`, `NOT`, `NEAR`). Raw user/transcript queries
-        // routinely contain brackets (`[user]`, code snippets, JSON), which
-        // makes the unquoted MATCH binding raise `fts5: syntax error near "["`.
-        // Each whitespace-separated term becomes its own FTS5 phrase (embedded
-        // quotes doubled per FTS5 escaping) joined with OR — binding the WHOLE
-        // query as one phrase required the exact token sequence, so multi-word
-        // natural-language queries matched nothing. `ORDER BY rank` (bm25)
-        // then puts notes matching more/rarer terms first.
-        let phrase = |t: &str| format!("\"{}\"", t.replace('"', "\"\""));
-        let terms: Vec<String> = query.split_whitespace().map(phrase).collect();
-        let match_expr = if terms.len() <= 1 {
-            phrase(query.trim())
-        } else {
-            terms.join(" OR ")
-        };
-
-        // Run one FTS table (unicode61 primary or trigram companion). `table`
-        // is a compile-time constant, so interpolating it is injection-safe.
-        let run_fts = |table: &str, expr: &str| -> Result<Vec<NoteIndexEntry>, AlephError> {
-            let sql = format!(
-                "SELECT n.*, \
-                 (SELECT COUNT(*) FROM notes_links WHERE from_note = n.path AND agent_id = n.agent_id) AS link_count \
-                 FROM {table} f \
-                 JOIN notes_index n ON n.path = f.path AND n.agent_id = f.agent_id \
-                 WHERE {table} MATCH ?1 AND f.agent_id = ?2 \
-                 ORDER BY rank \
-                 LIMIT ?3"
-            );
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| AlephError::config(format!("search_notes_fts prepare: {e}")))?;
-            let rows = stmt
-                .query_map(params![expr, agent_id, limit as i64], row_to_entry)
-                .map_err(|e| AlephError::config(format!("search_notes_fts query: {e}")))?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(
-                    row.map_err(|e| AlephError::config(format!("search_notes_fts row: {e}")))?,
+            // Run one FTS table (unicode61 primary or trigram companion). `table`
+            // is a compile-time constant, so interpolating it is injection-safe.
+            let run_fts = |table: &str, expr: &str| -> Result<Vec<NoteIndexEntry>, AlephError> {
+                let sql = format!(
+                    "SELECT n.*, \
+                     (SELECT COUNT(*) FROM notes_links WHERE from_note = n.path AND agent_id = n.agent_id) AS link_count \
+                     FROM {table} f \
+                     JOIN notes_index n ON n.path = f.path AND n.agent_id = f.agent_id \
+                     WHERE {table} MATCH ?1 AND f.agent_id = ?2 \
+                     ORDER BY rank \
+                     LIMIT ?3"
                 );
-            }
-            Ok(out)
-        };
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| AlephError::config(format!("search_notes_fts prepare: {e}")))?;
+                let rows = stmt
+                    .query_map(params![expr, agent_id, limit as i64], row_to_entry)
+                    .map_err(|e| AlephError::config(format!("search_notes_fts query: {e}")))?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(
+                        row.map_err(|e| AlephError::config(format!("search_notes_fts row: {e}")))?,
+                    );
+                }
+                Ok(out)
+            };
 
-        let mut entries = run_fts("notes_fts", &match_expr)?;
+            let mut entries = run_fts("notes_fts", &match_expr)?;
 
-        // CJK substring recall: `unicode61` indexes a run of CJK ideographs as a
-        // single token, so the CJK word `记忆` never matches inside `记忆管理`. For CJK-bearing
-        // queries also consult the trigram companion. Build the MATCH from
-        // per-term OR (mirroring the unicode61 leg), keeping only terms of ≥3
-        // chars — the trigram tokenizer's minimum — so a multi-word CJK query
-        // (e.g. `记忆管理 系统运维`) still substring-matches each word; a single
-        // whole-phrase MATCH would fail across the interior spaces. New hits are
-        // merged in, capped at `limit`. ASCII-only queries skip this entirely and
-        // keep byte-identical behaviour.
-        if query
-            .chars()
-            .any(crate::memory::notes::links::mentions::is_cjk)
-        {
-            let tri_terms: Vec<String> = query
-                .split_whitespace()
-                .filter(|t| t.chars().count() >= 3)
-                .map(phrase)
-                .collect();
-            if !tri_terms.is_empty() {
-                let tri_expr = tri_terms.join(" OR ");
-                let seen: std::collections::HashSet<String> =
-                    // rust-doctor-disable-next-line excessive-clone
-                    entries.iter().map(|e| e.path.clone()).collect();
-                for entry in run_fts("notes_fts_trigram", &tri_expr)? {
-                    if entries.len() >= limit {
-                        break;
-                    }
-                    if !seen.contains(entry.path.as_str()) {
-                        entries.push(entry);
+            // CJK substring recall: `unicode61` indexes a run of CJK ideographs as a
+            // single token, so the CJK word `记忆` never matches inside `记忆管理`. For CJK-bearing
+            // queries also consult the trigram companion. Build the MATCH from
+            // per-term OR (mirroring the unicode61 leg), keeping only terms of ≥3
+            // chars — the trigram tokenizer's minimum — so a multi-word CJK query
+            // (e.g. `记忆管理 系统运维`) still substring-matches each word; a single
+            // whole-phrase MATCH would fail across the interior spaces. New hits are
+            // merged in, capped at `limit`. ASCII-only queries skip this entirely and
+            // keep byte-identical behaviour.
+            if query
+                .chars()
+                .any(crate::memory::notes::links::mentions::is_cjk)
+            {
+                let tri_terms: Vec<String> = query
+                    .split_whitespace()
+                    .filter(|t| t.chars().count() >= 3)
+                    .map(phrase)
+                    .collect();
+                if !tri_terms.is_empty() {
+                    let tri_expr = tri_terms.join(" OR ");
+                    let seen: std::collections::HashSet<String> =
+                        // rust-doctor-disable-next-line excessive-clone
+                        entries.iter().map(|e| e.path.clone()).collect();
+                    for entry in run_fts("notes_fts_trigram", &tri_expr)? {
+                        if entries.len() >= limit {
+                            break;
+                        }
+                        if !seen.contains(entry.path.as_str()) {
+                            entries.push(entry);
+                        }
                     }
                 }
             }
-        }
-        Ok(entries)
+            Ok(entries)
+        })
+        .await
     }
 
     async fn get_graph_data(
@@ -1126,21 +1131,24 @@ impl NoteStore for SqliteMemoryBackend {
         filename: &str,
         agent_id: &str,
     ) -> Result<Vec<String>, AlephError> {
-        let conn = lock_conn!(self)?;
+        let filename = filename.to_string();
+        let agent_id = agent_id.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare("SELECT path FROM notes_index WHERE filename = ?1 AND agent_id = ?2")
+                .map_err(|e| AlephError::config(format!("find_by_filename prepare: {e}")))?;
 
-        let mut stmt = conn
-            .prepare("SELECT path FROM notes_index WHERE filename = ?1 AND agent_id = ?2")
-            .map_err(|e| AlephError::config(format!("find_by_filename prepare: {e}")))?;
+            let rows = stmt
+                .query_map(params![filename, agent_id], |row| row.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("find_by_filename query: {e}")))?;
 
-        let rows = stmt
-            .query_map(params![filename, agent_id], |row| row.get::<_, String>(0))
-            .map_err(|e| AlephError::config(format!("find_by_filename query: {e}")))?;
-
-        let mut paths = Vec::new();
-        for row in rows {
-            paths.push(row.map_err(|e| AlephError::config(format!("find_by_filename row: {e}")))?);
-        }
-        Ok(paths)
+            let mut paths = Vec::new();
+            for row in rows {
+                paths.push(row.map_err(|e| AlephError::config(format!("find_by_filename row: {e}")))?);
+            }
+            Ok(paths)
+        })
+        .await
     }
 
     async fn prune_orphan_vectors(&self, agent_id: &str) -> Result<usize, AlephError> {

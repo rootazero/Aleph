@@ -16,6 +16,7 @@ mod safety;
 pub mod session_lock;
 mod set_of_marks;
 mod types;
+mod verify_state;
 mod vision_bridge;
 mod wait_visual;
 
@@ -490,7 +491,9 @@ fn requires_lock(args: &DesktopArgs) -> bool {
 fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
     match args.action.as_str() {
         "screenshot" | "ocr" | "window_list" | "cursor_position" | "clipboard_read"
-        | "screen_record" | "focus_window" | "display_list" | "wait_visual" => None,
+        | "screen_record" | "focus_window" | "display_list" | "wait_visual" | "verify_state" => {
+            None
+        }
 
         "click" | "double_click" | "hover" | "mouse_button" => Some((
             ActionType::DesktopClick,
@@ -690,7 +693,7 @@ Actions:
 - type_text: Type text at the current keyboard focus. Blind by nature — the keystrokes go wherever focus actually is — so it is pre-flighted against the accessibility layer: it refuses when nothing is focused, or when the focused element reports that it takes no typed value, and tells you what to do instead (click the input, or use set_value). Typing into a secure/password field is always refused. If the app's accessibility tree lies (canvas, terminal, some Electron shells), pass force:true to type anyway — force does not lift the password refusal. Where no accessibility layer is available the pre-flight is skipped entirely.
 - key_combo: Press key combination, e.g. keys=["cmd","c"].
 - key_button: Hold or release a key/chord without auto-releasing — keys=["cmd"] plus press_action="press" (hold down) then later press_action="release". Distinct from key_combo, which presses and releases atomically. Useful for drag-with-modifier or chorded shortcuts. Send the matching release on the same target you pressed against: a key held in one app is only let up in that app.
-- scroll: Scroll by delta_x/delta_y PIXELS (negative = up/left), e.g. delta_y:-300 scrolls up about 300px. Pixels are quantized to whole mouse-wheel clicks (~100px each), so a delta under ~100px still moves one click and the result says how far it actually went. When you name a target app/pid/window_id, also pass x/y — a background scroll never moves the cursor, so the point is the only thing telling the app which view to scroll (any point inside it works, e.g. an element `center`).
+- scroll: Scroll by delta_x/delta_y PIXELS (negative = up/left), e.g. delta_y:-300 scrolls up about 300px. Pixels are quantized to whole mouse-wheel clicks (~100px each), so a delta under ~100px still moves one click and the result says how far it actually went. Pass x/y to say WHICH view to scroll: on a background (app/pid/window_id) scroll the point is required, since the cursor never moves; on a plain scroll the point is optional and, when given, the cursor is moved onto it first so the wheel lands there — omit it to scroll at the current cursor. Any point inside the target works (e.g. an element `center`). The result echoes where it scrolled under `at`.
 - launch_app: Launch app by bundle_id.
 - quit_app: Close app by bundle_id.
 - restart_app: Restart app by bundle_id (quit then relaunch).
@@ -705,6 +708,7 @@ Actions:
 - batch: Execute multiple actions sequentially. Requires actions array. Sub-actions inherit the batch-level `app` / `pid` / `window_id` (name the app you are driving once, at the top) and `coord_space` / `coord_factors` / `observe`, unless they set their own.
 - paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text. It goes through the user's clipboard: plain text is put back afterwards, but an image or file on the clipboard cannot be (the result says so) — use type_text when the clipboard must be preserved.
 - wait_visual: Wait until the screen settles. Polls screenshots and returns when two consecutive captures match, or after `timeout_ms` (default 5000, max 60000). Use after navigation or clicks that trigger animation. Returns `{stable: bool, polls, elapsed_ms}` — `stable=false` means timeout, not failure.
+- verify_state: Confirm a postcondition over the target app's accessibility tree, instead of eyeballing a screenshot. Pass `expect`: a list of 1–8 predicates that are ANDed and polled until they hold stably or `timeout_ms` (default 5000, max 10000; 0 = sample once) elapses. Each predicate is `{assert, role?, title?, title_contains?, value?}` where `assert` is one of `exists` (an element matching the selector is present), `focused` (the app's focused element matches), `value_equals` / `value_contains` (a single matched element's value). `stable_samples` (default 2, max 5) is how many consecutive satisfied samples count as stable. Scope with app/pid/window_id. Returns `{status: "satisfied"|"unsatisfied"|"unknown", stable, elapsed_ms, samples, predicates[]}`. `unknown` means the observation could NOT prove either answer (element not found within the node budget — absence is never provable — an ambiguous match, or a secure value) and is NEVER a pass. There is deliberately no "absent"/"not focused" assertion for the same reason.
 - set_value: Set a text field's value directly via the accessibility API and VERIFY the write by reading it back — the reliable way to fill forms (multiline, non-ASCII, replacing existing content). Locate the element with role ("AXTextField") and/or element_title, optionally x/y as a nearest-center hint (honors coord_space). Requires text. Result carries verification.state = "verified" | "unverified". Prefer this over click + type_text; type_text is a blind synthetic fallback.
 - ax_action: Trigger a native accessibility action (ax_action_name, e.g. "AXPress", "AXShowMenu") on an element located the same way. More reliable than a synthetic click for buttons/menus when the app exposes AX actions. Do not guess the name: desktop_ax_snapshot / desktop_som / desktop_gui_locate return each element's own `actions` list — pass one of those verbatim. An element reporting `enabled:false` is greyed out; acting on it does nothing, so fix the precondition instead. Available on macOS (AX), Windows (UI Automation: AXPress→Invoke/Toggle/Select, AXShowMenu→Expand) and Linux (AT-SPI2: pass the element's own action name, e.g. "click"; the AX* spellings resolve too). Where no accessibility layer is available, fall back to click.
 
@@ -921,6 +925,7 @@ mod escape_scope_tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         }
     }
 

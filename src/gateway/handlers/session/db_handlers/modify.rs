@@ -130,6 +130,17 @@ pub async fn handle_reset_db(
                 }
             };
 
+            // Same reasoning as `chat.clear`: the side session holds a
+            // copied prefix of this transcript, so a reset that spares it
+            // leaves the cleared content readable through the next `/btw`.
+            // Side session only — the key is unchanged, so the loop/goal
+            // chains keyed to it are still reachable and must survive.
+            crate::gateway::continuation_lifecycle::retire_side_session(
+                &session_key,
+                "sessions.reset",
+                Some(manager.clone()),
+            );
+
             match manager.reset_session(&session_key).await {
                 Ok(reset) => JsonRpcResponse::success(
                     request.id,
@@ -218,11 +229,16 @@ async fn handle_delete_db_inner(
             // still reach it with `loop(action='stop', session=…)`, but nothing
             // should require that after the user deleted the conversation.)
             //
-            // Canonical spelling, like `purge_session_artifacts` below: the
-            // registry and the goal store are keyed by `to_key_string()`.
+            // The same call retires the `/btw` side session derived from this
+            // key: the conversation it was a sidebar to is being deleted, and
+            // nothing else in the tree would ever reach that row again.
+            // Canonical spelling lives inside the seam now, like
+            // `purge_session_artifacts` below: the registry and the goal store
+            // are keyed by `to_key_string()`.
             crate::gateway::continuation_lifecycle::terminate_session_continuations(
-                &session_key.to_key_string(),
+                &session_key,
                 "sessions.delete",
+                Some(manager.clone()),
             );
 
             // Capture session tail BEFORE deletion so SessionEnd raw fires.

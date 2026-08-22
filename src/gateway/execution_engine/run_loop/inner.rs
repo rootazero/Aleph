@@ -261,11 +261,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // by the shared `turn_permissions` module: the slash-command fast path
         // consults the same resolution before it is allowed to dispatch, so the
         // two surfaces cannot enforce different rules.
-        let super::super::turn_permissions::TurnPermissions {
-            tier: exec_tier,
-            explicit: tool_permissions,
-            plan_gate,
-        } = self.resolve_turn_permissions(request, &agent).await;
+        // Kept whole rather than destructured: `plan_gate` and `side_question`
+        // cross into the turn context together, through
+        // `TurnPermissions::turn_context` below, and spreading them into loose
+        // locals here is what let the last one resolved be left out of the
+        // literal at the far end.
+        let turn_permissions = self.resolve_turn_permissions(request, &agent).await;
+        let exec_tier = turn_permissions.tier;
         // This turn's reasoning depth (composer pill / RPC `thinking` param /
         // the model's own `self_config` call, else whatever the session was
         // last stamped with). `None` = send no thinking directive, which is the
@@ -630,33 +632,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Routing context for HITL tools (sandbox escalation,
         // `requires_confirmation`, `ask_user`). Constant across retries.
-        // Channel id / conversation id come from the inbound router's metadata;
-        // empty for non-channel turns (cron, webhook) — HITL tools degrade.
-        let turn_context = crate::tools::turn_context::TurnContext {
-            session_key: request.session_key.clone(),
-            run_id: run_id.to_string(),
-            channel_id: request
-                .metadata
-                .get("channel_id")
-                .cloned()
-                .unwrap_or_default(),
-            conversation_id: request
-                .metadata
-                .get("conversation_id")
-                .cloned()
-                .unwrap_or_default(),
-            caller_role: request.metadata.get("caller_role").cloned(),
-            channel_tool_permissions: request
-                .metadata
-                .get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
-                .cloned(),
-            unattended,
-            // Cloned into BOTH tool services this run builds (its own and the
-            // parent view handed to spawned children), so the one human
-            // approval that lifts the gate lifts it everywhere this run can
-            // reach. `None` on every non-planning turn.
-            plan_gate: plan_gate.clone(),
-        };
+        // Built by the resolver that owns the permission facts riding in it —
+        // see `TurnPermissions::turn_context`.
+        let turn_context = turn_permissions.turn_context(request, run_id, unattended);
 
         loop {
             attempt += 1;
@@ -948,7 +926,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     Some(turn_context.clone()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
-                    tool_permissions.clone(),
+                    turn_permissions.explicit.clone(),
                     exec_tier,
                     unattended,
                     &mode_core_tools,
@@ -1221,7 +1199,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Some(turn_context.clone()),
                 hook_executor.clone(),
                 hook_session_id.clone(),
-                tool_permissions.clone(),
+                turn_permissions.explicit.clone(),
                 exec_tier,
                 unattended,
                 &mode_core_tools,

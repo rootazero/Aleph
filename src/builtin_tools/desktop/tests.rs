@@ -49,6 +49,8 @@ fn make_args(action: &str) -> DesktopArgs {
         pid: None,
         observe: None,
         force: None,
+        expect: Vec::new(),
+        stable_samples: None,
     }
 }
 
@@ -474,6 +476,7 @@ async fn approval_request_carries_agent_id_from_turn_context() {
         channel_tool_permissions: None,
         unattended: false,
         plan_gate: None,
+        side_question: false,
     };
 
     let mut args = make_args("click");
@@ -802,6 +805,8 @@ mod e2e_normalized {
             pid: None,
             observe: None,
             force: None,
+            expect: Vec::new(),
+            stable_samples: None,
         }];
 
         AlephTool::call(&tool, args).await.unwrap();
@@ -1237,6 +1242,7 @@ mod boundary_contracts {
     #[derive(Default)]
     struct Recorder {
         scrolls: Mutex<Vec<(String, i32)>>,
+        hovers: Mutex<Vec<(f64, f64)>>,
         clipboard_writes: Mutex<Vec<String>>,
     }
 
@@ -1274,6 +1280,14 @@ mod boundary_contracts {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push((direction.to_string(), amount));
+            Ok(())
+        }
+        async fn hover(&self, x: f64, y: f64) -> DResult<()> {
+            self.rec
+                .hovers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((x, y));
             Ok(())
         }
         async fn window_list(&self) -> DResult<Vec<WindowInfo>> {
@@ -1392,6 +1406,10 @@ mod boundary_contracts {
             .clone()
     }
 
+    fn hovers(rec: &Recorder) -> Vec<(f64, f64)> {
+        rec.hovers.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     fn writes(rec: &Recorder) -> Vec<String> {
         rec.clipboard_writes
             .lock()
@@ -1446,6 +1464,53 @@ mod boundary_contracts {
         assert!(!out.success);
         assert!(out.message.unwrap().contains("non-zero"));
         assert!(scrolls(&rec).is_empty(), "nothing should reach the limb");
+    }
+
+    #[tokio::test]
+    async fn global_scroll_with_a_point_lands_the_cursor_there_first() {
+        // The old global rail dropped x/y and scrolled wherever the cursor sat,
+        // reporting success either way — so a model pointing at a specific pane
+        // scrolled an arbitrary one. Now the point moves the cursor first, and
+        // the result echoes where the wheel landed under `at`.
+        let (tool, rec) = build(FRAME, None);
+        let mut args = make_args("scroll");
+        args.delta_y = Some(-300.0);
+        args.x = Some(700.0);
+        args.y = Some(460.0);
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(out.success, "scroll failed: {:?}", out.message);
+        assert_eq!(
+            hovers(&rec),
+            vec![(700.0, 460.0)],
+            "the cursor must be positioned on the point before the wheel event"
+        );
+        assert_eq!(scrolls(&rec), vec![("up".to_string(), 3)]);
+        assert_eq!(
+            out.data.expect("scroll data")["at"],
+            serde_json::json!([700.0, 460.0])
+        );
+    }
+
+    #[tokio::test]
+    async fn global_scroll_without_a_point_scrolls_at_the_cursor() {
+        // No point is still valid on the global rail: it scrolls at the real
+        // cursor and must not move it. `at` is null so the model knows.
+        let (tool, rec) = build(FRAME, None);
+        let mut args = make_args("scroll");
+        args.delta_y = Some(-300.0);
+
+        let out = AlephTool::call(&tool, args).await.unwrap();
+        assert!(out.success, "scroll failed: {:?}", out.message);
+        assert!(
+            hovers(&rec).is_empty(),
+            "a point-less scroll must not move the cursor"
+        );
+        assert_eq!(scrolls(&rec), vec![("up".to_string(), 3)]);
+        assert_eq!(
+            out.data.expect("scroll data")["at"],
+            serde_json::Value::Null
+        );
     }
 
     // ── Paste clipboard safety ─────────────────────────────────────

@@ -339,6 +339,10 @@ harness = false
 name = "full_rebuild_1000_notes"
 harness = false
 
+[[bench]]
+name = "recall_path_concurrency"
+harness = false
+
 # Undeclared, this one was auto-discovered with the default `harness = true`,
 # so cargo built it with `--test`: libtest supplied the `main`, the one
 # `criterion_main!` generates was compiled out as dead code, and the binary

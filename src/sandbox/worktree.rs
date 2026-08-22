@@ -237,6 +237,15 @@ async fn remove_worktree(repo_root: &Path, path: &Path) -> Result<(), WorktreeEr
 /// only the non-negotiable hardline is. An operator relying on a *custom* Block
 /// rule to gate a delegated subagent's commands should know it does not reach
 /// this path; the catastrophic floor does.
+///
+/// That second paragraph is a *ruling*, and it reads exactly like an oversight,
+/// so it is held by two tests rather than by this comment alone:
+/// `worktree_sandbox_installs_only_the_catastrophic_floor` (hook count) and
+/// `worktree_sandbox_does_not_reach_for_a_configurable_policy` (source-level —
+/// swapping `hardline_only()` for a config-derived policy keeps the count at 1,
+/// and the difference is invisible at runtime because every curated tunable rule
+/// is `Warn`). Widening the scope is a legitimate decision; make it one by
+/// editing those two and this paragraph in the same commit.
 pub struct WorktreeSandbox {
     worktree_path: std::path::PathBuf,
     hooks: crate::sandbox::hooks::SandboxHooks,
@@ -283,10 +292,7 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
         // "undisableable floor holds under every tier" invariant forbids.
         if let crate::sandbox::hooks::SandboxHookResult::Deny { reason } = self
             .hooks
-            .run_before(&crate::sandbox::hooks::SandboxHookContext::new(
-                &command.program,
-                &command,
-            ))
+            .run_before(&crate::sandbox::hooks::SandboxHookContext::new(&command))
             .await
         {
             return Err(crate::sandbox::SandboxError::Other(format!(
@@ -460,6 +466,7 @@ mod tests {
 
         let cmd = crate::sandbox::SandboxCommand {
             session_id: crate::session::service::SessionId::main("task7-sandbox-test"),
+            tool_name: "bash".into(),
             program: "pwd".into(),
             args: vec![],
             env: std::collections::HashMap::new(),
@@ -579,6 +586,7 @@ mod tests {
         let sandbox = WorktreeSandbox::new(std::env::temp_dir());
         let cmd = crate::sandbox::SandboxCommand {
             session_id: crate::session::service::SessionId::main("worktree-floor-test"),
+            tool_name: "bash".into(),
             program: "bash".into(),
             args: vec!["-c".into(), ":(){ :|:& };:".into()],
             env: std::collections::HashMap::new(),
@@ -598,6 +606,88 @@ mod tests {
         );
     }
 
+    /// The *other* half of the Stage-H scope ruling, which until now lived only
+    /// in the `WorktreeSandbox` doc comment: the catastrophic floor is shared,
+    /// and the operator-tunable `[sandbox.command_policy]` rules, the custom
+    /// shell-security patterns and the rate limiter deliberately are **not**.
+    ///
+    /// A ruling with only prose behind it does not stop the next sincere fixer.
+    /// This one reads as an oversight ("the worktree path is missing the hooks
+    /// the factory installs"), so the person who widens it will be *trying to
+    /// help* — and nothing would have gone red. Widening the scope is a real
+    /// option, but it has to be a decision: change this test in the same commit
+    /// and say why.
+    #[test]
+    fn worktree_sandbox_installs_only_the_catastrophic_floor() {
+        let sandbox = WorktreeSandbox::new(std::env::temp_dir());
+        assert_eq!(
+            sandbox.hooks.before.len(),
+            1,
+            "Stage-H scope: exactly one before-hook (the hardline command policy). \
+             Adding the rate limiter / security-kernel / resource-governor hooks that \
+             `factory::build_sandbox` layers onto WorkspaceSandbox is a scope change — \
+             see the WorktreeSandbox doc comment before editing this number."
+        );
+    }
+
+    /// Counterpart to the hook-count check above, which cannot see the one
+    /// change that matters most: swapping `hardline_only()` for a *configurable*
+    /// policy leaves the count at 1 while silently making this path obey rules
+    /// the ruling says it does not.
+    ///
+    /// Source-level because the distinction is not observable at runtime — the
+    /// curated tunable rules are all `Warn`, so a hardline-only policy and a
+    /// fully-configured one both *allow* the same commands and differ only in
+    /// audit rows written to a process-global sink.
+    ///
+    /// Comments are stripped first, and that is load-bearing rather than tidy:
+    /// the `WorktreeSandbox` doc comment names `[sandbox.command_policy]` and
+    /// the rate limiter *in the course of explaining why they are absent*, so a
+    /// guard that read them would have failed on its own documentation the day
+    /// it was written.
+    #[test]
+    fn worktree_sandbox_does_not_reach_for_a_configurable_policy() {
+        let src = include_str!("worktree.rs").replace('\r', "");
+        // No leading `\n` on the separator: this file is checked out CRLF, and
+        // an anchored `"\n#[cfg(test)]\n"` matches nothing there — which would
+        // silently hand the whole file (tests included) to the scan below.
+        let production = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element");
+        assert!(
+            production.len() < src.len(),
+            "separator did not match — the scan below would cover this test module's own literals"
+        );
+        let code: String = production
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with("//")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            code.contains("hardline_only()"),
+            "the worktree path must construct the hardline-only policy"
+        );
+        for forbidden in [
+            "CommandPolicy::defaults(",
+            "into_policy()",
+            "RateLimitHook",
+            "SecurityKernelHook",
+            "ResourceGovernor",
+        ] {
+            assert!(
+                !code.contains(forbidden),
+                "`{forbidden}` appeared in the production half of worktree.rs — that widens the \
+                 Stage-H scope lock beyond the catastrophic floor. If that is intended, update \
+                 the WorktreeSandbox doc comment and this guard together."
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn worktree_sandbox_blocks_private_key_in_output() {
@@ -608,6 +698,7 @@ mod tests {
         let sandbox = WorktreeSandbox::new(std::env::temp_dir());
         let cmd = crate::sandbox::SandboxCommand {
             session_id: crate::session::service::SessionId::main("worktree-secret-test"),
+            tool_name: "bash".into(),
             program: "printf".into(),
             args: vec!["%s".into(), "-----BEGIN PRIVATE KEY-----".into()],
             env: std::collections::HashMap::new(),

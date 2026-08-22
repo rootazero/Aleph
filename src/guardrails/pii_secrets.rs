@@ -455,14 +455,26 @@ mod delegation_tests {
 
     #[tokio::test]
     async fn tool_call_unknown_secret_blocks() {
+        // The Block reason deliberately does NOT echo the requested
+        // secret name (see the SecretResolutionFailed branch above —
+        // stripping the name closes a vault-namespace enumeration side
+        // channel exposed via the model-visible reason string). The
+        // invariant this test pins is "missing secret -> Block", not
+        // "missing secret -> reason contains name".
         let g = guard(true);
         let args = serde_json::json!({ "command": "echo {{secret:ghost}}" });
         let dec = g.evaluate_tool_call("bash_exec", &args).await;
         match dec {
             GuardrailDecision::Block { reason, .. } => {
                 assert!(
-                    reason.contains("ghost"),
-                    "reason must name the missing secret"
+                    !reason.is_empty(),
+                    "Block reason must carry enough info to triage; \
+                     got empty string"
+                );
+                assert!(
+                    reason.to_lowercase().contains("secret"),
+                    "Block reason must mention the secret pipeline so \
+                     the operator can route to vault config; got {reason:?}"
                 );
             }
             other => panic!("expected Block, got {:?}", other),

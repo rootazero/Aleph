@@ -121,6 +121,7 @@ mod tests {
             shared_token: mgr,
             agent_manager,
             session_store: crate::gateway::admin_api::test_session_store(dir.path()),
+            memory_handler: None,
         };
         let app = crate::gateway::admin_api::router(state);
         (app, dir, token)

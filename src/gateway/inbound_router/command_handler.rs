@@ -35,45 +35,57 @@ pub(super) fn strip_bot_mention(input: &str) -> String {
 
 /// Special slash-command variants intercepted in the inbound router before the
 /// generic `CommandParser` path. Case-insensitive over the command word, with
-/// the `@botname` Telegram suffix tolerated. `Btw` carries the verbatim body
-/// (original case preserved) so the model reads the user's actual phrasing
-/// rather than a lowercased copy.
+/// the `@botname` Telegram suffix tolerated.
+///
+/// Both variants here are answered by the router itself and never reach an
+/// agent. `/btw` deliberately does NOT belong: a side question is an ordinary
+/// agent turn, resolved by [`crate::gateway::btw::BtwTurn::resolve`] — the one
+/// resolver every surface shares — and claimed by `handle_message` only to keep
+/// it away from the slash fast path. A second variant here would be a second
+/// predicate for the same question.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SpecialSlash {
     Help,
     Stop,
-    Btw { body: String },
 }
+
+/// The commands the router answers or claims itself, appended to the channel
+/// `/help` listing after the catalog renderer has had its say.
+///
+/// These have no `ToolCatalog` entry — deliberately, in `/btw`'s case: an entry
+/// would make it resolvable, and `CommandParser::parse_async` +
+/// `stamp_slash_mode` would then route it into the slash fast path, which
+/// dispatches on the raw tool registry and never builds the `ScopedToolService`
+/// the side question's read-only ceiling lives in. A catalog has one table with
+/// two faces; a string appended here has only the face.
+///
+/// Only `/btw` is listed. `/help`, `/stop` and `/abort` are conventions a chat
+/// user arrives already knowing; `/btw` is a verb this project invented, and a
+/// feature whose value is "ask without derailing the run" is worth nothing to
+/// someone who has never seen the word. That is the whole argument for the line
+/// — if a future router-owned command is equally unguessable, it belongs here
+/// too, and if it is not, it does not.
+const ROUTER_OWNED_HELP_LINES: &str =
+    "\n/btw <question> — ask a read-only side question without disturbing this \
+     conversation";
 
 /// Classify a raw inbound text as a `SpecialSlash` variant.
 ///
-/// Returns `None` for anything that is not `/help`, `/stop`, `/abort`, or
-/// `/btw <body>` (case-insensitive, optional `@botname`). `/btw` without a
-/// non-empty body is rejected — an empty sidebar question has no place to go.
+/// Returns `None` for anything that is not `/help`, `/stop` or `/abort`
+/// (case-insensitive, optional `@botname`).
 pub(super) fn classify_special_slash(text: &str) -> Option<SpecialSlash> {
     let trimmed = text.trim();
     if !trimmed.starts_with('/') {
         return None;
     }
-    let (head, rest) = match trimmed.split_once(char::is_whitespace) {
-        Some((h, r)) => (h, r),
-        None => (trimmed, ""),
-    };
+    let head = trimmed
+        .split_once(char::is_whitespace)
+        .map_or(trimmed, |(h, _)| h);
     let cmd = head.split_once('@').map_or(head, |(c, _)| c);
     let cmd_lower = cmd.strip_prefix('/').unwrap_or(cmd).to_lowercase();
     match cmd_lower.as_str() {
         "help" => Some(SpecialSlash::Help),
         "stop" | "abort" => Some(SpecialSlash::Stop),
-        "btw" => {
-            let body = rest.trim();
-            if body.is_empty() {
-                None
-            } else {
-                Some(SpecialSlash::Btw {
-                    body: body.to_string(),
-                })
-            }
-        }
         _ => None,
     }
 }
@@ -249,46 +261,6 @@ impl InboundMessageRouter {
         true
     }
 
-    /// Handle /btw command: ephemeral sidebar conversation that doesn't affect context.
-    ///
-    /// Creates a `SessionKey::Ephemeral` so the question/answer is not persisted
-    /// to the current session history.
-    pub(super) async fn handle_btw(
-        &self,
-        msg: &InboundMessage,
-        agent_id: &str,
-        btw_text: &str,
-    ) -> Result<(), RoutingError> {
-        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
-
-        let reply_route = ReplyRoute::new(msg.channel_id.clone(), msg.conversation_id.clone())
-            .with_inbound_message_id(msg.id.clone());
-
-        // Use ephemeral session — no persistence, no context pollution
-        let session_key = SessionKey::ephemeral(agent_id);
-
-        // Create a modified message with just the btw text
-        let mut btw_msg = msg.clone();
-        btw_msg.text = btw_text.to_string();
-
-        let ctx = InboundContext::new(btw_msg, reply_route, session_key);
-
-        // /btw is a plain ephemeral turn — it does NOT take the slash-command
-        // fast path. Sending a non-mode JSON through
-        // `execute_for_context_with_metadata` previously injected `{"btw":true}`
-        // into the SLASH_COMMAND_MODE_KEY, which the engine's fast path
-        // parsed as an unknown `mode_type` and rejected with
-        // "Unknown slash command type:". Route through the regular
-        // execution path so the model gets the btw prompt directly.
-        self.execute_for_context(&ctx).await?;
-
-        info!(
-            "[Router] /btw handled as ephemeral session for agent '{}'",
-            agent_id
-        );
-        Ok(())
-    }
-
     /// Handle /new command: close current session with topic, create new epoch
     pub(super) async fn handle_new_session(
         &self,
@@ -310,10 +282,14 @@ impl InboundMessageRouter {
         // Terminate the closed session's autonomous continuations BEFORE the
         // epoch bump — after it, `/loop stop` / `goal clear` route to the new
         // epoch and the old chain becomes uncancellable (shared seam with the
-        // Panel `sessions.new` RPC).
+        // Panel `sessions.new` RPC). The same call retires the `/btw` side
+        // session derived from this key; the store handle is optional here for
+        // the same reason the epoch lookup above is, and without it the side
+        // session is left as disk residue rather than anything worse.
         crate::gateway::continuation_lifecycle::terminate_session_continuations(
-            &old_key_resolved.to_key_string(),
+            &old_key_resolved,
             "/new",
+            self.session_store.clone(),
         );
 
         let new_key = old_key.with_epoch(current_epoch + 1);
@@ -401,7 +377,15 @@ impl InboundMessageRouter {
         // admitted, so purging first marks every ticket that was waiting when
         // the user asked to stop, and `deliver_with_ticket` checks
         // `is_cancelled` ahead of `is_front`, so the wake finds it already dead.
-        let dropped = crate::gateway::busy_queue::purge(&ctx.session_key.to_key_string());
+        // Both lanes, for the same reason `cancel_session` reaches both
+        // sessions: a `/btw` side question queues on a lane derived from this
+        // one, and to the person typing `/stop` there is one conversation.
+        // `side_session_of` is `None` when this key is already a derived one, so
+        // this cannot purge a phantom lane.
+        let dropped = crate::gateway::busy_queue::purge(&ctx.session_key.to_key_string())
+            + crate::gateway::btw::side_session_of(&ctx.session_key).map_or(0, |side| {
+                crate::gateway::busy_queue::purge(&side.to_key_string())
+            });
         if dropped > 0 {
             info!(
                 session = %ctx.session_key.to_key_string(),
@@ -467,15 +451,25 @@ impl InboundMessageRouter {
     /// completion UI, so this is the channel-side counterpart. Intercepted
     /// before agent dispatch like `/stop` — a read-only listing must never be
     /// queued behind a running turn.
+    ///
+    /// The listing is assembled **here**, not by the catalog, which is what lets
+    /// a router-owned command appear in it. `/btw` uses that: it has no catalog
+    /// entry (one would make it resolvable, and a resolvable `/btw` is taken by
+    /// the slash fast path, which holds none of the loop's gates — see
+    /// `no_shipped_command_word_resolves_as_a_side_question`), so the only place
+    /// it can be advertised without becoming dispatchable is a string appended
+    /// after the renderer returns. Discoverable on channels, unresolvable
+    /// everywhere.
     pub(super) async fn handle_help(&self, msg: &InboundMessage) -> Result<(), RoutingError> {
         let Some(parser) = self.command_parser.as_ref() else {
             // No unified catalog wired (simulated mode) — nothing to list.
             return Ok(());
         };
 
-        let text =
+        let mut text =
             crate::gateway::handlers::commands::render_command_help(parser.tool_registry(), None)
                 .await;
+        text.push_str(ROUTER_OWNED_HELP_LINES);
 
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &text);
         if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
@@ -536,7 +530,9 @@ impl InboundMessageRouter {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_special_slash, parse_clarify_index, SpecialSlash};
+    use super::{
+        classify_special_slash, parse_clarify_index, SpecialSlash, ROUTER_OWNED_HELP_LINES,
+    };
 
     #[test]
     fn classify_help_lowercase() {
@@ -588,65 +584,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_btw_lowercase() {
-        assert_eq!(
-            classify_special_slash("/btw What is X?"),
-            Some(SpecialSlash::Btw {
-                body: "What is X?".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_uppercase_preserves_body_case() {
-        let body = "What is the Weather Forecast for Tokyo?";
-        assert_eq!(
-            classify_special_slash("/BTW What is the Weather Forecast for Tokyo?"),
-            Some(SpecialSlash::Btw {
-                body: body.to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_at_bot_preserves_body_case() {
-        assert_eq!(
-            classify_special_slash("/btw@MyBot Explain Async/Await in Rust"),
-            Some(SpecialSlash::Btw {
-                body: "Explain Async/Await in Rust".to_string()
-            })
-        );
-        assert_eq!(
-            classify_special_slash("/BTW@MyBot Hello, World!"),
-            Some(SpecialSlash::Btw {
-                body: "Hello, World!".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_newline_separator() {
-        assert_eq!(
-            classify_special_slash("/btw\nQuestion on next line"),
-            Some(SpecialSlash::Btw {
-                body: "Question on next line".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn classify_btw_empty_body_is_not_a_command() {
-        assert_eq!(classify_special_slash("/btw"), None);
-        assert_eq!(classify_special_slash("/btw "), None);
-        assert_eq!(classify_special_slash("/btw@MyBot"), None);
-        assert_eq!(classify_special_slash("/BTW\n   "), None);
-    }
-
-    #[test]
     fn classify_no_slash_prefix_is_not_a_command() {
         assert_eq!(classify_special_slash("help"), None);
         assert_eq!(classify_special_slash("STOP"), None);
-        assert_eq!(classify_special_slash("btw hi"), None);
+        assert_eq!(classify_special_slash("abort now"), None);
     }
 
     #[test]
@@ -655,6 +596,73 @@ mod tests {
         assert_eq!(classify_special_slash("/HELLO"), None);
         assert_eq!(classify_special_slash("/"), None);
         assert_eq!(classify_special_slash(""), None);
+    }
+
+    /// The channel `/help` line is the whole of `/btw`'s discovery, so it has to
+    /// actually name the command and it has to stay unresolvable.
+    ///
+    /// Both halves matter and they pull in opposite directions. Advertising a
+    /// command word that the `CommandParser` can resolve is precisely the defect
+    /// this line exists to route around: a catalog entry would be listed *and*
+    /// dispatchable, and a dispatchable `/btw` is taken by the slash fast path
+    /// with no read-only ceiling. So the assertion is not "the line mentions
+    /// btw" but "the line mentions btw **and** asking the one resolver about it
+    /// still yields a side question, not a tool".
+    #[test]
+    fn the_router_owned_help_line_advertises_btw() {
+        assert!(
+            ROUTER_OWNED_HELP_LINES.contains("/btw"),
+            "the only place a channel user can learn `/btw` exists stopped \
+             naming it: {ROUTER_OWNED_HELP_LINES:?}"
+        );
+        assert!(
+            ROUTER_OWNED_HELP_LINES.starts_with('\n'),
+            "the line must start its own line — it is appended to a rendered \
+             listing, and without the break it lands on the end of the last \
+             catalog entry: {ROUTER_OWNED_HELP_LINES:?}"
+        );
+        assert!(
+            crate::gateway::btw::BtwTurn::resolve("/btw why is this slow?").is_some(),
+            "the help line advertises a command the one resolver no longer \
+             recognises — the listing would be pointing at nothing"
+        );
+    }
+
+    /// A router-owned help line may only advertise a word the router itself
+    /// claims or answers.
+    ///
+    /// The failure this blocks is advertising something the catalog owns:
+    /// `render_command_help` already lists every catalog command, so a word
+    /// added here that the catalog also knows is both duplicated in the listing
+    /// and — the expensive half — dispatchable, which for `/btw` means the fast
+    /// path and no ceiling. Derives the router-answered vocabulary from
+    /// `classify_special_slash` and `BtwTurn::resolve` rather than listing it,
+    /// so a fourth router-owned command joins the rule automatically.
+    #[test]
+    fn every_word_in_the_router_owned_help_line_is_router_owned() {
+        let advertised: Vec<&str> = ROUTER_OWNED_HELP_LINES
+            .split_whitespace()
+            .filter(|w| w.starts_with('/') && w.len() > 1)
+            .collect();
+        assert!(
+            !advertised.is_empty(),
+            "no command word found in {ROUTER_OWNED_HELP_LINES:?} — this guard \
+             would pass vacuously"
+        );
+
+        for word in advertised {
+            let router_answers = classify_special_slash(word).is_some();
+            let router_claims =
+                crate::gateway::btw::BtwTurn::resolve(&format!("{word} some question")).is_some();
+            assert!(
+                router_answers || router_claims,
+                "`{word}` is advertised in the router's own help line but the \
+                 router neither answers it (`classify_special_slash`) nor claims \
+                 it (`BtwTurn::resolve`). If it is a catalog command, \
+                 `render_command_help` already lists it and this line is both a \
+                 duplicate and a claim the router cannot keep."
+            );
+        }
     }
 
     #[test]

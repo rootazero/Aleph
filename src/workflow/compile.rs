@@ -47,6 +47,25 @@ pub const WORKFLOW_MODEL_KEY: &str = "workflow_model";
 /// manifest's `effort` field, exactly mirroring [`WORKFLOW_MODEL_KEY`].
 /// Absent on steps with no override (byte-identical legacy rows).
 pub const WORKFLOW_EFFORT_KEY: &str = "workflow_effort";
+/// Metadata key carrying a step's phase title (the manifest's per-step `phase`,
+/// i.e. the `.workflow.js` `phase("…")` marker the step sits under). Read back
+/// by `workflow(action='status')` to group the run's steps the way the
+/// `.workflow.js` live view does. Interchange-only until this key existed: the
+/// phase plan round-tripped through `import`/`export` and was invisible to
+/// every runtime face. Absent on steps with no phase (byte-identical rows).
+pub const WORKFLOW_PHASE_KEY: &str = "workflow_phase";
+/// Metadata key carrying a step's requested output contract — the manifest's
+/// opaque `schema` (a JSON Schema). `build_handoff_context` renders it as an
+/// `## Output Contract` section so the member run is *told* what shape to
+/// return.
+///
+/// **This is a request, not an enforcement.** Aleph does not validate the
+/// member's reply against it: doing so would need a structured-output channel
+/// on `RunRequest` and a terminating tool inside the harness (R10's 12-file
+/// budget). The honest contract is "the model was asked"; the previous
+/// contract was "the field is carried and nothing whatsoever happens", which
+/// read the same from the outside. Absent on steps with no schema.
+pub const WORKFLOW_SCHEMA_KEY: &str = "workflow_schema";
 /// Metadata key carrying the run-global welded strategy frame on every
 /// materialised **agent** step. Stamped once per run (beside [`WORKFLOW_RUN_ID_KEY`])
 /// from the planned [`Strategy`](crate::strategy::Strategy) via
@@ -153,6 +172,119 @@ pub fn workflow_effort_think_level(
     crate::agents::thinking::normalize_think_level(raw)
 }
 
+/// Every per-step override a template can push past [`WorkflowDef`] into the
+/// materialised task's metadata, as **one** value.
+///
+/// Before this type these were parallel `HashMap<String, String>` arguments to
+/// [`materialize`], and the shape was simple enough that each new override got
+/// copied rather than shared. That copy is what went wrong: `model` grew a
+/// projection (`describe`/`run`/`status` all report it) and `effort` — stamped,
+/// consumed by the dispatcher, and equally executable — grew none, so a
+/// template could pin a step to `max` reasoning and no surface in the product
+/// could say so. A struct makes the next override a field on a type every call
+/// site already threads, and [`StepPins::census`] makes forgetting a face a
+/// test failure rather than an invisible one.
+///
+/// `phase` and `schema` are the two members that were previously
+/// interchange-only: they round-tripped through `import`/`export` and had zero
+/// runtime consumers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StepPins {
+    /// `"model"` or `"provider/model"` → `RunRequest.model_override`.
+    pub model: Option<String>,
+    /// `low`..`max` → the member run's `think_level`.
+    pub effort: Option<String>,
+    /// Phase title this step sits under → grouped `status` reporting.
+    pub phase: Option<String>,
+    /// Requested output contract (JSON Schema) → an `## Output Contract`
+    /// section in the member's handoff. Requested, never validated — see
+    /// [`WORKFLOW_SCHEMA_KEY`].
+    pub schema: Option<serde_json::Value>,
+}
+
+impl StepPins {
+    /// True when this step pins nothing — the caller then leaves the task row
+    /// byte-identical to a legacy materialisation.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none()
+            && self.effort.is_none()
+            && self.phase.is_none()
+            && self.schema.is_none()
+    }
+
+    /// Name every pin this value carries, in declaration order.
+    ///
+    /// Implemented by **exhaustive destructuring** on purpose: adding a field
+    /// to [`StepPins`] without adding it here is a compile error, which forces
+    /// its author to answer "does this need a surface?" at the moment they add
+    /// it. The `workflow` tool's projection test asserts against this list, so
+    /// a pin that reaches task metadata but no reporting face fails a test
+    /// **by name** instead of shipping invisible (which is exactly how `effort`
+    /// shipped).
+    #[must_use]
+    pub fn census(&self) -> Vec<&'static str> {
+        let Self {
+            model,
+            effort,
+            phase,
+            schema,
+        } = self;
+        let mut out = Vec::new();
+        if model.is_some() {
+            out.push("model");
+        }
+        if effort.is_some() {
+            out.push("effort");
+        }
+        if phase.is_some() {
+            out.push("phase");
+        }
+        if schema.is_some() {
+            out.push("schema");
+        }
+        out
+    }
+
+    /// The full field vocabulary, independent of what this value holds.
+    /// Derived from `census` on a fully-populated value so the two can never
+    /// disagree.
+    #[must_use]
+    pub fn all_fields() -> Vec<&'static str> {
+        Self {
+            model: Some(String::new()),
+            effort: Some(String::new()),
+            phase: Some(String::new()),
+            schema: Some(serde_json::Value::Null),
+        }
+        .census()
+    }
+
+    /// Stamp this step's pins onto `meta` (a task-metadata object). A `None`
+    /// pin writes nothing, so a step that pins nothing leaves the row
+    /// byte-identical. Blank strings are treated as absent — a manifest field
+    /// set to `""` is "unset spelled differently", and letting it through
+    /// would put an empty `workflow_model` on the wire that every reader then
+    /// has to re-filter.
+    pub fn stamp(&self, meta: &mut serde_json::Value) {
+        let Some(obj) = meta.as_object_mut() else {
+            return;
+        };
+        for (key, value) in [
+            (WORKFLOW_MODEL_KEY, self.model.as_deref()),
+            (WORKFLOW_EFFORT_KEY, self.effort.as_deref()),
+            (WORKFLOW_PHASE_KEY, self.phase.as_deref()),
+        ] {
+            if let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) {
+                obj.insert(key.to_string(), serde_json::json!(v));
+            }
+        }
+        if let Some(schema) = self.schema.as_ref().filter(|s| !s.is_null()) {
+            obj.insert(WORKFLOW_SCHEMA_KEY.to_string(), schema.clone());
+        }
+    }
+}
+
 /// The set of `coord_task` ids minted for one workflow run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedWorkflow {
@@ -178,15 +310,13 @@ pub struct MaterializedWorkflow {
 /// have no channel to reach — the dispatcher fails them with a clear reason
 /// rather than stalling the DAG.
 ///
-/// `models` maps step-local id → model override (e.g. `"opus"`,
-/// `"openai/gpt-5"`); a present entry is stamped under [`WORKFLOW_MODEL_KEY`] on
-/// that agent step so its member run executes on the requested model. `None` (or
-/// a step with no entry) leaves the run on the agent's default model — the
-/// pre-existing behaviour. Clarify steps run no agent, so they are never stamped.
-///
-/// `efforts` maps step-local id → reasoning-effort override (`low`..`max`),
-/// stamped under [`WORKFLOW_EFFORT_KEY`] with the exact same contract as
-/// `models` (agent steps only, absent entries byte-identical).
+/// `pins` maps step-local id → [`StepPins`]: the per-step model / effort /
+/// phase / output-contract overrides the lean [`WorkflowDef`] cannot carry.
+/// Each present pin is stamped onto that **agent** step's task metadata
+/// ([`StepPins::stamp`]) where the dispatcher and `workflow(action='status')`
+/// read it back. A step with no entry (or `None` here) leaves the row
+/// byte-identical to a legacy materialisation. Clarify steps run no agent, so
+/// they are never stamped.
 ///
 /// `origin_session` is the launching session's key captured at run start (the
 /// tool's turn context); it is stamped on every task as the `origin_session`
@@ -200,8 +330,7 @@ pub async fn materialize(
     team_id: &str,
     store: &dyn CoordTaskStore,
     clarify_ctx: Option<&ClarifyContext>,
-    models: Option<&std::collections::HashMap<String, String>>,
-    efforts: Option<&std::collections::HashMap<String, String>>,
+    pins: Option<&std::collections::HashMap<String, StepPins>>,
     strategy: Option<&Strategy>,
     origin_session: Option<&str>,
 ) -> Result<MaterializedWorkflow> {
@@ -297,30 +426,13 @@ pub async fn materialize(
                     }
                 }
             }
-            // Per-step model override (from the AWI manifest): stamp the model
-            // string the dispatcher turns into a RunRequest.model_override at
-            // launch. Absent when the step has no override (byte-identical rows).
-            if let Some(model) = models
-                .and_then(|m| m.get(step.id.as_str()))
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-            {
-                if let Some(obj) = meta.as_object_mut() {
-                    obj.insert(WORKFLOW_MODEL_KEY.to_string(), json!(model));
-                }
-            }
-            // Per-step reasoning-effort override (from the AWI manifest): same
-            // contract as the model stamp above — the dispatcher reads it via
-            // `workflow_effort_think_level` and threads it into the member
-            // run's think-level channel. Absent → byte-identical rows.
-            if let Some(effort) = efforts
-                .and_then(|m| m.get(step.id.as_str()))
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-            {
-                if let Some(obj) = meta.as_object_mut() {
-                    obj.insert(WORKFLOW_EFFORT_KEY.to_string(), json!(effort));
-                }
+            // Per-step pins (from the AWI manifest): model / effort / phase /
+            // output-contract, stamped through the ONE carrier so a new pin
+            // reaches metadata by adding a field rather than by remembering to
+            // add a fourth block here. Pins the step does not set write
+            // nothing → byte-identical rows.
+            if let Some(step_pins) = pins.and_then(|m| m.get(step.id.as_str())) {
+                step_pins.stamp(&mut meta);
             }
             // Run-global strategy frame: the same welded objective + cross-cutting
             // guardrails on every agent step (the DAG itself is the phase
@@ -530,7 +642,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .await
         .expect("materialise");
@@ -545,7 +656,6 @@ mod tests {
             "quantum computing",
             "team-1",
             &store,
-            None,
             None,
             None,
             None,
@@ -571,19 +681,9 @@ mod tests {
     #[tokio::test]
     async fn materialize_stamps_one_run_id_on_every_task() {
         let store = setup_store().await;
-        let first = materialize(
-            &linear_def(),
-            "x",
-            "team-1",
-            &store,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let first = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
+            .await
+            .unwrap();
         assert!(!first.run_id.is_empty(), "run id is minted");
         for id in &first.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
@@ -596,38 +696,18 @@ mod tests {
             );
         }
         // A second run of the same template mints a distinct identity.
-        let second = materialize(
-            &linear_def(),
-            "x",
-            "team-1",
-            &store,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let second = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
+            .await
+            .unwrap();
         assert_ne!(first.run_id, second.run_id, "runs are distinguishable");
     }
 
     #[tokio::test]
     async fn materialize_wires_dependency_so_dependent_is_blocked() {
         let store = setup_store().await;
-        let mat = materialize(
-            &linear_def(),
-            "x",
-            "team-1",
-            &store,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
+            .await
+            .unwrap();
 
         // task_ids[0] is "gather" (root), [1] is "write" (depends on gather).
         let root = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
@@ -666,7 +746,7 @@ mod tests {
             description: String::new(),
             steps: vec![step("a", "w", &[]), step("b", "w", &["a", "a"])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None, None)
             .await
             .expect("duplicate dep collapses instead of aborting");
         assert_eq!(mat.task_ids.len(), 2);
@@ -681,7 +761,7 @@ mod tests {
         let mut def = linear_def();
         def.steps[1].depends_on = vec!["ghost".into()];
         assert!(
-            materialize(&def, "x", "team-1", &store, None, None, None, None, None)
+            materialize(&def, "x", "team-1", &store, None, None, None, None)
                 .await
                 .is_err()
         );
@@ -700,7 +780,7 @@ mod tests {
                 step("d", "w", &["b", "c"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(mat.task_ids.len(), 4);
@@ -740,7 +820,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .await
         .unwrap();
@@ -767,7 +846,7 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].review = true;
-        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None, None)
+        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None)
             .await
             .unwrap();
 
@@ -794,7 +873,7 @@ mod tests {
             description: String::new(),
             steps: vec![clarify_step("ask", "Which file?", &[], &[])],
         };
-        let mat = materialize(&def, "x", "t", &store, None, None, None, None, None)
+        let mat = materialize(&def, "x", "t", &store, None, None, None, None)
             .await
             .unwrap();
         let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
@@ -805,20 +884,25 @@ mod tests {
 
     #[tokio::test]
     async fn materialize_stamps_per_step_model_override() {
-        // A model map keyed by step id stamps WORKFLOW_MODEL_KEY onto exactly
+        // A pins map keyed by step id stamps WORKFLOW_MODEL_KEY onto exactly
         // the matching agent step; an unlisted step stays byte-identical (no
         // key), so non-overridden runs keep the agent's default model.
         let store = setup_store().await;
-        let mut models = std::collections::HashMap::new();
-        models.insert("gather".to_string(), "opus".to_string());
+        let mut pins = std::collections::HashMap::new();
+        pins.insert(
+            "gather".to_string(),
+            StepPins {
+                model: Some("opus".into()),
+                ..Default::default()
+            },
+        );
         let mat = materialize(
             &linear_def(),
             "x",
             "team-1",
             &store,
             None,
-            Some(&models),
-            None,
+            Some(&pins),
             None,
             None,
         )
@@ -868,20 +952,25 @@ mod tests {
 
     #[tokio::test]
     async fn materialize_stamps_per_step_effort_override() {
-        // An effort map keyed by step id stamps WORKFLOW_EFFORT_KEY onto exactly
+        // A pins map keyed by step id stamps WORKFLOW_EFFORT_KEY onto exactly
         // the matching agent step; an unlisted step stays byte-identical (no
         // key) — the exact WORKFLOW_MODEL_KEY contract.
         let store = setup_store().await;
-        let mut efforts = std::collections::HashMap::new();
-        efforts.insert("gather".to_string(), "max".to_string());
+        let mut pins = std::collections::HashMap::new();
+        pins.insert(
+            "gather".to_string(),
+            StepPins {
+                effort: Some("max".into()),
+                ..Default::default()
+            },
+        );
         let mat = materialize(
             &linear_def(),
             "x",
             "team-1",
             &store,
             None,
-            None,
-            Some(&efforts),
+            Some(&pins),
             None,
             None,
         )
@@ -949,7 +1038,6 @@ mod tests {
             &store,
             None,
             None,
-            None,
             Some(&strategy),
             None,
         )
@@ -985,7 +1073,7 @@ mod tests {
         let mut def = linear_def();
         def.steps[0].timeout_seconds = Some(1800);
         def.steps[0].max_retries = Some(0);
-        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None, None)
+        let mat = materialize(&def, "x", "team-1", &store, None, None, None, None)
             .await
             .unwrap();
 
@@ -1020,7 +1108,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .await
         .unwrap();
@@ -1033,19 +1120,9 @@ mod tests {
             );
         }
         // Non-interactive runs stay byte-identical (no origin key).
-        let silent = materialize(
-            &linear_def(),
-            "x",
-            "team-1",
-            &store,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let silent = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
+            .await
+            .unwrap();
         for id in &silent.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert!(task.metadata.get(WORKFLOW_ORIGIN_KEY).is_none());
@@ -1065,7 +1142,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             Some("channel:telegram:user-1"),
         )
         .await
@@ -1079,19 +1155,9 @@ mod tests {
             );
         }
         // No session context → byte-identical rows (no key at all).
-        let silent = materialize(
-            &linear_def(),
-            "x",
-            "team-1",
-            &store,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let silent = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
+            .await
+            .unwrap();
         for id in &silent.task_ids {
             let task = store.get_task(id).await.unwrap().unwrap();
             assert!(origin_session_from_metadata(&task.metadata).is_none());
@@ -1101,22 +1167,102 @@ mod tests {
     #[tokio::test]
     async fn materialize_without_strategy_is_byte_identical() {
         let store = setup_store().await;
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None, None, None, None)
+            .await
+            .unwrap();
+        for id in &mat.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            assert!(task.metadata.get(WORKFLOW_STRATEGY_KEY).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn materialize_stamps_phase_and_schema_pins() {
+        // `phase` and `schema` ride the same StepPins carrier as model/effort.
+        // Phase feeds grouped `status` reporting; schema feeds the handoff's
+        // `## Output Contract` section. An unpinned step stays byte-identical.
+        let store = setup_store().await;
+        let mut pins = std::collections::HashMap::new();
+        pins.insert(
+            "gather".to_string(),
+            StepPins {
+                phase: Some("Scan".into()),
+                schema: Some(json!({"type": "object", "required": ["paths"]})),
+                ..Default::default()
+            },
+        );
         let mat = materialize(
             &linear_def(),
             "x",
             "team-1",
             &store,
             None,
-            None,
-            None,
+            Some(&pins),
             None,
             None,
         )
         .await
         .unwrap();
-        for id in &mat.task_ids {
-            let task = store.get_task(id).await.unwrap().unwrap();
-            assert!(task.metadata.get(WORKFLOW_STRATEGY_KEY).is_none());
+
+        let gather = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert_eq!(
+            gather
+                .metadata
+                .get(WORKFLOW_PHASE_KEY)
+                .and_then(|v| v.as_str()),
+            Some("Scan")
+        );
+        assert_eq!(
+            gather
+                .metadata
+                .get(WORKFLOW_SCHEMA_KEY)
+                .and_then(|v| v.get("required")),
+            Some(&json!(["paths"]))
+        );
+        let write = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert!(write.metadata.get(WORKFLOW_PHASE_KEY).is_none());
+        assert!(write.metadata.get(WORKFLOW_SCHEMA_KEY).is_none());
+    }
+
+    #[test]
+    fn step_pins_census_is_exhaustive_and_stamp_covers_it() {
+        // `census()` destructures exhaustively, so a new StepPins field is a
+        // compile error until it is named there. This test closes the second
+        // half: every named pin must actually LAND in metadata when stamped —
+        // a field that is censused but not stamped would report itself as
+        // carried while writing nothing (the `effort` failure shape, one layer
+        // down).
+        let pins = StepPins {
+            model: Some("opus".into()),
+            effort: Some("max".into()),
+            phase: Some("Scan".into()),
+            schema: Some(json!({"type": "object"})),
+        };
+        let mut meta = json!({});
+        pins.stamp(&mut meta);
+        let obj = meta.as_object().unwrap();
+        assert_eq!(
+            pins.census(),
+            StepPins::all_fields(),
+            "fully-set = full census"
+        );
+        for field in StepPins::all_fields() {
+            let key = match field {
+                "model" => WORKFLOW_MODEL_KEY,
+                "effort" => WORKFLOW_EFFORT_KEY,
+                "phase" => WORKFLOW_PHASE_KEY,
+                "schema" => WORKFLOW_SCHEMA_KEY,
+                other => panic!("StepPins grew `{other}` with no metadata key mapping"),
+            };
+            assert!(obj.contains_key(key), "pin `{field}` did not stamp `{key}`");
         }
+        // Blank strings are "unset spelled differently" — nothing lands.
+        let mut blank_meta = json!({});
+        StepPins {
+            model: Some("  ".into()),
+            ..Default::default()
+        }
+        .stamp(&mut blank_meta);
+        assert!(blank_meta.as_object().unwrap().is_empty());
     }
 }

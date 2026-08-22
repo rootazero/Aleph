@@ -126,6 +126,32 @@ impl InboundMessageRouter {
         // Defaults to disabled when never installed (tests, host-only paths).
         reply_config.footer = crate::gateway::runtime_footer::global_config();
 
+        // A side answer arrives in the same conversation as the main run's
+        // replies and — by design — does not queue behind them, so it can land
+        // between two of them. Mark it here so that is legible.
+        //
+        // Resolved from the ONE resolver, at construction, because that is the
+        // only moment this side of the wire can answer the question:
+        // `execute()` stamps `BTW_METADATA_KEY` on the `RunRequest`, and that
+        // request is built below and never comes back. This is the same
+        // derivation `stamp_btw` makes from the same bytes
+        // (`request.input == ctx.message.text`), not a second one — and it must
+        // stay a call to `BtwTurn::resolve`, never a `/btw` prefix test of its
+        // own. Set before the clones below so the Feishu and Telegram emitters
+        // inherit it.
+        //
+        // `/btw promote` resolves too, and is deliberately NOT marked. The
+        // badge's whole meaning is "this reply is not part of your main
+        // conversation"; a promote's reply announces something ENTERING it, and
+        // the crossing itself has already landed in this very transcript. That
+        // question used to be deferred here — "if promotion ever delivers INTO
+        // the main conversation, that delivery owes its own decision" — and
+        // this is the decision, taken when promotion became a served verb
+        // rather than a side turn. The predicate reads the resolver's own
+        // `promote` field, never a second string test.
+        reply_config.side_answer = crate::gateway::btw::BtwTurn::resolve(&ctx.message.text)
+            .is_some_and(|turn| !turn.promote);
+
         // Reconcile the global `output_mode` preference with what this channel
         // can physically do: EditBased widens, `editing` floors. The floor is
         // the half that was missing — see `apply_channel_capabilities`.
@@ -375,7 +401,7 @@ impl InboundMessageRouter {
         // Project-mode override (free workdir choice) enters via the desktop
         // Panel's `chat.send` and is gated there on Config tier.
         let effective_workspace = ctx.workspace.clone().or(channel_workspace);
-        let request = RunRequest {
+        let mut request = RunRequest {
             run_id: run_id.clone(),
             input: ctx.message.text.clone(),
             session_key: ctx.session_key.clone(),
@@ -413,11 +439,24 @@ impl InboundMessageRouter {
             run_id
         );
 
-        // Busy lane is keyed by SESSION (matches the engine's per-session
-        // `SessionRunRegistry` gate). Two sessions of the same agent get
-        // independent lanes and run in parallel; only same-session messages
-        // serialize FIFO.
-        let session_key = request.session_key.to_key_string();
+        // Recognise a `/btw` side question BEFORE the lane, not only inside
+        // `execute()`. The lane below is registered before the engine is ever
+        // entered, and to `btw::execution_session` an unstamped request is
+        // indistinguishable from an ordinary one — so an unstamped side
+        // question would queue on the session it was typed in and wait behind
+        // the very run it is asking about. Idempotent: `execute()`'s own call
+        // stamps from this same `request.input` and finds the key already
+        // there. The RPC surfaces get this from `stamp_slash_mode`, which they
+        // call before `spawn_queued_run` for the identical reason.
+        crate::gateway::execution_engine::stamp_btw(&request.input, &mut request.metadata);
+
+        // Busy lane is keyed by the session the run will EXECUTE on (matches
+        // the engine's per-session `SessionRunRegistry` gate, which claims the
+        // same key). Two sessions of the same agent get independent lanes and
+        // run in parallel; only same-session messages serialize FIFO. A side
+        // question executes on a derived session, so it gets its own lane —
+        // that is what lets it answer while the main run keeps going, and
+        // `register_run` is what picks the key rather than this call site.
         let agent_id_for_busy = request.session_key.agent_id().to_string();
         let busy_cfg = self.busy_queue_config().await;
 
@@ -426,8 +465,9 @@ impl InboundMessageRouter {
         // lane order depend on task scheduling, so two messages sent a
         // millisecond apart could enqueue inverted, defeating the arrival-order
         // guarantee the lane exists to provide.
-        let ticket = crate::gateway::busy_queue::register(
-            &session_key,
+        let ticket = crate::gateway::busy_queue::register_run(
+            &request.session_key,
+            &request.metadata,
             busy_cfg.max_per_session,
             &request.run_id,
         );

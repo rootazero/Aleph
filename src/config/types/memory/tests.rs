@@ -46,6 +46,56 @@ mod spec3_tests {
 #[cfg(test)]
 mod tests {
     use super::super::*;
+    use super::super::defaults::default_reconciler_interval_secs;
+
+    #[test]
+    fn reconciler_config_default_is_disabled() {
+        let r = ReconcilerConfig::default();
+        assert!(!r.enabled, "reconciler daemon must default to disabled");
+        assert_eq!(
+            r.interval_secs,
+            default_reconciler_interval_secs(),
+            "default interval must come from the shared defaults fn"
+        );
+        assert_eq!(
+            r.interval_secs, 300,
+            "5 minutes is the documented sensible minimum; \
+             operators with quieter workloads should bump this up"
+        );
+    }
+
+    #[test]
+    fn reconciler_config_round_trips_toml() {
+        for cfg in [
+            ReconcilerConfig {
+                enabled: true,
+                interval_secs: 60,
+            },
+            ReconcilerConfig {
+                enabled: false,
+                interval_secs: 3600,
+            },
+        ] {
+            let s = toml::to_string(&cfg).expect("serialize reconciler config");
+            let back: ReconcilerConfig = toml::from_str(&s).expect("parse reconciler config");
+            assert_eq!(back.enabled, cfg.enabled);
+            assert_eq!(back.interval_secs, cfg.interval_secs);
+        }
+    }
+
+    #[test]
+    fn reconciler_config_uses_default_interval_when_missing() {
+        let cfg: ReconcilerConfig = toml::from_str("enabled = true").unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.interval_secs, default_reconciler_interval_secs());
+    }
+
+    #[test]
+    fn memory_config_exposes_reconciler_with_safe_default() {
+        let m = MemoryConfig::default();
+        assert!(!m.reconciler.enabled);
+        assert_eq!(m.reconciler.interval_secs, 300);
+    }
 
     #[test]
     fn dreaming_config_defaults_include_new_fields() {
