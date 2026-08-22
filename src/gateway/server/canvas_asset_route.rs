@@ -676,6 +676,12 @@ mod tests {
             header_of(&response, header::CONTENT_RANGE).as_deref(),
             Some(format!("bytes */{}", payload.len()).as_str())
         );
+        assert_eq!(
+            header_of(&response, header::ACCEPT_RANGES).as_deref(),
+            Some("bytes"),
+            "a refusal must still say ranges are supported — otherwise a client \
+             that asked badly once concludes the route cannot seek at all"
+        );
     }
 
     #[tokio::test]

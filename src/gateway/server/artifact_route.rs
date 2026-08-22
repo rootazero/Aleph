@@ -618,6 +618,11 @@ mod tests {
             resp.headers().get(header::CONTENT_RANGE).unwrap(),
             "bytes */1000"
         );
+        assert_eq!(
+            resp.headers().get(header::ACCEPT_RANGES).unwrap(),
+            "bytes",
+            "a refusal must still say ranges are supported — otherwise a client \n             that asked badly once concludes the route cannot seek at all"
+        );
     }
 
     /// A 206 is still part of the document. Dropping the CSP on the partial

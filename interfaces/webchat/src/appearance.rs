@@ -901,7 +901,6 @@ mod tests {
     #[test]
     fn no_backdrop_filter_survives_flat_mode() {
         const CSS: &str = include_str!("../styles/tailwind.css");
-        const TODO_CSS: &str = include_str!("platform/wide/views/chat/todo_panel.rs");
 
         // Selectors a `html[data-flat="1"]` rule nulls the backdrop filter for.
         //
@@ -942,32 +941,156 @@ mod tests {
              would make this guard silently vacuous"
         );
 
-        // Selectors that SET a backdrop filter, from both declaration sites.
+        // Selectors that SET a backdrop filter, from EVERY declaration site.
+        //
+        // The stylesheet is one; the others are Rust `const`s holding CSS, and
+        // that set is discovered by walking `src/` rather than listed here.
+        // Listing it is what the review caught: the SELECTORS were derived but
+        // the FILES were an enumeration, so a blur added to any other `.rs`
+        // would have been invisible — the same defect one level up, which is
+        // exactly what this census exists to prevent.
+        //
+        // `include_str!` cannot glob, so this reads the tree at run time.
+        // That is available: the test runs on the host toolchain with the
+        // repo present, and `CARGO_MANIFEST_DIR` points at it.
+        let mut rust_sources: Vec<(String, String)> = Vec::new();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let Ok(text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    if !text.contains("backdrop-filter") {
+                        continue;
+                    }
+                    let label = path
+                        .strip_prefix(&root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    // Skip this file: its own test module contains the literal
+                    // strings this scan matches on, so including it would let
+                    // the guard be satisfied — or tripped — by its own source.
+                    if label == "appearance.rs" {
+                        continue;
+                    }
+                    rust_sources.push((label, text));
+                }
+            }
+        }
+        assert!(
+            !rust_sources.is_empty(),
+            "found no Rust file declaring a backdrop filter — the tree walk is \
+             broken, or CARGO_MANIFEST_DIR does not point at the crate"
+        );
+
+        // Strip comments before scanning. Rule heads are located by walking
+        // back to the previous `}`, and this stylesheet's explanatory comments
+        // are full of braces — leaving them in makes the head of most rules
+        // resolve to comment prose instead of a selector, which silently
+        // collapsed the setter set to ONE entry while the census stayed green.
+        fn strip_comments(src: &str) -> String {
+            let mut out = String::with_capacity(src.len());
+            let mut rest = src;
+            while let Some(start) = rest.find("/*") {
+                out.push_str(&rest[..start]);
+                match rest[start + 2..].find("*/") {
+                    Some(end) => rest = &rest[start + 2 + end + 2..],
+                    None => return out,
+                }
+            }
+            out.push_str(rest);
+            out
+        }
+
+        // From a `.rs` file take ONLY the raw-string literals. Rust code is
+        // full of braces that look exactly like CSS rule braces to a
+        // brace-walking head finder, so scanning the whole file makes every
+        // rule in a CSS const resolve its selector to surrounding Rust.
+        fn css_regions_of_rust(src: &str) -> String {
+            let mut out = String::new();
+            let mut rest = src;
+            while let Some(start) = rest.find("r#\"") {
+                rest = &rest[start + 3..];
+                match rest.find("\"#") {
+                    Some(end) => {
+                        out.push_str(&rest[..end]);
+                        out.push('\n');
+                        rest = &rest[end + 2..];
+                    }
+                    None => break,
+                }
+            }
+            out
+        }
+
         let mut setters: Vec<(String, &str)> = Vec::new();
-        for (source, label) in [(CSS, "tailwind.css"), (TODO_CSS, "todo_panel.rs")] {
-            let lines: Vec<&str> = source.lines().collect();
-            for (i, line) in lines.iter().enumerate() {
-                let decl = line.trim();
-                if !decl.starts_with("backdrop-filter:") && !decl.contains(";backdrop-filter:") {
+        let css_clean = strip_comments(CSS);
+        let rust_clean: Vec<(String, String)> = rust_sources
+            .iter()
+            .map(|(label, text)| (label.clone(), strip_comments(&css_regions_of_rust(text))))
+            .collect();
+        let mut scan: Vec<(&str, &str)> = vec![(css_clean.as_str(), "tailwind.css")];
+        for (label, text) in &rust_clean {
+            scan.push((text.as_str(), label.as_str()));
+        }
+
+        // Scan by OCCURRENCE, not by line.
+        //
+        // A line-oriented scan (declaration must start the line or follow a
+        // `;`) misses `.x{backdrop-filter:blur(4px)}` — a whole rule on one
+        // line, which is the dominant style in the Rust CSS consts: most of
+        // `todo_panel.rs`'s rules are single-line, and `.aleph-todo-wrap` was
+        // only visible because its blur happened to fall on a continuation
+        // line. Found by mutating a single-line rule into another `.rs` and
+        // watching this census stay green.
+        //
+        // Both spellings count as setters. A rule declaring only
+        // `-webkit-backdrop-filter` still paints a blur on WebKit, which is
+        // the engine flat mode exists for, so treating the prefixed property
+        // as invisible would exempt precisely the platform that matters.
+        for (source, label) in scan {
+            let bytes = source.as_bytes();
+            for (at, _) in source.match_indices("backdrop-filter:") {
+                // Skip the `backdrop-filter:` inside `-webkit-backdrop-filter:`
+                // only to avoid counting one declaration twice — the prefixed
+                // form on its own is still reached, because `match_indices`
+                // finds the unprefixed substring inside it either way.
+                let value_end = source[at..]
+                    .find(|c| c == ';' || c == '}')
+                    .map_or(source.len(), |o| at + o);
+                if source[at..value_end].contains("none") {
                     continue;
                 }
-                if decl.contains("backdrop-filter: none") || decl.contains("backdrop-filter:none") {
+                // The enclosing rule's head: text between the previous `}` (or
+                // the start) and the `{` that opens this rule.
+                let Some(brace) = source[..at].rfind('{') else {
                     continue;
-                }
-                // Walk back to the nearest selector line opening this block.
-                let head = lines[..i]
-                    .iter()
-                    .rev()
-                    .find(|l| l.contains('{'))
-                    .copied()
-                    .unwrap_or_default();
-                for sel in head.split('{').next().unwrap_or_default().split(',') {
+                };
+                // The head starts after the LATEST of `}`, `{` or `;`. `{` is
+                // load-bearing for nesting: `.glass` lives inside
+                // `@layer components {`, so stopping only at `}` swallows the
+                // at-rule into the head and the selector is never seen.
+                let head_start = source[..brace].rfind(['}', '{', ';']).map_or(0, |p| p + 1);
+                let head = &source[head_start..brace];
+                for sel in head.split(',') {
                     let sel = sel
                         .trim()
                         .trim_start_matches("html[data-flat=\"1\"]")
                         .trim();
-                    if sel.starts_with('.') {
-                        setters.push((sel.to_string(), label));
+                    if sel.starts_with('.') && !bytes.is_empty() {
+                        let sel = sel.to_string();
+                        if !setters.iter().any(|(s, _): &(String, &str)| *s == sel) {
+                            setters.push((sel, label));
+                        }
                     }
                 }
             }

@@ -242,6 +242,58 @@ mod tests {
         // Just check that it compiles
     }
 
+    /// The one claim in this module that no other test can make: a response
+    /// that already carries `Content-Encoding: br` passes through
+    /// `CompressionLayer` untouched.
+    ///
+    /// Every other test here calls `serve_static_or_index` DIRECTLY, so the
+    /// layer is never in the path — including the one whose message says "let
+    /// CompressionLayer decide". The whole reason the 22 MB wasm is cheap is
+    /// that the layer declines to re-encode it, and until now that rested on a
+    /// live measurement plus a reading of tower-http's source. A dependency
+    /// bump could reintroduce double-encoding with the suite green.
+    ///
+    /// So this one goes through `create_control_plane_router()`, which is the
+    /// only way the layer is exercised at all.
+    #[tokio::test]
+    async fn the_compression_layer_passes_through_a_precompressed_response() {
+        use tower::ServiceExt;
+
+        let request = axum::http::Request::builder()
+            .uri("/aleph_panel_bg.wasm")
+            .header(header::ACCEPT_ENCODING, "br, gzip")
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let response = create_control_plane_router()
+            .oneshot(request)
+            .await
+            .expect("route");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .and_then(|v| v.to_str().ok()),
+            Some("br"),
+            "the precompressed sibling must survive the layer as `br`; `gzip` here \
+             means the layer re-encoded 22 MB it was supposed to pass through"
+        );
+
+        // A single encoding, not a stacked list — `br, gzip` in this header is
+        // the wire signature of double-encoding, and it is the failure this
+        // test exists for.
+        let raw = response
+            .headers()
+            .get_all(header::CONTENT_ENCODING)
+            .iter()
+            .count();
+        assert_eq!(
+            raw, 1,
+            "double-encoded: more than one Content-Encoding header"
+        );
+    }
+
     #[tokio::test]
     async fn static_asset_sets_etag_and_revalidates() {
         // The dist/ folder is committed, so an embedded asset normally exists;
@@ -266,6 +318,11 @@ mod tests {
         let resp = serve_static_or_index(headers, AxumPath(path)).await;
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(resp.headers().get(header::ETAG).unwrap(), &etag);
+        assert_eq!(
+            resp.headers().get(header::VARY).unwrap(),
+            "accept-encoding",
+            "a 304 without Vary lets a shared cache reuse this validation across \n             encodings — the same hole Vary closes on the 200s"
+        );
     }
 
     /// The wire fact the whole precompression design rests on.
@@ -315,6 +372,11 @@ mod tests {
         assert!(
             resp.headers().get(header::CONTENT_ENCODING).is_none(),
             "a gzip-only client must get identity bytes and let CompressionLayer decide"
+        );
+        assert_eq!(
+            resp.headers().get(header::VARY).unwrap(),
+            "accept-encoding",
+            "the identity arm needs Vary as much as the brotli arm: without it a \n             cache can hand these bytes to a client that would have got `br`"
         );
     }
 
