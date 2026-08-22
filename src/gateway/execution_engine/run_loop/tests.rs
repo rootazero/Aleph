@@ -621,3 +621,105 @@ fn deny_if_over_spend_allows_a_principal_with_no_recorded_spend() {
     let request = minimal_request(metadata);
     assert!(deny_if_over_spend(&request).is_ok());
 }
+
+// ============================================================================
+// Task 12 (the real-machine fixture's own finding) — `report_admission_denial`
+//
+// Both engines used to end this function at a bare
+// `deny_if_over_spend(&request)?;`. Every other error `execute()` can
+// produce is caught by the think/act loop's own error arm and rendered onto
+// the wire — but this one fires *before* `RunAccepted`, ahead of that whole
+// apparatus, so nothing else was ever going to tell the caller. The RPC
+// still returned a `run_id`; the run then answered with silence forever.
+// `qa/spend_budget/run.sh`'s assertion 4 caught it on its first real-machine
+// run: `chat.send` succeeded, and neither `stream.run_accepted` nor
+// `stream.run_error` ever arrived.
+// ============================================================================
+
+/// A minimal recording [`EventEmitter`] — local to this module rather than
+/// reused from `execution_engine::tests::TestEmitter`, which is private to
+/// its own `#[cfg(test)] mod` and not visible from this sibling one.
+#[derive(Default)]
+struct RecordingEmitter {
+    events: std::sync::Mutex<Vec<StreamEvent>>,
+    next_seq: crate::sync_primitives::AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl EventEmitter for RecordingEmitter {
+    async fn emit(&self, event: StreamEvent) -> Result<(), crate::gateway::event_emitter::EventEmitError> {
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).push(event);
+        Ok(())
+    }
+
+    fn next_seq(&self) -> u64 {
+        self.next_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The `Ok` half: nothing to report, so nothing goes on the wire. Proven
+/// against a hand-built `Ok(())`, not a real `spend::check` read — see
+/// `report_admission_denial`'s own doc for why.
+#[tokio::test]
+async fn report_admission_denial_emits_nothing_when_allowed() {
+    let request = minimal_request(std::collections::HashMap::new());
+    let emitter = RecordingEmitter::default();
+
+    let result = report_admission_denial(Ok(()), &request, &emitter).await;
+
+    assert!(result.is_ok());
+    assert!(
+        emitter.events.lock().unwrap().is_empty(),
+        "an allowed admission must put nothing on the wire"
+    );
+}
+
+/// The `Denied` half — the one the bare `?` used to silently drop. A
+/// `RunError` must reach the emitter, carrying: the run's own id (nothing
+/// else can address this frame back to it — see `report_admission_denial`'s
+/// doc on why `session_key` is stamped explicitly), the stable
+/// `SPEND_EXHAUSTED` code, and a message that names the reset instant.
+#[tokio::test]
+async fn report_admission_denial_emits_a_run_error_naming_the_run_and_session_when_denied() {
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("locale".to_string(), "en".to_string());
+    let request = minimal_request(metadata);
+    let emitter = RecordingEmitter::default();
+
+    let denial = Err(ExecutionError::SpendExhausted {
+        limit: crate::spend::Limit::PerUser {
+            spent: 11.0,
+            limit: 10.0,
+        },
+        reset_ms: 1_700_000_000_000,
+    });
+
+    let result = report_admission_denial(denial, &request, &emitter).await;
+
+    assert!(result.is_err(), "the error must still propagate to the caller");
+    let events = emitter.events.lock().unwrap();
+    assert_eq!(events.len(), 1, "exactly one RunError, not zero and not a duplicate");
+    match &events[0] {
+        StreamEvent::RunError {
+            run_id,
+            error,
+            error_code,
+            session_key,
+            ..
+        } => {
+            assert_eq!(run_id, &request.run_id);
+            assert_eq!(error_code.as_deref(), Some("SPEND_EXHAUSTED"));
+            assert!(
+                error.contains("Resets at"),
+                "the message must name the reset time, not just the code: {error:?}"
+            );
+            assert_eq!(
+                session_key.as_deref(),
+                Some(request.session_key.to_key_string().as_str()),
+                "no RunAccepted will ever seed the run→session index for this frame — it \
+                 must carry its own addressing or the delivery filter drops it"
+            );
+        }
+        other => panic!("expected StreamEvent::RunError, got {other:?}"),
+    }
+}

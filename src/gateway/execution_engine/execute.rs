@@ -132,8 +132,11 @@ where
         // principal already over its ceiling should never be handed a
         // resource it is about to be denied anyway. See
         // `run_loop::deny_if_over_spend`'s doc for why this must run ahead
-        // of `admit_run`, not alongside or after it.
-        super::run_loop::deny_if_over_spend(&request)?;
+        // of `admit_run`, not alongside or after it. `_and_report` (not the
+        // bare `?` this used to be) because this fires before `RunAccepted`
+        // — see that function's doc for why the caller cannot be left to
+        // find out any other way.
+        super::run_loop::deny_if_over_spend_and_report(&request, emitter.as_ref()).await?;
 
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);

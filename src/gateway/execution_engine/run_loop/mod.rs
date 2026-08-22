@@ -86,6 +86,76 @@ pub(super) fn deny_if_over_spend(request: &RunRequest) -> Result<(), ExecutionEr
     admission_result_for(crate::spend::check(&principal, now_ms))
 }
 
+/// [`deny_if_over_spend`], plus the one thing a bare `?` on it cannot do: put
+/// a `RunError` on the wire when it denies.
+///
+/// This fires *before* `RunAccepted` — the run has not yet claimed a slot,
+/// so nothing downstream will ever emit a terminal frame for it. Every other
+/// `Err` an engine's `execute()` can produce is caught by the think/act
+/// loop's own error arm, which renders `ExecutionError::user_receipt` onto
+/// the wire before returning — see `execute.rs`'s `Err(e) => { .. }` tail.
+/// The admission arm runs ahead of that whole apparatus, so it is on its own
+/// for upholding the same contract, the one
+/// `busy_queue::spawn_queued_run`/`deliver_with_ticket` already assume every
+/// `execute()` error keeps: "the engine already emits `RunError` for
+/// anything that fails inside `execute`". Skipping this and returning the
+/// bare `Err` — which is what both engines did before this existed — breaks
+/// that contract silently: `chat.send`/`agent.run` still returns a `run_id`,
+/// but the run never reaches `RunAccepted` OR `RunError`, so every observer
+/// (Panel spinner, CLI, channel reply) waits on a run that will never answer
+/// and only `spend_ledger` and a `tracing::error!` line know why (see
+/// task-12's real-machine fixture, assertion 4).
+///
+/// `session_key` is stamped explicitly on the frame — the same reason
+/// `spawn_queued_run`'s own never-ran producer does, on the same never-ran
+/// case: with no `RunAccepted` to have seeded it, `EventVisibilityIndex`'s
+/// run→session index has nothing to resolve `ByRunId` against, so the frame
+/// must carry its own addressing or the delivery filter drops it before any
+/// client sees it.
+pub(super) async fn deny_if_over_spend_and_report<E: EventEmitter + Send + Sync>(
+    request: &RunRequest,
+    emitter: &E,
+) -> Result<(), ExecutionError> {
+    report_admission_denial(deny_if_over_spend(request), request, emitter).await
+}
+
+/// The reporting half of [`deny_if_over_spend_and_report`], with the
+/// admission result taken as a plain parameter instead of computed here —
+/// the same hazard-free split [`admission_result_for`] exists for: a test
+/// can drive this with a hand-built `Err(ExecutionError::SpendExhausted {
+/// .. })` without installing a low ceiling into the process-wide
+/// policy/ledger `OnceLock`s the rest of this crate's tests already share
+/// and race.
+async fn report_admission_denial<E: EventEmitter + Send + Sync>(
+    result: Result<(), ExecutionError>,
+    request: &RunRequest,
+    emitter: &E,
+) -> Result<(), ExecutionError> {
+    if let Err(e) = result {
+        let (error_code, error_message) =
+            e.user_receipt(crate::gateway::i18n::Locale::from_run_metadata(&request.metadata));
+        let seq = emitter.next_seq();
+        if let Err(emit_err) = emitter
+            .emit(crate::gateway::event_emitter::StreamEvent::RunError {
+                run_id: request.run_id.clone(),
+                seq,
+                error: error_message,
+                error_code: Some(error_code.to_string()),
+                session_key: Some(request.session_key.to_key_string()),
+            })
+            .await
+        {
+            tracing::warn!(
+                run_id = %request.run_id,
+                error = %emit_err,
+                "failed to emit RunError stream event for a spend-denied admission",
+            );
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// The translation [`deny_if_over_spend`] applies to whatever
 /// [`crate::spend::check`] returns — split out so it is testable without
 /// touching the process-global ledger/policy `check` reads. `cargo test

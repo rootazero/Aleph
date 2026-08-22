@@ -80,8 +80,10 @@ impl SimpleExecutionEngine {
         // alongside, so this is its own first act, before it transitions the
         // agent to `Running` below. See `run_loop::deny_if_over_spend`'s
         // doc: a floor only the full `ExecutionEngine` honoured would not be
-        // a floor.
-        super::run_loop::deny_if_over_spend(&request)?;
+        // a floor. `_and_report`, not the bare predicate: this fires before
+        // `RunAccepted` too, so see `deny_if_over_spend_and_report`'s doc for
+        // why the caller cannot be left to find out any other way.
+        super::run_loop::deny_if_over_spend_and_report(&request, emitter.as_ref()).await?;
 
         // Ensure the session row exists before any state transitions; tests and
         // fallback paths may run without the global SessionService initialized.
