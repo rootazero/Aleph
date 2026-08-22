@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Refuse to let a unit test persist onto the developer's real config file.
 ///

@@ -1065,7 +1065,7 @@ mod tests {
                 // form on its own is still reached, because `match_indices`
                 // finds the unprefixed substring inside it either way.
                 let value_end = source[at..]
-                    .find(|c| c == ';' || c == '}')
+                    .find(|c| [';', '}'].contains(&c))
                     .map_or(source.len(), |o| at + o);
                 if source[at..value_end].contains("none") {
                     continue;

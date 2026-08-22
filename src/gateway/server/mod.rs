@@ -629,9 +629,8 @@ impl GatewayServer {
     /// cares about draining in-flight scans).
     #[must_use]
     pub fn abort_reconciler_daemon(&mut self) -> Option<tokio::task::JoinHandle<()>> {
-        self.reconciler_handle.take().map(|h| {
+        self.reconciler_handle.take().inspect(|h| {
             h.abort();
-            h
         })
     }
 

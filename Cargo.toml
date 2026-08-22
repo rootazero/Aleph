@@ -113,7 +113,15 @@ edition = "2021"
 rust-version = "1.95"
 
 [lib]
-crate-type = ["rlib", "cdylib"]
+# rlib only. The cdylib half survived the 2026-04 core/Cargo.toml merge but
+# has no consumer: alephcore exports no `#[no_mangle] extern "C"` API, and
+# the WASM cdylib that IS shipped is aleph-panel's (interfaces/webchat),
+# declared in its own manifest. Keeping cdylib here makes rustdoc compile
+# doctests with `--crate-type rlib --crate-type cdylib`, which breaks
+# transitive-dep resolution for every doctest (E0460/E0462). If a future
+# shell needs alephcore as a dynamic library, add a thin `aleph-ffi` cdylib
+# crate wrapping it instead of re-adding cdylib here.
+crate-type = ["rlib"]
 name = "alephcore"
 # `--benches` selects every target with `bench = true`, and the lib defaults to
 # true — so `cargo bench --benches` was building the lib as a *bench harness*,

@@ -1716,7 +1716,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // can `.abort()` the task before dropping the StateDatabase
         // the daemon reads from.
         let reconciler_handle = if let Some(handler) = memory_handler.as_ref() {
-            let cfg = app_config.read().await.memory.reconciler.clone();
+            let cfg = app_config.read().await.memory.reconciler;
             if cfg.enabled {
                 let interval = std::time::Duration::from_secs(cfg.interval_secs);
                 tracing::info!(

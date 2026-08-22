@@ -127,14 +127,11 @@ impl LoopGraphStore {
         // the node from `lint_naked_loops` and `coverage_source_rejection`;
         // the caller must delete + recreate to change kind.
         let conn = self.lock();
-        if let Some(existing_kind) = conn
-            .query_row(
-                "SELECT kind FROM graph_nodes WHERE agent_id = ?1 AND id = ?2",
-                rusqlite::params![node.agent_id, node.id],
-                |r| r.get::<_, String>(0),
-                )
-                .ok()
-        {
+        if let Ok(existing_kind) = conn.query_row(
+            "SELECT kind FROM graph_nodes WHERE agent_id = ?1 AND id = ?2",
+            rusqlite::params![node.agent_id, node.id],
+            |r| r.get::<_, String>(0),
+        ) {
             if existing_kind != node.kind.as_str() {
                 return Err(AlephError::other(format!(
                     "loop_graph invariant: cannot change node kind after registration \
@@ -436,8 +433,7 @@ impl LoopGraphStore {
         }
         let conn = self.lock();
         // Build placeholders for the IN clause.
-        let placeholders = std::iter::repeat("?")
-            .take(ids.len())
+        let placeholders = std::iter::repeat_n("?", ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -554,6 +550,11 @@ impl LoopGraphStore {
     /// success the report matches the actual store state; on failure the
     /// store is unchanged (the transaction was rolled back) but the report
     /// describes the deletes that *would have* run.
+    // The Err tuple is deliberately fat: the report describes the deletes
+    // that WOULD have run so callers can distinguish "0 dangling" from
+    // "transaction aborted", and boxing it would hide that contract behind
+    // an indirection every caller must then unwrap.
+    #[allow(clippy::result_large_err)]
     pub fn gc(
         &self,
         agent_id: &str,

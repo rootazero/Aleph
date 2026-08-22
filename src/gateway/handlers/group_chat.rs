@@ -258,7 +258,7 @@ async fn handle_continue_with_targets(
 
         {
             let mut orch_guard = orch.lock().await;
-            orch_guard.end_session(&session_id);
+            orch_guard.end_session(&session_id).await;
         }
 
         return JsonRpcResponse::error(

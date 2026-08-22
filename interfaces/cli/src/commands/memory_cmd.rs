@@ -371,10 +371,10 @@ mod tests {
         );
     }
 
-    /// An unscoped (whole-store) request has no honest per-agent graph count,
-    /// so the handler sends JSON `null` for both graph fields. That must
-    /// render as an explicit "-", never as "0" — a `0` would misreport an
-    /// unknown count as a known empty one.
+    // An unscoped (whole-store) request has no honest per-agent graph count,
+    // so the handler sends JSON `null` for both graph fields. That must
+    // render as an explicit "-", never as "0" — a `0` would misreport an
+    // unknown count as a known empty one.
     // -- dreaming ----------------------------------------------------------
 
     /// Round-trip a status through the wire the way the server sends it.

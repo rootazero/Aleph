@@ -343,7 +343,7 @@ impl InboundMessageRouter {
             // Remove from orchestrator and tracking
             {
                 let mut orch_guard = orch.lock().await;
-                orch_guard.end_session(session_id);
+                orch_guard.end_session(session_id).await;
             }
             {
                 let mut sessions = self.active_group_sessions.lock().await;

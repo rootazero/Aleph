@@ -188,7 +188,6 @@ impl StateDatabase {
         since_seq: u64,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
         let fact_id = fact_id.to_string();
-        let since_seq = since_seq;
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(

@@ -119,7 +119,7 @@ pub fn spawn_event_persister(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    lag_counter.fetch_add(n as u64, std::sync::atomic::Ordering::AcqRel);
+                    lag_counter.fetch_add(n, std::sync::atomic::Ordering::AcqRel);
                     tracing::warn!(dropped = n,
                         "loop_graph: audit persister lagged — events dropped (audit may lose, never block)");
                 }
