@@ -59,6 +59,7 @@ use crate::gateway::rate_limiter::{
     RateLimitConfig, RateLimitKey, RateLimitScope, RateLimiter, WindowConfig,
 };
 use crate::gateway::security::ArtifactCapabilities;
+use crate::gateway::server::byte_range::{parse_range, RangeVerdict};
 use crate::gateway::trusted_proxy::resolve_client;
 use crate::sync_primitives::Arc;
 
@@ -81,6 +82,34 @@ pub const ARTIFACT_DOCUMENT_CSP: &str =
 /// obtained a capability, not to pace a UI. Loopback is exempt (see
 /// [`RateLimitConfig::exempt_loopback`]), so the desktop App is unaffected.
 const ARTIFACT_READS_PER_MINUTE: u32 = 240;
+
+/// Per-minute byte reads allowed per remote IP for requests carrying a `Range`.
+///
+/// A seek-heavy media scrub issues far more than [`ARTIFACT_READS_PER_MINUTE`]
+/// requests, and without a wider bucket remote (Tailnet) playback 429s while
+/// loopback — which is exempt — works fine. 3000/min is about 50/s: comfortably
+/// above any human scrubbing pattern, still orders of magnitude below what
+/// makes bulk scraping worth writing.
+///
+/// **The wide bucket is never a way to read more whole artifacts.** Which
+/// bucket a request draws from cannot be decided by whether it carried a
+/// `Range`, because that is the caller's choice: `bytes=0-` yields the entire
+/// body as a 206, and a malformed `Range` yields the entire body as a 200, so
+/// one added header would lift a scraper from
+/// [`ARTIFACT_READS_PER_MINUTE`] to this. The decision is therefore made on
+/// what the response actually sends — a reply carrying the whole resource
+/// charges the narrow bucket however it was requested (see the second check in
+/// `serve_artifact`), and only a genuine partial read is priced here.
+///
+/// That is correct rather than merely cautious for real playback: WebKit and
+/// Chrome routinely open media with `Range: bytes=0-`, which IS a full read,
+/// and one narrow token per media open sits far inside 240/min.
+///
+/// This matters because [`ArtifactCapabilities::mint`] is keyed to a SESSION,
+/// not to one artifact — a capability holder can reach every artifact in its
+/// session, so the narrow bucket is what bounds the bulk scraping its own doc
+/// names.
+const ARTIFACT_RANGE_READS_PER_MINUTE: u32 = 3_000;
 
 /// Percent-encode set for the RFC 5987 `filename*` parameter.
 const ATTR_CHAR_ESCAPE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.');
@@ -120,6 +149,16 @@ impl ArtifactRouteState {
             rate_limiter: RateLimiter::new(RateLimitConfig {
                 rpc_heavy: WindowConfig {
                     max_requests: ARTIFACT_READS_PER_MINUTE,
+                    window_secs: 60,
+                    lockout_secs: None,
+                },
+                // This limiter is private to the route, and `RpcRealtime` is
+                // otherwise unused in it, so it carries the Range bucket
+                // instead of widening the shared `RateLimitScope` enum for one
+                // caller. Its own doc — high-frequency realtime frames — is the
+                // right shape for a media scrub.
+                rpc_realtime: WindowConfig {
+                    max_requests: ARTIFACT_RANGE_READS_PER_MINUTE,
                     window_secs: 60,
                     lockout_secs: None,
                 },
@@ -268,8 +307,20 @@ async fn serve_artifact(
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
 
-    // 3. Own rate limit, before any filesystem work.
-    let key = RateLimitKey::new(&client_ip.to_string(), RateLimitScope::RpcHeavy);
+    // 3. Own rate limit, before any filesystem work. A ranged request is
+    //    provisionally priced from the wider bucket so a media scrub is not
+    //    throttled; if it turns out to be asking for the whole resource it
+    //    also pays the narrow bucket at step 9, once we know that. This half
+    //    cannot make that call — it runs before the read, so `total` and the
+    //    verdict do not exist yet — and it is deliberately still here so a
+    //    flood is refused before it costs any filesystem work.
+    let has_range = headers.contains_key(header::RANGE);
+    let scope = if has_range {
+        RateLimitScope::RpcRealtime
+    } else {
+        RateLimitScope::RpcHeavy
+    };
+    let key = RateLimitKey::new(&client_ip.to_string(), scope);
     if let Err(e) = state.rate_limiter.check_and_record(&key) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -322,11 +373,59 @@ async fn serve_artifact(
     let disposition = HeaderValue::from_str(&content_disposition(&record))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
 
-    let mut response = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CONTENT_DISPOSITION, disposition);
+    // 9. Representation. This runs LAST, after every gate above: a range must
+    //    never be the reason a byte is reachable.
+    let total = bytes.len() as u64;
+    let verdict = parse_range(
+        headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+        total,
+    );
 
+    let status = match verdict {
+        RangeVerdict::Whole => StatusCode::OK,
+        RangeVerdict::Satisfiable { .. } => StatusCode::PARTIAL_CONTENT,
+        RangeVerdict::Unsatisfiable => StatusCode::RANGE_NOT_SATISFIABLE,
+    };
+
+    // A ranged request that turns out to be asking for the WHOLE resource is a
+    // full read wearing a header, so it pays the narrow bucket too. Without
+    // this, which bucket you draw from is your own choice — `bytes=0-` returns
+    // everything as a 206, and a malformed `Range` returns everything as a
+    // 200. The predicate is what we are about to SEND, never what was asked.
+    let sends_everything = match verdict {
+        RangeVerdict::Whole => true,
+        RangeVerdict::Satisfiable { start, end } => start == 0 && end + 1 == total,
+        RangeVerdict::Unsatisfiable => false,
+    };
+    if has_range && sends_everything {
+        let narrow = RateLimitKey::new(&client_ip.to_string(), RateLimitScope::RpcHeavy);
+        if let Err(e) = state.rate_limiter.check_and_record(&narrow) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, e.retry_after_secs().to_string())],
+                "artifact read rate limit exceeded",
+            )
+                .into_response();
+        }
+    }
+
+    let mut response = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_DISPOSITION, disposition)
+        // Advertised on EVERY response, including the refusals: this is how a
+        // media element learns it may seek at all.
+        .header(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+
+    if let Some(cr) = verdict.content_range(total) {
+        if let Ok(v) = HeaderValue::from_str(&cr) {
+            response = response.header(header::CONTENT_RANGE, v);
+        }
+    }
+
+    // A 206 and a 416 are still part of the document, so both need the policy
+    // the 200 gets. Dropping it on the partial responses would leave a hole
+    // exactly where the exporter's escaping is the only other defence.
     if is_active_document(&record.mime_type) {
         response = response.header(
             header::CONTENT_SECURITY_POLICY,
@@ -334,9 +433,18 @@ async fn serve_artifact(
         );
     }
 
-    response
-        .body(Body::from(bytes))
-        .unwrap_or_else(|_| not_found())
+    let body = match verdict {
+        RangeVerdict::Whole => Body::from(bytes),
+        RangeVerdict::Satisfiable { start, end } => {
+            // `parse_range` guarantees start <= end < total, so these casts and
+            // the slice are in range.
+            let (s, e) = (start as usize, end as usize);
+            Body::from(bytes[s..=e].to_vec())
+        }
+        RangeVerdict::Unsatisfiable => Body::empty(),
+    };
+
+    response.body(body).unwrap_or_else(|_| not_found())
 }
 
 #[cfg(test)]
@@ -407,6 +515,173 @@ mod tests {
             .get(name)
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned)
+    }
+
+    /// Build a request carrying a Range header, addressed like `request()`.
+    fn range_request(uri: &str, ip: [u8; 4], range: &str) -> Request<Body> {
+        let mut req = Request::builder()
+            .uri(uri)
+            .header(header::RANGE, range)
+            .body(Body::empty())
+            .expect("request");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((ip, 40000))));
+        req
+    }
+
+    /// Seed a 1000-byte artifact and return (uri, bytes).
+    async fn seeded_artifact(f: &Fixture, tag: &str) -> (String, Vec<u8>) {
+        let session = unique_session(tag);
+        let bytes: Vec<u8> = (0u32..1000).map(|i| (i % 251) as u8).collect();
+        let record = f
+            .store
+            .put(
+                &session,
+                None,
+                ArtifactOrigin::Outbound,
+                "probe.bin",
+                "application/octet-stream",
+                &bytes,
+            )
+            .await
+            .expect("put artifact");
+        let cap = ArtifactCapabilities::mint(&session);
+        (
+            format!("/artifact/{cap}/{}/{}", record.id, record.filename),
+            bytes,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_full_read_advertises_range_support() {
+        let f = fixture();
+        let (uri, _) = seeded_artifact(&f, "advertise").await;
+        let resp = f
+            .app
+            .clone()
+            .oneshot(request(&uri, [127, 0, 0, 1]))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::ACCEPT_RANGES).unwrap(),
+            "bytes",
+            "without Accept-Ranges a media element never offers a seek bar"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_satisfiable_range_returns_exactly_that_slice() {
+        let f = fixture();
+        let (uri, bytes) = seeded_artifact(&f, "slice").await;
+        let resp = f
+            .app
+            .clone()
+            .oneshot(range_request(&uri, [127, 0, 0, 1], "bytes=100-199"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes 100-199/1000"
+        );
+        let body = body_bytes(resp).await;
+        assert_eq!(body.len(), 100);
+        assert_eq!(
+            body,
+            bytes[100..200],
+            "the slice must be the requested bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unsatisfiable_range_is_416_with_the_total() {
+        let f = fixture();
+        let (uri, _) = seeded_artifact(&f, "oob").await;
+        let resp = f
+            .app
+            .clone()
+            .oneshot(range_request(&uri, [127, 0, 0, 1], "bytes=999999999-"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_RANGE).unwrap(),
+            "bytes */1000"
+        );
+    }
+
+    /// A 206 is still part of the document. Dropping the CSP on the partial
+    /// responses would leave a hole exactly where the exporter's escaping is
+    /// the only other line of defence.
+    #[tokio::test]
+    async fn partial_and_unsatisfiable_document_responses_keep_the_csp() {
+        let f = fixture();
+        let session = unique_session("csp-range");
+        let html = b"<html><body>hi</body></html>".to_vec();
+        let record = f
+            .store
+            .put(
+                &session,
+                None,
+                ArtifactOrigin::Export,
+                "export.html",
+                "text/html",
+                &html,
+            )
+            .await
+            .expect("put artifact");
+        let cap = ArtifactCapabilities::mint(&session);
+        let uri = format!("/artifact/{cap}/{}/{}", record.id, record.filename);
+
+        let partial = f
+            .app
+            .clone()
+            .oneshot(range_request(&uri, [127, 0, 0, 1], "bytes=0-4"))
+            .await
+            .unwrap();
+        assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            partial
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY)
+                .unwrap(),
+            ARTIFACT_DOCUMENT_CSP
+        );
+
+        let refused = f
+            .app
+            .clone()
+            .oneshot(range_request(&uri, [127, 0, 0, 1], "bytes=99999-"))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(
+            refused
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY)
+                .unwrap(),
+            ARTIFACT_DOCUMENT_CSP
+        );
+    }
+
+    /// A range must never be the reason a byte is reachable.
+    #[tokio::test]
+    async fn a_range_does_not_bypass_the_capability_gate() {
+        let f = fixture();
+        let (uri, _) = seeded_artifact(&f, "gate").await;
+        let forged = uri.replacen(
+            uri.split('/').nth(2).unwrap(),
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            1,
+        );
+        let resp = f
+            .app
+            .clone()
+            .oneshot(range_request(&forged, [127, 0, 0, 1], "bytes=0-9"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -1075,6 +1350,74 @@ mod tests {
 
         let response = limited.expect("the bucket must close");
         assert!(header_of(&response, header::RETRY_AFTER).is_some());
+    }
+
+    /// The wide Range bucket must never be a way to read more WHOLE artifacts.
+    ///
+    /// `bytes=0-` returns the entire body as a 206 and a malformed `Range`
+    /// returns it as a 200, so if the bucket were picked by "did this request
+    /// carry a `Range`" — a thing the caller decides — one added header would
+    /// lift a scraper from 240/min to 3000/min. Both halves are asserted here:
+    /// a full read is refused however it was dressed, and the genuine partial
+    /// read the wide bucket exists for still goes through.
+    #[tokio::test]
+    async fn a_range_header_cannot_buy_more_whole_artifact_reads() {
+        let fx = fixture_with(true, false);
+        let (uri, bytes) = seeded_artifact(&fx, "rangebucket").await;
+
+        let mut drained = false;
+        for _ in 0..=ARTIFACT_READS_PER_MINUTE {
+            let response = fx
+                .app
+                .clone()
+                .oneshot(request(&uri, REMOTE))
+                .await
+                .expect("response");
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                drained = true;
+                break;
+            }
+        }
+        assert!(drained, "the narrow bucket must close on plain reads first");
+
+        let whole = fx
+            .app
+            .clone()
+            .oneshot(range_request(&uri, REMOTE, "bytes=0-"))
+            .await
+            .expect("response");
+        assert_eq!(
+            whole.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "`bytes=0-` returns all {} bytes, so it must cost a narrow token like every \
+             other full read",
+            bytes.len()
+        );
+
+        let malformed = fx
+            .app
+            .clone()
+            .oneshot(range_request(&uri, REMOTE, "bytes=abc-def"))
+            .await
+            .expect("response");
+        assert_eq!(
+            malformed.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "a malformed Range is ignored and the whole body sent, which is a full read"
+        );
+
+        let partial = fx
+            .app
+            .clone()
+            .oneshot(range_request(&uri, REMOTE, "bytes=10-19"))
+            .await
+            .expect("response");
+        assert_eq!(
+            partial.status(),
+            StatusCode::PARTIAL_CONTENT,
+            "a real partial read must still be served once the narrow bucket has closed — \
+             not throttling a media scrub is the entire reason the wide bucket exists"
+        );
     }
 
     #[test]
