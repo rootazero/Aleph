@@ -57,7 +57,7 @@ async def await_terminal(ws, run_id, budget):
     socket carries every run this connection can see, and a fixture that takes
     the first one would pass or fail on arrival order.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     end = loop.time() + budget
     while loop.time() < end:
         try:
@@ -152,7 +152,7 @@ def main():
 
     args = p.parse_args()
     fn = {"run": do_run, "query": do_query, "patch": do_patch}[args.verb]
-    out = asyncio.get_event_loop().run_until_complete(fn(args.url, args))
+    out = asyncio.run(fn(args.url, args))
     print(json.dumps(out))
     return 0
 

@@ -263,7 +263,7 @@ async def main(url, uid):
             if m.get("id") == 2:
                 print((m.get("result") or {}).get("ticket",""))
                 return
-asyncio.get_event_loop().run_until_complete(main(sys.argv[1], sys.argv[2]))
+asyncio.run(main(sys.argv[1], sys.argv[2]))
 PY
 )"
     if [ -z "$TICKET" ]; then
