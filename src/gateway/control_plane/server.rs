@@ -25,10 +25,17 @@ pub fn create_control_plane_router() -> Router {
         // payloads — the ~22 MB WASM above all — are served from committed
         // `.br` files by `serve_static_or_index` when brotli IS advertised,
         // and this layer passes those through untouched because they already
-        // carry a `Content-Encoding`. Measured on this build: wasm
-        // 21,882,715 B identity → 3,363,082 B via `.br` → 5,089,368 B via
-        // this layer's runtime gzip. The choice is per request, not per
-        // asset.
+        // carry a `Content-Encoding`. Measured 2026-08-22 on the dist
+        // committed in `abc24d614`: wasm 21,914,484 B identity → 3,360,760 B
+        // via `.br` → 5,089,074 B via this layer's runtime gzip. The choice is
+        // per request, not per asset.
+        //
+        // Those bytes are a snapshot and go stale on the next `just wasm` —
+        // an earlier copy of this comment still read "measured on this build"
+        // three digits off, because the dist was rebuilt and the comment was
+        // not. Date and commit are named so the next reader can tell a stale
+        // figure from a wrong one. The live numbers are in the spec's §5.1
+        // table, and `node scripts/precompress_dist.mjs` reprints them.
         //
         // Second: an asset below the 4 KiB floor that
         // scripts/precompress_dist.mjs compresses above. All four embedded
