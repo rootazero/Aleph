@@ -32,19 +32,42 @@ pub fn create_control_plane_router() -> Router {
 
 /// Does this request advertise brotli?
 ///
-/// A deliberately simple token scan rather than full q-value negotiation: the
-/// only decision here is "precompressed sibling or not", and a client that
-/// sends `br;q=0` while also sending it as a token is not a real client. If a
-/// weighted decision is ever needed, that is a different function, not a
-/// widening of this one.
+/// Per RFC 9110 §12.5.3, a `q=0` weight on a coding is an explicit refusal
+/// of it — not merely "prefers something else". Reading it as acceptance
+/// would fail silently, and lands on whoever is least expecting it: someone
+/// probing with `curl -H 'Accept-Encoding: br;q=0'` to force identity bytes
+/// would instead receive brotli. Honoring it costs nothing in the common
+/// case (no `q` parameter, or a positive one, are both acceptance) and
+/// fails safe in the refusal case (identity is always readable). A qvalue
+/// that fails to parse is NOT read as a refusal — only an exact zero is,
+/// checked numerically so `br;q=0.5` and `br;q=0.001` are correctly still
+/// acceptance rather than being caught by a textual match on "q=0".
+///
+/// This still answers exactly one question — "precompressed sibling or
+/// not" for the `br` token specifically — not full content negotiation:
+/// `*` is deliberately never consulted, so `*;q=0` does not disable `br`
+/// and a bare `*` does not enable it either. A weighted decision across
+/// multiple codings is a different function, not a widening of this one.
 fn accepts_brotli(headers: &HeaderMap) -> bool {
-    headers
+    let Some(value) = headers
         .get(header::ACCEPT_ENCODING)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(',')
-                .any(|t| t.split(';').next().unwrap_or_default().trim() == "br")
-        })
+    else {
+        return false;
+    };
+
+    value.split(',').any(|token| {
+        let mut segments = token.split(';');
+        if segments.next().unwrap_or_default().trim() != "br" {
+            return false;
+        }
+        // A qvalue of exactly 0 (`0`, `0.0`, `0.000`, …) is an explicit
+        // refusal. Anything else — a positive weight, no `q` parameter, or
+        // one that fails to parse — is acceptance.
+        !segments
+            .filter_map(|param| param.trim().strip_prefix("q="))
+            .any(|q| q.trim().parse::<f64>().is_ok_and(|q| q == 0.0))
+    })
 }
 
 /// Serve the index.html file
@@ -258,6 +281,115 @@ mod tests {
             plain.headers().get(header::ETAG),
             "an encoding-dependent ETag lets a client that switched Accept-Encoding \
              take a 304 and then decode brotli bytes as identity"
+        );
+    }
+
+    // --- accepts_brotli: RFC 9110 §12.5.3 qvalue handling -----------------
+    //
+    // The trap a textual match on "q=0" falls into: `br;q=0.5` and
+    // `br;q=0.001` contain the substring "q=0" but are nonzero, positive
+    // weights — acceptance, not refusal. These are unit tests on the
+    // helper directly so they run regardless of whether dist/ is embedded.
+
+    #[test]
+    fn accepts_brotli_rejects_every_spelling_of_an_explicit_zero_qvalue() {
+        for spelling in ["br;q=0", "br;q=0.0", "br;q=0.00", "br;q=0.000"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ACCEPT_ENCODING, spelling.parse().unwrap());
+            assert!(
+                !accepts_brotli(&headers),
+                "{spelling} is an explicit refusal (RFC 9110 §12.5.3) and must not be read \
+                 as acceptance"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_brotli_accepts_a_low_but_nonzero_qvalue() {
+        for spelling in ["br;q=0.5", "br;q=0.001", "br;q=1", "br;q=1.0", "br"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ACCEPT_ENCODING, spelling.parse().unwrap());
+            assert!(
+                accepts_brotli(&headers),
+                "{spelling} is a nonzero weight (or no weight at all) — the trap a textual \
+                 match on \"q=0\" would fall into by rejecting 0.5 and 0.001 as substrings"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_brotli_does_not_read_a_malformed_qvalue_as_refusal() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, "br;q=abc".parse().unwrap());
+        assert!(
+            accepts_brotli(&headers),
+            "an unparseable qvalue is not a refusal; only an exact zero is"
+        );
+    }
+
+    #[test]
+    fn accepts_brotli_does_not_widen_to_the_wildcard() {
+        // Scope is exactly the explicit `br` token — `*` is never consulted,
+        // in either direction.
+        let mut refuses_only_br = HeaderMap::new();
+        refuses_only_br.insert(header::ACCEPT_ENCODING, "gzip, *;q=0".parse().unwrap());
+        assert!(
+            !accepts_brotli(&refuses_only_br),
+            "no `br` token is present"
+        );
+
+        let mut wildcard_only = HeaderMap::new();
+        wildcard_only.insert(header::ACCEPT_ENCODING, "*;q=1".parse().unwrap());
+        assert!(
+            !accepts_brotli(&wildcard_only),
+            "a bare wildcard must not enable brotli — that would be a widening of this \
+             function into full content negotiation"
+        );
+    }
+
+    /// The corrected trap, exercised through the response: an explicit
+    /// refusal must fall through to identity, not be treated as bare
+    /// "does the token appear" acceptance.
+    #[tokio::test]
+    async fn identity_is_served_when_brotli_is_explicitly_refused_via_qzero() {
+        let Some(name) = ControlPlaneAssets::iter()
+            .find(|n| ControlPlaneAssets::get(&format!("{n}.br")).is_some())
+        else {
+            return;
+        };
+        let path = name.to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, "br;q=0".parse().unwrap());
+        let resp = serve_static_or_index(headers, AxumPath(path)).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.headers().get(header::CONTENT_ENCODING).is_none(),
+            "br;q=0 is an explicit refusal (RFC 9110 §12.5.3) and must get identity bytes"
+        );
+    }
+
+    /// A low-but-nonzero weight is still acceptance on the wire, not the
+    /// trap a naive textual match on "q=0" would fall into.
+    #[tokio::test]
+    async fn brotli_is_served_for_a_low_but_nonzero_qvalue() {
+        let Some(name) = ControlPlaneAssets::iter()
+            .find(|n| ControlPlaneAssets::get(&format!("{n}.br")).is_some())
+        else {
+            return;
+        };
+        let path = name.to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, "br;q=0.001".parse().unwrap());
+        let resp = serve_static_or_index(headers, AxumPath(path)).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_ENCODING).unwrap(),
+            "br",
+            "a nonzero weight, however low, is still acceptance"
         );
     }
 }
