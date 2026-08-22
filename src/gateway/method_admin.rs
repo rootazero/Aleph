@@ -112,6 +112,22 @@ const ADMIN_PREFIXES: &[&str] = &[
     // gating only the RPC would leave a member who hand-subscribes `node.**`
     // reading the fleet live. Neither half implies the other.
     "environments.",
+    // The security audit trail (`security.audit.query`). Org-level
+    // accountability: the rows name principals, sessions and source addresses
+    // across the whole server, and the trail exists partly to hold operators
+    // to account for cross-user reads — a member who could read it would learn
+    // exactly the fleet-shaped facts the rest of this list withholds. Prefixed
+    // so a future `security.audit.export` / `security.posture.*` is gated the
+    // day it is registered rather than the day somebody notices.
+    "security.",
+    // The per-principal spend ledger (`spend.query`). Names every principal
+    // on the box and their dollar figures — org-level accountability, not
+    // caller's-own-data, same reasoning as `security.` above. Prefixed
+    // rather than method-gated so a future `spend.*` sibling (e.g. a
+    // policy-history read) is gated the day it is registered rather than
+    // the day somebody notices. Deliberately no `spend.reset` exists at
+    // all — see `aleph_protocol::spend`'s module doc.
+    "spend.",
     "services.", // background service lifecycle (start/stop/list/status) —
     // server process control, not caller's-own-data.
     // --- Agent persona management: server-global roster, not per-user ---

@@ -1,0 +1,653 @@
+//! Local-calendar period boundaries for spend ceilings.
+//!
+//! [`period_start_ms`] / [`period_end_ms`] answer "which window is this
+//! spend event in": the half-open `[start, end)` millisecond range a
+//! [`SpendPeriod`] resolves to around a given instant. The ledger keys rows
+//! by [`period_start_ms`] and the spend verdict uses both to decide whether
+//! a principal is still inside their ceiling for the period containing
+//! "now".
+//!
+//! # Local time, not UTC — a deliberate tradeoff
+//!
+//! Boundaries are computed in the machine's local timezone, not UTC. A
+//! machine whose timezone changes mid-period will see one short or long
+//! period as a result of that choice — an accepted, rare cost. The
+//! alternative, UTC boundaries, would put the reset in the middle of the
+//! workday for most of the world's timezones, which is the failure mode
+//! that actually matters for a *spend ceiling*: a principal hitting a hard
+//! stop mid-shift because "today" reset six hours ago in a timezone nobody
+//! in this deployment is in. Local was chosen over UTC for that reason.
+//!
+//! # Why the timezone is a parameter, not `std::env::set_var("TZ")`
+//!
+//! [`period_start_ms`] / [`period_end_ms`] hard-code `chrono::Local`, but
+//! the logic underneath ([`period_start_ms_in`] / [`period_end_ms_in`])
+//! takes the timezone as a generic parameter instead of reading process
+//! state. That is deliberate — do not "simplify" it back into a test that
+//! calls `std::env::set_var("TZ", ..)`:
+//!
+//! - `set_var` is process-global, and `cargo test` runs tests in parallel
+//!   in the same process — a DST test that sets `TZ` can read (or race)
+//!   whatever zone a sibling test just set, or just set.
+//! - it is `unsafe` as of the 2024 edition, and chrono caches the local
+//!   zone on some platforms, so an assertion about DST behavior could
+//!   silently keep observing the *host machine's* zone regardless of what
+//!   the test just set — a test that passes for the wrong reason, which is
+//!   worse than no test.
+//!
+//! Tests instead pass an explicit [`chrono_tz::Tz`] value.
+
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
+
+use crate::config::types::policies::SpendPeriod;
+
+/// How many past periods (in addition to the current one) the spend ledger
+/// retains before a sweep may delete rows.
+///
+/// Kept at 3 (current + 2 prior): one prior period absorbs the ambiguity
+/// right at a boundary — a host whose timezone or clock is adjusted can
+/// briefly disagree with itself about which period "now" falls in — and a
+/// second prior period leaves a full historical cycle available for
+/// whoever is investigating a spend dispute before the sweep removes it.
+/// Ledger growth is bounded at `3 ×` the row count of the busiest single
+/// period, indefinitely, regardless of how long the process has been
+/// running.
+///
+/// # This does not mirror `security::audit::DEFAULT_RETENTION_SECS`
+///
+/// [`crate::security::audit::DEFAULT_RETENTION_SECS`] is a fixed 30-day
+/// window — seconds, converted to a wall-clock cutoff by subtraction.
+/// `RETENTION_PERIODS` is a period *count*, not a duration: under
+/// `SpendPeriod::Month` it retains roughly 90 days, under
+/// `SpendPeriod::Day` roughly 3. Neither is a rounding of the other, and
+/// the two must never be described as if they were the same policy in a
+/// different unit. The reason the spend ledger counts periods instead of
+/// seconds is structural, not stylistic: it is keyed by
+/// [`period_start_ms`], a *calendar boundary*, not by an elapsed-time
+/// cutoff, so a seconds-based horizon would still have to be converted
+/// into "which period boundary does that land on" before it could be used
+/// to sweep — and that conversion is exactly where a fixed-duration
+/// off-by-one deletes the *current* period instead of an old one (a month
+/// is not 30 days; a DST day is not 24 hours — see the module doc).
+/// [`retention_cutoff_ms`] does that walk in period-sized steps so the
+/// question never comes up.
+pub const RETENTION_PERIODS: u32 = 3;
+
+/// The oldest period-start still worth keeping in the ledger, in the
+/// system's local timezone: retains the period containing `now_ms` plus
+/// the `retain_periods - 1` periods immediately before it
+/// (`retain_periods` periods total — "current + 2 prior" when
+/// `retain_periods == RETENTION_PERIODS == 3`).
+///
+/// Delegates to [`retention_cutoff_ms_in`] with `chrono::Local` — see the
+/// module doc for why production code should call this name and tests
+/// should pass an explicit [`chrono_tz::Tz`].
+///
+/// The result is itself a valid period start, suitable directly as
+/// [`crate::spend::SpendLedger::sweep_before`]'s cutoff: rows with
+/// `period_start_ms` strictly before it are removed, and the cutoff
+/// period itself — along with every period after it — survives.
+#[must_use]
+pub fn retention_cutoff_ms(now_ms: i64, period: SpendPeriod, retain_periods: u32) -> i64 {
+    retention_cutoff_ms_in(now_ms, period, retain_periods, &chrono::Local)
+}
+
+/// [`retention_cutoff_ms`] with the timezone taken as a parameter — see
+/// that function's doc for the boot-time contract this computes, and the
+/// module doc for why `tz` is a parameter rather than read from process
+/// state.
+///
+/// Walks backward one calendar boundary at a time via [`period_start_ms_in`]
+/// — never `now_ms - retain_periods * <a fixed duration>`, which is exactly
+/// the bug this module exists to prevent (a month is not a fixed number of
+/// days; a local day is not always 24h under DST).
+#[must_use]
+pub fn retention_cutoff_ms_in<Tz: TimeZone>(
+    now_ms: i64,
+    period: SpendPeriod,
+    retain_periods: u32,
+    tz: &Tz,
+) -> i64 {
+    let mut boundary = period_start_ms_in(now_ms, period, tz);
+    for _ in 0..retain_periods.saturating_sub(1) {
+        // Step to an instant strictly inside the previous period before
+        // asking for *its* start — `period_start_ms_in` of a boundary that
+        // is already a period start would be a no-op and the walk would
+        // never move.
+        boundary = period_start_ms_in(boundary - 1, period, tz);
+    }
+    boundary
+}
+
+/// Start of the spend period containing `now_ms`, in the system's local
+/// timezone.
+///
+/// Delegates to [`period_start_ms_in`] with `chrono::Local` — see the
+/// module doc for why production code should call this (and
+/// [`period_end_ms`]) rather than the `_in` variants directly.
+#[must_use]
+pub fn period_start_ms(now_ms: i64, period: SpendPeriod) -> i64 {
+    period_start_ms_in(now_ms, period, &chrono::Local)
+}
+
+/// End of the spend period containing `now_ms` — equivalently, the start of
+/// the *next* period — in the system's local timezone.
+#[must_use]
+pub fn period_end_ms(now_ms: i64, period: SpendPeriod) -> i64 {
+    period_end_ms_in(now_ms, period, &chrono::Local)
+}
+
+/// Start of the spend period containing `now_ms`, in `tz`.
+///
+/// `Day` periods start at local midnight of the same calendar date;
+/// `Month` periods start at local midnight of the 1st of the same calendar
+/// month.
+#[must_use]
+pub fn period_start_ms_in<Tz: TimeZone>(now_ms: i64, period: SpendPeriod, tz: &Tz) -> i64 {
+    // Ask the local calendar, not epoch-millisecond arithmetic: the date
+    // component of `now` in `tz`, then the calendar day (or month) that
+    // date belongs to. `local_midnight` resolves the DST edges (see its
+    // own doc) rather than assuming every local midnight exists exactly
+    // once.
+    let date = to_local(now_ms, tz).date_naive();
+    let period_start_date = match period {
+        SpendPeriod::Day => date,
+        SpendPeriod::Month => first_of_month(date),
+    };
+    local_midnight(tz, period_start_date).timestamp_millis()
+}
+
+/// End of the spend period containing `now_ms` — equivalently, the start of
+/// the *next* period — in `tz`.
+#[must_use]
+pub fn period_end_ms_in<Tz: TimeZone>(now_ms: i64, period: SpendPeriod, tz: &Tz) -> i64 {
+    // Same calendar-first approach as `period_start_ms_in`: find the next
+    // period's first calendar date, then resolve *its* local midnight
+    // through the same DST-aware path — never "start + fixed duration",
+    // which is exactly what collapses or inverts the window on a 23h or
+    // 25h local day (see `local_midnight`'s doc and the DST test above).
+    let date = to_local(now_ms, tz).date_naive();
+    let next_period_start_date = match period {
+        SpendPeriod::Day => date
+            .succ_opt()
+            .expect("a spend event's calendar date is never chrono::NaiveDate::MAX"),
+        SpendPeriod::Month => next_month(date),
+    };
+    local_midnight(tz, next_period_start_date).timestamp_millis()
+}
+
+/// Convert epoch milliseconds to a `DateTime<Tz>`. Out-of-range `now_ms`
+/// falls back to the Unix epoch rather than panicking — this is a
+/// defensive floor (P7), not a path any current caller can reach, matching
+/// the fallback [`crate::tasks::shared::clock::Clock::now_utc`] uses for
+/// the same reason.
+///
+/// The fallback is silent about its *value* on purpose (P7: no panic on bad
+/// input) but not about its *occurrence* — it logs, because the ledger keys
+/// spend rows by [`period_start_ms`]/[`period_end_ms`], so a caller that
+/// ever passes the wrong unit (e.g. nanoseconds instead of milliseconds) or
+/// a corrupted value would otherwise silently compute 1970-01-01 boundaries
+/// and write spend into a row no query for the current period will ever
+/// find — a bug the ledger itself cannot detect, since a wrong-but-valid
+/// key looks identical to a right one.
+fn to_local<Tz: TimeZone>(now_ms: i64, tz: &Tz) -> DateTime<Tz> {
+    DateTime::from_timestamp_millis(now_ms)
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                now_ms,
+                "spend period: now_ms out of chrono's representable range, \
+                 falling back to the Unix epoch — period boundaries for this \
+                 call will be computed for 1970",
+            );
+            DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now)
+        })
+        .with_timezone(tz)
+}
+
+/// The first day of `date`'s calendar month.
+fn first_of_month(date: NaiveDate) -> NaiveDate {
+    NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
+        .expect("day 1 of any valid month is itself always a valid date")
+}
+
+/// A date in the calendar month after `date`'s (always the 1st — the only
+/// day this module ever asks [`first_of_month`] to resolve next).
+fn next_month(date: NaiveDate) -> NaiveDate {
+    let (year, month) = if date.month() == 12 {
+        (date.year() + 1, 1)
+    } else {
+        (date.year(), date.month() + 1)
+    };
+    NaiveDate::from_ymd_opt(year, month, 1)
+        .expect("month 1..=12 with day 1 is always a valid date")
+}
+
+/// Local midnight of `date` in `tz`, resolved through the DST-aware path
+/// (`TimeZone::from_local_datetime`) rather than fixed-duration arithmetic
+/// — the latter is exactly what produces an `end <= start` boundary on a
+/// DST-transition day, since a 23-hour or 25-hour local day breaks any
+/// implementation that gets "the next boundary" by adding a constant
+/// number of hours instead of asking the calendar.
+fn local_midnight<Tz: TimeZone>(tz: &Tz, date: NaiveDate) -> DateTime<Tz> {
+    let naive = date
+        .and_hms_opt(0, 0, 0)
+        .expect("00:00:00 is always a valid NaiveTime");
+    if let Some(dt) = tz.from_local_datetime(&naive).earliest() {
+        return dt;
+    }
+    // Local midnight does not exist for this date in this zone. This is
+    // not the ordinary spring-forward/fall-back case (those move the clock
+    // by 1-2 hours, essentially never across midnight) — it is the rarer
+    // case of a national calendar realignment dropping a whole day (Samoa
+    // skipped 30 Dec 2011 entirely when it crossed the international date
+    // line). Walk forward minute by minute until wall-clock time resumes
+    // existing; bounded at 48h so this can never loop forever. If even
+    // that fails — no recorded jump is that large — read the wall clock as
+    // UTC instead of panicking: a slightly-wrong boundary beats crashing
+    // the spend gate.
+    let mut probe = naive;
+    for _ in 0..48 * 60 {
+        probe += chrono::Duration::minutes(1);
+        if let Some(dt) = tz.from_local_datetime(&probe).earliest() {
+            return dt;
+        }
+    }
+    Utc.from_utc_datetime(&naive).with_timezone(tz)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    /// A day window starts at **local** midnight, not UTC midnight. Pick a
+    /// `now` where the UTC calendar date has already rolled to the next
+    /// day while the local (America/New_York, EST = UTC-5 in January)
+    /// calendar date has not, so a UTC-date implementation and a
+    /// local-date implementation disagree.
+    #[test]
+    fn day_window_starts_at_local_midnight_not_utc_midnight() {
+        let tz = chrono_tz::America::New_York;
+        // 2024-01-15T03:00:00Z = 2024-01-14T22:00:00 EST: UTC says the
+        // 15th, local says the 14th.
+        let now_ms = Utc
+            .with_ymd_and_hms(2024, 1, 15, 3, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+
+        let start = period_start_ms_in(now_ms, SpendPeriod::Day, &tz);
+
+        let expected_local_midnight = tz
+            .with_ymd_and_hms(2024, 1, 14, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let utc_midnight_same_calendar_day = Utc
+            .with_ymd_and_hms(2024, 1, 15, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+
+        assert_eq!(start, expected_local_midnight);
+        assert_ne!(start, utc_midnight_same_calendar_day);
+    }
+
+    /// A month window rolls Jan 31 -> Feb 1, not "31 days later" — and
+    /// Feb 2024 (a leap year, 29 days) -> Mar 1, not "+30" or "+31" days,
+    /// which is the case that actually distinguishes calendar rollover
+    /// from duration arithmetic.
+    #[test]
+    fn month_window_rolls_jan_31_to_feb_1_not_31_days_later() {
+        let tz = chrono_tz::UTC;
+
+        let jan_now_ms = tz
+            .with_ymd_and_hms(2024, 1, 31, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let jan_start = period_start_ms_in(jan_now_ms, SpendPeriod::Month, &tz);
+        let jan_end = period_end_ms_in(jan_now_ms, SpendPeriod::Month, &tz);
+        assert_eq!(
+            jan_start,
+            tz.with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis()
+        );
+        assert_eq!(
+            jan_end,
+            tz.with_ymd_and_hms(2024, 2, 1, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis()
+        );
+
+        let feb_now_ms = tz
+            .with_ymd_and_hms(2024, 2, 15, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let feb_end = period_end_ms_in(feb_now_ms, SpendPeriod::Month, &tz);
+        assert_eq!(
+            feb_end,
+            tz.with_ymd_and_hms(2024, 3, 1, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis()
+        );
+
+        // The year-rollover case: December -> January must roll the year
+        // forward, not just wrap the month. This is the branch
+        // `next_month`'s `date.month() == 12` arm exists for — a slip like
+        // writing `date.year()` instead of `date.year() + 1` would silently
+        // tile December 2024 into January **2024** instead of January 2025,
+        // with no panic and (before this case) no test to catch it.
+        let dec_now_ms = tz
+            .with_ymd_and_hms(2024, 12, 15, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let dec_start = period_start_ms_in(dec_now_ms, SpendPeriod::Month, &tz);
+        let dec_end = period_end_ms_in(dec_now_ms, SpendPeriod::Month, &tz);
+        assert_eq!(
+            dec_start,
+            tz.with_ymd_and_hms(2024, 12, 1, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis()
+        );
+        assert_eq!(
+            dec_end,
+            tz.with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis(),
+            "December's period should end at January 1 of the *following* \
+             year, not the same year"
+        );
+    }
+
+    /// Across every real hour of a DST-transition day (both directions —
+    /// the 23-hour spring-forward day and the 25-hour fall-back day),
+    /// `period_end_ms > period_start_ms` always holds. Hours-arithmetic
+    /// ("start + 24h") is exactly what breaks here: on the 23-hour day it
+    /// overshoots the next boundary, and computed the same way for `start`
+    /// itself (as a truncation of `now`) it can put `start` after the true
+    /// local midnight, collapsing or inverting the window.
+    #[test]
+    fn dst_transition_day_end_always_after_start() {
+        let tz = chrono_tz::America::New_York;
+        let hour_ms = 3_600_000i64;
+        // 2024-03-10: US spring-forward — the local day is 23h long
+        // (02:00 -> 03:00 does not exist).
+        // 2024-11-03: US fall-back — the local day is 25h long (01:00
+        // happens twice).
+        for (year, month, day, expected_day_length_ms) in
+            [(2024, 3, 10, 23 * hour_ms), (2024, 11, 3, 25 * hour_ms)]
+        {
+            // Local midnight always exists in this zone — its DST
+            // transitions move the clock at 02:00, never at 00:00 — so
+            // this anchor point is unaffected by the hazard under test.
+            let local_midnight_ms = tz
+                .with_ymd_and_hms(year, month, day, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis();
+
+            // The discriminating assertion: the transition day is NOT 24
+            // hours long. `period_end_ms > period_start_ms` alone is
+            // satisfied by any implementation that adds a positive
+            // duration — including "start + 24h", which is exactly the
+            // fixed-duration-arithmetic bug this test exists to catch.
+            // Only the exact length pins it down.
+            let start = period_start_ms_in(local_midnight_ms, SpendPeriod::Day, &tz);
+            let end = period_end_ms_in(local_midnight_ms, SpendPeriod::Day, &tz);
+            assert_eq!(
+                end - start,
+                expected_day_length_ms,
+                "{year}-{month:02}-{day:02}: local day should be {}h long, was {}h",
+                expected_day_length_ms / hour_ms,
+                (end - start) as f64 / hour_ms as f64
+            );
+
+            // Cheap invariant, checked across every real hour landing on
+            // (or adjacent to) the transition day: start/end never invert
+            // or collapse regardless of which instant `now` is.
+            for hour in 0..24i64 {
+                let now_ms = local_midnight_ms + hour * hour_ms;
+                let start = period_start_ms_in(now_ms, SpendPeriod::Day, &tz);
+                let end = period_end_ms_in(now_ms, SpendPeriod::Day, &tz);
+                assert!(
+                    end > start,
+                    "{year}-{month:02}-{day:02} hour {hour}: start={start} end={end} now={now_ms}"
+                );
+            }
+        }
+    }
+
+    /// `period_start_ms(period_end_ms(t))` is the **next** window's start:
+    /// feeding a period's own end back in as `now` must resolve to that
+    /// same instant, proving the windows tile with no gap and no overlap.
+    /// Anchored on a DST-transition day so the tiling property is checked
+    /// under the same hazard the boundary computation itself has to
+    /// survive.
+    #[test]
+    fn period_start_of_period_end_is_the_next_windows_start() {
+        let tz = chrono_tz::America::New_York;
+        for period in [SpendPeriod::Day, SpendPeriod::Month] {
+            let now_ms = tz
+                .with_ymd_and_hms(2024, 3, 10, 12, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp_millis();
+
+            let end = period_end_ms_in(now_ms, period, &tz);
+            let next_start = period_start_ms_in(end, period, &tz);
+
+            assert_eq!(
+                end, next_start,
+                "{period:?}: period_end should already be the next period's start"
+            );
+        }
+    }
+
+    /// `retain_periods == 1` walks back zero times: the cutoff is just the
+    /// start of the period containing `now_ms`, i.e. nothing before the
+    /// current period survives.
+    #[test]
+    fn retention_of_one_period_is_just_the_current_periods_start() {
+        let tz = chrono_tz::UTC;
+        let now_ms = tz
+            .with_ymd_and_hms(2024, 6, 15, 9, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected = period_start_ms_in(now_ms, SpendPeriod::Day, &tz);
+        assert_eq!(
+            retention_cutoff_ms_in(now_ms, SpendPeriod::Day, 1, &tz),
+            expected
+        );
+    }
+
+    /// `RETENTION_PERIODS == 3` on `Day` periods: the cutoff is the start
+    /// of the day two days before `now`, i.e. "current + 2 prior" survive
+    /// and anything older is swept — the exact claim in
+    /// `RETENTION_PERIODS`'s doc, pinned against an off-by-one in either
+    /// direction.
+    #[test]
+    fn retention_of_three_day_periods_keeps_current_and_two_prior() {
+        let tz = chrono_tz::UTC;
+        let now_ms = tz
+            .with_ymd_and_hms(2024, 6, 15, 9, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected_cutoff = tz
+            .with_ymd_and_hms(2024, 6, 13, 0, 0, 0) // two days back, local midnight
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(
+            retention_cutoff_ms_in(now_ms, SpendPeriod::Day, RETENTION_PERIODS, &tz),
+            expected_cutoff
+        );
+        // One day further back must NOT survive: `sweep_before` deletes
+        // strictly-less-than the cutoff, so the day before `expected_cutoff`
+        // has to compare less than it.
+        let one_day_too_old = tz
+            .with_ymd_and_hms(2024, 6, 12, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert!(one_day_too_old < expected_cutoff);
+    }
+
+    /// The backward walk crosses a month boundary via the calendar, not via
+    /// "now - N * 30 days": `now` in March, walking back two `Month`
+    /// periods from the current one must land on January 1st, not on some
+    /// fixed-duration approximation that would land in a different month
+    /// depending on how many days February and January actually have.
+    #[test]
+    fn retention_walk_crosses_a_month_boundary_by_calendar_not_by_fixed_duration() {
+        let tz = chrono_tz::UTC;
+        let now_ms = tz
+            .with_ymd_and_hms(2024, 3, 15, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected_cutoff = tz
+            .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(
+            retention_cutoff_ms_in(now_ms, SpendPeriod::Month, RETENTION_PERIODS, &tz),
+            expected_cutoff
+        );
+    }
+
+    /// The two tests above catch `now - N * fixed_duration` used raw as the
+    /// cutoff, but a reviewer traced that they would BOTH pass, by
+    /// coincidence, against a subtler wrong implementation: subtract a fixed
+    /// duration, *then* floor the result to a period start. Flooring hides
+    /// the error whenever the anchor sits far enough into its period that
+    /// the fixed-duration error cannot push the result across a boundary —
+    /// and both anchors are at noon and mid-month.
+    ///
+    /// A test that passes against the implementation it exists to reject is
+    /// not a test of anything, so these two anchor deliberately close to the
+    /// START of a period, which is the only place the two implementations
+    /// can be told apart:
+    ///
+    /// - `Month`: 00:30 on March 1st **2023**. Calendar walk (retain 3) →
+    ///   January 1 2023. Subtract 60 days → December 31 **2022**, floored →
+    ///   December 1 2022 — a whole extra month of rows deleted, in the
+    ///   previous YEAR, which is the shape that makes a spend dispute
+    ///   unanswerable.
+    ///
+    ///   ⚠️ The year is load-bearing and was wrong on the first attempt.
+    ///   Anchored in **2024**, January (31) + February (29, leap) sum to
+    ///   exactly 60, so "subtract 60 days then floor" lands on January 1
+    ///   too and the `assert_ne!` below becomes unconditionally true — a
+    ///   predicate that cannot fail, written into the very test whose job
+    ///   is to reject that implementation. 2023's February has 28 days, so
+    ///   the two answers separate by a month. If this test is ever
+    ///   re-anchored, re-derive the arithmetic; do not assume a nearby date
+    ///   discriminates just because this one does.
+    /// - `Day`: 00:30 on the morning after a 23-hour spring-forward day.
+    ///   Calendar walk (retain 3) → March 9. Subtract 48h → 23:30 on March
+    ///   8 local, floored → March 8 — one day too far back, caused by the
+    ///   single hour the transition removed.
+    #[test]
+    fn retention_cutoff_rejects_subtract_then_floor_not_only_raw_subtraction() {
+        let utc = chrono_tz::UTC;
+        let now_ms = utc
+            .with_ymd_and_hms(2023, 3, 1, 0, 30, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let calendar = utc
+            .with_ymd_and_hms(2023, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let subtract_then_floor = utc
+            .with_ymd_and_hms(2022, 12, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let got = retention_cutoff_ms_in(now_ms, SpendPeriod::Month, RETENTION_PERIODS, &utc);
+        assert_eq!(
+            got, calendar,
+            "anchored 30 minutes into March 1st, a calendar walk of 3 months keeps January \
+             onward; subtract-60-days-then-floor keeps December of the PREVIOUS year, sweeping \
+             an extra month away"
+        );
+        assert_ne!(
+            got, subtract_then_floor,
+            "this anchor exists precisely so the two implementations disagree — if they agree \
+             here, the anchor has drifted back toward the middle of a period and the test has \
+             stopped discriminating"
+        );
+
+        let ny = chrono_tz::America::New_York;
+        // 00:30 on the morning after the 2024 US spring-forward day.
+        let now_ms = ny
+            .with_ymd_and_hms(2024, 3, 11, 0, 30, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let calendar = ny
+            .with_ymd_and_hms(2024, 3, 9, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let subtract_then_floor = ny
+            .with_ymd_and_hms(2024, 3, 8, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let got = retention_cutoff_ms_in(now_ms, SpendPeriod::Day, RETENTION_PERIODS, &ny);
+        assert_eq!(
+            got, calendar,
+            "walking back 3 calendar days from March 11 keeps March 9 onward; subtracting 48 \
+             fixed hours lands at 23:30 on March 8 — the hour the spring-forward day removed — \
+             which floors to March 8 and sweeps a day that must be kept"
+        );
+        assert_ne!(
+            got, subtract_then_floor,
+            "this anchor exists precisely so the two implementations disagree — if they agree \
+             here, the DST hour is no longer doing the discriminating and the test has stopped \
+             being about DST"
+        );
+    }
+
+    /// The backward walk survives a DST transition without collapsing or
+    /// skipping a day: anchored the same way as
+    /// `dst_transition_day_end_always_after_start` above, walking back one
+    /// `Day` period from the 23-hour spring-forward day must land exactly
+    /// on the calendar day before it — "subtract 24h" would land inside
+    /// the transition day itself instead of before it.
+    #[test]
+    fn retention_walk_crosses_a_dst_transition_by_calendar_not_by_fixed_duration() {
+        let tz = chrono_tz::America::New_York;
+        // 2024-03-10 is the US spring-forward day (23h local day).
+        let transition_day_ms = tz
+            .with_ymd_and_hms(2024, 3, 10, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected_cutoff = tz
+            .with_ymd_and_hms(2024, 3, 9, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        // retain_periods = 2: current (Mar 10) + 1 prior (Mar 9).
+        assert_eq!(
+            retention_cutoff_ms_in(transition_day_ms, SpendPeriod::Day, 2, &tz),
+            expected_cutoff
+        );
+    }
+}

@@ -58,6 +58,135 @@ where
     .await
 }
 
+/// The run-admission spend arm: deny before this run claims any resource if
+/// its principal ([`crate::spend::principal_from_metadata`], resolved off
+/// `request.metadata` the same way [`with_request_scope`] resolves scope —
+/// see that resolver's doc for why it is unconditionally equivalent to the
+/// floor arm's `ambient_principal`) is over its ceiling for the period.
+///
+/// Both engines call this — `ExecutionEngine::execute` (`execute.rs`, ahead
+/// of `admit_run`) and `SimpleExecutionEngine::execute` (`simple.rs`, which
+/// has no `admit_run` to gate alongside and so calls this as its own first
+/// act) — as the very first thing they do, before either claims a session
+/// run slot, a concurrency permit, or (`SimpleExecutionEngine`) transitions
+/// the agent to `Running`. A principal already over the line should never be
+/// handed a resource it is about to be denied anyway, and a shared call site
+/// is what keeps `SimpleExecutionEngine`, which has no `admit_run` to
+/// piggyback on, from silently skipping a floor the full engine enforces —
+/// see this module's doc and the plan this task belongs to for why "a floor
+/// only one engine honours is not a floor".
+///
+/// One helper rather than each engine open-coding the
+/// `spend::principal_from_metadata` / `spend::check` pairing itself: a
+/// second, hand-written copy of that pairing is exactly the kind of drift
+/// [`crate::spend::check`]'s own doc warns against.
+pub(super) fn deny_if_over_spend(request: &RunRequest) -> Result<(), ExecutionError> {
+    let principal = crate::spend::principal_from_metadata(&request.metadata);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    admission_result_for(crate::spend::check(&principal, now_ms))
+}
+
+/// [`deny_if_over_spend`], plus the one thing a bare `?` on it cannot do: put
+/// a `RunError` on the wire when it denies.
+///
+/// This fires *before* `RunAccepted` — the run has not yet claimed a slot,
+/// so nothing downstream will ever emit a terminal frame for it. Every other
+/// `Err` an engine's `execute()` can produce is caught by the think/act
+/// loop's own error arm, which renders `ExecutionError::user_receipt` onto
+/// the wire before returning — see `execute.rs`'s `Err(e) => { .. }` tail.
+/// The admission arm runs ahead of that whole apparatus, so it is on its own
+/// for upholding the same contract, the one
+/// `busy_queue::spawn_queued_run`/`deliver_with_ticket` already assume every
+/// `execute()` error keeps: "the engine already emits `RunError` for
+/// anything that fails inside `execute`". Skipping this and returning the
+/// bare `Err` — which is what both engines did before this existed — breaks
+/// that contract silently: `chat.send`/`agent.run` still returns a `run_id`,
+/// but the run never reaches `RunAccepted` OR `RunError`, so every observer
+/// (Panel spinner, CLI, channel reply) waits on a run that will never answer
+/// and only `spend_ledger` and a `tracing::error!` line know why (see
+/// task-12's real-machine fixture, assertion 4).
+///
+/// `session_key` is stamped explicitly on the frame — the same reason
+/// `spawn_queued_run`'s own never-ran producer does, on the same never-ran
+/// case: with no `RunAccepted` to have seeded it, `EventVisibilityIndex`'s
+/// run→session index has nothing to resolve `ByRunId` against, so the frame
+/// must carry its own addressing or the delivery filter drops it before any
+/// client sees it.
+pub(super) async fn deny_if_over_spend_and_report<E: EventEmitter + Send + Sync>(
+    request: &RunRequest,
+    emitter: &E,
+) -> Result<(), ExecutionError> {
+    report_admission_denial(deny_if_over_spend(request), request, emitter).await
+}
+
+/// The reporting half of [`deny_if_over_spend_and_report`], with the
+/// admission result taken as a plain parameter instead of computed here —
+/// the same hazard-free split [`admission_result_for`] exists for: a test
+/// can drive this with a hand-built `Err(ExecutionError::SpendExhausted {
+/// .. })` without installing a low ceiling into the process-wide
+/// policy/ledger `OnceLock`s the rest of this crate's tests already share
+/// and race.
+async fn report_admission_denial<E: EventEmitter + Send + Sync>(
+    result: Result<(), ExecutionError>,
+    request: &RunRequest,
+    emitter: &E,
+) -> Result<(), ExecutionError> {
+    if let Err(e) = result {
+        let (error_code, error_message) =
+            e.user_receipt(crate::gateway::i18n::Locale::from_run_metadata(&request.metadata));
+        let seq = emitter.next_seq();
+        if let Err(emit_err) = emitter
+            .emit(crate::gateway::event_emitter::StreamEvent::RunError {
+                run_id: request.run_id.clone(),
+                seq,
+                error: error_message,
+                error_code: Some(error_code.to_string()),
+                session_key: Some(request.session_key.to_key_string()),
+            })
+            .await
+        {
+            tracing::warn!(
+                run_id = %request.run_id,
+                error = %emit_err,
+                "failed to emit RunError stream event for a spend-denied admission",
+            );
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// The translation [`deny_if_over_spend`] applies to whatever
+/// [`crate::spend::check`] returns — split out so it is testable without
+/// touching the process-global ledger/policy `check` reads. `cargo test
+/// --lib` runs every test in this crate in one binary, and
+/// `providers::metering`'s tests already install a real (if generously
+/// high) process-wide policy for their own wiring tests; a second test here
+/// racing `spend::check`'s global read would either see that policy or the
+/// pre-install default depending on execution order. Taking the `Verdict`
+/// as a plain parameter sidesteps the hazard entirely — same reasoning as
+/// `spend::check_with`'s own doc.
+fn admission_result_for(verdict: crate::spend::Verdict) -> Result<(), ExecutionError> {
+    match verdict {
+        crate::spend::Verdict::Allowed(_) => Ok(()),
+        crate::spend::Verdict::Denied { limit, spent } => {
+            // `spent.period_end_ms` is `None` only out of a raw
+            // `SpendLedger` read (see `Spent::period_end_ms`'s doc) — this
+            // `spent` came from `spend::check`/`check_with`, which always
+            // fills it in before returning `Denied` (the only early-return
+            // that skips filling it is `Verdict::Allowed`, taken while the
+            // policy is disabled). A `None` here means an earlier layer
+            // broke that guarantee; recomputing a plausible-looking instant
+            // would hide exactly the drift this field exists to prevent, so
+            // this is `expect`, not a fallback.
+            let reset_ms = spent.period_end_ms.expect(
+                "spend::check always fills period_end_ms before returning Verdict::Denied",
+            );
+            Err(ExecutionError::SpendExhausted { limit, reset_ms })
+        }
+    }
+}
+
 /// Create this run's session row **under the run's own attribution**.
 ///
 /// `SessionMetadata::stamp_attribution` reads `scope::current_scope()` on the

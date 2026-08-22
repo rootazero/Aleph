@@ -5,7 +5,25 @@
 //! the cumulative [`TokenBreakdown`] for the run, plus the provider + model
 //! identifiers; the table returns a USD figure annotated with how confident
 //! the estimate is. Unknown models degrade to [`CostStatus::Unknown`] without
-//! poisoning the rest of the outcome — pricing is best-effort, never a gate.
+//! poisoning the rest of the outcome.
+//!
+//! **A missing price is never a gate — only a *measured* price accumulates
+//! toward a ceiling, and [`CostStatus::Unknown`] moves no dollars.** That
+//! used to be stated as "pricing is best-effort, never a gate", which
+//! stopped being true the moment [`crate::spend`] started reading this
+//! module's output to enforce a per-principal USD ceiling: an *estimate*
+//! (turn-summary display, `cost_aware` routing) is still best-effort and
+//! never blocks anything, but a `spend::Delta` derived from a `Complete` or
+//! `PartialMissingPrice` estimate now can. The part that stays true, and is
+//! the reason this file exists in its current shape: `Unknown` degrades to
+//! a *count*, never a guessed figure — see [`crate::spend::Delta::Unpriced`],
+//! which is deliberately fieldless so an unpriced call has no `usd` value to
+//! carry into the ledger even if this module's price table someday grows a
+//! heuristic guess for unknown models.
+//! `providers::metering::MeteringProvider::record_spend_with` is the one
+//! production site that performs the `CostStatus` → `Delta` mapping; a
+//! source-level guard beside it (`cost_status_unknown_has_no_source_path_to_a_priced_delta`)
+//! pins that `Unknown` never maps to anything but `Delta::Unpriced`.
 //!
 //! The price table is intentionally inline (no network lookup, no config
 //! file). Prices drift; we accept that and let operators upgrade Aleph to

@@ -35,6 +35,13 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/picker_nav/run.sh           # keyboard walk + conditional bottom fade + phone add-a-provider,
                                  # at three widths (1440 / 700 folded / 390 phone)
 
+./qa/multiuser_audit/run.sh      # §5.22 round-6: the security trail is readable end to end,
+                                 # a deactivation receipt reports what it measured, and revoking
+                                 # a device credential names whose it was. Binds 0.0.0.0 for the
+                                 # remote-pairing half — a loopback peer is authorised before
+                                 # `bootstrap_ticket` is ever read, so a ticket redeemed over
+                                 # 127.0.0.1 creates no device row, silently and successfully.
+
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
 ./qa/channels/run.sh errors      # Lark throttle / refusal, via mock_lark.py's /__inject queue

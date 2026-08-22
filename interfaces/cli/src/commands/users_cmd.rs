@@ -26,6 +26,9 @@
 //! principals, and it keeps the invite flow out of reach of a remote session
 //! whose own credential is what is being managed.
 
+use aleph_protocol::users::{
+    UserCreateParams, UserCreateResult, UserListResult, UserUpdateParams, UserUpdateResult,
+};
 use serde_json::Value;
 
 use crate::output;
@@ -37,24 +40,23 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
 
     let result: Value = client.call("users.list", None::<()>).await?;
 
-    let mut rows = Vec::new();
-    if let Some(users) = result.get("users").and_then(|v| v.as_array()) {
-        for u in users {
-            let id = u.get("user_id").and_then(|v| v.as_str()).unwrap_or("-");
-            let name = u
-                .get("display_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
-            let role = u.get("role").and_then(|v| v.as_str()).unwrap_or("-");
-            let status = u.get("status").and_then(|v| v.as_str()).unwrap_or("-");
-            rows.push(vec![
-                id.to_string(),
-                name.to_string(),
-                role.to_string(),
-                status.to_string(),
-            ]);
-        }
-    }
+    // Parsed through the shared contract type rather than by string lookup: a
+    // renamed column used to render as a table of dashes, which reads like a
+    // field with no value rather than like a broken client.
+    let parsed: UserListResult =
+        serde_json::from_value(result.clone()).map_err(|e| aleph_client::CliError::Other(e.to_string()))?;
+    let rows: Vec<Vec<String>> = parsed
+        .users
+        .iter()
+        .map(|u| {
+            vec![
+                u.user_id.clone(),
+                u.display_name.clone(),
+                u.role.clone(),
+                u.status.clone(),
+            ]
+        })
+        .collect();
 
     output::print_table(&["User ID", "Name", "Role", "Status"], &rows, json, &result);
 
@@ -74,26 +76,20 @@ pub async fn create(
 ) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let mut params = serde_json::json!({ "display_name": display_name });
-    if let Some(r) = role {
-        params["role"] = Value::String(r.to_string());
-    }
+    let params = UserCreateParams {
+        display_name: display_name.to_string(),
+        role: role.map(str::to_string),
+    };
 
     let result: Value = client.call("users.create", Some(params)).await?;
 
     if json {
         output::print_json(&result);
     } else {
-        let user_id = result
-            .get("user")
-            .and_then(|u| u.get("user_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("<unknown>");
-        let role = result
-            .get("user")
-            .and_then(|u| u.get("role"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("member");
+        let created: UserCreateResult = serde_json::from_value(result.clone())
+            .map_err(|e| aleph_client::CliError::Other(e.to_string()))?;
+        let user_id = created.user.user_id.as_str();
+        let role = created.user.role.as_str();
         println!("Created {display_name} ({role}) as {user_id}");
         // The id alone grants nothing — say what the second step is, because
         // this command's whole purpose is to be the first half of a flow.
@@ -129,30 +125,77 @@ pub async fn update(
 
     let (client, _events) = AlephClient::connect(server_url, config).await?;
 
-    let mut params = serde_json::json!({ "user_id": user_id });
-    if let Some(v) = display_name {
-        params["display_name"] = Value::String(v.to_string());
-    }
-    if let Some(v) = role {
-        params["role"] = Value::String(v.to_string());
-    }
-    if let Some(v) = status {
-        params["status"] = Value::String(v.to_string());
-    }
+    let params = UserUpdateParams {
+        user_id: user_id.to_string(),
+        display_name: display_name.map(str::to_string),
+        role: role.map(str::to_string),
+        status: status.map(str::to_string),
+    };
 
     let result: Value = client.call("users.update", Some(params)).await?;
 
     if json {
         output::print_json(&result);
     } else {
+        let parsed: UserUpdateResult = serde_json::from_value(result.clone())
+            .map_err(|e| aleph_client::CliError::Other(e.to_string()))?;
         println!("Updated {user_id}.");
-        if status == Some("deactivated") {
-            println!("Their devices are revoked and their live connections are closed.");
-        }
+        print_update_effects(&parsed);
     }
 
     client.close().await?;
     Ok(())
+}
+
+/// Render what the write actually did.
+///
+/// This used to print one hard-coded sentence — "Their devices are revoked and
+/// their live connections are closed" — on every deactivation, whether any
+/// device existed or not, while the server's measured counts, the withdrawn
+/// channel bindings and the entire reactivation caveat went into the response
+/// and straight into the bit bucket. A receipt the only client discards is a
+/// receipt that does not exist, and a hard-coded claim standing in for a
+/// measurement is worse than silence: it is the client asserting an outcome it
+/// did not observe.
+fn print_update_effects(result: &UserUpdateResult) {
+    if let Some(devices) = result.revoked_devices {
+        // Zero is a measurement and it matters: it means this principal held
+        // no device credential, so "revoked" is not what closed anything.
+        match devices {
+            0 => println!("No devices were bound to them; nothing to revoke."),
+            1 => println!("1 device revoked and its live connections closed."),
+            n => println!("{n} devices revoked and their live connections closed."),
+        }
+    }
+
+    if !result.revoked_channel_senders.is_empty() {
+        println!("Channel sender approvals withdrawn:");
+        for s in &result.revoked_channel_senders {
+            println!("  {} / {}", s.channel, s.sender_id);
+        }
+    }
+
+    if let Some(frozen) = result.frozen_background_work {
+        if frozen.is_empty() {
+            println!("They owned no running goals, loops or crons.");
+        } else {
+            println!(
+                "Background work frozen: {} goal(s), {} loop(s), {} cron(s).",
+                frozen.goals, frozen.loops, frozen.crons
+            );
+        }
+    }
+
+    if let Some(effects) = &result.reactivation_effects {
+        // The half a bare `status: active` hides. Reactivation flips one
+        // column; naming what stayed down is the whole reason the server
+        // measures it.
+        println!();
+        println!("Reactivated — but this did NOT restore:");
+        println!("  devices:         {}", effects.devices);
+        println!("  channel senders: {}", effects.channel_senders);
+        println!("  background work: {}", effects.background_work);
+    }
 }
 
 #[cfg(test)]

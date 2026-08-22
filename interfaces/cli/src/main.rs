@@ -215,6 +215,24 @@ async fn dispatch(
             dispatch_workspace(server_url, config, action, json).await
         }
         Commands::Users { action } => dispatch_users(server_url, config, action, json).await,
+        Commands::Audit {
+            event_type,
+            actor,
+            since,
+            limit,
+        } => {
+            commands::audit_cmd::query(
+                server_url,
+                config,
+                event_type.as_deref(),
+                actor.as_deref(),
+                since.as_deref(),
+                limit,
+                json,
+            )
+            .await
+        }
+        Commands::Spend {} => commands::spend_cmd::query(server_url, config, json).await,
         Commands::Gateway { action } => dispatch_gateway(server_url, config, action, json).await,
         Commands::Logs { action } => dispatch_logs(server_url, config, action, json).await,
         Commands::Trace { action } => dispatch_trace(server_url, config, action, json).await,

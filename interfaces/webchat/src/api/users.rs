@@ -2,19 +2,19 @@
 //!
 //! Backs the project-room roster UI (Task 8): resolving `owner_user_id` /
 //! `member_ids` into display names, and picking new members from the set of
-//! known principals. Mirrors `gateway::handlers::users::UserView` on the wire.
+//! known principals. The wire shape is `aleph_protocol::users`, shared with
+//! the server and the CLI.
 
 use crate::context::DashboardState;
-use serde::{Deserialize, Serialize};
 
-/// Mirrors `gateway::handlers::users::UserView`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UserInfo {
-    pub user_id: String,
-    pub display_name: String,
-    pub role: String,
-    pub status: String,
-}
+/// The shared wire shape, not a third hand-written copy of it.
+///
+/// This was a local DTO that "mirrors `gateway::handlers::users::UserView`" —
+/// a mirror being exactly the arrangement where one side moves and the other
+/// keeps reflecting yesterday. The alias keeps every existing `UserInfo`
+/// reference in this crate working while making the fields a compile-time
+/// contract with the server and the CLI.
+pub use aleph_protocol::users::UserView as UserInfo;
 
 pub struct UsersApi;
 
@@ -24,11 +24,9 @@ impl UsersApi {
     /// no P1 identity attached.
     pub async fn me(state: &DashboardState) -> Result<Option<UserInfo>, String> {
         let result = state.rpc_call("users.me", serde_json::Value::Null).await?;
-        let user = result
-            .get("user")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        serde_json::from_value(user).map_err(|e| e.to_string())
+        let parsed: aleph_protocol::users::UserMeResult =
+            serde_json::from_value(result).map_err(|e| e.to_string())?;
+        Ok(parsed.user)
     }
 
     /// Every known principal — member-visible (the roster picker needs it).
@@ -36,10 +34,8 @@ impl UsersApi {
         let result = state
             .rpc_call("users.list", serde_json::Value::Null)
             .await?;
-        let arr = result
-            .get("users")
-            .cloned()
-            .unwrap_or(serde_json::Value::Array(vec![]));
-        serde_json::from_value(arr).map_err(|e| e.to_string())
+        let parsed: aleph_protocol::users::UserListResult =
+            serde_json::from_value(result).map_err(|e| e.to_string())?;
+        Ok(parsed.users)
     }
 }

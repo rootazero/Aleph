@@ -440,6 +440,27 @@ pub enum ExecutionError {
 
     #[error("orchestrator: {0}")]
     Orchestrator(String),
+
+    /// The run's principal ([`crate::spend::principal_from_metadata`]) is
+    /// over its spend ceiling for the period — the admission arm's denial,
+    /// raised by `run_loop::deny_if_over_spend` before either engine claims
+    /// any run resource. See [`crate::spend`] for the floor arm this is the
+    /// run-admission sibling of.
+    ///
+    /// `reset_ms` is the period boundary [`crate::spend::check`] itself
+    /// computed for this denial — carried on `Verdict::Denied`'s own
+    /// `Spent::period_end_ms` — captured here at denial time rather than
+    /// recomputed later at `receipt_kind()` time. Recomputing would not be
+    /// "the same answer, asked again a few instructions later": (1) if
+    /// rendering happens to cross a period boundary, or the run was parked
+    /// and retried later, a fresh computation names the *next* window's
+    /// end, not the one the caller actually hit; (2) `spend::current_policy`
+    /// is hot-swappable (`spend::update_policy`, and this task's own plan
+    /// makes `[policies.spend]` apply live), so "moments later, under the
+    /// same policy" is not a premise a fresh read can rely on. Carrying the
+    /// value sidesteps both.
+    #[error("spend ceiling reached")]
+    SpendExhausted { limit: crate::spend::Limit, reset_ms: i64 },
 }
 
 impl ExecutionError {
@@ -491,6 +512,12 @@ impl ExecutionError {
             | Self::RunNotActive(_)
             | Self::Fallthrough { .. }
             | Self::Orchestrator(_) => ReceiptKind::Failed,
+            // `reset_ms` is carried on the error (see `Self::SpendExhausted`'s
+            // doc) rather than recomputed here — this arm must not read
+            // `Utc::now()` or `spend::current_policy()`.
+            Self::SpendExhausted { limit, reset_ms } => {
+                ReceiptKind::SpendExhausted { limit: *limit, reset_ms: *reset_ms }
+            }
         }
     }
 }
@@ -579,7 +606,8 @@ mod shared_room_lane_tests {
 
 #[cfg(test)]
 mod user_receipt_tests {
-    use super::{ExecutionError, Locale};
+    use super::{ExecutionError, Locale, ReceiptKind};
+    use crate::tasks::shared::retry_hint::classify;
 
     #[test]
     fn rate_limit_failure_reads_as_retryable() {
@@ -670,5 +698,141 @@ mod user_receipt_tests {
         let (_, en) = ExecutionError::Timeout.user_receipt(Locale::En);
         assert_ne!(zh, en);
         assert!(!en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
+    }
+
+    /// A denied run's receipt carries the wire code and, by shape, the
+    /// caller's own numbers.
+    #[test]
+    fn spend_exhausted_carries_the_wire_code_and_the_callers_own_numbers() {
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::PerUser {
+                spent: 42.0,
+                limit: 40.0,
+            },
+            reset_ms: 1_000,
+        };
+        let (code, message) = e.user_receipt(Locale::En);
+        assert_eq!(code, "SPEND_EXHAUSTED");
+        assert!(message.contains("42.0") && message.contains("40.0"), "{message}");
+    }
+
+    /// `Limit::Total` never renders a dollar figure — there is no actor at
+    /// render time to ask whether this caller may see the machine total.
+    #[test]
+    fn spend_exhausted_total_never_leaks_a_number() {
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+            reset_ms: 1_000,
+        };
+        let (code, message) = e.user_receipt(Locale::En);
+        assert_eq!(code, "SPEND_EXHAUSTED");
+        assert!(!message.contains('$'), "{message}");
+    }
+
+    /// G11 — a spend denial is terminal, never one of the two provider-hiccup
+    /// buckets a caller of `receipt_kind()` might park-and-retry.
+    #[test]
+    fn spend_exhausted_receipt_kind_is_not_transient() {
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+            reset_ms: 1_000,
+        };
+        assert!(!e.receipt_kind().is_transient());
+    }
+
+    /// The reset instant is *carried* on the error, not recomputed at
+    /// `receipt_kind()` time — see `Self::SpendExhausted`'s doc for the two
+    /// ways recomputing could drift (a period boundary crossed between
+    /// denial and render; a live policy reload, which this plan's own
+    /// Task 10 makes possible). Pin `reset_ms` to an instant nowhere near
+    /// "now" (2000-01-01T00:00:00Z) so a fresh `period_end_ms(Utc::now(),
+    /// ..)` call could never coincidentally reproduce it: if `receipt_kind()`
+    /// ever regressed to recomputing instead of reading the field, this
+    /// assertion would fail rather than passing by accident.
+    #[test]
+    fn spend_exhausted_receipt_names_the_carried_reset_instant_not_a_recomputed_one() {
+        let reset_ms: i64 = 946_684_800_000; // 2000-01-01T00:00:00Z
+        let e = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+            reset_ms,
+        };
+        let (_, message) = e.user_receipt(Locale::En);
+        assert!(
+            message.contains("2000-01-01"),
+            "receipt must name the carried reset instant verbatim, got: {message}"
+        );
+
+        // Same property through `receipt_kind()` directly, without going
+        // through rendering.
+        match e.receipt_kind() {
+            ReceiptKind::SpendExhausted { reset_ms: got, .. } => {
+                assert_eq!(got, reset_ms);
+            }
+            other => panic!("expected ReceiptKind::SpendExhausted, got {other:?}"),
+        }
+    }
+
+    /// **CRITICAL INVARIANT**: `ExecutionError::SpendExhausted` must be
+    /// classified as permanent (not retryable) by **both**:
+    ///
+    /// 1. The typed path: `receipt_kind().is_transient()` in this file
+    /// 2. The string path: `cron/executor.rs`'s `classify(&err.to_string())`
+    ///    for fallback classification when a typed `ReceiptKind` is unavailable
+    ///
+    /// # Why this guard exists
+    ///
+    /// `SpendExhausted`'s Display is `#[error("spend ceiling reached")]`, a
+    /// terse string chosen for brevity, not to dodge the regex patterns in
+    /// `retry_hint::classify`. If that string is ever made more informative
+    /// (e.g., "spend quota exhausted", "rate limit for this period"), the
+    /// absence of this test would let it silently start matching one of the
+    /// `classify` regexes, flipping the error to retryable. The cron executor
+    /// would then retry-storm a permanent condition while suppressing alerts,
+    /// and the user would be neither served nor told.
+    ///
+    /// This test asserts the invariant is enforced, not left to chance.
+    #[test]
+    fn cron_string_classifier_agrees_spend_denial_is_permanent() {
+        // Test both variants: per-principal and fleet-wide.
+        let per_user = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::PerUser {
+                spent: 100.0,
+                limit: 100.0,
+            },
+            reset_ms: 1_000,
+        };
+        let total = ExecutionError::SpendExhausted {
+            limit: crate::spend::Limit::Total,
+            reset_ms: 1_000,
+        };
+
+        // Both variants must agree with the typed path.
+        for err in &[&per_user, &total] {
+            let err_text = err.to_string();
+
+            // String classifier must say "not retryable".
+            let hint = classify(&err_text);
+            assert!(
+                !hint.retryable,
+                "spend denial '{}' must not be retryable by string classifier, got: {:?}",
+                err_text,
+                hint
+            );
+
+            // Typed path must also say "not transient".
+            let is_transient = err.receipt_kind().is_transient();
+            assert!(
+                !is_transient,
+                "spend denial must not be transient by receipt_kind"
+            );
+
+            // Both mechanisms must agree.
+            assert_eq!(
+                hint.retryable, is_transient,
+                "string classifier and typed path must agree: \
+                 string says retryable={}, typed says transient={}",
+                hint.retryable, is_transient
+            );
+        }
     }
 }

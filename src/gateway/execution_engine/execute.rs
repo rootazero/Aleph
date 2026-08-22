@@ -127,6 +127,17 @@ where
     ) -> Result<(), ExecutionError> {
         let run_id = request.run_id.clone();
 
+        // Run-admission spend arm: deny before anything below claims a
+        // session run slot, a concurrency permit, or an `ActiveRun` — a
+        // principal already over its ceiling should never be handed a
+        // resource it is about to be denied anyway. See
+        // `run_loop::deny_if_over_spend`'s doc for why this must run ahead
+        // of `admit_run`, not alongside or after it. `_and_report` (not the
+        // bare `?` this used to be) because this fires before `RunAccepted`
+        // — see that function's doc for why the caller cannot be left to
+        // find out any other way.
+        super::run_loop::deny_if_over_spend_and_report(&request, emitter.as_ref()).await?;
+
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
 
@@ -1544,11 +1555,7 @@ async fn park_loop_on_transient_failure(
     origin: Option<&OriginRoute>,
 ) -> TransientPark {
     let kind = error.receipt_kind();
-    if !matches!(
-        kind,
-        crate::gateway::i18n::ReceiptKind::RateLimited
-            | crate::gateway::i18n::ReceiptKind::Unreachable
-    ) {
+    if !kind.is_transient() {
         return TransientPark::NotTransient;
     }
     let Some(reg) = crate::looping::global() else {
@@ -2085,6 +2092,38 @@ mod transient_loop_park_tests {
             "the park path must not touch a loop it declined to handle"
         );
         assert_eq!(state.pending_tick_wake_ms, None, "and must not re-arm it");
+    }
+
+    /// G11 — a spend-ceiling denial must not park a loop for automatic
+    /// retry: the ceiling does not lift until the period resets, so parking
+    /// it would spin the same tick against the same wall forever. Unlike a
+    /// genuine provider hiccup, a park here would cost NO iteration
+    /// (`a_rate_limited_tick_parks_the_loop_instead_of_stopping_it` proves
+    /// that's true even for the transient buckets), so nothing would ever
+    /// bound the retry count — an infinite billing-denial loop, not a
+    /// bounded one.
+    #[tokio::test]
+    async fn a_spend_exhausted_failure_is_left_to_the_caller_to_stop() {
+        let reg = registry();
+        let session = "transient-park/spend-exhausted";
+        reg.put(fired_tick(session));
+
+        let outcome = park_loop_on_transient_failure(
+            session,
+            &ExecutionError::SpendExhausted {
+                limit: crate::spend::Limit::Total,
+                reset_ms: 1_000,
+            },
+            None,
+        )
+        .await;
+        assert!(
+            matches!(outcome, TransientPark::NotTransient),
+            "a spend ceiling denial is terminal, not a provider hiccup to retry"
+        );
+        let state = reg.get(session).expect("still registered");
+        assert_eq!(state.status, LoopStatus::Active);
+        assert_eq!(state.pending_tick_wake_ms, None, "must not be re-armed");
     }
 
     /// The new exposure surface: `Exhausted` now enters from the FAILURE arm.
