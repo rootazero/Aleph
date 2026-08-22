@@ -1166,6 +1166,15 @@ html[data-flat="1"] .aleph-composer, html[data-flat="1"] .aleph-session-tabs {
   -webkit-backdrop-filter: none !important;
 }
 html[data-flat="1"] .aleph-session-tabs { background-color: var(--color-surface) !important; }
+/* `.aleph-todo-wrap` sets its blur from a Rust `const` in todo_panel.rs, not
+   from this file, which is exactly why it was missing from this list for as
+   long as it was: nobody reading the flat block could see the list was short.
+   `no_backdrop_filter_survives_flat_mode` now derives the required set from
+   both sources so the next one cannot be missed the same way. */
+html[data-flat="1"] .aleph-todo-wrap {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
 html[data-flat="1"] .chat-scroll-fade { mask-image: none !important; -webkit-mask-image: none !important; }
 /* `.aleph-scroll-more` is NOT simply nulled here. The chat fade is
    decorative — content dissolving under a chrome band — so dropping it costs

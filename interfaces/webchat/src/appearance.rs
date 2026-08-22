@@ -879,4 +879,119 @@ mod tests {
             ],
         );
     }
+    /// Every selector that turns a backdrop filter ON must be turned back OFF
+    /// by a `html[data-flat="1"]` rule.
+    ///
+    /// Flat mode's whole content is "the expensive materials are gone", and on
+    /// Linux it is applied unconditionally with no opt-out — so a surface that
+    /// keeps its blur there is that goal not met, on precisely the machines
+    /// the degradation exists to protect.
+    ///
+    /// The required set is DERIVED from both places a blur can be declared,
+    /// never hand-listed. `.aleph-todo-wrap` was missing from the flat block
+    /// for as long as it existed because it sets its blur from a Rust `const`
+    /// in `todo_panel.rs`: nobody reading the stylesheet could see that the
+    /// list was short. A hand-written expectation here would be that same
+    /// defect one level up.
+    ///
+    /// A universal `html[data-flat="1"] *` rule would also be rot-proof and is
+    /// deliberately not used: `!important` on every element costs style recalc
+    /// on exactly the weak machines flat mode targets. The cheap list stays;
+    /// the list gets a rule.
+    #[test]
+    fn no_backdrop_filter_survives_flat_mode() {
+        const CSS: &str = include_str!("../styles/tailwind.css");
+        const TODO_CSS: &str = include_str!("platform/wide/views/chat/todo_panel.rs");
+
+        // Selectors a `html[data-flat="1"]` rule nulls the backdrop filter for.
+        //
+        // Walk RULES, not occurrences of the prefix. A rule commonly lists
+        // several selectors, each repeating the prefix — splitting on the
+        // prefix keeps only the last of each group, which reads as a much
+        // shorter flat block than the file actually has.
+        let mut nulled: Vec<String> = Vec::new();
+        let css_lines: Vec<&str> = CSS.lines().collect();
+        for (i, line) in css_lines.iter().enumerate() {
+            if !line.trim().starts_with("backdrop-filter: none") {
+                continue;
+            }
+            // Walk back to the selector line that opened this rule. A rule
+            // often lists several selectors, each repeating the prefix, so
+            // take all of them — keeping only the last would read as a much
+            // shorter flat block than the file actually has.
+            let head = css_lines[..i]
+                .iter()
+                .rev()
+                .find(|l| l.contains('{'))
+                .copied()
+                .unwrap_or_default();
+            for sel in head.split('{').next().unwrap_or_default().split(',') {
+                let Some(sel) = sel.trim().strip_prefix("html[data-flat=\"1\"]") else {
+                    continue;
+                };
+                let sel = sel.trim();
+                if !sel.is_empty() {
+                    nulled.push(sel.to_string());
+                }
+            }
+        }
+        assert!(
+            nulled.len() >= 5,
+            "the flat block should null several selectors; found {nulled:?} — \
+             if this shrank to nothing the scanner stopped matching, which \
+             would make this guard silently vacuous"
+        );
+
+        // Selectors that SET a backdrop filter, from both declaration sites.
+        let mut setters: Vec<(String, &str)> = Vec::new();
+        for (source, label) in [(CSS, "tailwind.css"), (TODO_CSS, "todo_panel.rs")] {
+            let lines: Vec<&str> = source.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                let decl = line.trim();
+                if !decl.starts_with("backdrop-filter:") && !decl.contains(";backdrop-filter:") {
+                    continue;
+                }
+                if decl.contains("backdrop-filter: none") || decl.contains("backdrop-filter:none") {
+                    continue;
+                }
+                // Walk back to the nearest selector line opening this block.
+                let head = lines[..i]
+                    .iter()
+                    .rev()
+                    .find(|l| l.contains('{'))
+                    .copied()
+                    .unwrap_or_default();
+                for sel in head.split('{').next().unwrap_or_default().split(',') {
+                    let sel = sel
+                        .trim()
+                        .trim_start_matches("html[data-flat=\"1\"]")
+                        .trim();
+                    if sel.starts_with('.') {
+                        setters.push((sel.to_string(), label));
+                    }
+                }
+            }
+        }
+        assert!(
+            !setters.is_empty(),
+            "found no backdrop-filter declarations at all — the scanner is broken"
+        );
+
+        let missing: Vec<String> = setters
+            .iter()
+            .filter(|(sel, _)| {
+                !nulled
+                    .iter()
+                    .any(|n| n == sel || n.starts_with(&format!("{sel}:")))
+            })
+            .map(|(sel, src)| format!("{sel} (set in {src})"))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these selectors set a backdrop filter that flat mode never turns off: {missing:?}. \
+             Flat mode is unconditional on Linux, so each one keeps its blur on the machines \
+             the degradation exists for. Add a `html[data-flat=\"1\"] <selector>` rule nulling \
+             both the prefixed and unprefixed property."
+        );
+    }
 }

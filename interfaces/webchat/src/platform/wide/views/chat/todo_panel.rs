@@ -128,7 +128,7 @@ pub fn TodoPanel() -> impl IntoView {
 const TODO_PANEL_CSS: &str = r#"
 .aleph-todo-wrap{margin:0 auto 6px;max-width:1016px;border:1px solid var(--color-border);
   border-radius:14px;background:color-mix(in oklch,var(--color-surface-overlay) 92%,transparent);
-  backdrop-filter:blur(8px);overflow:hidden;font-size:13px}
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);overflow:hidden;font-size:13px}
 .aleph-todo-head{display:flex;align-items:center;gap:8px;width:100%;padding:5px 12px;
   background:transparent;border:0;cursor:pointer;color:var(--color-text-primary);text-align:left;font-size:13px}
 .aleph-todo-ring{flex:0 0 auto;width:18px;height:18px;border-radius:50%;display:grid;place-items:center}
