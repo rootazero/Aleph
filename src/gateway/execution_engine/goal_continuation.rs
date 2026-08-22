@@ -537,11 +537,7 @@ pub(super) async fn block_goal_on_failure(
     let kind = error.receipt_kind();
     let now = now_ms();
 
-    if matches!(
-        kind,
-        crate::gateway::i18n::ReceiptKind::RateLimited
-            | crate::gateway::i18n::ReceiptKind::Unreachable
-    ) {
+    if kind.is_transient() {
         let hint = crate::providers::llm_retry::extract_retry_after_str(&raw);
         let delay_ms = crate::goal::pursuit::bound_transient_park_delay_ms(
             hint,

@@ -40,19 +40,62 @@ impl WhisperTranscription {
     ///
     /// - `api_key` — `OpenAI` (or compatible) API key.
     /// - `base_url` — Override the API base URL (e.g. for local whisper-compatible servers).
+    ///   Plain HTTP is only permitted for loopback hosts (localhost / 127.0.0.1 / `[::1]`).
     /// - `model` — Override the model name (default: `whisper-1`).
+    ///
+    /// # Panics
+    /// Panics if `base_url` is neither `https://` nor an `http://` loopback address,
+    /// since forwarding the bearer API key over plain HTTP would leak it.
     #[must_use]
     pub fn new(api_key: String, base_url: Option<String>, model: Option<String>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(TRANSCRIPTION_TIMEOUT)
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .expect("reqwest client with 120s timeout must build");
+
+        let base_url = base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        Self::assert_safe_base_url(&base_url);
 
         Self {
             api_key,
-            base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            base_url,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             client,
+        }
+    }
+
+    /// Reject `base_url` values that would cause the bearer token to be sent in cleartext.
+    /// Loopback hosts are exempted so operators can run local whisper-compatible servers
+    /// without TLS termination (the loopback path cannot be intercepted off-host).
+    fn assert_safe_base_url(base_url: &str) {
+        let parsed = match reqwest::Url::parse(base_url) {
+            Ok(u) => u,
+            Err(e) => panic!("Whisper base_url {base_url:?} is not a valid URL: {e}"),
+        };
+        match parsed.scheme() {
+            "https" => {}
+            "http" => {
+                let host_ok = parsed
+                    .host_str()
+                    .map(|h| {
+                        h.eq_ignore_ascii_case("localhost")
+                            || h == "127.0.0.1"
+                            || h == "::1"
+                            || h == "[::1]"
+                    })
+                    .unwrap_or(false);
+                if !host_ok {
+                    panic!(
+                        "Whisper base_url {base_url:?} uses plain HTTP for a non-loopback \
+                         host; refusing to forward the bearer API key in cleartext. \
+                         Use https:// or an http://localhost/127.0.0.1 endpoint."
+                    );
+                }
+            }
+            other => panic!(
+                "Whisper base_url {base_url:?} uses scheme {other:?}; \
+                 only http(s) loopback and https:// are allowed"
+            ),
         }
     }
 }

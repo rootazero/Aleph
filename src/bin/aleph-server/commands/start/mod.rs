@@ -192,6 +192,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // it only because `[security]` is on the app config, not the gateway one.
     install_mask_patterns(&loaded_app_config);
 
+    // Install the process-wide `[policies.spend]` handle. UNCONDITIONAL —
+    // including on a box with no ceiling configured (`enabled() == false`).
+    // `spend::update_policy` (the live-apply path) returns `false`, and the
+    // live-apply verdict honestly downgrades to `Restart`, when no handle
+    // has been installed yet — so skipping this on an unconfigured box would
+    // mean an operator could turn a ceiling OFF live but never turn one ON
+    // live, only the direction that matters less. `install_policy` is
+    // idempotent (a second call is a no-op), so this is safe to call exactly
+    // once here regardless of what `[policies.spend]` says.
+    alephcore::spend::install_policy(loaded_app_config.policies.spend.clone());
+
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
     initialize_extension_manager(args.daemon).await;
@@ -453,6 +464,44 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Security store + vault construction (early — vault needed for API key
     // resolution).
     let auth_bundle = initialize_vault(final_port, server.node_registry.clone());
+
+    // Install the durable per-principal spend ledger on the same
+    // `SecurityStore` every other durable consumer shares — see
+    // `SqliteSpendLedger`'s module doc for why it does not open a second
+    // connection. Before anything that can admit a run (the gateway's own
+    // handler registration happens below), so no request or LLM call ever
+    // sees the process fall back to `spend::InMemorySpendLedger`, whose
+    // rows do not survive a restart.
+    alephcore::spend::install_ledger(Arc::new(alephcore::spend::sqlite::SqliteSpendLedger::new(
+        auth_bundle.security_store.clone(),
+    )));
+
+    // Bound the ledger's growth now that a real ledger exists to bound:
+    // drop spend rows older than `spend::period::RETENTION_PERIODS` past
+    // periods, computed by walking calendar boundaries backward rather than
+    // `now - N * <fixed duration>` — see `spend::period`'s module doc for
+    // why a month or a DST day breaks fixed-duration arithmetic.
+    {
+        let spend_now_ms = chrono::Utc::now().timestamp_millis();
+        let spend_cutoff_ms = alephcore::spend::period::retention_cutoff_ms(
+            spend_now_ms,
+            loaded_app_config.policies.spend.period,
+            alephcore::spend::period::RETENTION_PERIODS,
+        );
+        match alephcore::spend::global_ledger().sweep_before(spend_cutoff_ms) {
+            Ok(swept) => {
+                tracing::info!(
+                    swept,
+                    cutoff_ms = spend_cutoff_ms,
+                    "spend ledger: retention sweep complete"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, "spend ledger: retention sweep failed");
+            }
+        }
+    }
+
     register_core_handlers(
         &mut server,
         &auth_bundle.auth_ctx,
@@ -666,13 +715,33 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let s = s.clone();
             async move { alephcore::gateway::handlers::users::handle_create(req, s).await }
         });
-        let s = users_store;
+        let s = users_store.clone();
         let kick = users_kick;
         server.handlers_mut().register("users.update", move |req| {
             let s = s.clone();
             let kick = kick.clone();
             async move { alephcore::gateway::handlers::users::handle_update(req, s, kick).await }
         });
+        // The read face of `security_audit_log`. Registered beside `users.*`
+        // because it is the same store handle and the same question: this
+        // table's largest producer family is the one those handlers write.
+        let s = users_store;
+        server
+            .handlers_mut()
+            .register("security.audit.query", move |req| {
+                let s = s.clone();
+                async move {
+                    alephcore::gateway::handlers::security_audit::handle_query(req, s).await
+                }
+            });
+        // The read face of the per-principal spend ledger (`SpendLedger`,
+        // written by the metering floor and the run-admission gate). No
+        // store handle to capture: everything it reads
+        // (`spend::current_policy`, `spend::global_ledger`) is a
+        // process-wide handle already — see `handlers::spend`'s module doc.
+        server
+            .handlers_mut()
+            .register("spend.query", alephcore::gateway::handlers::spend::handle_query);
     }
     // Wire the security store so the WS node connect/disconnect paths can
     // stamp enrolled-node last_seen_at (offline fleet view honesty).
@@ -1626,10 +1695,50 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // LockOrIpc when this server holds the singleton lock. Bearer auth is
     // enforced by the existing OpenAI-compat handler upstream.
     {
+        // The reconciler endpoint surfaces the most recent `ReconcileReport`
+        // from the daemon operator opt-in starts via
+        // `MemoryCommandHandler::spawn_reconciler_daemon`. Construct one
+        // here so the admin API can query it; the reconciler daemon itself
+        // is started by config ([memory.reconciler] enabled = true).
+        let memory_handler = agent_result
+            .state_db
+            .as_ref()
+            .map(|state_db| {
+                std::sync::Arc::new(
+                    alephcore::memory::events::handler::MemoryCommandHandler::new(
+                        std::sync::Arc::clone(state_db),
+                    ),
+                )
+            });
+
+        // Start the background reconciler daemon if config opts in.
+        // The JoinHandle is stored on the server so a graceful shutdown
+        // can `.abort()` the task before dropping the StateDatabase
+        // the daemon reads from.
+        let reconciler_handle = if let Some(handler) = memory_handler.as_ref() {
+            let cfg = app_config.read().await.memory.reconciler.clone();
+            if cfg.enabled {
+                let interval = std::time::Duration::from_secs(cfg.interval_secs);
+                tracing::info!(
+                    interval_secs = cfg.interval_secs,
+                    "Starting background reconciler daemon"
+                );
+                Some(handler.spawn_reconciler_daemon(interval))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(handle) = reconciler_handle {
+            server.set_reconciler_handle(handle);
+        }
+
         let admin_state = alephcore::gateway::admin_api::AdminApiState {
             shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
             agent_manager: agent_manager.clone(),
             session_store: session_store.clone(),
+            memory_handler,
         };
         server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
     }
@@ -1714,6 +1823,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &event_bus,
         &app_config,
         &auth_bundle.auth_ctx.shared_token_mgr,
+        // Curated (`MEMORY.md`) hot-tier RPCs resolve their per-scope store
+        // through the same provider the `remember` tool uses, so the Panel
+        // reads exactly the file the tool writes. `None` in a gateway with no
+        // agent runtime: those three methods then answer SERVICE_UNAVAILABLE
+        // rather than serving a convincing empty hot tier.
+        agent_result.memory_context_provider.clone(),
         args.daemon,
     );
     register_daemon_handlers(&mut server, start_time, args.daemon);
@@ -2004,12 +2119,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Graph visualization handlers (wired with MemoryBackend + default agent +
     // the shared NoteIndexer for the write path)
-    register_graph_handlers(
-        &mut server,
-        &memory_db,
-        &default_agent_id,
-        Some(&note_indexer),
-    );
+    // No default agent id: every `graph.*` handler takes `agent_id` off the
+    // request (defaulting internally), so the parameter was read by nothing.
+    register_graph_handlers(&mut server, &memory_db, Some(&note_indexer));
 
     // Reconcile the note index with disk at startup, across EVERY corpus under
     // ~/.aleph/memory/note/ — not just the default agent. Each project
@@ -3372,4 +3484,53 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     run_result?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// `spend::install_policy`/`spend::install_ledger` had **zero production
+    /// callers** until this round wired them in here — every mention of
+    /// either name anywhere in `src/` was inside `#[cfg(test)]` or a doc
+    /// comment. On a real server that meant `spend::check` never denied
+    /// anything (the process-wide policy fell back to
+    /// `SpendPolicy::default()`, whose `enabled()` is `false`) and every
+    /// spend row lived in a process-lifetime `InMemorySpendLedger` that
+    /// never survived a restart — nine tasks of ceiling enforcement, inert,
+    /// with no compile error, no test going red, and a running server that
+    /// looked exactly like a correctly-configured one with no ceiling set.
+    /// Nothing else can see this failure, so this is a source-level census:
+    /// assert a production (comment-stripped) call to each name exists.
+    ///
+    /// CRLF-safe (`\r` stripped before any split — an anchored
+    /// `"\n#[cfg(test)]"` needle matches nothing on this repo's Windows
+    /// checkout, silently turning "production" into the whole file) and
+    /// comment-stripped (a doc comment naming either function — this one
+    /// included — would satisfy a naive `contains` otherwise; see CLAUDE.md
+    /// §10 for the documented failure that shape causes).
+    #[test]
+    fn boot_installs_the_spend_policy_and_the_spend_ledger() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing — this test would be \
+             reading its own source, and would trivially pass by finding \
+             its own doc comment"
+        );
+        let production: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for call in ["install_policy(", "install_ledger("] {
+            assert!(
+                production.contains(call),
+                "start/mod.rs must contain a production call to \
+                 spend::{call} — without it the round's config, ledger and \
+                 admission checks are all wired to a handle boot never \
+                 installs, and the server runs as if no ceiling were ever \
+                 configured"
+            );
+        }
+    }
 }

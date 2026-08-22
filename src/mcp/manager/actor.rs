@@ -580,11 +580,16 @@ impl McpManagerActor {
         // Drop the invocation record here rather than at any of the six
         // `McpManagerHandle::remove_server` call sites: this is the one point
         // they all funnel through, so a seventh inherits it.
+        //
+        // Fire-and-forget — awaiting `spawn_blocking` here would block the
+        // single-task actor on whatever the disk write does (slow FS, NFS
+        // hang, full disk) and freeze `StopServer` / `Shutdown` / health
+        // ticks for the duration. The forget_mcp call is idempotent and
+        // disk-bound; losing the join handle on actor shutdown is harmless.
         let owned = server_id.to_string();
-        let _ = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             crate::tools::usage::forget_mcp(&owned);
-        })
-        .await;
+        });
 
         tracing::info!(server_id = %server_id, "Server removed");
         Ok(())

@@ -12,16 +12,19 @@ use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization.
 ///
-/// One raw conversation record. `user_input` / `ai_output` stay separate so the
-/// panel can style the two halves independently — joining them into one string
-/// server-side threw that away.
+/// One raw conversation record, one body. It used to advertise `user_input` /
+/// `ai_output` "so the panel can style the two halves independently" — but
+/// `raw_memories` stores a single `content` column, so `ai_output` went out as
+/// `""` on every row this handler ever returned, and `window_title` likewise.
+/// The Panel's two-weight Q/A card was styling a distinction the store cannot
+/// make; both fields are gone rather than kept as permanently-empty strings a
+/// future reader would try to fill.
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryEntry {
     pub id: String,
     pub agent_id: String,
-    pub window_title: String,
-    pub user_input: String,
-    pub ai_output: String,
+    /// The recorded turn text.
+    pub content: String,
     /// Session the row was recorded in, when known. Already selected by the
     /// dashboard query — previously dropped on the floor here.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,9 +45,6 @@ pub struct SearchParams {
     /// Filter by agent ID (workspace isolation)
     #[serde(default)]
     pub agent_id: Option<String>,
-    /// Filter by window title
-    #[serde(default)]
-    pub window_title: Option<String>,
     /// Maximum results (default: 20)
     #[serde(default = "default_limit")]
     pub limit: u32,
@@ -62,7 +62,6 @@ impl Default for SearchParams {
         Self {
             query: None,
             agent_id: None,
-            window_title: None,
             limit: default_limit(),
             offset: 0,
         }
@@ -117,8 +116,14 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .map(str::trim)
         .filter(|q| !q.is_empty());
 
+    // Every raw writer composes the session's scope, so reading the base id
+    // verbatim read a partition nothing writes to. Resolved AFTER the
+    // visibility gate above, which judges the id the caller actually sent.
+    // See `memory_scope`'s module doc.
+    let partitions = super::memory_scope::read_partitions(agent_id);
+
     let memories = match db.get_raw_memories_dashboard(
-        Some(agent_id),
+        Some(&partitions),
         query,
         params.limit as usize,
         params.offset as usize,
@@ -137,7 +142,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
     // that filtered set — not the whole store. A pager sized to the store
     // total would keep "next" enabled past the last match (B4 phantom-page,
     // resurrected for the filtered case).
-    let total = match db.count_raw_memories(Some(agent_id), query) {
+    let total = match db.count_raw_memories(Some(&partitions), query) {
         Ok(total) => total,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -153,9 +158,7 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .map(|m| MemoryEntry {
             id: m.id,
             agent_id: m.agent_id,
-            window_title: String::new(),
-            user_input: m.content,
-            ai_output: String::new(),
+            content: m.content,
             session_id: m.session_id,
             timestamp: m.created_at,
         })
@@ -230,38 +233,6 @@ pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
 }
 
 // ============================================================================
-// Clear
-// ============================================================================
-
-/// Parameters for memory.clear
-#[derive(Debug, Default, Deserialize)]
-pub struct ClearParams {
-    /// Filter by window title (optional)
-    #[serde(default)]
-    pub window_title: Option<String>,
-}
-
-/// Clear memories in bulk.
-///
-/// Bulk clearing is not a supported operation: raw conversation history lives
-/// in the session store and knowledge notes are curated individually. The
-/// handler previously returned `{ "deletedCount": 0 }`, which made
-/// `aleph memory clear` print "All memory cleared" for a wipe that never ran.
-pub async fn handle_clear(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    let _params: ClearParams = request
-        .params
-        .as_ref()
-        .and_then(|p| serde_json::from_value(p.clone()).ok())
-        .unwrap_or_default();
-
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "Bulk memory clearing is not supported in the notes-based memory model.".to_string(),
-    )
-}
-
-// ============================================================================
 // List Facts
 // ============================================================================
 
@@ -277,9 +248,6 @@ pub struct ListFactsParams {
     /// Number of rows to skip for pagination (default: 0)
     #[serde(default)]
     pub offset: usize,
-    /// Include invalidated facts (default: false)
-    #[serde(default)]
-    pub include_invalid: bool,
 }
 
 const fn default_facts_limit() -> usize {
@@ -327,10 +295,18 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
         return JsonRpcResponse::success(request.id, json!({ "facts": [], "total": 0 }));
     }
 
-    match db.list_notes(agent_id).await {
+    // The partitions this session's writers actually wrote to. Resolved AFTER
+    // the visibility gate, which judges the base id the caller sent. See
+    // `memory_scope`'s module doc for why the reader used to miss every note
+    // on a stock install.
+    let partitions = super::memory_scope::read_partitions(agent_id);
+
+    match db.list_notes_multi(&partitions).await {
         Ok(notes) => {
-            // `total` describes the whole agent store, so the pager can size
-            // itself instead of guessing from a full page.
+            // `total` describes the whole window the pager slices, so it must
+            // count the same union the list above enumerated — a total taken
+            // from one partition and a list taken from two is the phantom-page
+            // bug with the operands swapped.
             let total = notes.len() as i64;
             let entries: Vec<FactEntry> = notes
                 .into_iter()
@@ -358,26 +334,6 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
             format!("List notes failed: {e}"),
         ),
     }
-}
-
-// ============================================================================
-// Clear Facts
-// ============================================================================
-
-/// Clear all knowledge notes.
-///
-/// Notes are not bulk-deletable through this RPC: they are curated
-/// individually via the `note_manage` tool and decayed by the dream daemon.
-/// The handler previously faked `{ "deletedCount": 0 }`, making
-/// `aleph memory clear --facts-only` report a successful wipe that never ran.
-pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "Bulk note clearing is not supported; manage knowledge notes via the \
-         note_manage tool."
-            .to_string(),
-    )
 }
 
 // ============================================================================
@@ -438,7 +394,6 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
                     json!({
                         "totalMemories": 0,
                         "totalFacts": 0,
-                        "validFacts": 0,
                         "totalGraphNodes": 0,
                         "totalGraphEdges": 0,
                         "scope": "agent",
@@ -451,16 +406,27 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         None => crate::gateway::visibility::visible_owner_filter()
             .map(|_| crate::routing::DEFAULT_AGENT_ID.to_string()),
     };
-    let agent = agent.as_deref();
     let scope = if agent.is_some() { "agent" } else { "global" };
+    // Resolved AFTER the visibility gate above. `None` here is the
+    // unrestricted whole-store rollup and stays unpartitioned.
+    let partitions: Option<Vec<String>> = agent
+        .as_deref()
+        .map(super::memory_scope::read_partitions);
+    let partitions = partitions.as_deref();
 
-    let raw_count = db.count_raw_memories(agent, None).unwrap_or(0);
-    let note_count = match agent {
-        Some(a) => db.count_notes(a).await.unwrap_or(0),
+    let raw_count = db.count_raw_memories(partitions, None).unwrap_or(0);
+    let note_count = match partitions {
+        Some(ids) => db.count_notes_multi(ids).await.unwrap_or(0),
         None => db.count_all_notes().await.unwrap_or(0),
     };
 
-    let (graph_nodes, graph_edges) = match agent {
+    // The galaxy is the one surface that cannot represent a union — its
+    // `NoteNodeDto` carries no `agent_id`, so two partitions holding the same
+    // `category/filename` would collide into one node. These two counts label
+    // THAT graph, so they must be scoped exactly as `graph.query` is, or the
+    // stat card would describe a picture the galaxy never draws.
+    let graph_partition = agent.as_deref().map(super::memory_scope::primary_read_partition);
+    let (graph_nodes, graph_edges) = match graph_partition.as_deref() {
         Some(a) => match db.get_graph_data(a, 10000).await {
             Ok((entries, links)) => (Some(entries.len() as i64), Some(links.len() as i64)),
             // A failed fetch is "we could not count", not "this agent has
@@ -476,9 +442,6 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         json!({
             "totalMemories": raw_count,
             "totalFacts": note_count,
-            // Notes have no invalidated state (unlike the retired fact model),
-            // so this mirrors totalFacts. Kept for response compatibility.
-            "validFacts": note_count,
             "totalGraphNodes": graph_nodes,
             "totalGraphEdges": graph_edges,
             "scope": scope,
@@ -560,6 +523,11 @@ pub async fn handle_list_corrections(
     let limit = params.limit.filter(|n| *n > 0).unwrap_or(50);
     let include_distilled = params.include_distilled.unwrap_or(true);
 
+    // `flag_user_correction` composes the session's scope like every other
+    // writer, so the fix queue read the wrong partition on a stock install.
+    // Resolved AFTER the visibility gate — see `memory_scope`'s module doc.
+    let partitions = super::memory_scope::read_partitions(agent_id);
+
     // Distillation status comes from the FeedbackDistill watermark, NOT from
     // `is_processed`: that flag belongs to CompressionService's drain, and
     // `flag_user_correction`'s sedimentation kick sets it within seconds of
@@ -569,52 +537,71 @@ pub async fn handle_list_corrections(
     // batch (consumer key "feedback_distill" — keep in sync with
     // `memory::dreaming::stages::feedback_distill::WATERMARK_CONSUMER`), so a
     // correction is distilled exactly when `created_at <= watermark`.
-    let watermark = db
-        .get_dream_watermark("feedback_distill", agent_id)
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                error = %e,
-                "memory.list_corrections: failed to read feedback_distill watermark; treating as 0"
-            );
-            None
-        })
-        .unwrap_or(0);
-
-    match db
-        .get_raw_by_path_prefix("aleph://correction/", agent_id, limit)
-        .await
-    {
-        Ok(rows) => {
-            let corrections: Vec<_> = rows
-                .into_iter()
-                .filter(|r| include_distilled || r.created_at > watermark)
-                .map(|r| {
-                    let (severity, suggested_rule) = match &r.source {
-                        RawMemorySource::Correction {
-                            severity,
-                            suggested_rule,
-                        } => (severity.clone(), suggested_rule.clone()),
-                        _ => ("low".to_string(), None),
-                    };
-                    let distilled = r.created_at <= watermark;
-                    json!({
-                        "id": r.id,
-                        "content": r.content,
-                        "severity": severity,
-                        "suggested_rule": suggested_rule,
-                        "status": if distilled { "distilled" } else { "pending" },
-                        "created_at": r.created_at,
-                    })
-                })
-                .collect();
-            JsonRpcResponse::success(request.id, json!({ "corrections": corrections }))
+    //
+    // The watermark is read PER PARTITION and each row judged against its own,
+    // rather than reading one watermark for the union: the dream cycle advances
+    // these independently per corpus, so borrowing the org tier's watermark to
+    // judge a personal-partition row would report rows as distilled that no
+    // dream stage has read — and "distilled" is what removes a row from the
+    // pending half of the queue.
+    let mut rows = Vec::new();
+    for partition in &partitions {
+        let watermark = db
+            .get_dream_watermark("feedback_distill", partition)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    partition = %partition,
+                    "memory.list_corrections: failed to read feedback_distill watermark; \
+                     treating as 0"
+                );
+                None
+            })
+            .unwrap_or(0);
+        match db
+            .get_raw_by_path_prefix("aleph://correction/", partition, limit)
+            .await
+        {
+            Ok(found) => rows.extend(found.into_iter().map(|r| (r, watermark))),
+            Err(err) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("memory.list_corrections failed: {err}"),
+                )
+            }
         }
-        Err(err) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("memory.list_corrections failed: {err}"),
-        ),
     }
+    // Merge into one newest-first ordering and cap once. Each partition was
+    // fetched to the full `limit` rather than a share of it, so a union whose
+    // corrections all live in one partition returns exactly what a
+    // single-partition read would.
+    rows.sort_by_key(|(r, _)| std::cmp::Reverse(r.created_at));
+    rows.truncate(limit);
+
+    let corrections: Vec<_> = rows
+        .into_iter()
+        .filter(|(r, watermark)| include_distilled || r.created_at > *watermark)
+        .map(|(r, watermark)| {
+            let (severity, suggested_rule) = match &r.source {
+                RawMemorySource::Correction {
+                    severity,
+                    suggested_rule,
+                } => (severity.clone(), suggested_rule.clone()),
+                _ => ("low".to_string(), None),
+            };
+            let distilled = r.created_at <= watermark;
+            json!({
+                "id": r.id,
+                "content": r.content,
+                "severity": severity,
+                "suggested_rule": suggested_rule,
+                "status": if distilled { "distilled" } else { "pending" },
+                "created_at": r.created_at,
+            })
+        })
+        .collect();
+    JsonRpcResponse::success(request.id, json!({ "corrections": corrections }))
 }
 
 // ============================================================================
@@ -625,7 +612,34 @@ pub async fn handle_list_corrections(
 ///
 /// Read-only; R4-compliant (I/O only). Forwards to
 /// [`crate::builtin_tools::memory_trace::MemoryTraceTool::call_impl`].
-pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+///
+/// ## Why this composes the caller's partition
+///
+/// Both things this reads — the write-decision ledger and the evidence chain —
+/// are written under the COMPOSED partition (`remember` and
+/// `flag_user_correction` go through `caller_memory_partition`, notes and raws
+/// through `session_write_id`). The tool face has resolved the same way since
+/// the day that was found; this face never did, so on any scoped session — and
+/// a loopback Panel session is `Personal(u-owner)`, i.e. the stock
+/// single-machine install — it read the bare persona and answered "there are
+/// none" for a store with a full ledger. The Panel's write-attempt ledger,
+/// whose entire purpose is answering "why was that never remembered?", was
+/// therefore empty on every install that had anything to show.
+///
+/// `agent_id` on the wire stays the BASE id (that is what the agent picker
+/// holds), and the resolution is [`MemoryContextProvider::resolve_storage_id`]
+/// — the same call `get_or_load_curated_store` makes, so the ledger the Panel
+/// shows belongs to the store whose entries are above it. Resolving here rather
+/// than in the client keeps composition on the server, where it cannot be
+/// double-applied (`session_write_id` is not idempotent).
+///
+/// `mcp` is `None` only before boot phase 2 wires the provider; there is no
+/// scope to compose then either, so the bare id is the correct answer.
+pub async fn handle_trace(
+    request: JsonRpcRequest,
+    db: MemoryBackend,
+    mcp: Option<crate::sync_primitives::Arc<crate::thinker::MemoryContextProvider>>,
+) -> JsonRpcResponse {
     use crate::builtin_tools::memory_trace::{MemoryTraceArgs, MemoryTraceTool, TraceKind};
 
     #[derive(serde::Deserialize)]
@@ -675,7 +689,12 @@ pub async fn handle_trace(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         }
     };
 
-    let tool = MemoryTraceTool::new(db, agent, note_memory_dir);
+    // Composed AFTER the visibility gate, which judges the base id the caller
+    // named. Composing first would hand `partition_visible` a string the
+    // caller never sent.
+    let partition = mcp.map_or_else(|| agent.clone(), |m| m.resolve_storage_id(&agent));
+
+    let tool = MemoryTraceTool::new(db, partition, note_memory_dir);
     match tool
         .call_impl(MemoryTraceArgs {
             target: params.target,
@@ -1017,15 +1036,14 @@ mod tests {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
-            window_title: "Test Window".to_string(),
-            user_input: "Hello".to_string(),
-            ai_output: "Hi there".to_string(),
+            content: "Hello".to_string(),
             session_id: Some("s-1".to_string()),
             timestamp: 1234567890,
         };
 
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(json["id"], "test-id");
+        assert_eq!(json["content"], "Hello");
         assert_eq!(json["session_id"], "s-1");
     }
 
@@ -1034,15 +1052,47 @@ mod tests {
         let entry = MemoryEntry {
             id: "test-id".to_string(),
             agent_id: "main".to_string(),
-            window_title: "".to_string(),
-            user_input: "".to_string(),
-            ai_output: "".to_string(),
+            content: String::new(),
             session_id: None,
             timestamp: 0,
         };
 
         let json = serde_json::to_value(&entry).unwrap();
         assert!(json.get("session_id").is_none());
+    }
+
+    /// The row shape carries one body and no permanently-empty companions.
+    /// `ai_output` / `window_title` were on this wire for as long as it
+    /// existed and were `""` in every response, because `raw_memories` has a
+    /// single `content` column — a Panel card that styled "the answer half"
+    /// was rendering a distinction the store cannot make.
+    #[test]
+    fn the_raw_row_has_no_permanently_empty_companion_fields() {
+        let entry = MemoryEntry {
+            id: "test-id".to_string(),
+            agent_id: "main".to_string(),
+            content: "one body".to_string(),
+            session_id: None,
+            timestamp: 0,
+        };
+
+        let json = serde_json::to_value(&entry).unwrap();
+        for gone in ["ai_output", "user_input", "window_title"] {
+            assert!(json.get(gone).is_none(), "{gone} is back on the wire");
+        }
+    }
+
+    /// `validFacts` mirrored `totalFacts` exactly (notes have no invalidated
+    /// state), so it was a second number that could only ever agree with the
+    /// first — and three clients rendered it as if it meant something.
+    #[test]
+    fn stats_no_longer_advertises_a_duplicate_fact_count() {
+        let src = std::fs::read_to_string("src/gateway/handlers/memory.rs").unwrap();
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            !production.contains("validFacts"),
+            "handle_stats is emitting validFacts again"
+        );
     }
 }
 
@@ -1083,7 +1133,7 @@ mod trace_tests {
             Some(json!({ "agent_id": "main", "target": "habits/exercise", "kind": "note" })),
             json!(1),
         );
-        let resp = handle_trace(req, db).await;
+        let resp = handle_trace(req, db, None).await;
         assert!(resp.is_success(), "{:?}", resp.error);
         let result = resp.result.unwrap();
         assert!(
@@ -1099,6 +1149,116 @@ mod trace_tests {
             evidence.iter().any(|e| e["raw_id"] == "raw-ev1"),
             "evidence references seeded raw raw-ev1"
         );
+    }
+
+    /// The Panel's write-decision ledger asks for an agent's RECENT decisions
+    /// rather than one fact's history, and it does that by sending an empty
+    /// `target` — `recent_write_decisions` drops a blank subject filter.
+    ///
+    /// That behaviour is load-bearing for a shipped surface but reads like an
+    /// accident at the call site (a required `String` parameter, deliberately
+    /// empty), so it is pinned here: tightening this handler to reject an
+    /// empty target would silently empty the Panel's ledger, and nothing else
+    /// in the tree would go red.
+    #[tokio::test]
+    async fn an_empty_write_decision_target_lists_the_recent_ledger() {
+        use crate::memory::store::sqlite::memory_write_decisions::MemoryWriteReason;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        db.record_write_decision("main", "add", MemoryWriteReason::OverBudget, "likes tea")
+            .unwrap();
+        db.record_write_decision("main", "remove", MemoryWriteReason::Written, "ships fridays")
+            .unwrap();
+
+        let resp = handle_trace(
+            JsonRpcRequest::with_id(
+                "memory.trace",
+                Some(json!({
+                    "agent_id": "main",
+                    "target": "",
+                    "kind": "write_decision",
+                    "max_results": 20,
+                })),
+                json!(1),
+            ),
+            db,
+            None,
+        )
+        .await;
+
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let rows = resp.result.unwrap()["write_decisions"]
+            .as_array()
+            .expect("write_decisions array")
+            .clone();
+        assert_eq!(rows.len(), 2, "an empty target must not filter anything out");
+        // Newest first, and the refusal is present — a ledger that only kept
+        // the writes that landed could not answer "why was that not
+        // remembered", which is the entire reason it exists.
+        assert_eq!(rows[0]["action"], "remove");
+        assert!(rows.iter().any(|r| r["reason"] == "over_budget"));
+    }
+
+    /// The ledger a scoped session reads is the one its own writes land in.
+    ///
+    /// `remember` records decisions under `caller_memory_partition`, so on any
+    /// scoped session the rows are keyed `main__u-alice` while the Panel's
+    /// agent picker still holds the base id `main`. Reading the base id there
+    /// answered "no write attempts recorded yet" for a store with a full
+    /// ledger — and since a loopback Panel session is `Personal(u-owner)`,
+    /// that was every stock single-machine install. Found by driving the real
+    /// Panel (`qa/memory_curated/`), not by any test in this file: both faces
+    /// were individually self-consistent.
+    #[tokio::test]
+    async fn a_scoped_session_reads_the_ledger_its_own_writes_landed_in() {
+        use crate::memory::store::sqlite::memory_write_decisions::MemoryWriteReason;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        // One row in each partition, so "it found something" cannot pass by
+        // reading the wrong one.
+        db.record_write_decision("main", "add", MemoryWriteReason::Written, "bare persona row")
+            .unwrap();
+        db.record_write_decision(
+            "main__u-alice",
+            "add",
+            MemoryWriteReason::Duplicate,
+            "alice's own row",
+        )
+        .unwrap();
+
+        let mcp = Arc::new(crate::thinker::MemoryContextProvider::new(db.clone(), None));
+        let req = JsonRpcRequest::with_id(
+            "memory.trace",
+            Some(json!({
+                "agent_id": "main",
+                "target": "",
+                "kind": "write_decision",
+                "max_results": 20,
+            })),
+            json!(1),
+        );
+
+        let resp = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-alice")),
+            handle_trace(req, db, Some(mcp)),
+        )
+        .await;
+
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let rows = resp.result.unwrap()["write_decisions"]
+            .as_array()
+            .expect("write_decisions array")
+            .clone();
+        assert_eq!(rows.len(), 1, "exactly alice's partition, {rows:?}");
+        assert_eq!(rows[0]["subject"], "alice's own row");
     }
 
     /// P1 partition isolation: bob tracing alice's partition by name gets an
@@ -1136,7 +1296,7 @@ mod trace_tests {
         );
         let resp = CALLER_USER
             .scope(Some("u-bob".to_string()), async {
-                handle_trace(req, db).await
+                handle_trace(req, db, None).await
             })
             .await;
         assert!(resp.is_success(), "success, not an error: {:?}", resp.error);
@@ -1321,7 +1481,7 @@ mod search_tests {
         assert_eq!(memories[0]["id"], "raw-1");
         assert_eq!(memories[0]["session_id"], "s-77");
         assert!(
-            memories[0]["user_input"]
+            memories[0]["content"]
                 .as_str()
                 .unwrap()
                 .contains("smoke tests"),
@@ -1874,5 +2034,209 @@ mod list_facts_tests {
         let v = r.result.expect("success, not an error");
         assert!(v["facts"].as_array().unwrap().is_empty());
         assert_eq!(v["total"], 0);
+    }
+}
+
+/// The read half of the partition contract, exercised end to end through the
+/// handlers rather than through `memory_scope` alone.
+///
+/// Its own module because the property is cross-cutting — `listFacts`, `search`
+/// and `stats` have to agree with each other, and a test that lives inside any
+/// one of their modules reads as being about that one handler.
+#[cfg(test)]
+mod partition_union_tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+    use serde_json::json;
+
+    /// D2, the behavioural half: on a stock loopback install every writer
+    /// composes `Personal(u-owner)`, so a reader handed the base persona the
+    /// agent picker holds must still find what those writers wrote.
+    ///
+    /// The runtime twin of `memory_scope`'s source-level census. Both are
+    /// needed and neither substitutes for the other: the census proves each
+    /// handler still *calls* the resolver, this proves calling it *works* —
+    /// the census would stay green if `read_partitions` itself started
+    /// returning the bare id.
+    ///
+    /// Seeded in BOTH partitions so "it found something" cannot pass by reading
+    /// only the org tier, which is what these handlers did before.
+    #[tokio::test]
+    async fn a_scoped_session_lists_the_notes_and_raws_its_own_writes_landed_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        for (partition, title) in [("main", "org-tier-note"), ("main__u-alice", "alices-note")] {
+            let note = KnowledgeNote {
+                title: title.into(),
+                category: "wiki".into(),
+                facts: vec!["a fact".into()],
+                ..Default::default()
+            };
+            db.index_note(&note, partition, "wiki").await.unwrap();
+
+            let mut raw = RawMemory::new(
+                format!("transcript in {partition}"),
+                RawMemorySource::Transcript,
+            );
+            raw.agent_id = partition.into();
+            db.insert_raw_memory(&raw).await.unwrap();
+        }
+
+        let scope = crate::scope::ScopeAttribution::personal("u-alice");
+
+        // --- memory.listFacts -------------------------------------------------
+        let req = JsonRpcRequest::with_id(
+            "memory.listFacts",
+            Some(json!({ "agent_id": "main", "limit": 50 })),
+            json!(1),
+        );
+        let resp =
+            crate::scope::with_scope(Some(scope.clone()), handle_list_facts(req, db.clone())).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        let titles: Vec<String> = body["facts"]
+            .as_array()
+            .expect("facts array")
+            .iter()
+            .map(|f| f["path"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            titles.iter().any(|p| p.contains("alices-note")),
+            "the note the writer actually wrote must be listed; got {titles:?}"
+        );
+        assert!(
+            titles.iter().any(|p| p.contains("org-tier-note")),
+            "the org tier stays readable - pre-P1 notes and every unscoped \
+             principal's writes live there; got {titles:?}"
+        );
+        assert_eq!(
+            body["total"], 2,
+            "`total` sizes the pager, so it must count the same union the list \
+             enumerated - a single-partition total paired with a union list is \
+             the phantom-page bug with the operands swapped"
+        );
+
+        // --- memory.search (raws) ---------------------------------------------
+        let req = JsonRpcRequest::with_id(
+            "memory.search",
+            Some(json!({ "agent_id": "main", "limit": 50 })),
+            json!(2),
+        );
+        let resp =
+            crate::scope::with_scope(Some(scope.clone()), handle_search(req, db.clone())).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(
+            body["total"], 2,
+            "raws are written through the same composed partition as notes"
+        );
+
+        // --- memory.stats ------------------------------------------------------
+        let req =
+            JsonRpcRequest::with_id("memory.stats", Some(json!({ "agent_id": "main" })), json!(3));
+        let resp =
+            crate::scope::with_scope(Some(scope.clone()), handle_stats(req, db.clone())).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(body["totalFacts"], 2, "stat card must agree with the list");
+        assert_eq!(
+            body["totalMemories"], 2,
+            "stat card must agree with the list"
+        );
+        // The galaxy cannot represent a union (`NoteNodeDto` has no agent_id),
+        // so `graph.query` reads the session's own partition alone - and these
+        // two counts label THAT picture, so they are scoped the same way. One
+        // note lives there; asserting it pins the asymmetry as deliberate.
+        assert_eq!(
+            body["totalGraphNodes"], 1,
+            "the graph counts describe the galaxy, which is single-partition by \
+             construction - see graph/query.rs"
+        );
+    }
+
+    /// With no ambient scope - internal, cron, A2A - every one of these
+    /// handlers is byte-for-byte what it was before D2: exactly the bare id,
+    /// nothing unioned in. The change is additive to scoped callers only.
+    #[tokio::test]
+    async fn an_unscoped_caller_still_sees_exactly_the_partition_it_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        for (partition, title) in [("main", "org-tier-note"), ("main__u-alice", "alices-note")] {
+            let note = KnowledgeNote {
+                title: title.into(),
+                category: "wiki".into(),
+                facts: vec!["a fact".into()],
+                ..Default::default()
+            };
+            db.index_note(&note, partition, "wiki").await.unwrap();
+        }
+
+        let req = JsonRpcRequest::with_id(
+            "memory.listFacts",
+            Some(json!({ "agent_id": "main", "limit": 50 })),
+            json!(1),
+        );
+        let resp = handle_list_facts(req, db.clone()).await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(
+            body["total"], 1,
+            "no scope means no union: alice's partition must not appear"
+        );
+        assert!(body["facts"][0]["path"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("org-tier-note"));
+    }
+
+    /// P1 isolation survives the change: an explicit partition address is
+    /// honored verbatim, so naming somebody else's partition is still refused
+    /// rather than silently rewritten to the caller's own - which is what
+    /// composing a composed id would have done.
+    #[tokio::test]
+    async fn naming_a_foreign_partition_is_still_refused_not_rewritten() {
+        use crate::gateway::caller_identity::CALLER_USER;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db: crate::memory::store::MemoryBackend =
+            Arc::new(SqliteMemoryBackend::new(&dir.path().join("m.db")).unwrap());
+
+        let note = KnowledgeNote {
+            title: "alices-note".into(),
+            category: "wiki".into(),
+            facts: vec!["a fact".into()],
+            ..Default::default()
+        };
+        db.index_note(&note, "main__u-alice", "wiki").await.unwrap();
+
+        let req = JsonRpcRequest::with_id(
+            "memory.listFacts",
+            Some(json!({ "agent_id": "main__u-alice", "limit": 50 })),
+            json!(1),
+        );
+        let resp = CALLER_USER
+            .scope(
+                Some("u-bob".to_string()),
+                crate::scope::with_scope(
+                    Some(crate::scope::ScopeAttribution::personal("u-bob")),
+                    handle_list_facts(req, db.clone()),
+                ),
+            )
+            .await;
+        assert!(resp.is_success(), "{:?}", resp.error);
+        let body = resp.result.unwrap();
+        assert_eq!(
+            body["total"], 0,
+            "bob must not read alice's partition, and must not have his request \
+             quietly rewritten into his own either"
+        );
     }
 }

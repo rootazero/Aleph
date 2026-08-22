@@ -595,6 +595,17 @@ impl InboundMessageRouter {
                     "[Router] Permission granted for {}:{}",
                     channel_id, ctx.sender_normalized
                 );
+                // A human reached us through a channel — the DreamDaemon idle
+                // sensor's second producer (the first is the gateway's
+                // `build_run_request`). Stamped only on the permission-granted
+                // arm: a stranger the policy refused is not "the user", and a
+                // busy group chat the agent merely lurks in must not starve
+                // nightly maintenance. Guarded by `run_loop::tests::
+                // every_run_producer_declares_whether_a_human_is_at_the_other_end`,
+                // which reads this file because `executor.rs` — the file that
+                // actually builds the RunRequest — declares its stamp lives
+                // here, at the gate.
+                crate::memory::dreaming::record_activity();
                 ctx
             }
             Err(e) => {
@@ -817,15 +828,10 @@ impl InboundMessageRouter {
         }
 
         // Special-case the inbound-only slash commands before the unified
-        // `CommandParser` path: `/btw` (ephemeral sidebar), `/stop` /
-        // `/abort` (cancel current run), `/help` (listing). All four are
-        // matched case-insensitively with the Telegram `@botname` suffix
-        // tolerated; `classify_special_slash` preserves the btw body in
-        // its original case for the model to read verbatim.
+        // `CommandParser` path: `/stop` / `/abort` (cancel current run) and
+        // `/help` (listing). Both are answered by the router itself, matched
+        // case-insensitively with the Telegram `@botname` suffix tolerated.
         match classify_special_slash(&ctx.message.text) {
-            Some(SpecialSlash::Btw { body }) => {
-                return self.handle_btw(&msg, &agent_id, &body).await;
-            }
             Some(SpecialSlash::Stop) => {
                 return self.handle_stop(&msg, &ctx).await;
             }
@@ -833,6 +839,49 @@ impl InboundMessageRouter {
                 return self.handle_help(&msg).await;
             }
             None => {}
+        }
+
+        // A `/btw` side question is an ORDINARY agent turn. This claim exists
+        // only to keep it out of the two paths below; it changes nothing about
+        // the turn itself.
+        //
+        // What it must preserve is exactly what makes a side question one:
+        //
+        // * the text keeps its `/btw` prefix, so `stamp_btw` recognises it (in
+        //   `executor.rs` before the busy lane, and again as `execute()`'s
+        //   first statement) and sets `btw::BTW_METADATA_KEY` — the metadata
+        //   stamp is the only thing that decides the read-only ceiling;
+        // * the session key stays the conversation's own, so
+        //   `btw::execution_session` has something to derive the persistent
+        //   side session from — seeding and retirement both address that
+        //   derived key and nothing else.
+        //
+        // Rewriting either is how this used to fail: an earlier router
+        // special case stripped the prefix AND substituted a fresh
+        // `SessionKey::ephemeral` uuid, so the stamp never fired (no ceiling)
+        // and no derived key existed (no side thread, one unaddressable row
+        // per question).
+        //
+        // It has to be a claim rather than a fall-through, because both paths
+        // below would take it and each is wrong in its own way:
+        //
+        // * the unified interception sends anything the `CommandParser`
+        //   resolves through `SLASH_COMMAND_MODE_KEY` into the engine's slash
+        //   fast path, which dispatches on the raw tool registry and therefore
+        //   never builds the `ScopedToolService` the ceiling lives in;
+        // * anything it does NOT resolve reaches `try_send_unknown_command_help`,
+        //   which answers "did you mean …?" and returns without running the
+        //   agent whenever the registry happens to hold a near-match to `btw`.
+        //
+        // The second is why "just let it fall through" is not equivalent to
+        // this: it would make channel `/btw` work or not according to today's
+        // tool list.
+        //
+        // `BtwTurn::resolve` is the one resolver every surface shares (case
+        // and `@botname` handled there, bare `/btw` rejected there) — this is
+        // not a second predicate.
+        if crate::gateway::btw::BtwTurn::resolve(&ctx.message.text).is_some() {
+            return self.execute_for_context(&ctx).await;
         }
 
         // Unified slash command interception

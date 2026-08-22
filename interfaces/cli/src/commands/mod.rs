@@ -5,6 +5,7 @@
 //! `main.rs` stays focused on parsing and dispatch.
 
 pub mod ask;
+pub mod audit_cmd;
 pub mod calls;
 pub mod channels_cmd;
 pub mod chat;
@@ -36,6 +37,7 @@ pub mod secret_cmd;
 pub mod services_cmd;
 pub mod session;
 pub mod skills_cmd;
+pub mod spend_cmd;
 pub mod tools;
 pub mod trace_cmd;
 pub mod users_cmd;

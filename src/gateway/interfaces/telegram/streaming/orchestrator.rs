@@ -19,6 +19,16 @@ pub struct StreamOrchestrator {
     config: StreamingOptions,
     event_rx: mpsc::Receiver<StreamEvent>,
     reasoning_extractor: Option<ReasoningExtractor>,
+    /// This run answers a `/btw` side question, so the answer lane's settled
+    /// text carries the side-answer marker.
+    ///
+    /// The orchestrator owns text delivery on this channel — no `StreamEvent`
+    /// is ever forwarded to the `ReplyEmitter` that rides along for media — so
+    /// this face cannot inherit the marker from the base emitter's outbound
+    /// chokepoint and has to apply it at its own settle point. The value is
+    /// read off that same `ReplyEmitter` at construction, so there is still one
+    /// `ReplyEmitterConfig` per run answering the question once.
+    side_answer: bool,
 }
 
 impl StreamOrchestrator {
@@ -26,6 +36,7 @@ impl StreamOrchestrator {
     pub fn new(
         delivery: TelegramDelivery,
         config: StreamingOptions,
+        side_answer: bool,
     ) -> (Self, mpsc::Sender<StreamEvent>) {
         let (event_tx, event_rx) = mpsc::channel(config.buffer_size);
         // `conversation_id` is built internally from numeric Telegram chat ids,
@@ -64,6 +75,7 @@ impl StreamOrchestrator {
                 config,
                 event_rx,
                 reasoning_extractor,
+                side_answer,
             },
             event_tx,
         )
@@ -136,9 +148,23 @@ impl StreamOrchestrator {
                     // already streamed instead: it is clean, and the promise that
                     // a pure-reasoning turn never blanks an existing message is
                     // kept without delivering what the sanitiser refused.
+                    //
+                    // The side-answer marker goes on AFTER that sanitizer and
+                    // only in the `Some` arm — this is an edit-based lane, so
+                    // the badge arrives atomically in the settling edit rather
+                    // than on each streamed chunk. `finalize_streamed` settles
+                    // on bytes already on screen and has no text to rewrite; a
+                    // pure-reasoning side question therefore settles unmarked,
+                    // which is the same thing that arm already promises for
+                    // every other rewrite.
                     let raw = summary.final_response.as_deref().unwrap_or("");
                     let outcome = match crate::gateway::reply_emitter::sanitize_final_response(raw)
                     {
+                        Some(text) if self.side_answer => {
+                            answer_lane
+                                .finalize(&crate::gateway::btw::format_side_answer(&text))
+                                .await
+                        }
                         Some(text) => answer_lane.finalize(&text).await,
                         None => answer_lane.finalize_streamed().await,
                     };
@@ -195,7 +221,7 @@ mod tests {
             "123",
         );
         let config = StreamingOptions::default();
-        let (orchestrator, _tx) = StreamOrchestrator::new(delivery, config);
+        let (orchestrator, _tx) = StreamOrchestrator::new(delivery, config, false);
         let handle = orchestrator.get_lane(LaneId::Answer);
         assert!(matches!(handle, LaneHandle { .. }));
     }
@@ -228,7 +254,7 @@ mod tests {
             reasoning_lane_enabled: true,
             ..Default::default()
         };
-        let (orchestrator, tx) = StreamOrchestrator::new(delivery, config);
+        let (orchestrator, tx) = StreamOrchestrator::new(delivery, config, false);
 
         let inbound = InboundMessage {
             id: crate::gateway::channel::MessageId::new("1"),
@@ -303,7 +329,7 @@ mod tests {
             reasoning_lane_enabled: true,
             ..Default::default()
         };
-        let (orchestrator, tx) = StreamOrchestrator::new(delivery, config);
+        let (orchestrator, tx) = StreamOrchestrator::new(delivery, config, false);
 
         let inbound = InboundMessage {
             id: crate::gateway::channel::MessageId::new("1"),

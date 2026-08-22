@@ -418,7 +418,9 @@ fn GalaxyCanvasView() -> impl IntoView {
             {move || truncation.get().map(|(shown, total)| view! {
                 <div class="absolute top-2 right-2 pointer-events-none text-[11px] text-white/70
                             bg-black/40 rounded px-2 py-0.5 select-none">
-                    {format!("showing top {shown} of {total}")}
+                    {t_string!(i18n, memory.graph_truncated)
+                        .replace("{shown}", &shown.to_string())
+                        .replace("{total}", &total.to_string())}
                 </div>
             })}
             // NodeDetailPanel: always mounted — with no selection it shows the

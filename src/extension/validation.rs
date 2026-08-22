@@ -313,6 +313,30 @@ handler = "handle2"
             let dir = entry.path();
             // A plugin is a directory carrying a manifest; `plugins/` also
             // holds README files and the submodule's own metadata.
+            //
+            // ⚠️ This two-entry test is narrower than the parser it gates.
+            // `parse_manifest_from_dir_sync` accepts four shapes (CC toml, CC
+            // json, the deprecated `aleph.plugin.toml`, auto-discovery from
+            // component directories) and production discovery
+            // (`discovery/scanner.rs::has_plugin_manifest`) accepts more still —
+            // so a bundled plugin in the deprecated format is never validated
+            // here, and `[[tools]]` at its top level becomes `tools_v2` and is
+            // registered at boot exactly like any other. The identical line in
+            // `btw_wire_tests.rs::bundled_plugin_command_words` was copied from
+            // here and carried the same blind spot; there the fix was to delete
+            // the filter, because that walk discards unparseable directories
+            // anyway and a non-plugin contributes no command words.
+            //
+            // Deleting it *here* is not the same change and is not safe: this
+            // test reports refusals, so widening it to every directory would
+            // validate READMEs and metadata folders and accuse them of failing
+            // the installer. The correct repair is to reach for production's own
+            // predicate — `has_plugin_manifest`, currently private to
+            // `discovery::scanner` — rather than to keep a third opinion here.
+            // Left as-is deliberately: this guard's real input is a submodule
+            // that is empty in a bare checkout, so a widening cannot be verified
+            // from here, and widening a validation guard blind is how a green
+            // suite turns red for a reason nobody chose.
             if !dir.join(".claude-plugin").join("plugin.toml").exists()
                 && !dir.join(".claude-plugin").join("plugin.json").exists()
             {

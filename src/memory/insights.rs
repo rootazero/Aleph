@@ -98,13 +98,13 @@ pub struct ToolUsageReport {
 /// `top_n` bounds how many per-tool entries appear in the report.
 pub async fn aggregate_tool_usage(
     store: &dyn RawMemoryStore,
-    agent_id: &str,
+    agent_ids: &[String],
     since_unix_secs: i64,
     window_seconds: i64,
     top_n: usize,
     fetch_limit: usize,
 ) -> Result<ToolUsageReport, AlephError> {
-    let rows = fetch_tool_invocation_rows(store, agent_id, fetch_limit).await?;
+    let rows = fetch_tool_invocation_rows(store, agent_ids, fetch_limit).await?;
     // The backend's order is newest-first, so a truncation at fetch_limit drops
     // the OLDEST rows in the partition — the right end to lose for a "recent
     // behaviour" question. The report's `truncated` flag is the consumer's
@@ -128,23 +128,42 @@ pub async fn aggregate_tool_usage(
 /// Backends order newest-first and apply `fetch_limit` in SQL, so a truncation
 /// drops the OLDEST rows in the partition — which is the right end to lose for
 /// a "recent behaviour" question.
+/// Fetch the `tool_invocation` rows for a SET of partitions.
+///
+/// A set, not one id, because `RawMemoryToolSink` files every row under
+/// `project_scope::session_write_id` — the composed partition — while the RPC
+/// face is handed a base persona id. Reading one bare id found no rows at all
+/// on a stock install and reported it as "this agent has not used any tools".
+///
+/// Each partition is fetched to the full `fetch_limit` and the merged rows are
+/// re-ordered newest-first and capped once, so the aggregator downstream sees
+/// exactly the shape it saw before: one newest-first list bounded by
+/// `fetch_limit`, whose truncation drops the oldest rows.
 async fn fetch_tool_invocation_rows(
     store: &dyn RawMemoryStore,
-    agent_id: &str,
+    agent_ids: &[String],
     fetch_limit: usize,
 ) -> Result<Vec<RawMemory>, AlephError> {
-    store
-        .get_raw_by_source(
-            // Probe variant; only the discriminator token matters for filtering.
-            RawMemorySource::ToolInvocation {
-                tool_name: String::new(),
-                success: false,
-                duration_ms: 0,
-            },
-            agent_id,
-            fetch_limit,
-        )
-        .await
+    let mut all = Vec::new();
+    for agent_id in agent_ids {
+        all.extend(
+            store
+                .get_raw_by_source(
+                    // Probe variant; only the discriminator token matters for filtering.
+                    RawMemorySource::ToolInvocation {
+                        tool_name: String::new(),
+                        success: false,
+                        duration_ms: 0,
+                    },
+                    agent_id,
+                    fetch_limit,
+                )
+                .await?,
+        );
+    }
+    all.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+    all.truncate(fetch_limit);
+    Ok(all)
 }
 
 // --- Failure evidence (nightly `tool_failure_distill` reader) --------------
@@ -198,6 +217,14 @@ pub struct ToolFailureDigest {
 /// Same window/limit semantics as [`aggregate_tool_usage`]; `top_n` bounds the
 /// per-tool breakdown, and the failure list is derived from that same
 /// (already-truncated) breakdown so the two views cannot name different tools.
+///
+/// Takes ONE partition, unlike its sibling [`aggregate_tool_usage`], and that
+/// asymmetry is deliberate: the only caller is the nightly
+/// `tool_failure_distill` stage, which the dream cycle runs once **per corpus**
+/// — so `agent_id` here is already the composed partition, and unioning in the
+/// org tier would distil the same rows into every corpus that shares it.
+/// `aggregate_tool_usage` faces the Panel, where the id is a base persona and
+/// the union is the whole point.
 pub async fn aggregate_tool_failures(
     store: &dyn RawMemoryStore,
     agent_id: &str,
@@ -206,7 +233,8 @@ pub async fn aggregate_tool_failures(
     top_n: usize,
     fetch_limit: usize,
 ) -> Result<ToolFailureDigest, AlephError> {
-    let rows = fetch_tool_invocation_rows(store, agent_id, fetch_limit).await?;
+    let one = [agent_id.to_string()];
+    let rows = fetch_tool_invocation_rows(store, &one, fetch_limit).await?;
     let truncated = rows.len() >= fetch_limit;
     Ok(build_failure_digest(
         &rows,
@@ -699,7 +727,7 @@ mod tests {
                 tool_row("3", "read", true, 5, 100),
             ]),
         };
-        let report = aggregate_tool_usage(&store, "agent-1", 0, 86_400, 10, 1000)
+        let report = aggregate_tool_usage(&store, &["agent-1".to_string()], 0, 86_400, 10, 1000)
             .await
             .unwrap();
         assert_eq!(report.total, 3);

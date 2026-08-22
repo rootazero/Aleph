@@ -385,7 +385,29 @@ pub struct DreamInsightsResponse {
     /// Every corpus that has ever dreamed, most recently active first.
     #[serde(default)]
     pub namespaces: Vec<DreamNamespaceDto>,
+    /// The daemon's live scheduling gates. `None` when no daemon runs in the
+    /// server process (memory disabled) — render that as "not running", never
+    /// as an error.
+    #[serde(default)]
+    pub daemon: Option<aleph_protocol::dreaming::DaemonStatus>,
+    /// The last persisted run, whatever its outcome — the half of "did
+    /// anything happen last night" that the `runs` list cannot answer, because
+    /// a cycle that errored, timed out or yielded files no row there.
+    #[serde(default)]
+    pub last_run: Option<aleph_protocol::dreaming::DreamLastRun>,
 }
+
+// The daemon's scheduling gates and last-run row used to be two hand-written
+// DTOs here. They are now `aleph_protocol::dreaming::{DaemonStatus,
+// DreamLastRun}` — the same types the server builds its response from and the
+// CLI's `aleph memory dreaming` reads, so a renamed key is a compile error in
+// three crates instead of a dash in one of them.
+//
+// The local copies were not hypothetically at risk, they had already drifted:
+// `max_duration_seconds` was on the wire and absent from the struct above, so
+// it parsed clean and vanished. That is the quiet end of the failure — the
+// loud end is `aleph providers list`, which rendered two columns the server
+// never sent and printed a dash on every row for as long as it existed.
 
 /// One corpus in the dream history: the base agent, or a `{base}__proj-*`
 /// project namespace.
@@ -511,8 +533,17 @@ pub struct DreamRunDto {
     pub synthesis_count: u32,
     #[serde(default)]
     pub notes_consolidated: u32,
+    /// Orphan notes woven into the link graph. Server-side since the notes-era
+    /// counters migration; this DTO had no field for it, so serde dropped it.
+    #[serde(default)]
+    pub notes_woven: u32,
     #[serde(default)]
     pub notes_archived: u32,
+    /// Correction rules that LANDED on disk this cycle — the Goodhart
+    /// counter-metric the governance audit pairs against the user's correction
+    /// count. Same story as `notes_woven`: emitted all along, never rendered.
+    #[serde(default)]
+    pub feedback_distilled: u32,
     #[serde(default)]
     pub errors: Option<String>,
     /// `None` on pre-migration rows.
@@ -656,6 +687,32 @@ impl Default for RetrievalScoringConfig {
 pub struct MemoryConfigApi;
 
 impl MemoryConfigApi {
+    /// Run a retrieval and get the per-stage funnel alongside the results.
+    ///
+    /// One wrapper, two consumers: the Settings debug panel and the memory
+    /// console's retrieval x-ray. The Settings panel used to build this call
+    /// inline with a bare `rpc_call` — the only `memory.*` request in the
+    /// Panel that did — which is how it ended up unable to name an agent at
+    /// all (it always probed the default one, whatever the operator was
+    /// looking at).
+    ///
+    /// `agent_id: None` keeps that behaviour for the caller that wants it:
+    /// the server defaults, exactly as an omitted field always has.
+    pub async fn retrieve_with_trace(
+        state: &DashboardState,
+        agent_id: Option<&str>,
+        query: &str,
+        limit: usize,
+    ) -> Result<RetrieveWithTraceResponse, String> {
+        let mut params = serde_json::json!({ "query": query, "limit": limit });
+        if let Some(agent) = agent_id {
+            params["agent_id"] = serde_json::json!(agent);
+        }
+        let result = state.rpc_call("memory.retrieve_with_trace", params).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse memory.retrieve_with_trace: {e}"))
+    }
+
     /// Get current memory configuration
     pub async fn get(state: &DashboardState) -> Result<MemoryConfig, String> {
         let result = state

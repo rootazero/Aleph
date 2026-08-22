@@ -204,4 +204,86 @@ mod tests {
             other => panic!("expected RunComplete, got {other:?}"),
         }
     }
+
+    /// The four construction sites are still the four that cannot carry a side
+    /// question.
+    ///
+    /// `btw::format_side_answer`'s doc answers each of them by name — why an
+    /// announce, a resume, a goal/loop continuation and the Simulated-fallback
+    /// `start_run` can never be a `/btw` turn, and therefore why this decorator
+    /// applies no side-answer marker. That answer is a paragraph, and a
+    /// paragraph does not notice a fifth site. This does.
+    ///
+    /// Source-level and by name, not a count: a bare number tells the next
+    /// author that something moved, not what to go read. Comment lines are
+    /// stripped first — a scanner judges code, and the doc that explains a
+    /// name is the most likely thing to mention it.
+    #[test]
+    fn the_fan_out_construction_sites_are_still_the_four_that_cannot_carry_a_side_question() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        /// Every production site, each answered in `btw::format_side_answer`.
+        const ANSWERED: &[&str] = &[
+            "src/gateway/announce_delivery.rs",
+            "src/gateway/resume_coordinator.rs",
+            "src/gateway/execution_engine/execute.rs",
+            "src/gateway/handlers/agent.rs",
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(files.len() > 100, "walk found suspiciously few sources");
+
+        let mut found: Vec<String> = Vec::new();
+        for file in files {
+            let rel = file
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .replace('\\', "/");
+            // This file's own test module builds two; they are the guard's own
+            // fixtures, not deliveries to a user.
+            if rel == "src/gateway/event_emitter/origin_fanout.rs" {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            if text
+                .lines()
+                .map(str::trim_start)
+                .filter(|code| !code.starts_with("//") && !code.starts_with('*'))
+                .any(|code| code.contains("OriginFanoutEmitter::new("))
+            {
+                found.push(rel);
+            }
+        }
+        found.sort();
+
+        let mut expected: Vec<String> = ANSWERED.iter().map(|s| (*s).to_string()).collect();
+        expected.sort();
+
+        assert_eq!(
+            found, expected,
+            "the set of files constructing an `OriginFanoutEmitter` changed. A \
+             new site must answer the question the other four answer in \
+             `gateway::btw::format_side_answer`'s doc — can a `/btw` run reach \
+             it? If it can, it needs the marker; if it cannot, say why there \
+             and add it here. A site that disappeared should be dropped from \
+             that paragraph in the same edit."
+        );
+    }
 }

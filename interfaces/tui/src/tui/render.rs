@@ -10,6 +10,7 @@ use tui_textarea::TextArea;
 
 use crate::tui::app::{AppState, Focus};
 use crate::tui::widgets::{
+    btw_panel::render_btw_panel,
     chat_area::render_chat_area,
     command_palette::render_command_palette,
     dialog::{render_approval, render_dialog},
@@ -77,6 +78,12 @@ pub fn render(frame: &mut Frame, state: &AppState, textarea: &TextArea) {
     }
     if let Some(dialog) = &state.dialog {
         render_dialog(frame, dialog, frame.area());
+    }
+    // The side-question overlay renders over the transcript it is deliberately
+    // not part of. Below the approval overlay: a parked run is waiting on that
+    // one, and nothing is waiting on this.
+    if state.btw.open {
+        render_btw_panel(frame, &state.btw, state.spinner_frame, frame.area());
     }
     // Approval overlay renders above everything — a parked run is waiting on it.
     if let Some(approval) = &state.approval {

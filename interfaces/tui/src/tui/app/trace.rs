@@ -35,6 +35,10 @@ impl AppState {
             return;
         }
 
+        // The one place both carriers of assistant text converge, which is why
+        // the "did this run say anything" flag is set here rather than at each
+        // caller — see `run_rendered_assistant_text`.
+        self.run_rendered_assistant_text = true;
         self.ensure_assistant_message();
         if let ChatMessage::Assistant {
             content: msg_content,

@@ -11,7 +11,7 @@ use crate::memory::store::raw_memory::RawMemory;
 use crate::sync_primitives::{Arc, RwLock};
 use std::time::Duration;
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::{error, warn};
 
 pub const ON_RETRIEVE_TIMEOUT: Duration = Duration::from_secs(2);
 pub const ON_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -158,13 +158,25 @@ impl MemoryExtensionRegistry {
     }
 
     /// `on_capture`: chained pipeline. Each extension's modification of `raw`
-    /// is visible to the next. A Block short-circuits. Error or timeout =>
-    /// Block (fail-safe).
+    /// is visible to the next.
+///
+/// Decision policy (fail-safe without being a single point of failure):
+/// - A explicit `Block` from any extension short-circuits — the most
+///   restrictive verdict wins.
+/// - A single extension erroring or timing out does NOT block the whole
+///   chain. Previously this returned Block immediately, so one buggy or
+///   misbehaving extension silently broke memory writes for every
+///   `insert_with_capture_filter` call site — with only a `tracing::warn!`
+///   to indicate the culprit.
+/// - Errors/timeouts are recorded; if the chain finishes without any
+///   explicit Allow or Block, and at least one extension errored, the
+///   combined failure becomes a single Block so we still fail closed.
     pub async fn dispatch_on_capture(
         &self,
         ctx: &CaptureCtx,
         raw: &mut RawMemory,
     ) -> Result<CaptureDecision, AlephError> {
+        let mut failures: Vec<String> = Vec::new();
         for ext in self.snapshot() {
             let name = ext.name().to_string();
             match timeout(ON_CAPTURE_TIMEOUT, ext.on_capture(ctx, raw)).await {
@@ -174,20 +186,29 @@ impl MemoryExtensionRegistry {
                     return Ok(blk);
                 }
                 Ok(Err(e)) => {
-                    warn!(
-                        "memory extension '{name}' on_capture errored: {e} — blocking for safety"
+                    error!(
+                        "memory extension '{name}' on_capture errored: {e} \
+                         — continuing with other extensions"
                     );
-                    return Ok(CaptureDecision::Block {
-                        reason: format!("extension '{name}' errored: {e}"),
-                    });
+                    failures.push(format!("'{name}' errored: {e}"));
                 }
                 Err(_) => {
-                    warn!("memory extension '{name}' on_capture timed out — blocking");
-                    return Ok(CaptureDecision::Block {
-                        reason: format!("extension '{name}' timeout"),
-                    });
+                    error!(
+                        "memory extension '{name}' on_capture timed out — \
+                         continuing with other extensions"
+                    );
+                    failures.push(format!("'{name}' timed out"));
                 }
             }
+        }
+        if !failures.is_empty() {
+            return Ok(CaptureDecision::Block {
+                reason: format!(
+                    "{} extension(s) failed: {}",
+                    failures.len(),
+                    failures.join("; ")
+                ),
+            });
         }
         Ok(CaptureDecision::Allow)
     }

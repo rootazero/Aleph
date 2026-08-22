@@ -46,11 +46,22 @@ pub fn FacetBar(
     counts: Signal<[usize; 4]>,
     raw_count: Signal<Option<u64>>,
     hits_count: Signal<Option<usize>>,
+    /// Curated entry count, or `None` while that fetch is in flight / failed.
+    /// A blank badge is honest there; a `0` would claim an empty hot tier.
+    curated_count: Signal<Option<usize>>,
     on_select: Callback<MemoryFacet>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="flex items-center gap-1 flex-wrap">
+            // Hot tier first: it is the block the model reads on every single
+            // turn, so it leads the bar the way it leads the prompt.
+            <FacetChip
+                facet=MemoryFacet::Curated active=active on_select=on_select
+                label=t_string!(i18n, memory.facet_curated).to_string()
+                badge=Signal::derive(move || curated_count.get().map(|c| c.to_string()).unwrap_or_default())
+            />
+            <span class="mx-1 text-border select-none">"|"</span>
             <FacetChip
                 facet=MemoryFacet::AllNotes active=active on_select=on_select
                 label=t_string!(i18n, memory.facet_all_notes).to_string()

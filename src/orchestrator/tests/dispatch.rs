@@ -10,7 +10,6 @@ use crate::orchestrator::flow_registry::{FlowRegistry, FlowSet};
 use crate::orchestrator::flow_spec::{
     BrainRef, FlowInput, FlowOverrides, FlowSpec, SessionStrategy,
 };
-use crate::orchestrator::resolver::RoutingOverrides;
 use crate::orchestrator::sandbox_factory::build_sandbox_factory;
 use crate::sandbox::Sandbox;
 
@@ -103,7 +102,6 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
     (
         Orchestrator::new(
             registry,
-            Arc::new(RoutingOverrides::default()),
             Arc::new(defaults),
             session_service,
             sandbox_factory,
@@ -311,7 +309,6 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
 
     let orch = Orchestrator::new(
         registry,
-        Arc::new(RoutingOverrides::default()),
         Arc::new(defaults),
         session_service,
         sandbox_factory,
@@ -485,7 +482,6 @@ fn fixture_capturing_orchestrator() -> (
     (
         Orchestrator::new(
             registry,
-            Arc::new(RoutingOverrides::default()),
             Arc::new(defaults),
             session_service,
             sandbox_factory,

@@ -271,7 +271,19 @@ pub async fn handle_retrieve_with_trace(
         .with_scoring_config(&scoring_cfg)
         .with_expansion_config(&expansion_cfg);
 
-    let (results, stages) = match retrieval.retrieve_traced(&query, &agent_id, limit).await {
+    // The x-ray explains why a real recall did or did not surface a note, so it
+    // must probe the partitions a real recall probes — `session_read_ids`, the
+    // union the assembler and `memory_search` use. Tracing the bare persona
+    // drew a faithful funnel through a partition nothing writes to: every stage
+    // honestly reported 0 in → 0 out, which reads as "retrieval is broken"
+    // rather than "you are looking at an empty corpus". Resolved AFTER the
+    // visibility gate above. See `memory_scope`'s module doc.
+    let partitions = crate::gateway::handlers::memory_scope::read_partitions(&agent_id);
+
+    let (results, stages) = match retrieval
+        .retrieve_multi_agent_traced(&query, &partitions, limit)
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             return JsonRpcResponse::error(

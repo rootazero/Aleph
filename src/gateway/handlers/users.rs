@@ -22,8 +22,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::RwLock;
 
 use super::gateway_devices::revoke_device_and_kick;
@@ -40,22 +39,36 @@ use crate::sync_primitives::Arc;
 
 /// Serializable view of a user — role/status render as their wire strings so
 /// Panel/CLI consumers never touch the enum representation.
-#[derive(Debug, Clone, Serialize)]
-pub struct UserView {
-    pub user_id: String,
-    pub display_name: String,
-    pub role: String,
-    pub status: String,
+///
+/// The shape is [`aleph_protocol::users::UserView`], shared with the CLI and
+/// the Panel rather than declared three times. `From<UserRecord>` cannot be
+/// implemented here (both types would be foreign to this crate's orphan rule
+/// on the protocol side, and the record is a `alephcore` type), so the
+/// conversion is a free function used everywhere a record becomes a view.
+pub use aleph_protocol::users::UserView;
+
+/// Serialise a contract type into a success response.
+///
+/// Every `users.*` response goes through here, so the wire shape is whatever
+/// the shared type says it is. Building responses this way (rather than with a
+/// `json!` literal beside the type) is what makes over-sending a compile-time
+/// impossibility: `workspace.get` shipped four fields with no reader and no
+/// writer anywhere precisely because a literal can carry keys the contract
+/// never mentions and still parse.
+fn encoded<T: serde::Serialize>(id: Option<Value>, value: &T) -> JsonRpcResponse {
+    match serde_json::to_value(value) {
+        Ok(v) => JsonRpcResponse::success(id, v),
+        Err(e) => JsonRpcResponse::error(id, INTERNAL_ERROR, format!("failed to encode: {e}")),
+    }
 }
 
-impl From<UserRecord> for UserView {
-    fn from(u: UserRecord) -> Self {
-        Self {
-            user_id: u.user_id,
-            display_name: u.display_name,
-            role: u.role.as_str().to_string(),
-            status: u.status.as_str().to_string(),
-        }
+/// The one place a stored record becomes the wire shape.
+fn user_view(u: UserRecord) -> UserView {
+    UserView {
+        user_id: u.user_id,
+        display_name: u.display_name,
+        role: u.role.as_str().to_string(),
+        status: u.status.as_str().to_string(),
     }
 }
 
@@ -85,13 +98,18 @@ pub struct UserDeactivationKick {
 /// callers) or the id doesn't resolve to a row.
 pub async fn handle_me(request: JsonRpcRequest, store: Arc<SecurityStore>) -> JsonRpcResponse {
     let Some(caller_id) = crate::gateway::caller_identity::current_caller_user() else {
-        return JsonRpcResponse::success(request.id, json!({ "user": null }));
+        return encoded(
+            request.id,
+            &aleph_protocol::users::UserMeResult { user: None },
+        );
     };
 
     match store.get_user(&caller_id) {
         Ok(user) => {
-            let view = user.map(UserView::from);
-            JsonRpcResponse::success(request.id, json!({ "user": view }))
+            let result = aleph_protocol::users::UserMeResult {
+                user: user.map(user_view),
+            };
+            encoded(request.id, &result)
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -110,8 +128,10 @@ pub async fn handle_me(request: JsonRpcRequest, store: Arc<SecurityStore>) -> Js
 pub async fn handle_list(request: JsonRpcRequest, store: Arc<SecurityStore>) -> JsonRpcResponse {
     match store.list_users() {
         Ok(users) => {
-            let view: Vec<UserView> = users.into_iter().map(UserView::from).collect();
-            JsonRpcResponse::success(request.id, json!({ "users": view }))
+            let result = aleph_protocol::users::UserListResult {
+                users: users.into_iter().map(user_view).collect(),
+            };
+            encoded(request.id, &result)
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -125,12 +145,10 @@ pub async fn handle_list(request: JsonRpcRequest, store: Arc<SecurityStore>) -> 
 // users.create
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
-pub struct CreateParams {
-    pub display_name: String,
-    #[serde(default)]
-    pub role: Option<String>,
-}
+/// [`aleph_protocol::users::UserCreateParams`] — shared with `aleph users create`
+/// so a renamed field is a compile error rather than a runtime
+/// `INVALID_PARAMS` nobody's tests can see.
+pub use aleph_protocol::users::UserCreateParams as CreateParams;
 
 /// `users.create { display_name, role? ("member") }` → `{ "user": UserView }`.
 /// `user_id` is server-generated (`u-<uuid v4>`). An unrecognized `role`
@@ -175,13 +193,15 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -
                     format!("users.create: created {} role={}", user_id, role.as_str()),
                 ));
             }
-            let view = UserView {
-                user_id,
-                display_name: params.display_name,
-                role: role.as_str().to_string(),
-                status: UserStatus::Active.as_str().to_string(),
+            let result = aleph_protocol::users::UserCreateResult {
+                user: UserView {
+                    user_id,
+                    display_name: params.display_name,
+                    role: role.as_str().to_string(),
+                    status: UserStatus::Active.as_str().to_string(),
+                },
             };
-            JsonRpcResponse::success(request.id, json!({ "user": view }))
+            encoded(request.id, &result)
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -195,16 +215,8 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -
 // users.update
 // ============================================================================
 
-#[derive(Debug, Deserialize)]
-pub struct UpdateParams {
-    pub user_id: String,
-    #[serde(default)]
-    pub display_name: Option<String>,
-    #[serde(default)]
-    pub role: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-}
+/// [`aleph_protocol::users::UserUpdateParams`] — shared with `aleph users update`.
+pub use aleph_protocol::users::UserUpdateParams as UpdateParams;
 
 /// `users.update { user_id, display_name?, role?, status? }` → `{ "user": UserView }`.
 ///
@@ -331,7 +343,7 @@ pub async fn handle_update(
         }
     }
 
-    let mut revoked_senders: Vec<Value> = Vec::new();
+    let mut revoked_senders: Vec<aleph_protocol::users::RevokedChannelSender> = Vec::new();
     let mut revoked_devices = 0usize;
     let mut freeze = FreezeReport::default();
     // The pipeline runs on EVERY deactivation write, not only on the
@@ -373,30 +385,31 @@ pub async fn handle_update(
             // devices show up only as closed connections, frozen background
             // work as runs that stopped happening, and a withdrawn channel
             // approval as traffic that stopped arriving.
-            let mut out = json!({
-                "user": UserView::from(user),
-                "revoked_channel_senders": revoked_senders,
-            });
-            if status == Some(UserStatus::Deactivated) {
-                out["revoked_devices"] = json!(revoked_devices);
-                out["frozen_background_work"] = json!({
-                    "goals": freeze.goals,
-                    "loops": freeze.loops,
-                    "crons": freeze.crons,
-                });
-            }
-            if reactivated {
+            let result = aleph_protocol::users::UserUpdateResult {
+                user: user_view(user),
+                revoked_channel_senders: revoked_senders,
+                revoked_devices: (status == Some(UserStatus::Deactivated))
+                    .then_some(revoked_devices),
+                frozen_background_work: (status == Some(UserStatus::Deactivated)).then_some(
+                    aleph_protocol::users::FrozenBackgroundWork {
+                        goals: freeze.goals,
+                        loops: freeze.loops,
+                        crons: freeze.crons,
+                    },
+                ),
                 // The write above flipped one column; everything the
                 // deactivation tore down stays down. Name the recovery verbs
                 // rather than implying them — "active" alone reads as if the
                 // principal were whole again.
-                out["reactivation_effects"] = json!({
-                    "devices": "remain revoked — issue a new bootstrap ticket (`pair --user`) per device",
-                    "channel_senders": "remain withdrawn — re-approve via channel.pairing.approve",
-                    "background_work": "goals/loops/crons remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle)",
-                });
-            }
-            JsonRpcResponse::success(request.id, out)
+                reactivation_effects: reactivated.then(|| {
+                    aleph_protocol::users::ReactivationEffects {
+                        devices: "remain revoked — issue a new bootstrap ticket (`pair --user`) per device".to_string(),
+                        channel_senders: "remain withdrawn — re-approve via channel.pairing.approve".to_string(),
+                        background_work: "goals/loops/crons remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle)".to_string(),
+                    }
+                }),
+            };
+            encoded(request.id, &result)
         }
         Ok(None) => JsonRpcResponse::error(
             request.id,
@@ -603,7 +616,10 @@ async fn deactivate_devices(
 ///
 /// Best-effort in the same shape as its siblings: the store write above is
 /// already committed, so a failure here is logged and does not abort the rest.
-async fn revoke_channel_bindings(kick: &UserDeactivationKick, user_id: &str) -> Vec<Value> {
+async fn revoke_channel_bindings(
+    kick: &UserDeactivationKick,
+    user_id: &str,
+) -> Vec<aleph_protocol::users::RevokedChannelSender> {
     match kick.pairing.revoke_for_user(user_id).await {
         Ok(pairs) => {
             if !pairs.is_empty() {
@@ -615,7 +631,12 @@ async fn revoke_channel_bindings(kick: &UserDeactivationKick, user_id: &str) -> 
             }
             pairs
                 .into_iter()
-                .map(|(channel, sender_id)| json!({ "channel": channel, "sender_id": sender_id }))
+                .map(
+                    |(channel, sender_id)| aleph_protocol::users::RevokedChannelSender {
+                        channel,
+                        sender_id,
+                    },
+                )
                 .collect()
         }
         Err(e) => {
@@ -725,6 +746,7 @@ async fn freeze_owned_background_work(user_id: &str) -> FreezeReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::gateway::security::store::DeviceUpsertData;
 
     /// `SecurityStore::in_memory()` runs migrations, including owner

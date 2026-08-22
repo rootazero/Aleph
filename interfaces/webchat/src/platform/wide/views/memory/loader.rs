@@ -48,6 +48,76 @@ fn to_notes_window(
     res.map(|(facts, total)| NotesWindow { facts, total })
 }
 
+/// Fetch the next window of notes and APPEND it to what is already loaded.
+///
+/// The note layer pages client-side over one loaded window (facet slicing and
+/// the local filter both want the whole set in hand), so reaching note 1001
+/// means growing the window, not swapping pages. `memory.listFacts` has
+/// accepted `offset` all along; every caller — desktop and phone — sent a
+/// hard-coded `0`, which put every note past the first `NOTE_WINDOW` beyond
+/// the reach of every client, with a one-line "truncated" italic as the only
+/// hint.
+///
+/// The slot is deliberately NOT set to `Loading`: that arm renders skeletons
+/// in place of the list, and blanking a thousand rows the user is reading in
+/// order to add to them is a worse answer than a busy button. Appending state
+/// is the caller's `busy` signal.
+pub fn load_more_notes(
+    state: DashboardState,
+    agent: String,
+    limit: usize,
+    slot: RwSignal<Loadable<NotesWindow>>,
+    busy: RwSignal<bool>,
+) {
+    let Loadable::Ready(current) = slot.get_untracked() else {
+        // Nothing on screen to extend: a "load more" can only exist under a
+        // rendered list, so this is a stale click, not a state to invent.
+        return;
+    };
+    busy.set(true);
+    spawn_local(async move {
+        let res = MemoryApi::list_facts(&state, &agent, limit, current.facts.len()).await;
+        // Post-`.await`: see `crate::disposed_reads`. `try_set` hands the
+        // value BACK when the signal is gone, so `Some` here means the view
+        // unmounted mid-flight and there is nothing left to update.
+        if busy.try_set(false).is_some() {
+            return;
+        }
+        match res {
+            Ok((next, total)) => slot.set(Loadable::Ready(merge_note_page(
+                &current.facts,
+                next,
+                total,
+            ))),
+            // Keep the rows already on screen and surface the failure the way
+            // every other loader does. Folding this into an empty window would
+            // destroy a thousand loaded rows to report a failed append.
+            Err(e) => slot.set(Loadable::Failed(e)),
+        }
+    });
+}
+
+/// Append `next` onto `loaded`, deduplicated by note path.
+///
+/// The server orders by `updated_at DESC`, so a note touched between two
+/// fetches slides toward the front and can be served twice under different
+/// offsets. Without the dedupe it would render twice and be selectable twice
+/// inside one batch operation.
+///
+/// `total` takes the newest response's value — it describes the store at the
+/// moment of the latest fetch, and a stale one would keep offering a "load
+/// more" that returns nothing.
+fn merge_note_page(
+    loaded: &[CompressedFact],
+    next: Vec<CompressedFact>,
+    total: Option<u64>,
+) -> NotesWindow {
+    let seen: std::collections::HashSet<&str> = loaded.iter().map(|f| f.path.as_str()).collect();
+    let mut facts = loaded.to_vec();
+    facts.extend(next.into_iter().filter(|f| !seen.contains(f.path.as_str())));
+    NotesWindow { facts, total }
+}
+
 /// One `memory.search` page plus the count of rows matching the same filter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawWindow {
@@ -131,6 +201,7 @@ mod tests {
             path: path.into(),
             tags: Vec::new(),
             link_count: 0,
+            match_field: None,
         }
     }
 
@@ -138,8 +209,7 @@ mod tests {
         RawMemory {
             id: id.into(),
             agent_id: "main".into(),
-            user_input: "q".into(),
-            ai_output: "a".into(),
+            content: "q".into(),
             session_id: None,
             created_at: None,
         }
@@ -175,6 +245,44 @@ mod tests {
             Err("gateway timeout".to_string()),
             "a failure must not fold into an empty window"
         );
+    }
+
+    // ── merge_note_page ─────────────────────────────────────────────────────
+
+    #[test]
+    fn merging_appends_the_next_page_after_the_loaded_one() {
+        let merged = merge_note_page(&[fact("a"), fact("b")], vec![fact("c")], Some(3));
+        assert_eq!(
+            merged.facts.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        assert_eq!(merged.total, Some(3));
+    }
+
+    #[test]
+    fn merging_drops_a_row_that_slid_across_the_page_boundary() {
+        // `updated_at DESC` ordering means a note touched between the two
+        // fetches can be served under both offsets. Rendering it twice would
+        // also let one batch operation select it twice.
+        let merged = merge_note_page(&[fact("a"), fact("b")], vec![fact("b"), fact("c")], Some(3));
+        assert_eq!(
+            merged.facts.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn merging_takes_the_newest_total_not_the_first_one() {
+        // Notes were added while the user was reading: the button must keep
+        // offering more, so the fresher count wins.
+        let merged = merge_note_page(&[fact("a")], vec![fact("b")], Some(9));
+        assert_eq!(merged.total, Some(9));
+    }
+
+    #[test]
+    fn merging_an_empty_page_is_a_no_op_on_the_rows() {
+        let merged = merge_note_page(&[fact("a")], Vec::new(), Some(1));
+        assert_eq!(merged.facts.len(), 1);
     }
 
     // ── to_raw_window ────────────────────────────────────────────────────────

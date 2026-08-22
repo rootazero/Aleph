@@ -27,15 +27,21 @@ pub mod exec_tier;
 pub mod memory;
 pub mod metrics;
 pub mod session_mode;
+pub mod spend;
 pub mod tool_permissions;
 pub mod web_fetch;
 
 pub use exec_tier::{
     builtin_tiers, effective_permission, session_tiers, ExecTier, ToolFacts, EXEC_TIER_SESSION_KEY,
 };
+// `pub(crate)`, not `pub`: `PLAN_REACHABLE_TOOLS` is a crate-internal
+// derivation source (the side-question floor reads it), not part of this
+// module's external surface — see its doc comment in `exec_tier.rs`.
+pub(crate) use exec_tier::PLAN_REACHABLE_TOOLS;
 pub use memory::{CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use session_mode::{builtin_modes, SessionMode, MODE_SESSION_KEY};
+pub use spend::{SpendPeriod, SpendPolicy};
 pub use tool_permissions::{PermissionMatch, ToolPermissionsConfig};
 pub use web_fetch::{Crawl4aiConfig, WebFetchPolicy};
 
@@ -62,6 +68,14 @@ pub struct DialPreset {
     /// metadata.
     pub id: &'static str,
 }
+
+/// Turns a cold `/btw` side seed carries when
+/// [`PoliciesConfig::btw_fork_turns`] is unset.
+///
+/// Named rather than spelled twice: the field's own doc states the default,
+/// and a doc that repeats a literal is a second statement of one fact that
+/// nothing keeps in step.
+pub const DEFAULT_BTW_FORK_TURNS: usize = 10;
 
 /// Root policies configuration
 ///
@@ -107,6 +121,31 @@ pub struct PoliciesConfig {
     /// Tool permission levels (Allow / Ask / Deny)
     #[serde(default)]
     pub tool_permissions: ToolPermissionsConfig,
+
+    /// Per-principal and machine-total USD spend ceilings.
+    ///
+    /// Absent ⇒ disabled.
+    #[serde(default)]
+    pub spend: SpendPolicy,
+
+    /// How many complete main-session turns a COLD `/btw` side seed carries.
+    /// Unset = [`DEFAULT_BTW_FORK_TURNS`]. `0` carries nothing — a side thread
+    /// that starts empty on purpose.
+    ///
+    /// Bounded on purpose. The side session's key is deterministic, so it
+    /// persists and its seed is paid once — but that once is a full-price
+    /// prefix write against a main conversation that may be hundreds of
+    /// thousands of tokens long, and a side question is meant to be the cheap
+    /// way to ask something. The cap buys recency, which is what a side
+    /// question almost always needs, at a price that does not scale with how
+    /// long the main conversation has been running.
+    ///
+    /// Bounds the cold seed only. Once the side session has a cursor, each
+    /// later question carries whatever settled since — naturally small, and
+    /// clamping it would drop the MIDDLE of the conversation rather than its
+    /// head, which nothing announces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub btw_fork_turns: Option<usize>,
 }
 
 #[cfg(test)]

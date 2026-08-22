@@ -709,6 +709,19 @@ pub async fn build_run_request(
     sessions: Option<&Arc<dyn crate::gateway::session_store::SessionStore>>,
     agent: &crate::gateway::agent_instance::AgentInstanceConfig,
 ) -> Result<RunRequest, BuildRunError> {
+    // A human is here. This builder is the one funnel behind every Panel /
+    // TUI / CLI run entrance, which makes it one of the DreamDaemon idle
+    // sensor's two producers (the other is the channel inbound router) —
+    // machine-originated runs (cron, heartbeat, teams, A2A, model-driven
+    // `session_send`) build their requests elsewhere and deliberately do not
+    // stamp, or overnight automation would starve dreaming forever. Stamped
+    // before the authorization gate below on purpose: a refused attempt is
+    // still a person at the keyboard. Guarded by `run_loop::tests::
+    // every_run_producer_declares_whether_a_human_is_at_the_other_end`, which
+    // derives that whitelist from the run-producer census rather than naming
+    // it — so a third human entrance is asked the question when it appears.
+    crate::memory::dreaming::record_activity();
+
     // The agent axis of authorization, and it runs FIRST — before the voice
     // registry write below, which is a side effect a refused turn must not
     // leave behind.
@@ -1717,6 +1730,39 @@ mod tests {
             request.metadata.get("conversation_id").map(String::as_str),
             Some(session_key.to_key_string().as_str()),
             "ask_user / approval routing refuse a turn with an empty conversation_id"
+        );
+    }
+
+    /// The DreamDaemon idle sensor: every human run entrance funnels through
+    /// this builder, so building a request must advance the activity stamp.
+    ///
+    /// The stamp is one process-global atomic, so the assertion is
+    /// directional only — back-date it, run the builder, require it to have
+    /// jumped to roughly now. A parallel test that also stamps can only make
+    /// it MORE recent, never restore the back-dated value, so interference
+    /// cannot turn a real regression green... except in the narrow window
+    /// where a sibling stamps between our back-date and our assert — which is
+    /// why the load-bearing guard is the source-level census in
+    /// `run_loop::tests::every_run_producer_declares_whether_a_human_is_at_the_
+    /// other_end`; this test adds the behavioural half.
+    #[tokio::test]
+    async fn build_run_request_stamps_the_dream_idle_sensor() {
+        let session_key = AgentRouter::new().route(None, None, None, None).await;
+        crate::memory::dreaming::set_last_activity_for_test(1_000_000);
+        let _ = build_run_request(
+            "run-activity".to_string(),
+            &session_key,
+            base_params(),
+            None,
+            None,
+            &crate::gateway::agent_instance::AgentInstanceConfig::default(),
+        )
+        .await
+        .expect("build_run_request");
+        let after = crate::memory::dreaming::last_activity_for_test();
+        assert!(
+            after > 1_000_000,
+            "building a human run request must advance the dream idle stamp"
         );
     }
 

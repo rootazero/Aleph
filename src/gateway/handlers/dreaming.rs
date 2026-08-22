@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::memory::store::MemoryBackend;
+use aleph_protocol::dreaming::{DreamLastRun, DreamSchedulingStatus};
 
 /// Force-trigger a single dream cycle on the globally-registered daemon.
 pub async fn handle_run_now(request: JsonRpcRequest) -> JsonRpcResponse {
@@ -59,6 +60,25 @@ pub async fn handle_run_now(request: JsonRpcRequest) -> JsonRpcResponse {
 /// three lists empty, the same shape a partition the dream daemon has never
 /// run over produces) — a half-checked response is exactly the shape this
 /// review kept finding, so we never return one.
+///
+/// ## Deliberately NOT resolved through `memory_scope::read_partitions`
+///
+/// Its siblings (`memory.listFacts`, `memory.search`, `graph.search`,
+/// `insights.tools`, the retrieval x-ray) all compose the session's scope,
+/// because on those surfaces a base persona id means "my view of this agent"
+/// and there is no other way to reach the partition the writers wrote to.
+/// Here there is: `namespaces` **is** that index, and it is returned on both
+/// the success and the refusal path precisely so every corpus is addressable.
+/// `agent_id` on this method therefore names a CORPUS, not an agent, and
+/// `synthesis`/`runs` are each scoped to exactly the one the caller named —
+/// internally consistent, and navigable to the composed partition in one click.
+///
+/// Composing here would break that: the response echoes `agent_id`, so a caller
+/// who picked `main` from `namespaces` would be shown rows labelled `main` that
+/// came from `main__u-owner`, and picking a composed namespace would double-
+/// compose into a partition nothing writes. If this surface ever loses its
+/// namespace index, revisit — the defect would be live again the moment the
+/// only way in is the default.
 pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     use crate::memory::notes::store::NoteStore;
     use crate::memory::store::DreamStore;
@@ -90,16 +110,20 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
     // in BOTH branches (it is not scoped to the corpus they asked about), so
     // withholding it here would leak the refusal just as loudly as omitting it.
     if !crate::gateway::visibility::partition_visible(agent_id) {
+        let scheduling = scheduling_status(&db).await;
         return match visible_namespaces(&db, limit) {
             Ok(namespaces) => JsonRpcResponse::success(
                 request.id,
-                json!({
-                    "agent_id": agent_id,
-                    "daily": [],
-                    "synthesis": [],
-                    "runs": [],
-                    "namespaces": namespaces,
-                }),
+                with_scheduling(
+                    json!({
+                        "agent_id": agent_id,
+                        "daily": [],
+                        "synthesis": [],
+                        "runs": [],
+                        "namespaces": namespaces,
+                    }),
+                    &scheduling,
+                ),
             ),
             Err(err) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, err),
         };
@@ -209,16 +233,99 @@ pub async fn handle_list_insights(request: JsonRpcRequest, db: MemoryBackend) ->
         Err(err) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, err),
     };
 
+    // 5. Scheduling status: the zero-side-effect answer to "why didn't
+    // dreaming run tonight" — enabled / window / idle gate as the daemon
+    // holds them, plus the last persisted run with its crash tombstone.
+    let scheduling = scheduling_status(&db).await;
+
     JsonRpcResponse::success(
         request.id,
-        json!({
-            "agent_id": agent_id,
-            "daily": daily,
-            "synthesis": synthesis,
-            "runs": runs,
-            "namespaces": namespaces,
-        }),
+        with_scheduling(
+            json!({
+                "agent_id": agent_id,
+                "daily": daily,
+                "synthesis": synthesis,
+                "runs": runs,
+                "namespaces": namespaces,
+            }),
+            &scheduling,
+        ),
     )
+}
+
+/// The scheduling-status half of the response: the daemon's live gate snapshot
+/// (`None` when no daemon is registered — memory disabled, unit tests) and the
+/// persisted last-run row with the crash tombstone derived.
+///
+/// One builder for both response branches, for the same reason
+/// [`visible_namespaces`] is: the refusal must stay key- and shape-identical
+/// to an empty success. Carrying it in the refusal branch leaks nothing — it
+/// is operational state (window times, idle gate, last run of the *shared*
+/// daemon) and names no partition.
+///
+/// The tombstone: a `dream_status` row can say `running` forever after the
+/// process died mid-cycle, because nothing that could correct it is alive to
+/// do so. `running` older than the cycle's own hard timeout (plus slack) is
+/// re-reported as `stale_running` — derived on read, no writer's cooperation
+/// needed. The timeout comes from the running daemon when there is one, else
+/// from the config default the dead process would have used. Deriving it here
+/// rather than shipping the ingredients is deliberate: it is the one piece of
+/// this payload a client would otherwise have to recompute, and two surfaces
+/// recomputing one predicate is how they come to disagree.
+async fn scheduling_status(db: &MemoryBackend) -> DreamSchedulingStatus {
+    use crate::memory::store::DreamStore;
+
+    let daemon = crate::memory::dreaming::daemon_status();
+    let last_run = match db.get_dream_status().await {
+        Ok(status) => status.last_run_at.map(|run_at| {
+            let raw = status.last_status.unwrap_or_else(|| "unknown".to_string());
+            let max_duration = daemon.as_ref().map_or_else(
+                crate::config::types::memory::defaults::default_dreaming_max_duration_seconds,
+                |d| d.max_duration_seconds,
+            );
+            let now = chrono::Utc::now().timestamp();
+            let shown = if raw == "running"
+                && crate::memory::dreaming::running_status_is_stale(run_at, max_duration, now)
+            {
+                "stale_running".to_string()
+            } else {
+                raw
+            };
+            DreamLastRun {
+                run_at,
+                status: shown,
+                duration_ms: status.last_duration_ms,
+            }
+        }),
+        // "I don't know" renders as nothing — never as "healthy".
+        Err(_) => None,
+    };
+    DreamSchedulingStatus { daemon, last_run }
+}
+
+/// Merge the scheduling section onto a response body.
+///
+/// The two keys are spelled by [`DreamSchedulingStatus`] and nowhere else, so
+/// a rename is a compile error in every crate that reads them rather than a
+/// column of dashes in one of them. Construction, not parsing, is where that
+/// has to be enforced: serde drops unknown keys silently, so a test that
+/// deserialises this response into the contract type proves the server sends a
+/// *superset* and stays green while an extra key nobody reads goes out on the
+/// wire.
+///
+/// A serialisation failure (unreachable for a struct of scalars) omits both
+/// keys rather than substituting an empty object: absent means "this core did
+/// not report", and every client renders that as "unknown". Substituting
+/// `{}` would render as a daemon that is switched off.
+fn with_scheduling(mut body: Value, status: &DreamSchedulingStatus) -> Value {
+    match (body.as_object_mut(), serde_json::to_value(status)) {
+        (Some(map), Ok(Value::Object(section))) => {
+            map.extend(section);
+        }
+        (_, Err(e)) => tracing::error!(%e, "dreaming scheduling status failed to serialise"),
+        _ => {}
+    }
+    body
 }
 
 /// Re-emit a stored JSON blob as a parsed value, warning (not failing) on a
@@ -725,5 +832,136 @@ mod tests {
         assert!(run["decision"].is_null());
         assert!(run["evolution"].is_null());
         assert_eq!(run["notes_consolidated"], 3);
+    }
+
+    /// The crash tombstone: a persisted `running` row older than the cycle's
+    /// hard timeout is re-reported as `stale_running` on read — the process
+    /// that wrote it died mid-cycle and nothing alive can correct the row. A
+    /// *recent* `running` row is left alone: that one may be a live cycle.
+    #[tokio::test]
+    async fn a_dead_processes_running_status_reads_as_stale() {
+        use crate::memory::dreaming::DreamStatus;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::memory::store::DreamStore;
+        use crate::sync_primitives::Arc;
+
+        let backend = SqliteMemoryBackend::in_memory().expect("in-memory backend");
+        let db: MemoryBackend = Arc::new(backend);
+        let now = chrono::Utc::now().timestamp();
+        let list = |db: MemoryBackend| async move {
+            let resp = handle_list_insights(
+                JsonRpcRequest::with_id("dreaming.list_insights", None, json!(1)),
+                db,
+            )
+            .await;
+            resp.result.expect("success")
+        };
+
+        // Ancient `running` (well past any max_duration_seconds + slack).
+        db.set_dream_status(DreamStatus {
+            last_run_at: Some(now - 100_000),
+            last_status: Some("running".to_string()),
+            last_duration_ms: None,
+        })
+        .await
+        .unwrap();
+        let v = list(db.clone()).await;
+        assert_eq!(
+            v["last_run"]["status"], "stale_running",
+            "a running row a dead process left behind must be tombstoned: {v}"
+        );
+        // No daemon is registered in a unit-test process; that must render as
+        // null ("not running"), never as an error.
+        assert!(v["daemon"].is_null());
+
+        // A running row started seconds ago may be a live cycle — untouched.
+        db.set_dream_status(DreamStatus {
+            last_run_at: Some(now - 30),
+            last_status: Some("running".to_string()),
+            last_duration_ms: None,
+        })
+        .await
+        .unwrap();
+        let v = list(db).await;
+        assert_eq!(v["last_run"]["status"], "running");
+    }
+
+    /// The scheduling section is spelled by the contract type, in both
+    /// directions.
+    ///
+    /// Parsing can only ever prove a superset — serde drops unknown keys, so a
+    /// test that deserialises this response into `DreamSchedulingStatus` stays
+    /// green while the server emits a field no client has ever heard of. That
+    /// is not a hypothetical here: the Panel's hand-written DTO was missing
+    /// `max_duration_seconds` for four rounds and parsed perfectly the whole
+    /// time. So the section is asserted as **key-set equality against the type
+    /// itself**, and the expectation is derived by serialising the type rather
+    /// than typed out — a remembered list is the same enumeration mistake one
+    /// level up.
+    #[tokio::test]
+    async fn the_scheduling_section_is_spelled_by_the_contract_type() {
+        use aleph_protocol::dreaming::DaemonStatus;
+
+        let keys = |v: &Value| -> Vec<String> {
+            let mut k: Vec<String> = v
+                .as_object()
+                .expect("object")
+                .keys()
+                .map(ToString::to_string)
+                .collect();
+            k.sort();
+            k
+        };
+
+        // 1. The helper the handler builds through: every key comes from the
+        //    type, the caller's own keys survive, and no third key appears.
+        let status = DreamSchedulingStatus {
+            daemon: Some(DaemonStatus {
+                enabled: true,
+                within_window: true,
+                idle_seconds: 7,
+                idle_threshold_seconds: 900,
+                window_start_local: "02:00".to_string(),
+                window_end_local: "06:00".to_string(),
+                max_duration_seconds: 1800,
+                ..DaemonStatus::default()
+            }),
+            last_run: None,
+        };
+        let merged = with_scheduling(json!({ "agent_id": "main" }), &status);
+        let section = serde_json::to_value(&status).expect("serialise");
+        let mut expected = keys(&section);
+        expected.push("agent_id".to_string());
+        expected.sort();
+        assert_eq!(keys(&merged), expected, "merged body: {merged}");
+        assert_eq!(
+            keys(&merged["daemon"]),
+            keys(&serde_json::to_value(DaemonStatus::default()).expect("serialise")),
+            "every gate the daemon reports must be a field of the shared type, \
+             and every field of the shared type must be reported: {merged}"
+        );
+
+        // 2. The handler still goes through it. Both response branches carry
+        //    the section (`a_refusal_is_shaped_exactly_like_an_empty_success`
+        //    pins that they carry the *same* keys; this pins which keys).
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
+        use crate::sync_primitives::Arc;
+        let db: MemoryBackend =
+            Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"));
+        let resp = handle_list_insights(
+            JsonRpcRequest::with_id("dreaming.list_insights", None, json!(1)),
+            db,
+        )
+        .await;
+        let body = resp.result.expect("success");
+        for key in keys(&serde_json::to_value(DreamSchedulingStatus::default()).expect("serialise"))
+        {
+            assert!(
+                body.get(&key).is_some(),
+                "`{key}` is a DreamSchedulingStatus field and must reach the wire — \
+                 without it `aleph memory dreaming` and the Panel's memory pane both \
+                 report a daemon that is merely absent: {body}"
+            );
+        }
     }
 }

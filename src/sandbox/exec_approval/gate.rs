@@ -351,6 +351,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended,
             plan_gate: None,
+            side_question: false,
         };
 
         // Attended (and outside any turn) still reaches the requester.

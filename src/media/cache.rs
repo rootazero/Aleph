@@ -134,14 +134,25 @@ impl MediaCache {
     }
 
     async fn resolve_local_path(path: &str, mime_type: &str) -> Result<CachedMedia, CacheError> {
-        let path = expand_tilde(path);
-        let meta = tokio::fs::metadata(&path).await?;
+        // Symlink-aware path containment: an inbound Attachment.path coming
+        // from a channel adapter (Telegram / Slack / Discord / …) or the
+        // model itself can name any file the process can read — ~/.ssh/id_rsa,
+        // /etc/passwd, another account's temp. The TOCTOU window between
+        // this check and the actual read is closed by `O_NOFOLLOW` at the
+        // call site that opens the file (the cache's own helpers); here we
+        // gate on the canonicalized location.
+        let safe = Self::safe_local_media_path(path).await.ok_or_else(|| {
+            CacheError::Download(format!(
+                "refusing to attach path outside the media trust root: {path}"
+            ))
+        })?;
+        let meta = tokio::fs::symlink_metadata(&safe).await?;
         let size = meta.len();
         if size > MAX_FILE_SIZE {
             return Err(CacheError::TooLarge { size });
         }
         Ok(CachedMedia {
-            local_path: path,
+            local_path: PathBuf::from(safe),
             mime_type: mime_type.to_string(),
             size,
         })
@@ -415,6 +426,29 @@ impl MediaCache {
             None
         };
 
+        // Pre-decode budget check: the downstream `MAX_FILE_SIZE` guard runs *after*
+        // a full base64/percent-decoded `Vec<u8>` is allocated. A multi-GB
+        // `data:` URL would otherwise peak at ~0.75 GB before being discarded,
+        // and concurrent hostile requests can OOM the process. Reject early on
+        // the encoded length; the downstream check remains the authoritative
+        // cap on the decoded size.
+        let encoded_len = data.len();
+        if header.contains("base64") {
+            // base64 expands by 4/3, so the decoded size is at most
+            // (encoded_len / 4) * 3 (ignore padding bytes).
+            let approx = encoded_len.saturating_mul(3) / 4;
+            if approx as u64 > MAX_FILE_SIZE {
+                return Err(CacheError::Download(format!(
+                    "data URL exceeds size cap before decode (encoded={encoded_len}, approx decoded > {})",
+                    MAX_FILE_SIZE
+                )));
+            }
+        } else if encoded_len as u64 > MAX_FILE_SIZE {
+            return Err(CacheError::Download(format!(
+                "data URL exceeds size cap before decode ({encoded_len} bytes)"
+            )));
+        }
+
         let bytes = if header.contains("base64") {
             BASE64
                 .decode(data)
@@ -430,14 +464,25 @@ impl MediaCache {
 
     /// Validate a model-supplied local media path for outbound delivery.
     ///
-    /// Returns the canonicalized path (as a String) iff it resolves inside the
-    /// OS temp dir — the only root where legitimate producers write (native
-    /// `camera_clip`/`record_audio` via `NSTemporaryDirectory`, and this cache's
-    /// own `<temp_dir>/aleph/media`). Canonicalization collapses `..` and
-    /// symlinks first, and `PathBuf::starts_with` matches whole components, so an
-    /// escape cannot slip past the prefix check. Returns `None` for any path
-    /// outside that root (or one that cannot be resolved), which the caller
-    /// treats as "do not attach this file".
+    /// A path is **safe** iff it canonicalizes into one of:
+    ///
+    /// 1. [`crate::utils::paths::private_temp_root`] — Aleph's owned tree
+    ///    (`<temp_dir>/aleph-<uid>/...`), where this cache itself writes
+    ///    attachments.
+    /// 2. A directory under `temp_dir()` that this process exclusively owns
+    ///    (e.g. native `camera_clip` / `record_audio` captures on macOS that
+    ///    land in `NSTemporaryDirectory`, which is per-user on every modern
+    ///    Unix).
+    ///
+    /// Merely being "under `temp_dir()`" is **not** sufficient: `/tmp` is
+    /// world-writable on most Linux distributions and any other account or
+    /// process could plant a file the model would then exfiltrate. The
+    /// ownership check closes that hole while preserving the documented
+    /// contract for native captures.
+    ///
+    /// Canonicalization collapses `..` and symlinks first, and
+    /// `PathBuf::starts_with` matches whole components, so an escape cannot
+    /// slip past the prefix check.
     ///
     /// `pub(crate)` so `media_send`'s pre-flight can ask this exact predicate
     /// rather than a copy of it — see [`Self::decode_data_url`] for why a copy
@@ -445,10 +490,29 @@ impl MediaCache {
     pub(crate) async fn safe_local_media_path(raw: &str) -> Option<String> {
         let expanded = expand_tilde(raw);
         let canonical = tokio::fs::canonicalize(&expanded).await.ok()?;
-        let root = tokio::fs::canonicalize(std::env::temp_dir()).await.ok()?;
-        canonical
-            .starts_with(&root)
-            .then(|| canonical.to_string_lossy().into_owned())
+
+        // (1) Aleph's owned private root is always safe.
+        if let Ok(private_root) = crate::utils::paths::private_temp_root() {
+            let canonical_private = tokio::fs::canonicalize(&private_root).await.ok()?;
+            if canonical.starts_with(&canonical_private) {
+                return Some(canonical.to_string_lossy().into_owned());
+            }
+        }
+
+        // (2) Otherwise, require the canonical path to be under `temp_dir()`
+        //     AND owned by the current process. `symlink_metadata` (not
+        //     `metadata`) is mandatory: a symlink would otherwise report its
+        //     *target's* owner, which is the one stat an attacker can choose.
+        let canonical_temp = tokio::fs::canonicalize(std::env::temp_dir()).await.ok()?;
+        if !canonical.starts_with(&canonical_temp) {
+            return None;
+        }
+        let meta = tokio::fs::symlink_metadata(&canonical).await.ok()?;
+        if !is_owned_by_current_process(&meta) {
+            return None;
+        }
+
+        Some(canonical.to_string_lossy().into_owned())
     }
 
     /// An [`Attachment`] that carries only the original URL — no bytes, no
@@ -567,6 +631,33 @@ async fn write_private(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> 
     file.write_all(bytes).await?;
     // tokio's File buffers; a dropped handle can lose the tail.
     file.flush().await
+}
+
+/// True iff the current process owns `meta`.
+///
+/// `safe_local_media_path` uses this as the second leg of its "may I attach
+/// this?" predicate: files under `temp_dir()` are safe only when Aleph itself
+/// wrote them (or the native capture subsystem did, which on macOS / Linux is
+/// always the same UID). A world-writable `/tmp/foo` left by another account is
+/// not.
+///
+/// On Windows, ACLs rather than uid make this check meaningless as currently
+/// written; until a per-platform ACL check is added, Windows falls back to
+/// "any file under temp_dir()" — which is the same overly-permissive behavior
+/// the original code had, but only on the one platform where per-user temp
+/// directories are the convention and the broader risk is lower.
+fn is_owned_by_current_process(meta: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let euid = unsafe { libc::geteuid() };
+        meta.uid() == euid
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        true
+    }
 }
 
 /// Build a collision-free temp filename by prefixing the (sanitized) attachment

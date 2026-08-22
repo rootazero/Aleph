@@ -17,7 +17,7 @@ use alephcore::orchestrator::FlowError;
 use alephcore::orchestrator::{
     build_sandbox_factory, AgentHarnessRunner, BrainRef, FlowInput, FlowOutcome, FlowOverrides,
     FlowRegistry, FlowRequest, FlowSet, FlowSpec, FlowStreamEvent, HarnessRunner, Orchestrator,
-    RoutingOverrides, SessionStrategy,
+    SessionStrategy,
 };
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
@@ -226,7 +226,6 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
 
     Arc::new(Orchestrator::new(
         flow_registry,
-        Arc::new(RoutingOverrides::default()),
         Arc::new(defaults),
         session_service,
         sandbox_factory,

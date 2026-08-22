@@ -34,6 +34,29 @@ pub struct ReplyEmitterConfig {
     /// Optional runtime-metadata footer appended to the final reply.
     /// Defaults to a disabled config so existing callers stay no-op.
     pub footer: RuntimeFooterConfig,
+
+    /// This run answers a `/btw` side question, so its final text is marked
+    /// (`crate::gateway::btw::format_side_answer`) before it reaches the
+    /// channel.
+    ///
+    /// **Resolved once, at emitter construction, from
+    /// [`crate::gateway::btw::BtwTurn::resolve`]** — the one resolver every
+    /// surface shares. It cannot come from the run's metadata, and the reason
+    /// is ordering, not distance: `BTW_METADATA_KEY` is stamped by
+    /// `stamp_btw`, which this same router calls ~300 lines further down
+    /// (`inbound_router/executor.rs`, just before the busy lane) and which
+    /// `execute()` then re-runs idempotently. The emitter is built before
+    /// either — before the `RunRequest` it would read even exists. Asking the
+    /// resolver here is therefore the same derivation `stamp_btw` makes, from
+    /// the same bytes, not a second one — and it must stay that way:
+    /// re-deriving from a `/btw` string prefix on this side would be exactly
+    /// the duplicate predicate `btw/mod.rs` deleted.
+    ///
+    /// Carried in the *config* rather than on the emitter so the two custom
+    /// emitters that clone `reply_config` (Feishu's streaming card, Telegram's
+    /// orchestrated lanes) inherit it without a second construction argument to
+    /// forget.
+    pub side_answer: bool,
 }
 
 impl Default for ReplyEmitterConfig {
@@ -47,6 +70,7 @@ impl Default for ReplyEmitterConfig {
             min_initial_chars: 30,
             max_message_length: 0,
             footer: RuntimeFooterConfig::default(),
+            side_answer: false,
         }
     }
 }

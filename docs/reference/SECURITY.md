@@ -303,6 +303,83 @@ put this conversation into read-only planning and an autonomous continuation
 must not act for them — but it is a dead end whose only exit is a person moving
 the tier back.
 
+### A `/btw` side question composes `Plan`, then revokes two of its named-tool carve-outs
+
+A `/btw` side question (see
+[FEATURE_LOCATOR §4.14](FEATURE_LOCATOR.md#414-btw-侧问派生的只读侧会话-side-questions--2026-08-20))
+runs on a session derived from the conversation it was typed in, and it is
+read-only whatever that conversation's own tier says. The ceiling is **composed,
+not assigned**: `resolve_turn_permissions` mints `side_question` from the request
+stamp (`execution_engine/turn_permissions.rs:291` — one minting site, never
+re-derived downstream from the key's shape) and folds it in with
+`ExecTier::most_restrictive(tier, ExecTier::Plan)` (`:303`) — the same rule the
+non-operator ceiling composes through (`:183`), and the same only-ever-tighten
+discipline the channel clamp keeps by hand (`clamp_tier_for_channel`,
+`gateway/channel_policy.rs:24`, is a two-arm match, not a `most_restrictive` call). So it can
+only tighten: a conversation already at `Plan` is byte-identical, and no tier, no
+explicit `[policies.tool_permissions]` entry and no request-carried pick can
+raise it, because `Plan`'s refusal is rung 0 rather than a default. It rides to
+the tool layer on `TurnContext::side_question` (`tools/turn_context.rs:85`).
+
+**Both `PLAN_REACHABLE_TOOLS` carve-outs are revoked** — a side question is
+strictly narrower than planning — at
+`ScopedToolService::permission_for`'s rung −1 (`tools/scoped/builder.rs:250`),
+above the tier verdict, because neither is removable by configuration nor
+resolvable by approving a plan, which are the two repairs everything beneath it
+points at. The reasons differ and both are load-bearing:
+
+- **`scratchpad`** writes the **main** session's execution list. A side question
+  is by definition not the main turn's work; letting it edit that file is a write
+  into the very conversation the side session exists to stay out of.
+- **`subagent`** can spawn a child that **outlives the side session**, with no
+  surface able to enumerate it — the side key is derived, so nothing on the
+  user's screen names the session the child is parented to.
+
+The revocation is read directly off the same `PLAN_REACHABLE_TOOLS` constant
+`ExecTier::rule_for` reads for the carve-out itself, not restated as a second
+list, so a third member added there is denied to side questions with no edit
+here. `Plan`'s **third named-tool** carve-out is untouched: `ask_user` lives in
+`HUMAN_CONTACT_TOOLS`, not in this constant, and asking the user a clarifying
+question is as circular to deny here as it is while planning.
+
+⚠️ **It cannot ride on the allow set.** The narrowing that reads most naturally
+— drop `subagent` from `allowed` — is a **no-op for exactly `subagent`**:
+`ScopedToolService::is_allowed` (`builder.rs:443`) returns `true`
+unconditionally for the attached `SubagentTool`, because that tool is appended
+to listings independently of `allowed` (it is not in the builtin registry) and
+would otherwise vanish from the model's list on every real gateway path. The
+exemption is correct and predates this; what matters is that a rule written to
+narrow *through* that filter never runs for the member it was written for — and
+it *does* run for every other tool, so a test written with any other tool is
+green. Narrow where the verdict is actually made.
+
+Two further consequences:
+
+- **No `PlanGate` is minted** (`turn_permissions.rs:339`). The gate is the one
+  thing that can move a turn's tier mid-run, and a side question's ceiling is not
+  the conversation asking to plan — it is a bound on this single turn with
+  nothing to hand back to when the turn ends. Withholding it makes the bound
+  immovable by construction rather than by the fact that `scratchpad`, the only
+  thing that flips a gate, happens to be revoked. ⚠️ Argued at the source and
+  **not pinned by a test of its own** — restoring the gate for a side question
+  would go unnoticed until something else made `scratchpad` reachable again.
+- **The refusal names itself and then keeps its promise**
+  (`a_side_question_refusal_names_itself_not_the_plan_handoff`,
+  `a_side_question_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest`,
+  `the_side_question_refusal_promises_reads_that_really_run`).
+  `GateRule::SideQuestion` is checked **ahead of** `PlanMode` and `PolicyDeny`
+  (`tools/scoped/gate_chain.rs:433`), because both of those name a repair that
+  cannot work here (approve the plan; edit the policy). Its sentence tells the
+  model the side question "can read and search" — so the per-call read
+  re-admission in `dispatch.rs:238` is keyed on **`PlanMode | SideQuestion`**,
+  the property rather than the reporting rule. Keyed on the rule name alone, a
+  side question missed that arm entirely and `file_ops list/search/stats`,
+  `doctor`, `note_schema read`, `a2a_agents list` and `inbox_read peek` — the
+  exploration a side question is mostly made of — were refused by a sentence
+  promising the opposite.
+  `denied_only_by_plan` still does the scoping, and it does **not** consult rung
+  −1, so the two revoked carve-outs stay refused.
+
 ### The rules read declared metadata, never the tool's name
 
 `ToolFacts { name, idempotent, requires_approval }` is filled from the tool's own
@@ -1054,6 +1131,40 @@ risk_segments}`.
 Security *events* (not approvals) still log through
 `src/security/audit.rs`; SSRF has its own trail (see below).
 
+### Reading the security trail — `aleph audit` (2026-08-21)
+
+`security_audit_log` had **five producers and no reader**. `AuthFailure`,
+`RateLimited`, `CommandPolicy`, `ScopedContentRead` and `AuthorityChange` were
+all persisted, indexed by timestamp and event type, and purged behind a 30-day
+horizon — and nothing in the repository ever ran a `SELECT` against them outside
+the drain task's own tests. `AuthorityChange` was added (round-5) specifically so
+that *what authority changed, in order* is answerable with one `WHERE` clause,
+and there was no surface from which that clause could be run.
+
+- **Store**: `SecurityStore::query_audit_entries` — SQL-side filters (event type,
+  actor, relative window), newest first with `id` breaking same-second ties, and
+  one row over-fetched so a full page can be distinguished from a truncated one.
+- **Wire**: `security.audit.query`, contract in
+  `aleph_protocol::audit`. Admin-gated by the new `security.` prefix in
+  `method_admin.rs` (prefix, not method, so a future `security.audit.export`
+  arrives gated). Census entry pins the ruling.
+- **Client**: `aleph audit [--type] [--actor] [--since 90s|5m|2h|7d] [--limit]`.
+
+Two honesty properties are carried on **every** response rather than left to the
+reader: `retention_secs`, because an empty window otherwise means *nothing
+happened* / *nothing matched* / *it was deleted and you cannot tell which*; and
+`truncated`, because "the window is clean" and "I stopped counting" must not
+render the same.
+
+⚠️ **This is not the `aleph-server audit` deleted on 2026-07-14 coming back.**
+That command queried `approval_audit.db`, three tables **whose only writers were
+test helpers** — it reported zeros about a trail that never existed, while the
+real approval trail sat in the session event log. This is the opposite defect:
+a table with five real producers and no way to read it. The deletion rule that
+removed the old command ("a reader with no writers is worse than dead code")
+and the connection rule that added this one ("a writer with no reader is a
+capability that was never delivered") are the same rule seen from its two ends.
+
 ### Signed agent ledger (2026-07-25, hardened 2026-07-26 … 2026-08-10)
 
 The session event log answers *what the run did*. It does not answer *who,
@@ -1135,6 +1246,121 @@ act.
 
 Full model, threat analysis and the buzz gap-analysis table:
 [AGENT_IDENTITY.md](AGENT_IDENTITY.md).
+
+---
+
+## Spend Ceilings (per-principal USD budget · 2026-08-22)
+
+**Location**: `src/spend/` (`Principal`/`Spent`/`Delta`/`Limit`/`Verdict`, the
+`SpendLedger` trait, the two process-global handles, the two principal
+resolvers, `check`/`check_with` — the single admission predicate),
+`src/spend/sqlite.rs` (durable backend on the `SecurityStore`),
+`src/spend/period.rs` (local-calendar period boundaries + retention),
+`src/config/types/policies/spend.rs` (`[policies.spend]`),
+`src/providers/metering.rs` (the floor arm),
+`src/gateway/execution_engine/run_loop/` (the admission arm, `deny_if_over_spend`),
+`src/gateway/handlers/spend.rs` (`spend.query`), `interfaces/cli` (`aleph spend`).
+Boot wiring — `src/bin/aleph-server/commands/start/mod.rs`, right after
+`initialize_vault`.
+
+`[policies.spend]` sets a per-principal ceiling (`per_user_usd`) and/or a
+machine-total ceiling (`total_usd`) over a rolling `Day` or `Month`
+local-calendar period. Two arms read the same predicate:
+
+- **The floor arm** — `MeteringProvider::enforce_spend_ceiling`, the first
+  statement inside every provider call's boxed future, before it is
+  awaited. A principal already over the ceiling gets no further LLM calls.
+- **The admission arm** — `run_loop::deny_if_over_spend`, checked when a run
+  is first admitted, so an over-budget principal cannot even start a new
+  run.
+
+### It is a ceiling, not a hard cap
+
+The floor arm checks *before* the call and records spend *after* it
+completes — by design. Reserving an estimate up front would need a refund
+on every error path, and a single missed refund would silently shrink
+someone's ceiling forever; a bounded overshoot is the cheaper failure to
+accept. The bound is exact: a principal can exceed the ceiling by at most
+the cost of whatever calls were already in flight the instant they crossed
+it. What this control promises is "no *new* call is admitted once you are
+over budget, and the ledger reflects reality within one in-flight call's
+worth of drift" — not "spend will never cross the configured number".
+
+### A missing price is never a gate
+
+`pricing::estimate` can answer `CostStatus::Unknown` for a provider/model
+pair the static price table does not carry. That maps to
+`spend::Delta::Unpriced`, a deliberately fieldless variant with no `usd`
+field to attach a figure to — an unpriced call is *counted* (so an operator
+can see how much traffic the ledger cannot price) but never denies anything
+and never contributes to either ceiling. A source-level guard beside the
+one production site that performs this mapping
+(`providers::metering::MeteringProvider::record_spend_with`) pins that
+`CostStatus::Unknown` can never reach `Delta::Usd`/`Delta::Partial`, so this
+stays true even if `pricing::estimate` someday grows a heuristic guess for
+unknown models. See `pricing.rs`'s module doc.
+
+### Two coverage boundaries, stated rather than left for a reader to infer
+
+- **Provider health probes are unmetered.** `providers::probe::probe_provider`
+  calls `.process()` directly on the raw provider, bypassing the
+  `MeteringProvider` wrapper entirely — a probe accumulates no spend and is
+  denied by no ceiling. This is correct (a health check is not the user's
+  spend), but it means "every model call is metered" is the wrong claim;
+  the accurate one is "every call made on a principal's behalf is metered".
+- **Unattributable spend has a name, and it is not a person.** Spend
+  produced where no principal can be resolved
+  (`principal_from_metadata`/`ambient_principal`'s fallback arm) lands on
+  `Principal::Unattributed`, the `"@unattributed"` row `spend.query` reports
+  alongside every real principal's row. It is the ledger's honest account
+  of spend nobody could be billed to — not a user who is somehow both
+  anonymous and over budget, and it is never itself subject to
+  `per_user_usd` (there is no per-principal ceiling to check it against).
+
+### What it does not buy
+
+Exceeding a ceiling denies further calls; it does not retroactively undo
+anything already billed. There is deliberately no `spend.reset`: zeroing a
+ledger row is, after the fact, indistinguishable from a write that never
+happened, so raising the ceiling in `[policies.spend]` (live-appliable, see
+below) is the reversible way to say the same thing. `spend.query`/
+`aleph spend` — admin-gated, same `spend.`-prefix reasoning
+`security.audit.query` documents for its own prefix, since a spend report
+names every principal on the machine and their dollar figures — are the
+only read faces today; there is no Panel surface, matching the CLI-only
+pattern `users.*`/`aleph audit` already established for admin-gated
+controls.
+
+### Retention
+
+The ledger is swept once at boot, right after the durable ledger is
+installed, down to `spend::period::RETENTION_PERIODS` (3 — current + 2
+prior periods). This is a period *count*, not the 30-day *duration*
+[`security::audit::DEFAULT_RETENTION_SECS`](#audit-logging) uses for the
+audit trail — the two are not the same policy in a different unit, and the
+ledger's own doc says so explicitly. The reason is structural: the ledger
+is keyed by a calendar boundary (`period_start_ms`), not by an elapsed-time
+cutoff, so a seconds-based horizon would still have to be converted into
+"which period boundary does that land on" before it could sweep anything —
+and that conversion is exactly where a fixed-duration off-by-one deletes
+the *current* period instead of an old one. `retention_cutoff_ms` walks
+calendar boundaries backward in period-sized steps instead.
+
+### `[policies.spend]` is live-appliable, boot installation is not optional
+
+`spend::install_policy`/`spend::install_ledger` install the two
+process-global handles this whole control reads; both must run at boot
+(`start/mod.rs`), unconditionally — including when no ceiling is
+configured. `spend::update_policy` (the live-apply path for
+`[policies.spend]`) returns `false`, and the live-apply verdict honestly
+downgrades to `Restart`, when no handle has been installed yet; skipping
+installation on an unconfigured box would mean an operator could turn a
+ceiling *off* live but never turn one *on* live — the direction that
+matters less. A source-level census in `start/mod.rs`'s own test module
+(`boot_installs_the_spend_policy_and_the_spend_ledger`) pins that both calls
+exist in production, because nothing else can see their absence: it is not
+a compile error, no other test goes red, and a server missing either call
+runs indistinguishably from a correctly-configured one with no ceiling set.
 
 ---
 

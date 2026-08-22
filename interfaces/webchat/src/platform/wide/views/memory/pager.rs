@@ -4,6 +4,9 @@
 
 use leptos::prelude::*;
 
+use super::data::{notes_truncated, Loadable};
+use super::loader::NotesWindow;
+
 use super::data::{has_next_page, page_count, PAGE_SIZES};
 use crate::i18n::{t, t_string, use_i18n};
 
@@ -92,5 +95,61 @@ pub fn Pager(
                 }.into_any()
             }}
         </div>
+    }
+}
+
+/// "Loaded N of M · Load more" for the note window.
+///
+/// A pagination affordance, so it lives beside the pager rather than inline in
+/// the console's orchestration. It replaced a static "showing the first 1000"
+/// italic: `memory.listFacts` has always accepted `offset`, every caller sent a
+/// hard-coded `0`, and that one line of text was all that stood between the
+/// user and note 1001.
+///
+/// Renders nothing when the window already holds everything — including when
+/// the total is unknown and the window came back short, which is
+/// [`super::data::notes_truncated`]'s job to decide (an un-upgraded core sends
+/// no total, and "unknown" must not read as "definitely complete").
+#[component]
+pub fn LoadMoreNotes(
+    notes: RwSignal<Loadable<NotesWindow>>,
+    /// True while an append is in flight. Deliberately not the slot's own
+    /// `Loading` arm: that renders skeletons in place of the list, and blanking
+    /// the rows the user is reading in order to add to them is worse than a
+    /// busy button.
+    busy: RwSignal<bool>,
+    on_more: Callback<()>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    view! {
+        {move || notes.get().as_ready()
+            .filter(|w| notes_truncated(w.total, w.facts.len()))
+            .map(|w| {
+                let loaded = w.facts.len();
+                let total = w.total;
+                view! {
+                    <div class="flex items-center gap-3 pt-1 text-xs">
+                        <span class="text-text-tertiary">
+                            {move || total.map_or_else(
+                                || t_string!(i18n, memory.notes_load_more).to_string(),
+                                |t| t_string!(i18n, memory.notes_loaded_of)
+                                    .replace("{loaded}", &loaded.to_string())
+                                    .replace("{total}", &t.to_string()),
+                            )}
+                        </span>
+                        <button
+                            class="text-primary hover:underline disabled:opacity-50"
+                            prop:disabled=move || busy.get()
+                            on:click=move |_| on_more.run(())
+                        >
+                            {move || if busy.get() {
+                                t_string!(i18n, memory.notes_loading_more).to_string()
+                            } else {
+                                t_string!(i18n, memory.notes_load_more).to_string()
+                            }}
+                        </button>
+                    </div>
+                }
+            })}
     }
 }

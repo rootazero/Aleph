@@ -115,7 +115,6 @@ mod tests {
     /// non-functional defaults.
     fn mk_test_orchestrator() -> Arc<Orchestrator> {
         use crate::orchestrator::flow_registry::{FlowRegistry, FlowSet};
-        use crate::orchestrator::resolver::RoutingOverrides;
         use crate::orchestrator::sandbox_factory::build_sandbox_factory;
         use crate::sandbox::Sandbox;
         use crate::session::in_process::InProcessActorSessionService;
@@ -171,7 +170,6 @@ mod tests {
 
         Arc::new(Orchestrator::new(
             flow_registry,
-            Arc::new(RoutingOverrides::default()),
             Arc::new(HashMap::new()),
             session_service,
             sandbox_factory,

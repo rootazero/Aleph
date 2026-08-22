@@ -4,6 +4,8 @@
 
 use std::collections::HashSet;
 
+use super::selection::RowRef;
+
 use crate::api::{CompressedFact, RawMemory};
 
 /// Window of notes pulled in one `list_facts` call, then faceted/paginated
@@ -60,6 +62,12 @@ impl<T> Loadable<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryFacet {
+    /// Curated hot memory (`MEMORY.md`) — the block injected into every turn.
+    ///
+    /// Owns its own fetch and its own renderer (`curated::CuratedPanel`): its
+    /// rows are neither notes nor raw turns, so none of the window slicing,
+    /// paging or batch machinery below applies to it.
+    Curated,
     AllNotes,
     Facts,
     Feedback,
@@ -80,7 +88,16 @@ impl MemoryFacet {
     /// undeletable.
     #[must_use]
     pub fn is_notes(&self) -> bool {
-        !matches!(self, MemoryFacet::Raw)
+        // Exhaustive on purpose. This used to be `!matches!(self, Raw)`,
+        // which silently classified any NEW facet as note-shaped — and
+        // "note-shaped" decides which delete verb runs against the row.
+        // A new variant should be a compile error here, not a wrong default.
+        match self {
+            Self::AllNotes | Self::Facts | Self::Feedback | Self::Lessons | Self::SearchHits => {
+                true
+            }
+            Self::Raw | Self::Curated => false,
+        }
     }
 }
 
@@ -115,7 +132,7 @@ pub fn bucket_counts(facts: &[CompressedFact]) -> [usize; 4] {
 pub fn facet_slice(facts: &[CompressedFact], facet: MemoryFacet) -> Vec<CompressedFact> {
     match facet {
         MemoryFacet::AllNotes => facts.to_vec(),
-        MemoryFacet::Raw | MemoryFacet::SearchHits => Vec::new(),
+        MemoryFacet::Raw | MemoryFacet::SearchHits | MemoryFacet::Curated => Vec::new(),
         other => facts
             .iter()
             .filter(|f| fact_facet(&f.category) == other)
@@ -263,8 +280,11 @@ pub struct RawExport {
     pub session_id: Option<String>,
     /// Already-formatted display timestamp (see [`format_ts`]).
     pub created_at: String,
-    pub user_input: String,
-    pub ai_output: String,
+    /// The recorded turn text. One body: `raw_memories` has a single
+    /// `content` column, so the `**Q**` / `**A**` split this used to emit
+    /// labelled a distinction the store never made — every export marked the
+    /// whole row as the question and never wrote an answer.
+    pub content: String,
 }
 
 /// Which of `selected` are present on `page_rows`, and how many are not.
@@ -278,12 +298,15 @@ pub struct RawExport {
 /// `node_detail` fetch on the notes side.
 #[must_use]
 pub fn stage_raw_export(
-    selected: &HashSet<String>,
+    selected: &HashSet<RowRef>,
     page_rows: &[RawMemory],
 ) -> (Vec<RawMemory>, usize) {
+    // Matched on (partition, id), not id alone: the list spans the partition
+    // union the gateway resolves, and a row is only the row the user ticked if
+    // both halves agree.
     let staged: Vec<RawMemory> = page_rows
         .iter()
-        .filter(|r| selected.contains(&r.id))
+        .filter(|r| selected.contains(&RowRef::new(&r.agent_id, &r.id)))
         .cloned()
         .collect();
     let dropped = selected.len().saturating_sub(staged.len());
@@ -322,11 +345,9 @@ pub fn raws_to_markdown(items: &[RawExport]) -> String {
             "# {}\n\n`{}` · {}{}\n\n",
             item.created_at, item.id, item.agent_id, session
         ));
-        if !item.user_input.trim().is_empty() {
-            out.push_str(&format!("**Q** {}\n\n", item.user_input.trim()));
-        }
-        if !item.ai_output.trim().is_empty() {
-            out.push_str(&format!("**A** {}\n\n", item.ai_output.trim()));
+        if !item.content.trim().is_empty() {
+            out.push_str(item.content.trim());
+            out.push_str("\n\n");
         }
     }
     out.truncate(out.trim_end().len());
@@ -351,6 +372,7 @@ mod tests {
             path: format!("{cat}/x"),
             tags: Vec::new(),
             link_count: 0,
+            match_field: None,
         }
     }
 
@@ -366,6 +388,7 @@ mod tests {
             path: p.into(),
             tags: Vec::new(),
             link_count: 0,
+            match_field: None,
         }
     }
 
@@ -468,6 +491,7 @@ mod tests {
             path: content.into(),
             tags: Vec::new(),
             link_count: 0,
+            match_field: None,
         }
     }
 
@@ -606,37 +630,53 @@ mod tests {
     }
 
     #[test]
-    fn raws_export_labels_both_halves_and_keeps_session() {
+    fn raws_export_writes_the_body_and_keeps_the_provenance_header() {
         let items = vec![RawExport {
             id: "raw-1".into(),
             agent_id: "main".into(),
             session_id: Some("s-77".into()),
             created_at: "2026-07-24 14:02".into(),
-            user_input: "why phantom pages?".into(),
-            ai_output: "the total was global".into(),
+            content: "why phantom pages?".into(),
         }];
         let md = raws_to_markdown(&items);
         assert!(md.contains("2026-07-24 14:02"));
         assert!(md.contains("main"));
         assert!(md.contains("s-77"));
-        assert!(md.contains("**Q** why phantom pages?"));
-        assert!(md.contains("**A** the total was global"));
+        assert!(md.contains("why phantom pages?"));
     }
 
+    /// The export used to label every row `**Q**` and, when it found a
+    /// second half, `**A**`. There is no second half — `raw_memories` has one
+    /// `content` column — so every exported row claimed to be a question with
+    /// no answer. Labels that can only ever say one thing are not labels.
     #[test]
-    fn raws_export_omits_an_empty_half() {
-        // Raw rows built from a single-sided record must not emit a bare "**A**".
+    fn raws_export_does_not_label_the_body_as_a_question() {
         let items = vec![RawExport {
             id: "raw-2".into(),
             agent_id: "main".into(),
             session_id: None,
             created_at: "2026-07-24 14:03".into(),
-            user_input: "only a question".into(),
-            ai_output: String::new(),
+            content: "only a question".into(),
         }];
         let md = raws_to_markdown(&items);
-        assert!(md.contains("**Q** only a question"));
-        assert!(!md.contains("**A**"));
+        assert!(md.contains("only a question"));
+        assert!(!md.contains("**Q**"), "{md:?}");
+        assert!(!md.contains("**A**"), "{md:?}");
+    }
+
+    #[test]
+    fn raws_export_skips_a_row_with_an_empty_body() {
+        let items = vec![RawExport {
+            id: "raw-3".into(),
+            agent_id: "main".into(),
+            session_id: None,
+            created_at: "2026-07-24 14:04".into(),
+            content: "   ".into(),
+        }];
+        let md = raws_to_markdown(&items);
+        // Header still present (the row exists), body section absent.
+        assert!(md.contains("raw-3"));
+        assert_eq!(md.trim_end().lines().last().unwrap().trim(), "`raw-3` · main");
     }
 
     #[test]
@@ -718,11 +758,14 @@ mod tests {
     // ── stage_raw_export ─────────────────────────────────────────────────────
 
     fn raw_row(id: &str) -> RawMemory {
+        raw_row_in("main", id)
+    }
+
+    fn raw_row_in(partition: &str, id: &str) -> RawMemory {
         RawMemory {
             id: id.into(),
-            agent_id: "main".into(),
-            user_input: "q".into(),
-            ai_output: "a".into(),
+            agent_id: partition.into(),
+            content: "q".into(),
             session_id: None,
             created_at: None,
         }
@@ -736,16 +779,33 @@ mod tests {
         // reported as dropped, not silently omitted from an export that still
         // claims success.
         let page: Vec<RawMemory> = (25..50).map(|i| raw_row(&format!("r{i}"))).collect();
-        let selected: HashSet<String> = (0..50).map(|i| format!("r{i}")).collect();
+        let selected: HashSet<RowRef> = (0..50).map(|i| RowRef::new("main", format!("r{i}"))).collect();
         let (staged, dropped) = stage_raw_export(&selected, &page);
         assert_eq!(staged.len(), 25);
         assert_eq!(dropped, 25);
     }
 
+    /// A row is staged only when BOTH halves of its identity match. Ticking
+    /// `r0` in one partition must not export the `r0` sitting in the other —
+    /// which is what an id-only match did once the list started spanning the
+    /// partition union.
+    #[test]
+    fn stage_raw_export_matches_on_the_partition_too_not_the_id_alone() {
+        let page = vec![
+            raw_row_in("main", "r0"),
+            raw_row_in("main__u-owner", "r0"),
+        ];
+        let selected: HashSet<RowRef> = [RowRef::new("main__u-owner", "r0")].into_iter().collect();
+        let (staged, dropped) = stage_raw_export(&selected, &page);
+        assert_eq!(staged.len(), 1, "exactly the ticked row, not its namesake");
+        assert_eq!(staged[0].agent_id, "main__u-owner");
+        assert_eq!(dropped, 0);
+    }
+
     #[test]
     fn stage_raw_export_no_drop_when_the_whole_selection_is_on_page() {
         let page: Vec<RawMemory> = (0..10).map(|i| raw_row(&format!("r{i}"))).collect();
-        let selected: HashSet<String> = (0..5).map(|i| format!("r{i}")).collect();
+        let selected: HashSet<RowRef> = (0..5).map(|i| RowRef::new("main", format!("r{i}"))).collect();
         let (staged, dropped) = stage_raw_export(&selected, &page);
         assert_eq!(staged.len(), 5);
         assert_eq!(dropped, 0);

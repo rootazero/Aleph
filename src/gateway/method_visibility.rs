@@ -571,6 +571,16 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("memory.delete", Treatment::PartitionChecked),
     ("graph.node_detail", Treatment::PartitionChecked),
     ("graph.search", Treatment::PartitionChecked),
+    // --- Round 2026-08-21: the curated (hot-tier) face ---
+    // All three take a BASE agent id and let `MemoryContextProvider` compose
+    // the caller's own scope, so the partition check is a refusal of a
+    // caller-supplied composed id plus the standard `partition_visible`.
+    // `list` answers a denial with the same snapshot a genuinely empty store
+    // produces (limit included); the two mutations answer with the same
+    // `NoMatch` an absent entry produces.
+    ("memory.curated.list", Treatment::PartitionChecked),
+    ("memory.curated.replace", Treatment::PartitionChecked),
+    ("memory.curated.remove", Treatment::PartitionChecked),
     // --- Task 7 fix round 2 ---
     ("graph.update_note", Treatment::PartitionChecked),
     ("graph.rename_note", Treatment::PartitionChecked),
@@ -812,19 +822,10 @@ mod tests {
         // and `chat.context_estimate` until 2026-08-07 — see those pin
         // tests.)
         assert_eq!(treatment_of("memory.reembed"), None);
-        // `memory.clear` / `memory.clearFacts` are HARD-ERROR STUBS: both
-        // handlers take `_db` and return `INTERNAL_ERROR` unconditionally
-        // (bulk clearing does not exist in the notes-based memory model), so
-        // they touch no partition and there is nothing to check. They ARE
-        // registered as RPCs, so every `memory.` sweep finds them and every
-        // reviewer re-derives "unregistered — is that a gap?" from scratch.
-        // Pinned with the reason so nobody has to. This assertion fails if
-        // someone registers them; it CANNOT see the handler growing a real
-        // body, which is the premise the ruling rests on — a body makes them
-        // `PartitionChecked` and this pin is the line to delete.
-        for m in ["memory.clear", "memory.clearFacts"] {
-            assert_eq!(treatment_of(m), None, "{m}");
-        }
+        // (`memory.clear` / `memory.clearFacts` were pinned here as
+        // unregistered hard-error stubs until 2026-08-21, when they were cut
+        // outright: their only caller — `aleph memory clear` — now explains
+        // locally instead of dispatching a call that could only fail.)
         assert_eq!(treatment_of("a.method.nobody.registered"), None);
     }
 

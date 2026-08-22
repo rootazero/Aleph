@@ -187,6 +187,18 @@ pub const fn default_bm25_bonus() -> f32 {
     0.15
 }
 
+/// Default scan cadence for the background reconciler daemon.
+///
+/// 5 minutes is the minimum sensible value: the scan walks every
+/// fact_id in `memory_events` plus the notes filesystem, so going
+/// faster trades I/O for divergence-detection latency. Operators with
+/// quieter workloads can bump this up; operators who actually need
+/// fast divergence detection should treat the existing call sites as
+/// audit surfaces and reduce the cadence accordingly.
+pub const fn default_reconciler_interval_secs() -> u64 {
+    300
+}
+
 pub const fn default_qf_enabled() -> bool {
     true
 }

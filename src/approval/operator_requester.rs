@@ -198,7 +198,8 @@ impl ApprovalRequester for OperatorApprovalRequester {
             return ApprovalResponse {
                 outcome: ApprovalOutcome::Denied,
                 deny_reason: Some(
-                    "approval notification could not be delivered to the operator surface".to_string(),
+                    "approval notification could not be delivered to the operator surface"
+                        .to_string(),
                 ),
             };
         }
@@ -290,6 +291,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         }
     }
 

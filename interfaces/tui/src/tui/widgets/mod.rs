@@ -1,3 +1,4 @@
+pub mod btw_panel;
 pub mod chat_area;
 pub mod command_palette;
 pub mod dialog;

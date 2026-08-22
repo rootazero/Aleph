@@ -752,7 +752,11 @@ mod tests {
         };
         let mut out = Vec::new();
         while let Ok(Some(e)) = rd.next_entry().await {
-            if e.path().extension().and_then(|x| x.to_str()) == Some("md") {
+            if e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+            {
                 out.push(e.file_name().to_string_lossy().to_string());
             }
         }

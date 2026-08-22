@@ -56,7 +56,7 @@ pub async fn run_catchup_poll(
             }
         }
         if cursor > after {
-            tracker.advance(cursor, "imessage-bb");
+            tracker.advance(cursor, "imessage-bb").await;
         }
         // Piggyback the attachment sweep on the existing poll interval so staged
         // downloads don't accumulate over a long-running daemon — no extra task.

@@ -566,7 +566,6 @@ pub(in crate::commands::start) fn register_teams_handlers(
 pub(in crate::commands::start) fn register_graph_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
-    _default_agent_id: &str,
     indexer: Option<
         &::std::sync::Arc<
             alephcore::memory::notes::NoteIndexer<

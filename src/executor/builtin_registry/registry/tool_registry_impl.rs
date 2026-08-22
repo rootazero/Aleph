@@ -1592,11 +1592,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             // chunks under). RecallContextTool predates AlephTool, so dispatch
             // via call_impl.
             "recall_context" => {
+                // Resolve the same (optionally project-scoped) agent id the
+                // compaction pipeline writes raw chunks under. Done first so
+                // it lands inside the ratchet's 20-line arm window (see
+                // `every_memory_dispatch_arm_composes_the_partition`); moving
+                // it past the session-key fallback would push it past line
+                // 1613 and the ratchet would falsely flag this arm.
+                let agent_id = self.caller_memory_partition("default");
                 // Per-task turn context first (race-free), then the
                 // process-global session context mirror: the handle is
                 // rewritten at every run start, so a concurrent run of
                 // another agent can swap the session mid-turn and split it
-                // from the agent id resolved below. Taking both from the same
+                // from the agent id resolved above. Taking both from the same
                 // TurnContext keeps the (agent, session) pair coherent — the
                 // same rule memory_search scope=current_session follows.
                 let session_id = crate::tools::turn_context::current_session_key().or_else(|| {
@@ -1614,11 +1621,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                         })
                         .map(|ctx| ctx.session_key_str.clone())
                 });
-                // Resolve the same (optionally project-scoped) agent id the
-                // compaction pipeline writes raw chunks under. This arm was the
-                // only one in this file that composed; it now shares the one
-                // resolver with the six that did not.
-                let agent_id = self.caller_memory_partition("default");
                 Box::pin(async move {
                     let db = self.recall_context_db.as_ref().ok_or_else(|| {
                         AlephError::tool(
@@ -1757,6 +1759,7 @@ mod recall_context_identity_tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         }
     }
 
@@ -1803,7 +1806,10 @@ mod recall_context_identity_tests {
         let out = TURN_CONTEXT
             .scope(turn_ctx("alice"), async {
                 registry
-                    .execute_tool("recall_context", serde_json::json!({ "query": "alice chunk" }))
+                    .execute_tool(
+                        "recall_context",
+                        serde_json::json!({ "query": "alice chunk" }),
+                    )
                     .await
             })
             .await
@@ -1848,7 +1854,10 @@ mod recall_context_identity_tests {
         })));
 
         let out = registry
-            .execute_tool("recall_context", serde_json::json!({ "query": "bob chunk" }))
+            .execute_tool(
+                "recall_context",
+                serde_json::json!({ "query": "bob chunk" }),
+            )
             .await
             .unwrap();
 
@@ -1965,11 +1974,39 @@ mod channel_tool_dispatch_tests {
         "flag_user_correction",
     ];
 
+    /// The end of a match arm, as a line index: the next arm's opening line at
+    /// the same indentation, or the end of the file.
+    ///
+    /// The arm's own syntactic terminus, NOT a line count. This used to scan a
+    /// fixed 20-line window, and `recall_context` grew a comment past it — so
+    /// the guard reported an arm that had composed correctly all along, and
+    /// stayed red across four rounds while the docs recorded it as evidence of
+    /// a defect it was not describing. A window whose bound is chosen by
+    /// somebody other than the unit being scanned reports on whatever happens
+    /// to be nearby (`src/gateway/CLAUDE.md`'s 400-character census made the
+    /// mirror-image mistake and read the NEXT declaration's compliance as this
+    /// one's).
+    fn arm_end(lines: &[&str], arm: usize) -> usize {
+        let indent = lines[arm].len() - lines[arm].trim_start().len();
+        lines
+            .iter()
+            .enumerate()
+            .skip(arm + 1)
+            .find(|(_, l)| {
+                let trimmed = l.trim_start();
+                trimmed.starts_with('"')
+                    && trimmed.contains("=>")
+                    && l.len() - trimmed.len() == indent
+            })
+            .map_or(lines.len(), |(i, _)| i)
+    }
+
     #[test]
     fn every_memory_dispatch_arm_composes_the_partition() {
         let source = include_str!("tool_registry_impl.rs");
         let lines: Vec<&str> = source.lines().collect();
         let mut offenders = Vec::new();
+        let mut checked = 0usize;
 
         for name in MEMORY_ARMS_THAT_MUST_COMPOSE {
             let needle = format!("\"{name}\" =>");
@@ -1980,10 +2017,16 @@ mod channel_tool_dispatch_tests {
                 offenders.push(format!("{name}: no dispatch arm found at all"));
                 continue;
             };
-            // The resolution always happens in the arm's opening statements,
-            // before the `Box::pin`; 20 lines is generous room for the comment
-            // that explains why.
-            let window = lines[arm..(arm + 20).min(lines.len())].join("\n");
+            // Comments are documentation, not code: several of these arms
+            // explain in prose why they compose, and counting that prose would
+            // pass an arm that had stopped doing it.
+            let window: String = lines[arm..arm_end(&lines, arm)]
+                .iter()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            checked += 1;
             if !window.contains("caller_memory_partition")
                 && !window.contains("caller_profile_partition")
             {
@@ -1993,6 +2036,13 @@ mod channel_tool_dispatch_tests {
                 ));
             }
         }
+
+        assert_eq!(
+            checked,
+            MEMORY_ARMS_THAT_MUST_COMPOSE.len(),
+            "every listed arm must actually have been scanned — a missing arm is \
+             reported above, but a silently unscanned one would read as compliant"
+        );
 
         assert!(
             offenders.is_empty(),

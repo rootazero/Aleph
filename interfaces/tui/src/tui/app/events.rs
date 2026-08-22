@@ -13,6 +13,44 @@ use aleph_protocol::{
 use super::super::slash::ToolProgressMode;
 use super::{Action, AppState, AskDialogView, ChatMessage};
 
+/// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
+/// learned one per `RunAccepted`. A background/cron/subagent-heavy install
+/// can mint many runs while one TUI screen stays open for hours; this keeps
+/// that memory bounded. Eviction is FIFO and fails open: the oldest pair
+/// falls out and that run_id reverts to "unknown" — which
+/// `AppState::frame_belongs_here` already keeps rather than drops. That is
+/// the safe direction: capping this can let a few stragglers back in, it can
+/// never cause a frame that is actually ours to be dropped.
+const RUN_SESSION_CAP: usize = 256;
+
+/// The run id `handle_gateway_event`'s cross-session guard should check for
+/// `event`, or `None` for a frame the guard does not apply to.
+///
+/// Default is GUARDED: `StreamEvent::run_id()` is an exhaustive match in
+/// shared/protocol (no wildcard arm), so a tenth run-scoped variant added
+/// there is a compile error until someone decides what it returns, and
+/// inherits this guard the moment they do — nothing here has to be told
+/// about it by name. Only one variant opts out below, and it says why.
+/// `ClarificationEnded` already self-exempts: `run_id()` returns `""` for it
+/// (session-keyed, not run-keyed, by the protocol's own design), which the
+/// emptiness check turns into `None` without a named case here.
+fn run_scoped_id(event: &StreamEvent) -> Option<&str> {
+    match event {
+        // Keyed by `session_key` — the clarification registry's actual
+        // routing key — not by which run started it. A parked question
+        // arguably belongs on every open screen until it is answered (R5:
+        // AI comes to you), which is a different judgement call from "this
+        // run's assistant text leaked into a transcript that isn't its
+        // session's." Scoping AskUser by run/session is left to its own
+        // task rather than folded into this guard by accident.
+        StreamEvent::AskUser { .. } => None,
+        other => {
+            let id = other.run_id();
+            (!id.is_empty()).then_some(id)
+        }
+    }
+}
+
 /// Flatten an `AskUser` frame into the view the dialog overlay renders.
 ///
 /// Prefers the structured `questions` view: it carries the short header, the
@@ -78,18 +116,178 @@ impl AppState {
         self.should_quit = true;
     }
 
+    /// Record which session `run_id` belongs to, learned from that run's own
+    /// `RunAccepted`. Recorded for EVERY run, own or foreign: a run's home
+    /// session cannot change, but [`AppState::session_key`] can (a
+    /// `/session` switch), so `frame_belongs_here` re-derives "does this
+    /// belong on THIS screen" against the current key every time instead of
+    /// baking in a yes/no at learn time — the same run correctly resumes
+    /// once the screen switches back to its actual session, instead of
+    /// staying dropped forever because it was foreign a moment ago.
+    ///
+    /// Idempotent (a repeated id is not pushed twice, so a resend cannot
+    /// burn through the FIFO bound early) and bounded at
+    /// [`RUN_SESSION_CAP`] (see its doc for why eviction is safe).
+    fn mark_run_session(&mut self, run_id: String, session_key: String) {
+        if self.run_sessions.iter().any(|(id, _)| *id == run_id) {
+            return;
+        }
+        if self.run_sessions.len() >= RUN_SESSION_CAP {
+            self.run_sessions.pop_front();
+        }
+        self.run_sessions.push_back((run_id, session_key));
+    }
+
+    /// Whether a frame naming `run_id` belongs on THIS screen right now.
+    ///
+    /// Only a run id whose recorded home session does not match
+    /// [`AppState::session_key`] *at this moment* is dropped. An id this
+    /// screen has never learned about is kept: "I cannot tell" must not
+    /// become "not mine", or a run whose `RunAccepted` raced past this frame
+    /// (or a core too old to send one at all) goes silently missing from its
+    /// own transcript.
+    #[must_use]
+    pub fn frame_belongs_here(&self, run_id: &str) -> bool {
+        match self.run_sessions.iter().find(|(id, _)| id == run_id) {
+            Some((_, session_key)) => *session_key == self.session_key,
+            None => true,
+        }
+    }
+
+    /// Apply one frame belonging to a side question to the `/btw` overlay.
+    ///
+    /// Every arm ends in the overlay or is deliberately ignored; none of them
+    /// touches `messages`, `current_run` or the run-scoped status fields. That
+    /// is the property Step 5 of this task asserts on a real machine and
+    /// `no_side_question_frame_reaches_the_main_transcript` asserts here: a
+    /// side question is answered on a session the user is not looking at, so
+    /// nothing about it may appear in the conversation they ARE looking at.
+    ///
+    /// Ignoring the rest is not laziness — a side question runs read-only on a
+    /// derived session, so its context gauge, model-fallback notice and retry
+    /// ladder describe that session, not this screen's. Applying them would be
+    /// the same defect the cross-session guard exists to prevent, arriving by
+    /// a route that bypasses it.
+    fn apply_btw_frame(&mut self, event: StreamEvent) -> Action {
+        use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
+
+        // Every application below names the run, never just "the active
+        // question". `accepts_frame` says the frame is the overlay's; it does
+        // NOT say it belongs to what is on screen, because a claim outlives
+        // its exchange and a second side question can be asked while the first
+        // is still answering. See `BtwOverlay::for_active_run`.
+        let run_id = event.run_id().to_string();
+
+        match event {
+            StreamEvent::RunAccepted {
+                run_id,
+                session_key,
+                ..
+            } => {
+                // Recorded even though this frame is being intercepted: if the
+                // overlay's claim is ever evicted, `frame_belongs_here` is the
+                // fallback, and it can only answer for a run it has learned
+                // about. The side key is not this screen's key, so it answers
+                // "drop" — which is the safe direction for a stray side frame.
+                self.mark_run_session(run_id, session_key);
+                Action::None
+            }
+            StreamEvent::ResponseChunk { content, .. } => {
+                self.btw.push_delta(&run_id, &content);
+                Action::None
+            }
+            StreamEvent::AgentTrace { event, .. } => {
+                match event {
+                    // The turn's full text; the deltas above are its prefix.
+                    AgentTraceEvent::TextEmitted {
+                        stream: AgentTraceTextKind::Final,
+                        text,
+                        ..
+                    } => self.btw.push_final(&run_id, &text),
+                    AgentTraceEvent::ToolCallStarted { call, .. } => {
+                        self.btw.note_tool(&run_id, Some(call.tool_name));
+                    }
+                    AgentTraceEvent::ToolCallCompleted { .. } => self.btw.note_tool(&run_id, None),
+                    _ => {}
+                }
+                Action::None
+            }
+            StreamEvent::RunComplete { summary, .. } => {
+                self.btw
+                    .finish_active(&run_id, summary.final_response.as_deref());
+                Action::None
+            }
+            StreamEvent::RunError { error, .. } => {
+                self.btw.fail_active(&run_id, error);
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
     // -- Gateway event handling -----------------------------------------
 
     /// Handle a `StreamEvent` from the gateway. Returns an Action if the event
     /// should trigger further side effects (e.g. scrolling to bottom).
     pub fn handle_gateway_event(&mut self, event: StreamEvent) -> Action {
+        // Cross-session guard, structural rather than one early-return per
+        // arm: see `run_scoped_id` for what is exempt and why. Everything
+        // else — whether it appends visible transcript text (`ResponseChunk`,
+        // `AgentTrace`, tool rows, reasoning, the system-message arms) or
+        // repaints run-scoped status (`ModelResolved`, `ContextGauge`) — is
+        // "another run's state silently applied to this screen," the same
+        // defect either way, so both kinds are dropped here before a single
+        // arm below runs.
+        // Side-question intercept, and it MUST run before the guard below.
+        //
+        // A `/btw` run executes on a *derived* session, so its frames are
+        // cross-session by construction and `frame_belongs_here` correctly
+        // drops every one of them — correct for the transcript, useless for
+        // the person who asked. Claiming them here routes them to the overlay
+        // instead, and returning is the other half of the same requirement:
+        // falling through to the arms below is exactly how a side question
+        // would end up IN the main transcript.
+        //
+        // This does not weaken the guard. The guard protects against every
+        // other foreign run; this is one narrow branch for run ids the
+        // overlay itself asked for.
+        if self.btw.accepts_frame(run_scoped_id(&event)) {
+            return self.apply_btw_frame(event);
+        }
+
+        if let Some(run_id) = run_scoped_id(&event) {
+            if !self.frame_belongs_here(run_id) {
+                return Action::None;
+            }
+        }
+
         match event {
-            StreamEvent::RunAccepted { run_id, .. } => {
+            StreamEvent::RunAccepted {
+                run_id,
+                session_key,
+                ..
+            } => {
+                // Learn this run's home session unconditionally — own or
+                // foreign — so `frame_belongs_here` can answer for it later
+                // no matter how many times `self.session_key` changes
+                // afterward (see `mark_run_session`'s doc). This frame
+                // itself always reaches here un-guarded: nothing could have
+                // proven it foreign before its own `RunAccepted`, which is
+                // what teaches it.
+                self.mark_run_session(run_id.clone(), session_key.clone());
+                if session_key != self.session_key {
+                    // Someone else's run: a background/cron/delegated-
+                    // subagent run, or another window's conversation. Every
+                    // later frame naming it is caught by the guard above and
+                    // dropped instead of leaking into this transcript.
+                    return Action::None;
+                }
                 self.current_run = Some(run_id);
                 self.run_started_at = Some(Instant::now());
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
                 self.turn_streamed_len = 0;
+                self.run_rendered_assistant_text = false;
                 self.is_connected = true;
                 Action::None
             }
@@ -214,6 +412,21 @@ impl AppState {
                 // first, then settle whatever it did not mention.
                 self.reconcile_tools_from_summary(&summary.tool_summaries, &summary.errors);
                 self.settle_orphan_tools();
+                // The terminal answer, when this run produced no other copy of
+                // it. On an ordinary streamed turn the text is already on
+                // screen (twice on the wire, de-duped by `turn_streamed_len`)
+                // and `final_response` is a duplicate, so the flag is what
+                // keeps this from doubling every reply. On a run the gateway
+                // SERVED rather than dispatched — `/btw promote` is the first —
+                // this frame is the only carrier the answer ever gets, and
+                // without this the surface that owns the `p` key showed a
+                // spinner and then silence for both of the outcomes that are
+                // not errors.
+                if !self.run_rendered_assistant_text {
+                    if let Some(text) = summary.final_response.as_deref() {
+                        self.append_assistant_content(text.trim_end());
+                    }
+                }
                 self.mark_current_assistant_complete();
 
                 // Surface non-clean terminations (a hit cap / exhausted budget)

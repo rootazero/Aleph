@@ -595,6 +595,21 @@ pub async fn handle_clear(
         }
     };
 
+    // Clearing the conversation must also clear the `/btw` side session it
+    // derives. Not for residue — the key is unchanged, so the side session is
+    // still perfectly addressable — but for content: `btw::seed` copies a
+    // prefix of THIS transcript into the side session's own event log, so a
+    // clear that spares it leaves the user's next `/btw` able to quote back the
+    // conversation they just wiped, from inside the conversation they wiped it
+    // from. Deliberately not `terminate_session_continuations`: the key stays
+    // reachable here, so a running loop/goal is still stoppable and clearing
+    // content is no reason to kill it.
+    crate::gateway::continuation_lifecycle::retire_side_session(
+        &session_key,
+        "chat.clear",
+        Some(session_manager.clone()),
+    );
+
     match session_manager.reset_session(&session_key).await {
         Ok(cleared) => JsonRpcResponse::success(
             request.id,

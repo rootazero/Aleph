@@ -168,6 +168,27 @@ pub fn scoped_or_base(base: &str, project_scoped: bool, project_root: Option<&Pa
 /// scoped sibling directory.
 const SCOPED_FAMILIES: [&str; 3] = ["proj-", "u-", "p-"];
 
+/// `true` when `agent_id` already carries a scope suffix from one of
+/// [`SCOPED_FAMILIES`], i.e. it is the OUTPUT of a composition rather than a
+/// base agent id.
+///
+/// Exists because composition is **not idempotent**: feeding an already
+/// composed id back through [`session_write_id`] under an active scope yields
+/// `main__u-bob__u-bob`, a partition nobody writes and everybody's reads
+/// miss. Callers that accept an agent id off the wire and then let the
+/// resolver compose it (the `memory.curated.*` handlers; the builtin tool
+/// registry's `remember` arm carries the same warning in prose) use this to
+/// refuse a pre-composed id instead of silently landing on a phantom store.
+///
+/// Derived from [`SCOPED_FAMILIES`], never from a second literal list: a new
+/// family added there is recognised here for free.
+#[must_use]
+pub fn is_composed_id(agent_id: &str) -> bool {
+    agent_id
+        .split_once(NS_SEP)
+        .is_some_and(|(_, suffix)| SCOPED_FAMILIES.iter().any(|f| suffix.starts_with(f)))
+}
+
 /// Enumerate every note **corpus** that has memory on disk under `memory_dir`.
 ///
 /// A corpus is one `note/{agent_id}/` directory — the partition key every note

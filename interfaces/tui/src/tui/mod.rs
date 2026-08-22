@@ -8,6 +8,7 @@
 
 mod app;
 mod approval;
+mod btw_overlay;
 mod command_tree;
 mod commands;
 mod event;
@@ -39,8 +40,9 @@ use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 use app::{Action, AppState, Focus};
 use commands::{
-    attach_session, confirm_provider_pick, confirm_session_switch, execute_local_command,
-    fetch_gateway_commands, refresh_picker_provider, send_to_agent, shadowed_gateway_commands,
+    attach_session, btw_abort_or_close, confirm_provider_pick, confirm_session_switch,
+    dispatch_gateway_text, execute_local_command, fetch_gateway_commands, refresh_picker_provider,
+    send_to_agent, shadowed_gateway_commands,
 };
 use slash::ParsedInput;
 
@@ -282,8 +284,6 @@ async fn main_loop(
                 execute_local_command(state, textarea, client, cmd).await;
             }
             Action::GatewayCommand(text) => {
-                // Send slash command to Gateway as a regular message
-                state.add_user_message(text.clone());
                 state.ctrl_c_count = 0;
 
                 if !text.is_empty() {
@@ -291,7 +291,11 @@ async fn main_loop(
                     state.history_index = None;
                 }
 
-                send_to_agent(state, client, &text, "Command error").await;
+                // Not `send_to_agent` directly: a `/btw` must reach the
+                // overlay instead of the transcript, and that decision has to
+                // be made BEFORE anything is echoed into the conversation the
+                // side question is supposed to stay out of.
+                dispatch_gateway_text(state, client, &text, "Command error").await;
             }
             Action::CancelRun(run_id) => {
                 let params = json!({ "run_id": run_id });
@@ -365,9 +369,11 @@ async fn main_loop(
                                 execute_local_command(state, textarea, client, cmd).await;
                             }
                             ParsedInput::Gateway(text) => {
-                                // Send gateway command as chat message
-                                state.add_user_message(text.clone());
-                                send_to_agent(state, client, &text, "Command error").await;
+                                // Same single dispatcher as the typed path —
+                                // the palette is a second way to type a
+                                // command, not a second set of rules for what
+                                // one means.
+                                dispatch_gateway_text(state, client, &text, "Command error").await;
                             }
                             ParsedInput::NotSlashCommand => {
                                 // Shouldn't happen from palette, but handle gracefully
@@ -409,6 +415,32 @@ async fn main_loop(
             // -- Tool approval --
             Action::ResolveApproval { index } => {
                 approval::resolve_approval(state, client, index).await;
+            }
+
+            // -- Side question (`/btw`) --
+            Action::BtwAbortOrClose => {
+                btw_abort_or_close(state, client).await;
+            }
+            Action::BtwCopy => {
+                // Fire-and-forget: OSC 52 has no reply, so the notice says
+                // what was actually done rather than claiming success. Written
+                // straight to the terminal rather than into ratatui's buffer —
+                // it is a control sequence, not content, and the next frame
+                // repaints over nothing.
+                let notice = match state.btw.copyable() {
+                    Some(answer) => {
+                        let sequence = btw_overlay::osc52_clipboard_sequence(answer);
+                        use std::io::Write as _;
+                        let mut out = io::stdout();
+                        if write!(out, "{sequence}").and_then(|()| out.flush()).is_ok() {
+                            "Side answer sent to the terminal's clipboard (OSC 52)."
+                        } else {
+                            "Could not write to the terminal to copy the side answer."
+                        }
+                    }
+                    None => "Nothing to copy yet.",
+                };
+                state.add_system_message(notice.to_string());
             }
 
             // -- Session picker --

@@ -781,7 +781,7 @@ mod tests {
 
         // Page 1 (offset 0, limit 2): newest two.
         let p1 = backend
-            .get_raw_memories_dashboard(Some("pager"), None, 2, 0)
+            .get_raw_memories_dashboard(Some(&["pager".to_string()]), None, 2, 0)
             .unwrap();
         assert_eq!(p1.len(), 2);
         assert_eq!(p1[0].content, "entry-4");
@@ -789,7 +789,7 @@ mod tests {
 
         // Page 2 (offset 2): next two, no overlap with page 1.
         let p2 = backend
-            .get_raw_memories_dashboard(Some("pager"), None, 2, 2)
+            .get_raw_memories_dashboard(Some(&["pager".to_string()]), None, 2, 2)
             .unwrap();
         assert_eq!(p2.len(), 2);
         assert_eq!(p2[0].content, "entry-2");
@@ -797,7 +797,7 @@ mod tests {
 
         // Page 3 (offset 4): final partial page.
         let p3 = backend
-            .get_raw_memories_dashboard(Some("pager"), None, 2, 4)
+            .get_raw_memories_dashboard(Some(&["pager".to_string()]), None, 2, 4)
             .unwrap();
         assert_eq!(p3.len(), 1);
         assert_eq!(p3[0].content, "entry-0");
@@ -817,7 +817,7 @@ mod tests {
         // Deleting an existing id reports success and removes exactly one row.
         assert!(backend.delete_raw_memory(&drop_id).unwrap());
         let remaining = backend
-            .get_raw_memories_dashboard(Some("del"), None, 10, 0)
+            .get_raw_memories_dashboard(Some(&["del".to_string()]), None, 10, 0)
             .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, keep.id);
@@ -849,7 +849,7 @@ mod tests {
 
         // Dashboard (both agent-scoped and global) hides telemetry.
         let scoped = backend
-            .get_raw_memories_dashboard(Some("noise"), None, 100, 0)
+            .get_raw_memories_dashboard(Some(&["noise".to_string()]), None, 100, 0)
             .unwrap();
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].content, "real conversation");
@@ -864,12 +864,21 @@ mod tests {
 
         // Count and list must agree under EVERY filter combination — a global
         // count paired with a scoped list is what produced phantom pages.
+        let scoped_one = ["noise".to_string()];
+        // The union a scoped session resolves to. Included here because count
+        // and list must agree under the MULTI-partition filter too — that is
+        // the filter every gateway reader now passes, and a union list paired
+        // with a single-partition count is the phantom-page bug with the
+        // operands swapped.
+        let scoped_union = ["noise".to_string(), "noise__u-owner".to_string()];
         for (agent, query) in [
             (None, None),
-            (Some("noise"), None),
+            (Some(&scoped_one[..]), None),
             (None, Some("real")),
-            (Some("noise"), Some("real")),
-            (Some("noise"), Some("nonexistent-needle")),
+            (Some(&scoped_one[..]), Some("real")),
+            (Some(&scoped_one[..]), Some("nonexistent-needle")),
+            (Some(&scoped_union[..]), None),
+            (Some(&scoped_union[..]), Some("real")),
         ] {
             let listed = backend
                 .get_raw_memories_dashboard(agent, query, 1000, 0)

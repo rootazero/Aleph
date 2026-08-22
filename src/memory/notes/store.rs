@@ -150,6 +150,47 @@ pub trait NoteStore: Send + Sync {
     /// List all indexed notes for an agent, ordered by most recently updated first.
     async fn list_notes(&self, agent_id: &str) -> Result<Vec<NoteIndexEntry>, AlephError>;
 
+    /// [`Self::list_notes`] across several partitions at once, merged back into
+    /// one `updated_at DESC` ordering.
+    ///
+    /// The gateway's enumerating readers resolve a base persona id into the
+    /// union `[org tier, this session's partition]`
+    /// (`gateway::handlers::memory_scope::read_partitions`), because that is
+    /// where the writers wrote. The merge has to happen HERE rather than in the
+    /// caller: the ordering is what pagination slices, and two separately
+    /// ordered lists concatenated are not one ordered list — the second page
+    /// would interleave partitions arbitrarily.
+    ///
+    /// Rows are NOT deduplicated by `path`. The same `category/filename` can
+    /// exist in two partitions and they are two different notes; each row
+    /// carries its own `agent_id`, which is the half of the note's identity
+    /// that tells them apart and the value every addressing verb must be
+    /// handed back.
+    async fn list_notes_multi(
+        &self,
+        agent_ids: &[String],
+    ) -> Result<Vec<NoteIndexEntry>, AlephError> {
+        let mut all = Vec::new();
+        for agent_id in agent_ids {
+            all.extend(self.list_notes(agent_id).await?);
+        }
+        all.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
+        Ok(all)
+    }
+
+    /// [`Self::count_notes`] summed across several partitions.
+    ///
+    /// Partitions are disjoint by construction (`notes_index.agent_id` is the
+    /// partition), so the sum is a count and not an over-count — the property
+    /// that lets this pair with [`Self::list_notes_multi`] as a pager total.
+    async fn count_notes_multi(&self, agent_ids: &[String]) -> Result<i64, AlephError> {
+        let mut total = 0i64;
+        for agent_id in agent_ids {
+            total = total.saturating_add(self.count_notes(agent_id).await?);
+        }
+        Ok(total)
+    }
+
     /// Upsert a directed link `from_note -> to_note` and set its `relation` label.
     ///
     /// Used by keyword linking after the body `[[ ]]` link is written, so the
@@ -205,6 +246,32 @@ pub trait NoteStore: Send + Sync {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<NoteIndexEntry>, AlephError>;
+
+    /// [`Self::search_notes_fts`] across several partitions, merged and capped.
+    ///
+    /// Each partition is searched to the full `limit` and the merged pool is
+    /// then truncated — over-fetching rather than dividing the budget, so a
+    /// union whose hits all live in one partition returns the same rows a
+    /// single-partition search would.
+    ///
+    /// The merge orders by `updated_at DESC` rather than by relevance: fts5
+    /// ranks within one query and there is no cross-query score to compare, so
+    /// interleaving on rank would be inventing an ordering. Recency is the
+    /// ordering the note list already uses, which keeps the two agreeing.
+    async fn search_notes_fts_multi(
+        &self,
+        query: &str,
+        agent_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<NoteIndexEntry>, AlephError> {
+        let mut all = Vec::new();
+        for agent_id in agent_ids {
+            all.extend(self.search_notes_fts(query, agent_id, limit).await?);
+        }
+        all.sort_by_key(|e| std::cmp::Reverse(e.updated_at));
+        all.truncate(limit);
+        Ok(all)
+    }
 
     /// Top notes by link count + recency, plus active edges between visible
     /// nodes (`status = 'active'` only — dangling/tombstone rows never

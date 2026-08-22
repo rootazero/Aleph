@@ -17,6 +17,7 @@ use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
+use super::btw_overlay::BtwOverlay;
 use super::command_tree::{CommandEntry, DisplayEntry};
 use super::slash::{LocalCommand, ToolProgressMode};
 
@@ -84,6 +85,15 @@ pub enum Action {
     /// `APPROVAL_DECISIONS` (0 = allow once, 1 = allow session, 2 = deny).
     ResolveApproval { index: usize },
 
+    // -- Side question (`/btw`) --
+    /// Esc in the side-question overlay: abort the side run when one is still
+    /// answering, close the overlay when none is. Aborting names the
+    /// **overlay's own** run id — the screen's `current_run` is the main run,
+    /// or nothing, so `/stop`'s helper would stop the wrong thing (or refuse).
+    BtwAbortOrClose,
+    /// Copy the shown side answer as raw markdown.
+    BtwCopy,
+
     // -- Session picker --
     /// Move session-picker selection up
     SessionPickerUp,
@@ -118,6 +128,8 @@ pub enum Focus {
     SessionPicker,
     ProviderPicker,
     Approval,
+    /// The `/btw` side-question overlay.
+    Btw,
 }
 
 // ---------------------------------------------------------------------------
@@ -644,6 +656,21 @@ pub struct AppState {
     cache_root_agent: Option<String>,
     pub is_connected: bool,
 
+    /// `(run_id, session_key)` pairs learned from every `RunAccepted` this
+    /// screen has observed, own or foreign. Every other run-scoped frame is
+    /// checked against this before it is applied (see
+    /// `events::run_scoped_id` and `frame_belongs_here`), which compares the
+    /// recorded session against [`Self::session_key`] *at check time* — not
+    /// baked in at learn time — so a run correctly resumes appearing here if
+    /// a `/session` switch leaves and later returns to its actual session. A
+    /// run id never recorded here is treated as "unknown", which counts as
+    /// "kept", not "foreign": proof is required to drop, absence of proof is
+    /// not.
+    ///
+    /// FIFO-bounded (`events::RUN_SESSION_CAP`) so a long-lived screen next
+    /// to a busy install does not grow this without limit.
+    run_sessions: std::collections::VecDeque<(String, String)>,
+
     // -- Run tracking --
     pub current_run: Option<String>,
     /// Wall-clock start of the active run (set on `RunAccepted`, cleared on any
@@ -668,6 +695,28 @@ pub struct AppState {
     /// provider, output guardrail) still lands in full.
     pub turn_streamed_len: usize,
 
+    /// Has THIS run put any assistant text on screen yet?
+    ///
+    /// Set by [`AppState::append_assistant_content`] — the one place either
+    /// carrier (`ResponseChunk` deltas, `AgentTrace{TextEmitted{Final}}`)
+    /// reaches the transcript — and cleared on `RunAccepted`.
+    ///
+    /// It exists because `RunComplete` carries `summary.final_response`, which
+    /// `reply_emitter/extract.rs` calls the run's authoritative terminal
+    /// answer, and for an ordinary streamed turn that field is a duplicate of
+    /// what is already rendered. For a run that produced no text at all it is
+    /// the ONLY copy, and the TUI used to drop it: a `/btw promote` — served
+    /// by the gateway without a model, so no chunk and no trace ever
+    /// arrives — showed a spinner and then nothing, for the success receipt
+    /// and the "nothing to promote" receipt alike, while the failure receipt
+    /// (`RunError`) spoke. This is the general repair rather than a promote
+    /// special case: any served-not-run branch added later inherits it.
+    ///
+    /// A per-run flag rather than "is the last assistant bubble empty":
+    /// a run that appended nothing leaves the previous turn's bubble as the
+    /// last one, so that question answers about the wrong turn.
+    pub run_rendered_assistant_text: bool,
+
     // -- Settings --
     pub verbose: bool,
     pub tool_progress_mode: ToolProgressMode,
@@ -687,6 +736,14 @@ pub struct AppState {
     /// Surfaced by the `exec.approvals.pending` poll, resolved via
     /// `exec.approval.resolve`.
     pub approval: Option<ApprovalState>,
+    /// The `/btw` side-question overlay.
+    ///
+    /// Not an `Option` like its siblings: its history outlives any one
+    /// showing (closing it hides it, the next `/btw` reopens onto what was
+    /// already asked), and its run claims have to answer `accepts_frame` for
+    /// frames that arrive after the user closed it. `BtwOverlay::open` says
+    /// whether it is on screen.
+    pub btw: BtwOverlay,
 
     // -- Control --
     pub ctrl_c_count: u8,
@@ -726,12 +783,14 @@ impl AppState {
             cache_stat_agent: None,
             cache_root_agent: None,
             is_connected: true,
+            run_sessions: std::collections::VecDeque::new(),
 
             current_run: None,
             run_started_at: None,
             last_run_duration: None,
             current_run_uses_agent_trace: false,
             turn_streamed_len: 0,
+            run_rendered_assistant_text: false,
             current_run_trace_summary_applied: false,
 
             verbose: false,
@@ -744,6 +803,7 @@ impl AppState {
             session_picker: None,
             provider_picker: None,
             approval: None,
+            btw: BtwOverlay::default(),
 
             ctrl_c_count: 0,
             spinner_frame: 0,
@@ -965,15 +1025,33 @@ impl AppState {
         true
     }
 
+    /// Where focus lands when a modal that was covering the screen goes away.
+    ///
+    /// Not unconditionally `Input`. The `/btw` overlay is the one surface that
+    /// can still be **on screen** when another modal closes: a clarification
+    /// or an approval card can open over it (both are raised by frames, not by
+    /// keys, so neither needs the user to have left the overlay first), and
+    /// answering one used to hand focus to the composer while the side
+    /// question stayed painted over the transcript — visible, unreachable, and
+    /// unclosable, because `Esc` at `Focus::Input` is a no-op and every key
+    /// went to a textarea the user could not see.
+    const fn focus_after_modal(&self) -> Focus {
+        if self.btw.open {
+            Focus::Btw
+        } else {
+            Focus::Input
+        }
+    }
+
     /// Close any open overlay (palette, dialog, session picker, provider
-    /// picker) and return focus to input.
+    /// picker) and return focus to whatever is still on screen.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
         self.session_picker = None;
         self.provider_picker = None;
         self.approval = None;
-        self.focus = Focus::Input;
+        self.focus = self.focus_after_modal();
     }
 
     // -- Session picker -------------------------------------------------
@@ -1176,11 +1254,35 @@ impl AppState {
         self.focus = Focus::Approval;
     }
 
+    /// Show the side-question overlay for a `/btw` just sent, and give it
+    /// focus.
+    ///
+    /// The purely local overlays are dismissed first — nothing on the server
+    /// is parked on any of them. The two that ARE parked on something
+    /// (`AskUser`, tool approval) are deliberately not touched, and cannot be
+    /// showing anyway: both hold focus, so no `/btw` can have been typed
+    /// while one was up.
+    pub fn open_btw(&mut self, question: String) {
+        self.palette = None;
+        self.session_picker = None;
+        self.provider_picker = None;
+        self.btw.begin(question);
+        self.focus = Focus::Btw;
+    }
+
+    /// Hide the side-question overlay and return focus to input. The history
+    /// and the run claims survive — see [`BtwOverlay`]'s docs for why the
+    /// claims must.
+    pub fn close_btw(&mut self) {
+        self.btw.close();
+        self.focus = Focus::Input;
+    }
+
     /// Retract the approval overlay (resolved here, resolved elsewhere, or the
     /// server-side approval expired) and return focus to input.
     pub fn close_approval(&mut self) {
         self.approval = None;
-        self.focus = Focus::Input;
+        self.focus = self.focus_after_modal();
     }
 
     /// Drop a showing approval overlay when its run ends by any path (complete,
@@ -1285,10 +1387,44 @@ impl AppState {
         self.session_snapshot = None;
         self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
+        // The run left behind (if any) still belongs to the OLD session, and
+        // nothing extra needs to be recorded for that here: its own
+        // `RunAccepted` already taught `run_sessions` which session it is
+        // home to (see that field's doc), so `frame_belongs_here` now
+        // answers "no" for it against the new `self.session_key` above — and
+        // "yes" again if a later switch returns to its actual session.
         self.current_run = None;
         self.run_started_at = None;
         self.current_run_uses_agent_trace = false;
         self.current_run_trace_summary_applied = false;
+        // The side thread belongs to the conversation we just left, and it is
+        // cleared rather than kept per-conversation. Two reasons, and the
+        // second is the decisive one:
+        //
+        // 1. This client has no per-conversation container to key it into.
+        //    `AppState` holds exactly one of everything and `messages` is
+        //    wiped outright above — the Panel's `SessionMap<ConvId, ChatState>`
+        //    has no counterpart here. A map with one live entry, in a
+        //    singleton, is an abstraction with no consumer (R10); it would
+        //    also be the only per-conversation field in the struct, which is
+        //    how the next reader gets it wrong.
+        // 2. The side key is derived from the main key **including its
+        //    epoch** (`gateway::btw::side_key_for`). A `/session` switch —
+        //    and `/new` — therefore leaves the old side session unaddressable
+        //    server-side. Keeping its exchanges pageable would display a
+        //    thread that no longer exists anywhere but in this process, and
+        //    offer `p`/follow-up keys that address the wrong conversation.
+        //
+        // The run CLAIMS are kept, and that is not an oversight — see
+        // `BtwOverlay::clear_for_session_switch`. A side run whose
+        // `RunAccepted` has not landed yet is unknown to `run_sessions`, and
+        // an unknown run id is deliberately kept by `frame_belongs_here`, so
+        // forgetting the claim would render that run's answer into the
+        // conversation we just switched TO. (The run itself keeps going
+        // server-side, exactly as the main run left behind does a few lines
+        // up: this client does not cancel on switch, and making the side
+        // question the one exception would be a surprise, not a fix.)
+        self.btw.clear_for_session_switch();
         // New session = different context window; drop the stale gauge until
         // the next run's first `ContextGauge` refreshes it.
         self.context_gauge = None;

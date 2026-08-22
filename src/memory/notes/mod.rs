@@ -10,7 +10,7 @@ pub mod graph;
 pub mod indexer;
 pub mod keyword_linker;
 pub mod links;
-mod note;
+pub mod note;
 pub mod orientation;
 pub mod search_result;
 pub mod store;

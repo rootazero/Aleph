@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 use super::super::sanitize::sanitize_llm_output;
 use super::{NativeStreamState, ReplyEmitter};
 use crate::gateway::channel::OutboundMessage;
-use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
+use crate::gateway::event_emitter::{EventEmitError, EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::streaming::StreamAction;
 
 /// Status strings shown while a Teams-native stream is buffering.
@@ -29,6 +29,252 @@ fn pick_status_text() -> &'static str {
         .unwrap_or_default()
         .subsec_nanos() as usize;
     TEAMS_STATUS_TEXTS[seed % TEAMS_STATUS_TEXTS.len()]
+}
+
+impl ReplyEmitter {
+    /// Deliver a completed run's answer: the whole body of the `RunComplete`
+    /// arm, called between [`ReplyEmitter::begin_answering`] and
+    /// [`ReplyEmitter::end_answering`] so the side-answer badge covers exactly
+    /// this call and nothing before or after it.
+    async fn deliver_final_answer(&self, summary: RunSummary) {
+        // Stop the persistent typing indicator
+        self.typing_cancel.cancel();
+
+        // Finalize native stream if active
+        if !self.native_disabled.load(Ordering::SeqCst) {
+            if let Some(ref handler) = self.native_handler {
+                let state = self.native_stream_state.lock().await.take();
+                if let Some(s) = state {
+                    let text = {
+                        let mut buffer = self.buffer.lock().await;
+                        let raw = std::mem::take(&mut *buffer);
+                        sanitize_llm_output(&raw).into_owned()
+                    };
+                    if !text.is_empty() {
+                        // Marked here rather than into `text`: the
+                        // failure arm below re-fills the buffer with
+                        // `text` for the ordinary path to deliver, and
+                        // that path marks again at the chokepoint.
+                        let message = OutboundMessage::text(
+                            self.route.conversation_id.as_str(),
+                            self.mark_side_answer(&text).as_ref(),
+                        );
+                        match handler
+                            .stream_finalize(&self.route.conversation_id, &s.stream_id, message)
+                            .await
+                        {
+                            Ok(_result) => {
+                                self.has_sent.store(true, Ordering::SeqCst);
+                                // Stop typing, react success, close the media
+                                // leg — then return. This branch used to
+                                // `let _ =` the drain, silently dropping every
+                                // attachment; and because it returns early it
+                                // never reaches the cleanup at the end of
+                                // `RunComplete`, so it has to close the leg
+                                // itself. `deliver_run_media` is both halves.
+                                self.typing_cancel.cancel();
+                                self.react_on_inbound("\u{1f44d}").await;
+                                self.deliver_run_media().await;
+                                return;
+                            }
+                            Err(e) => {
+                                warn!("Native stream_finalize failed, falling back: {}", e);
+                                // Re-fill buffer for normal path
+                                *self.buffer.lock().await = text;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hermes-summary-wiring: append a one-line cap notice when
+        // the run did not complete cleanly. Pulls `terminate_reason`
+        // off the enriched RunSummary; silent when the field is
+        // missing (legacy producers) or equals "completed".
+        if let Some(notice) = cap_notice_for(&summary) {
+            self.buffer.lock().await.push_str(&notice);
+        }
+
+        // Append fallback notice for non-Panel channels (Telegram, CLI, etc.).
+        // The arrow is dropped when the model id is unchanged — the run
+        // moved to a different *provider* serving the same id, and
+        // "gpt-4o → gpt-4o" reads as a bug. Same guard the TUI and CLI
+        // renderers already apply; this one lacked it because until the
+        // route witness landed, nothing could set `is_fallback` truthfully
+        // and the branch never actually ran.
+        if let Some(info) = self.fallback_info.lock().await.take() {
+            let head = match info.original_model.as_deref() {
+                Some(orig) if orig != info.model => {
+                    format!("{orig} \u{2192} {}", info.model)
+                }
+                _ => info.model.clone(),
+            };
+            let notice = format!("\n\n\u{26a1} {head} ({})", info.provider);
+            self.buffer.lock().await.push_str(&notice);
+        }
+
+        // Optional runtime-metadata footer (model · tokens · duration
+        // · cost · cwd, plus an opt-in `tools` digest). Off unless
+        // `gateway.runtime_footer.enabled = true` in TOML.
+        if self.config.footer.enabled {
+            let model_label = self.model_label.lock().await.clone();
+            let cwd = std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(|s| s.to_string()));
+            let home = std::env::var("HOME").ok();
+            let inputs = crate::gateway::runtime_footer::RuntimeFooterInputs {
+                model: model_label.as_deref(),
+                total_tokens: Some(summary.total_tokens),
+                cwd: cwd.as_deref(),
+                duration_ms: summary.duration_ms,
+                cost_usd: summary.estimated_cost_usd,
+                tool_summaries: &summary.tool_summaries,
+            };
+            let block = crate::gateway::runtime_footer::build_footer_block(
+                &self.config.footer,
+                &inputs,
+                home.as_deref(),
+            );
+            if !block.is_empty() {
+                self.buffer.lock().await.push_str(&block);
+            }
+        }
+
+        // Flush accumulated buffer (always flush — intermediate messages
+        // may have set has_sent, but the buffer holds the final response)
+        let text = {
+            let mut buffer = self.buffer.lock().await;
+            std::mem::take(&mut *buffer)
+        };
+        let reasoning = self.take_reasoning_buffer().await;
+
+        if !text.is_empty() {
+            if self.should_voice().await {
+                self.send_as_voice(&text).await;
+            } else if self.config.stream_enabled {
+                // Send explicit reasoning first if available.
+                //
+                // Its own message, and never the answer — `send_aside_to_channel`
+                // rather than `send_to_channel` because the latch is already
+                // open here (see this function's caller) and the badge must
+                // not reach a chain-of-thought preview.
+                if let Some(ref r) = reasoning {
+                    self.send_aside_to_channel(&format!("🤔 {r}")).await;
+                }
+                // Finalize the streaming controller
+                let mut ctrl = self.streaming.lock().await;
+                match ctrl.finalize() {
+                    StreamAction::SendFinal(final_text) => {
+                        drop(ctrl);
+                        if self.should_voice().await {
+                            self.send_as_voice(&final_text).await;
+                        } else {
+                            self.send_to_channel(&final_text).await;
+                        }
+                    }
+                    StreamAction::EditFinal(final_text) => {
+                        let final_text = sanitize_llm_output(&final_text);
+                        // Edit-based streaming: the message is already
+                        // on screen, unmarked, growing. The badge
+                        // therefore arrives ATOMICALLY AT SETTLE, in
+                        // this one rewrite, rather than from the first
+                        // frame — the alternative would mean marking
+                        // every debounced edit, i.e. marking the
+                        // streaming chunks, which is precisely what the
+                        // marker is not for.
+                        let final_text = self.mark_side_answer(&final_text);
+                        let msg_id = ctrl.message_id().cloned();
+                        drop(ctrl);
+                        if let Some(msg_id) = msg_id {
+                            let _ = self
+                                .channel_registry
+                                .edit(
+                                    &self.route.channel_id,
+                                    &self.route.conversation_id,
+                                    &msg_id,
+                                    &final_text,
+                                )
+                                .await;
+                        }
+                    }
+                    StreamAction::Done => {
+                        // `finalize()` says the last debounced edit already
+                        // put the whole buffer on screen, so there is no
+                        // settling rewrite — and therefore nothing that
+                        // could carry the badge. For a side answer that is
+                        // an answer delivered unmarked, and on the DEFAULT
+                        // path: `output_mode` is `"typewriter"` and
+                        // `apply_channel_capabilities` keeps streaming on
+                        // for any channel that can edit.
+                        //
+                        // So issue the edit `EditFinal` would have issued —
+                        // but only when the badge would actually change the
+                        // text, so an ordinary run takes this arm exactly as
+                        // it did before, down to the byte and the API call.
+                        let settle = self.is_marking().then(|| {
+                            (
+                                sanitize_llm_output(ctrl.buffer()).into_owned(),
+                                ctrl.message_id().cloned(),
+                            )
+                        });
+                        drop(ctrl);
+                        if let Some((settled, Some(msg_id))) = settle {
+                            if !settled.is_empty() {
+                                let _ = self
+                                    .channel_registry
+                                    .edit(
+                                        &self.route.channel_id,
+                                        &self.route.conversation_id,
+                                        &msg_id,
+                                        &self.mark_side_answer(&settled),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                    _ => {
+                        drop(ctrl);
+                    }
+                }
+                let media = self.drain_and_send_media().await;
+                self.send_media_standalone(media).await;
+            } else {
+                self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
+                    .await;
+            }
+        }
+
+        // Fallback: if buffer was empty (race with fire-and-forget emit),
+        // use final_response from summary
+        if text.is_empty() {
+            if let Some(ref final_response) = summary.final_response {
+                if !final_response.is_empty() {
+                    debug!(
+                        "Run {} complete, sending final_response as fallback (length: {})",
+                        self.run_id,
+                        final_response.len()
+                    );
+                    if self.should_voice().await {
+                        self.send_as_voice(final_response).await;
+                    } else {
+                        self.send_to_channel_with_reasoning(final_response, reasoning.as_deref())
+                            .await;
+                    }
+                }
+            }
+        }
+
+        // React with 👍 on successful completion
+        self.react_on_inbound("👍").await;
+
+        // Last chance to deliver media, then drop the temp files. Every
+        // drain above hangs off a non-empty reply, so a run that produced
+        // ONLY media — the model calls `media_send` and stops — left the
+        // queue full and the user with nothing. Idempotent: the buffer is
+        // `mem::take`n, so a run that already drained finds it empty.
+        self.deliver_run_media().await;
+    }
 }
 
 #[async_trait]
@@ -308,6 +554,17 @@ impl EventEmitter for ReplyEmitter {
                     if !self.config.stream_enabled && is_final && self.native_handler.is_none() {
                         let mut buffer = self.buffer.lock().await;
                         if !buffer.is_empty() {
+                            // A producer that closes the answer here rather than
+                            // at `RunComplete` — the slash fast path is the one
+                            // that does; the real agent-loop drain always emits
+                            // `is_final: false`. Same answer arriving through a
+                            // second door, so it latches the same flag rather
+                            // than getting a rule of its own — and closes it,
+                            // for the same reason `RunComplete` does: an opener
+                            // whose closer is "some later caller will do it" is
+                            // an invariant about call order, not about this
+                            // block.
+                            self.begin_answering();
                             let text = std::mem::take(&mut *buffer);
                             drop(buffer);
                             let reasoning = self.take_reasoning_buffer().await;
@@ -317,6 +574,7 @@ impl EventEmitter for ReplyEmitter {
                                 self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
                                     .await;
                             }
+                            self.end_answering();
                         }
                     }
                     // Typewriter mode: do nothing here, wait for RunComplete
@@ -332,200 +590,19 @@ impl EventEmitter for ReplyEmitter {
                     return Ok(());
                 }
 
-                // Stop the persistent typing indicator
-                self.typing_cancel.cancel();
-
-                // Finalize native stream if active
-                if !self.native_disabled.load(Ordering::SeqCst) {
-                    if let Some(ref handler) = self.native_handler {
-                        let state = self.native_stream_state.lock().await.take();
-                        if let Some(s) = state {
-                            let text = {
-                                let mut buffer = self.buffer.lock().await;
-                                let raw = std::mem::take(&mut *buffer);
-                                sanitize_llm_output(&raw).into_owned()
-                            };
-                            if !text.is_empty() {
-                                let message = OutboundMessage::text(
-                                    self.route.conversation_id.as_str(),
-                                    &text,
-                                );
-                                match handler
-                                    .stream_finalize(
-                                        &self.route.conversation_id,
-                                        &s.stream_id,
-                                        message,
-                                    )
-                                    .await
-                                {
-                                    Ok(_result) => {
-                                        self.has_sent.store(true, Ordering::SeqCst);
-                                        // Stop typing, react success, close the media
-                                        // leg — then return. This branch used to
-                                        // `let _ =` the drain, silently dropping every
-                                        // attachment; and because it returns early it
-                                        // never reaches the cleanup at the end of
-                                        // `RunComplete`, so it has to close the leg
-                                        // itself. `deliver_run_media` is both halves.
-                                        self.typing_cancel.cancel();
-                                        self.react_on_inbound("\u{1f44d}").await;
-                                        self.deliver_run_media().await;
-                                        return Ok(());
-                                    }
-                                    Err(e) => {
-                                        warn!("Native stream_finalize failed, falling back: {}", e);
-                                        // Re-fill buffer for normal path
-                                        *self.buffer.lock().await = text;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Hermes-summary-wiring: append a one-line cap notice when
-                // the run did not complete cleanly. Pulls `terminate_reason`
-                // off the enriched RunSummary; silent when the field is
-                // missing (legacy producers) or equals "completed".
-                if let Some(notice) = cap_notice_for(&summary) {
-                    self.buffer.lock().await.push_str(&notice);
-                }
-
-                // Append fallback notice for non-Panel channels (Telegram, CLI, etc.).
-                // The arrow is dropped when the model id is unchanged — the run
-                // moved to a different *provider* serving the same id, and
-                // "gpt-4o → gpt-4o" reads as a bug. Same guard the TUI and CLI
-                // renderers already apply; this one lacked it because until the
-                // route witness landed, nothing could set `is_fallback` truthfully
-                // and the branch never actually ran.
-                if let Some(info) = self.fallback_info.lock().await.take() {
-                    let head = match info.original_model.as_deref() {
-                        Some(orig) if orig != info.model => {
-                            format!("{orig} \u{2192} {}", info.model)
-                        }
-                        _ => info.model.clone(),
-                    };
-                    let notice = format!("\n\n\u{26a1} {head} ({})", info.provider);
-                    self.buffer.lock().await.push_str(&notice);
-                }
-
-                // Optional runtime-metadata footer (model · tokens · duration
-                // · cost · cwd, plus an opt-in `tools` digest). Off unless
-                // `gateway.runtime_footer.enabled = true` in TOML.
-                if self.config.footer.enabled {
-                    let model_label = self.model_label.lock().await.clone();
-                    let cwd = std::env::current_dir()
-                        .ok()
-                        .and_then(|p| p.to_str().map(|s| s.to_string()));
-                    let home = std::env::var("HOME").ok();
-                    let inputs = crate::gateway::runtime_footer::RuntimeFooterInputs {
-                        model: model_label.as_deref(),
-                        total_tokens: Some(summary.total_tokens),
-                        cwd: cwd.as_deref(),
-                        duration_ms: summary.duration_ms,
-                        cost_usd: summary.estimated_cost_usd,
-                        tool_summaries: &summary.tool_summaries,
-                    };
-                    let block = crate::gateway::runtime_footer::build_footer_block(
-                        &self.config.footer,
-                        &inputs,
-                        home.as_deref(),
-                    );
-                    if !block.is_empty() {
-                        self.buffer.lock().await.push_str(&block);
-                    }
-                }
-
-                // Flush accumulated buffer (always flush — intermediate messages
-                // may have set has_sent, but the buffer holds the final response)
-                let text = {
-                    let mut buffer = self.buffer.lock().await;
-                    std::mem::take(&mut *buffer)
-                };
-                let reasoning = self.take_reasoning_buffer().await;
-
-                if !text.is_empty() {
-                    if self.should_voice().await {
-                        self.send_as_voice(&text).await;
-                    } else if self.config.stream_enabled {
-                        // Send explicit reasoning first if available
-                        if let Some(ref r) = reasoning {
-                            self.send_to_channel(&format!("🤔 {r}")).await;
-                        }
-                        // Finalize the streaming controller
-                        let mut ctrl = self.streaming.lock().await;
-                        match ctrl.finalize() {
-                            StreamAction::SendFinal(final_text) => {
-                                drop(ctrl);
-                                if self.should_voice().await {
-                                    self.send_as_voice(&final_text).await;
-                                } else {
-                                    self.send_to_channel(&final_text).await;
-                                }
-                            }
-                            StreamAction::EditFinal(final_text) => {
-                                let final_text = sanitize_llm_output(&final_text);
-                                let msg_id = ctrl.message_id().cloned();
-                                drop(ctrl);
-                                if let Some(msg_id) = msg_id {
-                                    let _ = self
-                                        .channel_registry
-                                        .edit(
-                                            &self.route.channel_id,
-                                            &self.route.conversation_id,
-                                            &msg_id,
-                                            &final_text,
-                                        )
-                                        .await;
-                                }
-                            }
-                            StreamAction::Done => {
-                                drop(ctrl);
-                            }
-                            _ => {
-                                drop(ctrl);
-                            }
-                        }
-                        let media = self.drain_and_send_media().await;
-                        self.send_media_standalone(media).await;
-                    } else {
-                        self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
-                            .await;
-                    }
-                }
-
-                // Fallback: if buffer was empty (race with fire-and-forget emit),
-                // use final_response from summary
-                if text.is_empty() {
-                    if let Some(ref final_response) = summary.final_response {
-                        if !final_response.is_empty() {
-                            debug!(
-                                "Run {} complete, sending final_response as fallback (length: {})",
-                                self.run_id,
-                                final_response.len()
-                            );
-                            if self.should_voice().await {
-                                self.send_as_voice(final_response).await;
-                            } else {
-                                self.send_to_channel_with_reasoning(
-                                    final_response,
-                                    reasoning.as_deref(),
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                }
-
-                // React with 👍 on successful completion
-                self.react_on_inbound("👍").await;
-
-                // Last chance to deliver media, then drop the temp files. Every
-                // drain above hangs off a non-empty reply, so a run that produced
-                // ONLY media — the model calls `media_send` and stops — left the
-                // queue full and the user with nothing. Idempotent: the buffer is
-                // `mem::take`n, so a run that already drained finds it empty.
-                self.deliver_run_media().await;
+                // `RunComplete` is THE terminal frame for badging: it is the
+                // only event that carries a run's answer, so the latch is open
+                // for exactly the call below and closed on its far side. Opened
+                // after the duplicate guard so a second `RunComplete` cannot
+                // re-open it for a delivery that already happened.
+                //
+                // The delivery is a function rather than an inline block for
+                // one reason: its body has an early return (the native-stream
+                // branch delivers and stops), and a latch closed at two exits
+                // is a latch that will one day be closed at one.
+                self.begin_answering();
+                self.deliver_final_answer(summary).await;
+                self.end_answering();
             }
 
             StreamEvent::RunError { error, .. } => {

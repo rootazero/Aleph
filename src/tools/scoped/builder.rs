@@ -209,6 +209,18 @@ impl ScopedToolService {
     /// which every permission gate here funnels through.
     ///
     /// Precedence, most binding first:
+    /// -1. **the side-question floor**: this turn is a `/btw` side question
+    ///    and `name` is one of the two [`PLAN_REACHABLE_TOOLS`] carve-outs
+    ///    ([`crate::config::types::policies::PLAN_REACHABLE_TOOLS`]). Above
+    ///    the tier verdict, because it is not removable by any configuration
+    ///    and not resolvable by approving a plan — the two repairs the rules
+    ///    beneath it point at. `scratchpad` writes the MAIN session's
+    ///    execution list, and `subagent` can spawn a child that outlives the
+    ///    side session with no surface able to enumerate it, so both must
+    ///    stay denied even though `Plan` alone would let them through.
+    ///    Derived from the same constant [`ExecTier::rule_for`] reads for the
+    ///    carve-out, not a second list: a third member added there is denied
+    ///    for btw automatically, which is the safe direction.
     /// 0. a tier verdict of **`Deny`** — a floor no entry below may outrank.
     ///    Today that is [`ExecTier::Plan`] and only [`ExecTier::Plan`]: it is
     ///    the one tier that refuses instead of asking, so an entry naming the
@@ -221,19 +233,39 @@ impl ScopedToolService {
     ///    tool's declared metadata, never off its name). Every tier but `Plan`
     ///    can only raise a tool to `Ask`; none can lower a `Deny`.
     ///
-    /// The precedence itself lives in
+    /// The precedence below rung -1 lives in
     /// [`crate::config::types::policies::effective_permission`] — shared with the
-    /// gateway slash-command fast path so the two surfaces cannot drift.
+    /// gateway slash-command fast path so the two surfaces cannot drift. Rung
+    /// -1 is NOT shared with that fast path: neither carve-out is registered
+    /// as a direct-tool slash command there, so there is nothing for it to
+    /// gate yet — see the fast path's own `TurnPermissions` destructure.
     ///
     /// [`ToolPermissionsConfig`]: crate::config::types::policies::ToolPermissionsConfig
     /// [`ToolPermissionsConfig::resolve_explicit`]: crate::config::types::policies::ToolPermissionsConfig::resolve_explicit
     /// [`ExecTier::rule_for`]: crate::config::types::policies::ExecTier::rule_for
+    /// [`PLAN_REACHABLE_TOOLS`]: crate::config::types::policies::PLAN_REACHABLE_TOOLS
     pub(super) fn permission_for(&self, name: &str) -> crate::extension::PermissionAction {
+        use crate::extension::PermissionAction;
+
+        if self.is_side_question()
+            && crate::config::types::policies::PLAN_REACHABLE_TOOLS.contains(&name)
+        {
+            return PermissionAction::Deny;
+        }
         crate::config::types::policies::effective_permission(
             self.tool_permissions.as_ref(),
             self.effective_exec_tier(),
             self.tool_facts(name),
         )
+    }
+
+    /// Whether this turn is a `/btw` side question — from [`TurnContext`],
+    /// the same carrier [`Self::effective_exec_tier`]'s `plan_gate` read
+    /// rides on.
+    ///
+    /// [`TurnContext`]: crate::tools::turn_context::TurnContext
+    pub(super) fn is_side_question(&self) -> bool {
+        self.turn_context.as_ref().is_some_and(|t| t.side_question)
     }
 
     /// The tier to enforce **right now**.

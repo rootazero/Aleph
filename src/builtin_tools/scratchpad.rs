@@ -1185,6 +1185,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: Some(Arc::clone(&gate)),
+            side_question: false,
         };
         crate::tools::turn_context::TURN_CONTEXT
             .scope(ctx, f(gate))

@@ -70,8 +70,44 @@ pub(crate) async fn revoke_device_and_kick(
     event_bus: &GatewayEventBus,
     device_id: &str,
 ) -> Result<bool, DeviceTokenError> {
+    // Read the binding BEFORE the write: the audit line below wants to name
+    // the principal whose credential this was, and "which person did this cut
+    // off" must not depend on whether revocation leaves the column behind.
+    // A store error folds to `None` — "we could not tell" — never to a claim
+    // that the device was unbound.
+    let bound_user = device_token_mgr
+        .store()
+        .device_user(device_id)
+        .unwrap_or(None);
     let revoked = device_token_mgr.revoke_panel_device(device_id)?;
     if revoked {
+        // Authority change: minting a device credential
+        // (`gateway.ticket.create`) has been audited since round-5 and its
+        // inverse was not — the `AuthorityChange` doc names "device revoked"
+        // in its own list of covered writes, so this was a producer the
+        // variant claimed and never had.
+        //
+        // This lives in the shared pipeline rather than in
+        // `handle_devices_revoke`, because that is not the only face of this
+        // verb: `users.update`'s deactivation revokes in bulk through here
+        // too, and a per-face producer is the shape that leaves the second
+        // face silent. A bulk deactivation therefore writes one line per
+        // credential actually cut, which is what "which credentials did that
+        // deactivation reach" needs in order to be answerable at all.
+        //
+        // Only on the transition. `revoked == false` means unknown id,
+        // already revoked, or not a Panel device — nothing changed, so there
+        // is no decision to record.
+        if let Some(log) = crate::security::audit::global() {
+            log.log(crate::security::audit::AuditEntry::authority_change(
+                crate::gateway::caller_identity::current_caller_user(),
+                format!(
+                    "devices.revoke: {} (principal {})",
+                    device_id,
+                    bound_user.as_deref().unwrap_or("unbound")
+                ),
+            ));
+        }
         let downgraded =
             crate::gateway::server::invalidate_device_sessions(connections, device_id).await;
         if downgraded > 0 {

@@ -215,6 +215,24 @@ async fn dispatch(
             dispatch_workspace(server_url, config, action, json).await
         }
         Commands::Users { action } => dispatch_users(server_url, config, action, json).await,
+        Commands::Audit {
+            event_type,
+            actor,
+            since,
+            limit,
+        } => {
+            commands::audit_cmd::query(
+                server_url,
+                config,
+                event_type.as_deref(),
+                actor.as_deref(),
+                since.as_deref(),
+                limit,
+                json,
+            )
+            .await
+        }
+        Commands::Spend {} => commands::spend_cmd::query(server_url, config, json).await,
         Commands::Gateway { action } => dispatch_gateway(server_url, config, action, json).await,
         Commands::Logs { action } => dispatch_logs(server_url, config, action, json).await,
         Commands::Trace { action } => dispatch_trace(server_url, config, action, json).await,
@@ -665,10 +683,9 @@ async fn dispatch_memory(
             memory_cmd::search(server_url, config, &query, limit, json).await
         }
         MemoryAction::Stats => memory_cmd::stats(server_url, config, json).await,
-        MemoryAction::Clear { facts_only } => {
-            memory_cmd::clear(server_url, config, facts_only, json).await
-        }
+        MemoryAction::Clear { facts_only } => memory_cmd::clear(facts_only),
         MemoryAction::Compress => memory_cmd::compress(server_url, config, json).await,
+        MemoryAction::Dreaming => memory_cmd::dreaming(server_url, config, json).await,
         MemoryAction::Delete { id } => memory_cmd::delete(server_url, config, &id, json).await,
     }
 }

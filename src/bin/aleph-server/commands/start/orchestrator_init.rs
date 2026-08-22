@@ -16,13 +16,16 @@
 //!   the flow-selected sandbox only ever reaches `.summary()` in the prompt;
 //!   tool execution is gated by `src/tools/scoped/` alone. See
 //!   `orchestrator::sandbox_factory`'s module doc.
-//! * Routing overrides are always `RoutingOverrides::default()`. There is no
-//!   `[flow_routing]` key in `src/config/`, so `resolve_flow_id`'s exact- and
-//!   wildcard-override rungs have no producer. Deliberate: "which flow serves
-//!   agent X" is already answered by `default_routing` below plus
-//!   `~/.aleph/flows/<id>.toml`, and a second answer keyed on channel would be
-//!   the third. Delete `RoutingOverrides` rather than grow a config surface
-//!   for it, if it is ever touched again.
+//! * Routing is `default_routing` alone. The `RoutingOverrides` layer that
+//!   used to sit above it — exact `(agent, channel)` and wildcard `agent`
+//!   rungs — was cut: its only producer was to have been a `[flow_routing]`
+//!   config key that never landed, so every construction site passed
+//!   `RoutingOverrides::default()` and neither rung ever fired. Cutting beat
+//!   growing the config surface, because "which flow serves agent X" is
+//!   already answered by `default_routing` below plus `~/.aleph/flows/<id>.toml`
+//!   and a channel-keyed third answer is one too many. Reviving it means
+//!   reviving all three at once (config key, struct, resolver rungs), which is
+//!   the point: it can no longer half-exist.
 //! * `named_providers` is populated (see the `agent_overrides` block below):
 //!   every configured provider key maps to a route-shaped `FailoverProvider`
 //!   that pins it as primary and falls through the global chain. So a user
@@ -44,7 +47,6 @@ use alephcore::orchestrator::{
     flow_registry::FlowRegistry,
     harness_bridge::AgentHarnessRunner,
     loader::{load_catalog, load_presets},
-    resolver::RoutingOverrides,
     sandbox_factory::WorkspaceBuilder,
 };
 use alephcore::verification::{
@@ -455,13 +457,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         response_language: config.general.language.clone(),
     });
 
-    // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.
-    // Also clones the same `Arc<AgentRegistry>` that the harness received so
+    // Clones the same `Arc<AgentRegistry>` that the harness received so
     // the gateway-spawned `SubagentTool` resolves user-defined agents instead
     // of an empty fallback registry.
     let orchestrator = Orchestrator::new(
         flow_registry,
-        Arc::new(RoutingOverrides::default()),
         default_routing,
         session_service,
         sandbox_factory,

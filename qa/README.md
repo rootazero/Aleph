@@ -35,6 +35,13 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/picker_nav/run.sh           # keyboard walk + conditional bottom fade + phone add-a-provider,
                                  # at three widths (1440 / 700 folded / 390 phone)
 
+./qa/multiuser_audit/run.sh      # §5.22 round-6: the security trail is readable end to end,
+                                 # a deactivation receipt reports what it measured, and revoking
+                                 # a device credential names whose it was. Binds 0.0.0.0 for the
+                                 # remote-pairing half — a loopback peer is authorised before
+                                 # `bootstrap_ticket` is ever read, so a ticket redeemed over
+                                 # 127.0.0.1 creates no device row, silently and successfully.
+
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
 ./qa/channels/run.sh errors      # Lark throttle / refusal, via mock_lark.py's /__inject queue
@@ -49,6 +56,15 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # loads — the CLI and the server are two authors
 ./qa/plugins/run.sh trust        # owner trust: default posture, enforce, vouch, restart,
                                  # withdraw. Three restarts, because the policy is a LOAD gate
+
+./qa/memory_curated/run.sh       # the curated hot tier's three verbs, the note window's
+                                 # load-more, and the partition contract every enumerating
+                                 # memory reader resolves through (note list, stat cards, fix
+                                 # queue, retrieval x-ray). Seeds through `remember` /
+                                 # `note_manage` / `flag_user_correction` over `tools.invoke`,
+                                 # then answers each checkpoint out-of-band with `probe.py`
+                                 # (the FILE on disk and the TOOL face — never the RPC being
+                                 # driven).
 ```
 
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like

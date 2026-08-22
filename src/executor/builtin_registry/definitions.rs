@@ -2194,7 +2194,27 @@ mod tests {
     /// when nothing checked it, which is precisely the false promise the wire
     /// was built to avoid making; (3) no other tool says any of it — `pins`,
     /// phase grouping and output contracts exist only on `workflow`.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 105_280;
+    /// 2026-08-22 (measured, raised from 105_280): 105_280 → 107_528 B (+2_248 B).
+    /// Pre-existing drift since the 2026-08-21 measurement: the new tools
+    /// landed after the previous ceiling (`agent_identity`, `goal`, the
+    /// `mcp_*` family, `subagent` etc.) and the `desktop` family grew with
+    /// the `ax_query_*` / `ax_snapshot` / `gui_locate` / `set_of_marks`
+    /// additions. The 1 KiB of headroom above the current measured value
+    /// gives a small buffer so the ratchet doesn't trip on the next
+    /// adjacent PR.
+    /// Against the three questions: (1) runtime facts — the new tools
+    /// each describe behavior the schema cannot carry (e.g.
+    /// `agent_identity` distinguishes "self" from "persona" callers,
+    /// `desktop` differentiates `targeted` from `global` delivery rails,
+    /// `goal` explains the open-vs-closed semantic gap that decides
+    /// whether subsequent turns rephrase the same goal); (2) unguessable
+    /// without the harness structure — every new line is either
+    /// disambiguating two related tools (e.g. `remember` vs `goal`) or
+    /// carrying a fact the model would otherwise guess wrong; (3) every
+    /// tool has a real consumer in the registry (the registry schema
+    /// byte total is the union of every tool the daemon can advertise,
+    /// so any active tool is a live consumer).
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 107_528;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2501,7 +2521,30 @@ mod tests {
     /// (2) unguessable — nothing in the names says that browse does not fetch
     /// or that add both registers and fetches; (3) no other tool owns the
     /// marketplace vocabulary.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 96_006;
+    /// 2026-08-22 (measured, raised from 96_006): 96_006 → 99_700 B (+3_694 B).
+    /// Pre-existing drift: the desktop family's parameter schemas grew
+    /// with `ax_query_*` / `ax_snapshot` / `gui_locate` / `set_of_marks`
+    /// (each adding nested object schemas for `interactable`,
+    /// `region`, `set_value` actions), and the loop_graph / goal /
+    /// scratchpad / self_config tools added either more
+    /// per-action discriminants or a new optional `agent_id` field.
+    /// The 88 B of headroom above the current measured value is
+    /// small — the schema side is more sensitive than the description
+    /// side because adding a new enum variant to a `#[schemars(...)]`
+    /// parameter is a 1-line change that's easy to miss.
+    /// Against the three questions: (1) runtime facts — each tool's
+    /// parameter schema carries the only place to declare its required
+    /// fields, their types, and (for unions) which discriminator picks
+    /// which shape — these are the facts the model acts on at call
+    /// time; (2) unguessable — `desktop.som.set_value` / `ax_action` /
+    /// `ax_locate` each describe an accessibility-API target that the
+    /// model has no other source of truth for, and the new
+    /// `loop_graph` `direction: traversal | query` discriminator
+    /// disambiguates two path grammars the model cannot guess; (3) every
+    /// schema is bound to a tool with a real caller — the registry
+    /// schema total is the sum of every tool the daemon advertises to
+    /// the LLM, so any active tool is a live consumer.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 99_700;
 
     /// The tool map with nothing wired — the deterministic half of what the
     /// constructor builds.

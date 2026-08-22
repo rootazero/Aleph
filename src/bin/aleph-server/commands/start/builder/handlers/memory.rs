@@ -1,4 +1,5 @@
 use super::{memory_handlers, GatewayServer, MemoryBackend};
+use alephcore::gateway::handlers::memory_curated;
 
 /// Rebuild the embedder from the *current* config so a provider switched via
 /// `embedding_providers.setActive` takes effect for reembed without restarting
@@ -38,6 +39,12 @@ pub(in crate::commands::start) fn register_memory_handlers(
     // instead of the one frozen at boot.
     app_config: &std::sync::Arc<tokio::sync::RwLock<alephcore::Config>>,
     shared_token_mgr: &std::sync::Arc<alephcore::gateway::security::SharedTokenManager>,
+    // Curated hot-tier store resolver. `None` in a process with no agent
+    // runtime — see the `memory.curated.*` registrations below for why they
+    // are still registered in that case.
+    memory_context_provider: Option<
+        std::sync::Arc<alephcore::thinker::MemoryContextProvider>,
+    >,
     daemon: bool,
 ) {
     register_handler!(
@@ -60,20 +67,8 @@ pub(in crate::commands::start) fn register_memory_handlers(
     );
     register_handler!(
         server,
-        "memory.clear",
-        memory_handlers::handle_clear,
-        memory_db
-    );
-    register_handler!(
-        server,
         "memory.listFacts",
         memory_handlers::handle_list_facts,
-        memory_db
-    );
-    register_handler!(
-        server,
-        "memory.clearFacts",
-        memory_handlers::handle_clear_facts,
         memory_db
     );
     // Read-only corrections governance: raw correction rows + distillation status.
@@ -83,13 +78,65 @@ pub(in crate::commands::start) fn register_memory_handlers(
         memory_handlers::handle_list_corrections,
         memory_db
     );
-    // Read-only evidence-chain walk: note / raw / profile-section → ground-truth raws.
-    register_handler!(
-        server,
-        "memory.trace",
-        memory_handlers::handle_trace,
-        memory_db
-    );
+    // Curated hot memory (`MEMORY.md`) — the third memory pillar's manage face.
+    //
+    // Registered UNCONDITIONALLY, even with no `MemoryContextProvider`: a
+    // missing method is indistinguishable from an older core that never had
+    // it, while a registered one can say *why* it cannot serve
+    // (SERVICE_UNAVAILABLE). Same reasoning as the `memory.compress`
+    // placeholder below — and the inverse of `dreaming.list_insights`, whose
+    // absent phase-1 placeholder made it METHOD_NOT_FOUND during boot.
+    //
+    // Three literal `.register("…")` calls rather than a loop over a
+    // name/verb table, and no local macro: `method_census`'s scanner reads
+    // THIS source and recognises exactly this shape. A dynamic method name —
+    // or a macro it has not been taught — is a family it cannot see, and a
+    // family it cannot see is one whose ruling nobody has to record.
+    // `register_handler!` is not usable here: it `Arc::clone`s its context,
+    // and this one is an `Option<Arc<_>>` (absent in a process with no agent
+    // runtime).
+    {
+        let mcp = memory_context_provider.clone();
+        server
+            .handlers_mut()
+            .register("memory.curated.list", move |req| {
+                let mcp = mcp.clone();
+                async move { memory_curated::handle_list(req, mcp).await }
+            });
+    }
+    {
+        let mcp = memory_context_provider.clone();
+        server
+            .handlers_mut()
+            .register("memory.curated.replace", move |req| {
+                let mcp = mcp.clone();
+                async move { memory_curated::handle_replace(req, mcp).await }
+            });
+    }
+    {
+        let mcp = memory_context_provider.clone();
+        server
+            .handlers_mut()
+            .register("memory.curated.remove", move |req| {
+                let mcp = mcp.clone();
+                async move { memory_curated::handle_remove(req, mcp).await }
+            });
+    }
+
+    // Read-only evidence-chain walk: note / raw / profile-section → ground-truth
+    // raws, plus the curated write-decision ledger. Takes the provider because
+    // both of those live under the caller's COMPOSED partition — see
+    // `handle_trace`'s doc; without it the ledger is empty on every scoped
+    // session, which on a stock single-machine install means every session.
+    {
+        let db = memory_db.clone();
+        let mcp = memory_context_provider.clone();
+        server.handlers_mut().register("memory.trace", move |req| {
+            let db = db.clone();
+            let mcp = mcp.clone();
+            async move { memory_handlers::handle_trace(req, db, mcp).await }
+        });
+    }
     // Read-only per-tool usage introspection over ToolInvocation raw rows.
     register_handler!(
         server,
@@ -253,7 +300,6 @@ pub(in crate::commands::start) fn register_memory_handlers(
         println!("  - memory.search     : Search memories");
         println!("  - memory.stats      : Get memory statistics");
         println!("  - memory.delete     : Delete a memory");
-        println!("  - memory.clear      : Clear memories");
         println!("  - memory.compress   : Trigger compression");
         println!("  - memory.reembed    : Re-embed all memories");
         println!("  - insights.tools    : Per-tool usage breakdown");

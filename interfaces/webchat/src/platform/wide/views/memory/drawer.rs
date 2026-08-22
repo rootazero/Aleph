@@ -4,6 +4,9 @@
 //! their stored Q/A. Pure I/O — all persistence is JSON-RPC (R4).
 
 use leptos::prelude::*;
+
+use super::note_links::OutgoingLinks;
+use crate::memory_graph::adapter::OutgoingLinkDto;
 use leptos::task::spawn_local;
 
 use super::provenance::ProvenanceSection;
@@ -39,7 +42,7 @@ impl DrawerTarget {
     fn note_stub(agent: &str, path: &str) -> Self {
         Self::Note {
             agent: agent.to_string(),
-            fact: CompressedFact::stub_from_path(path),
+            fact: CompressedFact::stub_from_path(agent, path),
         }
     }
 }
@@ -114,6 +117,10 @@ fn NoteDetail(
 
     let body = RwSignal::new(None::<String>);
     let backlinks = RwSignal::new(Vec::<String>::new());
+    // `graph.node_detail` has always answered with these; this drawer simply
+    // dropped them, so the Vault view could see who points AT a note but not
+    // where the note points — while the galaxy's drawer showed the reverse.
+    let outgoing = RwSignal::new(Vec::<OutgoingLinkDto>::new());
     let is_editing = RwSignal::new(false);
     let draft = RwSignal::new(String::new());
     let is_saving = RwSignal::new(false);
@@ -138,6 +145,7 @@ fn NoteDetail(
                     Ok(d) => {
                         body.set(Some(d.content));
                         backlinks.set(d.backlinks);
+                        outgoing.set(d.outgoing);
                     }
                     Err(e) => error.set(Some(
                         crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
@@ -409,9 +417,9 @@ fn NoteDetail(
                                             on:click=delete
                                         >
                                             {move || if confirm_delete.get() {
-                                                "Confirm delete?"
+                                                t_string!(i18n, memory.confirm_delete).to_string()
                                             } else {
-                                                "Delete"
+                                                t_string!(i18n, memory.delete).to_string()
                                             }}
                                         </button>
                                     </div>
@@ -449,6 +457,14 @@ fn NoteDetail(
                     </div>
                 })
             }}
+
+            <OutgoingLinks
+                links=outgoing.into()
+                on_navigate=Callback::new({
+                    let agent_v = agent_v;
+                    move |id: String| navigate_drawer(&state, &agent_v.get_value(), target, id)
+                })
+            />
 
             <ProvenanceSection
                 agent=Signal::derive(move || agent_v.get_value())

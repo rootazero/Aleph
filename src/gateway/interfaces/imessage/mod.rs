@@ -192,7 +192,7 @@ impl IMessageChannel {
                 // `advance` is monotonic, so a stale value is a no-op.
                 if let Some(ref tracker) = offset_tracker {
                     if watermark > 0 {
-                        tracker.advance(watermark, "imessage");
+                        tracker.advance(watermark, "imessage").await;
                     }
                 }
 

@@ -289,12 +289,12 @@ impl A2AMessageHandler for AgentLoopBridge {
         // A2A bridge's tool dispatch hit the unrestricted arm anyway,
         // because nothing set the task-local around the spawn. The actor
         // here is the stable sentinel "a2a_peer" — distinct from "main"
-// and from any human channel id, so the visibility predicates see an
-// A2A run as belonging to a separate (machine) actor. A future PR can
-// promote this to the authenticated peer agent id once the A2A wire
-// carries that field; the sentinel keeps today's behavior unchanged
-// for honest callers and stops the actor-less arm from being the only
-// free path through visibility.
+        // and from any human channel id, so the visibility predicates see an
+        // A2A run as belonging to a separate (machine) actor. A future PR can
+        // promote this to the authenticated peer agent id once the A2A wire
+        // carries that field; the sentinel keeps today's behavior unchanged
+        // for honest callers and stops the actor-less arm from being the only
+        // free path through visibility.
         let a2a_turn = TurnContext {
             session_key: request.session_key.clone(),
             run_id: request.run_id.clone(),
@@ -304,6 +304,7 @@ impl A2AMessageHandler for AgentLoopBridge {
             channel_tool_permissions: None,
             unattended: true,
             plan_gate: None,
+            side_question: false,
         };
 
         tokio::spawn(TURN_CONTEXT.scope(a2a_turn, async move {

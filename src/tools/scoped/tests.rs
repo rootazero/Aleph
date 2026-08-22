@@ -1485,6 +1485,7 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
         channel_tool_permissions: None,
         unattended: false,
         plan_gate: None,
+        side_question: false,
     }
 }
 
@@ -1754,6 +1755,7 @@ async fn execute_scopes_session_id_from_turn_context() {
         channel_tool_permissions: None,
         unattended: false,
         plan_gate: None,
+        side_question: false,
     };
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(turn);
 
@@ -1817,6 +1819,7 @@ async fn chat_tier_blocked_from_config_tool() {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         },
     );
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -1840,6 +1843,7 @@ async fn operator_tier_allowed_config_tool() {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         },
     );
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
@@ -1899,6 +1903,7 @@ async fn chat_tier_config_tool_approved_executes() {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
     assert!(
@@ -1925,6 +1930,7 @@ async fn chat_tier_config_tool_denied_rejected() {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         })
         .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
@@ -2023,6 +2029,7 @@ async fn operator_approval_is_not_double_prompted_by_the_confirm_gate() {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         })
         .with_config_approval(StdArc::clone(&operator) as _)
         .with_confirmation(StdArc::clone(&own_channel) as _);
@@ -2063,6 +2070,7 @@ async fn operator_tier_caller_still_hits_the_confirm_gate() {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         })
         .with_confirmation(StdArc::clone(&own_channel) as _);
 
@@ -2536,6 +2544,7 @@ async fn approval_gates_no_longer_force_global_claims() {
         channel_tool_permissions: None,
         unattended: false,
         plan_gate: None,
+        side_question: false,
     };
 
     for role in [Some("guest"), Some("operator")] {
@@ -2654,6 +2663,7 @@ async fn every_card_names_the_rule_that_raised_it() {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         })
         .with_config_approval(StdArc::clone(&operator) as _);
     guest.execute("cron_manage", json!({})).await.unwrap();
@@ -3889,4 +3899,132 @@ async fn a_turn_with_no_plan_gate_is_unchanged() {
         .expect("Auto runs mutating tools");
     let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
     assert!(names.iter().any(|n| n == "file_write"));
+}
+
+/// A service resolved to `Plan` for the given `side_question` flag. `Plan` is
+/// what every `/btw` turn composes to (`ExecTier::most_restrictive`), so the
+/// carve-out revocation is only meaningful measured against it.
+fn side_question_service(side_question: bool) -> ScopedToolService {
+    let mut ctx = turn_ctx("side-question");
+    ctx.side_question = side_question;
+    ScopedToolService::new(plan_registry(), BTreeSet::new())
+        .with_exec_tier(crate::config::types::policies::ExecTier::Plan)
+        .with_turn_context(ctx)
+}
+
+/// The two `Plan` carve-outs are revoked for a side question, and the
+/// revocation is DERIVED from `PLAN_REACHABLE_TOOLS` rather than restating
+/// it. A third member added to that constant is denied for btw automatically
+/// — the safe direction — and this test names it so the author must confirm.
+#[test]
+fn a_side_question_revokes_every_plan_carve_out() {
+    use crate::config::types::policies::PLAN_REACHABLE_TOOLS;
+    use crate::extension::PermissionAction;
+
+    for tool in PLAN_REACHABLE_TOOLS {
+        let svc = side_question_service(true);
+        assert_eq!(
+            svc.permission_for(tool),
+            PermissionAction::Deny,
+            "{tool} is reachable under Plan but must not be during a side question"
+        );
+    }
+
+    // Control: without the side-question flag the carve-outs still hold, so
+    // this test cannot pass by breaking Plan mode itself.
+    for tool in PLAN_REACHABLE_TOOLS {
+        let svc = side_question_service(false);
+        assert_ne!(svc.permission_for(tool), PermissionAction::Deny, "{tool}");
+    }
+}
+
+/// The read half of "it can read and search, but not change anything" — the
+/// sentence the refusal itself puts in front of the model.
+///
+/// A multiplexer declares nothing at the NAME level, so `Plan` fails it closed
+/// wholesale; only the per-call claim lets its read arms through. That
+/// re-admission used to be keyed on the rule's name (`PlanMode`), and a side
+/// question reports its OWN rule — so the most common thing a side question
+/// does, listing and searching the tree, came back refused by a sentence
+/// promising exactly that, with "do not retry" attached. Mirrors
+/// `planning_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest`,
+/// because the two verdicts must behave identically per call and differ only
+/// in the sentence they hand back.
+#[tokio::test]
+async fn a_side_question_admits_the_read_arm_of_a_multiplexer_and_refuses_the_rest() {
+    let svc = side_question_service(true);
+    svc.execute("file_ops", json!({ "operation": "list" }))
+        .await
+        .expect("a side question explores");
+    let err = svc
+        .execute("file_ops", json!({ "operation": "delete" }))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ToolError::PermissionDenied { .. }),
+        "the write arm of the same tool must still refuse, got {err:?}"
+    );
+    // A missing `operation` is not a read: the claim degrades to exclusive,
+    // which is the fail-closed direction.
+    assert!(svc.execute("file_ops", json!({})).await.is_err());
+
+    // The floor is not re-admitted with the reads. `scratchpad` is denied at
+    // rung -1 of `permission_for`, which `denied_only_by_plan` does not
+    // consult — so it reports `false` there and the per-call arm never opens.
+    assert!(
+        svc.execute("scratchpad", json!({})).await.is_err(),
+        "the side-question floor must survive the read re-admission"
+    );
+
+    // Control: the SAME tier without the side-question flag answers the same
+    // way, per call. That is the invariant this fix is built on — the two
+    // verdicts differ in the sentence they hand back, never in what runs.
+    //
+    // What it buys, stated narrowly: it isolates a failure above to the
+    // side-question flag rather than to a general breakage of `Plan`. It does
+    // NOT catch a quiet *widening* of `Plan` — that would leave both arms
+    // passing, since `file_ops delete` would then stop at the
+    // destructive-argument filter instead.
+    let planning = side_question_service(false);
+    planning
+        .execute("file_ops", json!({ "operation": "list" }))
+        .await
+        .expect("planning explores the same way");
+    assert!(planning
+        .execute("file_ops", json!({ "operation": "delete" }))
+        .await
+        .is_err());
+}
+
+/// The refusal sentence is a claim the code has to keep, and the two halves are
+/// asserted against the SAME service so they cannot drift apart: if a mutating
+/// call is refused with "it can read and search", a read has to really run.
+#[tokio::test]
+async fn the_side_question_refusal_promises_reads_that_really_run() {
+    let svc = side_question_service(true);
+    let err = svc
+        .execute("file_ops", json!({ "operation": "delete" }))
+        .await
+        .unwrap_err();
+    let reason = err.to_string();
+    assert!(
+        reason.contains("read and search"),
+        "the refusal is what makes the promise; got: {reason}"
+    );
+    svc.execute("file_ops", json!({ "operation": "list" }))
+        .await
+        .expect("the sentence above just promised this call runs");
+}
+
+/// A mutating tool is refused during a side question, and the reason names
+/// the side question rather than the plan handoff — pointing the reader at
+/// "get your plan approved" would name a repair that cannot work here.
+#[test]
+fn a_side_question_refusal_names_itself_not_the_plan_handoff() {
+    let svc = side_question_service(true);
+    let rule = svc.deny_rule("file_write").expect("file_write is refused");
+    assert!(
+        matches!(rule, super::gate_chain::GateRule::SideQuestion),
+        "expected SideQuestion, got {rule:?}"
+    );
 }

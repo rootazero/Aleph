@@ -52,9 +52,15 @@ pub struct TurnContext {
     /// on the 120 s approval timeout instead of failing closed instantly.
     pub unattended: bool,
     /// The plan → build handoff cell, when this turn resolved to
-    /// [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan);
-    /// `None` on every other turn (and then everything below is
-    /// byte-identical to a build with no plan mode at all).
+    /// [`ExecTier::Plan`](crate::config::types::policies::ExecTier::Plan) and is
+    /// not a `/btw` side question; `None` otherwise (and then everything below
+    /// is byte-identical to a build with no plan mode at all).
+    ///
+    /// The side-question exception is deliberate, not an omission: a side
+    /// question always resolves to `Plan`, and this cell is the one thing that
+    /// can move a turn's tier mid-run. Its ceiling has nothing to hand back to,
+    /// so it is withheld — see `resolve_turn_permissions`. Do not reintroduce a
+    /// `Plan ⇒ Some` assertion at any consumer.
     ///
     /// It rides HERE rather than as a fourteenth parameter of
     /// `build_request_tool_service` because the run builds the tool service
@@ -68,6 +74,15 @@ pub struct TurnContext {
     /// `request_approval` (which reaches it through the [`TURN_CONTEXT`]
     /// task-local this same struct is scoped into around every dispatch).
     pub plan_gate: Option<std::sync::Arc<crate::tools::plan_gate::PlanGate>>,
+    /// This turn is a `/btw` side question.
+    ///
+    /// Minted beside `plan_gate` in `resolve_turn_permissions` — the one place
+    /// that already resolves per-turn permission facts. Deliberately NOT
+    /// derived from the session key's shape: matching an `ephemeral_id`
+    /// prefix would be a second derivation of a fact the request already
+    /// carries, and a string match is exactly the kind of predicate that
+    /// keeps working right up until someone renames the prefix.
+    pub side_question: bool,
 }
 
 /// Canonical operator-role predicate for a raw `caller_role` string. `None`
@@ -199,6 +214,7 @@ mod caller_tier_tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         }
     }
 

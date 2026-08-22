@@ -870,6 +870,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let steered = session.clone();
         tokio::spawn(async move {

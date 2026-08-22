@@ -800,7 +800,7 @@ async fn two_members_share_one_room_memory_and_nobody_elses() {
         .expect("memories array")
         .clone();
     assert!(
-        rows.iter().any(|m| m["user_input"]
+        rows.iter().any(|m| m["content"]
             .as_str()
             .unwrap_or_default()
             .contains("friday")),

@@ -44,7 +44,15 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
     }
 
     let entries = match db
-        .search_notes_fts(&params.query, agent_id, params.limit)
+        .search_notes_fts_multi(
+            &params.query,
+            // Notes land in the partition the session's writers composed, so a
+            // search of the bare persona found nothing on a stock install. Each
+            // hit carries its own `agent_id`, which is what every addressing
+            // verb must be handed back. See `memory_scope`'s module doc.
+            &crate::gateway::handlers::memory_scope::read_partitions(agent_id),
+            params.limit,
+        )
         .await
     {
         Ok(e) => e,

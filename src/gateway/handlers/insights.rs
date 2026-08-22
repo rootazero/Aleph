@@ -87,7 +87,22 @@ pub async fn handle_tools(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
         );
     }
 
-    match aggregate_tool_usage(db.as_ref(), agent_id, since, window, top_n, FETCH_LIMIT).await {
+    // Tool-invocation rows are filed under the composed partition like every
+    // other raw write, and this surface has no namespace picker to work around
+    // that with — the bare persona simply reported "no tools used". Resolved
+    // AFTER the visibility gate above; see `memory_scope`'s module doc.
+    let partitions = crate::gateway::handlers::memory_scope::read_partitions(agent_id);
+
+    match aggregate_tool_usage(
+        db.as_ref(),
+        &partitions,
+        since,
+        window,
+        top_n,
+        FETCH_LIMIT,
+    )
+    .await
+    {
         Ok(report) => JsonRpcResponse::success(
             request.id,
             json!({

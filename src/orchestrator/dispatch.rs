@@ -13,8 +13,7 @@ use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_registry::FlowRegistry;
 use crate::orchestrator::flow_spec::{AgentId, FlowId, FlowInput, FlowSpec};
 use crate::orchestrator::resolver::{
-    depth_guard, resolve_flow_id, resolve_session, RoutingOverrides, SessionResolveInput,
-    DEFAULT_AGENT_FLOW_ID,
+    depth_guard, resolve_flow_id, resolve_session, SessionResolveInput, DEFAULT_AGENT_FLOW_ID,
 };
 use crate::orchestrator::sandbox_factory::SandboxFactory;
 
@@ -392,6 +391,13 @@ pub struct FlowRequest {
     pub flow_id: Option<FlowId>,
     pub agent_id: AgentId,
     pub input: FlowInput,
+    /// Originating platform (`request.metadata["platform"]`), for diagnostics
+    /// only — it appears in this struct's `Debug` output and nowhere else.
+    /// It is **not** a routing input: the `(agent, channel)` override rung that
+    /// once read it was cut with `RoutingOverrides` (see
+    /// `resolver::resolve_flow_id`). The channel fact still reaches the prompt,
+    /// but through `interaction_manifest`, which is built from the same
+    /// metadata key.
     pub channel: Option<String>,
     /// Client-supplied routing hint for session affinity. When `session_strategy`
     /// resolves to `Reuse`, the hint is passed through; otherwise a fresh key is
@@ -539,7 +545,6 @@ const CHANNEL_BUFFER_SIZE: usize = 256;
 /// itself is cheap to share. Per-session lock is an internal `Mutex<HashSet>`.
 pub struct Orchestrator {
     pub flow_registry: Arc<FlowRegistry>,
-    pub routing_overrides: Arc<RoutingOverrides>,
     pub default_routing: Arc<HashMap<AgentId, FlowId>>,
     pub session_service: Arc<dyn crate::session::service::SessionService>,
     pub sandbox_factory: SandboxFactory,
@@ -752,7 +757,6 @@ fn fallback_spec_with_agent(base: Arc<FlowSpec>, agent_id: &str) -> Arc<FlowSpec
 impl Orchestrator {
     pub fn new(
         flow_registry: Arc<FlowRegistry>,
-        routing_overrides: Arc<RoutingOverrides>,
         default_routing: Arc<HashMap<AgentId, FlowId>>,
         session_service: Arc<dyn crate::session::service::SessionService>,
         sandbox_factory: SandboxFactory,
@@ -760,7 +764,6 @@ impl Orchestrator {
     ) -> Self {
         Self {
             flow_registry,
-            routing_overrides,
             default_routing,
             session_service,
             sandbox_factory,
@@ -820,12 +823,7 @@ impl Orchestrator {
                 .flow_registry
                 .resolve(id)
                 .ok_or_else(|| FlowError::UnknownFlow(id.clone())),
-            None => match resolve_flow_id(
-                &req.agent_id,
-                req.channel.as_deref(),
-                &self.routing_overrides,
-                &self.default_routing,
-            ) {
+            None => match resolve_flow_id(&req.agent_id, &self.default_routing) {
                 Ok(flow_id) => match self.flow_registry.resolve(&flow_id) {
                     Some(spec) => Ok(spec),
                     None => {

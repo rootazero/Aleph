@@ -473,20 +473,23 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         self.retrieve_inner(query, agent_id, limit, &mut sink).await
     }
 
-    /// Same as [`retrieve`], but also returns per-stage telemetry for the
-    /// retrieval debug panel. Results and ordering are identical to `retrieve`.
-    pub async fn retrieve_traced(
-        &self,
-        query: &str,
-        agent_id: &str,
-        limit: usize,
-    ) -> Result<(Vec<ScoredFact>, Vec<StageTrace>), AlephError> {
-        let mut sink = TraceSink::On(Vec::new());
-        let results = self
-            .retrieve_inner(query, agent_id, limit, &mut sink)
-            .await?;
-        Ok((results, sink.into_stages()))
-    }
+    // `retrieve_traced` used to live here: the single-agent twin of
+    // [`Self::retrieve_multi_agent_traced`]. It was removed on 2026-08-21 with
+    // zero production consumers left.
+    //
+    // Its one caller was the Panel's retrieval x-ray, which had to move to the
+    // multi-partition entry point because that is what real recall reads
+    // (`project_scope::session_read_ids`) — tracing one bare persona drew a
+    // faithful funnel through a partition nothing writes to. Nothing else ever
+    // wanted a trace, so keeping the wrapper would have been a hole with a
+    // convenient name (R10's YAGNI withdrawal).
+    //
+    // Consequence worth knowing before adding a caller: `retrieve_inner` is now
+    // reached only through [`Self::retrieve`], which passes `TraceSink::Off`, so
+    // its own `sink.record(...)` calls are inert in production. The stage
+    // vocabulary the x-ray legend depends on comes from `apply_scoring` /
+    // `apply_rerank`, which the MULTI path drives with a live sink — that is
+    // where the coverage for it lives now.
 
     /// Shared orchestration for `retrieve` / `retrieve_traced`. The `sink`
     /// records stage telemetry only when `On`; `Off` is a no-op hot path with
@@ -714,6 +717,42 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         agent_ids: &[String],
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError> {
+        let mut sink = TraceSink::Off;
+        self.retrieve_multi_agent_inner(query, agent_ids, limit, &mut sink)
+            .await
+    }
+
+    /// [`Self::retrieve_multi_agent`] with per-stage telemetry, for the Panel's
+    /// retrieval x-ray. Results and ordering are identical to the untraced call
+    /// — the sink only observes.
+    ///
+    /// The x-ray needs the MULTI-partition entry point for the same reason the
+    /// note list does: what it is asked to explain is why a real recall did or
+    /// did not surface a note, and real recall reads
+    /// `project_scope::session_read_ids`. Tracing the bare persona would draw a
+    /// faithful funnel through a partition nothing writes to — an honest
+    /// picture of the wrong population, which is worse than no picture because
+    /// it looks like an answer.
+    pub async fn retrieve_multi_agent_traced(
+        &self,
+        query: &str,
+        agent_ids: &[String],
+        limit: usize,
+    ) -> Result<(Vec<ScoredFact>, Vec<StageTrace>), AlephError> {
+        let mut sink = TraceSink::On(Vec::new());
+        let results = self
+            .retrieve_multi_agent_inner(query, agent_ids, limit, &mut sink)
+            .await?;
+        Ok((results, sink.into_stages()))
+    }
+
+    async fn retrieve_multi_agent_inner(
+        &self,
+        query: &str,
+        agent_ids: &[String],
+        limit: usize,
+        sink: &mut TraceSink,
+    ) -> Result<Vec<ScoredFact>, AlephError> {
         if agent_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -722,7 +761,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         // keyword search, mirroring the single-agent path.
         let Some(embedder) = self.embedder.as_ref() else {
             return self
-                .multi_agent_text_fallback(query, agent_ids, limit)
+                .multi_agent_text_fallback(query, agent_ids, limit, sink)
                 .await;
         };
 
@@ -738,7 +777,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                     "multi-agent recall: embedding unavailable, falling back to FTS-only search"
                 );
                 return self
-                    .multi_agent_text_fallback(query, agent_ids, limit)
+                    .multi_agent_text_fallback(query, agent_ids, limit, sink)
                     .await;
             }
         };
@@ -747,6 +786,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let mut all_results: Vec<ScoredFact> = Vec::new();
         // Over-fetch per agent so merged top-k is well-populated
         let per_agent_limit = limit.max(10);
+        let t_search = Instant::now();
 
         for agent_id in agent_ids {
             // Same reasoning as `retrieve_inner`: a store-side vector failure
@@ -767,7 +807,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
                         "multi-agent recall: vector leg unavailable, falling back to FTS-only search"
                     );
                     return self
-                        .multi_agent_text_fallback(query, agent_ids, limit)
+                        .multi_agent_text_fallback(query, agent_ids, limit, sink)
                         .await;
                 }
             };
@@ -786,13 +826,27 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             }
         }
 
+        // One stage for the whole fan-out, not one per partition: the funnel is
+        // a pipeline and each partition is a shard of the SAME stage, so N
+        // sibling `hybrid_search` rows would read as N sequential narrowings.
+        // The input count is 0 for the same reason `retrieve_inner` records 0 —
+        // a search has no input population, only an output.
+        sink.record(
+            "hybrid_search",
+            t_search.elapsed().as_millis() as u64,
+            0,
+            all_results.len(),
+        );
+
         // Sort by score DESC, then bound the pool before the (optional) rerank.
         all_results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        let before_cap = all_results.len();
         all_results.truncate(self.fetch_limit(limit));
+        sink.record("fetch_cap", 0, before_cap, all_results.len());
 
         // Close the hot-floating loop across the multi-agent path too. Signals
         // are filed per owning namespace (see `record_recall_by_owner`) — this
@@ -801,12 +855,12 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         // `read_scope_ids` returns `[base, scoped]`, so labelling every hit with
         // `agent_ids.first()` filed every project note's hit under the base
         // namespace.
-        let ranked = self
-            .apply_rerank(query, all_results, &mut TraceSink::Off)
-            .await;
+        let ranked = self.apply_rerank(query, all_results, sink).await;
         let counts = self.fetch_reinforcement_counts_by_owner(&ranked).await;
-        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, &mut TraceSink::Off);
+        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts, sink);
+        let before_limit = ranked.len();
         ranked.truncate(limit);
+        sink.record("limit", 0, before_limit, ranked.len());
         self.record_recall_by_owner(query, &ranked).await;
         Ok(ranked)
     }
@@ -820,18 +874,32 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         query: &str,
         agent_ids: &[String],
         limit: usize,
+        sink: &mut TraceSink,
     ) -> Result<Vec<ScoredFact>, AlephError> {
         let per_agent_limit = limit.max(10);
         let mut all_results: Vec<ScoredFact> = Vec::new();
+        let t0 = Instant::now();
         for agent_id in agent_ids {
             all_results.extend(self.text_retrieve(query, agent_id, per_agent_limit).await?);
         }
+        // Named `fts_search`, matching `retrieve_inner`'s keyword stage: the
+        // x-ray legend explains stages by name, and calling the same operation
+        // something else on the degraded path would read as a different
+        // pipeline rather than the same one without its vector leg.
+        sink.record(
+            "fts_search",
+            t0.elapsed().as_millis() as u64,
+            0,
+            all_results.len(),
+        );
         all_results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        let before_limit = all_results.len();
         all_results.truncate(limit);
+        sink.record("limit", 0, before_limit, all_results.len());
         self.record_recall_by_owner(query, &all_results).await;
         Ok(all_results)
     }
@@ -1684,11 +1752,19 @@ mod tests {
         }
     }
 
+    /// The x-ray's entry point on an empty corpus still describes a pipeline
+    /// rather than returning nothing at all — "no stages" and "stages that
+    /// found nothing" are different answers, and only the second one tells the
+    /// reader the retriever ran.
+    ///
+    /// Aimed at the MULTI entry point because that is the one the x-ray calls;
+    /// its single-agent twin was cut when the last consumer moved (see the note
+    /// where `retrieve_traced` used to be).
     #[tokio::test]
-    async fn retrieve_traced_on_empty_store_returns_stages() {
+    async fn the_traced_entry_point_on_an_empty_store_still_returns_stages() {
         let (retrieval, _dir) = create_retrieval().await;
         let (results, stages) = retrieval
-            .retrieve_traced("anything", "main", 5)
+            .retrieve_multi_agent_traced("anything", &["main".to_string()], 5)
             .await
             .unwrap();
         assert!(results.is_empty(), "empty store yields no results");
@@ -1699,5 +1775,30 @@ mod tests {
                 .any(|s| s.name == "hybrid_search" || s.name == "fts_search"),
             "a search stage must be recorded, got {stages:?}"
         );
+    }
+
+    /// Tracing must not change what comes back — the x-ray is an observer, and
+    /// a debug view that perturbs the thing it is explaining is worse than no
+    /// debug view. Asserted across the partition UNION, since that is the shape
+    /// the x-ray actually asks for.
+    #[tokio::test]
+    async fn tracing_the_multi_path_does_not_change_its_results() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let ids = vec!["main".to_string(), "main__u-owner".to_string()];
+
+        let untraced = retrieval
+            .retrieve_multi_agent("anything", &ids, 5)
+            .await
+            .unwrap();
+        let (traced, stages) = retrieval
+            .retrieve_multi_agent_traced("anything", &ids, 5)
+            .await
+            .unwrap();
+
+        let key = |v: &[ScoredFact]| -> Vec<(String, f32)> {
+            v.iter().map(|f| (f.fact.id.clone(), f.score)).collect()
+        };
+        assert_eq!(key(&untraced), key(&traced), "tracing must not change results");
+        assert!(!stages.is_empty(), "the traced call must record something");
     }
 }

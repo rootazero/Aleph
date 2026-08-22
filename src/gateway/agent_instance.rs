@@ -555,8 +555,34 @@ impl AgentInstance {
         }
     }
 
-    /// Reset (clear) a session (delegated to session store)
+    /// Reset (clear) a session (delegated to session store).
+    ///
+    /// Retires the live event log first, then the `/btw` side session, then the
+    /// projection — the same order, for the same two reasons, as `chat.clear`
+    /// and the `sessions.reset` RPC. The store's `reset_session` only empties
+    /// the `messages` table the Panel reads; the model replays `session_events`,
+    /// so clearing the projection alone blanks the screen while the model still
+    /// remembers every word. And the side session holds a copied prefix of this
+    /// transcript in its own event log, so a reset that spares it leaves the
+    /// cleared content readable through the next `/btw`. Side session only —
+    /// the key is unchanged, so any loop/goal keyed to it is still reachable
+    /// and must survive a content wipe.
+    ///
+    /// No production caller today; the wire is here so the first one inherits
+    /// the parity rather than the defect the other two surfaces document.
     pub async fn reset_session(&self, key: &SessionKey) -> bool {
+        // Parity requirement with both live clear surfaces: SSOT before
+        // projection, so a failure here leaves recoverable ghost rows on screen
+        // rather than a conversation the model secretly still holds.
+        if let Err(e) = crate::session::store::retire_live_events(key, 1).await {
+            warn!("Failed to retire session event log on reset: {}", e);
+            return false;
+        }
+        crate::gateway::continuation_lifecycle::retire_side_session(
+            key,
+            "agent_instance.reset",
+            Some(self.session_store.clone()),
+        );
         match self.session_store.reset_session(key).await {
             Ok(deleted) => {
                 debug!("Reset session: {}", key.to_key_string());

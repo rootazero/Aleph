@@ -322,6 +322,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -362,6 +363,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -402,6 +404,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -527,6 +530,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -568,6 +572,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -607,6 +612,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -651,6 +657,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -689,6 +696,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {
@@ -717,6 +725,7 @@ mod tests {
             channel_tool_permissions: None,
             unattended: false,
             plan_gate: None,
+            side_question: false,
         };
         let out2 = TURN_CONTEXT
             .scope(ctx2, async {
