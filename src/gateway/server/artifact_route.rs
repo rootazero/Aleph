@@ -387,17 +387,15 @@ async fn serve_artifact(
         RangeVerdict::Unsatisfiable => StatusCode::RANGE_NOT_SATISFIABLE,
     };
 
-    // A ranged request that turns out to be asking for the WHOLE resource is a
+    // A ranged request that turns out to be pulling most of the artifact is a
     // full read wearing a header, so it pays the narrow bucket too. Without
     // this, which bucket you draw from is your own choice — `bytes=0-` returns
     // everything as a 206, and a malformed `Range` returns everything as a
-    // 200. The predicate is what we are about to SEND, never what was asked.
-    let sends_everything = match verdict {
-        RangeVerdict::Whole => true,
-        RangeVerdict::Satisfiable { start, end } => start == 0 && end + 1 == total,
-        RangeVerdict::Unsatisfiable => false,
-    };
-    if has_range && sends_everything {
+    // 200. The predicate is what we are about to SEND, never what was asked,
+    // and "most" rather than "all" because `bytes=1-` is a fixed string that
+    // returns a complete usable copy of anything. See
+    // [`RangeVerdict::is_bulk_read`] for what this bounds and what it leaves.
+    if has_range && verdict.is_bulk_read(total) {
         let narrow = RateLimitKey::new(&client_ip.to_string(), RateLimitScope::RpcHeavy);
         if let Err(e) = state.rate_limiter.check_and_record(&narrow) {
             return (
@@ -1406,6 +1404,20 @@ mod tests {
             "a malformed Range is ignored and the whole body sent, which is a full read"
         );
 
+        let near_total = fx
+            .app
+            .clone()
+            .oneshot(range_request(&uri, REMOTE, "bytes=1-"))
+            .await
+            .expect("response");
+        assert_eq!(
+            near_total.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "`bytes=1-` is a fixed string needing no knowledge of the size, and it returns \
+             every byte but the first — a complete usable copy. An exact-coverage predicate \
+             lets it through, which is a one-header bypass of this whole bucket."
+        );
+
         let partial = fx
             .app
             .clone()
@@ -1417,6 +1429,19 @@ mod tests {
             StatusCode::PARTIAL_CONTENT,
             "a real partial read must still be served once the narrow bucket has closed — \
              not throttling a media scrub is the entire reason the wide bucket exists"
+        );
+
+        let opening_probe = fx
+            .app
+            .clone()
+            .oneshot(range_request(&uri, REMOTE, "bytes=0-9"))
+            .await
+            .expect("response");
+        assert_eq!(
+            opening_probe.status(),
+            StatusCode::PARTIAL_CONTENT,
+            "starting at byte zero does not make a read bulk; this is the first request a \
+             media element sends, and charging it the narrow bucket would throttle playback"
         );
     }
 

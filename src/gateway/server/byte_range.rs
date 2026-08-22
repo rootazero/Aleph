@@ -40,6 +40,45 @@ pub enum RangeVerdict {
 }
 
 impl RangeVerdict {
+    /// Does answering this verdict hand the caller most of the resource?
+    ///
+    /// A route that prices ranged requests from a wider rate bucket — so that
+    /// media seeking is not throttled — must still charge a full read as a
+    /// full read. The trap is defining "full" as byte-exact. `Range: bytes=1-`
+    /// returns every byte but the first, which for any real content type is a
+    /// complete copy, and it is a fixed string requiring no knowledge of the
+    /// resource's size. An exact-coverage test lets it through; this one does
+    /// not. The question is how MUCH is sent, never whether literally
+    /// everything is.
+    ///
+    /// The threshold is half, because a single request for more than half a
+    /// resource is not seeking under any reading of the word.
+    ///
+    /// # What this bounds, and what it does not
+    ///
+    /// It does not make bulk reading impossible, and no per-request predicate
+    /// can. A caller willing to split each resource into two requests stays
+    /// under the threshold on both, so what it reaches is the WIDE bucket's
+    /// rate halved — not the narrow bucket's. Lowering the threshold trades
+    /// that against throttling real playback, which does pull large chunks.
+    /// Closing it properly needs byte-budget accounting in the rate limiter
+    /// instead of a boolean per request; that is recorded as a follow-up and
+    /// deliberately not done here. Do not restate this as "the wide bucket
+    /// cannot be used to read more of the resource" — that sentence was in
+    /// this codebase once and it was false.
+    #[must_use]
+    pub fn is_bulk_read(&self, total: u64) -> bool {
+        let served = match self {
+            Self::Whole => total,
+            // Inclusive bounds, and `parse_range` guarantees start <= end.
+            Self::Satisfiable { start, end } => end - start + 1,
+            Self::Unsatisfiable => 0,
+        };
+        // `served * 2` cannot overflow: `served <= total`, and `total` is a
+        // buffer length, orders of magnitude below `u64::MAX / 2`.
+        served * 2 > total
+    }
+
     /// The `Content-Range` header value for this verdict, or `None` when the
     /// response carries no `Content-Range` (i.e. [`Self::Whole`]).
     #[must_use]
@@ -265,6 +304,45 @@ mod tests {
                 "input: {h}"
             );
         }
+    }
+
+    /// The case an exact-coverage test misses. `bytes=1-` is size-independent
+    /// and returns a complete usable copy of anything; if it is not a bulk
+    /// read, a rate bucket meant to bound scraping is bypassed by one header.
+    #[test]
+    fn a_range_missing_only_the_first_byte_is_still_a_bulk_read() {
+        let v = parse_range(Some("bytes=1-"), TOTAL);
+        assert_eq!(v, RangeVerdict::Satisfiable { start: 1, end: 999 });
+        assert!(v.is_bulk_read(TOTAL));
+    }
+
+    #[test]
+    fn whole_and_full_coverage_are_bulk_reads() {
+        assert!(RangeVerdict::Whole.is_bulk_read(TOTAL));
+        assert!(parse_range(Some("bytes=0-"), TOTAL).is_bulk_read(TOTAL));
+        assert!(parse_range(Some("bytes=0-999"), TOTAL).is_bulk_read(TOTAL));
+        assert!(parse_range(Some("bytes=-1000"), TOTAL).is_bulk_read(TOTAL));
+        // The tail half plus one byte — no start-at-zero, still most of it.
+        assert!(parse_range(Some("bytes=499-"), TOTAL).is_bulk_read(TOTAL));
+    }
+
+    #[test]
+    fn a_genuine_slice_is_not_a_bulk_read() {
+        assert!(!parse_range(Some("bytes=10-19"), TOTAL).is_bulk_read(TOTAL));
+        // Starting at zero does not by itself make a read bulk; a media
+        // element's opening probe must stay in the wide bucket.
+        assert!(!parse_range(Some("bytes=0-9"), TOTAL).is_bulk_read(TOTAL));
+        // Exactly half is not MORE than half.
+        assert!(!parse_range(Some("bytes=0-499"), TOTAL).is_bulk_read(TOTAL));
+    }
+
+    /// A refusal serves no bytes, so it must not be priced as a full read —
+    /// otherwise junk 416 probes drain the narrow bucket.
+    #[test]
+    fn a_refusal_serves_nothing_and_is_not_a_bulk_read() {
+        assert!(!RangeVerdict::Unsatisfiable.is_bulk_read(TOTAL));
+        // An empty resource: `Whole` serves zero bytes, so still not bulk.
+        assert!(!RangeVerdict::Whole.is_bulk_read(0));
     }
 
     #[test]
