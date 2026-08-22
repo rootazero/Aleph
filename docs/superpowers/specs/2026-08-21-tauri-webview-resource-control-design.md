@@ -368,7 +368,21 @@ identity.
 Expected effect: an ETag miss goes from
 *zstd-decompress 22 MB + gzip-compress 22 MB → send 5.02 MB*
 to *zstd-decompress ~3.4 MB → send ~3.4 MB*, with compression CPU at zero.
-(Exact post-change numbers are filled in from the Windows measurement.)
+
+**Measured on Windows, 2026-08-22**, from the `just wasm` precompression pass
+(build-time brotli, quality 11, 4 KiB floor):
+
+| Asset | identity | `.br` | saved |
+|---|---|---|---|
+| `aleph_panel_bg.wasm` | 21,914,484 | 3,360,760 | −84.7% |
+| `tailwind.css` | 145,347 | 19,476 | −86.6% |
+| `aleph_panel.js` | 110,252 | 13,373 | −87.9% |
+| `index.html` | 6,925 | 2,411 | −65.2% |
+| **total** | **22,177,008** | **3,396,020** | **−84.7%** |
+
+All four assets are over the floor, so none is skipped. The wasm figure lands
+where the estimate put it. Observed `content-encoding` behaviour is recorded
+in §7.3 rather than here, because it is a wire observation, not a build one.
 
 ### 5.2 G3 — Range / 206
 
@@ -529,6 +543,45 @@ the assertion or to the code.
    below macOS 13.3 need an old machine. The script marks it
    `SKIP: requires macOS < 13.3` and this spec records it as **not verified on
    real hardware** rather than pretending coverage.
+3. **Only the Windows arm of the shell's platform marker has ever been
+   compiled.** The macOS and Linux `cfg` arms of `SHELL_MARKER_JS` are
+   unverified. The QA script's header says so, so that a Linux user seeing no
+   `data-platform` attribute knows which half is untested rather than assuming
+   a broken install.
+
+#### What was actually falsified, by mutation
+
+Each guard below was broken, observed red, restored, and observed green. The
+list is exhaustive for guards this work added — anything not named here was
+not falsified.
+
+| Guard | Mutation | Observed |
+|---|---|---|
+| brotli sibling is served | serve the identity file | red |
+| `br;q=0` refusal honoured | accept any token containing `br` | red |
+| dist pair check, direction 1 | truncate / garbage the `.br` | red, "not valid brotli" |
+| dist pair check, direction 1b | recompress different content | red, "is STALE" |
+| dist pair check, direction 2 | delete the `.br` | red |
+| Range status mapping | force `OK` for `Satisfiable` | red |
+| `is_bulk_read` | revert to exact coverage | red ×4, across three modules |
+| capability gate precedes Range | disable the gate's early returns | red, 206 where 404 required |
+| codec verdict tags | tag the unknown verdict `codecs-ok` | red |
+| decoder predicate, platform half | drop the Linux clause | red |
+| decoder predicate, code half | move the code from 4 to 3 | red |
+| flat-mode census | drop `.aleph-todo-wrap`'s rule | red, names todo_panel.rs |
+| flat-mode census | drop `.glass` from its rule | red, names tailwind.css |
+
+Two mutations did **not** go red, and both were the mutation's fault rather
+than the guard's — recorded because a silent non-red is otherwise
+indistinguishable from a blind guard:
+
+- `printf '\x00' >> tailwind.css.br` (the plan's original text for direction
+  1). Appending to a brotli stream is inert: the decoder stops at the final
+  block, output is byte-identical, and no guard can fire. Replaced with the
+  two mutations above.
+- Removing `.aleph-composer` from the flat block. That selector has a flat
+  rule but sets no backdrop filter anywhere, so there was nothing for the
+  census to miss.
 
 ---
 
@@ -541,6 +594,18 @@ the assertion or to the code.
   with G2 rather than replacing it.
 - **FU-3 — Byte-based rate limiting.** D5 takes the cheap bucket instead; the
   semantically correct fix changes `RateLimiter`.
+
+  Review sharpened this into something with a measurable residual. The shipped
+  predicate (`RangeVerdict::is_bulk_read`) charges the narrow bucket when a
+  ranged request returns **more than half** the resource, which closes the
+  `Range: bytes=1-` bypass — a fixed string, needing no knowledge of the size,
+  that returns a complete usable copy while an exact-coverage test waves it
+  through. What it does not close: a caller who splits each resource across
+  two requests stays under the threshold on both, so bulk reading is bounded
+  at roughly **half the wide bucket's rate**, not at the narrow bucket's.
+  Lowering the threshold buys less than it costs, because real playback pulls
+  large chunks. Only byte-budget accounting — this follow-up — makes the
+  narrow bucket mean what its name says.
 - **FU-4 — A `Material::Solid` variant or a transparency toggle.** D6 degrades
   Linux unconditionally; giving the user a way back is a real product surface.
 

@@ -1385,13 +1385,26 @@ Expected: the existing js/wasm pair message plus no brotli complaints.
 
 - [ ] **Step 3: Prove direction 1 goes RED**
 
+Two mutations, because direction 1 covers two distinct failures — bytes that
+are not brotli at all, and bytes that are valid brotli of the wrong content.
+
 ```bash
-printf '\x00' >> interfaces/webchat/dist/tailwind.css.br
-node scripts/check_panel_dist.mjs
+# 1a — invalid: replace the stream with garbage
+printf 'not brotli' > interfaces/webchat/dist/tailwind.css.br
+node scripts/check_panel_dist.mjs   # ✗ tailwind.css.br is not valid brotli: ...
+
+# 1b — stale: valid brotli, wrong content
+node -e "const z=require('zlib'),f=require('fs');f.writeFileSync('interfaces/webchat/dist/tailwind.css.br',z.brotliCompressSync(Buffer.from('stale content')))"
+node scripts/check_panel_dist.mjs   # ✗ tailwind.css.br decompresses to something other than tailwind.css — it is STALE
 ```
 
-Expected: `✗ tailwind.css.br is not valid brotli: ...` or `... is STALE ...`.
-Restore with `node scripts/precompress_dist.mjs`.
+Restore with `node scripts/precompress_dist.mjs` after each.
+
+> **Do not use `printf '\x00' >> …`.** An earlier version of this step said to,
+> and it cannot work: a brotli decoder stops at the final block and ignores
+> trailing bytes, so the file still decompresses to a byte-identical copy of
+> the source and the guard correctly stays green. Measured 2026-08-22.
+> A falsification that cannot fail proves nothing about the guard.
 
 - [ ] **Step 4: Prove direction 2 goes RED**
 
