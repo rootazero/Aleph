@@ -79,6 +79,7 @@ impl DiagnosticEngine {
             Arc::new(checks::VaultCheck::from_default_path()),
             Arc::new(checks::HooksConsentCheck::from_default_path()),
             Arc::new(checks::BrowserRuntimeCheck::new()),
+            Arc::new(checks::MediaCodecsCheck::new()),
             Arc::new(checks::DuplicateInstanceCheck::new()),
         ];
         Ok(Self::new(checks))
