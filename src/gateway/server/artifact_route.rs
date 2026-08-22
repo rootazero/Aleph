@@ -91,15 +91,16 @@ const ARTIFACT_READS_PER_MINUTE: u32 = 240;
 /// above any human scrubbing pattern, still orders of magnitude below what
 /// makes bulk scraping worth writing.
 ///
-/// **The wide bucket is never a way to read more whole artifacts.** Which
-/// bucket a request draws from cannot be decided by whether it carried a
-/// `Range`, because that is the caller's choice: `bytes=0-` yields the entire
-/// body as a 206, and a malformed `Range` yields the entire body as a 200, so
-/// one added header would lift a scraper from
+/// Which bucket a request draws from cannot be decided by whether it carried
+/// a `Range`, because that is the caller's choice: `bytes=0-` yields the
+/// entire body as a 206, and a malformed `Range` yields the entire body as a
+/// 200, so one added header would lift a scraper from
 /// [`ARTIFACT_READS_PER_MINUTE`] to this. The decision is therefore made on
-/// what the response actually sends — a reply carrying the whole resource
-/// charges the narrow bucket however it was requested (see the second check in
-/// `serve_artifact`), and only a genuine partial read is priced here.
+/// what the response actually **sends** — see the second check in
+/// `serve_artifact` and [`RangeVerdict::is_bulk_read`], which draws the line
+/// at more than half the resource rather than at byte-exact coverage
+/// (`Range: bytes=1-` returns a complete usable copy and would otherwise slip
+/// through).
 ///
 /// That is correct rather than merely cautious for real playback: WebKit and
 /// Chrome routinely open media with `Range: bytes=0-`, which IS a full read,
@@ -109,6 +110,16 @@ const ARTIFACT_READS_PER_MINUTE: u32 = 240;
 /// not to one artifact — a capability holder can reach every artifact in its
 /// session, so the narrow bucket is what bounds the bulk scraping its own doc
 /// names.
+///
+/// # What this bucket does NOT promise
+///
+/// It bounds bulk reading; it does not prevent it. A caller who splits each
+/// artifact across two requests stays under the half threshold on both, so
+/// what is reachable is roughly half THIS bucket's rate, not the narrow
+/// bucket's. Byte-budget accounting in the rate limiter is the only complete
+/// fix and is recorded as a follow-up. An earlier version of this comment
+/// said "the wide bucket is never a way to read more whole artifacts" — that
+/// sentence was false, and it is the reason `bytes=1-` went unnoticed.
 const ARTIFACT_RANGE_READS_PER_MINUTE: u32 = 3_000;
 
 /// Percent-encode set for the RFC 5987 `filename*` parameter.

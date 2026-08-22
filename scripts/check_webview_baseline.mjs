@@ -42,6 +42,19 @@ const readJson = (p) => {
 };
 const baseline = readJson(BASELINE);
 
+// `readJson` reports and returns null rather than throwing, precisely so an
+// operator gets a named file instead of a stack trace. That only holds if
+// every later dereference stops here: edge D reads `baseline.css_probes`
+// unguarded, so without this exit a missing or malformed baseline produces the
+// raw TypeError the comment above says it prevents — AND loses the edge A/B
+// diagnostics already queued in `problems`, which are the ones that name the
+// file. Report what we have and stop; nothing downstream is answerable without
+// the declaration.
+if (!baseline) {
+  console.error(problems.join('\n'));
+  process.exit(1);
+}
+
 // ── Edge A: the macOS install gate ────────────────────────────────────────
 // The value is declared in the BASE config only. tauri.lite.conf.json is
 // applied as `cargo tauri build --config tauri.lite.conf.json`, a deep merge
@@ -273,7 +286,15 @@ if (baseline) {
     // start. This census's entire value is that its silence can be trusted
     // (never false-negative); a class of function it cannot see by
     // construction contradicts that, even with zero occurrences today.
-    for (const m of css.matchAll(/(?:^|[^\w-])(-?[a-zA-Z][\w-]*)\(/g)) {
+    // A LOOKBEHIND, not a consumed boundary class. `[^\w-]` eats the character
+    // it matches, and `matchAll` resumes after the previous match — which ends
+    // on `(`. So in `translate(calc(1px))` the `(` before `calc` is already
+    // consumed, `calc` has no boundary left, and the census cannot see it.
+    // Measured: the consuming form reports ["translate"], this one reports
+    // ["translate", "calc"]. That is the same "invisible by construction" flaw
+    // the paragraph above rejects, arrived at from the other direction, and
+    // `isLoadBearing` 100 lines up already spells it correctly.
+    for (const m of css.matchAll(/(?<![\w-])(-?[a-zA-Z][\w-]*)\(/g)) {
       seen.add(m[1]);
     }
     const novel = [...seen].filter((n) => !REVIEWED.has(n)).sort();

@@ -87,6 +87,22 @@ if (isMain) {
         },
       });
 
+      // Incompressible source: emit nothing and remove any stale sibling. A
+      // `.br` larger than its source is strictly worse on every axis — more
+      // bytes on the wire, plus decode work at the other end.
+      //
+      // NOTE — this branch and `check_panel_dist.mjs`'s direction 2 disagree by
+      // construction, and the guard's failure message points here. The guard
+      // requires a sibling for every source over MIN_BYTES; this skips one when
+      // brotli does not win. Today nothing in dist/ hits it: all four assets are
+      // text or wasm and all four compress by 65-88%. The first already-
+      // compressed asset over 4 KiB — a .png, a .woff2, a .zip — trips the guard
+      // instead of shipping silently unguarded, which is the safe direction, but
+      // re-running this script will NOT clear it. Extend both together: teach
+      // the guard to accept a missing sibling when re-compressing the source
+      // reproduces this same "not smaller" verdict. Do not simply exempt an
+      // extension list — that stops being true the day someone commits an
+      // uncompressed .png.
       if (compressed.length >= source.length) {
         try { unlinkSync(brPath); } catch { /* nothing to remove */ }
         console.log(`  ${name}: brotli is not smaller (${compressed.length} >= ${source.length}), skipped`);
