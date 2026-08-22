@@ -31,8 +31,23 @@ const MEDIA_ERR_SRC_NOT_SUPPORTED: u16 = 4;
 /// not-supported error there is a real bug worth a console warning, not a
 /// user-facing install instruction.
 fn is_missing_decoder(code: Option<u16>, platform: crate::platform_host::HostPlatform) -> bool {
-    code == Some(MEDIA_ERR_SRC_NOT_SUPPORTED)
-        && platform == crate::platform_host::HostPlatform::Linux
+    code == Some(MEDIA_ERR_SRC_NOT_SUPPORTED) && decoder_advice_applies(platform)
+}
+
+/// Is "install a decoder package" actionable advice on this platform?
+///
+/// Both legs of the receipt need this and neither may restate it. The
+/// pre-check leg (`canPlayType` returned the engine's definite "no") and the
+/// error leg ([`is_missing_decoder`]) had two copies of the clause, and only
+/// the second had tests — so the first could have drifted to a different
+/// answer with nothing red.
+///
+/// Only Linux: WebKitGTK decodes through GStreamer plugin packages a
+/// distribution may not install. Windows (WebView2) and macOS (WKWebView)
+/// decode through the OS, where there is no package to name and a
+/// not-supported error is a real bug rather than a missing install.
+const fn decoder_advice_applies(platform: crate::platform_host::HostPlatform) -> bool {
+    matches!(platform, crate::platform_host::HostPlatform::Linux)
 }
 
 /// Synthesize `text` via the core and play it back. Best-effort: a missing TTS
@@ -63,11 +78,13 @@ pub fn speak(dash: &DashboardState, chat: &ChatState, text: String) {
         // load-bearing alone.
         if let Ok(audio) = web_sys::HtmlAudioElement::new() {
             if audio.can_play_type(mime).is_empty()
-                && crate::platform_host::host() == crate::platform_host::HostPlatform::Linux
+                && decoder_advice_applies(crate::platform_host::host())
             {
                 chat.voice_notice.set(Some(format!(
-                    "This system cannot decode {mime}. Voice replies need GStreamer \
-                     decoder plugins — run `aleph doctor` for the exact package."
+                    "This system cannot decode {mime}. Voice replies need the GStreamer \
+                     decoder plugins on THIS machine — gstreamer1.0-plugins-good, -bad \
+                     and -ugly cover the usual set. If the Aleph server runs here too, \
+                     `aleph doctor` names the exact one."
                 )));
                 return;
             }
@@ -124,8 +141,16 @@ fn play(chat: ChatState, src: &str, revoke: bool) {
                 let code = keep_for_error.error().map(|err| err.code());
                 if is_missing_decoder(code, crate::platform_host::host()) {
                     chat.voice_notice.set(Some(
+                        // "THIS machine" is load-bearing: `aleph doctor` answers
+                        // for the machine running the CORE, and its codec check
+                        // returns nothing off Linux. In the co-located desktop
+                        // App they are the same machine, but a Linux browser
+                        // pointed at a remote core would otherwise be sent to a
+                        // diagnostic about the wrong computer.
                         "This system cannot decode the voice reply. Install the GStreamer \
-                         decoder plugins — run `aleph doctor` for the exact package."
+                         decoder plugins on THIS machine — gstreamer1.0-plugins-good, \
+                         -bad and -ugly cover the usual set. If the Aleph server runs \
+                         here too, `aleph doctor` names the exact one."
                             .to_string(),
                     ));
                 }

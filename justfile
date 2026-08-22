@@ -379,8 +379,11 @@ check-dist:
     node scripts/check_panel_dist.mjs {{panel_dist}}
 
 # Verify the Panel's declared WebView baseline is consistent across every
-# consumer. Run by `just wasm`, and in CI on any change under
-# interfaces/webchat/ or desktop/shell/.
+# consumer. Run by `just wasm`, and by the `panel-dist` job in
+# .github/workflows/aleph-core-ci.yml — which is true as of 2026-08-22 and was
+# not before: this comment claimed CI coverage the workflow never had, so the
+# guard's only trigger was a local build. Every input it reads is committed,
+# so it runs on a bare checkout with no WASM toolchain.
 check-baseline:
     node scripts/check_webview_baseline.mjs
 

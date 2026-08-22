@@ -25,6 +25,14 @@ pub enum RangeVerdict {
     /// "not the bytes unit", "multi-range", and every *invalid* spec: one
     /// that fails to parse, and one whose last-byte-pos is below its
     /// first-byte-pos.
+    ///
+    /// One exception, and it is deliberate rather than an oversight in the
+    /// list above: against a **zero-length** resource every range is
+    /// [`Self::Unsatisfiable`], including a malformed one, because the
+    /// emptiness check precedes the parse. RFC 9110 §14.2 permits either
+    /// answer for an invalid spec, and 416 with `bytes */0` is the more
+    /// informative of the two here — "there is nothing to range over" is a
+    /// fact about the resource, not about the spelling of the request.
     Whole,
     /// Send 206 with `[start, end]`, both inclusive.
     Satisfiable { start: u64, end: u64 },

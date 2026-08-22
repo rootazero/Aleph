@@ -13,7 +13,13 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'interfaces/webchat/dist/**'
+      - 'interfaces/webchat/webview-baseline.json'
+      - 'interfaces/webchat/baseline-probe.js'
+      - 'interfaces/webchat/styles/**'
+      - 'desktop/shell/tauri.conf.json'
+      - 'desktop/shell/tauri.lite.conf.json'
       - 'scripts/check_panel_dist.mjs'
+      - 'scripts/check_webview_baseline.mjs'
       - '.github/workflows/aleph-core-ci.yml'
   pull_request:
     paths:
@@ -26,7 +32,13 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'interfaces/webchat/dist/**'
+      - 'interfaces/webchat/webview-baseline.json'
+      - 'interfaces/webchat/baseline-probe.js'
+      - 'interfaces/webchat/styles/**'
+      - 'desktop/shell/tauri.conf.json'
+      - 'desktop/shell/tauri.lite.conf.json'
       - 'scripts/check_panel_dist.mjs'
+      - 'scripts/check_webview_baseline.mjs'
 
 env:
   CARGO_TERM_COLOR: always
@@ -42,6 +54,14 @@ jobs:
       - uses: actions/checkout@v6
       - name: Verify panel js+wasm are a matched pair
         run: node scripts/check_panel_dist.mjs
+      # Same job, same bare checkout. Every input this guard reads is
+      # committed — the baseline JSON, both Tauri confs, the probe, the built
+      # dist and stylesheet — so it needs no WASM toolchain, which is why it
+      # can run here at all. Until now its only trigger was a local
+      # `just wasm`, while the recipe's own doc claimed CI ran it: edges A-D,
+      # including the macOS install gate, drifted with nothing watching.
+      - name: Verify the declared WebView baseline is consistent
+        run: node scripts/check_webview_baseline.mjs
 
   test:
     name: Test (${{ matrix.os }})

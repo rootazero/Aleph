@@ -241,7 +241,7 @@ a third edge, revisit.
 
 ### 4.1 Gate 1 — install time (zero code, hardest)
 
-Both `desktop/shell/tauri.conf.json` and `tauri.lite.conf.json` gain:
+`desktop/shell/tauri.conf.json` — the BASE conf, and only it — gains:
 
 ```json
 "bundle": { "macOS": { "minimumSystemVersion": "13.3" } }
@@ -250,12 +250,25 @@ Both `desktop/shell/tauri.conf.json` and `tauri.lite.conf.json` gain:
 macOS refuses the install itself; the user sees the OS's own message. Windows and
 Linux are unaffected (`minimumSystemVersion` is macOS-only).
 
+> **Corrected 2026-08-22.** This section, §4.2 item 1, §7.1 row 5 and the §9
+> file table originally said *both* confs declare it. They must not.
+> `tauri.lite.conf.json` is applied as `--config tauri.lite.conf.json`, a deep
+> merge **over** the base, so the value is inherited; writing it there too
+> creates the second source of truth the guard's edge A exists to forbid, and
+> the two could then disagree. The shipped code is right and the spec was
+> wrong — recorded rather than silently rewritten, because a reader who
+> "closes the gap" in the direction the old text stated would introduce
+> exactly the defect being guarded against. Edge A therefore reads the value
+> from the base conf and checks the overlay only for a *contradiction*.
+
 ### 4.2 Gate 2 — build time
 
 **A source-level guard** (a Rust test that reads the files) asserts four things
 are consistent, all against `webview-baseline.json` (§3.3):
 
-1. Both `tauri.conf.json` files' `minimumSystemVersion` equal `macos_min`.
+1. The BASE `tauri.conf.json`'s `minimumSystemVersion` equals `macos_min`, and
+   the lite overlay does not CONTRADICT it (see the correction in §4.1 — the
+   overlay inherits by merge and must not restate it).
 2. `baseline-probe.js`'s probe list equals `css_probes` + `js_probes` — **set
    equality in both directions**, so neither a new probe nor a removed one can
    drift.
@@ -509,7 +522,7 @@ assertions, to be executed by the user on those platforms.
 | 2 | Both routes: 206 / 416 / `Content-Range` / `Accept-Ranges` / **206 also carries CSP** / Range applied after the auth gates | move range application ahead of capability resolution |
 | 3 | br negotiation hit · gzip fallback when no `.br` · **ETag does not emit a false 304 across `Accept-Encoding`** · `Vary` present | derive the ETag from the served representation |
 | 4 | `check_panel_dist.mjs` br pairing, both directions | flip one byte inside a `.br` |
-| 5 | The three G1 source-level guards | change one conf's `minimumSystemVersion` |
+| 5 | The three G1 source-level guards | change the BASE conf's `minimumSystemVersion`, or add a *contradicting* one to the lite overlay (see §4.1's correction — the overlay must not restate an agreeing value) |
 | 6 | wasm-opt feature fence | rebuild with `-C target-feature=+simd128` and assert wasm-opt errors |
 | 7 | WebView2 on real hardware: fallback page · `content-encoding: br` · mp4 seek issues 206 · microphone still works | override `CSS.supports` from devtools |
 
@@ -616,7 +629,7 @@ indistinguishable from a blind guard:
 | Path | Change |
 |---|---|
 | `desktop/shell/tauri.conf.json` | `minimumSystemVersion`, `webviewInstallMode` |
-| `desktop/shell/tauri.lite.conf.json` | same two |
+| `desktop/shell/tauri.lite.conf.json` | neither — inherits both by merge (§4.1) |
 | `desktop/shell/src/main.rs` | `SHELL_MARKER_JS` completed for all three platforms |
 | `desktop/shell/src/` (new test module) | the four-way baseline consistency guard (§4.2) |
 | `interfaces/webchat/webview-baseline.json` | **new** — the single baseline declaration (§3.3) |
