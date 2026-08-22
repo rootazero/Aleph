@@ -28,5 +28,42 @@
         <key>NSAllowsArbitraryLoads</key>
         <true/>
     </dict>
+    <!-- The macOS install floor. It lives HERE, and NOT in tauri.conf.json's
+         `bundle.macOS.minimumSystemVersion`, on purpose — that key is not just a
+         plist value, it also exports MACOSX_DEPLOYMENT_TARGET for the whole cargo
+         build (tauri-cli's own schema says setting it to null "completely removes
+         the LSMinimumSystemVersion field ... and the MACOSX_DEPLOYMENT_TARGET
+         environment variable"), and any deployment target >= 12.0 switches Apple's
+         linker to chained fixups, which on Xcode 27 / ld-27031 lays out LINKEDIT so
+         a proc-macro dylib's LC_SYMTAB.stroff lands at 4 (mod 8). macOS 26/27's
+         dyld rejects that with "mis-aligned LINKEDIT string pool", rustc then can't
+         dlopen the proc-macro, and the build dies as `error[E0463]: can't find crate
+         for serde_derive / tauri_macros`. Measured on 2026-08-22: 10.13/11.0/11.5
+         load fine (classic LC_DYLD_INFO); 12.0/13.0/13.3/13.4/14.0/15.0/26.0 all
+         fail identically. rustc's own default for aarch64-apple-darwin is 11.0,
+         which is why every other build in this repo is unaffected and only the
+         `cargo tauri build` step broke. CI never saw it: the release matrix runs
+         `macos-latest`, whose older dyld does not enforce the check.
+
+         Trade-off, RULED ON AND ACCEPTED by the repo owner on 2026-08-22 — this is a
+         decision on record, not an oversight to tidy up: the shell binary is now
+         compiled against the 11.0 default rather than 13.3, so "the shell cannot call
+         post-13.3 APIs" is no longer compiler-enforced; only this install gate enforces
+         it. That was judged acceptable because the 13.3 floor exists to guarantee a
+         WKWebView capable of oklch()/color-mix()/CSS.registerProperty (Safari 16.4) —
+         a runtime WebView capability, not a symbol the shell links against. See
+         interfaces/webchat/webview-baseline.json for the floor's real declaration.
+
+         If you want BOTH the plist gate and a compiler-enforced 13.3, the direction is
+         to stop proc-macros inheriting the deployment target — NOT to restore the
+         config key. cargo has no clean way to express that on stable today; if that
+         changes, revisit here and at edge A of scripts/check_webview_baseline.mjs.
+
+         If you are here to "restore" minimumSystemVersion in tauri.conf.json:
+         don't, unless you have verified the linker no longer mis-aligns. Check with
+             otool -l target/release/deps/lib<name>-*.dylib | grep -A5 LC_SYMTAB
+         and confirm stroff % 8 == 0. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.3</string>
 </dict>
 </plist>

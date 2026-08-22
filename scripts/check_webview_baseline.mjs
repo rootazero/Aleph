@@ -2,8 +2,11 @@
 // Guard: the Panel's WebView baseline is declared ONCE in
 // interfaces/webchat/webview-baseline.json, and every consumer that restates it
 // must agree. Four edges, added across tasks 1-4:
-//   A  desktop/shell/tauri.conf.json bundle.macOS.minimumSystemVersion == macos_min
-//      (and tauri.lite.conf.json, a MERGE OVERLAY, must not contradict it)
+//   A  desktop/shell/Info.plist LSMinimumSystemVersion == macos_min, AND
+//      tauri.conf.json bundle.macOS.minimumSystemVersion stays null (it also
+//      exports MACOSX_DEPLOYMENT_TARGET and breaks proc-macro dylibs on
+//      macOS 26/27 — see the long note at edge A). tauri.lite.conf.json, a
+//      MERGE OVERLAY, must not contradict it.
 //   B  baseline-probe.js probes == css_probes + js_probes, set-equal both ways
 //   C  dist/index.html contains baseline-probe.js verbatim
 //   D  every css_probe is actually exercised by dist/tailwind.css,
@@ -56,28 +59,93 @@ if (!baseline) {
 }
 
 // ── Edge A: the macOS install gate ────────────────────────────────────────
-// The value is declared in the BASE config only. tauri.lite.conf.json is
-// applied as `cargo tauri build --config tauri.lite.conf.json`, a deep merge
-// over the base (justfile shell-build-lite) — duplicating the value there would
-// create a second source of truth. The overlay is only checked for a
-// CONTRADICTION.
+// The floor is declared in webview-baseline.json (macos_min) and RESTATED IN
+// EXACTLY ONE consumer: desktop/shell/Info.plist's LSMinimumSystemVersion,
+// which tauri-bundler auto-merges into the built app's Info.plist (verified
+// 2026-08-22: NSMicrophoneUsageDescription et al. from that file appear in
+// target/release/bundle/macos/Aleph.app/Contents/Info.plist).
+//
+// It is deliberately NOT restated in tauri.conf.json's
+// bundle.macOS.minimumSystemVersion, and this edge now ENFORCES that that key
+// stays null. That key is not just a plist value: tauri-cli also exports it as
+// MACOSX_DEPLOYMENT_TARGET for the whole cargo build, and any deployment target
+// >= 12.0 switches Apple's linker to chained fixups. On Xcode 27 / ld-27031 that
+// lays out LINKEDIT so a proc-macro dylib's LC_SYMTAB.stroff lands at 4 (mod 8);
+// macOS 26/27's dyld then refuses to load it ("mis-aligned LINKEDIT string
+// pool"), rustc cannot dlopen the proc-macro, and `cargo tauri build` dies as
+// `error[E0463]: can't find crate for serde_derive / tauri_macros`. Measured:
+// 10.13/11.0/11.5 load fine (classic LC_DYLD_INFO); 12.0 through 26.0 all fail.
+// rustc's default for aarch64-apple-darwin is 11.0, which is why only the tauri
+// step broke. CI never caught it — the release matrix runs `macos-latest`, whose
+// older dyld does not enforce the check.
+//
+// So this edge asserts TWO things, and both directions matter:
+//   A1  the plist states the floor  (drop it and the app installs on anything)
+//   A2  the config key is null      (restore it and macOS 26/27 cannot build)
+// A2 is the one a future reader is most likely to "fix" back; it fails loudly
+// with the reason rather than leaving prose in a file nobody greps.
 //
 // Guarded by `if (baseline)`/`if (base)`/`if (lite)`: when readJson has
 // already recorded why a file couldn't be read, comparing against a null
 // value would just re-report the same failure as a confusing second message.
 if (baseline) {
+  // A1 — the plist carries the floor.
+  const PLIST = 'desktop/shell/Info.plist';
+  let plistSrc = null;
+  try {
+    plistSrc = readFileSync(PLIST, 'utf8');
+  } catch (e) {
+    fail('A', `cannot read ${PLIST}: ${e.message}`);
+  }
+  if (plistSrc !== null) {
+    // Match the key and the <string> that follows it, tolerating whitespace and
+    // comments between them. Anchored on the key so a stray "13.3" elsewhere in
+    // the file cannot satisfy this.
+    const m = plistSrc.match(
+      /<key>\s*LSMinimumSystemVersion\s*<\/key>\s*(?:<!--[\s\S]*?-->\s*)*<string>\s*([^<\s]+)\s*<\/string>/,
+    );
+    if (!m) {
+      fail(
+        'A',
+        `${PLIST} has no <key>LSMinimumSystemVersion</key> followed by a <string> value — ` +
+          `that plist is where the macOS install floor lives (see the comment in it). ` +
+          `Without it the app declares no minimum and installs on systems whose WebView ` +
+          `cannot render the Panel.`,
+      );
+    } else if (m[1] !== baseline.macos_min) {
+      fail(
+        'A',
+        `${PLIST} LSMinimumSystemVersion is ${JSON.stringify(m[1])}, expected ${JSON.stringify(baseline.macos_min)}`,
+      );
+    }
+  }
+
+  // A2 — the config key must stay null (see the long comment above).
   const base = readJson(BASE_CONF);
   if (base) {
     const got = base?.bundle?.macOS?.minimumSystemVersion;
-    if (got !== baseline.macos_min) {
-      fail('A', `${BASE_CONF} bundle.macOS.minimumSystemVersion is ${JSON.stringify(got)}, expected ${JSON.stringify(baseline.macos_min)}`);
+    if (got !== null) {
+      fail(
+        'A',
+        `${BASE_CONF} bundle.macOS.minimumSystemVersion is ${JSON.stringify(got)}, expected null. ` +
+          `That key also exports MACOSX_DEPLOYMENT_TARGET for the whole cargo build, and any ` +
+          `value >= 12.0 makes Apple's linker emit proc-macro dylibs that macOS 26/27's dyld ` +
+          `refuses to load ("mis-aligned LINKEDIT string pool"), which surfaces as ` +
+          `error[E0463]: can't find crate for <some derive>. The floor belongs in ` +
+          `desktop/shell/Info.plist instead — read the comment there before changing this.`,
+      );
     }
   }
   const lite = readJson(LITE_CONF);
   if (lite) {
     const liteGot = lite?.bundle?.macOS?.minimumSystemVersion;
-    if (liteGot !== undefined && liteGot !== baseline.macos_min) {
-      fail('A', `${LITE_CONF} overrides minimumSystemVersion to ${JSON.stringify(liteGot)}; the overlay must omit it or match ${JSON.stringify(baseline.macos_min)}`);
+    if (liteGot !== undefined && liteGot !== null) {
+      fail(
+        'A',
+        `${LITE_CONF} overrides minimumSystemVersion to ${JSON.stringify(liteGot)}; the overlay must ` +
+          `omit it or set null (same reason as the base config — it would re-export ` +
+          `MACOSX_DEPLOYMENT_TARGET and break the build on macOS 26/27).`,
+      );
     }
   }
 }
