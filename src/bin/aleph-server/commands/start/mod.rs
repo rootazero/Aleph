@@ -192,6 +192,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // it only because `[security]` is on the app config, not the gateway one.
     install_mask_patterns(&loaded_app_config);
 
+    // Install the process-wide `[policies.spend]` handle. UNCONDITIONAL —
+    // including on a box with no ceiling configured (`enabled() == false`).
+    // `spend::update_policy` (the live-apply path) returns `false`, and the
+    // live-apply verdict honestly downgrades to `Restart`, when no handle
+    // has been installed yet — so skipping this on an unconfigured box would
+    // mean an operator could turn a ceiling OFF live but never turn one ON
+    // live, only the direction that matters less. `install_policy` is
+    // idempotent (a second call is a no-op), so this is safe to call exactly
+    // once here regardless of what `[policies.spend]` says.
+    alephcore::spend::install_policy(loaded_app_config.policies.spend.clone());
+
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
     initialize_extension_manager(args.daemon).await;
@@ -453,6 +464,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Security store + vault construction (early — vault needed for API key
     // resolution).
     let auth_bundle = initialize_vault(final_port, server.node_registry.clone());
+
+    // Install the durable per-principal spend ledger on the same
+    // `SecurityStore` every other durable consumer shares — see
+    // `SqliteSpendLedger`'s module doc for why it does not open a second
+    // connection. Before anything that can admit a run (the gateway's own
+    // handler registration happens below), so no request or LLM call ever
+    // sees the process fall back to `spend::InMemorySpendLedger`, whose
+    // rows do not survive a restart.
+    alephcore::spend::install_ledger(Arc::new(alephcore::spend::sqlite::SqliteSpendLedger::new(
+        auth_bundle.security_store.clone(),
+    )));
+
     register_core_handlers(
         &mut server,
         &auth_bundle.auth_ctx,
@@ -3392,4 +3415,53 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     run_result?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// `spend::install_policy`/`spend::install_ledger` had **zero production
+    /// callers** until this round wired them in here — every mention of
+    /// either name anywhere in `src/` was inside `#[cfg(test)]` or a doc
+    /// comment. On a real server that meant `spend::check` never denied
+    /// anything (the process-wide policy fell back to
+    /// `SpendPolicy::default()`, whose `enabled()` is `false`) and every
+    /// spend row lived in a process-lifetime `InMemorySpendLedger` that
+    /// never survived a restart — nine tasks of ceiling enforcement, inert,
+    /// with no compile error, no test going red, and a running server that
+    /// looked exactly like a correctly-configured one with no ceiling set.
+    /// Nothing else can see this failure, so this is a source-level census:
+    /// assert a production (comment-stripped) call to each name exists.
+    ///
+    /// CRLF-safe (`\r` stripped before any split — an anchored
+    /// `"\n#[cfg(test)]"` needle matches nothing on this repo's Windows
+    /// checkout, silently turning "production" into the whole file) and
+    /// comment-stripped (a doc comment naming either function — this one
+    /// included — would satisfy a naive `contains` otherwise; see CLAUDE.md
+    /// §10 for the documented failure that shape causes).
+    #[test]
+    fn boot_installs_the_spend_policy_and_the_spend_ledger() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] split matched nothing — this test would be \
+             reading its own source, and would trivially pass by finding \
+             its own doc comment"
+        );
+        let production: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for call in ["install_policy(", "install_ledger("] {
+            assert!(
+                production.contains(call),
+                "start/mod.rs must contain a production call to \
+                 spend::{call} — without it the round's config, ledger and \
+                 admission checks are all wired to a handle boot never \
+                 installs, and the server runs as if no ceiling were ever \
+                 configured"
+            );
+        }
+    }
 }
