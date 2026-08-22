@@ -908,3 +908,40 @@ sentence P75 identified as the reason `bytes=1-` went unnoticed. I fixed the
 predicate, the call site, and the new helper's doc, and left the original
 claim standing one screen above, in the same commit where I named the
 failure mode. Naming a defect class does not inoculate you against it.
+
+## Two amendments from the agents' late final messages — 2026-08-22
+
+Every agent's closing message arrived after I had already read its work off
+disk and committed it. Nothing in them was outstanding; two are worth
+correcting into the record.
+
+**1. The census-regex fix was bigger than I measured, and the reviewer's
+number is the better one.** I recorded "32 distinct names either way, no new
+names — structural blind spot, not yet triggered." True, but it measures the
+wrong thing. Re-measured against the built stylesheet:
+
+    occurrences  consuming: 2433   lookbehind: 2666   hidden: 233
+    distinct     consuming:   32   lookbehind:   32
+
+So the consuming boundary class was silently skipping **233 function
+occurrences**, not zero. The census stayed green before and after only
+because every one of those 233 happened to be a repeat of a name already
+reviewed elsewhere in the file. That is luck, not coverage: the guard's whole
+value is that its silence can be trusted, and it was blind to 9% of its own
+input. "No new names surfaced" was the right observation and the wrong
+headline.
+
+**2. impl-t13's "tooling quirk" was me.** Its report flags that an Edit call
+to restore its mutation-3 errored `string not found`, while a read
+immediately after showed the code correctly restored — and says it could not
+explain that from the file contents. The explanation is not tooling: I had
+restored the same lines myself, seconds earlier, having read its in-flight
+RED phase as an abandoned mutation (see the correction above). Two writers,
+same content, one of them surprised.
+
+Recorded because the report is now a committed artifact and its open question
+otherwise stands as a suspected tool defect. It is not one. It is the
+concrete cost of P70's parallel dispatch meeting mutation-based
+falsification: the tree is not a stable observation surface while a falsifier
+is running, and the confusion is mutual — the agent could not explain my
+write any more than I could explain its mutation.
