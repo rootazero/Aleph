@@ -528,6 +528,102 @@ mod tests {
         );
     }
 
+    /// The two tests above catch `now - N * fixed_duration` used raw as the
+    /// cutoff, but a reviewer traced that they would BOTH pass, by
+    /// coincidence, against a subtler wrong implementation: subtract a fixed
+    /// duration, *then* floor the result to a period start. Flooring hides
+    /// the error whenever the anchor sits far enough into its period that
+    /// the fixed-duration error cannot push the result across a boundary —
+    /// and both anchors are at noon and mid-month.
+    ///
+    /// A test that passes against the implementation it exists to reject is
+    /// not a test of anything, so these two anchor deliberately close to the
+    /// START of a period, which is the only place the two implementations
+    /// can be told apart:
+    ///
+    /// - `Month`: 00:30 on March 1st **2023**. Calendar walk (retain 3) →
+    ///   January 1 2023. Subtract 60 days → December 31 **2022**, floored →
+    ///   December 1 2022 — a whole extra month of rows deleted, in the
+    ///   previous YEAR, which is the shape that makes a spend dispute
+    ///   unanswerable.
+    ///
+    ///   ⚠️ The year is load-bearing and was wrong on the first attempt.
+    ///   Anchored in **2024**, January (31) + February (29, leap) sum to
+    ///   exactly 60, so "subtract 60 days then floor" lands on January 1
+    ///   too and the `assert_ne!` below becomes unconditionally true — a
+    ///   predicate that cannot fail, written into the very test whose job
+    ///   is to reject that implementation. 2023's February has 28 days, so
+    ///   the two answers separate by a month. If this test is ever
+    ///   re-anchored, re-derive the arithmetic; do not assume a nearby date
+    ///   discriminates just because this one does.
+    /// - `Day`: 00:30 on the morning after a 23-hour spring-forward day.
+    ///   Calendar walk (retain 3) → March 9. Subtract 48h → 23:30 on March
+    ///   8 local, floored → March 8 — one day too far back, caused by the
+    ///   single hour the transition removed.
+    #[test]
+    fn retention_cutoff_rejects_subtract_then_floor_not_only_raw_subtraction() {
+        let utc = chrono_tz::UTC;
+        let now_ms = utc
+            .with_ymd_and_hms(2023, 3, 1, 0, 30, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let calendar = utc
+            .with_ymd_and_hms(2023, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let subtract_then_floor = utc
+            .with_ymd_and_hms(2022, 12, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let got = retention_cutoff_ms_in(now_ms, SpendPeriod::Month, RETENTION_PERIODS, &utc);
+        assert_eq!(
+            got, calendar,
+            "anchored 30 minutes into March 1st, a calendar walk of 3 months keeps January \
+             onward; subtract-60-days-then-floor keeps December of the PREVIOUS year, sweeping \
+             an extra month away"
+        );
+        assert_ne!(
+            got, subtract_then_floor,
+            "this anchor exists precisely so the two implementations disagree — if they agree \
+             here, the anchor has drifted back toward the middle of a period and the test has \
+             stopped discriminating"
+        );
+
+        let ny = chrono_tz::America::New_York;
+        // 00:30 on the morning after the 2024 US spring-forward day.
+        let now_ms = ny
+            .with_ymd_and_hms(2024, 3, 11, 0, 30, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let calendar = ny
+            .with_ymd_and_hms(2024, 3, 9, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let subtract_then_floor = ny
+            .with_ymd_and_hms(2024, 3, 8, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let got = retention_cutoff_ms_in(now_ms, SpendPeriod::Day, RETENTION_PERIODS, &ny);
+        assert_eq!(
+            got, calendar,
+            "walking back 3 calendar days from March 11 keeps March 9 onward; subtracting 48 \
+             fixed hours lands at 23:30 on March 8 — the hour the spring-forward day removed — \
+             which floors to March 8 and sweeps a day that must be kept"
+        );
+        assert_ne!(
+            got, subtract_then_floor,
+            "this anchor exists precisely so the two implementations disagree — if they agree \
+             here, the DST hour is no longer doing the discriminating and the test has stopped \
+             being about DST"
+        );
+    }
+
     /// The backward walk survives a DST transition without collapsing or
     /// skipping a day: anchored the same way as
     /// `dst_transition_day_end_always_after_start` above, walking back one
