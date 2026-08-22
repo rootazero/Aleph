@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod artifact_route;
+mod byte_range;
 mod canvas_asset_route;
 mod flood_guard;
 mod handler;
