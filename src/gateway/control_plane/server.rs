@@ -18,14 +18,25 @@ pub fn create_control_plane_router() -> Router {
     Router::new()
         .route("/", get(serve_index))
         .route("/{*path}", get(serve_static_or_index))
-        // Runtime gzip for a client that does not advertise `br` — not "no
-        // sibling": every embedded asset currently has one (precompressed at
-        // build time by scripts/precompress_dist.mjs). The large payloads —
-        // the ~22 MB WASM above all — are served from those committed `.br`
-        // files by `serve_static_or_index`, and this layer passes them
-        // through untouched because they already carry a `Content-Encoding`.
-        // Measured on this build: wasm 21,882,715 B identity → 3,363,082 B
-        // via `.br` → 5,089,368 B via this layer's runtime gzip fallback.
+        // This layer earns its place twice, and neither reason is "assets
+        // without a sibling".
+        //
+        // First: a client that does not advertise `br` at all. The large
+        // payloads — the ~22 MB WASM above all — are served from committed
+        // `.br` files by `serve_static_or_index` when brotli IS advertised,
+        // and this layer passes those through untouched because they already
+        // carry a `Content-Encoding`. Measured on this build: wasm
+        // 21,882,715 B identity → 3,363,082 B via `.br` → 5,089,368 B via
+        // this layer's runtime gzip. The choice is per request, not per
+        // asset.
+        //
+        // Second: an asset below the 4 KiB floor that
+        // scripts/precompress_dist.mjs compresses above. All four embedded
+        // assets are currently over that floor, so all four have a sibling;
+        // one added below it would have none, and `serve_static_or_index`
+        // would fall through to identity for it — this layer is what still
+        // compresses it.
+        //
         // 304 revalidations carry no body, so nothing runs on a cache hit.
         .layer(CompressionLayer::new())
 }
@@ -39,9 +50,28 @@ pub fn create_control_plane_router() -> Router {
 /// would instead receive brotli. Honoring it costs nothing in the common
 /// case (no `q` parameter, or a positive one, are both acceptance) and
 /// fails safe in the refusal case (identity is always readable). A qvalue
-/// that fails to parse is NOT read as a refusal — only an exact zero is,
-/// checked numerically so `br;q=0.5` and `br;q=0.001` are correctly still
-/// acceptance rather than being caught by a textual match on "q=0".
+/// that fails to parse is NOT read as a refusal — only a weight that parses
+/// to zero or below is, checked numerically so `br;q=0.5` and `br;q=0.001`
+/// are correctly still acceptance rather than being caught by a textual
+/// match on "q=0".
+///
+/// Three malformed shapes stay explicitly decided rather than falling out
+/// of how the parse happens to be written. No conformant client emits any
+/// of them, but each one's accidental reading was *acceptance* — brotli
+/// sent to a client that refused it — so each resolves toward identity,
+/// the representation every client can read:
+///
+/// * **A refusal anywhere wins.** The scan does not stop at the first
+///   accepting token, so `br;q=0.9, br;q=0` refuses. Stopping early would
+///   make the answer depend on header order, and would disagree with the
+///   duplicate-`q=` case one level down, where any zero already wins. Two
+///   halves of one function disagreeing is how a rule nobody wrote gets
+///   inferred later.
+/// * **Token and parameter names match case-insensitively**, as RFC 9110
+///   requires of both. Matched case-sensitively, `br;Q=0` reads as an
+///   acceptance.
+/// * **Whitespace around the parameter `=` is tolerated**, so `br;q = 0`
+///   refuses rather than being read as a `br` with no weight at all.
 ///
 /// This still answers exactly one question — "precompressed sibling or
 /// not" for the `br` token specifically — not full content negotiation:
@@ -56,18 +86,34 @@ fn accepts_brotli(headers: &HeaderMap) -> bool {
         return false;
     };
 
-    value.split(',').any(|token| {
+    let mut advertised = false;
+    for token in value.split(',') {
         let mut segments = token.split(';');
-        if segments.next().unwrap_or_default().trim() != "br" {
+        if !segments
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .eq_ignore_ascii_case("br")
+        {
+            continue;
+        }
+        advertised = true;
+        // A qvalue of zero (`0`, `0.0`, `0.000`, …) is an explicit refusal,
+        // as is a negative one — neither is a positive preference. Anything
+        // else — a positive weight, no `q` parameter, or one that fails to
+        // parse — is acceptance.
+        let refused = segments.any(|param| {
+            let Some((name, weight)) = param.split_once('=') else {
+                return false;
+            };
+            name.trim().eq_ignore_ascii_case("q")
+                && weight.trim().parse::<f64>().is_ok_and(|q| q <= 0.0)
+        });
+        if refused {
             return false;
         }
-        // A qvalue of exactly 0 (`0`, `0.0`, `0.000`, …) is an explicit
-        // refusal. Anything else — a positive weight, no `q` parameter, or
-        // one that fails to parse — is acceptance.
-        !segments
-            .filter_map(|param| param.trim().strip_prefix("q="))
-            .any(|q| q.trim().parse::<f64>().is_ok_and(|q| q == 0.0))
-    })
+    }
+    advertised
 }
 
 /// Serve the index.html file
@@ -323,7 +369,69 @@ mod tests {
         headers.insert(header::ACCEPT_ENCODING, "br;q=abc".parse().unwrap());
         assert!(
             accepts_brotli(&headers),
-            "an unparseable qvalue is not a refusal; only an exact zero is"
+            "an unparseable qvalue is not a refusal; only a weight that parses to zero \
+             or below is"
+        );
+    }
+
+    #[test]
+    fn accepts_brotli_lets_a_refusal_win_over_a_duplicate_accepting_token() {
+        // Self-contradictory and outside the ABNF, so no real client sends
+        // it — but whichever way it is answered must not depend on which
+        // token came first, and the within-token duplicate-`q=` case already
+        // lets any zero win.
+        for spelling in ["br;q=0.9, br;q=0", "br;q=0, br;q=0.9"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ACCEPT_ENCODING, spelling.parse().unwrap());
+            assert!(
+                !accepts_brotli(&headers),
+                "{spelling}: a refusal anywhere in the header must win, in either order — \
+                 otherwise the answer depends on token order and disagrees with how a \
+                 repeated `q=` inside one token is already resolved"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_brotli_matches_the_token_and_the_q_parameter_case_insensitively() {
+        // RFC 9110 makes both the content-coding token and the parameter
+        // name case-insensitive. `br;Q=0` matched case-sensitively would be
+        // read as acceptance — brotli sent to a client that refused it.
+        let mut upper_token = HeaderMap::new();
+        upper_token.insert(header::ACCEPT_ENCODING, "BR".parse().unwrap());
+        assert!(
+            accepts_brotli(&upper_token),
+            "`BR` is the same content coding as `br`"
+        );
+
+        let mut upper_param = HeaderMap::new();
+        upper_param.insert(header::ACCEPT_ENCODING, "br;Q=0".parse().unwrap());
+        assert!(
+            !accepts_brotli(&upper_param),
+            "`Q=0` is the same refusal as `q=0`; reading it as acceptance is the unsafe \
+             direction"
+        );
+    }
+
+    #[test]
+    fn accepts_brotli_tolerates_whitespace_around_the_parameter_equals() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, "br;q = 0".parse().unwrap());
+        assert!(
+            !accepts_brotli(&headers),
+            "`br;q = 0` is outside the ABNF, but reading it as a `br` with no weight at \
+             all serves brotli to a client that refused it"
+        );
+    }
+
+    #[test]
+    fn accepts_brotli_does_not_read_a_negative_weight_as_a_preference() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, "br;q=-1".parse().unwrap());
+        assert!(
+            !accepts_brotli(&headers),
+            "a negative weight is not a positive preference by any reading; identity is \
+             the safe answer"
         );
     }
 
