@@ -633,8 +633,10 @@ mod tests {
     /// bounded signal into a per-session heartbeat.
     #[tokio::test]
     async fn an_unchanged_position_is_not_reported_twice() {
+        // Process-global run-id namespace — see the comment on
+        // `cancel_queued_run_targets_exactly_one_ticket` in mod.rs.
         let s = "bqd-report-dedup";
-        let front = register(s, 8, "run-front").expect("lane accepts the first message");
+        let front = register(s, 8, "bqd-dedup-front").expect("lane accepts the first message");
         let sink = Arc::new(tokio::sync::Mutex::new(Vec::<u16>::new()));
 
         let waker = tokio::spawn(async move {
@@ -649,8 +651,14 @@ mod tests {
             drop(front);
         });
 
-        let outcome =
-            deliver_reporting(s, "run-b", cfg(8), || async { Ok(()) }, Arc::clone(&sink)).await;
+        let outcome = deliver_reporting(
+            s,
+            "bqd-dedup-b",
+            cfg(8),
+            || async { Ok(()) },
+            Arc::clone(&sink),
+        )
+        .await;
         waker.await.expect("waker task");
 
         assert!(matches!(outcome, DeliveryOutcome::Executed(Ok(()))));

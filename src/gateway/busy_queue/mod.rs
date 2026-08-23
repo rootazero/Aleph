@@ -1186,17 +1186,19 @@ mod tests {
     /// that is already gone.
     #[test]
     fn ahead_counts_only_tickets_that_may_still_run() {
+        // Process-global run-id namespace — see the comment on
+        // `cancel_queued_run_targets_exactly_one_ticket`.
         let s = "sess-ahead-live";
-        let a = register(s, CAP, "run-a").expect("a");
-        let b = register(s, CAP, "run-b").expect("b");
-        let c = register(s, CAP, "run-c").expect("c");
+        let a = register(s, CAP, "ahead-live-a").expect("a");
+        let b = register(s, CAP, "ahead-live-b").expect("b");
+        let c = register(s, CAP, "ahead-live-c").expect("c");
 
         assert_eq!(a.ahead(), 0, "front ticket has nobody ahead of it");
         assert_eq!(b.ahead(), 1);
         assert_eq!(c.ahead(), 2);
 
         // Cancelling the middle one must shrink what `c` is told to wait for.
-        assert!(cancel_queued_run("run-b"));
+        assert!(cancel_queued_run("ahead-live-b"));
         assert_eq!(c.ahead(), 1, "a cancelled predecessor is not a wait");
         assert_eq!(a.ahead(), 0);
         drop((a, b, c));
@@ -1369,10 +1371,12 @@ mod tests {
     /// already fetches has to carry the same fact.
     #[test]
     fn pending_for_lists_live_waiters_in_lane_order() {
+        // Process-global run-id namespace — see the comment on
+        // `cancel_queued_run_targets_exactly_one_ticket`.
         let s = "sess-pending";
-        let a = register(s, CAP, "run-a").expect("a");
-        let b = register(s, CAP, "run-b").expect("b");
-        let c = register(s, CAP, "run-c").expect("c");
+        let a = register(s, CAP, "pending-lane-a").expect("a");
+        let b = register(s, CAP, "pending-lane-b").expect("b");
+        let c = register(s, CAP, "pending-lane-c").expect("c");
 
         let pending = pending_for(s);
         assert_eq!(
@@ -1380,17 +1384,21 @@ mod tests {
                 .iter()
                 .map(|p| (p.run_id.as_str(), p.ahead))
                 .collect::<Vec<_>>(),
-            vec![("run-a", 0), ("run-b", 1), ("run-c", 2)]
+            vec![
+                ("pending-lane-a", 0),
+                ("pending-lane-b", 1),
+                ("pending-lane-c", 2)
+            ]
         );
 
-        assert!(cancel_queued_run("run-b"));
+        assert!(cancel_queued_run("pending-lane-b"));
         let pending = pending_for(s);
         assert_eq!(
             pending
                 .iter()
                 .map(|p| (p.run_id.as_str(), p.ahead))
                 .collect::<Vec<_>>(),
-            vec![("run-a", 0), ("run-c", 1)],
+            vec![("pending-lane-a", 0), ("pending-lane-c", 1)],
             "a cancelled waiter is neither listed nor counted"
         );
 
