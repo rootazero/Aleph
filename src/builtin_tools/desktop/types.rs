@@ -651,3 +651,78 @@ pub struct DesktopOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
+
+/// Closed-set evidence grade for whether a successful mutating action took
+/// effect — the `effect` field injected into `data` by `DesktopTool::call`.
+///
+/// The vocabulary is aligned with cua-driver's `ActionResult.effect`
+/// (`docs/superpowers/specs/2026-08-23-desktop-action-result-review.md`):
+/// `confirmed` / `partial` / `unverifiable` / `suspected_noop`. Their fifth
+/// value, `refused`, is deliberately absent: Aleph refusals are
+/// `success: false` outputs (approval, hard-block, lock, escape, coord), a
+/// fact orthogonal to evidence grading, so the grade appears on the success
+/// path only.
+///
+/// The grade is EVIDENCE, not a verdict: `Unverifiable` means the OS accepted
+/// the event and nothing proves the UI changed — native API acceptance, event
+/// receipt, and screenshot diffing are diagnostics that do not promote an
+/// action to `Confirmed` (cua-driver's invariant, adopted verbatim). A caller
+/// that needs certainty asserts the postcondition with `verify_state` or reads
+/// it with `observe`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionEffect {
+    /// Publishable post-action proof exists (set_value's read-back matched,
+    /// restart_app's poll found the app running again).
+    Confirmed,
+    /// The action provably took effect only in part: a `batch` that stopped
+    /// early after delivering some sub-actions, or a `restart_app` whose quit
+    /// half landed while the relaunch is disproven.
+    Partial,
+    /// The OS accepted the event; no trusted evidence says the UI changed.
+    /// The default for synthetic input (click/keys/scroll/…).
+    Unverifiable,
+    /// Evidence suggests nothing happened. Reserved: no verb produces this
+    /// today — a provable no-op needs detection Stage 1 does not build (e.g.
+    /// `ax_action` on an `enabled:false` element, scroll already at a bound).
+    /// Kept in the closed set so the contract never has to grow a value under
+    /// a live model contract.
+    SuspectedNoop,
+}
+
+impl ActionEffect {
+    /// The wire spelling, so serialization has exactly one source.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::Partial => "partial",
+            Self::Unverifiable => "unverifiable",
+            Self::SuspectedNoop => "suspected_noop",
+        }
+    }
+}
+
+/// Grade a successful mutating action from the evidence the verb already
+/// produced (`data`). Stage 1 deliberately emits only grades today's code can
+/// back: every verb without a post-action proof is `Unverifiable`, which is
+/// the honest statement — not a euphemism for success.
+pub(super) fn effect_for(action: &str, data: Option<&Value>) -> ActionEffect {
+    match action {
+        "set_value" => match data.and_then(|d| d["verification"]["state"].as_str()) {
+            Some("verified") => ActionEffect::Confirmed,
+            // Read-back did not confirm: the write reached an actuator but its
+            // effect is unproven — not failure, not success.
+            _ => ActionEffect::Unverifiable,
+        },
+        "restart_app" => match data.and_then(|d| d["verified"].as_bool()) {
+            Some(true) => ActionEffect::Confirmed,
+            // The quit half provably happened and the relaunch is disproven —
+            // the intended effect (app running again) is only half-delivered.
+            Some(false) => ActionEffect::Partial,
+            // `verified: null` — the platform cannot enumerate running apps.
+            None => ActionEffect::Unverifiable,
+        },
+        _ => ActionEffect::Unverifiable,
+    }
+}

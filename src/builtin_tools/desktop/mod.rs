@@ -33,7 +33,7 @@ pub use ax::{
 pub use gui_locate::{DesktopGuiLocate, DesktopGuiLocateArgs};
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
 pub use set_of_marks::{DesktopSom, DesktopSomArgs};
-pub use types::{DesktopArgs, DesktopOutput};
+pub use types::{ActionEffect, DesktopArgs, DesktopOutput};
 pub use vision_bridge::{Augmentation, VisionBridge};
 
 use crate::sync_primitives::Arc;
@@ -325,9 +325,51 @@ impl DesktopTool {
             .and_then(|r| r["success"].as_bool())
             .unwrap_or(false);
 
+        // Batch-level effect grade, folded from the per-sub-action grades the
+        // recursive calls stamped (each entry's `data.effect`):
+        // - fully delivered → Confirmed iff every sub-action graded Confirmed
+        //   (the chain is only as proven as its weakest link), else
+        //   Unverifiable;
+        // - stopped early after delivering ≥1 sub-action → Partial, with
+        //   `delivered_count` (a partial grade must name how much was
+        //   delivered);
+        // - failed on the first sub-action → no grade: nothing was delivered,
+        //   which is the fact `success:false` already states.
+        let mut data = serde_json::json!({"results": results});
+        let delivered = data["results"]
+            .as_array()
+            .map(|rs| {
+                rs.iter()
+                    .filter(|r| r["success"].as_bool() == Some(true))
+                    .count()
+            })
+            .unwrap_or(0);
+        let grade = if overall_success {
+            let all_confirmed = data["results"].as_array().is_some_and(|rs| {
+                rs.iter().all(|r| {
+                    r["data"]["effect"].as_str() == Some(types::ActionEffect::Confirmed.as_str())
+                })
+            });
+            Some(if all_confirmed {
+                types::ActionEffect::Confirmed
+            } else {
+                types::ActionEffect::Unverifiable
+            })
+        } else if delivered > 0 {
+            Some(types::ActionEffect::Partial)
+        } else {
+            None
+        };
+        if let (Some(grade), Some(obj)) = (grade, data.as_object_mut()) {
+            obj.insert("effect".into(), grade.as_str().into());
+            if grade == types::ActionEffect::Partial {
+                obj.insert("delivered_count".into(), delivered.into());
+            }
+        }
+
         Ok(DesktopOutput {
             success: overall_success,
-            data: Some(serde_json::json!({"results": results})),
+            data: Some(data),
             message: None,
         })
     }
@@ -731,6 +773,8 @@ Drive one app in the background (nothing else on the user's screen is disturbed)
 {"action":"type_text","app":"Notes","text":"meeting notes\n"}
 {"action":"scroll","pid":733,"x":700,"y":460,"delta_y":-300}
 
+Effect grading — every successful mutating action's `data` carries `effect`, a closed-set evidence grade: "confirmed" (publishable post-action proof — set_value's read-back matched, restart_app's poll found the app running again), "partial" (only part of the intended effect is provable: a batch that stopped early — see `delivered_count` — or a restart whose relaunch did not come back), "unverifiable" (the OS accepted the event; nothing proves the UI changed — most synthetic input), "suspected_noop" (evidence suggests nothing happened). effect grades EVIDENCE, not outcome: "unverifiable" is not failure, and OS/event acceptance never promotes an action to "confirmed". When you need certainty, assert the postcondition with verify_state or read it with observe. Refusals (success:false) carry no effect.
+
 Act→observe in one call — mutating actions accept `observe:"state"` (result gains `post_state`: frontmost app + focused element after a 300ms settle) or `observe:"screenshot"` (additionally a fresh bounded screenshot as `post_screenshot`). Use it on the last action of a step instead of a separate screenshot round-trip. In a batch, sub-actions inherit the batch-level `observe`.
 
 {"action":"click","x":500,"y":300,"observe":"state"}
@@ -869,6 +913,21 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
         // 7. Execute via platform
         if let Some(ref platform) = self.platform {
             if let Some(mut output) = self.call_via_platform(platform, &args).await? {
+                // 7.4 Effect grading — stamp every successful mutating action
+                //     with the closed-set evidence grade (`types::ActionEffect`).
+                //     Success-path only: refusals (success:false) are a
+                //     different fact and carry no grade. Batch never reaches
+                //     here (handled at step 6; its sub-actions are graded by
+                //     the recursive call, and its own grade is folded in
+                //     `execute_batch`).
+                if output.success && classify_approval(&args).is_some() {
+                    let effect = types::effect_for(&args.action, output.data.as_ref());
+                    let mut data = output.data.take().unwrap_or_else(|| serde_json::json!({}));
+                    if let Some(obj) = data.as_object_mut() {
+                        obj.insert("effect".into(), effect.as_str().into());
+                    }
+                    output.data = Some(data);
+                }
                 // 7.5 act→observe fusion: on success, a mutating leaf action may
                 //     carry its own post-state so the model saves a round-trip.
                 //     Never turns a succeeded action into a failure —
