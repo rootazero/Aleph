@@ -9,39 +9,49 @@
 //! word-level geometry that we group back into lines.
 
 use crate::{BoundingBox, DesktopError, OcrLine, OcrResult, Result};
-use std::io::Write;
+use std::time::Duration;
+
+/// Hard deadline for one tesseract run.
+///
+/// OCR of a full-screen capture is slow-but-working territory, so this is far
+/// above [`crate::script_exec::DESKTOP_QUERY_TIMEOUT`]; the cap exists for the
+/// wedged case (a tesseract that never finishes pins the agent turn until the
+/// harness ceiling and leaks the child — the same failure shape `xclip`,
+/// `notify-send` and `ffmpeg` each taught once). 30 s covers a 4K screen on a
+/// slow box with room to spare.
+const OCR_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Only *called* under `#[cfg(target_os = "linux")]` in `perform_ocr`; compiled
 /// everywhere so the pure [`parse_tesseract_tsv`] parser stays host-testable.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn linux_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
-    let mut child = std::process::Command::new("tesseract")
-        .arg("stdin")
+    let mut cmd = std::process::Command::new("tesseract");
+    cmd.arg("stdin")
         .arg("stdout")
         .arg("-l")
         .arg("chi_sim+eng")
         // `tsv` is a tesseract configfile that emits a tab-separated table with
         // per-word geometry + confidence instead of plain text.
-        .arg("tsv")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| {
+        .arg("tsv");
+
+    // stdin fed on its own thread, stdout/stderr drained on theirs, hard
+    // deadline with kill-and-reap — see `output_capped_blocking_with_stdin`
+    // for why hand-rolling any of the three is a known loss.
+    let output = crate::script_exec::output_capped_blocking_with_stdin(
+        cmd,
+        Some(png_bytes),
+        OCR_TIMEOUT,
+        "tesseract OCR",
+    )
+    .map_err(|e| {
+        if crate::script_exec::is_spawn_failure(&e) {
             DesktopError::OcrFailed(format!(
                 "Tesseract execution failed (install tesseract-ocr): {e}"
             ))
-        })?;
-
-    if let Some(ref mut stdin) = child.stdin {
-        stdin.write_all(png_bytes).map_err(|e| {
-            DesktopError::OcrFailed(format!("Failed to feed PNG to tesseract: {e}"))
-        })?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| DesktopError::OcrFailed(format!("Tesseract process failed: {e}")))?;
+        } else {
+            DesktopError::OcrFailed(e.to_string())
+        }
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -197,7 +197,10 @@ impl AlephTool for DesktopAxQueryTree {
     const DESCRIPTION: &'static str =
         "Return the AX element tree for a process (the frontmost app if `pid` is omitted). \
          Bounded by `max_depth` (default 6). Response contains an `element` field \
-         with nested `children`. Each node carries its own affordances: `actions` (the exact \
+         with nested `children`; pure layout wrappers (AXGroup/AXUnknown carrying no \
+         label, value, actions or affordance flags) are flattened away — their children \
+         are kept, the wrappers are counted in `elided`. Each node carries its own \
+         affordances: `actions` (the exact \
          AX action names that node supports — pass one verbatim to `ax_action` instead of \
          guessing), `enabled` (false = greyed out), `settable` (false = value not writable), \
          `secure` (true = password field; its value is never returned).";
@@ -220,22 +223,35 @@ impl AlephTool for DesktopAxQueryTree {
             max_nodes: clamp_max_nodes(args.max_nodes.unwrap_or(DEFAULT_MAX_NODES)),
         };
         match ax.query_tree(params).await {
-            Ok(result) => Ok(DesktopOutput {
-                success: true,
-                // `truncated` travels with the tree, never silently: a model
-                // handed a clipped subtree with no marker concludes the control
-                // it is looking for is absent.
-                data: Some(json!({
-                    "element": result.element.map(redact_secure_values),
-                    "node_count": result.node_count,
-                    "truncated": result.truncated,
-                })),
-                message: result.truncated.then(|| {
-                    "Tree truncated at the node budget — this is not the whole app. Narrow it \
-                     with `pid` / a smaller `max_depth`, or use ax_query_by_role."
-                        .to_string()
-                }),
-            }),
+            Ok(result) => {
+                // Render-only compression: pure layout wrappers (AXGroup/
+                // AXUnknown with no label/value/actions/affordances) are
+                // elided and their children rehomed, so the node budget is
+                // spent on real controls. Matching paths (verify_state,
+                // gui_locate, set_of_marks) still see the raw tree.
+                let mut element = result.element.map(redact_secure_values);
+                let elided = element
+                    .as_mut()
+                    .map(super::ax_compress::elide_wrapper_nodes)
+                    .unwrap_or(0);
+                Ok(DesktopOutput {
+                    success: true,
+                    // `truncated` travels with the tree, never silently: a model
+                    // handed a clipped subtree with no marker concludes the control
+                    // it is looking for is absent.
+                    data: Some(json!({
+                        "element": element,
+                        "node_count": result.node_count,
+                        "elided": elided,
+                        "truncated": result.truncated,
+                    })),
+                    message: result.truncated.then(|| {
+                        "Tree truncated at the node budget — this is not the whole app. Narrow it \
+                         with `pid` / a smaller `max_depth`, or use ax_query_by_role."
+                            .to_string()
+                    }),
+                })
+            }
             Err(e) => Ok(bridge_err_output(e)),
         }
     }

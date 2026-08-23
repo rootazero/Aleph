@@ -51,6 +51,10 @@ impl PimTool {
 
     /// Returns `true` for PIM actions that modify data.
     fn is_write_action(action: &str) -> bool {
+        // Only actions `PimCapability` actually implements. The legacy
+        // `contacts_create/update/delete` names are parsed but unsupported —
+        // listing them here would gate a nonexistent capability behind an
+        // approval prompt that can only ever lead to "unsupported action".
         matches!(
             action,
             "calendar_create"
@@ -62,9 +66,6 @@ impl PimTool {
                 | "notes_create"
                 | "notes_update"
                 | "notes_delete"
-                | "contacts_create"
-                | "contacts_update"
-                | "contacts_delete"
         )
     }
 
@@ -80,9 +81,6 @@ impl PimTool {
             "notes_create" => "Create a note".to_string(),
             "notes_update" => "Update a note".to_string(),
             "notes_delete" => "Delete a note".to_string(),
-            "contacts_create" => "Create a contact".to_string(),
-            "contacts_update" => "Update a contact".to_string(),
-            "contacts_delete" => "Delete a contact".to_string(),
             other => format!("PIM action: {other}"),
         }
     }
@@ -668,9 +666,12 @@ mod tests {
         assert!(PimTool::is_write_action("notes_create"));
         assert!(PimTool::is_write_action("notes_update"));
         assert!(PimTool::is_write_action("notes_delete"));
-        assert!(PimTool::is_write_action("contacts_create"));
-        assert!(PimTool::is_write_action("contacts_update"));
-        assert!(PimTool::is_write_action("contacts_delete"));
+        // Legacy contacts write actions are parsed but unsupported by
+        // `PimCapability`; classifying them as writes would gate a
+        // nonexistent capability behind an approval prompt.
+        assert!(!PimTool::is_write_action("contacts_create"));
+        assert!(!PimTool::is_write_action("contacts_update"));
+        assert!(!PimTool::is_write_action("contacts_delete"));
     }
 
     #[test]

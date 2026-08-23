@@ -410,17 +410,23 @@ fn read_os_version() -> Option<String> {
         }
     }
 
-    std::process::Command::new("uname")
-        .arg("-r")
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
+    aleph_desktop::script_exec::output_capped_blocking(
+        {
+            let mut c = std::process::Command::new("uname");
+            c.arg("-r");
+            c
+        },
+        aleph_desktop::script_exec::DESKTOP_QUERY_TIMEOUT,
+        "uname -r",
+    )
+    .ok()
+    .and_then(|o| {
+        if o.status.success() {
+            Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+        } else {
+            None
+        }
+    })
 }
 
 fn read_hostname() -> Option<String> {
@@ -428,17 +434,23 @@ fn read_hostname() -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .or_else(|| {
-            std::process::Command::new("uname")
-                .arg("-n")
-                .output()
-                .ok()
-                .and_then(|o| {
-                    if o.status.success() {
-                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    } else {
-                        None
-                    }
-                })
+            aleph_desktop::script_exec::output_capped_blocking(
+                {
+                    let mut c = std::process::Command::new("uname");
+                    c.arg("-n");
+                    c
+                },
+                aleph_desktop::script_exec::DESKTOP_QUERY_TIMEOUT,
+                "uname -n",
+            )
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
         })
 }
 
