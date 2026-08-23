@@ -920,6 +920,142 @@ async fn tool_call_sanitize_rewrites_args_seen_by_tool() {
     );
 }
 
+/// Returns a `Sanitize` whose replacement text is NOT valid JSON, driving the
+/// fail-closed reparse path in `apply_tool_call_guardrail`.
+struct SanitizeToolArgsToInvalidJson(&'static str);
+#[async_trait]
+impl ToolCallGuardrail for SanitizeToolArgsToInvalidJson {
+    fn name(&self) -> &str {
+        "sanitize_tool_args_to_invalid_json"
+    }
+    async fn evaluate_tool_call(
+        &self,
+        tool_name: &str,
+        _args: &serde_json::Value,
+    ) -> GuardrailDecision {
+        if tool_name == self.0 {
+            GuardrailDecision::Sanitize(Replacement {
+                // A redactor that rewrites args as prose rather than JSON —
+                // the exact shape the fail-closed branch exists to catch.
+                text: "[REDACTED by policy]".into(),
+                source: "test".into(),
+            })
+        } else {
+            GuardrailDecision::Allow
+        }
+    }
+}
+
+/// The fail-closed sanitize path is the SECOND producer of
+/// `ToolCallGuardOutcome::Block`, and both `act` and `act_parallel` treat that
+/// value as "the guardrail already emitted ToolError + trace" and do nothing
+/// themselves. It used to return a bare `Block` after only `on_safety_block`,
+/// so the call was requested and never resolved anywhere:
+///
+///   * no `SessionEvent::ToolError` ⇒ the turn's `tool_use` block has no
+///     matching result, so the next `build_prompt` drops it as an orphan and
+///     takes the whole assistant turn's context with it;
+///   * no `on_tool_call_done` ⇒ a permanently "running" tool card on the
+///     broadcast stream;
+///   * no timeline entry ⇒ absent from `RunSummary.tool_summaries`, the
+///     authoritative state consumers reconcile the lossy `agent_trace`
+///     against.
+///
+/// Deliberately the same assertion set as
+/// [`tool_call_block_skips_only_blocked_call_in_batch`]: the two decision
+/// variants converge on one outcome value, so they owe the same receipts.
+#[tokio::test]
+async fn tool_call_sanitize_that_fails_to_reparse_settles_like_any_other_block() {
+    let leaky = NativeToolCall {
+        thought_signature: None,
+        id: "c1".into(),
+        name: "leaky_tool".into(),
+        arguments: serde_json::json!({"token": "SECRET"}),
+    };
+    let allowed = NativeToolCall {
+        thought_signature: None,
+        id: "c2".into(),
+        name: "safe_tool".into(),
+        arguments: serde_json::json!({"y": 2}),
+    };
+    let session = MockSession::new(vec![turn_started(), user_message("run both")]);
+    let provider = provider_with_two_calls(leaky.clone(), allowed.clone());
+    let tools = RecordingTools::new();
+    let registry = GuardrailRegistry::builder()
+        .with_tool_call(Arc::new(SanitizeToolArgsToInvalidJson("leaky_tool")))
+        .build();
+    let harness = AgentHarness::new(make_deps_with_tools(
+        session.clone(),
+        provider as Arc<dyn AiProvider>,
+        tools.clone(),
+        registry,
+    ));
+
+    let mut cb = CapturingCallback::default();
+    let state = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn ok");
+    assert_eq!(state, TurnState::Continue);
+
+    // Fail-closed: the un-sanitised args must never reach the tool, and the
+    // sibling call must still run.
+    let seen = tools.seen.lock().await.clone();
+    assert_eq!(seen.len(), 1, "expected exactly one dispatch, got {seen:?}");
+    assert_eq!(seen[0].0, "safe_tool");
+
+    assert_eq!(cb.safety_blocks.len(), 1, "got {:?}", cb.safety_blocks);
+    assert!(
+        cb.safety_blocks[0].contains("invalid JSON"),
+        "the block reason must name the reparse failure, got {:?}",
+        cb.safety_blocks
+    );
+
+    // Live stream: every ToolStart needs its ToolEnd.
+    assert!(
+        cb.tool_done.contains(&("c1".to_string(), true)),
+        "the fail-closed call must emit an error `done`, got {:?}",
+        cb.tool_done
+    );
+    assert!(
+        cb.tool_done.contains(&("c2".to_string(), false)),
+        "the safe call must emit a success `done`, got {:?}",
+        cb.tool_done
+    );
+
+    // Transcript: a ToolError pairs the orphaned tool_use block.
+    let log = session.snapshot().await;
+    let tool_errors = log
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
+        .count();
+    let tool_results = log
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolResult { .. }))
+        .count();
+    assert_eq!(tool_errors, 1, "expected 1 ToolError, got log={log:?}");
+    assert_eq!(tool_results, 1, "expected 1 ToolResult, got log={log:?}");
+
+    // Authoritative terminal state.
+    let timeline = harness.tool_timeline();
+    let entry = timeline
+        .iter()
+        .find(|inv| inv.id == "c1")
+        .expect("the fail-closed call must be on the tool timeline");
+    assert!(!entry.success, "a fail-closed block is not a success");
+    assert!(
+        entry
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("invalid JSON")),
+        "the timeline entry must carry the reparse cause, got {entry:?}",
+    );
+    assert!(
+        timeline.iter().any(|inv| inv.id == "c2" && inv.success),
+        "the executed call must still be on the timeline, got {timeline:?}",
+    );
+}
+
 #[tokio::test]
 async fn tool_call_allow_passes_through_unchanged() {
     let call = NativeToolCall {
