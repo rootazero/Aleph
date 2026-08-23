@@ -320,19 +320,17 @@ pub async fn enter_project_room(
         // tab that sends nowhere.
         return;
     };
-    let conv = session_map
-        .conv_for_session_key(&key)
-        .unwrap_or_else(|| session_map.open_conversation(&agent_id, project_name));
-    session_map.activate(chat, conv);
+    // Reuse-or-open + activate + register, through the one writer every chat
+    // surface shares. The registration half matters more here than anywhere
+    // else: a room's canonical session belongs to every member, so a run
+    // started by a peer is the NORMAL case — without the identity
+    // `adopt_session` stamps, `conv_for_session_key` cannot find the tab and
+    // the peer's turn has nowhere to render.
+    session_map.adopt_session(chat, &agent_id, &key, || project_name);
     chat.clear_team_context();
     chat.room_project_id.set(Some(project_id.to_string()));
     chat.session_key.set(Some(key.clone()));
-    // Same wire as `ChatSidebar::on_select_session`, and it matters more here:
-    // a room's canonical session is shared with every other member, so a run
-    // started by a peer is the NORMAL case, not the exotic one. Without this
-    // the lookup two lines above never finds the tab it just opened and the
-    // peer's turn has nowhere to render.
-    session_map.set_session_key(conv, &key);
+
     // Mirror `ChatSidebar::on_select_session`: only hydrate when there is
     // nothing live to preserve — a conversation already open (background
     // `ChatState`) is at least as fresh as `chat.history`.

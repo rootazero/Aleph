@@ -7,10 +7,11 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
 use leptos_router::NavigateOptions;
 
-use crate::components::chat_sidebar::hydrate_session_history;
+use crate::components::chat_sidebar::hydrate_and_follow;
 use crate::context::DashboardState;
 use crate::platform::phone::shell::PhoneShell;
 use crate::state::layout::WorkspaceState;
+use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
 
 /// One row of `sessions.list` — the same decoder the wide sidebar uses.
@@ -41,6 +42,8 @@ pub fn PhoneChatHistory() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let workspace = expect_context::<WorkspaceState>();
+    let sessions = expect_context::<SessionMap>();
+
     // Carried into the history replay so trace-derived narration (MoA turn
     // trace, compaction / veto notes) is localised off the component tree.
     let i18n = crate::i18n::use_i18n();
@@ -99,7 +102,17 @@ pub fn PhoneChatHistory() -> impl IntoView {
             navigate("/", NavigateOptions::default());
             return;
         }
-        chat.clear_session();
+        // Reuse-or-open + activate + register, through the writer the wide
+        // sidebar and the project-room entry share. `activate` swaps the
+        // singleton's contents for the incoming conversation's, which is why it
+        // runs before anything below writes to `chat`.
+        let topic = row.topic.clone();
+        let key_for_label = row.key.clone();
+        sessions.adopt_session(chat, &row.agent_id, &row.key, move || {
+            topic.filter(|t| !t.is_empty()).unwrap_or(key_for_label)
+        });
+
+        chat.clear_team_context();
         chat.agent_id.set(Some(row.agent_id.clone()));
         chat.session_key.set(Some(row.key.clone()));
         chat.active_project_root.set(row.project_root.clone());
@@ -108,15 +121,23 @@ pub fn PhoneChatHistory() -> impl IntoView {
         // kept resolving the stored values every turn — and the tier pill is
         // the one that says which tool calls stop for approval.
         chat.apply_session_knobs(row.knobs());
-        // The phone shell mounts no `ChatSidebar`, so it registers no
-        // conversations in `SessionMap` and has nothing to bind a live run to
-        // — the returned run id is discarded rather than followed. Deliberate:
-        // joining a turn needs a `ConvId` this surface never creates.
+        // `hydrate_and_follow`, not the bare hydrate: opening a session
+        // somebody else is mid-turn on — another Panel, the CLI, a channel,
+        // cron, a crash-recovered run — used to show a complete-looking
+        // transcript that then never moved, because this client never saw that
+        // run's `run_accepted` and so had no route for its frames. It now joins
+        // from the open point on.
         let locale = i18n.get_locale_untracked();
         let key = row.key.clone();
-        spawn_local(async move {
-            let _live = hydrate_session_history(dash, chat, Some(workspace), key, locale).await;
-        });
+        spawn_local(hydrate_and_follow(
+            dash,
+            chat,
+            Some(workspace),
+            sessions,
+            key,
+            locale,
+        ));
+
         navigate("/", NavigateOptions::default());
     };
 

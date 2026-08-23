@@ -29,6 +29,8 @@ use leptos::task::spawn_local;
 
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
+use crate::state::sessions::SessionMap;
+
 use crate::views::chat::composer::attachments::{read_file_list_into, AttachmentPreviewBar};
 use crate::views::chat::dial_picker::{Dial, DialPicker};
 use crate::views::chat::exec_tier_picker::ExecTierPicker;
@@ -44,6 +46,9 @@ use shared_ui_logic::state::{
 pub fn PhoneComposer() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    // Same registry the wide composer binds runs into. `PhoneChat` registered
+    // this surface's conversation at mount, so `active_conv()` answers here.
+    let sessions = expect_context::<SessionMap>();
 
     // Shared with the wide composer via ChatState: the shared `MessageList`
     // renders the starter chips and the queued-ghost bubbles on phone too, and
@@ -128,9 +133,14 @@ pub fn PhoneComposer() -> impl IntoView {
         // Tier every send, the store-owned dials only on the first — one rule,
         // one place.
         let dials = session_dials_for_send(session_key.is_some(), &chat.session_knobs());
+        // Captured at *send* time, exactly as the wide composer does: the run
+        // belongs to the conversation the user sent from, not to whichever one
+        // is focused when `run_accepted` comes back.
+        let send_conv = sessions.active_conv();
         let dash = dashboard;
         spawn_local(async move {
             let res = ChatApi::send(
+
                 &dash,
                 &text,
                 session_key.as_deref(),
@@ -145,7 +155,17 @@ pub fn PhoneComposer() -> impl IntoView {
             )
             .await;
             match res {
-                Ok(resp) => chat.session_key.set(Some(resp.session_key)),
+                Ok(resp) => {
+                    // Establishes the route `resolve_target` needs for every
+                    // later frame of this run, and the identity
+                    // `conv_for_session_key` needs for runs started elsewhere
+                    // on the same session.
+                    if let Some(conv) = send_conv {
+                        sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                    }
+                    chat.session_key.set(Some(resp.session_key));
+                }
+
                 Err(e) => {
                     chat.set_send_error(ChatSendError::classify(e));
                     // Nothing reached the server, so the payload comes back.
@@ -296,9 +316,15 @@ pub fn PhoneComposer() -> impl IntoView {
         // session, so everything but the tier is `None` in practice — but not
         // when the very first thing a user does is queue two prompts.
         let dials = session_dials_for_send(session_key.is_some(), &chat.session_knobs());
+        let send_conv = sessions.active_conv();
         let dash = dashboard;
         spawn_local(async move {
+            // Only the first send of a batch starts a run; everything after it
+            // steers into that run and reports the same id back, so binding
+            // again would double-count the double-bind witness.
+            let mut binds_a_real_run = true;
             let mut pending = batch.into_iter();
+
             while let Some(entry) = pending.next() {
                 let api_attachments: Vec<crate::api::chat::ChatAttachment> = entry
                     .attachments
@@ -326,6 +352,12 @@ pub fn PhoneComposer() -> impl IntoView {
                 .await
                 {
                     Ok(resp) => {
+                        if binds_a_real_run {
+                            if let Some(conv) = send_conv {
+                                sessions.bind_run(&resp.run_id, conv, Some(&resp.session_key));
+                            }
+                            binds_a_real_run = false;
+                        }
                         // Only once it is really sent — the bubble used to go up
                         // first, so a failed send left the transcript claiming a
                         // prompt had been delivered that the queue had already
@@ -333,6 +365,7 @@ pub fn PhoneComposer() -> impl IntoView {
                         chat.push_user_message(&entry.text);
                         chat.session_key.set(Some(resp.session_key));
                     }
+
                     Err(e) => {
                         chat.set_send_error(ChatSendError::classify(e));
                         let mut unsent = vec![entry];

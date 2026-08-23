@@ -9,8 +9,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
-use crate::api::system::SystemApi;
-use crate::api::team_chat::{TeamChatApi, TeamMessageItem};
+use crate::api::team_chat
+::{TeamChatApi, TeamMessageItem};
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
@@ -483,12 +483,13 @@ pub fn ChatSidebar() -> impl IntoView {
                                     .or(list.first())
                                     .map(|a| a.id.clone());
                                 if let Some(id) = default_id {
-                                    let conv = session_map.open_conversation(
+                                    selected_agent.set(Some(id.clone()));
+                                    session_map.start_new(
+                                        chat,
                                         &id,
                                         t_string!(i18n, chat.new_chat).to_string(),
                                     );
-                                    selected_agent.set(Some(id.clone()));
-                                    session_map.activate(chat, conv);
+
                                 }
                             }
                             agents.set(list);
@@ -514,17 +515,16 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }
 
-            // Seed the sidebar's server-authoritative running set from the same
-            // refresh tick, so running dots are correct on a fresh load and for
-            // runs started by any interface (daemon / Telegram / another Panel)
-            // — not just Panel-initiated runs tracked via client run events.
-            // `SessionMap` is an app-root context (signals outlive this
-            // component), so no disposal guard is needed here.
-            if let Ok(metrics) = SystemApi::run_concurrency(&dash).await {
-                session_map.seed_server_running(metrics.running_sessions.into_iter().collect());
-            }
+            // The running-set seed used to be taken here as well. It was a
+            // third round trip to `gateway.metrics.run_concurrency` per
+            // reconnect and a fourth on every `run.session_updated` — and a
+            // no-op on all of them but the first, because `seed_server_running`
+            // only applies while no live frame has advanced the baseline. The
+            // one place that both needs the answer and acts on it
+            // (`state::reattach`) now takes it once.
 
             // Fetch teams for the selected agent (drives the group-chat section).
+
             // `try_get_untracked`: outer `None` = component disposed, inner
             // `None` = no agent selected — either way skip.
             if let Some(Some(agent_id)) = selected_agent.try_get_untracked() {
@@ -551,40 +551,12 @@ pub fn ChatSidebar() -> impl IntoView {
         // a socket that was replaced without `is_connected` visibly flipping.
         let _epoch = dash.connection_epoch.get();
         if dash.is_connected.get() {
-            // MUST precede the reload. `seed_server_running` inside it is a
-            // no-op while a sequence baseline survives, and the baseline from
-            // the previous connection is exactly what has to go: a restarted
-            // core numbers its `RunningSetChanged` frames from 0 again, so
-            // every frame it ever sends is `<=` the old baseline and is
-            // discarded — the running dots freeze permanently, silently, and
-            // no later refresh repairs them. Voiding it here makes this same
-            // reload the repair.
-            session_map.reset_running_baseline();
+            // The list reload only. Re-basing the running-set sequence,
+            // settling routes the server no longer confirms and re-joining the
+            // turn it still does are one repair against one snapshot, and they
+            // live at the app root (`state::reattach`) so the phone — which
+            // never mounts this component — inherits them too.
             reload_for_mount(dash);
-            // Second half of the reconnect repair, and the one that shows: ask
-            // the server which sessions are actually running and settle every
-            // client-side run it does not confirm. A core restart wipes the
-            // in-memory run registry, and a socket that was down long enough
-            // loses the terminal frame regardless — either way `settle_run` is
-            // driven only by `run_complete` / `run_error`, so those runs never
-            // settled: the composer stayed locked on Stop and the dot stayed
-            // lit until the user reloaded the page.
-            //
-            // Its own round trip rather than `reload_data`'s: this must
-            // reconcile against the set as it is NOW, and the shared seed is a
-            // no-op whenever a live frame has already advanced the baseline.
-            leptos::task::spawn_local(async move {
-                let Ok(metrics) = SystemApi::run_concurrency(&dash).await else {
-                    return;
-                };
-                let live: std::collections::HashSet<String> =
-                    metrics.running_sessions.into_iter().collect();
-                for (run_id, conv) in session_map.settle_runs_absent_from(&live) {
-                    if let Some(target) = session_map.chat_for(conv, chat) {
-                        target.settle_abandoned_run(&run_id);
-                    }
-                }
-            });
         }
     });
 
@@ -757,31 +729,26 @@ pub fn ChatSidebar() -> impl IntoView {
         // full `clear_session()` used to run here and undid the restore one
         // line after it happened. The history load below overwrites
         // `messages` either way.
-        let conv = session_map.conv_for_session_key(&key).unwrap_or_else(|| {
-            // Open the tab labelled with the session's topic (M1), falling back
-            // to the raw key only when the backend hasn't assigned one yet.
-            let label = sessions
+        // Reuse-or-open + activate + register, in one writer shared with the
+        // project-room entry and the phone's history list. The label closure
+        // only runs when a tab actually has to be opened: the session's topic
+        // (M1), falling back to the raw key while the backend has not assigned
+        // one yet.
+        session_map.adopt_session(chat, &agent_id, &key, || {
+            sessions
                 .get_untracked()
                 .iter()
                 .find(|s| s.key == key)
                 .and_then(|s| s.topic.clone())
-                .unwrap_or_else(|| key.clone());
-            session_map.open_conversation(&agent_id, label)
+                .unwrap_or_else(|| key.clone())
         });
-        session_map.activate(chat, conv);
         chat.clear_team_context();
+
         if let Some(ws) = workspace {
             ws.reset();
         }
         selected_agent.set(Some(agent_id));
         chat.session_key.set(Some(key.clone()));
-        // Give the conversation a discoverable identity in the SAME breath as
-        // the ChatState signal. Without this the map above (`conv_for_session_key`)
-        // could only ever see conversations the user had already SENT in — the
-        // lookup on line 639 therefore missed its own tab and opened a duplicate
-        // on every re-selection, the row's dot never applied, and a run started
-        // from another surface on this very session had no tab to route to.
-        session_map.set_session_key(conv, &key);
 
         // Restore the session's persisted project folder (G3) so the composer
         // keeps running inside it and the project pill reflects it. Set the
@@ -916,9 +883,8 @@ pub fn ChatSidebar() -> impl IntoView {
     // without clearing / replacing the currently running conversation. session_key=None -> first send triggers a new epoch.
     let on_new_chat = move |_: web_sys::MouseEvent| {
         if let Some(agent_id) = selected_agent.get_untracked() {
-            let conv = session_map
-                .open_conversation(&agent_id, t_string!(i18n, chat.new_chat).to_string());
-            session_map.activate(chat, conv);
+            session_map.start_new(chat, &agent_id, t_string!(i18n, chat.new_chat).to_string());
+
             if let Some(ws) = workspace {
                 ws.reset();
             }
@@ -1266,11 +1232,12 @@ pub fn ChatSidebar() -> impl IntoView {
                                                             return;
                                                         }
                                                         selected_agent.set(Some(val.clone()));
-                                                        let conv = session_map.open_conversation(
+                                                        session_map.start_new(
+                                                            chat,
                                                             &val,
                                                             t_string!(i18n, chat.new_chat).to_string(),
                                                         );
-                                                        session_map.activate(chat, conv);
+
                                                         if let Some(ws) = workspace {
                                                             ws.reset();
                                                         }
