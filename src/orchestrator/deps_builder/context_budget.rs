@@ -23,6 +23,57 @@ const DEFAULT_OUTPUT_RESERVE: u64 = 8_192;
 /// would force compaction or a final reply on the very first turn.
 const MIN_USABLE_BUDGET: u64 = 16_384;
 
+/// Floor for the derived summarizer-input budget. Below this the window
+/// selection would admit barely a handful of turns, so every compaction
+/// would summarize almost nothing (and a still-overflowing span has the
+/// deterministic-truncation fallback anyway).
+const MIN_SUMMARIZER_INPUT_BUDGET: u64 = 4_096;
+
+/// Derive the summarizer-input token budget from the model that will actually
+/// summarize — NOT from the main model's window.
+///
+/// `SUMMARIZER_INPUT_TOKEN_BUDGET` (48k) was a compile-time constant chosen
+/// "well below common flash-tier windows (64k+)": a cheap/aux model with a
+/// 64k window then received 48k of transcript plus the prompt scaffold plus
+/// had to emit the summary — overflowing the summarizer itself, so every
+/// compaction silently degraded to first-line truncation. The rule is
+/// `min(48k, summarizer_window / 4)`, floored at [`MIN_SUMMARIZER_INPUT_BUDGET`]:
+/// min semantics mean the derivation can only ever shrink the summarizer
+/// input (compact a smaller span per call), never grow it past the tuned
+/// constant — the legacy 200k-window path resolves to exactly 48k and stays
+/// byte-identical.
+///
+/// Window precedence for the summary model: `capabilities_for(model)` (the
+/// catalog is model-specific) → the primary provider's operator-declared
+/// `context_window` → the chain-minimum window computed above (already the
+/// most conservative window in play). When no distinct summary model
+/// resolves, the summarizer IS the main model, and the chain-minimum window
+/// is exactly right.
+fn derive_summarizer_input_budget(
+    config: &Config,
+    primary_provider_key: &str,
+    chain_min_window: u64,
+) -> usize {
+    let summary_model = super::summary::effective_summary_model(config, primary_provider_key);
+    let window = match summary_model.as_ref().map(|(model, _)| model.as_str()) {
+        Some(model) => capabilities_for(model)
+            .map(|c| u64::from(c.context_window))
+            .or_else(|| {
+                config
+                    .providers
+                    .get(primary_provider_key)
+                    .and_then(|p| p.context_window)
+                    .map(u64::from)
+            })
+            .unwrap_or(chain_min_window),
+        None => chain_min_window,
+    };
+    (window / 4).clamp(
+        MIN_SUMMARIZER_INPUT_BUDGET,
+        crate::context::compact::summary_utils::SUMMARIZER_INPUT_TOKEN_BUDGET as u64,
+    ) as usize
+}
+
 /// Fraction below which an auto-sized chain-minimum budget is considered to
 /// *materially* undercut the primary's own window: a narrow fallback sibling
 /// dragging the budget under 60% of the primary's usable budget means the
@@ -143,7 +194,7 @@ fn window_aware_fresh_tail(usable: u64) -> usize {
 /// orchestrator then leaves `HarnessDeps.context_budget`/`context_compactor`
 /// as `None`, so behavior is identical to before this wiring (no mid-run
 /// compaction). When `Some`, `AgentHarnessRunner::run` constructs a *fresh*
-/// `ContextBudget` per run (its circuit-breaker / diminishing-returns state
+/// `ContextBudget` per run (its circuit-breaker / split state
 /// must not be shared across concurrent sessions).
 ///
 /// `token_budget` and the two thresholds are user-tunable; the remaining
@@ -366,10 +417,10 @@ pub fn build_context_budget_config(
             "context budget: applying per-model threshold override"
         );
     }
-    // Critical (hard-stop) keeps the flat default: once `FinalReply` fires the
-    // harness runs no further tools, so no tool result can be appended between
-    // the critical check and the bounded final reply — the hard line is safe at
-    // a fixed fraction regardless of window size.
+    // Critical (hard-pressure floor) keeps the flat default: the escalation
+    // target is `CompactToFit` (a deterministic truncation against the same
+    // budget), which appends nothing between the critical check and the fit,
+    // so the hard line is safe at a fixed fraction regardless of window size.
     let critical_threshold = model_override
         .and_then(|o| o.critical_threshold)
         .or(cb.critical_threshold)
@@ -386,7 +437,8 @@ pub fn build_context_budget_config(
 
     // Defensive validation (P7): a misconfigured budget silently cuts off
     // every run — e.g. inverted thresholds make `CompactAndContinue`
-    // unreachable so every warning-pressure turn escalates to `FinalReply`.
+    // unreachable so every warning-pressure turn escalates straight to
+    // `CompactToFit`, bypassing the summarizer entirely.
     // Reject rather than degrade.
     if token_budget == 0 {
         tracing::warn!("context_budget: token_budget must be > 0; disabling");
@@ -419,6 +471,15 @@ pub fn build_context_budget_config(
         // references' window-scaled `keepRecentTokens`. A 200k window keeps the
         // historical 6; a 1M window keeps ~12 (see `window_aware_fresh_tail`).
         fresh_tail_count: window_aware_fresh_tail(token_budget),
+        // Sized from the SUMMARIZER's window, not the main model's — see
+        // `derive_summarizer_input_budget`. `derived.budget.window` is the
+        // chain-minimum window, the conservative fallback when the summary
+        // model cannot be resolved.
+        summarizer_input_budget: derive_summarizer_input_budget(
+            config,
+            primary_provider_key,
+            derived.budget.window,
+        ),
         circuit_breaker_max: 3,
         max_splits: 3,
     })
@@ -648,6 +709,92 @@ mod tests {
             "a 200k window must compact earlier than the flat 0.70 default, got {}",
             bc.warning_threshold
         );
+        // No provider/model resolves → the summarizer budget anchors on the
+        // default 200k window: 200k/4 = 50k, capped at the historical 48k.
+        assert_eq!(bc.summarizer_input_budget, 48_000);
+    }
+
+    // ── summarizer-input budget derivation ───────────────────────────────
+
+    #[test]
+    fn summarizer_budget_shrinks_for_a_narrow_summary_model() {
+        // The summary model is not in the catalog, so the derivation falls to
+        // the provider's operator-declared window: 64k / 4 = 16k — the fixed
+        // 48k constant would have overflowed this summarizer's own window.
+        let mut pc = ProviderConfig::test_config("main-model");
+        pc.context_window = Some(64_000);
+        let cfg = cfg_with_primary(
+            "custom",
+            pc,
+            ContextBudgetToml {
+                enabled: true,
+                summary_model: Some("no-such-model-in-catalog".into()),
+                ..ContextBudgetToml::default()
+            },
+        );
+        let bc = build_context_budget_config(&cfg, "custom").expect("enabled → Some");
+        assert_eq!(bc.summarizer_input_budget, 16_000);
+    }
+
+    #[test]
+    fn summarizer_budget_is_capped_at_the_historical_constant() {
+        // A wide-window summary model must never RAISE the budget past 48k —
+        // min semantics: the derivation can only shrink the summarizer input.
+        let cfg = cfg_with_primary(
+            "custom",
+            ProviderConfig::test_config("main-model"),
+            ContextBudgetToml {
+                enabled: true,
+                // kimi-k2 is pinned in the catalog at a 262,144 window (see
+                // `derive_falls_back_to_catalog_when_unset`): 262144/4 = 65536
+                // exceeds the cap.
+                summary_model: Some("kimi-k2".into()),
+                ..ContextBudgetToml::default()
+            },
+        );
+        let bc = build_context_budget_config(&cfg, "custom").expect("enabled → Some");
+        assert_eq!(bc.summarizer_input_budget, 48_000);
+    }
+
+    #[test]
+    fn summarizer_budget_is_floored_for_a_tiny_window() {
+        // 8k / 4 = 2k would admit barely two turns of transcript; the floor
+        // keeps the summarizer input useful (and a still-overflowing span has
+        // the deterministic-truncation fallback).
+        let mut pc = ProviderConfig::test_config("main-model");
+        pc.context_window = Some(8_000);
+        let cfg = cfg_with_primary(
+            "custom",
+            pc,
+            ContextBudgetToml {
+                enabled: true,
+                summary_model: Some("no-such-model-in-catalog".into()),
+                ..ContextBudgetToml::default()
+            },
+        );
+        let bc = build_context_budget_config(&cfg, "custom").expect("enabled → Some");
+        assert_eq!(bc.summarizer_input_budget, 4_096);
+    }
+
+    #[test]
+    fn summarizer_budget_anchors_on_chain_min_window_without_a_summary_model() {
+        // No summary_model, preset with no declared aux (unknown provider key)
+        // → summarization runs on the main model, and the budget anchors on
+        // the chain-minimum window. Here the provider declares 100k, so the
+        // budget is 100k/4 = 25k — NOT the flat 48k a 200k-default guess would
+        // have produced.
+        let mut pc = ProviderConfig::test_config("main-model");
+        pc.context_window = Some(100_000);
+        let cfg = cfg_with_primary(
+            "custom-no-preset",
+            pc,
+            ContextBudgetToml {
+                enabled: true,
+                ..ContextBudgetToml::default()
+            },
+        );
+        let bc = build_context_budget_config(&cfg, "custom-no-preset").expect("enabled → Some");
+        assert_eq!(bc.summarizer_input_budget, 25_000);
     }
 
     #[test]
@@ -668,8 +815,8 @@ mod tests {
     #[test]
     fn context_budget_none_when_thresholds_inverted() {
         // warning >= critical makes the CompactAndContinue branch unreachable;
-        // every warning-pressure turn escalates straight to FinalReply,
-        // silently cutting off every run. Reject rather than degrade.
+        // every warning-pressure turn escalates straight to CompactToFit,
+        // bypassing the summarizer on every run. Reject rather than degrade.
         let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
             enabled: true,
             warning_threshold: Some(0.9),

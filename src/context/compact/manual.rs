@@ -58,6 +58,7 @@
 
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::context::compact::compactor::{deterministic_truncation, ContextCompactor};
+use crate::context::compact::event_snap::{snap_out_of_open_run, snap_past_tool_results};
 use crate::context::compact::preserve::SUMMARY_MARKER;
 use crate::context::compact::session_split::event_to_message;
 use crate::context::compact::summary_utils::{
@@ -174,6 +175,12 @@ pub struct ManualCompactWiring {
     /// Operator default for the verbatim tail budget
     /// (`[context_budget] manual_compact_keep_tokens`).
     pub keep_tokens: usize,
+    /// Summarizer-input token budget derived from the summarizer model's own
+    /// window at startup (`ContextBudgetConfig::summarizer_input_budget`).
+    /// The manual path has no run to inherit a compactor config from, so the
+    /// derived value rides the wiring; defaults to the historical constant
+    /// when the budget section is absent/disabled.
+    pub summarizer_input_budget: usize,
 }
 
 static MANUAL_WIRING: std::sync::OnceLock<ManualCompactWiring> = std::sync::OnceLock::new();
@@ -196,6 +203,16 @@ pub fn manual_keep_tokens() -> usize {
     MANUAL_WIRING
         .get()
         .map_or(DEFAULT_KEEP_TOKENS, |w| w.keep_tokens)
+}
+
+/// The startup-derived summarizer-input budget (see
+/// [`ManualCompactWiring::summarizer_input_budget`]), or the historical
+/// constant when the wiring was never installed (tests, non-daemon callers).
+#[must_use]
+pub fn manual_summarizer_input_budget() -> usize {
+    MANUAL_WIRING
+        .get()
+        .map_or(SUMMARIZER_INPUT_TOKEN_BUDGET, |w| w.summarizer_input_budget)
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +337,13 @@ pub async fn compact_session(
 
     // Bound the summarizer's own input: keep the NEWEST budget-worth so a huge
     // history cannot overflow the (possibly flash-tier) summarizer's window.
-    let elided = clamp_start_to_budget(&dropped, SUMMARIZER_INPUT_TOKEN_BUDGET);
+    // The budget comes from the compactor when one is wired — it was derived
+    // from the summarizer model's own window at startup — and falls back to
+    // the historical constant for a summarizer-less (deterministic-only) run.
+    let input_budget = summarizer.map_or(SUMMARIZER_INPUT_TOKEN_BUDGET, |c| {
+        c.summarizer_input_budget()
+    });
+    let elided = clamp_start_to_budget(&dropped, input_budget);
     let summarizer_input = &dropped[elided..];
 
     // Anchor on the live task from the KEPT tail, exactly like every other
@@ -513,58 +536,6 @@ fn select_cut(events: &[SessionEventRecord], keep_tokens: usize) -> Option<usize
     let cut = snap_past_tool_results(events, cut);
     let cut = snap_out_of_open_run(events, cut);
     (cut > 0 && cut < events.len()).then_some(cut)
-}
-
-/// Advance `cut` past any contiguous run of `ToolResult` / `ToolError` so the
-/// kept region never *begins* on a result whose `tool_use` was just retired.
-///
-/// `build_prompt` already downgrades an orphan result to plain text rather than
-/// letting the provider reject it (Anthropic: `tool_result` without a preceding
-/// `tool_use`), but producing the orphan in the first place turns a structured
-/// result into prose for the rest of the session. Event-level mirror of the
-/// compactor's `snap_boundary_forward`, identical to the guard
-/// `perform_session_split` applies to its fresh-tail boundary.
-fn snap_past_tool_results(events: &[SessionEventRecord], cut: usize) -> usize {
-    let mut c = cut;
-    while c < events.len()
-        && matches!(
-            events[c].event,
-            SessionEvent::ToolResult { .. } | SessionEvent::ToolError { .. }
-        )
-    {
-        c += 1;
-    }
-    c
-}
-
-/// Pull `cut` back so it never falls between a `RunStarted` and the
-/// `RunFinished` that closes it.
-///
-/// `load_run_markers` skips retired events, so retiring a `RunStarted` while
-/// keeping its `RunFinished` leaves a dangling close that `ResumeCoordinator`
-/// reads as a run it never saw start. Both markers must land on the same side
-/// of the cut. Pulling back (rather than pushing forward) is the safe
-/// direction: it compacts less, never more.
-fn snap_out_of_open_run(events: &[SessionEventRecord], cut: usize) -> usize {
-    // One pass over the kept tail collects the runs it closes; the prefix scan
-    // is then a set lookup rather than a nested search.
-    let closed_after_cut: std::collections::HashSet<&str> = events[cut..]
-        .iter()
-        .filter_map(|r| match &r.event {
-            SessionEvent::RunFinished { run_id, .. } => Some(run_id.as_str()),
-            _ => None,
-        })
-        .collect();
-    if closed_after_cut.is_empty() {
-        return cut;
-    }
-    events[..cut]
-        .iter()
-        .position(|r| {
-            matches!(&r.event, SessionEvent::RunStarted { run_id, .. }
-                if closed_after_cut.contains(run_id.as_str()))
-        })
-        .unwrap_or(cut)
 }
 
 /// The live-task anchor for a manual compaction, with the compaction command

@@ -513,6 +513,7 @@ fn budget_config() -> ContextBudgetConfig {
         critical_threshold: 0.85,
         token_estimate_ratio: 4.0,
         fresh_tail_count: 2,
+        summarizer_input_budget: 48_000,
         circuit_breaker_max: 10,
         max_splits: 3,
     }
@@ -528,6 +529,7 @@ fn near_full_budget_config() -> ContextBudgetConfig {
         critical_threshold: 0.85,
         token_estimate_ratio: 1.0,
         fresh_tail_count: 2,
+        summarizer_input_budget: 48_000,
         circuit_breaker_max: 10,
         max_splits: 3,
     }

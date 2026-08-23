@@ -83,8 +83,8 @@ pub struct AgentHarnessRunner {
     pub verifier_chain: Option<Arc<VerifierChain>>,
     /// Opt-in mid-run context management (`[context_budget]`). Held as the
     /// *config*, not a live `ContextBudget`: `run()` constructs a fresh
-    /// `ContextBudget` per call because its circuit-breaker /
-    /// diminishing-returns state must never be shared across concurrent
+    /// `ContextBudget` per call because its circuit-breaker / split state
+    /// must never be shared across concurrent
     /// sessions. `None` disables mid-run compaction entirely.
     pub context_budget_config: Option<ContextBudgetConfig>,
     /// Per-run companion to [`Self::context_budget_config`]: re-keys the

@@ -9,7 +9,7 @@
 use crate::context::compact::compactor::ContextCompactor;
 use crate::context::compact::preserve::SUMMARY_MARKER;
 use crate::context::compact::summary_utils::{
-    cap_summary_lines, clamp_start_to_budget, MAX_SUMMARY_LINES, SUMMARIZER_INPUT_TOKEN_BUDGET,
+    cap_summary_lines, clamp_start_to_budget, MAX_SUMMARY_LINES,
 };
 use crate::providers::message::UnifiedMessage;
 use crate::session::epoch_registrar::SessionEpochRegistrar;
@@ -73,26 +73,45 @@ pub async fn perform_session_split(
     // session is never seeded with a verbatim tool result whose originating
     // tool_use was summarized away into the SystemMessage. A tool_result with no
     // preceding tool_use is rejected by Anthropic-compatible backends (HTTP 400)
-    // on the child's first turn. Mirrors the in-place compactor's
-    // `snap_boundary_forward` guard, applied here at the event level
-    // (`SessionEventRecord`) rather than on `UnifiedMessage`s.
-    let tail_start = {
-        let mut ts = tail_start;
-        while ts < events.len()
-            && matches!(
-                events[ts].event,
-                SessionEvent::ToolResult { .. } | SessionEvent::ToolError { .. }
-            )
-        {
-            ts += 1;
-        }
-        ts
-    };
+    // on the child's first turn. Single source:
+    // `event_snap::snap_past_tool_results` — the event-level twin of the
+    // in-place compactor's message-level `snap_boundary_forward`, shared with
+    // the manual `/compact` cut selection.
+    //
+    // Deliberately NOT snapped here: `snap_out_of_open_run`. The split's
+    // `tail_start` falls inside the currently-open run by construction (that
+    // run has no `RunFinished` in the log yet), so the guard could only fire
+    // on a historical run whose close was already lost — and pulling the
+    // boundary back over it would re-seed the child with a run the parent
+    // already finished. See the guard's doc in `event_snap`.
+    let tail_start = super::event_snap::snap_past_tool_results(events, tail_start);
+
+    // The split path used to be the one compaction surface with zero
+    // telemetry: the breaker escalated to it, and the only trace of what
+    // happened next was the parent's RunFinished appearing in the log. Emit
+    // the shape of the split (how much is summarized away vs. carried
+    // verbatim) so an operator can tell a healthy escalation from a split
+    // storm without replaying the event log.
+    tracing::info!(
+        target: "context_budget",
+        parent = ?parent_session_id,
+        child = ?child,
+        total_events = events.len(),
+        summarized_events = tail_start,
+        carried_tail_events = events.len() - tail_start,
+        "session split: summarizing pre-tail into a new epoch",
+    );
 
     // 2. Summarize events[..tail_start].
     let summary_text = summarize_pretail(compactor, events, tail_start)
         .await
         .map_err(SplitError::Failed)?;
+    tracing::info!(
+        target: "context_budget",
+        parent = ?parent_session_id,
+        summary_chars = summary_text.len(),
+        "session split: pre-tail summarized; seeding child epoch",
+    );
 
     // 3. Register the new epoch so gateway routing sees it.
     epoch_registrar
@@ -215,7 +234,10 @@ async fn summarize_pretail(
     // messages so the side-channel call cannot overflow, and note the elision
     // honestly (the elided span was already covered by earlier in-place
     // compaction summaries where they exist).
-    let elided = clamp_start_to_budget(&messages, SUMMARIZER_INPUT_TOKEN_BUDGET);
+    // Bound the summarizer's input by the budget derived from the summarizer
+    // model's own window (carried on the compactor), not the historical
+    // constant — a narrow-window cheap/aux model cannot hold 48k of transcript.
+    let elided = clamp_start_to_budget(&messages, compactor.summarizer_input_budget());
     let kept = &messages[elided..];
 
     // Live-task anchor: scan the kept tail back-to-front for the latest user
@@ -319,6 +341,7 @@ mod tests {
     use tokio::sync::{broadcast, Mutex};
 
     use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
+    use crate::context::compact::summary_utils::SUMMARIZER_INPUT_TOKEN_BUDGET;
     use crate::providers::mock::MockProvider;
     use crate::session::events::{now_ms, EventSeq, MessageContent, SessionEventRecord};
     use crate::session::service::{SessionError, SessionHandle, SessionService};

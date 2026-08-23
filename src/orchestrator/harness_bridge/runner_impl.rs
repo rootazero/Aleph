@@ -496,7 +496,7 @@ impl HarnessRunner for AgentHarnessRunner {
         let power = self.power.clone();
         // H2: build a per-run context budget + compactor when `[context_budget]`
         // is enabled. The budget is fresh per run — its circuit-breaker and
-        // diminishing-returns counters must not leak across concurrent
+        // split counters must not leak across concurrent
         // sessions. The compactor reuses this run's SIDE-CHANNEL provider for
         // summarization (deterministic-truncation fallback on provider error) —
         // `side_channel_llm`, not `llm`: see its construction above.
@@ -520,7 +520,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 let mut budget_inner = ContextBudget::new(cfg);
                 // Seed ONLY the tokenizer-calibration factor from the previous
                 // run on the same model (see CALIBRATION_CARRYOVER below): the
-                // fresh per-run budget keeps breaker / diminishing counters
+                // fresh per-run budget keeps breaker / split counters
                 // isolated, while the FIRST before_turn — carrying the full
                 // accumulated history, where heuristic drift is largest — no
                 // longer starts uncalibrated.
@@ -539,6 +539,7 @@ impl HarnessRunner for AgentHarnessRunner {
                     side_channel_llm.clone(),
                     CompactorConfig {
                         fresh_tail: cfg.fresh_tail_count,
+                        summarizer_input_budget: cfg.summarizer_input_budget,
                         ..CompactorConfig::default()
                     },
                 )
@@ -1204,7 +1205,7 @@ impl HarnessRunner for AgentHarnessRunner {
 /// Cross-run tokenizer-calibration carry-over slot, keyed by serving model id.
 ///
 /// H2 builds a FRESH `ContextBudget` per run so circuit-breaker /
-/// diminishing-returns / split counters can never leak across runs — but that
+/// split counters can never leak across runs — but that
 /// also discarded the EWMA calibration factor, leaving the first `before_turn`
 /// of every run (the one carrying the full accumulated history, where
 /// heuristic drift is largest) permanently uncalibrated. Only the calibration
@@ -1408,6 +1409,7 @@ mod calibration_carryover_tests {
             critical_threshold: 0.95,
             token_estimate_ratio: 1.0,
             fresh_tail_count: 6,
+            summarizer_input_budget: 48_000,
             circuit_breaker_max: 3,
             max_splits: 3,
         }

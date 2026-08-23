@@ -121,7 +121,11 @@ pub async fn run_manual_compaction(
     let compactor = crate::context::compact::manual::manual_summarizer().map(|provider| {
         crate::context::compact::compactor::ContextCompactor::new(
             provider,
-            crate::context::compact::compactor::CompactorConfig::default(),
+            crate::context::compact::compactor::CompactorConfig {
+                summarizer_input_budget:
+                    crate::context::compact::manual::manual_summarizer_input_budget(),
+                ..crate::context::compact::compactor::CompactorConfig::default()
+            },
         )
     });
 

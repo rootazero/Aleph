@@ -262,6 +262,7 @@ fn tiny_budget_config(budget: u64, warn: f64, critical: f64) -> ContextBudgetCon
         // 1 char ≈ 1 token so tests get deterministic ratios from message length.
         token_estimate_ratio: 1.0,
         fresh_tail_count: 2,
+        summarizer_input_budget: 48_000,
         circuit_breaker_max: 10,
         max_splits: 3,
     }

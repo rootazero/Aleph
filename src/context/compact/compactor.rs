@@ -19,6 +19,7 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Strategy used during compaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,12 @@ pub struct CompactorConfig {
     pub timeout: Duration,
     /// Whether to fall back to deterministic truncation on LLM failure (default: true).
     pub fallback_to_truncation: bool,
+    /// Token budget for a single summarizer-input call (window selection and
+    /// extend-merge). Defaults to [`SUMMARIZER_INPUT_TOKEN_BUDGET`] (48k);
+    /// production wiring derives it from the summarizer model's own window
+    /// (`ContextBudgetConfig::summarizer_input_budget`), so a narrow-window
+    /// cheap/aux model cannot be fed more transcript than it can hold.
+    pub summarizer_input_budget: usize,
 }
 
 impl Default for CompactorConfig {
@@ -67,6 +74,7 @@ impl Default for CompactorConfig {
             max_window: 40,
             timeout: Duration::from_secs(15),
             fallback_to_truncation: true,
+            summarizer_input_budget: SUMMARIZER_INPUT_TOKEN_BUDGET,
         }
     }
 }
@@ -172,6 +180,20 @@ pub struct ContextCompactor {
     /// almost never required; routing it to a flash-tier provider yields a
     /// 10–20× per-token cost reduction without measurable quality regression.
     cheap_provider: Option<Arc<dyn AiProvider>>,
+    /// Per-run poison flag for the cheap tier (codex `compact_model_fallback`
+    /// parity). Set the first time the cheap summarizer fails with a
+    /// model-class error (`llm_retry::classify_exhausted` → `Fallback` minus
+    /// the two transient-derived reasons) — the canonical shape being a
+    /// third-party compatible proxy that does not serve the preset's
+    /// `default_aux_model`, so EVERY summarization 404s. Once poisoned,
+    /// `summarizer()` routes straight to the main provider for the rest of
+    /// this compactor's life, so a misconfigured deployment pays one failed
+    /// call + one fallback call per run boundary instead of two wasted calls
+    /// per compaction. Deliberately NOT persisted across runs (the compactor
+    /// is rebuilt per run): a transient outage must not mute the cheap tier
+    /// forever, and a config fix takes effect on the next run without a
+    /// restart.
+    cheap_poisoned: AtomicBool,
     /// Fingerprint cache of the last successful compaction (openteams
     /// compression-cache parity). The harness rebuilds the message list from
     /// the session log every turn, discarding the previous turn's in-place
@@ -210,6 +232,7 @@ impl ContextCompactor {
             config,
             summary_reuse: None,
             cheap_provider: None,
+            cheap_poisoned: AtomicBool::new(false),
             cache: Mutex::new(None),
             monitor_scope: None,
             carryover_key: None,
@@ -276,9 +299,22 @@ impl ContextCompactor {
         self
     }
 
-    /// Provider used for summarization — cheap-tier override if set, otherwise
-    /// the main provider passed to `new()`. Internal accessor.
+    /// Token budget for a single summarizer-input call — derived from the
+    /// summarizer model's own window at startup (see
+    /// [`CompactorConfig::summarizer_input_budget`]). Exposed so the OTHER
+    /// drain sites that never see a `CompactorConfig` construction (manual
+    /// `/compact`, session-split pre-tail) apply the same bound.
+    pub(crate) fn summarizer_input_budget(&self) -> usize {
+        self.config.summarizer_input_budget
+    }
+
+    /// Provider used for summarization — the cheap-tier override when set and
+    /// not poisoned (see [`Self::cheap_poisoned`]), otherwise the main
+    /// provider passed to `new()`. Internal accessor.
     fn summarizer(&self) -> &Arc<dyn AiProvider> {
+        if self.cheap_poisoned.load(Ordering::Relaxed) {
+            return &self.provider;
+        }
         self.cheap_provider.as_ref().unwrap_or(&self.provider)
     }
 
@@ -443,7 +479,7 @@ impl ContextCompactor {
             window_start,
             cut_end,
             self.config.max_window,
-            SUMMARIZER_INPUT_TOKEN_BUDGET,
+            self.config.summarizer_input_budget,
         );
 
         // Guard: a zero-width window means there is nothing to compress.
@@ -735,7 +771,7 @@ impl ContextCompactor {
             c.end,
             cut_end,
             self.config.max_window,
-            SUMMARIZER_INPUT_TOKEN_BUDGET,
+            self.config.summarizer_input_budget,
         );
         // Hash over the wider range BEFORE mutating: this is the fingerprint a
         // future rebuild will present for the extended cover.
@@ -919,12 +955,78 @@ impl ContextCompactor {
     /// Side-channel LLM call for summarization. Routes to the cheap-tier
     /// provider when one is configured (Reasonix parity), otherwise reuses
     /// the main provider.
+    ///
+    /// Cheap-tier fallback (codex `compact_model_fallback` parity): when the
+    /// cheap provider fails with an error the shared classifier reads as
+    /// "switch model" (`RetryVerdict::Fallback` — 404 model-not-found being
+    /// the canonical shape, see [`Self::cheap_poisoned`]) or "this input
+    /// overflowed the cheap model's own window" (`CompactAndRetry` — the
+    /// summarizer input budget is sized from the summarizer model's window,
+    /// but an operator-pinned `summary_model` can outrun the catalog), the
+    /// call is retried once on the main provider. Only the final outcome
+    /// reaches `accept_summary`, so the observability contract (one warn per
+    /// failure class) is unchanged. Model-class Fallbacks additionally poison
+    /// the cheap tier for the rest of the run; the two transient-derived
+    /// Fallback reasons (overload / network) retry without poisoning, so one
+    /// blip does not mute the cheap tier for a long run.
     async fn call_llm(&self, prompt: &str) -> anyhow::Result<String> {
-        let msgs = [UnifiedMessage::user(prompt)];
         let system =
             "You are a precise conversation summarizer. Output the analysis block followed by the summary block. No other text.";
-        let payload = RequestPayload::new(&msgs).with_system(Some(system));
-        let response: ProviderResponse = self.summarizer().process(payload).await?;
+        // `msgs` outlives both attempts: `RequestPayload` borrows it.
+        let msgs = [UnifiedMessage::user(prompt)];
+        let build_payload = || RequestPayload::new(&msgs).with_system(Some(system));
+        let first = self.summarizer().clone();
+        let tried_cheap =
+            self.cheap_provider.is_some() && !self.cheap_poisoned.load(Ordering::Relaxed);
+        let response: ProviderResponse = match first.process(build_payload()).await {
+            Ok(r) => r,
+            Err(e) => {
+                let verdict = crate::providers::llm_retry::classify_exhausted(&e.to_string());
+                // The fallback target exists only when the failed attempt ran
+                // on the cheap tier — the main provider is the floor.
+                let fallback_worthwhile = tried_cheap
+                    && matches!(
+                        verdict,
+                        crate::providers::llm_retry::RetryVerdict::Fallback { .. }
+                            | crate::providers::llm_retry::RetryVerdict::CompactAndRetry { .. }
+                    );
+                if !fallback_worthwhile {
+                    return Err(e.into());
+                }
+                if let crate::providers::llm_retry::RetryVerdict::Fallback { ref reason } = verdict
+                {
+                    // Poison on every model-class failure (404 / auth /
+                    // model-scoped quota): none of them heal within a run,
+                    // and the per-run scope bounds the mute. The two
+                    // transient-derived reasons (`classify_exhausted` wraps an
+                    // exhausted in-place retry budget — the compactor's budget
+                    // is one call, so they surface here) are excluded: one
+                    // overload blip must not mute the cheap tier for a long run.
+                    let is_transient_derived = reason.starts_with("provider overloaded")
+                        || reason.starts_with("primary model unavailable");
+                    if !is_transient_derived {
+                        self.cheap_poisoned.store(true, Ordering::Relaxed);
+                    }
+                    tracing::warn!(
+                        target: "context_budget",
+                        cheap_provider = %first.name(),
+                        %reason,
+                        poisoned = self.cheap_poisoned.load(Ordering::Relaxed),
+                        "cheap summarizer failed with a model-level error; retrying once on \
+                         the main provider (check [context_budget] summary_model / the preset's \
+                         aux model against what this provider actually serves)",
+                    );
+                } else {
+                    tracing::warn!(
+                        target: "context_budget",
+                        cheap_provider = %first.name(),
+                        "summarizer input overflowed the cheap model's window; retrying once \
+                         on the main provider",
+                    );
+                }
+                self.provider.process(build_payload()).await?
+            }
+        };
         Ok(response.text.unwrap_or_default())
     }
 }
@@ -1982,6 +2084,158 @@ mod tests {
         assert!(
             !prompt.contains("---TRANSCRIPT---"),
             "incremental path must not use the from-scratch transcript marker"
+        );
+    }
+
+    /// Provider that always answers with a scripted outcome and counts calls —
+    /// the witness for which provider a summarization actually ran on.
+    struct ScriptedProvider {
+        name: String,
+        calls: Arc<crate::sync_primitives::Mutex<usize>>,
+        outcome: std::result::Result<String, String>,
+    }
+
+    impl ScriptedProvider {
+        fn ok(name: &str, text: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                calls: Arc::new(crate::sync_primitives::Mutex::new(0)),
+                outcome: Ok(text.to_string()),
+            }
+        }
+        fn failing(name: &str, raw_error: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                calls: Arc::new(crate::sync_primitives::Mutex::new(0)),
+                outcome: Err(raw_error.to_string()),
+            }
+        }
+        fn call_count(&self) -> usize {
+            *self.calls.lock().unwrap_or_else(|e| e.into_inner())
+        }
+    }
+
+    impl crate::providers::AiProvider for ScriptedProvider {
+        fn process(
+            &self,
+            _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            *self.calls.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+            let outcome = self.outcome.clone();
+            Box::pin(async move {
+                match outcome {
+                    Ok(text) => Ok(crate::providers::adapter::ProviderResponse::text_only(text)),
+                    Err(raw) => Err(crate::error::AlephError::provider(raw)),
+                }
+            })
+        }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    #[tokio::test]
+    async fn cheap_summarizer_model_not_found_falls_back_to_main_and_poisons() {
+        // codex `compact_model_fallback` parity: the documented deployment
+        // class is a third-party compatible proxy that does not serve the
+        // preset's `default_aux_model`, so EVERY cheap summarization 404s.
+        // The compactor must retry once on the main provider — and, a 404
+        // being a config-level fact that cannot heal mid-run, route the rest
+        // of the run straight to main instead of paying a 404 per compaction.
+        let cheap = Arc::new(ScriptedProvider::failing(
+            "cheap",
+            "error 404: model 'aux-x' not found",
+        ));
+        let main = Arc::new(ScriptedProvider::ok("main", "main-summary"));
+        let compactor = ContextCompactor::new(main.clone(), CompactorConfig::default())
+            .with_cheap_provider(Some(cheap.clone()));
+
+        let messages = make_messages(4);
+        let s1 = compactor
+            .summarize_slice(&messages, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            s1, "main-summary",
+            "the summary must come from the main provider"
+        );
+        assert_eq!(cheap.call_count(), 1, "the failed cheap attempt");
+        assert_eq!(main.call_count(), 1, "the fallback attempt");
+
+        // Poisoned: the next summarization goes straight to main.
+        let s2 = compactor
+            .summarize_slice(&messages, None, None)
+            .await
+            .unwrap();
+        assert_eq!(s2, "main-summary");
+        assert_eq!(
+            cheap.call_count(),
+            1,
+            "a poisoned cheap tier must not be retried within the run"
+        );
+        assert_eq!(main.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn transient_cheap_failure_retries_main_without_poisoning() {
+        // A network blip is worth one fallback attempt but must NOT poison:
+        // the cheap tier is healthy again a turn later, and muting it for the
+        // rest of the run would silently bill every later summarization to the
+        // main model.
+        let cheap = Arc::new(ScriptedProvider::failing(
+            "cheap",
+            "connection reset by peer",
+        ));
+        let main = Arc::new(ScriptedProvider::ok("main", "main-summary"));
+        let compactor = ContextCompactor::new(main.clone(), CompactorConfig::default())
+            .with_cheap_provider(Some(cheap.clone()));
+
+        let messages = make_messages(4);
+        let _ = compactor
+            .summarize_slice(&messages, None, None)
+            .await
+            .unwrap();
+        let _ = compactor
+            .summarize_slice(&messages, None, None)
+            .await
+            .unwrap();
+        assert_eq!(cheap.call_count(), 2, "transient failure must not poison");
+        assert_eq!(main.call_count(), 2, "each failure earns one main retry");
+    }
+
+    #[tokio::test]
+    async fn fatal_cheap_failure_does_not_fall_back() {
+        // A 400-class error means the REQUEST is broken — retrying it verbatim
+        // on the main provider would fail identically, so the compactor must
+        // skip the fallback and take the deterministic-truncation path.
+        let cheap = Arc::new(ScriptedProvider::failing(
+            "cheap",
+            "400 Bad Request: invalid request",
+        ));
+        let main = Arc::new(ScriptedProvider::ok("main", "main-summary"));
+        let compactor = ContextCompactor::new(main.clone(), CompactorConfig::default())
+            .with_cheap_provider(Some(cheap.clone()));
+
+        let messages = make_messages(4);
+        let seed = compactor
+            .summarize_slice(&messages, None, None)
+            .await
+            .unwrap();
+        assert_eq!(main.call_count(), 0, "fatal errors must not be retried");
+        assert_eq!(cheap.call_count(), 1);
+        assert!(
+            seed.contains("User message 0"),
+            "deterministic truncation fallback should still produce a summary, got: {seed}"
         );
     }
 

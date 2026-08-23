@@ -119,6 +119,26 @@ pub async fn apply_budget_directive(
                                  check [context_budget] / the aux model on this provider"
                             );
                         }
+                        // Structured telemetry for the SUCCESS paths too
+                        // (codex's compaction analytics parity: reason /
+                        // strategy / tokens before→after on every compaction,
+                        // not only on degradation). This is also the first
+                        // consumer of `CompactResult.tokens_before/after` on
+                        // the automatic path — the manual `/compact` RPC
+                        // already reported them, the automatic path dropped
+                        // them on the floor. `0/0` with a non-LLM strategy is
+                        // expected: CacheReuse and SessionMemoryReuse never
+                        // measured the window (that is exactly what makes
+                        // them zero-cost), and `Skipped` names its reason in
+                        // the strategy itself.
+                        tracing::info!(
+                            target: "context_budget",
+                            ?session_id,
+                            strategy = ?result.strategy_used,
+                            tokens_before = result.tokens_before,
+                            tokens_after = result.tokens_after,
+                            "compaction applied",
+                        );
                         if let Some(budget) = budget {
                             budget.lock().await.note_compaction_effect(
                                 messages,
