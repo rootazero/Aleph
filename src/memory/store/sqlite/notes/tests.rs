@@ -1202,6 +1202,81 @@ mod tests {
         assert_eq!(pending[0].retry_count, 3);
     }
 
+    /// `archive_review` had a writer and no reader anywhere in the repo —
+    /// tests included. That is load-bearing for `rejected`: the candidate's
+    /// facts were never written to a note, so the archive row is the only place
+    /// the proposal survives at all. "The knowledge is preserved" is a claim
+    /// about a table somebody has to be able to read.
+    #[tokio::test]
+    async fn a_decided_verdict_can_be_read_back() {
+        let backend = make_backend();
+        let id = backend
+            .enqueue_review(
+                "agent1",
+                r#"{"note":"candidate"}"#,
+                "high",
+                0.3,
+                "contradicts",
+            )
+            .await
+            .unwrap();
+        backend.archive_review(&id, "rejected").await.unwrap();
+
+        // Gone from the queue…
+        assert!(backend
+            .list_pending_review("agent1", i64::MAX)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // …and readable in the archive, verdict and all.
+        let rows = backend.list_review_archive("agent1", 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].final_status, "rejected");
+        assert_eq!(rows[0].reason, "contradicts");
+        assert!(rows[0].candidate_json.contains("candidate"));
+
+        // Scoped by agent like every other note-layer read.
+        assert!(backend
+            .list_review_archive("other-agent", 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// An append-only decision log with no retention grows for the life of the
+    /// install — one row per gated candidate, each carrying a whole note
+    /// payload. Retention has to age rows out *and* leave recent ones, or it is
+    /// either a leak or an amnesia.
+    #[tokio::test]
+    async fn retention_ages_out_old_verdicts_and_keeps_recent_ones() {
+        let backend = make_backend();
+        for (n, status) in [("old", "rejected"), ("new", "approved")] {
+            let id = backend
+                .enqueue_review("agent1", &format!(r#"{{"n":"{n}"}}"#), "low", 0.5, "why")
+                .await
+                .unwrap();
+            backend.archive_review(&id, status).await.unwrap();
+        }
+        // Backdate one row past the window.
+        {
+            let conn = backend.conn().lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute(
+                "UPDATE notes_review_archive SET archived_at = archived_at - 1000 \
+                 WHERE candidate_json LIKE '%old%'",
+                [],
+            )
+            .unwrap();
+        }
+
+        let pruned = backend.prune_review_archive("agent1", 500).await.unwrap();
+        assert_eq!(pruned, 1);
+
+        let rows = backend.list_review_archive("agent1", 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].final_status, "approved");
+    }
+
     // ---- §2.10 embedding dimensions + vector freshness --------------------
 
     #[tokio::test]

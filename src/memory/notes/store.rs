@@ -22,6 +22,27 @@ pub struct ReviewQueueRow {
     pub created_at: i64,
 }
 
+/// One decided row from `notes_review_archive` — the governance gate's verdict
+/// on a note candidate that never became a note (or became one late).
+///
+/// This table was write-only for its whole life: `archive_review` inserted into
+/// it and nothing in the repo, tests included, ever ran a `SELECT` against it.
+/// That is load-bearing for the `rejected` verdict in particular — a rejected
+/// candidate's knowledge is not written to any note, so the archive row *is*
+/// the only surviving record of what was proposed and why it was turned down.
+/// "The knowledge is preserved" is a claim about a table someone has to be able
+/// to read.
+#[derive(Debug, Clone)]
+pub struct ReviewArchiveRow {
+    pub id: String,
+    pub candidate_json: String,
+    /// `approved` | `rejected` | `rewritten` | `timeout` | `max_retries_exceeded`.
+    pub final_status: String,
+    pub reason: String,
+    pub created_at: i64,
+    pub archived_at: i64,
+}
+
 /// Lightweight index entry for a knowledge note (no full content).
 #[derive(Debug, Clone)]
 pub struct NoteIndexEntry {
@@ -736,6 +757,35 @@ pub trait NoteStore: Send + Sync {
     async fn archive_review(&self, queue_id: &str, final_status: &str) -> Result<(), AlephError> {
         let _ = (queue_id, final_status);
         Ok(())
+    }
+
+    /// Read the most recently decided governance verdicts, newest first.
+    ///
+    /// The consumer half of [`Self::archive_review`]. Default impl returns
+    /// empty so non-SQLite stores and test mocks compile unchanged.
+    async fn list_review_archive(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ReviewArchiveRow>, AlephError> {
+        let _ = (agent_id, limit);
+        Ok(Vec::new())
+    }
+
+    /// Delete archive rows older than `older_than_secs`, returning how many
+    /// went. Returns the count so a caller can log a real number rather than
+    /// assert one.
+    ///
+    /// An append-only decision log with no retention is a table that grows for
+    /// the life of the install; it is written on every gated candidate and the
+    /// rows carry a full candidate payload each.
+    async fn prune_review_archive(
+        &self,
+        agent_id: &str,
+        older_than_secs: i64,
+    ) -> Result<usize, AlephError> {
+        let _ = (agent_id, older_than_secs);
+        Ok(0)
     }
 
     /// Phase C2.7 — return the `MAX(created_at)` recall signal for

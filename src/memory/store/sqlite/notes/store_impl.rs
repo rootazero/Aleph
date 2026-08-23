@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::error::AlephError;
 use crate::memory::notes::graph::{GraphEdge, GraphNode, GraphSnapshot};
 use crate::memory::notes::store::{
-    GraphEdgeRow, NoteIndexEntry, NoteStore, OutgoingLinkRow, ReviewQueueRow,
+    GraphEdgeRow, NoteIndexEntry, NoteStore, OutgoingLinkRow, ReviewArchiveRow, ReviewQueueRow,
 };
 use crate::memory::notes::{
     extract_wikilinks_with_alias, FactProvenance, KnowledgeNote, ProvenanceOrigin,
@@ -2410,6 +2410,54 @@ impl NoteStore for SqliteMemoryBackend {
         tx.commit()
             .map_err(|e| AlephError::config(format!("archive_review tx commit: {e}")))?;
         Ok(())
+    }
+
+    async fn list_review_archive(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ReviewArchiveRow>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, candidate_json, final_status, reason, created_at, archived_at \
+                 FROM notes_review_archive WHERE agent_id = ?1 \
+                 ORDER BY archived_at DESC LIMIT ?2",
+            )
+            .map_err(|e| AlephError::config(format!("list_review_archive prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![agent_id, limit as i64], |r| {
+                Ok(ReviewArchiveRow {
+                    id: r.get(0)?,
+                    candidate_json: r.get(1)?,
+                    final_status: r.get(2)?,
+                    reason: r.get(3)?,
+                    created_at: r.get(4)?,
+                    archived_at: r.get(5)?,
+                })
+            })
+            .map_err(|e| AlephError::config(format!("list_review_archive query: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("list_review_archive row: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    async fn prune_review_archive(
+        &self,
+        agent_id: &str,
+        older_than_secs: i64,
+    ) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+        let cutoff = chrono::Utc::now().timestamp() - older_than_secs;
+        let n = conn
+            .execute(
+                "DELETE FROM notes_review_archive WHERE agent_id = ?1 AND archived_at < ?2",
+                params![agent_id, cutoff],
+            )
+            .map_err(|e| AlephError::config(format!("prune_review_archive: {e}")))?;
+        Ok(n)
     }
 
     /// Phase C2.7 — return the most recent `created_at` recall signal for

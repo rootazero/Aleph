@@ -189,9 +189,37 @@ impl DreamStage for NoteReviewStage {
                 }
             }
         }
+
+        // Retention. `archive_review` is an append-only writer and, until the
+        // archive got a reader, nothing had any reason to notice the table only
+        // ever grew — one row per gated candidate, each carrying a full note
+        // payload, for the life of the install. Pruning belongs here rather
+        // than at boot because this is the stage that *writes* the rows: the
+        // producer owning its own retention is what keeps the ceiling from
+        // becoming a second fact somebody has to remember to maintain.
+        // Best-effort — a prune failure must not fail the review pass.
+        match store
+            .prune_review_archive(&ctx.agent_id, ARCHIVE_RETENTION_SECS)
+            .await
+        {
+            Ok(n) if n > 0 => {
+                tracing::info!(pruned = n, "note_review: aged out governance verdicts")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "note_review: archive prune failed"),
+        }
+
         Ok(ctx)
     }
 }
+
+/// How long a decided governance verdict stays readable: 90 days.
+///
+/// Long enough that "why was this rejected?" is answerable across the months a
+/// user actually asks it in, short enough that the table cannot become the
+/// largest thing in the database. `insights` shows the most recent handful; the
+/// retention window is what stands behind it.
+const ARCHIVE_RETENTION_SECS: i64 = 90 * 24 * 3600;
 
 const REVIEW_SYSTEM: &str = "You are a memory governance reviewer. A candidate note was deferred \
     to review because it was low-confidence, high-severity, or contradicts existing knowledge. \

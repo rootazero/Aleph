@@ -8,7 +8,17 @@ use crate::error::{AlephError, Result};
 use crate::memory::notes::store::NoteStore;
 
 use super::args::{NoteManageArgs, NoteManageResult};
+use super::helpers::bound_chars;
 use super::NoteManageTool;
+
+/// How many recent governance verdicts `insights` surfaces. The archive is a
+/// retained log, not a feed; the model wants "what did the gate just do", and
+/// an unbounded dump of it would crowd out the graph half of this action.
+const REVIEW_ARCHIVE_PREVIEW: usize = 10;
+
+/// Per-verdict candidate-payload cap. The stored JSON is a whole note
+/// candidate; ten of them at full width is a context flood.
+const REVIEW_ARCHIVE_CANDIDATE_CHARS: usize = 400;
 
 impl NoteManageTool {
     /// Read materialized knowledge-graph health insights for the agent: knowledge
@@ -35,10 +45,44 @@ impl NoteManageTool {
                 content.push_str(&format!("## {kind}\n```json\n{payload}\n```\n\n"));
             }
         }
+
+        // Governance verdicts. `notes_review_archive` is where the admission
+        // gate parks every decided candidate, and for `rejected` rows it is the
+        // *only* place the proposal survives — the note was never written. The
+        // table had no reader anywhere in the repo, so "the knowledge is
+        // preserved" was true about bytes and false about anyone's ability to
+        // reach them. Best-effort: the graph half of this action must still
+        // answer if the archive read fails.
+        let verdicts = self
+            .indexer
+            .store()
+            .list_review_archive(agent_id, REVIEW_ARCHIVE_PREVIEW)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "insights: review-archive read failed");
+                Vec::new()
+            });
+        if !verdicts.is_empty() {
+            content.push_str("## governance_verdicts\n\n");
+            for v in &verdicts {
+                content.push_str(&format!(
+                    "- **{}** — {} · candidate: {}\n",
+                    v.final_status,
+                    v.reason,
+                    bound_chars(&v.candidate_json, REVIEW_ARCHIVE_CANDIDATE_CHARS),
+                ));
+            }
+            content.push('\n');
+        }
+
         Ok(NoteManageResult {
             related_notes: None,
             success: true,
-            message: format!("Graph insights ({} kinds)", rows.len()),
+            message: format!(
+                "Graph insights ({} kinds), {} recent governance verdict(s)",
+                rows.len(),
+                verdicts.len()
+            ),
             destination: None,
             note_path: None,
             content: Some(content),
