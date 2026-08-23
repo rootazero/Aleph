@@ -349,6 +349,10 @@ prune-the-prompt 是 R7（LLM 主权）/ R9（智慧在 Prompt）/ R10（薄 Har
 
 **第五课：对一个「everything is a plugin」的 harness 做完 10 维对照，落点依旧全在循环之外（2026-08-15，deepseek-harness/Cordis）**。dsh 是与 Aleph 立场相反的极端——模型、工具、会话、循环本身全是可热替换的插件，配 33 份子系统文档 + postmortem 库 + 包自有运行时不变量注册表。10 个维度扫描、13 项对抗验证、11 项实施之后：**`src/harness/` 增删 0 行，第五次**。落点分布再次复读第四课的结论：panic 遏制在工具派发咽喉、取消抑制在 subagent settle、压缩括号在 context 层、终局帧在 clarification、耐久回执在 orchestrator callback、死键扫描在 config/diagnostics、权限纪律在 utils/media/result_store、census 在 gateway 测试域。插件架构本身（及其 capability-seam 三角、invariant registry）被记为 DEFER——**对照的产出从来不是「把参考项目的形状搬来」，而是「它的失效知识在我们的形状里住在哪」**（dsh 的 defensive-patterns 六条里有两条直接换来了本轮的 P2 修复）。逐项见 FEATURE_LOCATOR §3.1 Round 8。
 
+**第六课：连续五次「零增删」之后，第六次净增 99 行——而真正的教训是关于闸，不是关于行数（2026-08-23，harness 自查轮）**。前五轮的共同形状是「拿一个参考 harness 的能力清单逐条对照，落点全在循环之外」；本轮**没有参考项目**（deepseek-harness 本机不可达，且 Round 8 的不移植裁定仍然成立），改用本仓自己的判据清单扫 12 文件及其接缝。差别是结构性的：**对照轮找到的是"我们缺什么能力"，而能力几乎总能装在循环之外；自查轮找到的是"脚手架自己坏在哪"，而脚手架的缺陷只能在脚手架里修**。四笔增长（`agent/guardrails.rs` +44 守卫 Block 的终局记账收敛 · `agent.rs` +37 退出臂不再让失败冒充取消、并给续跑闸加上"这个 Done 是谁选的" · `trace.rs` +9 新增 `Failed` 变体 · `agent/act.rs` +9 把一份自相矛盾的 doc 标成历史）逐条过了 R10 三问，**逐文件账目以 `budget.rs::CEILING` 为准，这里只是它的索引**。
+
+所以「`src/harness/` 增删 0 行」从来不是目标，它是**结论**——把它当目标就会开始把该在循环里的修复挤到别处去，那正是 R10 第 1 问要防的反面。真正该记住的是同轮 ① 那件事：`CEILING` 在前一天被设成 `实测 + 1024`，理由写着"给下一个 PR 留点余量"。**那一天起，「零增删」这句话本身也不再是可证的**——闸离开实测值之后就不会红，于是它对 1018 行以内的任何增长都说不出话。一条只减不增的红线，它的健康度不是"有没有被触发过"，是"它离实测值有多远"。
+
 ---
 
 ## 9. 参考文献

@@ -553,7 +553,79 @@ const BUDGETED: [&str; 12] = [
 ///     agent hits on every turn, `agent/act.rs` is the tool-dispatch layer,
 ///     `chain_context.rs` is the Panel reasoning feed, and the rest is
 ///     glue that the doctor check inspects.
-const CEILING: usize = 6152;
+/// −919 (6152 → 5233, 2026-08-23 harness self-audit): **the ratchet had been
+///     disarmed, deliberately.** The 2026-08-22 entry above set `CEILING` to
+///     `measured + 1024` and called the gap "headroom … so the next adjacent PR
+///     doesn't trip the ratchet", then asserted "the budget is still a hard
+///     cap, not a soft floor". Those two sentences cannot both be true: a cap
+///     standing 1024 lines above the measurement is exactly a soft floor, and
+///     `src/harness/CLAUDE.md` spends a whole paragraph on this failure mode —
+///     "棘轮只在它贴着实测值时才是棘轮；离开实测值它就退化成一个宽松的上限" —
+///     after catching it in 2026-08-06 (there called "the third kind of
+///     drift": measurement, docs, and the gate itself). This is the fourth,
+///     and the first that was granted rather than accumulated: R10's line
+///     redline permitted ~20% silent growth for a day.
+///     Measured at the branch point: **5134**, i.e. 1018 lines of free
+///     allowance nobody had spent yet.
+///
+///     Of the −919, **+99 is this round's real cost** (5134 → 5233) and the
+///     rest is the allowance going back. Per-file: `agent/guardrails.rs`
+///     +44, `agent.rs` +37, `trace.rs` +9, `agent/act.rs` +9.
+///
+///     +44 `agent/guardrails.rs` — `settle_blocked_call`, the single terminal
+///     path for `ToolCallGuardOutcome::Block`. Both callers (`act`'s serial
+///     loop and `act_parallel`'s PASS 0) treat that value as "the guardrail
+///     already emitted ToolError + trace"; the bookkeeping hung off the
+///     `GuardrailDecision::Block` arm alone, so the **second** producer of the
+///     same outcome — the fail-closed sanitize-reparse path — returned a bare
+///     `Block` that emitted no `SessionEvent::ToolError` (orphaned `tool_use`
+///     ⇒ next `build_prompt` drops the whole assistant turn), no
+///     `on_tool_call_done` (a permanently "running" tool card), and no
+///     timeline entry (absent from `RunSummary.tool_summaries`). This is the
+///     same defect Round 7 paid +13 here to fix for the sibling arm; only one
+///     of the two producers was counted then.
+///     Three questions: (1) **scaffolding** — it records that a call resolved,
+///     it decides nothing; (2) **yes after a model upgrade** — a requested
+///     tool call needing a matching result is a provider protocol invariant;
+///     (3) **four real consumers** — the prompt builder's `tool_use`↔result
+///     pairing, the broadcast stream's ToolStart↔ToolEnd symmetry,
+///     `RunSummary.tool_summaries`, and the `tool_signal_sink`.
+///
+///     +37 `agent.rs` / +9 `trace.rs` — `LoopTraceSessionOutcome::Failed` and
+///     the exit arm that produces it. The old arm computed
+///     `HarnessError::class()` and fanned all four `ErrorClass` variants into
+///     `Cancelled` (under `#[allow(clippy::match_same_arms)]`), so a provider
+///     auth failure rendered on every trace surface as
+///     `AgentTracePresentationStatus::Info` labelled "cancelled" — softer than
+///     a `HitLimit` cap, and indistinguishable from the user pressing stop,
+///     while the session log right beside it said `RunOutcome::Errored`. The
+///     same arm's blanket `set_terminate_reason(Cancelled)` also overwrote
+///     causes the loop had already recorded — `ReactiveCompactExhausted` is
+///     set by `RescueHost::mark_rescue_exhausted` and then returned as the
+///     error that lands in exactly that arm, so the variant whose doc says it
+///     exists to stop the `CompactAndRetry` path "leaking into
+///     `HarnessError::Llm`" never survived to a reader. Part of the +37 is the
+///     `!self.hit_limit()` clause on the follow-up continuation: a `Done`
+///     carrying `hit_limit` comes from the verifier `Halt` path, whose verdict
+///     doc says "the harness MUST exit immediately" and whose
+///     `TerminateReason::StopHookHalt` doc says "the loop ends immediately …
+///     a permanent stop signal from policy" — and a steering message that
+///     happened to land during the halted turn resumed it anyway.
+///     Three questions: (1) **scaffolding** — reporting which of two things
+///     happened, and obeying an already-made policy decision; neither judges
+///     completion; (2) **yes after a model upgrade** — "the provider rejected
+///     our key" and "the user pressed stop" stay different events; (3) **three
+///     real consumers** — `trace_presentation` (Panel + TUI share it),
+///     `task_traces` persistence, and the trace payload's `terminate_reason`.
+///
+///     +9 `agent/act.rs` is documentation only: `emit_deferred_tool_results`
+///     carried two contradictory descriptions 15 lines apart. The outer doc
+///     asserted the function emits `ToolError` "NOT … a `ToolResult`" and
+///     cited a review id (H4) as authority; the code, the comment inside the
+///     loop, and three tests in `tests/act.rs` all pin `ToolResult`. The
+///     paragraph is kept as history, marked as such, so the next reader does
+///     not "restore" a model-visible shape three tests are holding down.
+const CEILING: usize = 5233;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
