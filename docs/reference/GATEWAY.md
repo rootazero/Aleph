@@ -608,9 +608,19 @@ for as long as `busy_queue_max_wait_secs`. Waiting now has two halves, split
 the same way `agent_trace` (lossy live mirror) and `RunSummary` (authority)
 already are: the live half is the best-effort `StreamEvent::RunQueued{run_id,
 session_key, ahead}`; the authoritative half is `chat.history`'s `pending[]`
-array (`aleph_protocol::queue::PendingRun`), which a client that attaches
-mid-wait reads instead, since it never received the frame. `ahead` comes from
-`TicketGuard::ahead()`, which counts the same way `snapshot()`'s
+array (`aleph_protocol::queue::PendingRun`), which carries the lane
+truthfully — but **no client renders it today**. `active_run` and `pending[]`
+are disjoint by construction: `try_claim` calls `busy_queue::mark_admitted`
+in the same step that populates `active_run`, which withdraws the ticket
+from the lane, so a run that is `active_run` has already left `pending[]`,
+and a run still in `pending[]` is never `active_run`. A returning client has
+no way to identify which queued entry (if any) is its own from `pending[]`
+alone, either — the entries carry neither an author nor the message payload
+(deliberate non-goals, see the design doc's §7). The live
+`StreamEvent::RunQueued` frame is currently the only representation of a
+user's own wait that any client renders; wiring an attach-time renderer for
+`pending[]` is a decision recorded separately, not yet made. `ahead` comes
+from `TicketGuard::ahead()`, which counts the same way `snapshot()`'s
 `total_waiting` contract does — a cancelled ticket ahead of you is not a wait
 — and fails **open** to `0` once the ticket has left the lane (withdrawn by
 `mark_admitted`, dropped, or garbage-collected). `0` renders as "about to
