@@ -1463,7 +1463,7 @@ git commit -m "panel: classify failures by the server's error_code, not by keywo
 
 | 站点 | 形状 | 加 `Queued` 后 | 处置 |
 |---|---|---|---|
-| `phone/chat/composer.rs:66` | `matches!(chat.phase.get(), ChatPhase::Thinking \| ChatPhase::Streaming)` | **手机端 composer 在排队期间恢复可发送** | **改成 `.is_busy()`** |
+| `phone/chat/composer.rs:66` | `matches!(chat.phase.get(), Thinking \| Streaming)` **`\|\| chat.active_run_id.get().is_some()`**（:67） | 这一行**过期但不致命**——第二条臂救了它（`start_assistant_message` 设了 `active_run_id`） | **改成 `.is_busy()`**（见下） |
 | `reasoning.rs:45` | `== ChatPhase::Thinking` | 排队时不脉冲 | 不动（正确） |
 | `messages.rs:360` | `<Show when=… == ChatPhase::Thinking>` | 排队时不显示「思考中」占位 | 不动（正确），排队文案是**并列**的新 `<Show>` |
 | `messages.rs:229` | `let _phase = chat.phase.get();` | 只订阅、丢值 | 不动 |
@@ -1472,7 +1472,9 @@ git commit -m "panel: classify failures by the server's error_code, not by keywo
 
 初稿点名的 `composer/mod.rs` 与 `team_events.rs` **只写不读**，不在此列。
 
-**既然编译器不管，就补一条源码级守卫**（见 Step 3 末尾）：这个 bug 的形状正是「某个面自己手写了一份 busy 谓词、而它列举的变体集合过期了」，而它今天已经真的发生了一次（就是上表第一行）。
+**⚠️ 上面第一行的严重度要说准**（控制器自我更正）：我起初判它「手机端排队期间恢复可发送」，**那是错的**——`running` 是 `matches!(…) || chat.active_run_id.get().is_some()`，而排队中的 run 已经设了 `active_run_id`，所以第二条臂托住了它。真实状况是：**那个 `matches!` 已经过期，只是恰好冗余**。改成 `is_busy()` 是把两个半谓词收敛成一个，不是修一个活着的 bug。
+
+**既然编译器不管，就补一条源码级守卫**（见 Step 3 末尾）。它防的是**下一个**只读 phase 的读者——这一次那个读者恰好还 OR 了 `active_run_id`，下一次不一定。守卫有真实主语（就是上表第一行），不是零消费者抽象。
 
 **Interfaces:**
 - Consumes: 无
@@ -2109,21 +2111,59 @@ pub fn parse_history_pending(result: &Value) -> Vec<PendingRun> {
             pending: parse_history_pending(&result),
 ```
 
-在水化路径（`hydrate_and_follow` 或等价处，即今天消费 `history.active_run` 的那一段）之后加：
+**⚠️ 控制器裁定 R9（初稿的插入点不成立）**：`SessionHistory` 在水化路径上**活不到**能用的地方。实测：
+
+- `components/chat_sidebar.rs::hydrate_session_history` 只返回 `Option<String>`（活跃 run id），整个 `loaded` 在函数内被消费掉，`pending` 出不来。
+- 而 `mark_queued` 被 `active_run_id` 守着，`active_run_id` 是在 **`hydrate_and_follow` 里、hydrate 返回之后**才由 `start_assistant_message` 设上的 —— 所以在 `hydrate_session_history` 内部调 `mark_queued` **恒为 no-op**。
+
+所以：
+
+**9a.** `hydrate_session_history` 的返回类型改成 `(Option<String>, Vec<PendingRun>)`，函数末尾把 `active_run` 换成 `(active_run, loaded.pending)`。它有两个调用者：`hydrate_and_follow`（chat_sidebar.rs:377）与 `platform/phone/chat/history.rs:118` 的 `let _live = …`（丢弃返回值，元组照样绑得上，改一下名字即可）。
+
+**9b.** 同文件加一个模块级小函数（`hydrate_and_follow` 有**两条**会「跟上这条 run」的出口，所以推导只做一次——判据「一个动作有两个终端臂时，公告类副作用要抽成共用函数」）：
 
 ```rust
-        // Restore the queued phase for the run this client is following. Live
-        // clients got here via `RunQueued`; a client that attached mid-wait
-        // has only this. `mark_queued` is already scoped to `active_run_id`,
-        // so a lane entry for a sibling run repaints nothing.
-        if let Some(run) = history.active_run.as_deref() {
-            if let Some(entry) = history.pending.iter().find(|p| p.run_id == run) {
-                chat.mark_queued(run, entry.ahead);
-            }
-        }
+/// Restore the queued phase for a run this client is now following.
+///
+/// Live clients reach it through `RunQueued`; a client that attached mid-wait
+/// never saw those frames — they fired before its socket existed — so the
+/// snapshot it already fetched is the only place the fact survives.
+///
+/// `mark_queued` is scoped to `active_run_id`, so a lane entry for a sibling
+/// run repaints nothing, and replaying the same value is idempotent.
+fn restore_queued_phase(chat: &ChatState, run_id: &str, pending: &[PendingRun]) {
+    if let Some(entry) = pending.iter().find(|p| p.run_id == run_id) {
+        chat.mark_queued(run_id, entry.ahead);
+    }
+}
 ```
 
-> ⚠️ 变量名 `history` / `chat` 与插入位置**以该文件实际水化代码为准**。找到今天读 `active_run` 的那几行，紧跟其后。
+**9c.** `hydrate_and_follow` 改成（只标出改动处）：
+
+```rust
+    let (run_id, pending) =
+        hydrate_session_history(dash, chat, workspace, key.clone(), locale).await;
+    let Some(run_id) = run_id else {
+        return;
+    };
+    // Already following it — our own send bound it, or `run_accepted` did.
+    if sessions.route_lookup(&run_id).is_some() {
+        // `active_run_id` is already set on this path, so the phase can be
+        // restored right here — an early return is still a follow path.
+        restore_queued_phase(&chat, &run_id, &pending);
+        return;
+    }
+```
+
+…以及末尾，**排在 `start_assistant_message` 之后**（那一行才是设 `active_run_id` 的地方，早于它调就是 no-op）：
+
+```rust
+    sessions.bind_run(&run_id, conv, Some(&key));
+    chat.start_assistant_message(&run_id);
+    restore_queued_phase(&chat, &run_id, &pending);
+```
+
+> ⚠️ **手机端不接**：`platform/phone/chat/history.rs` 调的是**裸** `hydrate_session_history`，它本来就不 join 在飞的 run、也不设 `active_run_id`。这是既有的不对称（手机端没有「加入他人正在跑的回合」这个能力），**本轮不扩**——在报告里记一句即可。
 
 - [ ] **Step 4: 跑测试确认它绿**
 
@@ -2144,6 +2184,13 @@ Expected: **RED** —— `pending_is_read_off_the_history_response`。确认后�
 git add interfaces/webchat/src/
 git commit -m "panel: rebuild the queued phase from the attach-time snapshot"
 ```
+
+- [ ] **Step 7: 确认没有第三个水化面漏掉**
+
+```
+grep -rn "hydrate_session_history\|hydrate_and_follow" interfaces/webchat/src --include='*.rs'
+```
+把每个命中分类成「调用者 / 注释提及」，并在报告里说明每个**调用者**拿到 `pending` 没有。已知：`hydrate_and_follow`（接）· `platform/phone/chat/history.rs`（刻意不接，见上）· `project_page.rs` 与 `chat_sidebar.rs` 两处 spawn 的是 `hydrate_and_follow`（白继承）。
 
 ---
 
