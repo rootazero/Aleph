@@ -2331,3 +2331,121 @@ fn the_streamed_flag_is_cleared_when_the_next_run_is_accepted() {
         "the second run's receipt was suppressed by the first run's text: {joined:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Joining a running session, and not stealing somebody else's turn
+// ---------------------------------------------------------------------------
+
+/// Before the server has answered "what is running here", an unheard-of run id
+/// is kept — the posture this screen has always had, and the one an older
+/// gateway (no `active_run` field) leaves it in.
+#[test]
+fn an_unknown_run_is_kept_until_the_server_has_answered() {
+    let state = AppState::new("agent:main:main:s1".into(), "m".into());
+    assert!(
+        state.frame_belongs_here("run-from-somewhere-else"),
+        "\"I cannot tell\" must not read as \"not mine\" before reconciling"
+    );
+}
+
+/// After it has answered, an unheard-of run id can only be somebody else's.
+///
+/// The reachable case is mundane: this terminal starts while another one is
+/// mid-turn on a different session. Its `RunAccepted` was broadcast before this
+/// client connected, so `run_sessions` never learns it is foreign — and every
+/// later frame of that turn (reasoning, tool rows, streamed answer) used to be
+/// rendered into whatever conversation this screen is showing.
+#[test]
+fn a_run_that_started_before_this_screen_connected_is_dropped_once_reconciled() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(None); // server: nothing running on this session
+    assert!(!state.frame_belongs_here("run-started-before-we-connected"));
+}
+
+/// Attaching to a session somebody else is driving joins that turn instead of
+/// watching a transcript that never moves.
+#[test]
+fn attaching_to_a_running_session_adopts_its_run() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some("run-live".into()));
+
+    assert_eq!(state.current_run.as_deref(), Some("run-live"));
+    assert!(
+        state.run_started_at.is_some(),
+        "the working indicator is what tells the user the turn is live"
+    );
+    assert!(state.frame_belongs_here("run-live"));
+    // …and reconciliation still holds for everything else.
+    assert!(!state.frame_belongs_here("run-elsewhere"));
+}
+
+/// The adopted run is recorded by home session, so a `/session` switch away and
+/// back behaves like any other run: dropped while elsewhere, kept on return.
+#[test]
+fn an_adopted_run_follows_its_home_session_across_switches() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some("run-live".into()));
+
+    state.switch_session("agent:main:main:s2");
+    assert!(
+        !state.frame_belongs_here("run-live"),
+        "s1's run must not render into s2"
+    );
+    assert!(
+        state.frame_belongs_here("run-unknown"),
+        "the switch reopens the fail-open window until the caller re-attaches"
+    );
+
+    state.switch_session("agent:main:main:s1");
+    assert!(state.frame_belongs_here("run-live"));
+}
+
+/// `run_sessions` is FIFO-bounded, so a busy install can evict the pair for the
+/// very run this screen is watching. That eviction used to be harmless because
+/// unknown meant "keep"; with reconciliation it would mean "drop", so the
+/// active run is answered before the map is consulted at all.
+#[test]
+fn the_screens_own_run_survives_fifo_eviction() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(Some("run-live".into()));
+
+    for i in 0..(super::events::RUN_SESSION_CAP + 8) {
+        state.handle_gateway_event(StreamEvent::RunAccepted {
+            run_id: format!("noise-{i}"),
+            session_key: "agent:main:main:other".into(),
+            accepted_at: String::new(),
+        });
+    }
+
+    assert!(
+        state.frame_belongs_here("run-live"),
+        "the one turn the user is watching was evicted out of its own transcript"
+    );
+}
+
+/// Reconciliation must not blind this screen to `RunAccepted` itself.
+///
+/// That frame is the only thing that ever teaches `run_sessions` where a run
+/// lives. Guarding it once the guard can answer "not mine" would drop the
+/// teaching frame, and the run would stay unknown forever — so a later
+/// `/session` switch onto its actual session could not recognise it either.
+#[test]
+fn a_foreign_run_is_still_learned_after_reconciling() {
+    let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
+    state.adopt_active_run(None);
+
+    state.handle_gateway_event(StreamEvent::RunAccepted {
+        run_id: "run-elsewhere".into(),
+        session_key: "agent:main:main:s2".into(),
+        accepted_at: String::new(),
+    });
+    assert_eq!(
+        state.current_run, None,
+        "a foreign run must not become this screen's run"
+    );
+    assert!(!state.frame_belongs_here("run-elsewhere"));
+
+    // Learned, not merely dropped: switching to its home session picks it up.
+    state.switch_session("agent:main:main:s2");
+    assert!(state.frame_belongs_here("run-elsewhere"));
+}
