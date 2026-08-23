@@ -132,11 +132,9 @@ pub struct AgentHarness {
     /// `CompactAndRetry` verdict it calls `context_compactor` and retries
     /// the LLM call, at most `MAX_REACTIVE_COMPACT_ATTEMPTS` times per run
     /// (defined in `context::compact::rescue` — currently 2). The atomic is
-    /// bumped *before* the rescue
-    /// attempt so concurrent paths cannot race past the cap. Repeated
-    /// overflows after
-    /// summarisation indicate fundamentally oversized input rather than a
-    /// recoverable burst. R10-safe: pure round scheduling, no policy choice.
+    /// bumped *before* the attempt so concurrent paths cannot race the cap.
+    /// Repeated overflows after summarisation indicate fundamentally
+    /// oversized input. R10-safe: pure round scheduling, no policy choice.
     pub(super) reactive_compact_attempts: AtomicU32,
     /// Seq of the last persisted event covered by the most recent turn's
     /// prompt (captured in `think.rs` right after `get_events`, before that
