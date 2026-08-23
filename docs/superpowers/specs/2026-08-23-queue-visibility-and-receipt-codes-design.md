@@ -187,7 +187,7 @@ if last_reported != Some(ahead) {
 pub enum ChatPhase { Idle, Thinking, Streaming, Error, Queued { ahead: u16 } }
 ```
 
-仍是 `Copy`/`PartialEq`/`Eq`。⚠️ **这里最初想按穷尽 `match` 设计，核实后发现前提不成立**：全 crate 只有 **12 个**读写站点（7 写 + 5 读），且**没有一处是穷尽 `match`**——每个读者都是 `==`、`matches!`，或干脆丢弃返回值。这意味着**加一个变体不是编译错误**：手机端 `composer.rs:66` 的 `matches!(…, Thinking | Streaming)` 正是这样漏掉 `Queued` 的——写下那天完全正确，`Queued` 这个第三种忙态出现的那一刻起悄悄错了，代价是排队期间手机 composer 又肯发一次。
+仍是 `Copy`/`PartialEq`/`Eq`。⚠️ **这里最初想按穷尽 `match` 设计，核实后发现前提不成立**：`state.rs` **之外**只有 **12 个**读写站点（7 写 + 5 读）——`state.rs` 自己还持有额外的写站点（`start_assistant_message` / `mark_queued` / `mark_admitted` / `begin_step` 等每一个改相位的方法各一个 `self.phase.set(...)`），这 12 个不是全 crate 的数。且这些站点**没有一处是穷尽 `match`**——每个读者都是 `==`、`matches!`，或干脆丢弃返回值。这意味着**加一个变体不是编译错误**：手机端 `composer.rs:66` 的 `matches!(…, Thinking | Streaming)` 正是这样漏掉 `Queued` 的——写下那天完全正确，`Queued` 这个第三种忙态出现的那一刻起悄悄错了，代价是排队期间手机 composer 又肯发一次。
 
 真正让"是不是 busy"只有一处答案的，不是编译器而是**一个谓词 + 一条源码级守卫**：`ChatPhase::is_busy()`（`matches!(self, Queued{..} | Thinking | Streaming)`）是唯一允许判定忙态的地方，所有 surface 都必须问它；守卫 `no_surface_enumerates_the_busy_phases_by_hand` 按**规则而非名单**抓违规——一行 `matches!(` 里出现两个及以上 `ChatPhase::` 就判定为内联忙态集合，唯一豁免的正是 `is_busy` 自身，单变体的 `matches!`（问"是不是这一个特定阶段"，`==` 对 `Queued { .. }` 表达不了这一问）不算违规。**加一个变体不会让编译器点名任何读者**——读者要不要跟上新变体，靠这条守卫在下次改动时抓，不是靠类型系统。
 
@@ -277,7 +277,7 @@ platform/wide/views/chat/state.rs (3088)
 - `deliver_with_ticket` 只在 `ahead` **真变化**时上报（去重），且不因 `wake_fallback_secs` 兜底 tick 重复上报
 - 空闲会话路径**一次 `report` 都不调**（守住「常见路径逐字节不变」）
 - `ReceiptCode` 两侧对账：服务端 `ReceiptKind::code()` 的码集 == 协议表；Panel `from_wire_code` 对协议表**每一个**码都有非 `Unknown` 的映射（**期望值从协议类型派生，不写字面量清单**）
-- `ChatPhase` 穷尽 match（编译期）
+- 源码级守卫 `no_surface_enumerates_the_busy_phases_by_hand`：一行 `matches!(` 里出现两个及以上 `ChatPhase::` 判违规（规则而非名单，唯一豁免是 `is_busy` 自身）——**不是**编译期穷尽 `match`，`ChatPhase` 在 crate 里没有一处那样的写法，见 §3.6「核实后发现前提不成立」的订正
 
 ### 6.2 变异证伪（判据：没被证伪过的守卫不算守卫）
 
@@ -333,7 +333,7 @@ cargo clippy --all-targets
 
 | 风险 | 缓解 |
 |---|---|
-| `ChatPhase` 加变体触及 6 个读者 | 编译器穷尽 match，无法静默漏掉；每处都要显式回答「Queued 算不算 busy」 |
+| `ChatPhase` 加变体触及 6 个读者 | **不是**编译器穷尽 match（§3.6 核实后已订正：crate 里没有一处那样的写法）——真正的缓解是源码级守卫 `no_surface_enumerates_the_busy_phases_by_hand`，按规则而非名单抓「一行 `matches!(` 里出现两个及以上 `ChatPhase::`」，逼每处显式回答「Queued 算不算 busy」，唯一豁免是 `is_busy` 自身 |
 | `deliver_with_ticket` 新增参数触及 2 个生产调用点 + 测试 | 必填参数（不给默认值）——编译错误强于登记表 |
 | `RunQueued` 帧在 fan-out 装饰器里被误处理 | **已逐个核实（2026-08-23）**，四个装饰器无一需要新逻辑：<br>· `redacting.rs` **穷尽无通配**（line 81 的注释逐字说明这是有意的：「Every arm is explicit rather than a catch-all `_ => event`, so a NEW …」）⇒ 加变体是**编译错误**，逼一次显式决定；新变体进 line 241 的 pass-through 臂（排队帧无正文可脱敏）<br>· `origin_fanout.rs:111` `_ => None` —— 只从 `RunComplete` 抽终局答案，排队帧天然不扇出到 Telegram/Slack ✓<br>· `team_fanout.rs:202` `_ => {}` —— 排队 run 没有群聊气泡 ✓<br>· `instant_buffer.rs:192` `_ => InstantOutcome::Forward` —— 原样转发 ✓ |
 | 位置上报刷屏（车道深 32、频繁变动） | 去重（只在真变化时报）+ 会话级车道上限 32 ⇒ 单会话上限 32 次；帧本身 best-effort |
