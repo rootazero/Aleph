@@ -284,15 +284,24 @@ impl AgentHarness {
         Ok(executed_count)
     }
 
-    /// Emit a synthetic `ToolError` for each tool call the
-    /// cooperative steer checkpoint skipped. Every `tool_use` block in the
-    /// turn's `AssistantMessage` must have a matching `tool_result` or the
-    /// provider rejects the next request, so a skipped call still gets a
-    /// result — but as `ToolError` (rendered `is_error: true`), NOT as a
-    /// `ToolResult` whose JSON body the model could misread as a successful
-    /// return. The previous `ToolResult` shape (`{"deferred": true, ...}`)
-    /// let the model treat the call as completed and reason over the marker
-    /// as if it were real output (H4 in review/harness-statics).
+    /// Emit a synthetic `ToolResult` for each tool call the cooperative steer
+    /// checkpoint skipped. Every `tool_use` block in the turn's
+    /// `AssistantMessage` must have a matching `tool_result` or the provider
+    /// rejects the next request, so a skipped call still gets a result — one
+    /// whose body says, in the only channel the model reads, that the call did
+    /// not run: `{"deferred": true, "reason": …, "tool": …}`.
+    ///
+    /// ⚠️ This doc used to assert the opposite ("as `ToolError` … NOT as a
+    /// `ToolResult`", citing H4 in review/harness-statics) while the code, the
+    /// comment inside the loop, and three tests in `tests/act.rs`
+    /// (`deferred_results_emit_one_tool_result_per_skipped_call` and the two
+    /// steer-checkpoint counters) all pinned `ToolResult`. The H4 direction was
+    /// never the shipped behaviour; the paragraph is kept here — as history,
+    /// not as a contract — so the next reader does not "restore" it and flip a
+    /// model-visible shape three tests are holding down. The reasoning for the
+    /// shipped choice is in the loop body: neither "succeeded" nor "the tool
+    /// failed" is true of a deferred call, so the marker states the third thing
+    /// explicitly rather than picking the less-wrong lie.
     ///
     /// R10-safe: pure mechanical bookkeeping. Whether a deferred call is
     /// re-run is the model's decision next Think, not the harness's.
