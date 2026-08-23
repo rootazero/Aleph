@@ -221,17 +221,27 @@ pub enum ReceiptKind {
 impl ReceiptKind {
     /// Stable wire code carried on `StreamEvent::RunError.error_code`.
     /// Clients may switch on it, so these strings are API — do not rename.
+    ///
+    /// The spellings live in `aleph_protocol::receipt::ReceiptCode`, which the
+    /// Panel also reads, so the two sides cannot drift into two taxonomies.
     #[must_use]
     pub const fn code(self) -> &'static str {
+        self.protocol_code().as_wire()
+    }
+
+    /// This bucket as the shared protocol type.
+    #[must_use]
+    pub const fn protocol_code(self) -> aleph_protocol::receipt::ReceiptCode {
+        use aleph_protocol::receipt::ReceiptCode as C;
         match self {
-            Self::Timeout => "TIMEOUT",
-            Self::Cancelled => "CANCELLED",
-            Self::AgentBusy => "AGENT_BUSY",
-            Self::RateLimited => "RATE_LIMITED",
-            Self::Auth => "AUTH",
-            Self::Unreachable => "PROVIDERS_UNREACHABLE",
-            Self::Failed => "FAILED",
-            Self::SpendExhausted { .. } => "SPEND_EXHAUSTED",
+            Self::Timeout => C::Timeout,
+            Self::Cancelled => C::Cancelled,
+            Self::AgentBusy => C::AgentBusy,
+            Self::RateLimited => C::RateLimited,
+            Self::Auth => C::Auth,
+            Self::Unreachable => C::ProvidersUnreachable,
+            Self::Failed => C::Failed,
+            Self::SpendExhausted { .. } => C::SpendExhausted,
         }
     }
 
@@ -1168,5 +1178,39 @@ mod tests {
             t(Msg::ClarifyReplyPickOne, Locale::En)
         );
         assert_eq!(Locale::from_config(None), Locale::Zh);
+    }
+
+    /// Server-side reconciliation: every protocol bucket must be reachable
+    /// from some `ReceiptKind`, and every `ReceiptKind` must map to one. A
+    /// literal list here would be the same enumeration bug one level up, so
+    /// the expectation is derived from `ReceiptCode::ALL`.
+    #[test]
+    fn every_protocol_receipt_code_is_produced_by_some_kind() {
+        use aleph_protocol::receipt::ReceiptCode;
+        use std::collections::HashSet;
+
+        let produced: HashSet<ReceiptCode> = [
+            ReceiptKind::Timeout,
+            ReceiptKind::Cancelled,
+            ReceiptKind::AgentBusy,
+            ReceiptKind::RateLimited,
+            ReceiptKind::Auth,
+            ReceiptKind::Unreachable,
+            ReceiptKind::Failed,
+            ReceiptKind::SpendExhausted {
+                limit: Limit::Total,
+                reset_ms: 0,
+            },
+        ]
+        .into_iter()
+        .map(ReceiptKind::protocol_code)
+        .collect();
+
+        let expected: HashSet<ReceiptCode> = ReceiptCode::ALL.iter().copied().collect();
+        assert_eq!(
+            produced, expected,
+            "a protocol bucket with no producing ReceiptKind is unreachable; \
+             a ReceiptKind with no bucket cannot be rendered by any client"
+        );
     }
 }
