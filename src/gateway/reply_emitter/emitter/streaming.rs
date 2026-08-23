@@ -704,7 +704,10 @@ impl EventEmitter for ReplyEmitter {
             // transient Panel status line; channels already signal liveness
             // via typing indicators and would render it as message spam.
             // RunQueued is the same kind of transient status — a channel has
-            // no lane concept to report on, and Task 3 wires its consumers.
+            // no lane concept to report on. Deliberately unwired here: it is
+            // the same shape as approval waits only reaching the grant
+            // surface, never the waiting one, and belongs with that fix
+            // rather than a half-measure in this file.
             StreamEvent::RunAccepted { .. }
             | StreamEvent::RunQueued { .. }
             | StreamEvent::ToolUpdate { .. }

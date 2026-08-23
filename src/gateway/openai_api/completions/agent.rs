@@ -177,8 +177,9 @@ impl EventEmitter for SseEventEmitter {
             StreamEvent::AgentTrace { .. } => None,
             StreamEvent::RunAccepted { .. } => None,
             // The OpenAI Chat Completions wire format has no queueing
-            // concept, and this task only makes the frame representable —
-            // Task 3 wires an actual producer.
+            // concept, so a queued run produces no chunk on this surface —
+            // deliberate suppression, not a missing producer. Panel is the
+            // one client that renders this frame today (`ChatPhase::Queued`).
             StreamEvent::RunQueued { .. } => None,
             StreamEvent::AskUser { .. } => None,
             StreamEvent::UncertaintySignal { .. } => None,

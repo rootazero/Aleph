@@ -292,11 +292,12 @@ impl AppState {
                 Action::None
             }
 
-            // Wire representation only as of this change — no gateway path
-            // emits it yet (that lands separately), and this screen has
-            // nothing to render for "waiting" until that producer exists.
-            // Exhaustiveness still requires an arm the moment the variant
-            // exists, per `run_scoped_id`'s doc above.
+            // The gateway does emit this frame (`busy_queue::deliver_with_
+            // ticket`'s `report(ahead)`) — Panel renders it as a queued
+            // phase. This screen has no equivalent "waiting" presentation
+            // yet, so the frame is a no-op here rather than unreachable.
+            // Exhaustiveness still requires an arm for the variant, per
+            // `run_scoped_id`'s doc above.
             StreamEvent::RunQueued { .. } => Action::None,
 
             StreamEvent::AgentTrace { event, .. } => {
