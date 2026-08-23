@@ -95,16 +95,17 @@ jobs:
     # for *this* failure (it is still worth keeping: the integration step spends
     # ~57 GB, so without it that step would bottom out near 16 GB).
     #
-    # 723 MiB on a 16 GB runner is not comfortable, and six samples in a row
-    # under 1.3 GB is a sustained phase rather than one unlucky spike. `debug: 0`
-    # for dependencies is the last lever that costs nothing — it is strictly
-    # less work than `line-tables-only`, and the frames we actually read
-    # backtraces for are in alephcore, which keeps its line tables via the
-    # separate `test` profile below. If a later run still dips near ~700 MiB,
-    # the next lever is `-j3`/`-j2` on Linux, and that one does cost wall time;
-    # the Lint job has already measured that road (OOM at the default -j4).
+    # Dropping dependencies to `debug: 0` was then tried and measured to change
+    # nothing: floor 708 MiB against 723, and 29m09s against 28m00s. So the low
+    # point is not debuginfo — the win was full -> line-tables, and what remains
+    # there is the compiler's own working set. It is back at `line-tables-only`,
+    # because `0` bought no memory and no time while costing line numbers in
+    # dependency frames.
+    #
+    # That leaves ~710 MiB of headroom on a 16 GB runner, reproducible across
+    # two runs. Thin, so parallelism is capped below — see the step.
     env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v6
@@ -113,9 +114,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # ~25 GB of preinstalled SDKs this repo never touches. Cheap, and disk is
-      # one of the two resources that can end this job with exit 143 and no
-      # other output; the sampler below says which one it actually was.
+      # The measured constraint, and the only lever left that moves it. The
+      # floor sat at ~710 MiB across two runs with the debuginfo caps in place,
+      # which is ~4% of the runner — reproducible rather than a coin flip, but
+      # one added dependency from being negative again. `-j3` trades roughly a
+      # quarter of the dependency phase's parallelism for that margin.
+      #
+      # Written as a step and not a matrix expression on purpose: an expression
+      # would have to name a number for macOS and Windows too, and those pass
+      # today on runners with different core counts. This touches Linux only.
+      #
+      # If the sampler shows this bought little, the reading to compare is the
+      # low-water line in this job's log, not the wall clock.
+      - name: Cap build parallelism (Linux)
+        if: runner.os == 'Linux'
+        run: echo "CARGO_BUILD_JOBS=3" >> "$GITHUB_ENV"
+
+      # ~25 GB of preinstalled SDKs this repo never touches. Disk turned out not
+      # to be the constraint here at all (98 GB free through the compile), but
+      # the integration step spends ~57 GB, so this is what keeps *that* step
+      # off the floor.
       - name: Reclaim runner disk (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -426,7 +444,8 @@ jobs:
         run: bash scripts/ci_run_with_resource_log.sh cargo test --features loom --lib
         env:
           LOOM_MAX_PREEMPTIONS: 3
-          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_BUILD_JOBS: "3"
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
           CARGO_PROFILE_TEST_DEBUG: line-tables-only
         timeout-minutes: 30
 
