@@ -281,6 +281,46 @@ Write entry points on `NoteIndexer`:
 - `delete_note(agent_id, category, filename)` — removes the index rows (including any embedding) first, then the markdown file, then notifies orientation. Idempotent: a file already missing on disk is not an error; if the file delete fails after index removal, `full_rebuild` re-indexes the surviving file (self-healing in the safe direction).
 - `rename_note(agent_id, old_title, new_title)` — renames the file, scans every category dir for `[[old_title]]` references, calls `rewrite_wikilinks` on each match, and re-indexes every changed file.
 
+#### Abandoned apply-staging residue (`.tx/`)
+
+`CompoundApplyTx` stages every write under
+`memory/note/{agent}/.tx/{tx_id}/` and cleans that tree in three places: a
+successful commit, a rollback, and the `Drop` impl that covers cancellation.
+All three run **inside the process that staged it**. Kill the server between
+staging and commit — `kill -9`, OOM, power loss — and the tree survives every
+one of them, permanently: for its whole life nothing else in the repo so much as
+named `.tx`. The residue is a full copy of every note the batch was about to
+write, sitting inside the vault the product tells the user to open in Obsidian,
+and it accumulated one tree per unlucky death forever.
+
+`ingest::sweep_tx_residue(memory_dir, agent_id, older_than_secs)` deletes
+staging trees older than the ceiling and returns how many went.
+`full_rebuild_all` calls it once per corpus and reports the total on
+`RebuildAllStats::tx_residue_removed`, which boot logs beside `stale_vectors`:
+a non-zero count means a previous process died mid-ingest, and a count climbing
+across boots means something is killing the server during consolidation.
+
+Three decisions:
+
+- **Boot is the right time and a sufficient one.** Residue exists exactly
+  because a process died holding it, and this pass is the first thing that
+  happens afterwards.
+- **Age threshold, not "delete everything under `.tx`".** A live transaction
+  owns its tree while it works. `memory.compound_ingest.tx_residue_gc_seconds`
+  (default 3,600) is the width of the window an apply may take; an apply takes
+  milliseconds, so that is three orders of magnitude of headroom. The knob was
+  written with this sweep in the original Spec-6 plan and then shipped for its
+  whole life with **zero consumers** — a user-visible setting that did nothing.
+- **A tree whose mtime cannot be read is left alone.** "I could not look" is not
+  evidence of "it is abandoned", and the other branch deletes — the same rule
+  the vault watcher applies to its own stat failures (§6.4).
+
+The sweep is deliberately scoped to `.tx` only. Orphaned `.aleph_atomic_*.tmp`
+staging files from a killed atomic write are the same class and are **not**
+swept (they are filtered out of listings by `vault_io` and by the watcher's
+extension check, so they are inert rather than harmful) — stretching a knob
+named `tx_residue` to cover them would be a wider promise than its name makes.
+
 #### Write-time semantic dedup (mem0-style) / 写入期语义去重
 
 The compound ingestor (`DefaultCompoundIngestor::dedup_redirect_creates`) runs an
@@ -363,6 +403,8 @@ There is **no config flag to disable it.** It does not choose a behaviour on the
 | `get_notes_by_category(&self, agent_id, category, limit) -> Result<Vec<NoteIndexEntry>>` | Paginated category listing. |
 | `get_embedding(&self, path, agent_id, dim_hint) -> Result<Option<Vec<f32>>>` | Read back a stored embedding. |
 | `prune_orphan_vectors(&self, agent_id) -> Result<usize>` | Sweep embedding rows whose path has no `notes_index` row (historical deletes); returns the count removed. Called by `full_rebuild` (§6.3). |
+| `list_review_archive(&self, agent_id, limit) -> Result<Vec<ReviewArchiveRow>>` | Most recent governance verdicts, newest first — the consumer half of `archive_review` (§15). |
+| `prune_review_archive(&self, agent_id, older_than_secs) -> Result<usize>` | Age out decided verdicts; returns the count removed. Called by `NoteReviewStage` (§15). |
 
 `NoteIndexEntry` is the lightweight row returned everywhere index metadata is enough:
 
@@ -522,6 +564,7 @@ pub enum NoteManageAction {
     Append,    // extend facts + links (or relations-only) on existing or new note
     Query,     // hybrid (vector + FTS) search across indexed notes
     List,      // list notes, optionally filtered by category
+    Get,       // read ONE note by address — full body, untruncated by ranking
     Delete,    // remove file + index entry
     Rename,    // rename filename/title, rewrite every inbound [[wikilink]], backfill
     Insights,  // read materialized graph-health insights (read-only, §14)
@@ -557,6 +600,37 @@ pub struct NoteRelationArg {
 Mutating actions run `validate_category(category)` directly against `CATEGORY_DIRS` imported from the indexer — single-sourced, so the tool can never drift from the directories the indexer creates (a hand-copied list here once drifted from `CATEGORY_DIRS`, locking the LLM out of `feedback` / `goal-lessons` / `query` notes; a regression test now pins the alignment). Unknown categories are rejected with a listing of valid values. Create and update both run input through `sanitize_title` before the filename is ever joined into a path.
 
 `query` is hybrid search: when an embedder is injected (`with_embedder`, wired from the registry's `config.embedder`), the query text is embedded and `hybrid_search_notes` fuses vector + FTS results via RRF — which also gives CJK queries semantic recall that the unicode61 FTS tokenizer cannot. A missing embedder or a failed embed degrades to the FTS path rather than failing (P7). Every query records `recall_signals` on the dedicated channel `"note_manage"` (independent per-day dedup from the auto-recall channel). Output is budgeted: 4,000 chars per note, 24,000 chars total, with honest `…(+N chars truncated)` markers rather than silent cuts.
+
+`get` reads one note **by address** rather than by rank. Until it existed the
+only body-returning read on this tool was `query`, and `query` caps every hit at
+4,000 chars — while `update` replaces a note's body *wholesale*. The two
+together meant a model asked to edit a long note could only ever see its first
+4,000 chars and would write back what it saw, silently dropping the rest; the
+`…(+N chars truncated)` marker sat inside the very text it was copying forward.
+The Panel never had this problem: `graph.node_detail` reads the same file from
+disk, whole. This action is that capability on the model's face, and the tool
+`DESCRIPTION` now tells the model to `get` before it `update`s.
+
+Three rules `get` does not share with `query`:
+
+- **The address must be unambiguous.** `category` is optional; omitted, the
+  filename is resolved through `find_by_filename`, and a name held by two
+  categories is a refusal that *names both candidates* rather than a first-hit
+  guess. Handing the wrong note to a caller that is about to replace its body is
+  worse than making the caller say which one — the same never-guess rule the
+  wikilink resolver applies to an ambiguous tier (§5.2).
+- **Disk is the answer.** The index row supplies tags and category; the body
+  comes from the markdown file, which is the source of truth. A missing file is
+  reported as missing rather than served as stale metadata.
+- **It is a read, so it carries no `destination`.** That field is a *write*
+  receipt (§D4 acknowledgment contract); stamping one on a read is how a model
+  ends up telling the user something was filed when nothing was written.
+
+Content is capped at `GET_MAX_CHARS` (64,000 — 16× the per-hit `query` cap),
+and when the cap bites the *message* says so as well as the body, because a
+wholesale `update` written from a truncated read is exactly the loss this action
+exists to stop. A note above that ceiling has no paging path through this tool
+(stated gap).
 
 `create` and `update` store `content` verbatim as the note's `body` (via `set_body`, §4) and route through `NoteIndexer::write_note` — atomic write, orientation notification, supersession section. Both, plus `append`, refresh the note's embedding immediately after a successful write (embed-on-write, best-effort — never fails the write), so the note is discoverable by vector search without waiting for a manual `memory.reembed`. `create` additionally surfaces `related_notes` — semantic neighbors via the embedder's vector search, falling back to per-keyword FTS when no embedder is wired — so the model can weave the new note into the wiki via `links` instead of leaving an orphan island. `delete` routes through `NoteIndexer::delete_note` (§6.1): index rows including embedding, file, and orientation in one owned path.
 
@@ -653,6 +727,36 @@ The graph is **materialized offline** by `GraphRecomputeStage` (`src/memory/drea
 **MentionWeaveStage** (`src/memory/dreaming/stages/mention_weave.rs`) is a separate, corpus-scanning consumer — not a reader of the materialized cache above. It sits in the Consolidate pipeline between `NoteWeaveStage` (real links win first) and `NoteDecayStage` (so mention edges count toward `link_weight` the same cycle it runs), and scans every note body for **unlinked mentions** of another note's filename/alias via `src/memory/notes/links/mentions.rs::scan_mentions`: deterministic exact matching (ASCII names require word boundaries on both sides; CJK names match as substrings since CJK text has no word boundaries; a name must be ≥4 ASCII chars or ≥2 CJK chars to qualify, and a name owned by more than one note is dropped wholesale — the same never-guess rule as §5.2), zero LLM. Each cycle **fully replaces** the `relation = 'mention'` edge set (`NoteStore::replace_mention_links`, one transaction) — capped at `MAX_MENTIONS_PER_NOTE = 5` per source note and `MAX_MENTIONS_PER_CYCLE = 200` overall (deterministic truncation over the `(from, to)`-sorted scan output) — inserting rows at `confidence = 0.35` with `resolved_by = 'mention_scan'` and `ON CONFLICT(agent_id, from_note, to_note) DO NOTHING`, so an existing real wikilink or typed relation for the same pair always wins over the soft mention edge.
 
 **Canvas / gateway enrichment.** `graph.query` (`src/gateway/handlers/graph.rs::handle_query_impl`) layers three graph-health signals onto the base node/edge feed before returning: top-3-per-node MinHash similarity edges (`related_edges_between`, surfaced as edge kind `related_similarity`, deduped against real links by undirected pair), `bridge_nodes` (the materialized `bridge` insight, filtered to nodes visible in this response), and `surprising_edges` (the materialized `surprising` insight, both endpoints visible). The panel's galaxy renderer (`interfaces/webchat/src/platform/wide/views/canvas/galaxy_build.rs` + `gl/edges.rs`) maps each edge's `relation`/`kind` string to a render code and tint via `edge_kind_code`/`edge_kind_color`; `mention` and `related_similarity` render at a fixed dim brightness (not confidence-scaled, since they are soft/derived edges rather than authored links), and any edge present in `surprising_edges` overrides its base kind with a bloom-emphasized code regardless of its real relation.
+
+## 15. Governance verdict archive
+
+The admission gate (`memory.compound_ingest.governance_enabled`, default
+`false`) defers a risky `Create` into `notes_review_queue`; `NoteReviewStage`
+adjudicates it next dream cycle and `archive_review` moves the decided row into
+`notes_review_archive` with a final status of `approved` | `rejected` |
+`rewritten` | `timeout` | `max_retries_exceeded`.
+
+That table was **write-only for its whole life** — one `INSERT`, and not one
+`SELECT` anywhere in the repo, tests included. Two things followed from that:
+
+1. **The `rejected` verdict was unreachable.** A rejected candidate's facts are
+   never written to any note, so the archive row *is* the only surviving record
+   of what was proposed and why it was turned down. The ingest path's own
+   comment says a deferred op is fine because "the knowledge is preserved" —
+   which is a claim about a table somebody has to be able to read.
+2. **It grew for the life of the install.** One row per gated candidate, each
+   carrying a full note-candidate payload, with no retention.
+
+Both halves are now closed, and each is owned by the side that caused it:
+
+- `note_manage(action='insights')` appends a `governance_verdicts` section — the
+  10 most recent verdicts, each candidate payload capped at 400 chars. It is
+  best-effort: an archive read failure must not stop the graph-health half of
+  that action from answering.
+- `NoteReviewStage` — the stage that *writes* the rows — prunes verdicts older
+  than 90 days at the end of each pass. Retention living with the producer is
+  what keeps the ceiling from becoming a second fact somebody has to remember to
+  maintain elsewhere.
 
 ## See Also
 
