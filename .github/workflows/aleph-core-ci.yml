@@ -95,15 +95,23 @@ jobs:
     # for *this* failure (it is still worth keeping: the integration step spends
     # ~57 GB, so without it that step would bottom out near 16 GB).
     #
-    # Dropping dependencies to `debug: 0` was then tried and measured to change
-    # nothing: floor 708 MiB against 723, and 29m09s against 28m00s. So the low
-    # point is not debuginfo — the win was full -> line-tables, and what remains
-    # there is the compiler's own working set. It is back at `line-tables-only`,
-    # because `0` bought no memory and no time while costing line numbers in
-    # dependency frames.
+    # Two further levers were then tried and both measured as nothing:
     #
-    # That leaves ~710 MiB of headroom on a 16 GB runner, reproducible across
-    # two runs. Thin, so parallelism is capped below — see the step.
+    #   dev line-tables-only, -j4    floor 723 MiB   28m00s
+    #   dev debug: 0,         -j4    floor 708 MiB   29m09s
+    #   dev line-tables-only, -j3    floor 760 MiB   27m50s
+    #
+    # Neither is here any more. `-j3` costing no wall clock is the tell: had the
+    # build really been running four rustc at the peak, cutting to three would
+    # have been slower. It was dependency-graph-bound, not core-bound, so the
+    # cap did nothing in either direction.
+    #
+    # Which also re-reads the floor itself. ~720 MiB is not a near-miss — it is
+    # where this workload plateaus in every *healthy* run, across three configs.
+    # A near-miss would move. So do not spend wall clock buying margin against
+    # that number; if this dies again the sampler will show a decline rather
+    # than a plateau, and that is a different problem (a bigger runner, or
+    # splitting the job) with different answers.
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -113,22 +121,6 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-
-      # The measured constraint, and the only lever left that moves it. The
-      # floor sat at ~710 MiB across two runs with the debuginfo caps in place,
-      # which is ~4% of the runner — reproducible rather than a coin flip, but
-      # one added dependency from being negative again. `-j3` trades roughly a
-      # quarter of the dependency phase's parallelism for that margin.
-      #
-      # Written as a step and not a matrix expression on purpose: an expression
-      # would have to name a number for macOS and Windows too, and those pass
-      # today on runners with different core counts. This touches Linux only.
-      #
-      # If the sampler shows this bought little, the reading to compare is the
-      # low-water line in this job's log, not the wall clock.
-      - name: Cap build parallelism (Linux)
-        if: runner.os == 'Linux'
-        run: echo "CARGO_BUILD_JOBS=3" >> "$GITHUB_ENV"
 
       # ~25 GB of preinstalled SDKs this repo never touches. Disk turned out not
       # to be the constraint here at all (98 GB free through the compile), but
@@ -444,7 +436,6 @@ jobs:
         run: bash scripts/ci_run_with_resource_log.sh cargo test --features loom --lib
         env:
           LOOM_MAX_PREEMPTIONS: 3
-          CARGO_BUILD_JOBS: "3"
           CARGO_PROFILE_DEV_DEBUG: line-tables-only
           CARGO_PROFILE_TEST_DEBUG: line-tables-only
         timeout-minutes: 30
