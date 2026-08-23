@@ -124,7 +124,11 @@ impl StateDatabase {
     ///
     /// This creates a SQLite database in memory (:memory:) without persisting to disk.
     /// Useful for unit tests that need isolated database instances.
-    #[cfg(test)]
+    /// Also reachable under `test-helpers`: `memory::events::testing` is
+    /// gated on that feature and calls this, so a `cfg(test)`-only gate made
+    /// the integration-test build (`--features test-helpers --test '*'`,
+    /// where `cfg(test)` is false for the lib) fail to compile.
+    #[cfg(any(test, feature = "test-helpers"))]
     pub fn in_memory() -> Result<Self, AlephError> {
         Self::register_sqlite_vec_extension()?;
 
