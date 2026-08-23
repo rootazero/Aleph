@@ -135,6 +135,15 @@ pub struct RebuildAllStats {
     pub total: IndexStats,
     /// `(corpus, error)` for each corpus whose reconcile returned `Err`.
     pub failed: Vec<(String, String)>,
+    /// Abandoned `.tx/{id}` apply-staging trees deleted across every corpus
+    /// (see [`crate::memory::notes::ingest::sweep_tx_residue`]).
+    ///
+    /// Carried on the boot summary for the same reason `stale_vectors` is: the
+    /// only way this number is non-zero is that a previous process died
+    /// mid-ingest, and that is a fact an operator reading one line wants to
+    /// know. A steadily climbing count across boots means something is killing
+    /// the server during memory consolidation.
+    pub tx_residue_removed: usize,
 }
 
 /// What `index_one_file` actually wrote, for the callers that owe the file
@@ -597,7 +606,11 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// would only multiply peak SQLite contention on one connection.
     /// A corpus that fails is recorded and the pass continues: one unreadable
     /// namespace must not decide whether the others get reconciled.
-    pub async fn full_rebuild_all(&self, always_include: &str) -> RebuildAllStats
+    pub async fn full_rebuild_all(
+        &self,
+        always_include: &str,
+        tx_residue_max_age_secs: u64,
+    ) -> RebuildAllStats
     where
         S: 'static,
     {
@@ -617,6 +630,18 @@ impl<S: NoteStore> NoteIndexer<S> {
             } else {
                 self.reconcile_corpus(&corpus).await
             };
+            // Boot is the *only* moment this can matter and the *first* moment
+            // after it happens: `.tx` residue exists exactly because a process
+            // died holding it, and this pass is what that death is followed by.
+            // Deliberately outside the `match` — a corpus whose index reconcile
+            // failed still has a disk to clean, and the two answer different
+            // questions.
+            out.tx_residue_removed += crate::memory::notes::ingest::sweep_tx_residue(
+                &self.memory_dir,
+                &corpus,
+                tx_residue_max_age_secs,
+            )
+            .await;
             match reconciled {
                 Ok(s) => {
                     out.total.indexed += s.indexed;

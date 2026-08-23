@@ -15,6 +15,118 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// Directory name, directly under an agent's note root, that holds one
+/// subdirectory per in-flight apply transaction.
+///
+/// Single source: [`CompoundApplyTx::new`] composes the staging root from it
+/// and [`sweep_tx_residue`] enumerates by it. Two literals here is how a
+/// sweeper ends up scanning a directory nothing writes to.
+pub const TX_DIR: &str = ".tx";
+
+/// Delete `.tx/{id}` staging trees left behind by an apply that never reached
+/// commit, rollback, or `Drop`. Returns how many were removed.
+///
+/// **Why this has to exist.** The transaction cleans up in three places — a
+/// successful commit, a rollback, and the `Drop` impl that covers cancellation
+/// — and all three run *inside the process that created the tree*. Kill the
+/// server between staging and commit (`kill -9`, OOM, power loss) and the tree
+/// survives every one of them, permanently: nothing else in the repo so much as
+/// names `.tx`. The residue is a full copy of every note the batch was about to
+/// write, sitting inside the vault the product tells the user to open in
+/// Obsidian, and it accumulates one tree per unlucky death forever.
+///
+/// **Why an age threshold rather than "delete everything".** A live transaction
+/// owns its tree while it works, and this sweep can run alongside one (boot
+/// races nothing today, but a future nightly caller would). `older_than_secs`
+/// is the width of the window a transaction is allowed to take; an apply
+/// finishes in milliseconds, so the default hour is three orders of magnitude
+/// of headroom. A tree whose mtime cannot be read is **left alone** — "I could
+/// not look" is not evidence of "it is abandoned", and the other branch
+/// deletes. Same rule the vault watcher applies to its own stat failures.
+///
+/// Best-effort throughout: every failure is a named warning and the sweep
+/// continues, because a residue tree that survives one boot is a disk cost, and
+/// a sweep that aborts the pass around it is an index cost.
+pub async fn sweep_tx_residue(
+    memory_dir: &std::path::Path,
+    agent_id: &str,
+    older_than_secs: u64,
+) -> usize {
+    let tx_root = memory_dir.join(agent_id).join(TX_DIR);
+    let mut entries = match tokio::fs::read_dir(&tx_root).await {
+        Ok(e) => e,
+        // No `.tx` directory is the normal state — this agent has either never
+        // ingested or never died mid-apply. Not an error, not worth a log line.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                tx_root = %tx_root.display(),
+                "tx residue sweep: cannot read staging root"
+            );
+            return 0;
+        }
+    };
+
+    let cutoff = std::time::Duration::from_secs(older_than_secs);
+    let mut removed = 0usize;
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(e)) => e,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    tx_root = %tx_root.display(),
+                    "tx residue sweep: staging root iteration failed"
+                );
+                break;
+            }
+        };
+        let path = entry.path();
+        let Ok(meta) = entry.metadata().await else {
+            tracing::warn!(
+                path = %path.display(),
+                "tx residue sweep: cannot stat staging tree; leaving it"
+            );
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        // `modified()` is unsupported on a handful of exotic filesystems; the
+        // fail-safe direction is to keep the tree, not to delete something
+        // whose age is unknown.
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(age) = modified.elapsed() else {
+            // Clock moved backwards, or the tree is stamped in the future.
+            // Either way its age is not a number we can act on.
+            continue;
+        };
+        if age < cutoff {
+            continue;
+        }
+        match tokio::fs::remove_dir_all(&path).await {
+            Ok(()) => {
+                removed += 1;
+                tracing::info!(
+                    path = %path.display(),
+                    age_secs = age.as_secs(),
+                    "tx residue sweep: removed abandoned staging tree"
+                );
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "tx residue sweep: removal failed"
+            ),
+        }
+    }
+    removed
+}
+
 /// C2.8 origin tagging: ensure every fact line carries an inline provenance
 /// marker. If the LLM already emitted one (matching the canonical regex),
 /// pass through unchanged; otherwise append a permissive
@@ -91,7 +203,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
     ) -> Self {
         let memory_dir = memory_dir.into();
         let tx_id = Uuid::new_v4().to_string();
-        let tx_root = memory_dir.join(agent_id).join(".tx").join(&tx_id);
+        let tx_root = memory_dir.join(agent_id).join(TX_DIR).join(&tx_id);
         Self {
             indexer,
             store,
@@ -1154,6 +1266,121 @@ mod tests {
                 .any(|p| p.origin == ProvenanceOrigin::Legacy),
             "no fact should fall through to Legacy after stamping, got {:?}",
             n.fact_provenance
+        );
+    }
+}
+
+#[cfg(test)]
+mod residue_tests {
+    use super::{sweep_tx_residue, TX_DIR};
+    use std::time::{Duration, SystemTime};
+
+    /// Backdate a directory's mtime so the sweep sees it as abandoned. Uses
+    /// `filetime` on the directory itself — the sweep reads `metadata.modified`
+    /// of the tree root, which is what a real orphan carries: the moment its
+    /// process died.
+    fn backdate(path: &std::path::Path, secs: u64) {
+        let when = SystemTime::now() - Duration::from_secs(secs);
+        filetime::set_file_mtime(path, filetime::FileTime::from_system_time(when)).unwrap();
+    }
+
+    /// The defect: cleanup lives in commit, rollback and `Drop` — all three
+    /// inside the process that staged the tree. Kill that process and the tree
+    /// outlives every one of them, forever, because nothing else in the repo
+    /// even names `.tx`.
+    #[tokio::test]
+    async fn an_abandoned_staging_tree_is_removed_and_a_live_one_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let tx_root = dir.path().join("agent").join(TX_DIR);
+        let dead = tx_root.join("dead-tx");
+        let live = tx_root.join("live-tx");
+        std::fs::create_dir_all(dead.join("learning")).unwrap();
+        std::fs::create_dir_all(live.join("learning")).unwrap();
+        std::fs::write(dead.join("learning/a.md"), "staged").unwrap();
+        std::fs::write(live.join("learning/b.md"), "staged").unwrap();
+        backdate(&dead, 7_200);
+
+        let removed = sweep_tx_residue(dir.path(), "agent", 3_600).await;
+
+        assert_eq!(removed, 1);
+        assert!(!dead.exists(), "an hours-old staging tree is residue");
+        assert!(
+            live.exists(),
+            "a tree younger than the ceiling may belong to a transaction still \
+             working; deleting it would corrupt a live apply"
+        );
+    }
+
+    /// No `.tx` directory is the normal state for an agent that has never died
+    /// mid-ingest. It must be silent, not an error and not a warning: this runs
+    /// once per corpus on every boot.
+    #[tokio::test]
+    async fn a_corpus_that_never_staged_anything_sweeps_to_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("agent/learning")).unwrap();
+        assert_eq!(sweep_tx_residue(dir.path(), "agent", 3_600).await, 0);
+    }
+
+    /// A stray file under `.tx/` is not a staging tree. Removing "everything
+    /// under .tx" would be a wider promise than the one this function makes.
+    #[tokio::test]
+    async fn a_stray_file_under_the_staging_root_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let tx_root = dir.path().join("agent").join(TX_DIR);
+        std::fs::create_dir_all(&tx_root).unwrap();
+        let stray = tx_root.join("notes.txt");
+        std::fs::write(&stray, "not a tx").unwrap();
+        backdate(&stray, 7_200);
+
+        assert_eq!(sweep_tx_residue(dir.path(), "agent", 3_600).await, 0);
+        assert!(stray.exists());
+    }
+
+    /// The staging root the constructor composes and the one the sweep walks
+    /// must be the same directory. Two literals is how a sweeper ends up
+    /// cleaning a path nothing writes to — reporting zero forever while the
+    /// residue piles up next door.
+    /// The staging root the constructor composes and the one the sweep walks
+    /// must be the same directory. Two literals is how a sweeper ends up
+    /// cleaning a path nothing writes to — reporting zero forever while the
+    /// residue piles up next door. Source-level because at runtime a sweep of
+    /// the wrong directory and a sweep of an empty one are the same reading.
+    ///
+    /// Comment lines are stripped first: a doc comment naming the directory is
+    /// documentation, not a second spelling, and a scanner that cannot tell
+    /// them apart reports on prose.
+    #[test]
+    fn the_directory_name_is_spelled_exactly_once() {
+        let src = include_str!("apply.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        let code: String = production
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with("//") && !t.starts_with("*")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let decl = "const TX_DIR: &str = \".tx\";";
+        assert!(
+            code.contains(decl),
+            "self-guard: the scan must find the declaration it is counting \
+             against, or a rename makes this test pass vacuously"
+        );
+        assert_eq!(
+            code.matches("\".tx\"").count(),
+            1,
+            "`.tx` may appear once — on TX_DIR's declaration. Every other site \
+             (the constructor, the sweep) must go through the constant."
+        );
+        assert!(
+            code.contains("join(TX_DIR)"),
+            "the constructor must compose its staging root from TX_DIR"
+        );
+        assert!(
+            code.contains("join(agent_id).join(TX_DIR)"),
+            "…and the sweep must walk that same root"
         );
     }
 }

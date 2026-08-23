@@ -11,7 +11,7 @@ pub mod prompts;
 pub mod ref_table;
 pub mod retrieve;
 
-pub use apply::{ApplyError, CompoundApplyTx};
+pub use apply::{sweep_tx_residue, ApplyError, CompoundApplyTx, TX_DIR};
 pub use plan::{ApplyReport, IngestPlan, PageOp, SchemaProposal};
 pub use prompts::{build_compound_system_prompt, PROMPT_COMPOUND_PLAN};
 pub use ref_table::{RefTable, ResolveStats};

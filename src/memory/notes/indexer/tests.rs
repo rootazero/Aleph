@@ -1582,7 +1582,7 @@ async fn full_rebuild_all_reconciles_every_corpus_not_just_the_default_agent() {
         .unwrap();
     }
 
-    let stats = indexer.full_rebuild_all(AGENT).await;
+    let stats = indexer.full_rebuild_all(AGENT, 3600).await;
     assert!(
         stats.failed.is_empty(),
         "no corpus may be left unreconciled"
@@ -1603,7 +1603,7 @@ async fn full_rebuild_all_reconciles_every_corpus_not_just_the_default_agent() {
     fs::remove_file(dir.path().join(SCOPED).join("reference").join("note.md"))
         .await
         .unwrap();
-    let stats = indexer.full_rebuild_all(AGENT).await;
+    let stats = indexer.full_rebuild_all(AGENT, 3600).await;
     assert_eq!(stats.total.pruned, 1);
     // rust-doctor-disable-next-line unwrap-in-production
     assert!(db.list_notes(SCOPED).await.unwrap().is_empty());
@@ -1632,7 +1632,7 @@ async fn full_rebuild_all_scaffolds_only_the_agent_it_was_asked_about() {
     .await
     .unwrap();
 
-    indexer.full_rebuild_all(AGENT).await;
+    indexer.full_rebuild_all(AGENT, 3600).await;
 
     assert!(
         dir.path().join(AGENT).join("plan").is_dir(),
@@ -1659,7 +1659,7 @@ async fn full_rebuild_all_still_scaffolds_the_default_agent_on_a_fresh_install()
     // rust-doctor-disable-next-line excessive-clone
     let indexer = NoteIndexer::new(dir.path().to_path_buf(), db);
 
-    let stats = indexer.full_rebuild_all(AGENT).await;
+    let stats = indexer.full_rebuild_all(AGENT, 3600).await;
     assert_eq!(stats.corpora, 1);
     assert!(stats.failed.is_empty());
     for cat in CATEGORY_DIRS {
