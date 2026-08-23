@@ -81,6 +81,9 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 # Build pipeline logs (root-level scratch logs from just shell-build / wasm retry)
 /.shell-build.log
 /.wasm-retry.log
+/cua-cs.log
+/cua-som.log
+/ocu-docs.log
 
 # Packaged installers
 Aleph.dmg
