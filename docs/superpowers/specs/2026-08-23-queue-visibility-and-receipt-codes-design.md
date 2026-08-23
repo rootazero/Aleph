@@ -142,19 +142,30 @@ impl TicketGuard {
     pub fn ahead(&self) -> u16;
 }
 
-// busy_queue/deliver.rs —— 唯一新增参数
-pub async fn deliver_with_ticket<F, Fut>(
+// busy_queue/deliver.rs —— 唯一新增参数，形状与既有的 `attempt` 逐字同构
+pub async fn deliver_with_ticket<F, Fut, R, RFut>(
     ticket: TicketGuard,
     cfg: BusyQueueConfig,
     attempt: &mut F,
-    report: &mut dyn FnMut(u16),   // 位置变了就调一次
+    report: &mut R,                 // 位置变了就调一次
 ) -> DeliveryOutcome
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), ExecutionError>>,
+    R: FnMut(u16) -> RFut,
+    RFut: Future<Output = ()>,
 ```
 
-循环里只加**一处**判断，紧挨着已有的 `is_front()`：
+⚠️ **`report` 必须是 async 且被内联 await，不能是 `FnMut(u16)` + `tokio::spawn`。** 发帧是 async；spawn 出去就放弃了顺序，而 `ahead` 是单调下降的——乱序到达等于界面闪回。内联 await 按构造保序，且与 `attempt` 用的是同一个 `FnMut() -> Fut` 惯用法。
+
+循环里加**一处**上报，位置在「决定 park 之前」（覆盖队首被背压推回的情形）：
 
 ```rust
-if ticket.is_front() { … } else if ahead != last_reported { last_reported = ahead; report(ahead); }
+let ahead = ticket.ahead();
+if last_reported != Some(ahead) {
+    last_reported = Some(ahead);
+    report(ahead).await;
+}
 ```
 
 | 改动点 | 性质 | 行数量级 |
@@ -182,7 +193,14 @@ pub enum ChatPhase { Idle, Thinking, Streaming, Error, Queued { ahead: u16 } }
 
 渲染：占位气泡文案「排队中 · 前面还有 N 条」。
 
-⚠️ **`ahead == 0` 只有一个来源，别读成两个。** 上报只发生在 `else`（不是队首）臂里，所以队首**从不上报**——线上出现 `ahead: 0` 唯一的可能是 `ahead()` 的 fail-open（ticket 已不在车道：撤票、被清、或车道消失）。渲染成「即将开始」是对的：那三种情形接下来要么是 `RunAccepted`，要么是 `RunError`，两者都会覆盖这个相位。
+**`ahead == 0` 的含义是「前面没有别人了，但我还没开始」**，统一渲染成「即将开始」。它有两个来源，两个都为真、都该可见：
+
+1. **队首被背压推回**——`attempt()` 回 `AgentBusy`（steering burst 到 `max_pending_steering`），我是队首但跑不了。这正是 §4.8 Round-9 处理的那类等待，**它今天完全不可见**（继续冒充 Thinking）。
+2. `ahead()` 的 fail-open——ticket 已不在车道（撤票 / 被清 / 车道消失）。
+
+两者接下来都会被 `RunAccepted` 或 `RunError` 覆盖，所以同形渲染无害。
+
+⚠️ **上报点在「决定 park 之前」而不是在 `else` 臂里**——否则来源 1 漏掉。空闲会话仍然一帧不发：`is_front()` 为真且 `attempt()` 不回 `AgentBusy` ⇒ 函数在到达上报点之前就 `return` 了。
 
 ### 3.7 错误码跨端收口
 
