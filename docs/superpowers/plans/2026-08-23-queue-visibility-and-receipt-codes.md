@@ -204,7 +204,11 @@ git commit -m "gateway: add TicketGuard::ahead, the lane's read-only position qu
 - Modify: `src/gateway/event_emitter/types.rs`（`enum StreamEvent`，紧接 `RunAccepted` 之后）
 - Modify: `src/gateway/event_emitter/redacting.rs:241`（pass-through 臂）
 - Modify: `src/gateway/events/frame.rs`（`enum GatewayEventFrame` + `From<StreamEvent>` + `stream_method`）
+- Modify: `shared/protocol/src/events.rs`（**`aleph_protocol::StreamEvent` 的孪生变体 + `run_id()` 的臂**——见下方裁定 R7）
 - Test: `src/gateway/events/frame.rs` 的 `#[cfg(test)] mod tests`
+- Test: `src/gateway/event_visibility.rs` 的 `#[cfg(test)] mod tests`
+
+**⚠️ 控制器裁定 R7（补计划初稿的一个缺口）**：本仓有**两个** `StreamEvent`——`crate::gateway::StreamEvent`（服务端内部）与 `aleph_protocol::StreamEvent`（TUI / CLI / `shared/client` 解码的那个）。`events/frame_census.rs` 的 `every_stream_method_has_a_typed_twin_in_the_protocol_enum` 要求每个 `stream.*` method 在**协议**那个枚举里有孪生，否则每个终端客户端在 `connection.rs` 静默丢帧。初稿只说"`RunQueued` 有 `StreamEvent` 孪生"，那句话对内部枚举成立、对协议枚举不成立。**所以本任务多一处改动**（3f），而 `PANEL_ONLY_STREAM_METHODS` 仍然**不要**碰——那张表是给真的没有孪生的三个帧用的，且它有一条"只减不增"的守卫。
 
 **Interfaces:**
 - Consumes: 无
@@ -339,6 +343,31 @@ Expected: **BUILD-ERROR**（`no variant named RunQueued`）。
             Self::RunQueued { .. } => Some("stream.run_queued"),
 ```
 
+**3f.（控制器裁定 R7）** `shared/protocol/src/events.rs`，`pub enum StreamEvent` 里紧接 `RunAccepted` 之后：
+
+```rust
+    /// The run joined its session's wait lane and has not been admitted yet.
+    ///
+    /// Terminal clients decode this enum, so a `stream.*` method without a
+    /// variant here is a silent drop at `shared/client/src/connection.rs` for
+    /// every one of them — the census in `gateway::events::frame_census`
+    /// exists because that happened before.
+    RunQueued {
+        run_id: String,
+        session_key: String,
+        /// How many messages ahead of this one may still run. `0` means
+        /// "nobody ahead, but not started yet".
+        ahead: u16,
+    },
+```
+
+同文件 `run_id()` 的 match —— `RunQueued` 是 run-keyed，加进那一串或运算的模式里（`run_id()` **穷尽无通配**，不加就是编译错误，这正是它该有的样子）：
+
+```rust
+            Self::RunAccepted { run_id, .. }
+            | Self::RunQueued { run_id, .. }
+```
+
 - [ ] **Step 4: 补一条「索引真的被播种了」的断言**
 
 `note_frame`（`event_visibility.rs:649`）是**完全通用**的——它对任意 `stream.*` 帧读 `session_key` 与 `run_id` 两个 JSON 字段，不逐变体匹配。所以 `RunQueued` **零改动自动播种**。
@@ -405,20 +434,25 @@ Expected: **BUILD-ERROR**（`no variant named RunQueued`）。
 cargo test -p alephcore --lib events::frame::tests::run_queued_has_a_wire_method
 cargo test -p alephcore --lib event_visibility::
 cargo test -p alephcore --lib events::frame_census
+cargo test -p aleph-tui -p aleph-cli --no-run
 ```
-Expected: 三条都 `test result: ok`。census 若红，按它的报错把新 method 登记进它要求的位置（**不要**把它加进 `PANEL_ONLY_STREAM_METHODS`——`RunQueued` 有 `StreamEvent` 孪生，那张表是给**没有**孪生的帧用的）。
+Expected: 前三条都 `test result: ok`，第四条构建通过。
+
+`frame_census` 的两半都必须绿：`every_stream_method_has_a_typed_twin_in_the_protocol_enum`（3f 的枚举变体满足它）与 `every_protocol_stream_variant_has_a_gateway_producer`（3e 的 `stream_method` 臂满足它）。**不要**把 `run_queued` 加进 `PANEL_ONLY_STREAM_METHODS`。
+
+第四条是因为本任务动了协议 crate：那个枚举被 TUI / CLI 解码，加变体可能点名它们的穷尽 match。
 
 - [ ] **Step 6: 变异证伪（两次）**
 
 1. 删掉 3e 那一行（让它落回 `_ => None`），重跑第一条命令 → Expected **RED**，断言 `Some("stream.run_queued")` 失败。
-2. 把 `RunQueued` 的 `session_key` 字段临时改名成 `session`，重跑 `event_visibility::` → Expected **RED**，`a_run_queued_frame_seeds_the_index_for_its_session`。
+2. 把 `RunQueued` 的 `session_key` 字段临时改名成 `session`，重跑 `event_visibility::` → Expected **RED**，`a_queued_frame_reaches_its_session_and_nobody_else`。
 
 两次都确认后改回。
 
 - [ ] **Step 7: 提交**
 
 ```bash
-git add src/gateway/event_emitter/types.rs src/gateway/event_emitter/redacting.rs src/gateway/events/frame.rs src/gateway/event_visibility.rs
+git add src/gateway/event_emitter/types.rs src/gateway/event_emitter/redacting.rs src/gateway/events/frame.rs src/gateway/event_visibility.rs shared/protocol/src/events.rs
 git commit -m "gateway: add the RunQueued frame, waiting's first wire representation"
 ```
 
@@ -756,12 +790,16 @@ git commit -m "gateway: report lane position from the waiter's existing wake poi
 ### Task 4: `chat.history` 带上 `pending[]`（权威那一半）
 
 **Files:**
+- Create: `shared/protocol/src/queue.rs`
+- Modify: `shared/protocol/src/lib.rs`（模块声明，按字母序插在 `providers` 与 `receipt` 之间——`receipt` 由任务 5 加，两条不冲突）
 - Modify: `src/gateway/busy_queue/mod.rs`（新增 `pending_for`）
 - Modify: `src/gateway/handlers/chat.rs`（history 响应）
 
 **Interfaces:**
 - Consumes: `Lane` 内部结构
-- Produces: `pub fn busy_queue::pending_for(session_key: &str) -> Vec<PendingRun>`；`pub struct PendingRun { pub run_id: String, pub ahead: u16 }`（`Serialize`）；`chat.history` 响应新键 `pending`
+- Produces: `aleph_protocol::queue::PendingRun { pub run_id: String, pub ahead: u16 }`（`Serialize + Deserialize`）；`pub fn busy_queue::pending_for(session_key: &str) -> Vec<PendingRun>`；`chat.history` 响应新键 `pending`
+
+**⚠️ 控制器裁定 R4（覆盖计划初稿）**：`PendingRun` **住在协议 crate**，不在 `busy_queue` 里。任务 9 的 Panel 侧读的是**同一个类型**，不是自己再定义一个 `PendingRunDto`。理由：这是本仓记录在案、复发过四次的缺陷——「跨 crate 的 wire 契约要么共用一个类型（重命名 ⇒ 编译错），要么在依赖两边的那一侧留一条对账测试」。`alephcore` 与 `aleph-panel` 互不依赖，所以**共用类型是唯一合规的形状**，而任务 5 在本轮已经为另一条 wire 契约立了同一个先例。
 
 **为什么挂在 `chat.history` 上而不是新开 RPC**：与 `active_run` / `plan` 逐字同一个论证——它们是**一个**快照，分两次调用就开出一个「拿着 transcript 却拿着另一份状态」的窗口。
 
@@ -814,9 +852,19 @@ Expected: **BUILD-ERROR**（`cannot find function pending_for`）。
 
 - [ ] **Step 3: 实现**
 
-`src/gateway/busy_queue/mod.rs`，紧接 `snapshot` 之后：
+**3a.** 新建 `shared/protocol/src/queue.rs`：
 
 ```rust
+//! The shape of a session's server-side wait lane, as it crosses the wire.
+//!
+//! Lives here rather than in either side because `alephcore` and
+//! `aleph-panel` do not depend on each other: a type they both derive their
+//! serde from is the only way a field rename can be a compile error instead
+//! of a client that silently reads nothing. Same reasoning as
+//! [`crate::receipt`], for the other wire contract in this round.
+
+use serde::{Deserialize, Serialize};
+
 /// One message still waiting on a session's lane.
 ///
 /// Serialized onto `chat.history`'s `pending` array — the authoritative half
@@ -829,12 +877,24 @@ Expected: **BUILD-ERROR**（`cannot find function pending_for`）。
 /// (the full `RunRequest` lives only in the two spawn closures), and giving it
 /// one is the same change as making the queue crash-durable — a separate,
 /// recorded piece of work.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingRun {
     pub run_id: String,
     /// How many messages ahead of this one may still run.
     pub ahead: u16,
 }
+```
+
+`shared/protocol/src/lib.rs`，在 `pub mod providers;` 之后加：
+
+```rust
+pub mod queue;
+```
+
+**3b.** `src/gateway/busy_queue/mod.rs`，紧接 `snapshot` 之后：
+
+```rust
+pub use aleph_protocol::queue::PendingRun;
 
 /// Messages still waiting on `session_key`, in lane order.
 ///
@@ -862,7 +922,7 @@ pub fn pending_for(session_key: &str) -> Vec<PendingRun> {
 }
 ```
 
-`src/gateway/handlers/chat.rs`，在 `let session_snapshot = …;` 之后、`JsonRpcResponse::success` 之前：
+**3c.** `src/gateway/handlers/chat.rs`，在 `let session_snapshot = …;` 之后、`JsonRpcResponse::success` 之前：
 
 ```rust
             // The lane's waiting messages, by the SAME canonical key and at
@@ -883,10 +943,11 @@ pub fn pending_for(session_key: &str) -> Vec<PendingRun> {
 - [ ] **Step 4: 跑测试确认它绿**
 
 ```
+cargo test -p aleph-protocol queue::
 cargo test -p alephcore --lib busy_queue::tests::pending_for_lists_live_waiters
 cargo test -p alephcore --lib handlers::chat
 ```
-Expected: 两条都 `test result: ok`。
+Expected: 三条都 `test result: ok`（第一条可能是 `running 0 tests`——`queue.rs` 本身不带测试，形状由任务 9 的 Panel 侧对账覆盖）。
 
 - [ ] **Step 5: 变异证伪**
 
@@ -896,7 +957,7 @@ Expected: **RED**（`a cancelled waiter is neither listed nor counted`）。确�
 - [ ] **Step 6: 提交**
 
 ```bash
-git add src/gateway/busy_queue/mod.rs src/gateway/handlers/chat.rs
+git add shared/protocol/src/queue.rs shared/protocol/src/lib.rs src/gateway/busy_queue/mod.rs src/gateway/handlers/chat.rs
 git commit -m "gateway: carry the wait lane on chat.history, the attach-time authority"
 ```
 
@@ -1397,7 +1458,13 @@ git commit -m "panel: classify failures by the server's error_code, not by keywo
 
 **Interfaces:**
 - Consumes: 无
-- Produces: `ChatPhase`（新增 `Queued { ahead: u16 }`）· `ChatPhase::is_busy(self) -> bool` · `ChatState::mark_queued(&self, run_id: &str, ahead: u16)`
+- Produces: `ChatPhase`（新增 `Queued { ahead: u16 }`）· `ChatPhase::is_busy(self) -> bool` · `ChatState::mark_queued(&self, run_id: &str, ahead: u16)` · `ChatState::mark_admitted(&self, run_id: &str)`
+
+**⚠️ 控制器裁定 R3（补计划初稿的一个缺口）**：还要产出 `mark_admitted`，并且这两个方法都欠一条**断言效果到达**的测试（初稿只测了 `is_busy` 这个纯函数）。
+
+理由：`start_assistant_message`（`state.rs:1175`）在气泡**已存在**时**提前返回**，而 `active_run_id` / `phase` 的写入排在那道早返回**之后**（`state.rs:1210-1211`）。任务 8 的 `run_queued` 臂先建气泡，于是随后到达的 `run_accepted` 变成 no-op，相位**停在 `Queued`**，直到第一个 `turn_started` / 第一个 token 才被别的路径改掉——那段时间正好是模型延迟，用户读到的是「排队中」而模型其实在思考。spec §3.6 逐字写着这两种 `ahead==0` 的来源「接下来都会被 `RunAccepted` 或 `RunError` 覆盖」，初稿没有让那句话成真。
+
+`mark_admitted` **只碰 `Queued`**（其余相位原样返回），所以对今天工作正常的每一条转移逐字节 no-op。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1433,6 +1500,62 @@ mod tests {
         assert_ne!(ChatPhase::Queued { ahead: 0 }, ChatPhase::Thinking);
     }
 }
+```
+
+并在 `state/mod.rs` 的 `#[cfg(test)] mod tests` 里追加**效果到达**的三条（`run_phase.rs` 只测了纯函数；这三条测的是 `ChatState` 上的转移，所以住在 state 的测试模块里，沿用该模块既有的 `Owner::new(); owner.set(); ChatState::new()` 写法）：
+
+```rust
+    /// Asserting the effect arrives, not that the call happened. `mark_queued`
+    /// is guarded on `active_run_id`, and `start_assistant_message` sets that
+    /// only on the branch where it does not early-return — so this is the one
+    /// path the whole queued phase depends on.
+    #[test]
+    fn marking_a_run_queued_moves_the_phase() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-a", 2);
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 2 });
+    }
+
+    /// A lane frame for a sibling run — another tab, a channel, cron — must not
+    /// repaint this conversation.
+    #[test]
+    fn a_sibling_runs_lane_frame_repaints_nothing() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-b", 5);
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+    }
+
+    /// Admission is the edge that ends the wait. It cannot ride on
+    /// `start_assistant_message`: that early-returns once the bubble exists,
+    /// and by admission time the queued frame has already created it — so
+    /// without this the phase reads "queued" for the whole of model latency.
+    #[test]
+    fn admission_clears_the_queued_phase_and_touches_nothing_else() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-a", 1);
+        chat.mark_admitted("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+
+        // Every other phase is left exactly as it was: admission answers only
+        // "the wait is over", never "what is happening now".
+        chat.phase.set(ChatPhase::Streaming);
+        chat.mark_admitted("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Streaming);
+
+        // And a sibling run's admission is not this conversation's news.
+        chat.mark_queued("run-a", 1);
+        chat.mark_admitted("run-b");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 1 });
+    }
 ```
 
 - [ ] **Step 2: 跑测试确认它红**
@@ -1509,6 +1632,28 @@ pub use run_phase::ChatPhase;
         }
         self.phase.set(ChatPhase::Queued { ahead });
     }
+
+    /// The run was admitted to the engine — the wait is over.
+    ///
+    /// Only ever moves `Queued` to `Thinking`; every other phase is left
+    /// exactly as it was, because admission answers "the wait ended", never
+    /// "what is happening now" (a later frame may already have moved this
+    /// conversation to `Streaming`).
+    ///
+    /// This cannot ride on `start_assistant_message`, which is what
+    /// `run_accepted` already calls: that early-returns once the run's bubble
+    /// exists, and by admission time the queued frame has created it. Without
+    /// this method the phase would read "queued" until the first
+    /// `turn_started` or token — i.e. for the whole of model latency, exactly
+    /// while the model is in fact thinking.
+    pub fn mark_admitted(&self, run_id: &str) {
+        if self.active_run_id.get_untracked().as_deref() != Some(run_id) {
+            return;
+        }
+        if matches!(self.phase.get_untracked(), ChatPhase::Queued { .. }) {
+            self.phase.set(ChatPhase::Thinking);
+        }
+    }
 ```
 
 然后跑构建，**让编译器点名每个 `ChatPhase` 读者**，逐个改：
@@ -1543,8 +1688,12 @@ Expected: 三条全过。**第三条是唯一编译出厂形态的命令，必�
 
 - [ ] **Step 5: 变异证伪**
 
-把 `is_busy` 里的 `Self::Queued { .. } |` 删掉，重跑第一条。
-Expected: **RED** —— `queued_counts_as_busy`。确认后加回。
+1. 把 `is_busy` 里的 `Self::Queued { .. } |` 删掉，重跑第一条命令。
+   Expected: **RED** —— `queued_counts_as_busy`。
+2. 把 `mark_admitted` 的函数体整体换成 `{}`（即让「准入」什么都不做，这正是初稿的行为），跑 `cargo test -p aleph-panel --lib state::`。
+   Expected: **RED** —— `admission_clears_the_queued_phase_and_touches_nothing_else`。
+
+两次都确认后改回。
 
 - [ ] **Step 6: 提交**
 
@@ -1718,6 +1867,19 @@ Expected: **RED** 或 BUILD-ERROR（`fail_run` 参数数量不符 / 路由返回
 
 **3e.** `state/mod.rs` 的 `fail_run` 加第三参，内部把 `ChatSendError::classify(error)` 换成 `ChatSendError::from_wire_code(error_code, error)`。**全仓搜 `fail_run(` 补齐其余调用点**（编译器会点名）。
 
+**3f.（控制器裁定 R3）** 既有的 `"run_accepted"` 臂（`events.rs:926`）末尾，在 `chat.start_assistant_message(run_id);` **之后**加一行：
+
+```rust
+                // Admission is the edge that ends the wait, and it cannot ride
+                // on `start_assistant_message`: that early-returns once the
+                // run's bubble exists, and the queued frame has already
+                // created it. Without this the phase reads "queued" until the
+                // first `turn_started` or token — the whole of model latency.
+                chat.mark_admitted(run_id);
+```
+
+（`mark_admitted` 只碰 `Queued`，所以没有排过队的 run 逐字节不受影响。）
+
 - [ ] **Step 4: 跑测试确认它绿**
 
 ```
@@ -1730,7 +1892,7 @@ Expected: 三条全过。
 - [ ] **Step 5: 变异证伪**
 
 把 3a 的臂头改回单个 `"run_accepted"`，重跑第一条。
-Expected: **RED** —— `run_queued_resolves_by_the_session_key_it_carries`。确认后改回。
+Expected: **RED** —— `run_queued_resolves_like_run_accepted`。确认后改回。
 
 - [ ] **Step 6: 提交**
 
@@ -1748,8 +1910,10 @@ git commit -m "panel: render the queued phase and stop guessing at failure codes
 - Modify: `.../chat/state/mod.rs`（`hydrate_and_follow` 或其等价的水化路径）
 
 **Interfaces:**
-- Consumes: `chat.history` 的 `pending`（Task 4）· `ChatState::mark_queued`（Task 7）
-- Produces: `SessionHistory.pending: Vec<PendingRunDto>`；`pub struct PendingRunDto { pub run_id: String, pub ahead: u16 }`
+- Consumes: `chat.history` 的 `pending`（Task 4）· `aleph_protocol::queue::PendingRun`（Task 4）· `ChatState::mark_queued`（Task 7）
+- Produces: `SessionHistory.pending: Vec<PendingRun>`；`pub fn parse_history_pending(result: &Value) -> Vec<PendingRun>`
+
+**⚠️ 控制器裁定 R4（覆盖计划初稿）**：**不要**定义 `PendingRunDto`。读的是任务 4 放进 `aleph_protocol::queue` 的**同一个** `PendingRun`，且逐项**用 serde 反序列化**而不是手抄 `"run_id"` / `"ahead"` 两个字面量——手抄的话服务端改字段名不会在这一侧变成编译错误，共用类型就白共用了。外层的宽容守卫保留（`as_array` 拿不到 ⇒ 空），逐项失败 `filter_map` 掉。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1775,6 +1939,21 @@ git commit -m "panel: render the queued phase and stop guessing at failure codes
         assert_eq!(pending[1].ahead, 1);
     }
 
+    /// The shape is `aleph_protocol::queue::PendingRun`, the same type the
+    /// server serializes — not a Panel-local copy of its field names. That is
+    /// what makes a server-side rename a compile error here instead of a
+    /// client that silently reads an empty queue. Asserting it by round-trip
+    /// keeps the check on the type rather than on a literal key list.
+    #[test]
+    fn the_shape_is_the_shared_protocol_type() {
+        let one = aleph_protocol::queue::PendingRun {
+            run_id: "run-a".to_string(),
+            ahead: 2,
+        };
+        let raw = serde_json::json!({ "pending": [serde_json::to_value(&one).unwrap()] });
+        assert_eq!(parse_history_pending(&raw), vec![one]);
+    }
+
     /// Absent against a core that predates the field, and absent when nothing
     /// is waiting. Both mean "no queue to show", so neither may error.
     #[test]
@@ -1796,13 +1975,7 @@ Expected: **BUILD-ERROR**（`parse_history_pending` 不存在）。
 `interfaces/webchat/src/api/chat.rs`：
 
 ```rust
-/// One message still waiting on the session's server-side lane.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingRunDto {
-    pub run_id: String,
-    /// How many messages ahead of this one may still run.
-    pub ahead: u16,
-}
+use aleph_protocol::queue::PendingRun;
 
 /// Read the wait lane off a `chat.history` response.
 ///
@@ -1810,19 +1983,21 @@ pub struct PendingRunDto {
 /// socket — same shape as `parse_history_plan` next door. Absent reads as
 /// empty: a core that predates the field and an idle session are
 /// indistinguishable here, and both mean "no queue to show".
+///
+/// Each item is deserialized into the shared protocol type rather than
+/// hand-read key by key. That is the whole point of the type being shared: a
+/// field renamed on the server changes this side's parse at the same time,
+/// instead of leaving a client that reads an empty queue and says nothing.
+/// An item that fails to deserialize is dropped, not fatal — one malformed
+/// entry must not hide the rest of the lane.
 #[must_use]
-pub fn parse_history_pending(result: &Value) -> Vec<PendingRunDto> {
+pub fn parse_history_pending(result: &Value) -> Vec<PendingRun> {
     let Some(items) = result.get("pending").and_then(Value::as_array) else {
         return Vec::new();
     };
     items
         .iter()
-        .filter_map(|v| {
-            Some(PendingRunDto {
-                run_id: v.get("run_id")?.as_str()?.to_string(),
-                ahead: u16::try_from(v.get("ahead")?.as_u64()?).unwrap_or(u16::MAX),
-            })
-        })
+        .filter_map(|v| serde_json::from_value::<PendingRun>(v.clone()).ok())
         .collect()
 }
 ```
@@ -1830,7 +2005,7 @@ pub fn parse_history_pending(result: &Value) -> Vec<PendingRunDto> {
 `SessionHistory` 加字段（并在其 doc 末尾追加一段说明，与 `active_run` / `plan` 并列）：
 
 ```rust
-    pub pending: Vec<PendingRunDto>,
+    pub pending: Vec<PendingRun>,
 ```
 
 解析处加：
