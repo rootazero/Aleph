@@ -379,6 +379,23 @@ pub(crate) fn MessageList() -> impl IntoView {
                                     </div>
                                 </Show>
                             </Show>
+                            // Queued indicator — the run has an id but the
+                            // engine has not admitted it yet. A sibling of the
+                            // Thinking block above, not a variant of it: the
+                            // two phases are mutually exclusive, so exactly one
+                            // of the two `<Show>` blocks renders.
+                            <Show when=move || matches!(chat.phase.get(), ChatPhase::Queued { .. })>
+                                <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
+                                    <span class="reading-dots"><span></span><span></span><span></span></span>
+                                    {move || match chat.phase.get() {
+                                        ChatPhase::Queued { ahead: 0 } => t_string!(i18n, chat.queued_next).to_string(),
+                                        ChatPhase::Queued { ahead } => {
+                                            t_string!(i18n, chat.queued_behind, count = ahead as i64).to_string()
+                                        }
+                                        _ => String::new(),
+                                    }}
+                                </div>
+                            </Show>
                             // The question the agent is parked on (`ask_user`).
                             // Tail of the stream: it is always the newest thing
                             // that happened, and the turn cannot advance until

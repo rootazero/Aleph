@@ -61,11 +61,12 @@ pub fn PhoneComposer() -> impl IntoView {
     // suppression has to swap with the conversation the way the queue does.
     let user_interrupted = chat.stop_suppresses_next_drain;
 
-    // True while a run is in flight → the composer shows Queue/Force/Stop.
-    let running = move || {
-        matches!(chat.phase.get(), ChatPhase::Thinking | ChatPhase::Streaming)
-            || chat.active_run_id.get().is_some()
-    };
+    // True while a run is in flight (including waiting in the session's lane)
+    // → the composer shows Queue/Force/Stop. Collapses what used to be two
+    // half-predicates (an inline phase set, backstopped by an `active_run_id`
+    // check that happened to cover the phases the set forgot) into the one
+    // this crate has no compiler-enforced way to keep in sync by hand.
+    let running = move || chat.phase.get().is_busy();
 
     // A draft is text OR staged files. Attachments-only used to be
     // unsendable here: the guard was text-only, so a photo with no caption

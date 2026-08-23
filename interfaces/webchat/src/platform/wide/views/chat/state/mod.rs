@@ -7,7 +7,9 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use shared_ui_logic::state::merge_recalled_draft;
 
+mod run_phase;
 mod send_error;
+pub use run_phase::ChatPhase;
 pub use send_error::{ChatSendError, ChatSendErrorCode};
 
 /// File staged for upload as part of the next outbound message.
@@ -400,16 +402,6 @@ pub enum MemberStatus {
     Idle,
     Working,
     Done,
-    Error,
-}
-
-/// Top-level Chat UI phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ChatPhase {
-    #[default]
-    Idle,
-    Thinking,
-    Streaming,
     Error,
 }
 
@@ -1129,6 +1121,41 @@ impl ChatState {
         self.active_run_id.set(Some(run_id.to_string()));
         self.phase.set(ChatPhase::Thinking);
         self.reasoning_text.set(String::new());
+    }
+
+    /// The run joined its session's wait lane. Idempotent — the lane reports
+    /// only when `ahead` changes, but a re-attach can replay the same value.
+    ///
+    /// Scoped to the run this conversation is actually following: a lane frame
+    /// for a sibling run (another tab, a channel, cron) must not repaint this
+    /// conversation's phase.
+    pub fn mark_queued(&self, run_id: &str, ahead: u16) {
+        if self.active_run_id.get_untracked().as_deref() != Some(run_id) {
+            return;
+        }
+        self.phase.set(ChatPhase::Queued { ahead });
+    }
+
+    /// The run was admitted to the engine — the wait is over.
+    ///
+    /// Only ever moves `Queued` to `Thinking`; every other phase is left
+    /// exactly as it was, because admission answers "the wait ended", never
+    /// "what is happening now" (a later frame may already have moved this
+    /// conversation to `Streaming`).
+    ///
+    /// This cannot ride on `start_assistant_message`, which is what
+    /// `run_accepted` already calls: that early-returns once the run's bubble
+    /// exists, and by admission time the queued frame has created it. Without
+    /// this method the phase would read "queued" until the first
+    /// `turn_started` or token — i.e. for the whole of model latency, exactly
+    /// while the model is in fact thinking.
+    pub fn mark_admitted(&self, run_id: &str) {
+        if self.active_run_id.get_untracked().as_deref() != Some(run_id) {
+            return;
+        }
+        if matches!(self.phase.get_untracked(), ChatPhase::Queued { .. }) {
+            self.phase.set(ChatPhase::Thinking);
+        }
     }
 
     /// Begin a new agent step (Think→Act iteration) for `run_id`.
@@ -2551,6 +2578,58 @@ mod step_tests {
             by_id["other"], "running",
             "another run's live tool must keep running"
         );
+    }
+
+    /// Asserting the effect arrives, not that the call happened. `mark_queued`
+    /// is guarded on `active_run_id`, and `start_assistant_message` sets that
+    /// only on the branch where it does not early-return — so this is the one
+    /// path the whole queued phase depends on.
+    #[test]
+    fn marking_a_run_queued_moves_the_phase() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-a", 2);
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 2 });
+    }
+
+    /// A lane frame for a sibling run — another tab, a channel, cron — must not
+    /// repaint this conversation.
+    #[test]
+    fn a_sibling_runs_lane_frame_repaints_nothing() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-b", 5);
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+    }
+
+    /// Admission is the edge that ends the wait. It cannot ride on
+    /// `start_assistant_message`: that early-returns once the bubble exists,
+    /// and by admission time the queued frame has already created it — so
+    /// without this the phase reads "queued" for the whole of model latency.
+    #[test]
+    fn admission_clears_the_queued_phase_and_touches_nothing_else() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("run-a");
+        chat.mark_queued("run-a", 1);
+        chat.mark_admitted("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Thinking);
+
+        // Every other phase is left exactly as it was: admission answers only
+        // "the wait is over", never "what is happening now".
+        chat.phase.set(ChatPhase::Streaming);
+        chat.mark_admitted("run-a");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Streaming);
+
+        // And a sibling run's admission is not this conversation's news.
+        chat.mark_queued("run-a", 1);
+        chat.mark_admitted("run-b");
+        assert_eq!(chat.phase.get_untracked(), ChatPhase::Queued { ahead: 1 });
     }
 }
 
