@@ -6,13 +6,24 @@ on:
     - cron: '0 0 * * 1'
   push:
     paths:
+      # `src/**` and `build.rs` were missing, and `security-clippy` lints
+      # exactly those: `cargo clippy -p alephcore`. So the gate that exists to
+      # keep `panic!` out of production code only ran when a *dependency*
+      # changed. It went red on 2026-06-15 and stayed red for two months while
+      # src/ changed daily, because nothing it watched was being touched — the
+      # four panics it was reporting had been added under it, not before it.
+      - 'src/**'
+      - 'build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/security-audit.yml'
   pull_request:
     paths:
+      - 'src/**'
+      - 'build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/workflows/security-audit.yml'
 
 env:
   CARGO_TERM_COLOR: always
