@@ -1449,12 +1449,30 @@ git commit -m "panel: classify failures by the server's error_code, not by keywo
 
 ---
 
-### Task 7: `ChatPhase::Queued` —— 让编译器点名每个读者
+### Task 7: `ChatPhase::Queued` —— 一个相位，一个 busy 谓词
 
 **Files:**
 - Create: `.../chat/state/run_phase.rs`
 - Modify: `.../chat/state/mod.rs`
-- Modify（编译器点名的 5 个读者）：`.../chat/messages.rs` · `.../chat/reasoning.rs` · `.../chat/composer/mod.rs` · `interfaces/webchat/src/platform/phone/chat/composer.rs` · `.../chat/team_events.rs`
+- Modify（**只有一处**读者要改）：`interfaces/webchat/src/platform/phone/chat/composer.rs:66`
+- Modify（渲染排队文案）：`.../chat/messages.rs` + locale 文件（en + zh）
+
+**⚠️ 控制器裁定 R8（推翻计划初稿与 spec §3.6 的一句话）**：**编译器不会点名任何读者。** 全仓 `ChatPhase` 一个穷尽 `match` 都没有——12 个站点里 7 个是**写**（`phase.set(...)`），5 个是读，而 5 个读全是 `==` 比较、`matches!` 或丢弃值。加一个变体**静默兼容**。
+
+实测清单（`grep 'phase\.get' + 'ChatPhase::'` 得到，请自己复核一遍）：
+
+| 站点 | 形状 | 加 `Queued` 后 | 处置 |
+|---|---|---|---|
+| `phone/chat/composer.rs:66` | `matches!(chat.phase.get(), ChatPhase::Thinking \| ChatPhase::Streaming)` | **手机端 composer 在排队期间恢复可发送** | **改成 `.is_busy()`** |
+| `reasoning.rs:45` | `== ChatPhase::Thinking` | 排队时不脉冲 | 不动（正确） |
+| `messages.rs:360` | `<Show when=… == ChatPhase::Thinking>` | 排队时不显示「思考中」占位 | 不动（正确），排队文案是**并列**的新 `<Show>` |
+| `messages.rs:229` | `let _phase = chat.phase.get();` | 只订阅、丢值 | 不动 |
+| `state.rs:1732` | 快照捕获 | — | 不动 |
+| wide `composer/mod.rs` | busy 谓词是 `chat.active_run_id.get().is_some()`，**不读 phase** | 排队时已经是 busy（`start_assistant_message` 设了 `active_run_id`） | 不动（白拿） |
+
+初稿点名的 `composer/mod.rs` 与 `team_events.rs` **只写不读**，不在此列。
+
+**既然编译器不管，就补一条源码级守卫**（见 Step 3 末尾）：这个 bug 的形状正是「某个面自己手写了一份 busy 谓词、而它列举的变体集合过期了」，而它今天已经真的发生了一次（就是上表第一行）。
 
 **Interfaces:**
 - Consumes: 无
@@ -1656,10 +1674,85 @@ pub use run_phase::ChatPhase;
     }
 ```
 
-然后跑构建，**让编译器点名每个 `ChatPhase` 读者**，逐个改：
+然后按上面那张表改**唯一那一处**读者：
 
-- `phone/chat/composer.rs:66` 的 `matches!(chat.phase.get(), ChatPhase::Thinking | ChatPhase::Streaming)` → `chat.phase.get().is_busy()`
-- 其余 4 个文件的 `== ChatPhase::Thinking` 等比较**保持语义不变**（它们问的是"正在思考"而不是"忙"，`Queued` 对它们应为 false）；只有被 `matches!` 当成"忙"用的那些改成 `is_busy()`。**逐个读上下文判断，不要一律替换。**
+`interfaces/webchat/src/platform/phone/chat/composer.rs:66`
+
+```rust
+        chat.phase.get().is_busy()
+```
+
+其余读者按表**保持不变**——它们问的是「正在思考」而不是「忙」，`Queued` 对它们应为 false。**不要一律替换。**
+
+**并补一条源码级守卫**（放在 `run_phase.rs` 的测试模块里）——编译器管不了这件事，而它已经真的漏过一次：
+
+```rust
+    /// No surface may spell the busy predicate by hand.
+    ///
+    /// `ChatPhase` has no exhaustive `match` anywhere in this crate — every
+    /// reader is an `==`, a `matches!`, or a discarded read — so adding a
+    /// variant is silently compatible and the compiler names nobody. That is
+    /// how `platform/phone/chat/composer.rs` came to enumerate
+    /// `Thinking | Streaming` inline: correct on the day it was written, and
+    /// wrong the moment a third busy phase existed, with the phone composer
+    /// offering a fresh send into a queue the user cannot see.
+    ///
+    /// The rule is derived, not a list: a `matches!` naming TWO OR MORE
+    /// `ChatPhase` variants on one line is an inline phase set, and the only
+    /// place allowed to hold one is [`ChatPhase::is_busy`]. A single-variant
+    /// `matches!` is fine — that is asking about one specific phase, which
+    /// `==` cannot express for `Queued { .. }`.
+    #[test]
+    fn no_surface_enumerates_the_busy_phases_by_hand() {
+        let mut offenders = Vec::new();
+        let mut inspected = 0usize;
+        for path in crate::disposed_reads::rust_sources(&crate::disposed_reads::src_dir()) {
+            // This file's RED fixture below is by construction the shape the
+            // rule forbids; scanning it would make the guard report itself and
+            // never go green. Same carve-out, same reason, as
+            // `disposed_reads::rust_sources` makes for its own file.
+            if path.file_name().is_some_and(|n| n == "run_phase.rs") {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for (i, line) in src.lines().enumerate() {
+                // The scanner judges code; a comment is documentation.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if !line.contains("matches!(") || !line.contains("ChatPhase::") {
+                    continue;
+                }
+                inspected += 1;
+                if line.matches("ChatPhase::").count() >= 2 {
+                    offenders.push(format!("{}:{}", path.display(), i + 1));
+                }
+            }
+        }
+        assert!(
+            inspected > 0,
+            "the scanner matched no `matches!(… ChatPhase::…)` anywhere — it has              gone vacuous and would agree with any code at all"
+        );
+        assert!(
+            offenders.is_empty(),
+            "{offenders:?} enumerate ChatPhase variants inline instead of asking              `ChatPhase::is_busy()`. Adding a phase cannot reach them: this crate              has no exhaustive match on ChatPhase, so the compiler names nobody"
+        );
+    }
+
+    /// The scanner itself, on hand-built input — a guard whose scanner is wrong
+    /// fails open, matching nothing and agreeing with everything.
+    #[test]
+    fn the_scanner_separates_a_phase_set_from_a_single_phase_test() {
+        let two = "matches!(p, ChatPhase::Thinking | ChatPhase::Streaming)";
+        let one = "matches!(p, ChatPhase::Queued { .. })";
+        assert_eq!(two.matches("ChatPhase::").count(), 2);
+        assert_eq!(one.matches("ChatPhase::").count(), 1);
+    }
+```
+
+> `rust_sources` / `src_dir` 是 `crate::disposed_reads` 里已有的 `pub(crate)` 助手（`disposed_reads.rs:31`/`:39`），**复用它们**，别再写一个走目录树的函数。
 
 在 `messages.rs` 的占位气泡处渲染排队文案（紧邻既有的 `<Show when=move || chat.phase.get() == ChatPhase::Thinking>` 块）：
 
@@ -1692,8 +1785,10 @@ Expected: 三条全过。**第三条是唯一编译出厂形态的命令，必�
    Expected: **RED** —— `queued_counts_as_busy`。
 2. 把 `mark_admitted` 的函数体整体换成 `{}`（即让「准入」什么都不做，这正是初稿的行为），跑 `cargo test -p aleph-panel --lib state::`。
    Expected: **RED** —— `admission_clears_the_queued_phase_and_touches_nothing_else`。
+3. 把 `phone/chat/composer.rs:66` 改回 `matches!(chat.phase.get(), ChatPhase::Thinking | ChatPhase::Streaming)`，跑 `cargo test -p aleph-panel --lib run_phase::`。
+   Expected: **RED** —— `no_surface_enumerates_the_busy_phases_by_hand`，且报错里**点得出 `composer.rs:66`**（点不出就说明它只是"扫不到你"，不是"你合规"）。
 
-两次都确认后改回。
+三次都确认后改回。
 
 - [ ] **Step 6: 提交**
 
@@ -2110,7 +2205,9 @@ git commit -m "gateway: cut EventEmitter::emit_run_error, a trait method with no
 
 - **§4.7**：新增 Round-8 条目，记 `RunQueued` 帧、错误码跨端收口、`emit_run_error` CUT。**必须写明**：`RunError.session_key`（Round-8 ②）现已冗余但**刻意保留**，理由是「帧自解析比索引更强」——否则下一个读者会把它当残留清掉。
 - **§4.8**：新增 Round-11 条目，记「等待者自报位置」这个产地选择与它否决的两个替代方案（车道广播 / 客户端轮询），以及 owed backlog 的接缝确认（四臂与墓碑四臂同源）。
-- **§6.1**：新增条目，记 `ChatPhase::Queued`、`pending[]` 水化、以及「加变体是编译错误」这个形状。
+- **§6.1**：新增条目，记 `ChatPhase::Queued`、`pending[]` 水化、以及 **R8**：`ChatPhase` 全仓**没有**穷尽 `match`（12 站点＝7 写 + 5 读，读全是 `==`/`matches!`/丢弃值），所以加变体**不是**编译错误——`phone/chat/composer.rs:66` 就是因此漏掉的，代价是手机端 composer 在排队期间恢复可发送。守卫是源码级的 `no_surface_enumerates_the_busy_phases_by_hand`（规则而非名单：一行 `matches!` 里出现 ≥2 个 `ChatPhase::` 即违规），不是编译器。
+
+  ⚠️ **同批改正 spec §3.6**：那一节写着「穷尽 match 会逐个逼它们回答『Queued 算不算 busy』」，这句话在本仓不成立，且 §4.7 / §6.1 若照抄就是第二份错误表述。改成描述真实机制（一个 `is_busy()` 谓词 + 一条源码级守卫）。
 
 - [ ] **Step 3: GATEWAY.md**
 
