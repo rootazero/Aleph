@@ -526,6 +526,22 @@ pub use aleph_protocol::queue::PendingRun;
 ///
 /// Cancelled tickets are neither listed nor counted, matching [`snapshot`]'s
 /// `total_waiting` contract and [`TicketGuard::ahead`].
+///
+/// # Known limit: a `/btw` side question's ticket is invisible here
+///
+/// `session_key` here is the caller's **addressed** session (`chat.history`
+/// is keyed by conversation), but [`register_run`] deliberately keys a
+/// side question's ticket on its **derived** execution session
+/// ([`crate::gateway::btw::execution_session`]) — see that function's doc
+/// for why. So a queued side question's ticket lives in a lane this
+/// function can never look up by the addressed key. The live
+/// `StreamEvent::RunQueued` frame does not have this gap: it carries the
+/// addressed session key regardless of which lane the ticket sits in (see
+/// `busy_queue::spawn`'s `report` closure), so a client attached to the
+/// conversation still sees the transient frame — it just never lands in
+/// this snapshot. Fixing the mismatch is a separate decision; this
+/// function's key is not to be changed to chase it (see [`register_run`]'s
+/// doc for what keying it on the addressed session costs instead).
 #[must_use]
 pub fn pending_for(session_key: &str) -> Vec<PendingRun> {
     let map = lock();
